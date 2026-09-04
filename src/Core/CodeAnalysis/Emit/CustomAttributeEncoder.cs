@@ -1108,7 +1108,18 @@ internal sealed class CustomAttributeEncoder
         }
         else if (t.IsEnum)
         {
-            EncodeClrTypeForCtorSig(enc, GetEnumUnderlyingTypeSafe(t));
+            // Issue #3892: this is the METHOD SIGNATURE of the attribute's
+            // `.ctor` MemberRef, not the custom-attribute VALUE blob. ECMA-335
+            // II.23.3 says the *value* of an enum-typed fixed argument is
+            // serialised as its underlying type — that rule is applied by
+            // WriteCustomAttributeFixedArg below and is correct there. It does
+            // NOT apply to the signature: II.23.2.12 requires the parameter to
+            // be encoded as VALUETYPE <TypeRef to the enum>. Substituting the
+            // underlying type here produced `AttributeUsageAttribute..ctor(Int32)`,
+            // a MemberRef the runtime cannot resolve — so any type carrying such
+            // an attribute threw MissingMethodException the moment reflection
+            // touched it (xunit discovery enumerating GetExportedTypes()).
+            enc.Type(this.getTypeReference(t), isValueType: true);
         }
         else if (t.IsArray && t.GetArrayRank() == 1)
         {

@@ -62,6 +62,48 @@ public sealed class ImportedEnumArgAttribute : Attribute
     public ImportedAttributeMode Mode { get; set; }
 }
 
+/// <summary>
+/// Regression fixture for issue #3892: an attribute whose POSITIONAL
+/// constructor parameter is enum-typed. The emitter must encode that parameter
+/// in the <c>.ctor</c> MemberRef signature as <c>VALUETYPE &lt;TypeRef&gt;</c>
+/// naming the enum (ECMA-335 II.23.2.12), not as the enum's underlying type —
+/// the underlying-type rule (II.23.3) governs only the value blob. Emitting
+/// the underlying type produces a MemberRef the runtime cannot resolve.
+/// </summary>
+[AttributeUsage(AttributeTargets.All, AllowMultiple = false, Inherited = true)]
+public sealed class ImportedEnumCtorAttribute : Attribute
+{
+    /// <summary>Initializes a new instance taking a positional enum argument.</summary>
+    /// <param name="mode">The mode.</param>
+    public ImportedEnumCtorAttribute(ImportedAttributeMode mode)
+    {
+        this.Mode = mode;
+    }
+
+    /// <summary>Gets the mode supplied positionally.</summary>
+    public ImportedAttributeMode Mode { get; }
+}
+
+/// <summary>
+/// Anti-vacuity partner to <see cref="ImportedEnumCtorAttribute"/> for issue
+/// #3892: a constructor parameter that is genuinely <see cref="int"/> must
+/// still encode as <c>ELEMENT_TYPE_I4</c>. A fix that encoded every integral
+/// parameter as a value-type TypeRef would break this one.
+/// </summary>
+[AttributeUsage(AttributeTargets.All, AllowMultiple = false, Inherited = true)]
+public sealed class ImportedInt32CtorAttribute : Attribute
+{
+    /// <summary>Initializes a new instance taking a positional int argument.</summary>
+    /// <param name="value">The value.</param>
+    public ImportedInt32CtorAttribute(int value)
+    {
+        this.Value = value;
+    }
+
+    /// <summary>Gets the value supplied positionally.</summary>
+    public int Value { get; }
+}
+
 /// <summary>Attribute fixture with reserved and colliding CLR identifier names.</summary>
 [AttributeUsage(AttributeTargets.All)]
 public sealed class ImportedReservedNamedAttribute : Attribute
