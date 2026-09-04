@@ -52,7 +52,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 BENCH = REPO / "bench" / "concurrency"
-ROW = re.compile(r"^(?P<name>[A-Za-z0-9_.-]+) ns_per_op (?P<value>[0-9]+(?:\.[0-9]+)?)$")
+# The trailing `ms <elapsed>` is optional so the runner reads both the old
+# and the current Bench.gs output (issue #3902).
+ROW = re.compile(
+    r"^(?P<name>[A-Za-z0-9_.-]+) ns_per_op (?P<value>[0-9]+(?:\.[0-9]+)?)"
+    r"(?: ms (?P<elapsed_ms>[0-9]+(?:\.[0-9]+)?))?$")
 GO_ROW = re.compile(r"^\[(?P<name>[^\]]+?)\s*\]\s+[0-9.]+ ms\s+(?P<value>[0-9.]+) ns/op$")
 
 # Pinning the tiering delay is normative, not a tuning knob; see the module
