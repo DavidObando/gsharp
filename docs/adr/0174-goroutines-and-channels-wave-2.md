@@ -1,12 +1,13 @@
 # ADR-0174: Goroutines and channels, wave 2 — suspension over blocking, a G#-owned channel runtime, and observable completion
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-09-04)
 - **Date**: 2026-09-01
 - **Phase**: Concurrency wave 2 (language surface + runtime + performance program)
 - **Supersedes on acceptance**: ADR-0082 (`import`-gated Go subspace). D13
   retires the per-file opt-in and with it GS0316/GS0317; ADR-0082's packaging
   and namespace decisions survive and are restated where they still apply.
-  ADR-0082 stays **Accepted** and in force until this ADR is accepted.
+  ADR-0082 was marked **Superseded** when D13 landed (2026-09-02) and this ADR's
+  acceptance confirms it.
 - **Amends**: ADR-0158 — D16 renames `SyncMap.Len()` to `SyncMap.Length()` so
   the concurrency story carries one name for one concept. Nothing else in
   ADR-0158 changes. **D16 has landed** ahead of the rest of this ADR; see the
@@ -1102,8 +1103,8 @@ This ADR ships one:
 | Parked-goroutine memory, depth 1 | ≤ 0.5× | **supported at depth 1 only** — measure depths 1/4/16; the target applies per depth, and D4's per-frame cost may fail it at depth |
 | Buffered throughput, per message | ≤ 1.8× | **not yet met by any measured implementation** — best CLR is 44.9/25.5 = 1.76×, so the earlier ≤1.5× target was already refuted by the ADR's own data. 1.8× holds the measured line; tightening requires a result that does not exist yet. |
 | `select`, ready arms | ≤ 1.2× | **not evidence-backed** — the 30.7 vs 53.3 ns result compared deterministic source-order probing against Go's randomized choice, i.e. it partly measured the divergence D8 removes. Re-derive after D8. |
-| `select`, parking path | **to be established** | never measured. Phase 4 establishes the baseline before setting a target. |
-| Rendezvous round trip | **provisional ≤ 2.0×** | **baseline measured in Phase 1** — 1.18–1.30 µs/op vs Go 617 ns/op on the same Linux 20-core machine (≈2×), single launch. Phase 5 sets the target from multi-launch runs; the known lever is gate G6 (`RunContinuationsAsynchronously`). |
+| `select`, parking path | **to be established** | baseline now exists: ~1100 ns before gate G6, ~300 ns after (issue #3902 H1). No Go counterpart scenario, so this row can only ever carry a within-runtime budget. |
+| Rendezvous round trip | **provisional ≤ 2.0×, to be re-set** | gate G6 answered it: ~1000 → ~175 ns, from ≈3.2× Go to roughly level. The provisional ceiling is now far too loose, and the row's Go ratio must be read with the pairing correction in errata 34 — G# counts one hand-off, `go-pingpong` two. Re-derive from nightlies. |
 | Chunked throughput | ≤ 2.0× | plausible; GC write barriers and array bounds are structural |
 | Goroutines schedulable while N are parked | unbounded | **supported** — today fails at 400 |
 
@@ -2496,6 +2497,56 @@ implementation had to refine it.
     inline-continuation prototype and the finding that `rendezvous`,
     `select-ready` and `spawn` compare unequal work to their Go counterparts, is
     issue #3902.
+
+34. **Decision-gate dispositions, and what acceptance does and does not settle
+    (Phase 5-3).** The gates named through this ADR — G1 through G11 — were the
+    conditions under which its performance decisions were allowed to be locked
+    in. Four of them are now answered by measurement rather than by argument,
+    and the answers are recorded here so nobody re-derives them.
+
+    | Gate | Question | Disposition |
+    | --- | --- | --- |
+    | G1 | hidden `Context` parameter vs `AsyncLocal` | **Resolved** (errata 12): parameter ≈15 ns vs 24–54 ns per 3-deep chain. |
+    | G2 | `ExecutionContext` capture | **Resolved** (errata 12): not flowed. |
+    | G3 | rendezvous target | **Re-set.** The provisional ceiling was ≤2.0× and the row now measures **0.85× Go on a 4-vCPU runner** and ~0.57× on a 20-core workstation, from ~3.2× before. The target must be re-derived from nightlies rather than merely marked "met" — and read with the pairing correction below. |
+    | G5 | select boxing / node allocation | **Resolved.** The threshold was >160 B/op; a ready select now allocates **0 B** in steady state (issue #3902 S4). The arm descriptors became the pooled waiter's per-slot cache and the winning value stays in its producer's typed field. |
+    | G6 | `RunContinuationsAsynchronously` | **Resolved: adopt, with a bounded budget.** Inline completion takes rendezvous from ~1000 → ~175 ns and select-park from ~1100 → ~300. Bounded by depth (16) and `TryEnsureSufficientExecutionStack`; the gate's 10 000-deep chain test exists and passes. **The correctness half is suppression, not the budget** — see below. |
+    | G7 | `chunks` fresh vs pooled arrays | **Still fires.** The threshold was >2.0× Go. After issue #3902 S3 the rows measure 2.68× (`chunk64`) and 4.93× (`chunk1k`) on the workstation, 3.91×/9.28× on CI. The research in #3902 showed the fresh array is *not* the dominant cost — the wasted probe arrays and the element-wise ring copy were, and both are fixed — so a pooled overload is still indicated but is no longer the obvious next lever. |
+    | G4, G8, G9, G10, G11 | `Chan.Unbounded` usage, `await` at an `async let` use, `for batch of N`, defer grace, inference fallback | Unchanged; none is a performance gate and none blocked acceptance. |
+
+    **G6's hazard was real, and the prototype that proposed it did not handle
+    it.** Inline publication is sound only where the publisher holds no lock the
+    continuation could re-enter. G#'s blocking channel forms are what a
+    `lock { ch <- v }` body compiles to (errata 10), and Monitor is reentrant —
+    an inline receiver would run *inside* the sender's monitor and observe
+    mutual exclusion it does not hold. Those paths, and
+    `SelectWaiter.OnCancelled` (which runs inside
+    `CancellationTokenSource.Cancel`), publish under suppression. A notifier
+    never inlines at all: its continuation is a BCL `WaitToReadAsync` consumer,
+    which `Channel<T>` itself completes asynchronously for the same reason.
+
+    **The prediction that buffered channels would degrade under G6 did not
+    hold** — `buf64` improved once the wrapper state machines were gone. But it
+    is not settled either: the same row *regressed* 129 → 184 ns on the 4-vCPU
+    CI runner while improving 10% on a 20-core workstation. That is one noisy
+    launch set, it is the row the hazard named, and it is the open question the
+    nightlies should answer first.
+
+    **Read the rendezvous comparison with the pairing correction.** G#'s
+    `rendezvous` row counts **one** hand-off; Go's `go-pingpong` counts **two**.
+    A ratio computed from the raw rows flatters G# by 2×. The honest statement
+    is that the row moved from ≈3.2× behind to roughly level, not that G# is
+    twice Go's speed. `select-ready` (four channel operations against Go's one)
+    and `spawn` (which times a send and a receive Go does not) carry the same
+    caveat; correcting the scenarios is tracked in issue #3902.
+
+    **What acceptance does not settle: the budgets.** Every median in
+    `bench/concurrency/baseline.json` is still `null`, and stays that way until
+    three nightlies have run on one hardware class. Accepting this ADR settles
+    the *design* — the decisions, the semantics, and the four gates above — not
+    the numbers the ratchet will gate on. A budget written from anything other
+    than a nightly would be exactly the "looks like evidence" failure the
+    baseline's own comment warns about.
 
 ## Addendum A — The ten patterns, three ways
 
