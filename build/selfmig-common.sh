@@ -41,8 +41,10 @@ selfmig_excludes=(
   # ADR-0174 D11: the concurrency benchmark's C# and Go sides are measurement
   # apparatus, not migration targets. Translating the CLR baseline would
   # measure the translator rather than the runtime, which is the one thing this
-  # harness must not do.
+  # harness must not do. The AOT project holds no logic at all — its only C# is
+  # a placeholder Main that the publish overwrites.
   --exclude bench/concurrency/clr
+  --exclude bench/concurrency/aot
 )
 
 # MSBuildWorkspace design-time project loads evaluate in Debug regardless of

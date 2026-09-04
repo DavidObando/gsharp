@@ -69,10 +69,11 @@ investigate sustained movement, not a single run.
       <thead>
         <tr>
           <th>Scenario</th>
-          <th>G# ns/op</th>
-          <th>Ceiling</th>
+          <th>G# JIT ns/op</th>
+          <th>G# AOT ns/op</th>
           <th>Go ns/op</th>
-          <th>Ratio</th>
+          <th>JIT ÷ Go</th>
+          <th>AOT ÷ Go</th>
           <th>Target</th>
         </tr>
       </thead>
@@ -81,21 +82,32 @@ investigate sustained movement, not a single run.
           <tr key={row.name}>
             <td><code>{row.name}</code></td>
             <td>{row.medianNs ?? '—'}</td>
-            <td>{row.ceilingNs ?? 'not yet measured'}</td>
+            <td>{row.aotMedianNs ?? '—'}</td>
             <td>{row.goMedianNs ?? '—'}</td>
             <td>{row.ratioVsGo ? `${row.ratioVsGo}×` : '—'}</td>
+            <td>{row.aotRatioVsGo ? `${row.aotRatioVsGo}×` : '—'}</td>
             <td>{row.targetVsGo ? `${row.targetVsGo}× (${row.targetStatus})` : row.targetStatus}</td>
           </tr>
         ))}
       </tbody>
     </table>
     <p>
-      A ceiling of <em>not yet measured</em> means no nightly has recorded a
-      budget for that scenario, so nothing gates on it. A target stays{' '}
-      <em>provisional</em> until the ratio has met it on three separate nights
-      on the same hardware class. The G#-versus-Go ratio moves with the Go
-      toolchain and the machine and is reported, never gated; only the
-      within-runtime check can fail a run.
+      Two G# columns, because "how fast is G#" has two honest answers.{' '}
+      <strong>JIT</strong> is CoreCLR with the tiering delay pinned, which is
+      what a deployed G# program does at steady state; without the pin a
+      benchmark process is too short-lived for the runtime to finish promoting
+      its own hot code, and the reported number depends on whether it did.{' '}
+      <strong>AOT</strong> is NativeAOT: fully compiled before the process
+      starts, and the mode that compares like-for-like with Go's ahead-of-time
+      binary. Each carries its own budget, since they regress for different
+      reasons.
+    </p>
+    <p>
+      A target stays <em>provisional</em> until the ratio has met it on three
+      separate nights on the same hardware class. The G#-versus-Go ratios move
+      with the Go toolchain and the machine and are reported, never gated; only
+      the within-runtime check against a recorded ceiling can fail a run, and a
+      scenario with no recorded ceiling gates on nothing.
     </p>
   </>
 ) : (
