@@ -1066,6 +1066,7 @@ internal sealed partial class DeclarationBinder
                     // return type when the (omitted-type) body is `-> object { ... }`.
                     returnType = InferAnonymousClassLiteralReturnType(methodSyntax, returnType, methodAccessibility);
 
+                    var methodIsAsyncVoid = IsExplicitAsyncVoid(methodSyntax, returnType);
                     returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodParameters = parameters.ToImmutable();
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
@@ -1136,7 +1137,7 @@ internal sealed partial class DeclarationBinder
                         {
                             baseMethod ??= candidate;
                             var candidateTypeArgSubst = WithMethodTypeParameterSubstitution(baseTypeArgSubst, candidate, methodTypeParameters);
-                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind, candidateTypeArgSubst, methodIsAsync))
+                            if (SignaturesMatch(candidate, methodParameters, returnType, methodReturnRefKind, candidateTypeArgSubst, methodIsAsync, methodIsAsyncVoid))
                             {
                                 baseSignatureMatch = candidate;
                                 break;
@@ -1154,6 +1155,7 @@ internal sealed partial class DeclarationBinder
                                 methodTypeParameters,
                                 methodAccessibility,
                                 methodIsAsync,
+                                methodIsAsyncVoid,
                                 returnTypeIsValueTask,
                                 binderCtx.References);
                             if (externalMatch.Member != null)
@@ -1238,7 +1240,7 @@ internal sealed partial class DeclarationBinder
                             }
 
                             var shadowedTypeArgSubst = WithMethodTypeParameterSubstitution(baseTypeArgSubst, shadowed, methodTypeParameters);
-                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, shadowedTypeArgSubst, methodIsAsync))
+                            if (SignaturesMatch(shadowed, methodParameters, returnType, methodReturnRefKind, shadowedTypeArgSubst, methodIsAsync, methodIsAsyncVoid))
                             {
                                 if (shadowed.ReceiverType is { } shadowedReceiverType)
                                 {
@@ -1269,6 +1271,7 @@ internal sealed partial class DeclarationBinder
                         || (isAsyncIteratorReturnType(returnType)
                             && methodSyntax.Body is { } methodBodyForSymbol
                             && IteratorDetection.ContainsYield(methodBodyForSymbol));
+                    methodSymbol.IsAsyncVoid = methodIsAsyncVoid;
                     methodSymbol.SuspendingKind = methodSyntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
@@ -2465,6 +2468,7 @@ internal sealed partial class DeclarationBinder
                     // return type when the (omitted-type) body is `-> object { ... }`.
                     returnType = InferAnonymousClassLiteralReturnType(methodSyntax, returnType, methodAccessibility);
 
+                    var methodIsAsyncVoid = IsExplicitAsyncVoid(methodSyntax, returnType);
                     returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
@@ -2484,6 +2488,7 @@ internal sealed partial class DeclarationBinder
                         || (isAsyncIteratorReturnType(returnType)
                             && methodSyntax.Body is { } methodBody
                             && IteratorDetection.ContainsYield(methodBody));
+                    methodSymbol.IsAsyncVoid = methodIsAsyncVoid;
                     methodSymbol.SuspendingKind = methodSyntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
                     methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;

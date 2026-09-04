@@ -1674,16 +1674,6 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapDelegateLikeReturnType(localSymbol, isAsync, localFunction.ReturnType.GetLocation())
                 : null;
 
-            // Issue #2438: an `async void` LOCAL function (Oahu's
-            // `AaxFileConversionProgressUpdate` shape) needs the exact same
-            // fire-and-forget rewrite as an `async void` METHOD — see
-            // BuildAsyncVoidHandlerWrapperBody. The local function still
-            // lowers to a single `let`-bound literal either way, so its
-            // name/identity for `+=`/`-=` subscription is unaffected: only
-            // the literal it is bound to changes shape (non-async wrapper
-            // instead of the raw async literal).
-            bool isAsyncVoidHandler = localSymbol != null && IsCSharpAsyncVoidHandler(localSymbol);
-
             // A local function's body is its own evaluation scope: a spill hoisted
             // while translating it (issue #1731) must never leak into the
             // ENCLOSING statement's prologue (that would evaluate the operand once,
@@ -1701,9 +1691,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (localFunction.Body != null)
                 {
                     BlockStatement innerBody = this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body));
-                    lambda = isAsyncVoidHandler
-                        ? new LambdaExpression(parameters, blockBody: this.BuildAsyncVoidHandlerWrapperBody(parameters, innerBody, localFunction.GetLocation()), isAsync: false, returnType: null, isFunctionLiteral: true)
-                        : new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
                 }
                 else if (localFunction.ExpressionBody != null)
                 {
@@ -1722,9 +1710,7 @@ public sealed partial class CSharpToGSharpTranslator
                             }).ToList())
                         : new BlockStatement(this.WithSpillSeam(
                             () => this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()).ToList());
-                    lambda = isAsyncVoidHandler
-                        ? new LambdaExpression(parameters, blockBody: this.BuildAsyncVoidHandlerWrapperBody(parameters, innerBody, localFunction.GetLocation()), isAsync: false, returnType: null, isFunctionLiteral: true)
-                        : new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
                 }
                 else
                 {

@@ -1396,7 +1396,7 @@ internal sealed partial class OverloadResolver
         if (substitution != null)
         {
             var returnType = substituteType(extension.Type, substitution);
-            if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
+            if (extension.IsAsync && !extension.IsAsyncVoid && !isAsyncIteratorReturnType(extension.Type))
             {
                 returnType = wrapAsTask(returnType, extension.AsyncReturnsValueTask);
             }
@@ -1414,7 +1414,7 @@ internal sealed partial class OverloadResolver
         // return type is Task / Task[T], not the underlying void / T. Wrap here
         // so awaiting the call sees a value-bearing Task, mirroring the async
         // free-function and user-instance-call paths.
-        if (extension.IsAsync && !isAsyncIteratorReturnType(extension.Type))
+        if (extension.IsAsync && !extension.IsAsyncVoid && !isAsyncIteratorReturnType(extension.Type))
         {
             var asyncReturn = wrapAsTask(extension.Type, extension.AsyncReturnsValueTask);
             return new BoundCallExpression(null, extension, finalArguments, asyncReturn) { MethodTypeArguments = extensionMethodTypeArguments };
@@ -1903,7 +1903,7 @@ internal sealed partial class OverloadResolver
         if (substitution != null)
         {
             var substitutedReturn = substituteType(method.Type, substitution);
-            if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
+            if (method.IsAsync && !method.IsAsyncVoid && !isAsyncIteratorReturnType(method.Type))
             {
                 substitutedReturn = wrapAsTask(substitutedReturn, method.AsyncReturnsValueTask);
                 return MakeCall(substitutedReturn);
@@ -1923,7 +1923,7 @@ internal sealed partial class OverloadResolver
         // Issue #502: an async instance method's call-site return type is
         // Task / Task[T], not the underlying T. Wrap here so the call
         // expression's static type matches the kickoff method's return type.
-        if (method.IsAsync && !isAsyncIteratorReturnType(method.Type))
+        if (method.IsAsync && !method.IsAsyncVoid && !isAsyncIteratorReturnType(method.Type))
         {
             var asyncReturn = wrapAsTask(method.Type, method.AsyncReturnsValueTask);
             return MakeCall(asyncReturn);

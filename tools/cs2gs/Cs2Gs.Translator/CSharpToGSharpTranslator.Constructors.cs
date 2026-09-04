@@ -1159,7 +1159,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (symbol.ReturnsVoid)
                 {
-                    return null;
+                    return symbol.IsAsync ? new NamedTypeReference("void") : null;
                 }
 
                 ITypeSymbol returnType = symbol.ReturnType;

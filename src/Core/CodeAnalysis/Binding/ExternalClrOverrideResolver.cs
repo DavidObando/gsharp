@@ -43,6 +43,7 @@ internal static class ExternalClrOverrideResolver
         ImmutableArray<TypeParameterSymbol> typeParameters,
         Accessibility accessibility,
         bool isAsync,
+        bool isAsyncVoid,
         bool isValueTask,
         ReferenceResolver references)
     {
@@ -69,6 +70,7 @@ internal static class ExternalClrOverrideResolver
                     method,
                     methodTypeArguments,
                     isAsync,
+                    isAsyncVoid,
                     isValueTask))
             {
                 continue;
@@ -852,6 +854,7 @@ internal static class ExternalClrOverrideResolver
         MethodInfo? openMethodDefinition = null,
         ImmutableArray<TypeSymbol?> methodTypeArguments = default,
         bool isAsync = false,
+        bool isAsyncVoid = false,
         bool isValueTask = false)
     {
         if (clrReturnType == null)
@@ -872,6 +875,13 @@ internal static class ExternalClrOverrideResolver
             {
                 return false;
             }
+        }
+
+        if (isAsyncVoid)
+        {
+            return returnRefKind == RefKind.None
+                && clrReturnType.IsSameAs(typeof(void))
+                && ReferenceEquals(returnType, TypeSymbol.Void);
         }
 
         if (isAsync && IsClrNonGenericAsyncReturnType(clrReturnType, isValueTask))

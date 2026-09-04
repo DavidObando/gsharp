@@ -1091,8 +1091,9 @@ internal sealed class SignatureEncoder
     }
 
     /// <summary>
-    /// For an async lambda, resolves the delegate CLR type with the return type
-    /// wrapped in Task/Task&lt;T&gt; (matching the actual kickoff method signature).
+    /// For an async lambda, resolves the delegate CLR type matching the kickoff
+    /// method signature: Task/Task&lt;T&gt; for ordinary async, or Action for
+    /// explicit async void.
     /// </summary>
     internal Type ResolveAsyncDelegateClrType(FunctionTypeSymbol fnType, FunctionSymbol function)
     {
@@ -1113,12 +1114,13 @@ internal sealed class SignatureEncoder
         }
 
         var builderInfo = plan.StateMachine.BuilderInfo;
-        Type taskClrType;
         if (builderInfo.Kind == AsyncMethodBuilderKind.Void)
         {
-            taskClrType = typeof(System.Threading.Tasks.Task);
+            return this.ResolveDelegateClrType(fnType);
         }
-        else if (builderInfo.TaskProperty != null)
+
+        Type taskClrType;
+        if (builderInfo.TaskProperty != null)
         {
             taskClrType = builderInfo.TaskProperty.PropertyType;
         }

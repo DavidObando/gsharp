@@ -2,6 +2,7 @@
 
 - **Status**: Shipped (emit; originally also the interpreter, whose backend was removed by [ADR-0156](0156-gsi-emit-to-memory-execution.md) Phase 3c — the state-machine emission design remains current)
 - **Date**: 2026-05-25
+- **Amended**: 2026-09-04 — explicit `async ... void`
 - **Phase**: Phase 5 (lock before 5.1)
 - **Related**: ADR-0002 (concurrency model), ADR-0022 (go/chan/select lowering), ADR-0040 (`sequence[T]` + `yield`); execution plan §§5.1 – 5.2, 5.8; issue #51 (Roslyn-fork option)
 
@@ -25,7 +26,9 @@ let body = await fetch("https://example.com")
 ```
 
 - `async` is a **modifier** on `func` declarations (free, method, extension, lambda).
-- The declared return type is the **logical** return type. The actual call-site type is `Task` (when the function declares no return) or `Task[T]` (when the function declares `T`). This matches C# `async Task<T>` ergonomics: callers always see a `Task`.
+- The declared return type is the **logical** return type. The actual call-site type is `Task` when the return type is omitted or `Task[T]` when the function declares `T`.
+- Explicit `void` is the exception: `async func handler() void { ... }` matches C# `async void`. It emits CLR `void`, uses `AsyncVoidMethodBuilder`, returns to its caller after reaching an incomplete await, and forwards unhandled exceptions through the captured `SynchronizationContext` (or the CLR thread-pool fallback). It is intended for void delegate/event handlers; callers cannot await it.
+- Omitted return and explicit `void` are intentionally distinct: `async func work() { ... }` remains Task-observable. Async function **type clauses** also remain Task-shaped per ADR-0043; native async-void function values use the ordinary `(P) -> void` delegate shape.
 - `await e` is an **expression** whose type is the unwrapped result of `e` (which must be `Task` or `Task[T]`, or any type exposing a compatible `GetAwaiter()` shape via duck-typing on the imported CLR type).
 - `await` is legal only inside an `async func`, an `async` lambda, or a top-level `await` statement at script entry-point scope (mirroring C# 9 top-level statements). Use outside these contexts is a binder error.
 - `Task` and `Task[T]` are first-class types in the language (imported from `System.Threading.Tasks`); the type-clause grammar admits `Task` and `Task[T]` via the existing generic-type-argument syntax (ADR-0020).
@@ -49,6 +52,7 @@ The emit backend implements **Strategy A — bespoke state-machine emit** from t
 Key architectural choices:
 
 - **Struct state machines** for async methods and async lambdas (value-type allocation, boxed only on first incomplete await — matching Roslyn's optimization).
+- **Builder selection follows the observable return shape**: `AsyncTaskMethodBuilder` / `AsyncTaskMethodBuilder[T]` for Task-observable functions and `AsyncVoidMethodBuilder` for explicit `async ... void`.
 - **Class state machines** for sync iterators (`IEnumerable[T]`) and async iterators (`IAsyncEnumerable[T]`), following the C# pattern where the iterator object itself serves as both enumerable and enumerator for the initial thread.
 - Lowering passes run in a fixed order: `AsyncExceptionHandlerRewriter` → `SpillSequenceSpiller` → `RefInitializationHoister` → `AsyncCaptureWalker` → state-machine rewriter (with MoveNext body rewriter as a sub-pass).
 - Synthesized state-machine types nest privately inside the declaring type (`<Program>` for top-level functions; closure class for capture-bearing lambdas), matching the Roslyn convention for debugger/reflection discovery.
@@ -94,6 +98,7 @@ The async emitter shipped end-to-end across PRs #106–#135, building on the int
 - **#125** — `BoundDefaultExpression` + `initobj` (value-type awaiter clear).
 - **#126** — awaitable-shape generalization (`Task.Yield()` / `ValueTask` / structural awaitables).
 - **#127** — async lambdas.
+- **#3897 family 2** — explicit `async ... void` declarations/literals and direct cs2gs translation of C# async-void methods, local functions, and lambdas.
 
 ### Polish
 
@@ -130,7 +135,7 @@ Smaller deferrals carried in commit messages:
 
 - New `SyntaxKind`s: `AsyncKeyword`, `AwaitKeyword`; new modifier slot on `FunctionDeclarationSyntax` and lambda syntax.
 - New bound forms: `BoundAwaitExpression`. (`async` itself flows through `FunctionSymbol.IsAsync` and does not need its own bound node.)
-- Binder rules: `await` only inside async context; an `async func` declared `T` is callable as `Task[T]` everywhere; `await` is the only legal way to consume a `Task[T]` for its value (other than `.Result` via CLR interop, which we accept as an escape hatch).
+- Binder rules: `await` is only legal inside async context; an `async func` declared `T` is callable as `Task[T]`; an omitted return produces `Task`; explicit `void` produces an unawaitable void callable. `await` is the only legal way to consume a `Task[T]` for its value (other than `.Result` via CLR interop, which we accept as an escape hatch).
 - Interpreter takes a synchronous-blocking `await`. Tests must therefore not assert thread-id continuity across `await`; document the constraint in the conformance harness header.
 - Both backends (interpreter and emit) now cover `async`/`await`. The coverage matrix reflects ✅ interp, ✅ emit for async-method and async-lambda surfaces. Iterator surfaces are emit-only pending #138.
 

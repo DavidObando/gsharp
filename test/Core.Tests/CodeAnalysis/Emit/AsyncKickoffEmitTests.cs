@@ -79,11 +79,8 @@ Console.WriteLine(t.Result)
     }
 
     [Fact]
-    public void AsyncVoid_Emits_And_Runs()
+    public void AsyncTask_OmittedReturn_Emits_And_Runs()
     {
-        // async void methods use AsyncVoidMethodBuilder.
-        // For now the GSharp parser models `async func F() {}` as returning Task.
-        // This test verifies the basic kickoff emits and runs without crash.
         const string Source = @"package AsyncVoidTest
 import System
 
@@ -95,6 +92,73 @@ Console.WriteLine(""fired"")
 ";
         var output = CompileAndRun(Source, "AsyncVoidTest");
         Assert.Contains("fired", output);
+    }
+
+    [Fact]
+    public void AsyncVoid_ExplicitVoid_ReturnsVoid_AndUsesVoidBuilder()
+    {
+        const string Source = @"package AsyncVoidMetadataTest
+
+async func implicitTask() {
+}
+
+async func explicitVoid() void {
+}
+";
+        using var peStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        var result = compilation.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "compilation should succeed: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        var loadContext = new AssemblyLoadContext(nameof(AsyncVoid_ExplicitVoid_ReturnsVoid_AndUsesVoidBuilder), isCollectible: true);
+        try
+        {
+            var assembly = loadContext.LoadFromStream(peStream);
+            var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+            var implicitTask = program.GetMethod("implicitTask", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            var explicitVoid = program.GetMethod("explicitVoid", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+
+            Assert.Equal(typeof(Task), implicitTask!.ReturnType);
+            Assert.Equal(typeof(void), explicitVoid!.ReturnType);
+
+            var stateMachine = assembly.GetTypes().Single(t => t.Name.Contains("<explicitVoid>d__"));
+            Assert.Contains(
+                stateMachine.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+                field => field.FieldType == typeof(System.Runtime.CompilerServices.AsyncVoidMethodBuilder));
+        }
+        finally
+        {
+            loadContext.Unload();
+        }
+    }
+
+    [Fact]
+    public void AsyncVoid_ReturnsAfterIncompleteAwait_ThenResumes()
+    {
+        const string Source = @"package AsyncVoidRuntimeTest
+import System
+import System.Threading
+import System.Threading.Tasks
+
+async func fire() void {
+    Console.WriteLine(""prefix"")
+    await Task.Delay(100)
+    Console.WriteLine(""continued"")
+}
+
+fire()
+Console.WriteLine(""returned"")
+Thread.Sleep(300)
+";
+        var lines = CompileAndRun(Source, "AsyncVoidRuntime")
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        Assert.Equal(new[] { "prefix", "returned", "continued" }, lines);
     }
 
     [Fact]

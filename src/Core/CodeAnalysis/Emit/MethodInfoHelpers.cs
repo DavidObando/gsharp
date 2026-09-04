@@ -243,6 +243,15 @@ internal static class MethodInfoHelpers
             return TypesMatch(interfaceMethod.Type, implementationMethod.Type, typeParameterMap);
         }
 
+        if (interfaceMethod.IsAsyncVoid || implementationMethod.IsAsyncVoid)
+        {
+            var interfaceIsEffectivelyVoid = interfaceMethod.IsAsyncVoid
+                || (!interfaceMethod.IsAsyncOrSuspending && ReferenceEquals(interfaceMethod.Type, TypeSymbol.Void));
+            var implementationIsEffectivelyVoid = implementationMethod.IsAsyncVoid
+                || (!implementationMethod.IsAsyncOrSuspending && ReferenceEquals(implementationMethod.Type, TypeSymbol.Void));
+            return interfaceIsEffectivelyVoid && implementationIsEffectivelyVoid;
+        }
+
         if (interfaceMethod.IsAsyncOrSuspending == implementationMethod.IsAsyncOrSuspending)
         {
             return TypesMatch(interfaceMethod.Type, implementationMethod.Type, typeParameterMap);

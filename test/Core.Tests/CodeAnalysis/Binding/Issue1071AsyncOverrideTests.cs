@@ -147,6 +147,58 @@ public class Issue1071AsyncOverrideTests
         Assert.Contains(Bind(source), d => d.Id == "GS0187");
     }
 
+    [Fact]
+    public void AsyncVoidOverride_OfVoidBaseMethod_BindsWithoutDiagnostics()
+    {
+        const string source = """
+            package p
+            import System.Threading.Tasks
+            open class Base {
+                protected open func OnOpened() { }
+            }
+            open class Derived : Base {
+                protected override async func OnOpened() void {
+                    await Task.CompletedTask
+                }
+            }
+            """;
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void AsyncTaskOverride_OfVoidBaseMethod_StillReportsGS0185()
+    {
+        const string source = """
+            package p
+            import System.Threading.Tasks
+            open class Base {
+                protected open func OnOpened() { }
+            }
+            open class Derived : Base {
+                protected override async func OnOpened() {
+                    await Task.CompletedTask
+                }
+            }
+            """;
+        Assert.Contains(Bind(source), d => d.Id == "GS0185");
+    }
+
+    [Fact]
+    public void AsyncVoidImplementation_OfVoidInterfaceMethod_BindsWithoutDiagnostics()
+    {
+        const string source = """
+            package p
+            import System.Threading.Tasks
+            interface I { func Handle(); }
+            class C : I {
+                async func Handle() void {
+                    await Task.CompletedTask
+                }
+            }
+            """;
+        Assert.Empty(Bind(source));
+    }
+
     private static IReadOnlyList<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

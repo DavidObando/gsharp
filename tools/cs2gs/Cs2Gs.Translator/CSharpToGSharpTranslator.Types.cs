@@ -91,16 +91,6 @@ public sealed partial class CSharpToGSharpTranslator
                 && simpleLambda.Parameter.Identifier.ValueText == "_")
                 || parameterList?.Parameters.Any(parameter => parameter.Identifier.ValueText == "_") == true;
 
-            // Issue #2438: an async lambda directly targeting a VOID delegate
-            // (`EventHandler h = async (s, e) => await Foo();`,
-            // `button.Click += async (s, e) => { ... };`) is Roslyn's async-void
-            // shape for a lambda — its inferred `IMethodSymbol.ReturnsVoid` is
-            // `true` because it takes its signature from the CONVERTED target
-            // delegate's `Invoke` method, not from a `Task` value of its own. It
-            // needs the exact same fire-and-forget rewrite as an `async void`
-            // method/local function — an ordinary `async` lambda targeting
-            // `Func<Task>`/`Func<T, Task>` etc. has `ReturnsVoid == false` and is
-            // untouched. See BuildAsyncVoidHandlerWrapperBody.
             bool isAsyncVoidTarget = isAsync &&
                 lambdaSymbol != null &&
                 IsCSharpAsyncVoidHandler(lambdaSymbol);
@@ -154,8 +144,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                     return new LambdaExpression(
                         parameters,
-                        blockBody: this.BuildAsyncVoidHandlerWrapperBody(parameters, innerBody, lambda.GetLocation()),
-                        isAsync: false);
+                        blockBody: innerBody,
+                        isAsync: true,
+                        returnType: new NamedTypeReference("void"),
+                        isFunctionLiteral: true);
                 }
 
                 if (lambda.Body is BlockSyntax block)
@@ -279,7 +271,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (symbol.ReturnsVoid)
             {
-                return null;
+                return isAsync ? new NamedTypeReference("void") : null;
             }
 
             ITypeSymbol returnType = symbol.ReturnType;

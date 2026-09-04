@@ -80,8 +80,9 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
         // ADR-0166 / issue #3409: the negated guard keeps its C# shape and name.
         Assert.Contains("if !(DataContext is State vm) || booksGrid == nil", codebehind, StringComparison.Ordinal);
         Assert.Contains("vm.Count = booksGrid", codebehind, StringComparison.Ordinal);
-        Assert.Contains("__asyncVoid_OnLoaded(e)", codebehind, StringComparison.Ordinal);
-        Assert.Contains("private async func __asyncVoid_OnLoaded(e RoutedEventArgs)", codebehind, StringComparison.Ordinal);
+        Assert.Contains("override async func OnLoaded", codebehind, StringComparison.Ordinal);
+        Assert.Contains("RoutedEventArgs) void", codebehind, StringComparison.Ordinal);
+        Assert.DoesNotContain("__asyncVoid_", codebehind, StringComparison.Ordinal);
         Assert.Contains("base.OnLoaded(e)", codebehind, StringComparison.Ordinal);
 
         string generated = File.ReadAllText(Directory.GetFiles(

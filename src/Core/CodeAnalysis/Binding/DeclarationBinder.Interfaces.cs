@@ -303,6 +303,7 @@ internal sealed partial class DeclarationBinder
             ValidateVariadicParameterShape(methodSyntax.Parameters);
 
             var returnType = bindReturnTypeClause(methodSyntax.Type, methodSyntax.IsAsync) ?? TypeSymbol.Void;
+            var methodIsAsyncVoid = IsExplicitAsyncVoid(methodSyntax, returnType);
             returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
             var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
 
@@ -344,6 +345,7 @@ internal sealed partial class DeclarationBinder
                 || (isAsyncIteratorReturnType(returnType)
                     && (methodSyntax.HasSemicolonBody
                         || (methodSyntax.Body is { } body && IteratorDetection.ContainsYield(body))));
+            methodSymbol.IsAsyncVoid = methodIsAsyncVoid;
             methodSymbol.SuspendingKind = methodSyntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
             methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend;
             methodSymbol.IsUnsafe = methodSyntax.IsUnsafe;

@@ -312,6 +312,9 @@ internal sealed class LambdaBinder
 
         var returnType = syntax.ReturnTypeClause != null ? bindReturnTypeClause(syntax.ReturnTypeClause, syntax.IsAsync) : TypeSymbol.Void;
         returnType ??= TypeSymbol.Void;
+        var isAsyncVoid = syntax.IsAsync
+            && syntax.ReturnTypeClause != null
+            && ReferenceEquals(returnType, TypeSymbol.Void);
         var isAsync = syntax.IsAsync
             || (isAsyncIteratorReturnType(returnType) && IteratorDetection.ContainsYield(syntax.Body));
 
@@ -356,7 +359,7 @@ internal sealed class LambdaBinder
         // with the iterator carve-out (ADR-0041): an async iterator lambda
         // returning IAsyncEnumerable[T] does not get a Task wrap.
         var observableReturnType = returnType;
-        if (isAsync && !isAsyncIteratorReturnType(returnType))
+        if (isAsync && !isAsyncVoid && !isAsyncIteratorReturnType(returnType))
         {
             observableReturnType = WrapAsTask(returnType, asyncReturnsValueTask);
         }
@@ -367,6 +370,7 @@ internal sealed class LambdaBinder
             parameterSymbols.ToImmutable(),
             returnType);
         synthetic.IsAsync = isAsync;
+        synthetic.IsAsyncVoid = isAsyncVoid;
         synthetic.AsyncReturnsValueTask = asyncReturnsValueTask;
 
         // Issue #3501 A2: give a named-binding caller the chance to declare
@@ -1220,6 +1224,8 @@ internal sealed class LambdaBinder
             adapterResultType,
             package: literal.Function.Package);
         adapterFunction.IsAsync = literal.Function.IsAsync;
+        adapterFunction.IsAsyncVoid = literal.Function.IsAsyncVoid;
+        adapterFunction.AsyncReturnsValueTask = literal.Function.AsyncReturnsValueTask;
 
         // Issue #2381: propagate the original literal's lexical enclosing
         // type so a capturing adapter is nested inside the SAME user type as

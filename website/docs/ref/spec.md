@@ -1612,7 +1612,7 @@ Channels are typed (`chan[T]`, with `in`/`out` directional handles), are rendezv
 
 ## Async and iterators
 
-`async func` declarations and literals are supported. The emitter lowers async methods and lambdas to state machines, including exception handler rewriting, spill management, and capture analysis.
+`async func` declarations and literals are supported. An omitted return type is Task-observable, and declaring `T` is observable as `Task[T]`. Explicit `async func ... void` instead emits CLR `void` with `AsyncVoidMethodBuilder`, matching C# async-void timing and exception propagation; it is intended for void delegate/event handlers and cannot be awaited. Async function type clauses remain Task-shaped per ADR-0043. The emitter lowers async methods and lambdas to state machines, including exception handler rewriting, spill management, and capture analysis.
 
 ### Suspending functions (`suspend func`)
 

@@ -63,9 +63,11 @@ children. If you find yourself reaching for a `Task[]` array and
 
 ## `async func` and `await`
 
-`async func` declares a function that produces a `Task` (for `void`) or
-`Task[T]` (for a value return). `await expr` suspends the surrounding
-async function until the awaited task completes and yields its result.
+`async func` with an omitted return type produces `Task`; declaring `T`
+produces `Task[T]`. Explicit `async func handler() void` instead matches C#
+`async void`: it is a fire-and-forget void callable intended for event
+handlers and cannot be awaited. `await expr` suspends the surrounding async
+function until the awaited task completes and yields its result.
 
 ```gsharp title="AsyncTask.gs"
 package GSharp.Samples.AsyncTask

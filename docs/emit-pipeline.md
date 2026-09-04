@@ -49,6 +49,8 @@ Inside `AsyncStateMachineRewriter.Rewrite`, the bound body is transformed throug
 4. **`AsyncCaptureWalker`** — walks the rewritten body to compute the hoist set (locals and parameters that live across await points).
 5. **State-machine rewriter** — synthesizes the `IAsyncStateMachine` struct, builder field, state field, hoisted-local fields, and the `MoveNext()` body. The **MoveNext body rewriter** is a sub-pass that converts each `await` into a yield/resume pair with state transitions, and inserts sequence-point markers.
 
+Task-observable functions use `AsyncTaskMethodBuilder` (generic when needed). An explicit `async func ... void` uses `AsyncVoidMethodBuilder`, emits a CLR `void` kickoff method, and has no builder `Task` property; omitted-return `async func ...` continues to emit `Task`.
+
 ### Sync and async iterators
 
 `IteratorRewriter` (sync) and `AsyncIteratorRewriter` (async) run as siblings of the async-state-machine rewriter in `LowerForEmit`. They produce **class** state machines (not structs) because the iterator object serves as both `IEnumerable[T]` and `IEnumerator[T]` for the first enumeration. Each `yield` statement becomes a `current = value; state = K; return true` transition in the generated `MoveNext()`.

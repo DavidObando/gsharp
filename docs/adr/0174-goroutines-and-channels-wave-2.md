@@ -576,6 +576,7 @@ signature has to change, and this ADR states exactly how:
 | non-suspending `func f() R` | `R f()` | ordinary call | `R f()` |
 | **inferred**-suspending `func f() R` | `ValueTask<R> f()`, `[Suspending]`, `[PoolingAsyncValueTaskMethodBuilder]` | **implicitly awaited** | `ValueTask<R> f()` — visible, and that is accepted |
 | explicit `async func f() R` | `Task<R> f()` (ADR-0023, unchanged) | returns `Task[R]`; `await` to get `R` | `Task<R> f()` |
+| explicit `async func f() void` | `void f()` with `AsyncVoidMethodBuilder` | fire-and-forget void call; not awaitable | `async void f()` shape |
 
 Three points follow, and they are the whole contract:
 
