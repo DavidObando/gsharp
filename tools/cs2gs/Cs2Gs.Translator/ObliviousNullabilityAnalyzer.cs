@@ -303,8 +303,8 @@ internal static class ObliviousNullabilityAnalyzer
     /// promoted.</para>
     ///
     /// <para><b>The second half: a promoted forward is write evidence, but only
-    /// for GENERATED sinks.</b> A pure-forward expression written into a
-    /// declaration that <see cref="IsEvidenceDecidedGeneratedDeclaration"/>
+    /// for GENERATED STORAGE sinks.</b> A pure-forward expression written into a
+    /// FIELD or PROPERTY that <see cref="IsEvidenceDecidedGeneratedDeclaration"/>
     /// accepts promotes that declaration too — this is what carries
     /// <c>GetDocumentUri</c>'s nullability into the generated
     /// <c>Location.Uri</c> slot instead of parking a <c>!!</c> one frame up.
@@ -1138,10 +1138,24 @@ internal static class ObliviousNullabilityAnalyzer
                     continue;
                 }
 
-                // The same three write shapes `ComputeNullAssignmentTargets`
-                // recognises, restricted to a generated target: an assignment
-                // (including an object-initializer member), a field/property
-                // initializer, and a `return`/arrow body.
+                // A generated STORAGE sink: an assignment (which is also the
+                // object-initializer member shape, `Location { Uri = … }`) or a
+                // field/property initializer.
+                //
+                // Deliberately fields and properties ONLY. A method's return
+                // position is already covered, and covered more strictly, by
+                // the forwarder path above — which requires EVERY exit to
+                // forward and requires the method to own its signature. Letting
+                // a `return`/arrow body in here as well would promote members
+                // whose G# signature this translator does not actually repaint,
+                // and the analysis and the emitted code would disagree: the
+                // generated `public static implicit operator DocumentUri(string
+                // value) => From(value)` is exactly that — a
+                // ConversionOperatorDeclaration, whose G# `func operator
+                // implicit(value string) DocumentUri` keeps its conversion
+                // contract. Calling it promoted dropped the `!!` its return
+                // still needed and produced GS0155 in migrated
+                // `Protocol/Models.gs`.
                 ISymbol target = node switch
                 {
                     AssignmentExpressionSyntax assignment
@@ -1149,14 +1163,10 @@ internal static class ObliviousNullabilityAnalyzer
                         Model().GetSymbolInfo(assignment.Left).Symbol,
                     EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax or PropertyDeclarationSyntax } initializer =>
                         Model().GetDeclaredSymbol(initializer.Parent),
-                    ReturnStatementSyntax { Expression: not null } returned =>
-                        OwningMember(Model().GetEnclosingSymbol(returned.SpanStart)),
-                    ArrowExpressionClauseSyntax arrow =>
-                        OwningMember(Model().GetDeclaredSymbol(arrow.Parent)),
                     _ => null,
                 };
 
-                if (target != null
+                if (target is IFieldSymbol or IPropertySymbol
                     && IsEvidenceDecidedGeneratedDeclaration(target)
                     && target.OriginalDefinition.GetDocumentationCommentId() is { } sinkId)
                 {
@@ -1164,8 +1174,6 @@ internal static class ObliviousNullabilityAnalyzer
                     {
                         AssignmentExpressionSyntax assignment => assignment.Right,
                         EqualsValueClauseSyntax initializer => initializer.Value,
-                        ReturnStatementSyntax returned => returned.Expression,
-                        ArrowExpressionClauseSyntax arrow => arrow.Expression,
                         _ => null,
                     };
 
