@@ -511,6 +511,49 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
         return closed;
     }
 
+    /// <summary>
+    /// Copies as much of the ring as fits into <paramref name="destination"/>,
+    /// in at most two contiguous spans (issue #3902 S3).
+    /// </summary>
+    /// <remarks>
+    /// The batch receive used to walk <c>DequeueBuffer</c> per element, paying a
+    /// modulo and an <c>Array.Clear</c> of one slot each time. The clear only
+    /// matters when <typeparamref name="T"/> can hold a reference — leaving a
+    /// dead reference in the ring keeps an object alive — so for a blittable
+    /// element it is skipped entirely.
+    /// </remarks>
+    /// <param name="destination">Where to copy.</param>
+    /// <returns>The number of elements copied.</returns>
+    private int DrainBufferInto(Span<T> destination)
+    {
+        var ring = buffer;
+        if (ring is null || count == 0 || destination.IsEmpty)
+        {
+            return 0;
+        }
+
+        var take = Math.Min(destination.Length, count);
+        var first = Math.Min(take, ring.Length - head);
+        ring.AsSpan(head, first).CopyTo(destination);
+        if (take > first)
+        {
+            ring.AsSpan(0, take - first).CopyTo(destination[first..]);
+        }
+
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        {
+            Array.Clear(ring, head, first);
+            if (take > first)
+            {
+                Array.Clear(ring, 0, take - first);
+            }
+        }
+
+        head = (head + take) % ring.Length;
+        count -= take;
+        return take;
+    }
+
     private void RefillFromSenderLocked(ref Completions completions)
     {
         while (senders.TryDequeue(out var node))

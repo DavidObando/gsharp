@@ -54,10 +54,36 @@ public sealed class ChunkReader<T> : ChannelReader<ReadOnlyMemory<T>>
     /// <inheritdoc/>
     public override Task Completion => source.Completion;
 
+    /// <summary>
+    /// Gets how many elements are known to be waiting, or <c>size</c> when the
+    /// source cannot say (issue #3902 S3). A G#-owned channel can answer
+    /// exactly; a foreign reader is asked for a lower bound, and the
+    /// conservative answer keeps the old behaviour rather than skipping a read.
+    /// </summary>
+    private int Available => source switch
+    {
+        Chan<T>.ChanReader owned => owned.Owner.Length(),
+        _ => source.CanCount ? source.Count : size,
+    };
+
     /// <inheritdoc/>
+    /// <remarks>
+    /// Issue #3902 (S3): the array is sized to what is actually there, and is
+    /// not allocated at all when nothing is. This path is probed by the
+    /// readiness/re-probe loop a foreign reader goes through, so an empty
+    /// channel used to throw away one <c>T[size]</c> per probe — at a chunk
+    /// size of 1024 that dominated everything else the scenario did.
+    /// </remarks>
     public override bool TryRead(out ReadOnlyMemory<T> item)
     {
-        var buffer = new T[size];
+        var available = Available;
+        if (available == 0)
+        {
+            item = default;
+            return false;
+        }
+
+        var buffer = new T[Math.Min(size, available)];
         var taken = source.TryReceiveBatch(buffer.AsSpan());
         if (taken == 0)
         {
