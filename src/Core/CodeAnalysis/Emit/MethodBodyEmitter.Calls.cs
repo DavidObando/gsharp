@@ -207,8 +207,8 @@ internal sealed partial class MethodBodyEmitter
         else if (receiverIface != null
             && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(receiverIface))
         {
-            var openMethod = ResolveOpenInterfaceMethod(receiverIface, call.Method);
-            methodHandle = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(receiverIface, openMethod);
+            var (slotIface, openMethod) = ResolveInterfaceSlotOwner(receiverIface, call.Method);
+            methodHandle = this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(slotIface, openMethod);
         }
         else if (call.Method.ReceiverType is StructSymbol importedReceiver && importedReceiver.ClrType != null)
         {
@@ -295,6 +295,52 @@ internal sealed partial class MethodBodyEmitter
     // open <c>FunctionSymbol</c> on the definition so the emitter can look
     // up its <c>MethodHandle</c> and parent the resulting MemberRef at the
     // constructed TypeSpec.
+
+    /// <summary>
+    /// Issue #3907: resolves the interface that actually DECLARES the slot a
+    /// call reaches through <paramref name="receiverIface"/>, together with
+    /// that interface's open method.
+    /// </summary>
+    /// <remarks>
+    /// <para><see cref="ResolveOpenInterfaceMethod"/> only ever searched the
+    /// receiver interface's own definition, so a slot INHERITED from a base
+    /// interface found nothing and the call fell through to the bare-MethodDef
+    /// lookup, which threw "has no emitted handle". Parenting the MemberRef at
+    /// the receiver interface would have been just as wrong — the derived
+    /// interface's TypeSpec does not declare the method — so both halves have
+    /// to move together.</para>
+    /// <para><c>SelfAndAllBaseInterfaces</c> yields <c>this</c> first, so a
+    /// slot the receiver declares itself still wins, and each base arrives
+    /// ALREADY SUBSTITUTED with the receiver's type arguments (see
+    /// <c>InterfaceSymbol.BaseInterfaces</c>), which is what makes the
+    /// resulting MemberRef parent the constructed <c>IBase&lt;T&gt;</c> rather
+    /// than the open definition. <c>Methods</c> is per-interface and excludes
+    /// inherited members, so a candidate matching by identity is genuinely the
+    /// declarer.</para>
+    /// <para>This is the shape ADR-0174's channels runtime is built on:
+    /// <c>ISendSelectableCore[T] : ISelectableCore[T]</c>, with
+    /// <c>Deregister</c> declared on the base and called through the derived
+    /// interface.</para>
+    /// </remarks>
+    /// <param name="receiverIface">The receiver expression's interface type.</param>
+    /// <param name="substitutedMethod">The call's (substituted) method symbol.</param>
+    /// <returns>The declaring interface and its open method.</returns>
+    private static (InterfaceSymbol Interface, FunctionSymbol Method) ResolveInterfaceSlotOwner(
+        InterfaceSymbol receiverIface,
+        FunctionSymbol substitutedMethod)
+    {
+        foreach (var candidate in receiverIface.SelfAndAllBaseInterfaces())
+        {
+            var open = ResolveOpenInterfaceMethod(candidate, substitutedMethod);
+            if (!ReferenceEquals(open, substitutedMethod))
+            {
+                return (candidate, open);
+            }
+        }
+
+        return (receiverIface, substitutedMethod);
+    }
+
     private static FunctionSymbol ResolveOpenInterfaceMethod(InterfaceSymbol receiverIface, FunctionSymbol substitutedMethod)
     {
         var def = receiverIface.Definition ?? receiverIface;
