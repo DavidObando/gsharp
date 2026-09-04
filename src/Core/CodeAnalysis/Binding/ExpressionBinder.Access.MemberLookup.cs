@@ -128,6 +128,23 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
     {
+        // Issue #3887: a receiver whose type is already the error type carries
+        // no members by construction, so every lookup on it fails and reports a
+        // NEW independent `GS0158 Cannot find member` / `GS0159 Cannot find
+        // function` naming a member that usually exists on the type the user
+        // actually meant. The receiver only became error-typed because some
+        // earlier expression was already diagnosed, so those reports are
+        // provably redundant with that first diagnostic and actively
+        // misdirecting: they name members and mechanisms unrelated to the real
+        // cause. Fold the whole access to an error expression here instead —
+        // the same suppression C# performs for error types — which keeps the
+        // poison propagating through inference (`let x = broken(); x.M().N()`)
+        // without emitting a diagnostic per hop.
+        if (receiver != null && receiver.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(rightPart);
+        }
+
         switch (rightPart)
         {
             case UnaryExpressionSyntax unary
