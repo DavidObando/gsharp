@@ -3962,6 +3962,39 @@ internal static class ClrOverloadResolution
             return 1;
         }
 
+        // Issue #3866: a user-defined implicit conversion to a SPECIFIC target
+        // beats boxing/reference-converting the same argument to
+        // `System.Object`. C# §12.6.4.5 ranks two applicable candidates by
+        // "better conversion target", not by the mechanism of the conversion:
+        // `EntityHandle` converts implicitly to `object` and `object` does not
+        // convert back, so `EntityHandle` is the better target. Without this
+        // rule the ordinal comparison below let Boxing (4) beat
+        // UserDefinedImplicit (6), so
+        // `List[EntityHandle].Add(StandaloneSignatureHandle)` bound to the
+        // non-generic `IList.Add(object)` face instead of `Add(T)` via
+        // `StandaloneSignatureHandle`'s `op_Implicit` — a silent runtime
+        // divergence (`List<T>` throws ArgumentException from
+        // `IList.Add`), not a compile error.
+        //
+        // `System.Object` is the least specific possible target, so this can
+        // never demote a genuinely better candidate; unrelated non-object
+        // targets keep falling through to the ordinal comparison.
+        if (ka == ImplicitConversionKind.UserDefinedImplicit
+            && kb is ImplicitConversionKind.Reference or ImplicitConversionKind.Boxing
+            && IsSystemObject(paramB)
+            && !IsSystemObject(paramA))
+        {
+            return -1;
+        }
+
+        if (kb == ImplicitConversionKind.UserDefinedImplicit
+            && ka is ImplicitConversionKind.Reference or ImplicitConversionKind.Boxing
+            && IsSystemObject(paramA)
+            && !IsSystemObject(paramB))
+        {
+            return 1;
+        }
+
         if (ka != kb)
         {
             return ((int)ka).CompareTo((int)kb);
