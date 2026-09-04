@@ -56,6 +56,13 @@ public static partial class ChannelOps
     /// <returns>The value and whether one was delivered.</returns>
     public static (T Value, bool Ok) Receive2<T>(Channel<T>? channel, CancellationToken cancellationToken)
     {
+        // Issue #3902 H1: a blocking channel operation is what the body of a
+        // `lock { ch <- v }` compiles to (ADR-0174 errata 10). Monitor is
+        // reentrant, so an inline continuation would run INSIDE the caller's
+        // lock and observe mutual exclusion it does not hold. Publication on
+        // these paths always queues.
+        using var noInline = InlineBudget.Suppress();
+
         if (channel is Chan<T> chan)
         {
             if (chan.TryReceive(out var value, out var ok))
@@ -78,6 +85,13 @@ public static partial class ChannelOps
     /// <returns>The value and whether one was delivered.</returns>
     public static (T Value, bool Ok) Receive2<T>(ChannelReader<T>? reader, CancellationToken cancellationToken)
     {
+        // Issue #3902 H1: a blocking channel operation is what the body of a
+        // `lock { ch <- v }` compiles to (ADR-0174 errata 10). Monitor is
+        // reentrant, so an inline continuation would run INSIDE the caller's
+        // lock and observe mutual exclusion it does not hold. Publication on
+        // these paths always queues.
+        using var noInline = InlineBudget.Suppress();
+
         if (reader is Chan<T>.ChanReader owned)
         {
             return Receive2(owned.Owner, cancellationToken);
@@ -112,6 +126,13 @@ public static partial class ChannelOps
     /// <exception cref="ChannelClosedException">The channel is closed.</exception>
     public static void Send<T>(Channel<T>? channel, T value, CancellationToken cancellationToken)
     {
+        // Issue #3902 H1: a blocking channel operation is what the body of a
+        // `lock { ch <- v }` compiles to (ADR-0174 errata 10). Monitor is
+        // reentrant, so an inline continuation would run INSIDE the caller's
+        // lock and observe mutual exclusion it does not hold. Publication on
+        // these paths always queues.
+        using var noInline = InlineBudget.Suppress();
+
         if (channel is Chan<T> chan)
         {
             if (!chan.TrySend(value))
@@ -133,6 +154,13 @@ public static partial class ChannelOps
     /// <exception cref="ChannelClosedException">The channel is closed.</exception>
     public static void Send<T>(ChannelWriter<T>? writer, T value, CancellationToken cancellationToken)
     {
+        // Issue #3902 H1: a blocking channel operation is what the body of a
+        // `lock { ch <- v }` compiles to (ADR-0174 errata 10). Monitor is
+        // reentrant, so an inline continuation would run INSIDE the caller's
+        // lock and observe mutual exclusion it does not hold. Publication on
+        // these paths always queues.
+        using var noInline = InlineBudget.Suppress();
+
         if (writer is Chan<T>.ChanWriter owned)
         {
             Send(owned.Owner, value, cancellationToken);

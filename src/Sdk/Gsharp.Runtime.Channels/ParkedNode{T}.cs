@@ -54,6 +54,15 @@ internal abstract class ParkedNode<T> : WaiterNode<T>
     /// <summary>Gets a value indicating whether a transfer committed to this node.</summary>
     protected bool IsCommitted => Volatile.Read(ref state) == Committed;
 
+    /// <summary>
+    /// Gets a value indicating whether this node's continuation may run on the
+    /// publishing thread (issue #3902 H1). False for notifiers: their
+    /// continuation is a BCL <c>WaitToReadAsync</c> consumer, which
+    /// <see cref="System.Threading.Channels.Channel{T}"/> itself completes
+    /// asynchronously for the same reason.
+    /// </summary>
+    protected virtual bool AllowsInlineCompletion => true;
+
     /// <inheritdoc/>
     internal sealed override bool TryCancel(OperationCanceledException exception) => TryFault(exception);
 
@@ -73,13 +82,30 @@ internal abstract class ParkedNode<T> : WaiterNode<T>
             CanPool = registration.Unregister();
         }
 
-        if (Volatile.Read(ref state) == Committed)
+        // Issue #3902 H1 / ADR-0174 gate G6: complete the awaiter's
+        // continuation on this thread when the budget allows, instead of
+        // queueing a thread-pool work item and waiting for another thread to
+        // steal it. Publication already happens outside every channel lock,
+        // which is what makes this admissible at all.
+        var inline = AllowsInlineCompletion && InlineBudget.TryEnter();
+        try
         {
-            PublishResult();
+            SetRunContinuationsAsynchronously(!inline);
+            if (Volatile.Read(ref state) == Committed)
+            {
+                PublishResult();
+            }
+            else
+            {
+                PublishException(fault!);
+            }
         }
-        else
+        finally
         {
-            PublishException(fault!);
+            if (inline)
+            {
+                InlineBudget.Exit();
+            }
         }
     }
 
@@ -125,6 +151,10 @@ internal abstract class ParkedNode<T> : WaiterNode<T>
         fault = exception;
         return true;
     }
+
+    /// <summary>Points the node's value-task source at inline or queued completion.</summary>
+    /// <param name="value">Whether continuations must be queued.</param>
+    protected abstract void SetRunContinuationsAsynchronously(bool value);
 
     /// <summary>Publishes the committed result to the awaiter.</summary>
     protected abstract void PublishResult();
@@ -246,6 +276,9 @@ internal sealed class OpReceiveNode<T>
     }
 
     /// <inheritdoc/>
+    protected override void SetRunContinuationsAsynchronously(bool value) => core.RunContinuationsAsynchronously = value;
+
+    /// <inheritdoc/>
     protected override void PublishResult() => core.SetResult(result);
 
     /// <inheritdoc/>
@@ -358,6 +391,9 @@ internal sealed class OpSendNode<T> : ParkedNode<T>, IValueTaskSource
     }
 
     /// <inheritdoc/>
+    protected override void SetRunContinuationsAsynchronously(bool value) => core.RunContinuationsAsynchronously = value;
+
+    /// <inheritdoc/>
     protected override void PublishResult() => core.SetResult(true);
 
     /// <inheritdoc/>
@@ -389,6 +425,15 @@ internal sealed class NotifyNode<T> : ParkedNode<T>, IValueTaskSource<bool>
 
     /// <inheritdoc/>
     internal override bool IsNotify => true;
+
+    /// <summary>
+    /// Gets a value indicating whether the continuation may run inline: never,
+    /// for a notifier. Its continuation is a BCL <c>WaitToReadAsync</c>
+    /// consumer, and running arbitrary consumer code on a sender's stack is
+    /// exactly what <c>Channel&lt;T&gt;</c> avoids by defaulting that path to
+    /// asynchronous.
+    /// </summary>
+    protected override bool AllowsInlineCompletion => false;
 
     /// <inheritdoc/>
     bool IValueTaskSource<bool>.GetResult(short token) => core.GetResult(token);
@@ -431,6 +476,9 @@ internal sealed class NotifyNode<T> : ParkedNode<T>, IValueTaskSource<bool>
             result = false;
         }
     }
+
+    /// <inheritdoc/>
+    protected override void SetRunContinuationsAsynchronously(bool value) => core.RunContinuationsAsynchronously = value;
 
     /// <inheritdoc/>
     protected override void PublishResult() => core.SetResult(result);

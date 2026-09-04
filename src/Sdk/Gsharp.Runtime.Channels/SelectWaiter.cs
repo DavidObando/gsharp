@@ -556,13 +556,28 @@ public sealed class SelectWaiter : IValueTaskSource<int>
     /// <summary>Fires the select's continuation. Called exactly once, by the claimer, outside every channel lock.</summary>
     internal void PublishOutcome()
     {
-        if (fault is not null)
+        // Issue #3902 H1: the select's continuation may run on the claiming
+        // thread when the budget allows. Like a channel hand-off, the claim is
+        // published outside every gate.
+        var inline = InlineBudget.TryEnter();
+        try
         {
-            core.SetException(fault);
+            core.RunContinuationsAsynchronously = !inline;
+            if (fault is not null)
+            {
+                core.SetException(fault);
+            }
+            else
+            {
+                core.SetResult(winnerArm);
+            }
         }
-        else
+        finally
         {
-            core.SetResult(winnerArm);
+            if (inline)
+            {
+                InlineBudget.Exit();
+            }
         }
     }
 
@@ -695,6 +710,11 @@ public sealed class SelectWaiter : IValueTaskSource<int>
 
     private void OnCancelled()
     {
+        // Issue #3902 H1: this runs inside CancellationTokenSource.Cancel, so
+        // an inline continuation would execute the select's body — arbitrary
+        // user code — on whatever thread called Cancel, and inside the CTS's
+        // own callback machinery. Publication here always queues.
+        using var noInline = InlineBudget.Suppress();
         var generation = Generation;
         if (cancelledArm >= 0)
         {
