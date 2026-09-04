@@ -840,6 +840,23 @@ internal sealed partial class OverloadResolver
             return CompareReferenceTargets(paramA, paramB);
         }
 
+        // Issue #3866: the user-symbolic path was missing the UserDefinedImplicit
+        // arm that `ClrOverloadResolution.CompareConversions` has had since
+        // Stream E. `ClassifyUserArgumentConversionKind` reports
+        // UserDefinedImplicit for BOTH `Wrapped -> Payload` (a real
+        // `op_Implicit`) and `Wrapped -> object` (where the operator is merely
+        // one of several routes and boxing would do), so the two candidates
+        // landed in the same bucket, tied at 0 and reported a spurious GS0266
+        // where C# §12.6.4.5 prefers the better conversion TARGET. Payload
+        // converts implicitly to object and object does not convert back, so
+        // Payload wins; genuinely unrelated targets still tie and stay
+        // ambiguous.
+        if (ka == ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
+            && paramA != null && paramB != null && !ReferenceEquals(paramA, paramB))
+        {
+            return CompareReferenceTargets(paramA, paramB);
+        }
+
         return 0;
     }
 
