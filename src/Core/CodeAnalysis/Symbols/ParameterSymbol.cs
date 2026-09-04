@@ -80,6 +80,22 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     public object? ExplicitDefaultValue { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether this parameter carries
+    /// <c>@AllowNull</c> (issue #3907), the .NET-standard annotation for "this
+    /// input accepts <c>nil</c> even though its type is not nullable".
+    /// </summary>
+    /// <remarks>
+    /// <para>Purely an ANNOTATION: <c>Type</c> is untouched, so a
+    /// value-type <c>T</c> keeps its <c>T</c> signature slot and never becomes
+    /// <c>Nullable&lt;T&gt;</c>, and reads of the parameter inside the body
+    /// still see a non-nullable <c>T</c>. Only the ARGUMENT conversion at a
+    /// call site is relaxed, and only where the nullable source and the
+    /// non-nullable target share a runtime representation — see
+    /// <c>ConversionClassifier.AcceptsNilAnnotatedArgument</c>.</para>
+    /// </remarks>
+    public bool AllowsNullArgument => Binding.KnownAttributes.HasAllowNull(Attributes);
+
+    /// <summary>
     /// Gets the resolved <c>@MarshalAs(UnmanagedType.…)</c> override for
     /// this parameter (ADR-0096 / issue #762), or <see langword="null"/>
     /// when the parameter has no such annotation. Attached by

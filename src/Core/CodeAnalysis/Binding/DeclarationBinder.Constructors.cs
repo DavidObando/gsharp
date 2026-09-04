@@ -616,6 +616,14 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
+            // Issue #3907: an `@AllowNull` base-constructor parameter declares
+            // that it accepts a nil-carrying input.
+            if (ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type))
+            {
+                convertedArgs.Add(argument);
+                continue;
+            }
+
             if (argument.Type != parameter.Type
                 && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit
                 && !ExpressionBinder.IsImplicitConstantNarrowingArgument(argument, parameter.Type))

@@ -706,6 +706,15 @@ internal sealed class ConversionClassifier
 
         if (!conversion.Exists)
         {
+            // Issue #3907: the target parameter is annotated `@AllowNull`, so
+            // a `T?` argument is exactly what it declares itself willing to
+            // receive. See AcceptsNilAnnotatedArgument for why this is
+            // annotation-only and why it cannot reshape the emitted call.
+            if (AcceptsNilAnnotatedArgument(callParameter, expression.Type, type))
+            {
+                return expression;
+            }
+
             // Issue #1017: a user-defined conversion operator declared on a
             // same-package struct/class is modelled as a static op_Implicit /
             // op_Explicit FunctionSymbol — those types have no reflectible
@@ -2506,6 +2515,61 @@ internal sealed class ConversionClassifier
     internal static bool IsNumericReturnWidening(TypeSymbol source, TypeSymbol target)
     {
         return IsNumericReturnWideningCore(source, target);
+    }
+
+    /// <summary>
+    /// Issue #3907: true when <paramref name="parameter"/> is annotated
+    /// <c>@AllowNull</c> and <paramref name="sourceType"/> is the nullable
+    /// spelling of the parameter's own <paramref name="targetType"/> — i.e.
+    /// the argument is precisely the <c>nil</c>-carrying input the annotation
+    /// declares the parameter accepts.
+    /// </summary>
+    /// <remarks>
+    /// <para>Two properties make this safe, and both are load-bearing.</para>
+    /// <para><b>It is annotation-only.</b> The parameter's own
+    /// declared type is never widened. Widening it would make a
+    /// value-type <c>T</c> emit a <c>Nullable&lt;T&gt;</c> signature slot where
+    /// <c>T</c> is expected — wrong IL that ILVerify does not catch, because
+    /// the metadata is internally consistent and simply describes a different
+    /// method. Keeping the slot at <c>T</c> also preserves the asymmetry the
+    /// attribute exists for: reads of the parameter inside the body still see
+    /// a non-nullable <c>T</c> and still need the author's <c>!!</c>.</para>
+    /// <para><b>It never reshapes the emitted call.</b> The relaxation is
+    /// gated on <see cref="NullableLifting.IsAnyValueTypeNullable"/> being
+    /// false, so the source nullable is one whose runtime representation is
+    /// identical to its underlying (ADR-0001 §Phase 3.C.1: for a reference
+    /// type or an unconstrained type parameter, <c>T?</c> relays <c>T</c>'s
+    /// <c>ClrType</c> and the IL value is the same reference either way). A
+    /// value-type nullable — <c>int32?</c> into an <c>@AllowNull</c>
+    /// <c>int32</c> slot — really is <c>Nullable&lt;int32&gt;</c> on the
+    /// stack, is rejected by C# too, and stays rejected here. The underlying
+    /// must also be IDENTICAL to the target rather than merely convertible to
+    /// it, so this admits exactly <c>T?</c> at a <c>T</c> slot and no other
+    /// shape; the argument is returned unchanged, with no synthesized
+    /// conversion node.</para>
+    /// </remarks>
+    /// <param name="parameter">The target parameter, or <see langword="null"/> when not binding a call argument.</param>
+    /// <param name="sourceType">The argument's static type.</param>
+    /// <param name="targetType">The parameter's (substituted) declared type.</param>
+    /// <returns><see langword="true"/> when the argument is accepted as-is.</returns>
+    internal static bool AcceptsNilAnnotatedArgument(
+        ParameterSymbol? parameter,
+        TypeSymbol? sourceType,
+        TypeSymbol? targetType)
+    {
+        if (parameter is not { AllowsNullArgument: true }
+            || targetType == null
+            || targetType == TypeSymbol.Error
+            || sourceType is not NullableTypeSymbol nullableSource
+            || NullableLifting.IsAnyValueTypeNullable(nullableSource))
+        {
+            return false;
+        }
+
+        var underlying = nullableSource.UnderlyingType;
+        return underlying != null
+            && underlying != TypeSymbol.Error
+            && Conversion.Classify(underlying, targetType).IsIdentity;
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----

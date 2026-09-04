@@ -265,6 +265,43 @@ internal static class ClrOverloadResolution
 #pragma warning restore SA1201
 
     /// <summary>
+    /// Issue #3907: sentinel argument type representing a by-ref
+    /// (<c>ref</c>/<c>out</c>/<c>in</c>) argument whose pointee is a
+    /// same-compilation user REFERENCE type — a G# <c>class</c>, interface or
+    /// named delegate the current compilation is still emitting, and which
+    /// therefore has no CLR <see cref="Type"/> to match against.
+    /// </summary>
+    /// <remarks>
+    /// <para>By VALUE such an argument rides through the <c>object</c>
+    /// boundary harmlessly (issue #658) — a class instance really is an
+    /// <c>object</c>. By REFERENCE it does not: C# requires a <c>ref</c>
+    /// argument to match its parameter EXACTLY, so <c>ref Node</c> is not a
+    /// <c>ref object</c>. Erasing it made the non-generic
+    /// <c>Interlocked.Exchange(ref object, object)</c> an exact IDENTITY match
+    /// for <c>Interlocked.Exchange(&amp;nodeField, nil)</c>, so it beat the
+    /// <c>Exchange&lt;T&gt;(ref T, T) where T : class</c> the author meant and
+    /// the call's type silently became <c>object</c>. csc never considers that
+    /// overload at all.</para>
+    /// <para>Like the inline <c>out var</c> sentinel, this one classifies as an
+    /// identity conversion against any by-ref parameter and as inapplicable
+    /// against everything else, so it stays neutral during betterness ranking.
+    /// The <em>candidate</em> restriction — only a by-ref parameter that is
+    /// GENERIC in the open definition can accept it, because no imported
+    /// signature can name a type this compilation has not emitted yet — is
+    /// applied before resolution by
+    /// <c>MemberLookup.ExcludeNonGenericByRefCandidates</c>, since a candidate
+    /// closed over the erasure no longer remembers which of its by-ref
+    /// parameters were generic. The type argument is then recovered
+    /// symbolically (<c>MemberLookup.BuildSymbolicMethodTypeArgs</c> →
+    /// <c>TryRecoverErasedTypeArguments</c>), which is what makes the
+    /// resulting call's type the user's own class rather than
+    /// <c>object</c>.</para>
+    /// </remarks>
+#pragma warning disable SA1201 // Elements should appear in the correct order
+    public static readonly Type SymbolicByRefArgumentType = typeof(SymbolicByRefArgumentMarker);
+#pragma warning restore SA1201
+
+    /// <summary>
     /// Issue #2126: reports whether <paramref name="argType"/> is a resolution
     /// sentinel — the inline <c>out var</c> placeholder
     /// (<see cref="InlineOutVarArgumentType"/>) or the untyped <c>default</c>
@@ -280,7 +317,9 @@ internal static class ClrOverloadResolution
     /// <param name="argType">The candidate argument/type-argument CLR type.</param>
     /// <returns><see langword="true"/> when the type is a resolution sentinel.</returns>
     public static bool IsResolutionSentinel(Type argType) =>
-        ReferenceEquals(argType, InlineOutVarArgumentType) || ReferenceEquals(argType, DefaultLiteralArgumentType);
+        ReferenceEquals(argType, InlineOutVarArgumentType)
+        || ReferenceEquals(argType, DefaultLiteralArgumentType)
+        || ReferenceEquals(argType, SymbolicByRefArgumentType);
 
     // Issue #658 / #1311 / #1634: the supplementary-interface and constant-
     // narrowing checks used to live here as mutable (later [ThreadStatic])
@@ -337,6 +376,16 @@ internal static class ClrOverloadResolution
         if (ReferenceEquals(source, DefaultLiteralArgumentType))
         {
             return target.IsByRef ? ImplicitConversionKind.None : ImplicitConversionKind.Identity;
+        }
+
+        // Issue #3907: a by-ref argument over a same-compilation user reference
+        // type matches a by-ref parameter whose element type is a generic
+        // parameter, and nothing else — see SymbolicByRefArgumentType. In
+        // particular it must NOT match `ref object`, which is what erasure
+        // used to make it do.
+        if (ReferenceEquals(source, SymbolicByRefArgumentType))
+        {
+            return target.IsByRef ? ImplicitConversionKind.Identity : ImplicitConversionKind.None;
         }
 
         // Issue #533: a null source represents the `nil` literal in G#.
@@ -5589,6 +5638,15 @@ internal static class ClrOverloadResolution
     /// <c>default</c> literal argument during overload resolution. Never instantiated.
     /// </summary>
     private sealed class DefaultLiteralArgumentMarker
+    {
+    }
+
+    /// <summary>
+    /// Issue #3907: private marker type whose <see cref="Type"/> identity is used
+    /// as the <see cref="SymbolicByRefArgumentType"/> sentinel for a by-ref
+    /// argument over a same-compilation user reference type. Never instantiated.
+    /// </summary>
+    private sealed class SymbolicByRefArgumentMarker
     {
     }
 }
