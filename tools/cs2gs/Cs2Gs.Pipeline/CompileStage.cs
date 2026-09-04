@@ -145,8 +145,14 @@ public sealed class CompileStage : IMigrationStage
                     return Task.FromResult(StageOutcome.Passed());
                 }
 
+                // Issue #3905: a compiler CRASH and a mis-parsed diagnostic
+                // reach this line looking identical — "exited with code 1 and
+                // no parseable diagnostic" — and the first one cost a whole
+                // investigation through raw sdk.build.log to tell apart. When
+                // the build output carries a managed crash signature, say so.
+                string crash = DescribeCompilerCrash(sdkResult.Output);
                 string sdkSyntheticMessage = "dotnet build (--via-sdk) exited with code " + sdkResult.ExitCode +
-                    " and no parseable diagnostic. Output: " + Truncate(sdkResult.Output);
+                    " and no parseable diagnostic." + crash + " Output: " + Truncate(sdkResult.Output);
                 return Task.FromResult(BuildFailureOutcome(context, sdkResult.Errors, sdkSyntheticMessage));
             }
 
@@ -447,6 +453,59 @@ public sealed class CompileStage : IMigrationStage
         return Directory.EnumerateFiles(runtimeDir, "*.dll", SearchOption.TopDirectoryOnly)
             .OrderBy(p => p, StringComparer.Ordinal)
             .ToList();
+    }
+
+    /// <summary>
+    /// Issue #3905: recognises a compiler process that DIED rather than
+    /// reported. A stack overflow cannot be caught, so gsc leaves nothing but
+    /// "Stack overflow." and a managed stack trace on stdout and exits
+    /// non-zero — which the diagnostic parser reads as "no diagnostics", the
+    /// same shape a mis-parsed error line produces. Naming the crash (and the
+    /// first compiler frame beneath it) in the synthetic message turns a
+    /// dig through raw sdk.build.log into a line of gate output.
+    /// </summary>
+    /// <param name="output">The captured build output.</param>
+    /// <returns>A leading-space-prefixed sentence, or the empty string when the output shows no crash.</returns>
+    private static string DescribeCompilerCrash(string output)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return string.Empty;
+        }
+
+        string kind = null;
+        if (output.Contains("Stack overflow."))
+        {
+            kind = "stack overflow";
+        }
+        else if (output.Contains("Unhandled exception."))
+        {
+            kind = "unhandled exception";
+        }
+
+        if (kind is null)
+        {
+            return string.Empty;
+        }
+
+        // The first compiler frame names the recursion/fault site, which is the
+        // one thing a reader needs before opening the log.
+        string frame = null;
+        foreach (string rawLine in output.Replace("\r\n", "\n").Split('\n'))
+        {
+            string line = rawLine.Trim();
+            if (line.StartsWith("at GSharp.", StringComparison.Ordinal))
+            {
+                frame = line;
+                break;
+            }
+        }
+
+        string where = frame is null
+            ? string.Empty
+            : " First compiler frame: " + Truncate(frame) + ".";
+        return " THE COMPILER CRASHED (" + kind + ") — this is a gsc bug, not a translation error;"
+            + " no diagnostics exist because the process died." + where;
     }
 
     private static string Truncate(string value)

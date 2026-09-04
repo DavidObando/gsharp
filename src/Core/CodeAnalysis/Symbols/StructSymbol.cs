@@ -1879,44 +1879,35 @@ public sealed class StructSymbol : TypeSymbol
 
     private static StructSymbol CreateConstructed(StructSymbol definition, ImmutableArray<TypeSymbol> typeArguments, Func<Type, Type>? mapClrType)
     {
-        var subst = new Dictionary<TypeParameterSymbol, TypeSymbol>(definition.TypeParameters.Length);
-        for (var i = 0; i < definition.TypeParameters.Length; i++)
-        {
-            subst[definition.TypeParameters[i]] = typeArguments[i];
-        }
-
-        var substitutedFields = ImmutableArray.CreateBuilder<FieldSymbol>(definition.Fields.Length);
-        foreach (var f in definition.Fields)
-        {
-            substitutedFields.Add(new FieldSymbol(
-                f.Name,
-                SubstituteTypeForConstruction(f.Type, subst, mapClrType),
-                f.Accessibility,
-                declaration: f.Declaration));
-        }
-
-        var substitutedPrimary = ImmutableArray<ParameterSymbol>.Empty;
-        if (!definition.PrimaryConstructorParameters.IsDefaultOrEmpty)
-        {
-            var b = ImmutableArray.CreateBuilder<ParameterSymbol>(definition.PrimaryConstructorParameters.Length);
-            foreach (var p in definition.PrimaryConstructorParameters)
-            {
-                b.Add(new ParameterSymbol(p.Name, SubstituteTypeForConstruction(p.Type, subst, mapClrType), isVariadic: p.IsVariadic, isScoped: p.IsScoped));
-            }
-
-            substitutedPrimary = b.MoveToImmutable();
-        }
-
+        // Issue #3905: the instance fields and primary-constructor parameters are
+        // NOT substituted here. On a constructed instance both the `Fields` and
+        // `PrimaryConstructorParameters` getters forward to the definition and
+        // substitute lazily (GetSubstitutedFields /
+        // GetSubstitutedPrimaryConstructorParameters, issue #1341), so anything
+        // computed eagerly at this point was written to a store that a
+        // constructed instance never reads. Doing that dead work here also put
+        // `SubstituteTypeForConstruction` on the construction path, which made
+        // mutually-referential generic types (`class Node[T] { var Core
+        // ICore[T] }` / `interface ICore[T] { func Register(node Node[T]) }`)
+        // recurse forever: this factory runs INSIDE
+        // `ConcurrentDictionary.GetOrAdd`, so the entry for `(definition,
+        // typeArguments)` is not yet published when the substitution asks for
+        // the same construction again, and gsc died with a stack overflow
+        // instead of emitting anything. Deferring to the lazy getters — exactly
+        // what CreateConstructedNested and CreateConstructedNestedGeneric
+        // already do — keeps construction cheap and re-entrancy-free, and picks
+        // up the richer lazy substitution (field modifiers, parameter
+        // `refKind`) that the eager copy dropped.
         var constructed = new StructSymbol(
             definition.Name,
-            substitutedFields.MoveToImmutable(),
+            definition.Fields,
             definition.Accessibility,
             definition.Declaration,
             definition.PackageName,
             definition.IsData,
             definition.IsInline,
             definition.IsClass,
-            substitutedPrimary,
+            definition.PrimaryConstructorParameters,
             definition.IsOpen,
             definition.BaseClass);
 
