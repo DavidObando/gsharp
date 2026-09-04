@@ -857,6 +857,13 @@ public partial class Parser
         var awaitKeyword = MatchToken(SyntaxKind.AwaitKeyword);
         var forKeyword = MatchToken(SyntaxKind.ForKeyword);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        TypeClauseSyntax? typeClause = null;
+        if (!(Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
+            && Current.Kind != SyntaxKind.ColonEqualsToken)
+        {
+            typeClause = ParseTypeClause();
+        }
+
         SyntaxToken? colonEquals = null;
         SyntaxToken? rangeKeyword = null;
         SyntaxToken? inToken = null;
@@ -879,7 +886,7 @@ public partial class Parser
         var stream = ParseExpressionInBodyHeader();
         var body = ParseBlockStatement();
         return new AwaitForRangeStatementSyntax(
-            syntaxTree, awaitKeyword, forKeyword, identifier, colonEquals, rangeKeyword, inToken, stream, body);
+            syntaxTree, awaitKeyword, forKeyword, identifier, typeClause, colonEquals, rangeKeyword, inToken, stream, body);
     }
 
     private StatementSyntax ParseSelectStatement()

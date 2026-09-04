@@ -3054,38 +3054,13 @@ public sealed partial class CSharpToGSharpTranslator
                         this.context.GetDeclaredSymbol(forEach),
                         forEach.Identifier.ValueText);
                     BlockStatement loopBody = this.TranslateStatementAsBlock(forEach.Statement);
-                    Conversion elementConversion = this.context.SemanticModel
-                        .GetForEachStatementInfo(forEach)
-                        .ElementConversion;
-                    if (!forEach.Type.IsVar && !elementConversion.IsImplicit)
+                    GTypeReference loopVariableType = null;
+                    if (!forEach.Type.IsVar)
                     {
-                        string itemIdentifier = $"__foreach{this.state.DeconCounter++}";
                         ITypeSymbol targetSymbol = this.context.GetTypeInfo(forEach.Type).Type;
-                        GTypeReference targetType = targetSymbol != null
+                        loopVariableType = targetSymbol != null
                             ? this.typeMapper.Map(targetSymbol, this.context, forEach.Type.GetLocation())
                             : new NamedTypeReference(forEach.Type.ToString());
-                        GExpression converted = targetSymbol is { IsReferenceType: true }
-                            ? new BinaryExpression(
-                                new IdentifierExpression(itemIdentifier),
-                                "as",
-                                new TypeExpression(targetType))
-                            : new ConversionExpression(targetType, new IdentifierExpression(itemIdentifier));
-                        if (targetSymbol is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated })
-                        {
-                            converted = new NonNullAssertionExpression(converted);
-                        }
-
-                        var statements = new List<GStatement>(loopBody.Statements.Count + 1)
-                        {
-                            new LocalDeclarationStatement(
-                                BindingKind.Let,
-                                loopIdentifier,
-                                targetType,
-                                converted),
-                        };
-                        statements.AddRange(loopBody.Statements);
-                        loopBody = new BlockStatement(statements);
-                        loopIdentifier = itemIdentifier;
                     }
 
                     return new[]
@@ -3094,7 +3069,8 @@ public sealed partial class CSharpToGSharpTranslator
                             loopIdentifier,
                             this.TranslateReceiverWithNullForgiveness(forEach.Expression),
                             loopBody,
-                            isAwait: !forEach.AwaitKeyword.IsKind(SyntaxKind.None)),
+                            isAwait: !forEach.AwaitKeyword.IsKind(SyntaxKind.None),
+                            variableType: loopVariableType),
                     };
 
                 case ForEachVariableStatementSyntax forEachVariable:

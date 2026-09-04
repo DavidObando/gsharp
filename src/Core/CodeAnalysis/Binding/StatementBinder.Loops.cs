@@ -170,6 +170,7 @@ internal sealed partial class StatementBinder
             syntax.SyntaxTree,
             syntax.Keyword,
             tempIdentifier,
+            typeClause: null,
             commaToken: null,
             secondIdentifier: null,
             colonEqualsToken: null,
@@ -448,6 +449,7 @@ internal sealed partial class StatementBinder
 
         VariableSymbol? keyVariable = null;
         VariableSymbol valueVariable;
+        ImmutableArray<BoundStatement> typedVariablePrelude = ImmutableArray<BoundStatement>.Empty;
         if (syntax.SecondIdentifier != null)
         {
             keyVariable = bindLocalVariable(
@@ -475,10 +477,30 @@ internal sealed partial class StatementBinder
                     Invariant.Required(keyType, "a dictionary iteration has a key type"),
                     Invariant.Required(valueType, "a dictionary iteration has a value type"))
                 : Invariant.Required(valueType, "a range iteration has a value type");
-            valueVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: singleVarType);
+            if (syntax.TypeClause == null)
+            {
+                valueVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: singleVarType);
+            }
+            else
+            {
+                var declaredType = bindTypeClause(syntax.TypeClause) ?? TypeSymbol.Error;
+                valueVariable = new LocalVariableSymbol(
+                    $"<forrange{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: false,
+                    type: singleVarType);
+                var declaredVariable = bindLocalVariable(syntax.FirstIdentifier, isReadOnly: false, type: declaredType);
+                var convertedValue = conversions.BindConversion(
+                    syntax.TypeClause.Location,
+                    new BoundVariableExpression(syntax, valueVariable),
+                    declaredType,
+                    allowExplicit: true);
+                typedVariablePrelude = ImmutableArray.Create<BoundStatement>(
+                    new BoundVariableDeclaration(syntax, declaredVariable, convertedValue));
+            }
         }
 
-        var prelude = bindLoopPrelude?.Invoke(valueVariable) ?? ImmutableArray<BoundStatement>.Empty;
+        var prelude = typedVariablePrelude.AddRange(
+            bindLoopPrelude?.Invoke(valueVariable) ?? ImmutableArray<BoundStatement>.Empty);
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
         if (!prelude.IsEmpty)
         {

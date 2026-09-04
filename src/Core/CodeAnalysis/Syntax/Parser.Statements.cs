@@ -1058,12 +1058,50 @@ public partial class Parser
             return !HasEllipsisBeforeBrace(o + 1);
         }
 
+        if (!hasCommaSecondId && LooksLikeTypedForRange(o, out var inOffset))
+        {
+            return !HasEllipsisBeforeBrace(inOffset + 1);
+        }
+
         if (Peek(o).Kind != SyntaxKind.ColonEqualsToken)
         {
             return false;
         }
 
         return Peek(o + 1).Kind == SyntaxKind.RangeKeyword;
+    }
+
+    private bool LooksLikeTypedForRange(int typeOffset, out int inOffset)
+    {
+        inOffset = -1;
+        if (!CanStartTypeClause(Peek(typeOffset)))
+        {
+            return false;
+        }
+
+        var savedPosition = position;
+        var savedTokens = tokens;
+        var savedDiagnosticCount = Diagnostics.Count;
+        try
+        {
+            position += typeOffset;
+            _ = ParseTypeClause();
+            if (Diagnostics.Count != savedDiagnosticCount
+                || Current.Kind != SyntaxKind.IdentifierToken
+                || Current.Text != "in")
+            {
+                return false;
+            }
+
+            inOffset = position - savedPosition;
+            return true;
+        }
+        finally
+        {
+            position = savedPosition;
+            tokens = savedTokens;
+            Diagnostics.TruncateTo(savedDiagnosticCount);
+        }
     }
 
     private bool HasEllipsisBeforeBrace(int startOffset)
@@ -1280,12 +1318,18 @@ public partial class Parser
     {
         var keyword = MatchToken(SyntaxKind.ForKeyword);
         var firstIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        TypeClauseSyntax? typeClause = null;
         SyntaxToken? commaToken = null;
         SyntaxToken? secondIdentifier = null;
         if (Current.Kind == SyntaxKind.CommaToken)
         {
             commaToken = MatchToken(SyntaxKind.CommaToken);
             secondIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+        }
+        else if (!(Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "in")
+            && Current.Kind != SyntaxKind.ColonEqualsToken)
+        {
+            typeClause = ParseTypeClause();
         }
 
         SyntaxToken? colonEqualsToken = null;
@@ -1315,7 +1359,7 @@ public partial class Parser
 
         var collection = ParseExpressionInBodyHeader(allowEmptyStructLiteralCollection: true);
         var body = ParseStatement();
-        return new ForRangeStatementSyntax(syntaxTree, keyword, firstIdentifier, commaToken, secondIdentifier, colonEqualsToken, rangeKeyword, inToken, collection, body);
+        return new ForRangeStatementSyntax(syntaxTree, keyword, firstIdentifier, typeClause, commaToken, secondIdentifier, colonEqualsToken, rangeKeyword, inToken, collection, body);
     }
 
     private StatementSyntax ParseForEllipsisStatement()

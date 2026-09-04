@@ -1380,6 +1380,7 @@ ForStmt = "for" Statement
         | "for" Expression Statement
         | "for" SimpleStmt? ";" Expression? ";" SimpleStmt? Statement
         | "for" identifier ( "," identifier )? "in" Expression Statement
+        | "for" identifier TypeClause "in" Expression Statement
         | "for" identifier "in" Expression "..." Expression Statement
         | "for" "(" identifier ( "," identifier )* ")" "in" Expression Statement .
 ```
@@ -1391,6 +1392,12 @@ sequence into the parenthesized identifier list, one binding per tuple slot
 The `for … in` range form iterates arrays, slices, strings (over `char`),
 `sequence[T]` and other CLR/pattern enumerables, and `map[K,V]`. The meaning
 of the identifier list depends on the operand:
+
+The single-variable form may declare an element type:
+`for item T in collection`. Each source element is explicitly converted to
+`T` before the body executes, matching C# `foreach (T item in collection)`.
+An impossible conversion is diagnosed at compile time; a failed runtime cast
+throws the normal CLR exception.
 
 - **Indexed and enumerable collections** (arrays, slices, strings, sequences,
   CLR enumerables): the single-variable form `for v in coll` binds each
@@ -1601,7 +1608,7 @@ ThrowExpr     = "throw" Expression .
 `await expr` is a prefix expression and must appear in an async context with an awaitable operand. `await for` iterates asynchronous sequences.
 
 ```ebnf
-AwaitForRangeStmt = "await" "for" identifier "in" Expression Block .
+AwaitForRangeStmt = "await" "for" identifier TypeClause? "in" Expression Block .
 ```
 
 ## Concurrency
@@ -1954,7 +1961,7 @@ AwaitUsingStmt    ::= 'await' 'using' VariableDecl
 DeferStmt         ::= 'defer' Expression
 GoStmt            ::= 'go' (Expression | Block)                                   (* ADR-0174 D14 *)
 ScopeStmt         ::= 'scope' Block
-AwaitForRangeStmt ::= 'await' 'for' identifier 'in' Expression Block
+AwaitForRangeStmt ::= 'await' 'for' identifier TypeClause? 'in' Expression Block
 SelectStmt        ::= 'select' '{' SelectCase* '}'
 SelectCase        ::= 'default' Block
                     | 'case' '<-' Expression Guard? Block
