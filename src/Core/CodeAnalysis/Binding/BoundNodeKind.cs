@@ -28,6 +28,7 @@ public enum BoundNodeKind
     ExpressionStatement,
     TryStatement,
     ThrowStatement,
+    RethrowStatement,
     PatternSwitchStatement,
     PatternSwitchArm,
 

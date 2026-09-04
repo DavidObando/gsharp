@@ -288,7 +288,7 @@ public sealed class Binder
         lambdas = new LambdaBinder(
             binderCtx,
             conversions,
-            bindBlockStatement: syntax => Statements.BindBlockStatement(syntax),
+            bindBlockStatement: BindNestedFunctionBodyForLambdas,
             bindTypeClause: BindTypeClause,
             bindReturnTypeClause: (syntax, isAsync) => BindReturnTypeClause(syntax, isAsync),
             isIteratorReturnType: IsIteratorReturnType,
@@ -311,8 +311,14 @@ public sealed class Binder
             ExpressionSyntax syntax,
             TypeSymbol targetType) =>
             Expressions.BindExpression(syntax, targetType);
+
+        // ADR-0176 (#3897): a lambda / local-function body is emitted as its own
+        // method, so the enclosing catch handlers are not in scope for a
+        // `rethrow` written inside it.
+        BoundStatement BindNestedFunctionBodyForLambdas(BlockStatementSyntax syntax) =>
+            Statements.BindNestedFunctionBody(syntax);
         BoundExpression BindLambdaBodyExpressionForLambdas(ExpressionSyntax syntax, TypeSymbol? targetType) =>
-            Expressions.BindLambdaBodyExpression(syntax, targetType);
+            Statements.OutsideExceptionHandlers(() => Expressions.BindLambdaBodyExpression(syntax, targetType));
         statements = new StatementBinder(
             binderCtx,
             conversions,

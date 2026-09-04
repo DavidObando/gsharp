@@ -46,6 +46,27 @@ func requireName(name string?) string {
 ```
 
 
+## Rethrowing
+
+Inside a `catch` handler, `rethrow` re-raises the exception being handled while
+keeping its original throw site. Re-throwing the caught binder instead
+(`throw e`) raises the same object but resets `StackTrace` to the line that
+re-threw it, which loses the frames that actually failed.
+
+```gsharp
+try {
+    process(order)
+} catch (e IOException) {
+    Console.WriteLine("retrying: " + e.Message)
+    rethrow
+}
+```
+
+`rethrow` is only valid lexically inside a `catch` body. Writing it anywhere
+else is `GS0570`, and writing it in a `finally` nested inside that `catch` is
+`GS0571` — by then the runtime has already left the handler. A `rethrow` inside
+a nested `catch` re-raises that inner exception, not the outer one.
+
 ## Nullable absence is not an exception
 
 Use nullable types and `nil` for expected absence. Use exceptions for failure paths that interrupt normal control flow. `??` is the null-coalescing operator, `?.` is null-conditional access, and `!!` asserts non-null.

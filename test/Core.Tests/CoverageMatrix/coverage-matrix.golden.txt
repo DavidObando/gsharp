@@ -212,6 +212,8 @@ RangeExpression
 RangeKeyword
 RefArgumentExpression
 RelationalPattern
+RethrowKeyword
+RethrowStatement
 ReturnKeyword
 ReturnStatement
 RightArrowToken
@@ -358,6 +360,7 @@ PropertyAssignmentExpression
 PropertyPattern
 PropertyPatternField
 RelationalPattern
+RethrowStatement
 ReturnStatement
 SizeOfExpression
 SlicePattern

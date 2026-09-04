@@ -579,6 +579,16 @@ public sealed class ThrowStatement : GStatement
 }
 
 /// <summary>
+/// A <c>rethrow</c> statement (ADR-0176, issue #3897): re-raises the exception
+/// the enclosing <c>catch</c> is handling, preserving its original throw site.
+/// Distinct from <see cref="ThrowStatement"/> over the catch binder, which
+/// resets <c>StackTrace</c> to the throw site.
+/// </summary>
+public sealed class RethrowStatement : GStatement
+{
+}
+
+/// <summary>
 /// A <c>defer</c> statement. Per ADR-0030, the operand is a single call
 /// expression that runs on scope exit (LIFO); G# has no block-bodied
 /// <c>defer { … }</c> form.

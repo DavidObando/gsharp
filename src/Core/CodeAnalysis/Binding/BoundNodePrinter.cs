@@ -84,6 +84,9 @@ public static class BoundNodePrinter
             case BoundNodeKind.ThrowStatement:
                 WriteThrowStatement((BoundThrowStatement)node, writer);
                 break;
+            case BoundNodeKind.RethrowStatement:
+                WriteRethrowStatement(writer);
+                break;
             case BoundNodeKind.PatternSwitchStatement:
                 WritePatternSwitchStatement((BoundPatternSwitchStatement)node, writer);
                 break;
@@ -571,6 +574,12 @@ public static class BoundNodePrinter
         writer.WriteKeyword(SyntaxKind.ThrowKeyword);
         writer.WriteSpace();
         node.Expression.WriteTo(writer);
+        writer.WriteLine();
+    }
+
+    private static void WriteRethrowStatement(IndentedTextWriter writer)
+    {
+        writer.WriteKeyword(SyntaxKind.RethrowKeyword);
         writer.WriteLine();
     }
 

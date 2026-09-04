@@ -206,6 +206,8 @@ public static class SyntaxFacts
                 return SyntaxKind.PublicKeyword;
             case "range":
                 return SyntaxKind.RangeKeyword;
+            case "rethrow":
+                return SyntaxKind.RethrowKeyword;
             case "return":
                 return SyntaxKind.ReturnKeyword;
             case "scope":
@@ -600,6 +602,8 @@ public static class SyntaxFacts
                 return "suspend";
             case SyntaxKind.SwitchKeyword:
                 return "switch";
+            case SyntaxKind.RethrowKeyword:
+                return "rethrow";
             case SyntaxKind.ThrowKeyword:
                 return "throw";
             case SyntaxKind.TrueKeyword:

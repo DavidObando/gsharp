@@ -306,7 +306,7 @@ public static class AsyncExceptionHandlerRewriter
                         clause.Variable,
                         new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)));
                     newClauses.Add(typedCatchClause);
-                    afterTryHandlers.Add((clause, clause.Body, captureLocal));
+                    afterTryHandlers.Add((clause, LiftRethrows(clause), captureLocal));
                 }
                 else
                 {
@@ -447,7 +447,7 @@ public static class AsyncExceptionHandlerRewriter
                         clause.Variable,
                         new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(assignCapture, assignPending)));
                     innerClauses.Add(typedCatchClause);
-                    liftedCatchHandlers.Add((clause, clause.Body, captureLocal));
+                    liftedCatchHandlers.Add((clause, LiftRethrows(clause), captureLocal));
                 }
                 else
                 {
@@ -627,6 +627,26 @@ public static class AsyncExceptionHandlerRewriter
         }
 
         /// <summary>
+        /// Converts every <c>rethrow</c> that belongs to <paramref name="clause"/>
+        /// into <c>ExceptionDispatchInfo.Capture(e).Throw()</c> (ADR-0176,
+        /// issue #3897).
+        /// </summary>
+        /// <remarks>
+        /// A catch handler containing an <c>await</c> is lifted out of the CLR
+        /// protected region by this pass, so an <c>ILOpCode.Rethrow</c> in its
+        /// body would no longer be inside a handler — unverifiable IL. The EDI
+        /// capture/throw pair is the standard stand-in and preserves the
+        /// original stack trace, which is the whole point of the construct.
+        /// Rethrows inside a <i>nested</i> catch that stays in place keep their
+        /// real <c>rethrow</c>: <see cref="RethrowLifter"/> does not descend
+        /// into nested catch bodies.
+        /// </remarks>
+        /// <param name="clause">The catch clause whose body is being lifted.</param>
+        /// <returns>The handler body with its own rethrows converted.</returns>
+        private static BoundStatement LiftRethrows(BoundCatchClause clause)
+            => new RethrowLifter(clause.Variable, clause.ExceptionType).Lift(clause.Body);
+
+        /// <summary>
         /// Builds the lowered statement
         /// <c>ExceptionDispatchInfo.Capture(<paramref name="exceptionExpr"/>).Throw();</c>.
         /// Used by the async-rethrow path so that an exception captured into a
@@ -706,6 +726,44 @@ public static class AsyncExceptionHandlerRewriter
             public int Discriminator { get; }
 
             public BoundStatement Exit { get; }
+        }
+
+        /// <summary>
+        /// Replaces a lifted catch handler's own <c>rethrow</c> statements with
+        /// <c>ExceptionDispatchInfo.Capture(e).Throw()</c> (ADR-0176).
+        /// </summary>
+        private sealed class RethrowLifter : BoundTreeRewriter
+        {
+            private readonly VariableSymbol exceptionVariable;
+            private readonly TypeSymbol exceptionType;
+
+            public RethrowLifter(VariableSymbol exceptionVariable, TypeSymbol exceptionType)
+            {
+                this.exceptionVariable = exceptionVariable;
+                this.exceptionType = exceptionType;
+            }
+
+            public BoundStatement Lift(BoundStatement body) => RewriteStatement(body);
+
+            protected override BoundStatement RewriteRethrowStatement(BoundRethrowStatement node)
+                => BuildEdiCaptureThrow(
+                    new BoundVariableExpression(node.Syntax, this.exceptionVariable),
+                    this.exceptionType);
+
+            protected override BoundStatement RewriteTryStatement(BoundTryStatement node)
+            {
+                // A `rethrow` inside a nested catch belongs to that catch, which
+                // stays a real CLR handler here, so leave those bodies alone.
+                // The nested try *block* and its finally are still ours.
+                var tryBlock = RewriteStatement(node.TryBlock);
+                var finallyBlock = node.FinallyBlock != null ? RewriteStatement(node.FinallyBlock) : null;
+                if (ReferenceEquals(tryBlock, node.TryBlock) && ReferenceEquals(finallyBlock, node.FinallyBlock))
+                {
+                    return node;
+                }
+
+                return new BoundTryStatement(node.Syntax, tryBlock, node.CatchClauses, finallyBlock);
+            }
         }
 
         /// <summary>

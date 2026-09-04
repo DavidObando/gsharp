@@ -50,6 +50,8 @@ public abstract class BoundTreeRewriter
                 return RewriteTryStatement((BoundTryStatement)node);
             case BoundNodeKind.ThrowStatement:
                 return RewriteThrowStatement((BoundThrowStatement)node);
+            case BoundNodeKind.RethrowStatement:
+                return RewriteRethrowStatement((BoundRethrowStatement)node);
             case BoundNodeKind.PatternSwitchStatement:
                 return RewritePatternSwitchStatement((BoundPatternSwitchStatement)node);
             case BoundNodeKind.GoStatement:
@@ -303,6 +305,14 @@ public abstract class BoundTreeRewriter
 
         return new BoundTryStatement(node.Syntax, tryBlock, rewrittenClauses.ToImmutable(), finallyBlock);
     }
+
+    /// <summary>
+    /// Rewrites a rethrow statement (ADR-0176).
+    /// </summary>
+    /// <param name="node">The rethrow statement to rewrite.</param>
+    /// <returns>The rewritten statement; the node itself by default, since a
+    /// rethrow has no children.</returns>
+    protected virtual BoundStatement RewriteRethrowStatement(BoundRethrowStatement node) => node;
 
     /// <summary>
     /// Rewrites a throw statement.

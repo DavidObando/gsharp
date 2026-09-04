@@ -69,6 +69,7 @@ LocalFunctionStatement
 LockStatement
 MultiAssignmentStatement
 RawStatement
+RethrowStatement
 ReturnStatement
 SwitchStatement
 ThrowStatement

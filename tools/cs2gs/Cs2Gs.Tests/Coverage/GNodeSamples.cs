@@ -169,6 +169,10 @@ public static class GNodeSamples
             [typeof(ForTupleInStatement)] = () => Stmts(new ForTupleInStatement(new[] { "a", "b" }, Id("items"), Block())),
             [typeof(ThrowStatement)] = () => Stmts(new ThrowStatement(
                 new InvocationExpression(Id("Exception"), List<GExpression>(LiteralExpression.String("boom"))))),
+            [typeof(RethrowStatement)] = () => Stmts(new TryStatement(
+                Block(),
+                List(new CatchClause("e", Type("Exception"), Block(new RethrowStatement()))),
+                finallyBlock: null)),
             [typeof(DeferStatement)] = () => Stmts(new DeferStatement(new InvocationExpression(Id("cleanup")))),
             [typeof(RawStatement)] = () => Stmts(new RawStatement("let raw = 1")),
             [typeof(CatchClause)] = TrySample,

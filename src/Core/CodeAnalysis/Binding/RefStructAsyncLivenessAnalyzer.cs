@@ -286,6 +286,9 @@ internal static class RefStructAsyncLivenessAnalyzer
             case BoundThrowStatement th:
                 ApplyExpression(th.Expression, live, interesting, diagnostics, statement);
                 break;
+            case BoundRethrowStatement:
+                // ADR-0176: no operand, so no ref-struct value is read.
+                break;
             case BoundConditionalGotoStatement cgs:
                 ApplyExpression(cgs.Condition, live, interesting, diagnostics, statement);
                 break;

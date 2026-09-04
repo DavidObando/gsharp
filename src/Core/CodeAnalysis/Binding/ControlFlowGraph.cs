@@ -191,7 +191,8 @@ public sealed class ControlFlowGraph
                 return StatementDefinitelyReturns(fixedStatement.Body);
             default:
                 return statement.Kind == BoundNodeKind.ReturnStatement
-                    || statement.Kind == BoundNodeKind.ThrowStatement;
+                    || statement.Kind == BoundNodeKind.ThrowStatement
+                    || statement.Kind == BoundNodeKind.RethrowStatement;
         }
     }
 
@@ -266,6 +267,7 @@ public sealed class ControlFlowGraph
                 case BoundGotoStatement:
                 case BoundReturnStatement:
                 case BoundThrowStatement:
+                case BoundRethrowStatement:
                     if (routeTransfer == null)
                     {
                         builder.Add(current);
@@ -653,6 +655,7 @@ public sealed class ControlFlowGraph
 
                         break;
                     case BoundNodeKind.ThrowStatement:
+                    case BoundNodeKind.RethrowStatement:
                         statements.Add(statement);
                         if (treatThrowsAsTerminators)
                         {
@@ -794,6 +797,7 @@ public sealed class ControlFlowGraph
 
                             break;
                         case BoundNodeKind.ThrowStatement:
+                        case BoundNodeKind.RethrowStatement:
                             // Throws transfer control to a catch handler or unwind out
                             // of the function; treat as terminator.
                             Connect(current, end);

@@ -239,6 +239,8 @@ internal sealed partial class StatementBinder
                 return BindTryStatement((TryStatementSyntax)syntax);
             case SyntaxKind.ThrowStatement:
                 return BindThrowStatement((ThrowStatementSyntax)syntax);
+            case SyntaxKind.RethrowStatement:
+                return BindRethrowStatement((RethrowStatementSyntax)syntax);
             case SyntaxKind.UsingStatement:
                 return BindUsingStatement((UsingStatementSyntax)syntax);
             case SyntaxKind.DeferStatement:

@@ -229,6 +229,8 @@ public partial class Parser
                 return ParseTryStatement();
             case SyntaxKind.ThrowKeyword:
                 return ParseThrowStatement();
+            case SyntaxKind.RethrowKeyword:
+                return ParseRethrowStatement();
             case SyntaxKind.UsingKeyword:
                 return ParseUsingStatement();
             case SyntaxKind.DeferKeyword:

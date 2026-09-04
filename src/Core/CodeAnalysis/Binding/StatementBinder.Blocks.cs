@@ -460,6 +460,104 @@ internal sealed partial class StatementBinder
         return new BoundThrowStatement(syntax, expression);
     }
 
+    /// <summary>
+    /// Binds a <c>rethrow</c> statement (ADR-0176, issue #3897).
+    /// </summary>
+    /// <remarks>
+    /// <para>Legality mirrors ECMA-335 III.4.24 (and C#'s CS0156 / CS0724):
+    /// the statement must be lexically inside a <c>catch</c> handler, and no
+    /// <c>finally</c> clause may sit between it and that handler — by the time
+    /// a nested <c>finally</c> runs the CLR has already left the catch handler,
+    /// so <c>rethrow</c> there would be unverifiable IL.</para>
+    /// <para>The exception re-raised is the one belonging to the <i>lexically
+    /// innermost</i> enclosing catch, which is exactly the top of
+    /// <c>exceptionHandlerRegions</c>. A nested <c>try</c> <i>block</i> inside a
+    /// catch handler pushes nothing, so a <c>rethrow</c> in it still refers to
+    /// the enclosing catch's exception — matching C#.</para>
+    /// </remarks>
+    private BoundStatement BindRethrowStatement(RethrowStatementSyntax syntax)
+    {
+        // The stack holds only handler bodies (catch/finally). The first entry
+        // from the top decides: a catch means we are directly inside a handler;
+        // a finally means a finally intervenes.
+        SyntaxNode? innermostHandler = exceptionHandlerRegions.Count > 0
+            ? exceptionHandlerRegions.Peek()
+            : null;
+
+        if (innermostHandler is CatchClauseSyntax)
+        {
+            return new BoundRethrowStatement(syntax);
+        }
+
+        // A `finally` at the top only earns the more specific GS0571 when there
+        // really is a catch handler further out that the finally is nested in;
+        // otherwise there is no exception being handled at all (GS0570).
+        var hasEnclosingCatch = false;
+        foreach (var region in exceptionHandlerRegions)
+        {
+            if (region is CatchClauseSyntax)
+            {
+                hasEnclosingCatch = true;
+                break;
+            }
+        }
+
+        if (innermostHandler is FinallyClauseSyntax && hasEnclosingCatch)
+        {
+            Diagnostics.ReportRethrowInsideNestedFinally(syntax.RethrowKeyword.Location);
+        }
+        else
+        {
+            Diagnostics.ReportRethrowOutsideCatchHandler(syntax.RethrowKeyword.Location);
+        }
+
+        return BindErrorStatement();
+    }
+
+    /// <summary>
+    /// Binds a nested function body (lambda / function literal) with the
+    /// enclosing exception-handler regions hidden.
+    /// </summary>
+    /// <remarks>
+    /// ADR-0176: a lambda declared inside a <c>catch</c> handler is emitted as
+    /// a separate method, so a <c>rethrow</c> in its body is not inside any
+    /// handler at run time. Clearing the region stack for the duration of the
+    /// nested body makes <see cref="BindRethrowStatement"/> report GS0570 there
+    /// instead of emitting unverifiable IL — matching C#'s treatment of
+    /// <c>throw;</c> in a lambda.
+    /// </remarks>
+    /// <param name="syntax">The nested function's block body.</param>
+    /// <returns>The bound body.</returns>
+    internal BoundStatement BindNestedFunctionBody(BlockStatementSyntax syntax)
+        => OutsideExceptionHandlers(() => BindBlockStatement(syntax));
+
+    /// <summary>
+    /// Runs <paramref name="bind"/> with the enclosing exception-handler
+    /// regions hidden, then restores them.
+    /// </summary>
+    /// <typeparam name="T">The bound result type.</typeparam>
+    /// <param name="bind">The binding callback for the nested function body.</param>
+    /// <returns>Whatever <paramref name="bind"/> produced.</returns>
+    internal T OutsideExceptionHandlers<T>(Func<T> bind)
+    {
+        var saved = exceptionHandlerRegions.ToArray();
+        exceptionHandlerRegions.Clear();
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            exceptionHandlerRegions.Clear();
+
+            // Stack.ToArray() yields top-first; push back in reverse to restore.
+            for (var i = saved.Length - 1; i >= 0; i--)
+            {
+                exceptionHandlerRegions.Push(saved[i]);
+            }
+        }
+    }
+
     private BoundStatement BindUsingStatement(UsingStatementSyntax syntax)
     {
         var usingLowering = BindUsingStatementInBlock(syntax);

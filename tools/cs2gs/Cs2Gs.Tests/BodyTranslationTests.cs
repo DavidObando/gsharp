@@ -87,7 +87,7 @@ public class BodyTranslationTests
         Assert.Contains("using let log = AuditLog(\"ledger\")", printed);
         Assert.Contains("} catch (ex InsufficientStockException) {", printed);
         Assert.Contains("} finally {", printed);
-        Assert.Contains("throw ex", printed);
+        Assert.Contains("rethrow", printed);
         Assert.Contains("let available = if _stock.TryGetValue(sku, out qty) {", printed);
         Assert.Contains("threshold ?? 0", printed);
     }
@@ -190,17 +190,18 @@ public class BodyTranslationTests
         Assert.Contains("} finally {", body);
     }
 
-    /// <summary>A C# explicit re-throw <c>throw;</c> in a named catch maps to
-    /// re-throwing the caught binder (<c>throw ex</c>); G# has no bare
-    /// <c>throw</c> form.</summary>
+    /// <summary>ADR-0176 / issue #3897: a C# explicit re-throw <c>throw;</c>
+    /// maps to G# <c>rethrow</c>, which emits <c>ILOpCode.Rethrow</c> and keeps
+    /// the original throw site. It previously lowered to <c>throw ex</c>, the
+    /// same exception object with its <c>StackTrace</c> reset.</summary>
     [Fact]
-    public void Rethrow_TranslatesToThrowCaughtVariable()
+    public void Rethrow_TranslatesToRethrowStatement()
     {
         string body = GetMethodBody(@"
             try { n = 1; }
             catch (Exception ex) { n = ex.Message.Length; throw; }");
         Assert.Contains("} catch (ex Exception) {", body);
-        Assert.Contains("throw ex", body);
+        Assert.Contains("rethrow", body);
     }
 
     /// <summary>G# has no native <c>catch ... when (filter)</c>; a filtered catch
@@ -217,7 +218,7 @@ public class BodyTranslationTests
         Assert.Contains("} catch (ex Exception) {", body);
         int catchIndex = body.IndexOf("} catch (ex Exception) {", StringComparison.Ordinal);
         int ifIndex = body.IndexOf("if !(ex.Message.Length > 0) {", StringComparison.Ordinal);
-        int rethrowIndex = body.IndexOf("throw ex", StringComparison.Ordinal);
+        int rethrowIndex = body.IndexOf("rethrow", StringComparison.Ordinal);
         int assignIndex = body.IndexOf("n = 2", StringComparison.Ordinal);
 
         Assert.True(ifIndex > catchIndex, "filter check must be inside the catch body.");
@@ -237,7 +238,7 @@ public class BodyTranslationTests
             catch (Exception ex) when (false) { n = 999; }");
 
         Assert.Contains("if !false {", body);
-        Assert.Contains("throw ex", body);
+        Assert.Contains("rethrow", body);
         Assert.DoesNotContain("999", body.Substring(0, body.IndexOf("if !false", StringComparison.Ordinal)));
     }
 
@@ -253,7 +254,7 @@ public class BodyTranslationTests
             extraLocals: "");
 
         Assert.Contains("if !(ex.Message == \"retry\") {", body);
-        Assert.Contains("throw ex", body);
+        Assert.Contains("rethrow", body);
     }
 
     /// <summary>A filtered catch whose later sibling could still receive the
@@ -325,7 +326,7 @@ public class BodyTranslationTests
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         Assert.Contains("if !(ex.Message.Length > 0) {", body);
-        Assert.Contains("throw ex", body);
+        Assert.Contains("rethrow", body);
     }
 
     /// <summary>A filtered catch followed only by sibling catches of provably
@@ -343,7 +344,7 @@ public class BodyTranslationTests
 
         Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         Assert.Contains("if !(ex.Message.Length > 0) {", body);
-        Assert.Contains("throw ex", body);
+        Assert.Contains("rethrow", body);
     }
 
     /// <summary>A pre-declared C# <c>out</c> argument maps to the legacy

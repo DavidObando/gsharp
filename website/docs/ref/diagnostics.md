@@ -2160,6 +2160,21 @@ above retain their longer explanations and examples.
 | GS0505 | Error | A call cannot choose between compiler-generated reference-type and value-type variants of a nullable iterator because the caller's type parameter is unconstrained.  | |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
 
+## Rethrow outside a catch handler (GS0570, GS0571)
+
+| ID | Severity | Meaning | Example |
+| --- | --- | --- | --- |
+| GS0570 | Error | A `rethrow` appears where no exception is being handled — outside any `catch`, or inside a lambda / local function declared in one (the nested body is emitted as its own method, so at run time it is not inside the handler). Use `throw <expr>` to raise a new exception. | `func f() { rethrow }` |
+| GS0571 | Error | A `rethrow` appears in a `finally` clause nested inside the enclosing `catch` handler. By the time that `finally` runs the CLR has left the handler, so `ILOpCode.Rethrow` there is unverifiable. Move the `rethrow` into the `catch` body, or `throw` a captured exception. | `catch (e Exception) { try { … } finally { rethrow } }` |
+
+`rethrow` ([ADR-0176](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0176-rethrow-statement.md), issue #3897) re-raises the
+exception the lexically innermost enclosing `catch` is handling, emitting
+`ILOpCode.Rethrow`. Unlike `throw <expr>`, which emits `ILOpCode.Throw` and
+resets `StackTrace` to the throw site, a `rethrow` preserves the original throw
+site. G# spells it with a dedicated keyword rather than C#'s bare `throw;`
+because G# statements are not newline-terminated: a bare `throw` followed by a
+statement on the next line would parse as `throw <that expression>`.
+
 ## Stack-only CLR values in the interpreter (GS0511, retired)
 
 GS0511 marked stack-only (`ByRefLike`) CLR values the boxed-storage
