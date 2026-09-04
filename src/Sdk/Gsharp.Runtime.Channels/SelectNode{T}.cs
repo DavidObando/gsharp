@@ -56,6 +56,9 @@ internal sealed class SelectNode<T> : WaiterNode<T>, IArmValue<T>, ISelectArm
     {
         var taken = received;
         received = default;
+
+        // Only the winning arm takes the value, and the winner deposited it
+        // first; a closed arm deposits the zero value on purpose (D3).
         return taken!;
     }
 

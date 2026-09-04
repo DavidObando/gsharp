@@ -190,6 +190,9 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
             ReceiveStart.Closed => new ValueTask<ReceiveResult<T>>(ReceiveResult<T>.Closed),
             ReceiveStart.Cancelled => ValueTask.FromCanceled<ReceiveResult<T>>(cancellationToken),
             ReceiveStart.Ready => new ValueTask<ReceiveResult<T>>(new ReceiveResult<T>(value, ok)),
+
+            // Parked is the only remaining outcome, and ReceiveOrPark assigns
+            // `node` on exactly that path.
             _ => new ValueTask<ReceiveResult<T>>(node!, node!.Version),
         };
     }
@@ -215,9 +218,17 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
         var outcome = ReceiveOrPark(cancellationToken, out var value, out _, out var node);
         return outcome switch
         {
+            // The zero value is the documented closed-channel result (D3), so a
+            // null here is the answer rather than a missing one.
             ReceiveStart.Closed => new ValueTask<T>(default(T)!),
             ReceiveStart.Cancelled => ValueTask.FromCanceled<T>(cancellationToken),
+
+            // Ready means ReceiveOrPark took a value; `ok` reports whether the
+            // channel delivered one, and this shape deliberately discards it.
             ReceiveStart.Ready => new ValueTask<T>(value!),
+
+            // Parked is the only remaining outcome, and ReceiveOrPark assigns
+            // `node` on exactly that path.
             _ => new ValueTask<T>(node!, node!.Version),
         };
     }
@@ -231,9 +242,15 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
         var outcome = ReceiveOrPark(cancellationToken, out var value, out var ok, out var node);
         return outcome switch
         {
+            // The `false` IS the report that the value is meaningless (D3).
             ReceiveStart.Closed => new ValueTask<(T Value, bool Ok)>((default(T)!, false)),
             ReceiveStart.Cancelled => ValueTask.FromCanceled<(T Value, bool Ok)>(cancellationToken),
+
+            // Ready means ReceiveOrPark took a value; `ok` travels beside it.
             ReceiveStart.Ready => new ValueTask<(T Value, bool Ok)>((value!, ok)),
+
+            // Parked is the only remaining outcome, and ReceiveOrPark assigns
+            // `node` on exactly that path.
             _ => new ValueTask<(T Value, bool Ok)>(node!, node!.Version),
         };
     }

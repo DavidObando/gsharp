@@ -155,7 +155,7 @@ internal sealed class CoreReceiveArm<T> : ArmDescriptor, IArmValue<T>
 internal sealed class CoreSendArm<T> : ArmDescriptor
 {
     private ISendSelectableCore<T>? selectable;
-    private T value;
+    private T? value;
     private SelectNode<T>? node;
 
     /// <summary>Initializes a new instance of the <see cref="CoreSendArm{T}"/> class.</summary>
@@ -197,7 +197,7 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
     internal override void Release()
     {
         selectable = null;
-        value = default!;
+        value = default;
         node = null;
     }
 
@@ -206,7 +206,9 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
     {
         try
         {
-            return Selectable.TrySendLocked(value, ref completions);
+            // Set by the constructor or by Retarget, both of which run before
+            // the waiter can probe this arm; Release only runs after it is done.
+            return Selectable.TrySendLocked(value!, ref completions);
         }
         catch (ChannelClosedException closed)
         {
@@ -219,7 +221,8 @@ internal sealed class CoreSendArm<T> : ArmDescriptor
     /// <inheritdoc/>
     internal override void Register(SelectWaiter waiter, long generation)
     {
-        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: true, value);
+        // As in TryProbe: live between Retarget and Release.
+        node = new SelectNode<T>(waiter, generation, Arm, Selectable, isSend: true, value!);
         Selectable.RegisterSendLocked(node);
     }
 
