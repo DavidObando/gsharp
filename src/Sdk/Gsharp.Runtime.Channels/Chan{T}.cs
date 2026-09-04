@@ -184,37 +184,58 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
     /// <returns>The value and whether one was delivered (false: closed and drained).</returns>
     public ValueTask<ReceiveResult<T>> ReceiveAsync(CancellationToken cancellationToken = default)
     {
-        if (IsClosedAndDrained)
+        var outcome = ReceiveOrPark(cancellationToken, out var value, out var ok, out var node);
+        return outcome switch
         {
-            return new ValueTask<ReceiveResult<T>>(ReceiveResult<T>.Closed);
-        }
+            ReceiveStart.Closed => new ValueTask<ReceiveResult<T>>(ReceiveResult<T>.Closed),
+            ReceiveStart.Cancelled => ValueTask.FromCanceled<ReceiveResult<T>>(cancellationToken),
+            ReceiveStart.Ready => new ValueTask<ReceiveResult<T>>(new ReceiveResult<T>(value, ok)),
+            _ => new ValueTask<ReceiveResult<T>>(node!, node!.Version),
+        };
+    }
 
-        var completions = default(Completions);
-        OpReceiveNode<T>? node = null;
-        T? value;
-        bool ok;
-        bool done;
-        lock (gate)
+    /// <summary>
+    /// Receives one value as the element alone — the zero value once the
+    /// channel is closed and drained (ADR-0174 D3).
+    /// </summary>
+    /// <remarks>
+    /// Issue #3902 (S2): the parked path returns a <see cref="ValueTask{T}"/>
+    /// backed by the node ITSELF, so a suspending receive through the language
+    /// no longer routes through an <c>async</c> wrapper that reshapes the
+    /// result. That wrapper ran on the default builder and boxed an
+    /// <c>AsyncStateMachineBox</c> — about 144 bytes on every park — and put a
+    /// Task continuation between the node and the caller's state machine. This
+    /// allocates nothing, ready or parked.
+    /// </remarks>
+    /// <param name="cancellationToken">The ambient cancellation.</param>
+    /// <returns>The element, or the zero value when closed.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<T> ReceiveValueAsync(CancellationToken cancellationToken = default)
+    {
+        var outcome = ReceiveOrPark(cancellationToken, out var value, out _, out var node);
+        return outcome switch
         {
-            done = TryReceiveLocked(out value, out ok, ref completions);
-            if (!done)
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    completions.Publish();
-                    return ValueTask.FromCanceled<ReceiveResult<T>>(cancellationToken);
-                }
+            ReceiveStart.Closed => new ValueTask<T>(default(T)!),
+            ReceiveStart.Cancelled => ValueTask.FromCanceled<T>(cancellationToken),
+            ReceiveStart.Ready => new ValueTask<T>(value!),
+            _ => new ValueTask<T>(node!, node!.Version),
+        };
+    }
 
-                node = RentReceiveNode();
-                receivers.Enqueue(node);
-                node.RegisterCancellation(cancellationToken);
-            }
-        }
-
-        completions.Publish();
-        return done
-            ? new ValueTask<ReceiveResult<T>>(new ReceiveResult<T>(value, ok))
-            : new ValueTask<ReceiveResult<T>>(node!, node!.Version); // `done` false only where a node was parked above.
+    /// <summary>The suspending two-value receive as a tuple; see <see cref="ReceiveValueAsync"/> for why it is shaped here rather than wrapped.</summary>
+    /// <param name="cancellationToken">The ambient cancellation.</param>
+    /// <returns>The element and whether the channel delivered it.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask<(T Value, bool Ok)> ReceiveTupleAsync(CancellationToken cancellationToken = default)
+    {
+        var outcome = ReceiveOrPark(cancellationToken, out var value, out var ok, out var node);
+        return outcome switch
+        {
+            ReceiveStart.Closed => new ValueTask<(T Value, bool Ok)>((default(T)!, false)),
+            ReceiveStart.Cancelled => ValueTask.FromCanceled<(T Value, bool Ok)>(cancellationToken),
+            ReceiveStart.Ready => new ValueTask<(T Value, bool Ok)>((value!, ok)),
+            _ => new ValueTask<(T Value, bool Ok)>(node!, node!.Version),
+        };
     }
 
     /// <summary>
@@ -565,6 +586,55 @@ public sealed partial class Chan<T> : Channel<T>, ISelectable<T>, ISendSelectabl
 
         buffer = grown;
         head = 0;
+    }
+
+    /// <summary>
+    /// The shared start of every suspending receive: take a ready value, or
+    /// park a node. Factored so the three result shapes (issue #3902 S2) differ
+    /// only in how they wrap the outcome — the lock body, the cancellation
+    /// check and the completion publication have one copy between them.
+    /// </summary>
+    /// <param name="cancellationToken">The ambient cancellation.</param>
+    /// <param name="value">The value taken, when the outcome is <see cref="ReceiveStart.Ready"/>.</param>
+    /// <param name="ok">Whether a value was delivered, when ready.</param>
+    /// <param name="node">The parked node, when the outcome is <see cref="ReceiveStart.Parked"/>.</param>
+    /// <returns>How the receive started.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ReceiveStart ReceiveOrPark(
+        CancellationToken cancellationToken,
+        out T? value,
+        out bool ok,
+        out OpReceiveNode<T>? node)
+    {
+        value = default;
+        ok = false;
+        node = null;
+        if (IsClosedAndDrained)
+        {
+            return ReceiveStart.Closed;
+        }
+
+        var completions = default(Completions);
+        bool done;
+        lock (gate)
+        {
+            done = TryReceiveLocked(out value, out ok, ref completions);
+            if (!done)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    completions.Publish();
+                    return ReceiveStart.Cancelled;
+                }
+
+                node = RentReceiveNode();
+                receivers.Enqueue(node);
+                node.RegisterCancellation(cancellationToken);
+            }
+        }
+
+        completions.Publish();
+        return done ? ReceiveStart.Ready : ReceiveStart.Parked;
     }
 
     private OpReceiveNode<T> RentReceiveNode()

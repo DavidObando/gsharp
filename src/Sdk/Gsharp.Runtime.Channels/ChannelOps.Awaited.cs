@@ -15,6 +15,15 @@ namespace Gsharp.Concurrency;
 /// <c>(T, bool)</c> of the two-value receive — so the compiler awaits one call
 /// and reads no member of <see cref="ReceiveResult{T}"/> in emitted IL. Both
 /// complete synchronously when a value is ready and allocate nothing then.
+///
+/// <para>
+/// Issue #3902 (S2): a G#-owned <see cref="Chan{T}"/> — the overwhelmingly
+/// common case — is shaped by the channel itself, so the parked path is backed
+/// by the waiter node and allocates nothing either. Only a genuinely foreign
+/// <see cref="ChannelReader{T}"/> still goes through the reshaping wrappers
+/// below, and those now use the pooling builder so their state machine is
+/// rented rather than allocated.
+/// </para>
 /// </summary>
 public static partial class ChannelOps
 {
@@ -24,7 +33,9 @@ public static partial class ChannelOps
     /// <param name="cancellationToken">The ambient cancellation.</param>
     /// <returns>The element, or the zero value when closed.</returns>
     public static ValueTask<T> ReceiveValueAsync<T>(Channel<T>? channel, CancellationToken cancellationToken)
-        => Unwrap(ReceiveAsync(channel, cancellationToken));
+        => channel is Chan<T> chan
+            ? chan.ReceiveValueAsync(cancellationToken)
+            : ReceiveValueAsync(channel?.Reader, cancellationToken);
 
     /// <summary>Receives one value from a reader, suspending while none is available.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -32,7 +43,9 @@ public static partial class ChannelOps
     /// <param name="cancellationToken">The ambient cancellation.</param>
     /// <returns>The element, or the zero value when closed.</returns>
     public static ValueTask<T> ReceiveValueAsync<T>(ChannelReader<T>? reader, CancellationToken cancellationToken)
-        => Unwrap(ReceiveAsync(reader, cancellationToken));
+        => reader is Chan<T>.ChanReader owned
+            ? owned.Owner.ReceiveValueAsync(cancellationToken)
+            : Unwrap(ReceiveAsync(reader, cancellationToken));
 
     /// <summary>The suspending two-value receive as a tuple.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -40,7 +53,9 @@ public static partial class ChannelOps
     /// <param name="cancellationToken">The ambient cancellation.</param>
     /// <returns>The element and whether the channel delivered it.</returns>
     public static ValueTask<(T Value, bool Ok)> ReceiveTupleAsync<T>(Channel<T>? channel, CancellationToken cancellationToken)
-        => ToTuple(ReceiveAsync(channel, cancellationToken));
+        => channel is Chan<T> chan
+            ? chan.ReceiveTupleAsync(cancellationToken)
+            : ReceiveTupleAsync(channel?.Reader, cancellationToken);
 
     /// <summary>The suspending two-value receive from a reader as a tuple.</summary>
     /// <typeparam name="T">The element type.</typeparam>
@@ -48,7 +63,9 @@ public static partial class ChannelOps
     /// <param name="cancellationToken">The ambient cancellation.</param>
     /// <returns>The element and whether the channel delivered it.</returns>
     public static ValueTask<(T Value, bool Ok)> ReceiveTupleAsync<T>(ChannelReader<T>? reader, CancellationToken cancellationToken)
-        => ToTuple(ReceiveAsync(reader, cancellationToken));
+        => reader is Chan<T>.ChanReader owned
+            ? owned.Owner.ReceiveTupleAsync(cancellationToken)
+            : ToTuple(ReceiveAsync(reader, cancellationToken));
 
     /// <summary>Receives one value under <paramref name="context"/>; see <see cref="ReceiveValueAsync{T}(Channel{T}, CancellationToken)"/>.</summary>
     /// <typeparam name="T">The element type.</typeparam>

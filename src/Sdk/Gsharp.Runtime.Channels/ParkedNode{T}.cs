@@ -147,7 +147,11 @@ internal abstract class ParkedNode<T> : WaiterNode<T>
 
 /// <summary>A parked receiver: the awaitable behind <see cref="Chan{T}.ReceiveAsync"/>.</summary>
 /// <typeparam name="T">The channel element type.</typeparam>
-internal sealed class OpReceiveNode<T> : ParkedNode<T>, IValueTaskSource<ReceiveResult<T>>
+internal sealed class OpReceiveNode<T>
+    : ParkedNode<T>,
+      IValueTaskSource<ReceiveResult<T>>,
+      IValueTaskSource<T>,
+      IValueTaskSource<(T Value, bool Ok)>
 {
     private ManualResetValueTaskSourceCore<ReceiveResult<T>> core;
     private ReceiveResult<T> result;
@@ -167,27 +171,42 @@ internal sealed class OpReceiveNode<T> : ParkedNode<T>, IValueTaskSource<Receive
     internal override bool IsNotify => false;
 
     /// <inheritdoc/>
-    ReceiveResult<T> IValueTaskSource<ReceiveResult<T>>.GetResult(short token)
-    {
-        var pool = CanPool && token == core.Version && core.GetStatus(token) != ValueTaskSourceStatus.Pending;
-        try
-        {
-            return core.GetResult(token);
-        }
-        finally
-        {
-            if (pool)
-            {
-                Owner.ReturnReceiveNode(this);
-            }
-        }
-    }
+    ReceiveResult<T> IValueTaskSource<ReceiveResult<T>>.GetResult(short token) => TakeResult(token);
 
     /// <inheritdoc/>
     ValueTaskSourceStatus IValueTaskSource<ReceiveResult<T>>.GetStatus(short token) => core.GetStatus(token);
 
     /// <inheritdoc/>
     void IValueTaskSource<ReceiveResult<T>>.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
+        => core.OnCompleted(continuation, state, token, flags);
+
+    // The single-value shape. A closed, drained channel yields the zero value
+    // by design (ADR-0174 D3), so there is no null to guard.
+
+    /// <inheritdoc/>
+    T IValueTaskSource<T>.GetResult(short token) => TakeResult(token).Value!;
+
+    /// <inheritdoc/>
+    ValueTaskSourceStatus IValueTaskSource<T>.GetStatus(short token) => core.GetStatus(token);
+
+    /// <inheritdoc/>
+    void IValueTaskSource<T>.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
+        => core.OnCompleted(continuation, state, token, flags);
+
+    // The two-value shape: the tuple IS the three-state encoding (D3).
+
+    /// <inheritdoc/>
+    (T Value, bool Ok) IValueTaskSource<(T Value, bool Ok)>.GetResult(short token)
+    {
+        var taken = TakeResult(token);
+        return (taken.Value!, taken.Ok);
+    }
+
+    /// <inheritdoc/>
+    ValueTaskSourceStatus IValueTaskSource<(T Value, bool Ok)>.GetStatus(short token) => core.GetStatus(token);
+
+    /// <inheritdoc/>
+    void IValueTaskSource<(T Value, bool Ok)>.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
         => core.OnCompleted(continuation, state, token, flags);
 
     /// <inheritdoc/>
@@ -231,6 +250,32 @@ internal sealed class OpReceiveNode<T> : ParkedNode<T>, IValueTaskSource<Receive
 
     /// <inheritdoc/>
     protected override void PublishException(Exception exception) => core.SetException(exception);
+
+    /// <summary>
+    /// Consumes the result exactly once and returns the node to its channel's
+    /// pool. Issue #3902 (S2): the node backs three <see cref="ValueTask{T}"/>
+    /// shapes over one result, and only the shape the awaiter chose calls its
+    /// <c>GetResult</c> — so this is still one consumption per rental. It is
+    /// factored rather than repeated because the pooling predicate has to stay
+    /// identical across all three; a drifted copy would return a node twice.
+    /// </summary>
+    /// <param name="token">The version token the awaiter holds.</param>
+    /// <returns>The receive result.</returns>
+    private ReceiveResult<T> TakeResult(short token)
+    {
+        var pool = CanPool && token == core.Version && core.GetStatus(token) != ValueTaskSourceStatus.Pending;
+        try
+        {
+            return core.GetResult(token);
+        }
+        finally
+        {
+            if (pool)
+            {
+                Owner.ReturnReceiveNode(this);
+            }
+        }
+    }
 }
 
 /// <summary>A parked sender: the awaitable behind <see cref="Chan{T}.SendAsync"/>.</summary>
