@@ -387,6 +387,14 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
+                // Issue #3907: an `@AllowNull` parameter declares that it
+                // accepts a nil-carrying input, so the `T?` argument needs no
+                // conversion at all and is forwarded as-is.
+                if (ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type))
+                {
+                    continue;
+                }
+
                 if (argument.Type != parameter.Type
                     && !Conversion.Classify(argument.Type, parameter.Type).IsImplicit)
                 {
@@ -656,6 +664,13 @@ internal sealed partial class OverloadResolver
             {
                 boundArguments[i] = Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression");
                 hasErrors |= methodGroupArg is BoundErrorExpression;
+                continue;
+            }
+
+            // Issue #3907: an `@AllowNull` parameter declares that it accepts a
+            // nil-carrying input, so the `T?` argument is forwarded as-is.
+            if (ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type))
+            {
                 continue;
             }
 
@@ -1289,6 +1304,14 @@ internal sealed partial class OverloadResolver
                 && !ReferenceEquals(argument.Type, namedDelegateParamTarget))
             {
                 convertedArguments.Add(conversions.BindConversion(argLocation, argument, paramType));
+                continue;
+            }
+
+            // Issue #3907: an `@AllowNull` parameter declares that it accepts a
+            // nil-carrying input, so the `T?` argument is forwarded as-is.
+            if (ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, paramType))
+            {
+                convertedArguments.Add(argument);
                 continue;
             }
 
@@ -2347,6 +2370,14 @@ internal sealed partial class OverloadResolver
                 && !ReferenceEquals(argument.Type, namedDelegateInitTarget))
             {
                 convertedArgs.Add(conversions.BindConversion(argLocation, argument, parameter.Type));
+                continue;
+            }
+
+            // Issue #3907: an `@AllowNull` parameter declares that it accepts a
+            // nil-carrying input, so the `T?` argument is forwarded as-is.
+            if (ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type))
+            {
+                convertedArgs.Add(argument);
                 continue;
             }
 

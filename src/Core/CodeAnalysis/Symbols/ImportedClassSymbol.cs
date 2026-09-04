@@ -229,6 +229,12 @@ public sealed class ImportedClassSymbol : Symbol
 
         var argTypes = new Type?[arguments.Length];
         var hasUserClassArg = false;
+
+        // Issue #3907: slots carrying the SymbolicByRefArgumentType sentinel.
+        // The sentinel is not a real argument type, so it must be withheld from
+        // CLR type inference; the type argument comes from the symbolic vector
+        // instead (see the `deferredInferenceArgs` hand-off to Resolve below).
+        bool[]? symbolicByRefArgs = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             // Issue #1391: the untyped `default` literal (bound as a
@@ -280,6 +286,30 @@ public sealed class ImportedClassSymbol : Symbol
                 && byRefPointee.ClrType == null)
             {
                 argTypes[i] = ClrOverloadResolution.InlineOutVarArgumentType;
+                continue;
+            }
+
+            // Issue #3907: the REFERENCE-type counterpart of #1599 above. A
+            // pre-declared `ref`/`out` whose pointee is a same-compilation user
+            // class/interface/named delegate also has no CLR type while
+            // binding, and issue #658's `object` ride-through — correct for a
+            // by-VALUE argument, since a class instance really is an `object` —
+            // is wrong by REFERENCE: C# requires a `ref` argument to match its
+            // parameter exactly, so `ref Node` is not a `ref object`. Left
+            // erased, `Interlocked.Exchange(&nodeField, nil)` made the
+            // non-generic `Exchange(ref object?, object?)` an exact IDENTITY
+            // match, so it beat `Exchange[T](ref T, T) where T : class` and the
+            // call's type silently became `object` (GS0156 at the use site, or
+            // worse, no diagnostic at all where the result is discarded).
+            // The dedicated sentinel matches only a by-ref parameter whose
+            // element type is a generic parameter; the type argument is then
+            // recovered from `symbolicArgVector` below.
+            if (arguments[i] is BoundAddressOfExpression { Operand.Type: { } refPointee }
+                && IsSameCompilationUserReferencePointee(refPointee))
+            {
+                argTypes[i] = ClrOverloadResolution.SymbolicByRefArgumentType;
+                symbolicByRefArgs ??= new bool[arguments.Length];
+                symbolicByRefArgs[i] = true;
                 continue;
             }
 
@@ -368,11 +398,14 @@ public sealed class ImportedClassSymbol : Symbol
             receiverType: null,
             ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
         var filteredNameMatches = new List<MethodInfo>();
-        foreach (var method in MemberLookup.ExcludeErasureOnlyEnumCandidates(
-                     nameMatches,
-                     symbolicArgVector,
-                     argumentNames,
-                     SymbolicReceiver))
+        foreach (var method in MemberLookup.ExcludeNonGenericByRefCandidates(
+                     MemberLookup.ExcludeErasureOnlyEnumCandidates(
+                         nameMatches,
+                         symbolicArgVector,
+                         argumentNames,
+                         SymbolicReceiver),
+                     symbolicByRefArgs,
+                     argumentNames))
         {
             filteredNameMatches.Add(method);
         }
@@ -407,7 +440,8 @@ public sealed class ImportedClassSymbol : Symbol
                 type =>
                 {
                     return Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable");
-                }));
+                }),
+            deferredInferenceArgs: symbolicByRefArgs);
 
         switch (result.Outcome)
         {
@@ -681,6 +715,33 @@ public sealed class ImportedClassSymbol : Symbol
         var remove = eventInfo.RemoveMethod;
         return (add != null && IsVisibleToCurrentCompilation(add))
             || (remove != null && IsVisibleToCurrentCompilation(remove));
+    }
+
+    /// <summary>
+    /// Issue #3907: whether a by-ref argument's pointee is a same-compilation
+    /// user REFERENCE type — a G# <c>class</c>, interface or named delegate
+    /// whose CLR <see cref="Type"/> does not exist yet — optionally behind a
+    /// reference-nullable <c>?</c>, which is a pure annotation and does not
+    /// change the pointee's runtime representation.
+    /// </summary>
+    /// <remarks>
+    /// A same-compilation user VALUE type is deliberately excluded: it is
+    /// already handled by the #1599/#1601 branch above, whose sentinel has the
+    /// wider "matches any by-ref parameter" meaning those cases need.
+    /// </remarks>
+    /// <param name="pointee">The by-ref argument's pointee type.</param>
+    /// <returns><see langword="true"/> when the sentinel applies.</returns>
+    private static bool IsSameCompilationUserReferencePointee(TypeSymbol pointee)
+    {
+        while (pointee is NullableTypeSymbol nullable
+            && !NullableLifting.IsAnyValueTypeNullable(nullable)
+            && nullable.UnderlyingType != null)
+        {
+            pointee = nullable.UnderlyingType;
+        }
+
+        return pointee.ClrType == null
+            && pointee is StructSymbol { IsClass: true } or InterfaceSymbol or DelegateTypeSymbol;
     }
 
     /// <summary>

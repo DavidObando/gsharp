@@ -3102,7 +3102,7 @@ internal sealed partial class ExpressionBinder
             lengthOf,
             statements);
 
-        var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
+        var returnType = SliceResultType(target, sliceMethod.ReturnType);
         var call = new BoundImportedInstanceCallExpression(
             null,
             srcRef,
@@ -3116,8 +3116,46 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindRangeIndexerSlice(BoundExpression target, RangeExpressionSyntax range, PropertyInfo indexer)
     {
         var rangeValue = BuildSystemRangeValue(range);
-        var resultType = TypeSymbol.FromClrType(indexer.PropertyType);
+        var resultType = SliceResultType(target, indexer.PropertyType);
         return new BoundClrIndexExpression(range, target, indexer, ImmutableArray.Create(rangeValue), resultType);
+    }
+
+    /// <summary>
+    /// Issue #3907: the static type of a range slice (<c>src[a..b]</c>) over an
+    /// imported slice shape.
+    /// </summary>
+    /// <remarks>
+    /// <para>The slice member is discovered by reflecting on the receiver's
+    /// <see cref="TypeSymbol.ClrType"/>, and issue #658 erases a type argument
+    /// that has no CLR representation while binding — so inside
+    /// <c>class Holder[T]</c> a <c>Span[T]</c> receiver reflects as
+    /// <c>Span&lt;object&gt;</c> and <c>Slice</c> reports that as its return
+    /// type. Taking the reflected answer verbatim threw the symbolic <c>T</c>
+    /// away: <c>destination[1..]</c> produced a <c>Span[object]</c> that no
+    /// longer converted back into the <c>Span[T]</c> slot it was sliced
+    /// from.</para>
+    /// <para>Every slice shape in the BCL — <c>Span&lt;T&gt;</c>,
+    /// <c>ReadOnlySpan&lt;T&gt;</c>, <c>Memory&lt;T&gt;</c>,
+    /// <c>ReadOnlyMemory&lt;T&gt;</c>, <c>string</c> — yields the RECEIVER'S
+    /// OWN type, so when the reflected result is identical to the receiver's
+    /// CLR type the symbolic answer is just the receiver's symbolic type,
+    /// which still carries <c>T</c>. Deliberately guarded on that identity:
+    /// a slice member returning anything else keeps the reflected answer
+    /// unchanged, and a receiver whose type argument is already concrete
+    /// (<c>Span[int32]</c>) gets back the same symbol it had before.</para>
+    /// </remarks>
+    /// <param name="target">The sliced receiver.</param>
+    /// <param name="reflectedResult">The slice member's reflected result type.</param>
+    /// <returns>The slice expression's static type.</returns>
+    private static TypeSymbol SliceResultType(BoundExpression target, Type reflectedResult)
+    {
+        var targetType = target.Type;
+        if (targetType?.ClrType != null && targetType.ClrType.IsSameAs(reflectedResult))
+        {
+            return targetType;
+        }
+
+        return TypeSymbol.FromClrType(reflectedResult);
     }
 
     // Issue #1016/#1022/#1038: construct a `System.Range` value from a range
@@ -3263,7 +3301,7 @@ internal sealed partial class ExpressionBinder
         {
             if (TryFindRangeIndexer(clrType, out var rangeIndexer))
             {
-                var resultType = TypeSymbol.FromClrType(rangeIndexer.PropertyType);
+                var resultType = SliceResultType(target, rangeIndexer.PropertyType);
                 return new BoundClrIndexExpression(null, target, rangeIndexer, ImmutableArray.Create(rangeValue), resultType);
             }
 
@@ -3278,7 +3316,7 @@ internal sealed partial class ExpressionBinder
                     lengthOf,
                     statements);
 
-                var returnType = TypeSymbol.FromClrType(sliceMethod.ReturnType);
+                var returnType = SliceResultType(target, sliceMethod.ReturnType);
                 var call = new BoundImportedInstanceCallExpression(
                     null,
                     srcRef,

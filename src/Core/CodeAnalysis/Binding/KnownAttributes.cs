@@ -403,6 +403,48 @@ internal static class KnownAttributes
     }
 
     /// <summary>
+    /// Returns <c>true</c> when <paramref name="attributes"/> carries
+    /// <see cref="System.Diagnostics.CodeAnalysis.AllowNullAttribute"/>
+    /// (issue #3907).
+    /// </summary>
+    /// <remarks>
+    /// <para><c>[AllowNull]</c> is the .NET-standard "this INPUT accepts
+    /// <c>null</c> even though its type is not nullable" annotation. It is the
+    /// one nullability contract G# cannot spell in a type, because ADR-0155
+    /// gives a declaration a single nullability (Kotlin-style) while C# gives
+    /// it separate input and output contracts. cs2gs widens a REFERENCE-typed
+    /// <c>[AllowNull]</c> declaration to <c>T?</c> (issue #3694) — the two
+    /// contracts then agree — but an UNCONSTRAINED type parameter has no such
+    /// widening, so <c>[AllowNull] T value</c> translates verbatim to
+    /// <c>@AllowNull value T</c> and only the annotation carries the
+    /// contract.</para>
+    /// <para>Consumed by <c>ConversionClassifier</c> to relax the ARGUMENT
+    /// conversion at a call site — never the parameter's own type, which is
+    /// exactly the asymmetry the attribute exists to express: reads inside the
+    /// body still see a non-nullable <c>T</c> and still require the author's
+    /// <c>!!</c>.</para>
+    /// </remarks>
+    /// <param name="attributes">The attribute list on a parameter symbol.</param>
+    /// <returns><c>true</c> when at least one <c>[AllowNull]</c> is present.</returns>
+    public static bool HasAllowNull(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (attr?.AttributeType?.ClrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.AllowNullAttribute)) == true)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="attributes"/> contains at
     /// least one <c>[Conditional("SYMBOL")]</c> application and *none* of the
     /// named symbols is present in <paramref name="preprocessorSymbols"/>. In

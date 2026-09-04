@@ -1642,6 +1642,94 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Issue #3907: removes imported candidates that could only accept a
+    /// by-ref argument over a same-compilation user REFERENCE type by erasing
+    /// it — i.e. whose parameter at such a slot is a by-ref over a type that is
+    /// not generic in the OPEN definition.
+    /// </summary>
+    /// <remarks>
+    /// <para>C# requires a <c>ref</c> argument to match its parameter exactly,
+    /// and no imported signature can name a class this compilation has not
+    /// emitted yet, so a generic <c>ref T</c> is the only parameter such an
+    /// argument can legally reach. Without this filter the non-generic
+    /// <c>Interlocked.Exchange(ref object?, object?)</c> was an exact IDENTITY
+    /// match for <c>Interlocked.Exchange(&amp;nodeField, nil)</c> — the #658
+    /// erasure made <c>ref Node</c> look like <c>ref object</c> — so it beat
+    /// <c>Exchange&lt;T&gt;(ref T, T)</c>, a candidate csc never even
+    /// considers.</para>
+    /// <para>The filter runs on the OPEN candidates on purpose: once a generic
+    /// candidate is closed over the erasure its <c>ref T</c> has already become
+    /// <c>ref object</c> and is indistinguishable from the non-generic
+    /// overload's. Slots are matched positionally and the filter declines to
+    /// act when the call site uses named arguments, so it can never drop a
+    /// candidate whose parameter order it has not actually established.</para>
+    /// </remarks>
+    /// <param name="candidates">The imported candidates to filter.</param>
+    /// <param name="symbolicByRefArgs">Per-argument flags marking the symbolic by-ref slots; <see langword="null"/> disables the filter.</param>
+    /// <param name="argumentNames">Optional source argument names aligned with the arguments.</param>
+    /// <returns>Candidates that can accept the symbolic by-ref argument without erasing it.</returns>
+    public static IEnumerable<MethodInfo> ExcludeNonGenericByRefCandidates(
+        IEnumerable<MethodInfo> candidates,
+        IReadOnlyList<bool>? symbolicByRefArgs,
+        IReadOnlyList<string?>? argumentNames = null)
+    {
+        if (candidates == null || symbolicByRefArgs == null)
+        {
+            return candidates ?? Enumerable.Empty<MethodInfo>();
+        }
+
+        if (argumentNames != null)
+        {
+            foreach (var name in argumentNames)
+            {
+                if (name != null)
+                {
+                    return candidates;
+                }
+            }
+        }
+
+        var filtered = new List<MethodInfo>();
+        foreach (var candidate in candidates)
+        {
+            if (AcceptsSymbolicByRefSlots(candidate, symbolicByRefArgs))
+            {
+                filtered.Add(candidate);
+            }
+        }
+
+        return filtered;
+
+        static bool AcceptsSymbolicByRefSlots(MethodInfo candidate, IReadOnlyList<bool> symbolicByRefArgs)
+        {
+            var open = candidate.IsGenericMethod && !candidate.IsGenericMethodDefinition
+                ? candidate.GetGenericMethodDefinition()
+                : candidate;
+            var parameters = open.GetParameters();
+            for (var i = 0; i < symbolicByRefArgs.Count; i++)
+            {
+                if (!symbolicByRefArgs[i])
+                {
+                    continue;
+                }
+
+                if (i >= parameters.Length)
+                {
+                    return false;
+                }
+
+                var parameterType = parameters[i].ParameterType;
+                if (!parameterType.IsByRef || parameterType.GetElementType()?.IsGenericParameter != true)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Issue #2494: removes imported method candidates that are applicable only
     /// because a same-compilation enum was projected to its temporary CLR
     /// <c>int32</c> representation. The projection is a lookup aid; it is not a
@@ -3388,6 +3476,20 @@ internal sealed class MemberLookup
                 return IsSymbolicTypeArgument(slice.ElementType);
             case NullableTypeSymbol nullable when nullable.UnderlyingType != null:
                 return IsSymbolicTypeArgument(nullable.UnderlyingType);
+
+            // Issue #3907: a tuple type argument is symbolic exactly when one
+            // of its ELEMENTS is — `IValueTaskSource[(T, bool)]` closes over
+            // an open `T` just as surely as `IValueTaskSource[T]` does. The
+            // emitter's counterpart already recurses here (issue #1902's arm
+            // in ReflectionMetadataEmitter.ArgIsSymbolicUserDefined); the
+            // binder's did not, so the two disagreed about whether the
+            // interface survives erasure. Conformance then ran against the
+            // ERASED `IValueTaskSource<ValueTuple<object, bool>>` and demanded
+            // a `GetResult` returning `(object, bool)`, which is why the
+            // identical declaration over concrete element types
+            // (`(string, bool)`) has always worked.
+            case TupleTypeSymbol tuple:
+                return tuple.ElementTypes.Any(IsSymbolicTypeArgument);
             default:
                 return false;
         }
@@ -5512,6 +5614,39 @@ internal sealed class MemberLookup
         if (a is SliceTypeSymbol sliceA && b is SliceTypeSymbol sliceB)
         {
             return SameTypeSymbol(sliceA.ElementType, sliceB.ElementType);
+        }
+
+        // Issue #3907: two tuples are the same type when their SHAPES agree.
+        // Element names are deliberately not compared — ADR-0172 (as amended
+        // by #3643) makes same-shape tuples differing only in element names
+        // identity-convertible, which is also the CLR's answer, since both
+        // erase to the same `ValueTuple` instantiation.
+        //
+        // Without this arm the comparison fell through to the ClrType probe at
+        // the bottom, and a tuple containing a same-compilation or open type
+        // (`(T, bool)`) has no ClrType at all while binding — see
+        // `TupleTypeSymbol.BuildClrType`, which returns null as soon as one
+        // element cannot be projected (the #3748/#3910 hole, here on the
+        // interface-conformance side). So `class Node[T] :
+        // IValueTaskSource[(T, bool)]` could not satisfy its own
+        // `GetResult` slot, while the identical declaration over concrete
+        // element types (`(string, bool)`) always could.
+        if (a is TupleTypeSymbol tupleA && b is TupleTypeSymbol tupleB)
+        {
+            if (tupleA.Arity != tupleB.Arity)
+            {
+                return false;
+            }
+
+            for (var i = 0; i < tupleA.Arity; i++)
+            {
+                if (!SameTypeSymbol(tupleA.ElementTypes[i], tupleB.ElementTypes[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         if (a is NullableTypeSymbol nullableA && b is NullableTypeSymbol nullableB)
