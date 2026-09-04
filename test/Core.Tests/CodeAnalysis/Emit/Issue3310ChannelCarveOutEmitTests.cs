@@ -8,7 +8,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 /// <summary>
-/// Issue #3310 / ADR-0159 channel carve-out: <c>chan T</c> is excluded from
+/// Issue #3310 / ADR-0159 channel carve-out: <c>chan[T]</c> is excluded from
 /// the empty-instance zero values (an auto-created channel has no sensible
 /// default — buffer size and ownership are the decisions <c>make</c>
 /// exists to force), so a bare initializer-less channel declaration is
@@ -29,10 +29,9 @@ public class Issue3310ChannelCarveOutEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310ChanLocal
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 return 0
             }
 
@@ -50,9 +49,8 @@ public class Issue3310ChannelCarveOutEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310ChanGlobal
 
-            import Gsharp.Extensions.Go
 
-            var c chan int32
+            var c chan[int32]
             0
             """);
 
@@ -65,10 +63,9 @@ public class Issue3310ChannelCarveOutEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310ChanField
 
-            import Gsharp.Extensions.Go
 
             class Worker {
-                var inbox chan int32
+                var inbox chan[int32]
             }
 
             0
@@ -83,11 +80,10 @@ public class Issue3310ChannelCarveOutEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310ChanStaticField
 
-            import Gsharp.Extensions.Go
 
             class Bus {
                 shared {
-                    var events chan int32
+                    var events chan[int32]
                 }
             }
 
@@ -104,10 +100,9 @@ public class Issue3310ChannelCarveOutEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310ChanMakeLocal
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c = make(chan int32, 1)
+                var c = chan[int32](1)
                 c <- 7
                 return <-c
             }
@@ -125,10 +120,9 @@ public class Issue3310ChannelCarveOutEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310ChanFieldInit
 
-            import Gsharp.Extensions.Go
 
             class Worker {
-                var inbox chan int32 = make(chan int32, 1)
+                var inbox chan[int32] = chan[int32](1)
                 func Ping() int32 {
                     inbox <- 5
                     return <-inbox

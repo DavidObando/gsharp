@@ -121,6 +121,7 @@
         "dependencies": {
           "GSharp.CodeAnalysis.Analyzers.Testing": "[1.0.0, )",
           "GSharp.Core": "[1.0.0, )",
+          "Gsharp.Runtime.Channels": "[1.0.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },
@@ -139,6 +140,12 @@
         }
       },
       "GSharp.Gsharp.Extensions": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
+      },
+      "gsharp.runtime.channels": {
         "type": "Project",
         "dependencies": {
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"

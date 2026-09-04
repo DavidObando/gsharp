@@ -1,83 +1,61 @@
 ---
-title: "Go-style built-ins"
+title: "Go-style built-ins (retired)"
 sidebar_position: 2
 draft: false
 ---
 
-# Go-style built-ins
+# Go-style built-ins (retired)
 
-`Gsharp.Extensions.Go` also surfaces the small set of Go-style built-in
-functions — `len`, `cap`, `append`, and `delete` — that cover fixed,
-rectangular, and slice arrays plus strings and maps. Outside this extension namespace
-the .NET-idiomatic spelling is preferred (`.Length`, `.Count`,
-`List[T].Add`, `Dictionary[K,V].Remove`); the built-ins are available
-when a Go-shaped codebase wants them.
+G# 0.4 shipped the Go-style built-in functions `len`, `cap`, `append`, and
+`delete` behind a per-file `import Gsharp.Extensions.Go`. ADR-0174 (D13)
+retired them, together with the import gate and the `Gsharp.Extensions.Go`
+namespace itself: every receiver already carries the member, so a free
+function that adds no syntax of its own only competed with it. A call to a
+retired name reports
+[`GS0566`](../ref/diagnostics#adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567),
+whose message names the replacement for that exact site (`xs.Length`,
+`m.Count`, `m.Remove(k)`, …). The names are free for your own functions: a
+user-defined `func len(...)` is an ordinary call.
 
-:::note Requires `import Gsharp.Extensions.Go`
-The built-ins are gated behind a per-file `import Gsharp.Extensions.Go`.
-Without the import, the binder emits
-[`GS0317`](../ref/diagnostics#go-style-built-ins-require-import-gsharpextensionsgo-gs0317)
-for each use; the message names the .NET-idiomatic alternative
-(`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`) when one exists.
-:::
+## Replacements
 
-## Length and capacity — `len` / `cap`
-
-`len(x)` returns the count of elements (or characters, for strings) and
-`cap(x)` returns the underlying capacity for slice-shaped values.
+| Retired | Receiver | Write instead |
+|---|---|---|
+| `len(xs)` | array `[N]T`, slice `[]T`, string, rectangular array | `xs.Length` (rectangular arrays also have `.Rank` and `.GetLength(d)`) |
+| `len(m)` | `map[K, V]` | `m.Count` |
+| `len(ch)` | a channel you constructed (`Chan[T]`) | `ch.Length()` |
+| `cap(xs)` | slice | *removed* — a slice is a fixed CLR array whose capacity **is** its length, `xs.Length` |
+| `cap(ch)` | a channel you constructed | `ch.Capacity` |
+| `append(xs, v)` | slice | keep a growable `List[T]` and call `.Add(v)`; a slice is a fixed CLR array |
+| `delete(m, k)` | `map[K, V]` | `m.Remove(k)` |
+| `close(ch)` | channel | `ch.Close()` |
+| `make(chan T[, n])` | — | `chan[T]()` (rendezvous), `chan[T](n)`, `Chan.Unbounded[T]()` |
 
 ```gsharp
 import System
-import Gsharp.Extensions.Go
+import System.Collections.Generic
 
 var nums = []int32{10, 20, 30}
-var matrix = [2, 3]int32
-Console.WriteLine(len(nums))   // 3
-Console.WriteLine(cap(nums))   // 3
-Console.WriteLine(len(matrix)) // 6 (total rectangular element count)
-Console.WriteLine(len("hello")) // 5
-```
+Console.WriteLine(nums.Length)        // 3
 
-The .NET-idiomatic spelling without the extension import is
-`nums.Length`, `matrix.Length`, `"hello".Length`, and so on. Rectangular
-arrays also expose `.Rank` and `.GetLength(d)`. `cap` and `append` do not
-apply to rectangular arrays. Maps spell their count as `.Count`.
-
-## Append — `append`
-
-`append(slice, value)` returns a new `[]T` containing the appended
-value. The first argument must be `[]T`; the second converts to `T`.
-
-```gsharp
-import System
-import Gsharp.Extensions.Go
-
-var nums = []int32{1, 2, 3}
-nums = append(nums, 4)
-Console.WriteLine(nums[3])   // 4
-```
-
-For mutable, grow-and-copy semantics the .NET-idiomatic alternative is
-`List[T]` plus `.Add`.
-
-## Delete — `delete`
-
-`delete(map, key)` removes a key from a map.
-
-```gsharp
-import System
-import Gsharp.Extensions.Go
+var grown = List[int32]()
+grown.Add(40)
+Console.WriteLine(grown.Count)        // 1
 
 var counts = map[string,int32]{"a": 1, "b": 2}
-delete(counts, "a")
-Console.WriteLine(len(counts))  // 1
+counts.Remove("a")
+Console.WriteLine(counts.Count)       // 1
+
+Console.WriteLine("hello".Length)     // 5
 ```
 
-The .NET-idiomatic alternative is `Dictionary[K,V].Remove(key)`.
+Because `[]T` **is** `T[]` and `map[K, V]` **is** `Dictionary[K, V]` (ADR-0158
+type identity), no new API ships with this change; the members were always
+there.
 
 ## See also
 
-- [Go-flavored concurrency](go-concurrency) — `go`, `chan T`, `select`,
-  `close`, and `make(chan T, ...)`.
+- [Go-flavored concurrency](go-concurrency) — `go`, `chan[T]`, `select`,
+  `ch.Close()`, and channel construction.
 - [Standard library reference](../ref/standard-library) for the full
   built-in matrix.

@@ -29,8 +29,7 @@ public sealed class Issue3304GoVoidOperandSessionTests : IDisposable
         // cross-submission limitation independent of #3304 (it fails
         // identically for a value-returning goroutine target).
         var cell = engine.Evaluate("""
-            import Gsharp.Extensions.Go
-            var done = make(chan int32, 1)
+            var done = chan[int32](1)
             func poke() {
                 done <- 42
             }

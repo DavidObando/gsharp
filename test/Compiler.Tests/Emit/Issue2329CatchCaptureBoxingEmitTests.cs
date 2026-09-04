@@ -422,10 +422,9 @@ public class Issue2329CatchCaptureBoxingEmitTests
         var source = """
             package Probe2329Select
             import System
-            import Gsharp.Extensions.Go
 
             func Main() {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 7
                 select {
                 case let v = <-ch {

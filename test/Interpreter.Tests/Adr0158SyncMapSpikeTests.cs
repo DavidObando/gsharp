@@ -72,13 +72,13 @@ public class Adr0158SyncMapSpikeTests
 
             func Delete(key string) {
                 lock items {
-                    delete(items, key)
+                    items.Remove(key)
                 }
             }
 
             func Length() int32 {
                 lock items {
-                    return len(items)
+                    return items.Count
                 }
             }
 
@@ -90,11 +90,11 @@ public class Adr0158SyncMapSpikeTests
 
             func Keys() []string {
                 lock items {
-                    var ks = []string{}
+                    var ks = System.Collections.Generic.List[string]()
                     for k in items.Keys {
-                        ks = append(ks, k!!)
+                        ks.Add(k!!)
                     }
-                    return ks
+                    return ks.ToArray()
                 }
             }
 
@@ -463,7 +463,7 @@ public class Adr0158SyncMapSpikeTests
     private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: `go` is gated behind this import.
-        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var fullSource = source;
         return EmittedOracle.Evaluate(fullSource);
     }
 

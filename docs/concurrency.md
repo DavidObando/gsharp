@@ -9,9 +9,19 @@ and the [standard-library reference](../website/docs/ref/standard-library.md).
 ## The idiom: share memory by communicating
 
 G#'s concurrency surface is Go-shaped over the .NET runtime (ADR-0002,
-ADR-0022): `go f(args)` lowers to `Task.Run`, `chan T` to
-`System.Threading.Channels.Channel<T>`, `select` orchestrates channel
-operations, and structured `scope { ... }` blocks join everything they own.
+ADR-0022, ADR-0174): `go f(args)` lowers to `Task.Run` (ADR-0174 Phase 3
+replaces this with an `IThreadPoolWorkItem`), `chan[T]` **is**
+`System.Threading.Channels.Channel<T>` while `chan[T](…)` constructs the
+G#-owned `Gsharp.Concurrency.Chan<T>` (rendezvous at capacity 0, Go-exact
+close semantics, two-value receive), channel operations lower onto the
+`Gsharp.Runtime.Channels` runtime's `ChannelOps` facade (inside an `async func`
+they are *awaited* — `ReceiveValueAsync` / `ReceiveTupleAsync` / `SendAsync` —
+so a parked operation holds a state machine, not a thread — and since
+suspension is *inferred*, every plain `func` that performs or transitively
+reaches a channel operation is compiled that way too, with `ValueTask[R]` +
+`[Suspending]` as its ABI and `suspend func` reserved for boundaries), `select`
+orchestrates channel operations, and structured `scope { ... }` blocks join
+everything they own.
 The first answer to "how do goroutines share state" is the same as Go's:
 don't — pass values through channels, and let `scope` own the joins. Every
 concurrency sample in the repo works this way.
@@ -61,7 +71,6 @@ For a map that is *meant* to be shared, use the G#-authored
 (`src/Sdk/Gsharp.Extensions/Sync/Sync.gs`, ADR-0158):
 
 ```gsharp
-import Gsharp.Extensions.Go
 import Gsharp.Extensions.Sync
 
 func bump(m SyncMap[string, int32]) int32 {

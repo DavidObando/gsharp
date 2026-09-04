@@ -188,7 +188,7 @@ enum Status { Pending, Complete, Failed }
 
 ## Sequences and channels
 
-`sequence[T]` maps to `IEnumerable<T>` and is produced with iterator functions that use `yield`. `async sequence[T]` maps to asynchronous enumeration and is consumed with `await for`. `chan T` represents channels created with `make(chan T)` or `make(chan T, capacity)`.
+`sequence[T]` maps to `IEnumerable<T>` and is produced with iterator functions that use `yield`. `async sequence[T]` maps to asynchronous enumeration and is consumed with `await for`. `chan[T]` is a channel (`System.Threading.Channels.Channel<T>`), constructed with `chan[T]()` (rendezvous), `chan[T](capacity)`, or `Chan.Unbounded[T]()`; `in chan[T]` / `out chan[T]` are its receive-only / send-only handles.
 
 ## Function types and delegates
 

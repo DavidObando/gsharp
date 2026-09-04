@@ -280,7 +280,7 @@ unsafe func ok(out a int32, arr []int32) {
         const string Source = @"package SelectDA1
 
 func ok(out a int32) {
-    let ch = make(chan int32, 1)
+    let ch = chan[int32](1)
     ch <- 1
     select {
     case let v = <-ch {

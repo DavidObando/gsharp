@@ -139,12 +139,10 @@ internal static class SideEffectAnalyzer
                 return HasObservableSideEffect(ta.Receiver);
             }
 
-            // len / cap on a pure operand are pure (they read .Length / .Count
-            // which are property getters but are conventionally idempotent).
+            // len on a pure operand is pure (it reads .Length / .Count, which
+            // are property getters but are conventionally idempotent).
             case BoundNodeKind.LenExpression:
                 return HasObservableSideEffect(((BoundLenExpression)expression).Operand);
-            case BoundNodeKind.CapExpression:
-                return HasObservableSideEffect(((BoundCapExpression)expression).Operand);
 
             // Every other expression kind — calls, awaits, assignments,
             // property / indexer reads (which run user code), allocations

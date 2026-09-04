@@ -399,7 +399,9 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 builder.Append(')');
                 break;
             case ChannelTypeSymbol channel:
-                builder.Append("!chan(");
+                builder.Append("!chan");
+                builder.Append((int)channel.Direction);
+                builder.Append('(');
                 AppendIdentityKey(builder, channel.ElementType);
                 builder.Append(')');
                 break;

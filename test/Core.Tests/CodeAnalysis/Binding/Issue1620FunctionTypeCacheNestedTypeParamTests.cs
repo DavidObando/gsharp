@@ -112,7 +112,6 @@ public class Issue1620FunctionTypeCacheNestedTypeParamTests
     {
         var source = """
             package Issue1620ArrayT
-            import Gsharp.Extensions.Go
 
             func applyA[T](xs []T, f ([]T) -> int32) int32 {
                 return f(xs)
@@ -121,8 +120,8 @@ public class Issue1620FunctionTypeCacheNestedTypeParamTests
                 return f(xs)
             }
             func Main() {
-                var ra = applyA([]int32{1, 2}, (s) -> len(s))
-                var rb = applyB([]string{"a", "b", "c"}, (s) -> len(s))
+                var ra = applyA([]int32{1, 2}, (s) -> s.Length)
+                var rb = applyB([]string{"a", "b", "c"}, (s) -> s.Length)
             }
             """;
         Assert.Empty(GetDiagnostics(source));

@@ -12,6 +12,9 @@
 
   <ItemGroup>
     <ProjectReference Include="@(GsharpCore)" />
+    <!-- ADR-0174 D1: ship the channel runtime next to gsc so the driver probe
+         (ReferenceResolver.ResolveDriverReferencePaths) finds it outside MSBuild. -->
+    <ProjectReference Include="..\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj" />
     <!-- ADR-0169 M5 / issue #3686: the analyzer verifier ships NEXT TO gsc, the
          same way GSharp.Core does. A migrated analyzer test project references
          it through $(GsharpCompilerFullPath)'s directory (see

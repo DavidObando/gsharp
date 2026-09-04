@@ -1339,7 +1339,7 @@ public partial class Parser
                     ahead++;
                 }
 
-                if (Peek(ahead).Kind == SyntaxKind.AsyncKeyword && Peek(ahead + 1).Kind == SyntaxKind.FuncKeyword)
+                if (IsFunctionColorModifier(Peek(ahead).Kind) && Peek(ahead + 1).Kind == SyntaxKind.FuncKeyword)
                 {
                     ahead++;
                 }
@@ -1386,7 +1386,7 @@ public partial class Parser
             // followed by `func`; otherwise it is left for ParseFieldDeclaration
             // (or another fallback) to surface a diagnostic.
             SyntaxToken? memberAsyncModifier = null;
-            if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
             {
                 memberAsyncModifier = NextToken();
             }
@@ -1396,10 +1396,10 @@ public partial class Parser
             // by `func` (or `async func`).
             SyntaxToken? memberUnsafeModifier = null;
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-                && (Peek(1).Kind == SyntaxKind.FuncKeyword || Peek(1).Kind == SyntaxKind.AsyncKeyword))
+                && (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)))
             {
                 memberUnsafeModifier = NextToken();
-                if (memberAsyncModifier == null && Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                if (memberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
                 {
                     memberAsyncModifier = NextToken();
                 }

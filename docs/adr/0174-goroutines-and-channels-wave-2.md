@@ -159,6 +159,16 @@ sequence the emitter produces.
 | 200 000 parked receivers — *shallow frame* | *cannot* | **384 B each**, 400 ms | 2669 B each, 407 ms | 7× less memory at this depth |
 | 400 blocked receivers, then spawn one more | **never scheduled (>60 s)** | n/a (suspension) | n/a | correctness failure |
 
+**Phase 1 addendum (2026-09-02).** The runtime assembly `Gsharp.Runtime.Channels`
+landed and two rows were measured on a *different* machine (Linux x64, 20
+cores, .NET 10.0.11 / Go 1.27.0, both sides on the same machine, round 3 of 3,
+single launch — so a baseline, not yet a D11 result):
+
+| Scenario | Phase 1 runtime (`Chan<T>`) | Go 1.27, same machine | Note |
+| --- | --- | --- | --- |
+| **Rendezvous round trip** — two capacity-0 `Chan<int>`, `await SendAsync`/`ReceiveAsync` | 1.18–1.30 µs/op | **617 ns/op** | ≈2× behind. The row the table above lacked. Waiters complete with `RunContinuationsAsynchronously = true` (one pool hop per hand-off); gate G6 measures the synchronous alternative. Go's own number on this machine is 2.8× its Apple-silicon figure — absolute numbers do not travel. |
+| Receive from closed channel — `TryReceive` on a closed, drained `Chan<T>` | **0.7 ns/op** | 32.5 ns/op | lock-free closed-and-drained path (`closed` is monotonic; the buffer can only drain after close). BCL `TryRead` on the same machine: 3.8 ns. |
+
 Four rows carry caveats that must not be lost when they are quoted:
 
 - **Ping-pong.** Wave 1 has no rendezvous channel at all (defect 3), so there
@@ -445,7 +455,7 @@ still open. Only the third state requires suspending.
 machinery (ADR-0015, ADR-0168):
 
 ```gsharp
-let value, ok = <-jobs
+let (value, ok) = <-jobs
 if !ok {
     return
 }
@@ -1087,13 +1097,13 @@ This ADR ships one:
 
 | Scenario | Target vs Go | Status of the evidence |
 | --- | --- | --- |
-| Receive from closed channel | ≤ 1.0× | **supported** — 1949 → 4.4 ns/op vs Go's 5.1 is pure defect removal |
+| Receive from closed channel | ≤ 1.0× | **supported, and met by the Phase 1 runtime** — 1949 → 0.7 ns/op (`Chan<T>.TryReceive`, lock-free closed-and-drained path) vs Go's 32.5 ns on the same machine |
 | Goroutine spawn | ≤ 1.2× | **partial** — 220 vs 202 ns covers queueing only; D4/D5/D6 add capture, state machine, sink, and registration. Re-derive in Phase 3. |
 | Parked-goroutine memory, depth 1 | ≤ 0.5× | **supported at depth 1 only** — measure depths 1/4/16; the target applies per depth, and D4's per-frame cost may fail it at depth |
 | Buffered throughput, per message | ≤ 1.8× | **not yet met by any measured implementation** — best CLR is 44.9/25.5 = 1.76×, so the earlier ≤1.5× target was already refuted by the ADR's own data. 1.8× holds the measured line; tightening requires a result that does not exist yet. |
 | `select`, ready arms | ≤ 1.2× | **not evidence-backed** — the 30.7 vs 53.3 ns result compared deterministic source-order probing against Go's randomized choice, i.e. it partly measured the divergence D8 removes. Re-derive after D8. |
 | `select`, parking path | **to be established** | never measured. Phase 4 establishes the baseline before setting a target. |
-| Rendezvous round trip | **to be established** | never measured — wave 1 has no rendezvous channel; the 1158 ns figure is a capacity-1 channel. Phase 1 must build the real baseline. |
+| Rendezvous round trip | **provisional ≤ 2.0×** | **baseline measured in Phase 1** — 1.18–1.30 µs/op vs Go 617 ns/op on the same Linux 20-core machine (≈2×), single launch. Phase 5 sets the target from multi-launch runs; the known lever is gate G6 (`RunContinuationsAsynchronously`). |
 | Chunked throughput | ≤ 2.0× | plausible; GC write barriers and array bounds are structural |
 | Goroutines schedulable while N are parked | unbounded | **supported** — today fails at 400 |
 
@@ -1964,6 +1974,470 @@ so this work moves that horizon closer rather than further.
     knowingly relied on unbounded buffering needs a target for GS0566 to name.
     Reconsider in Phase 5 once the corpus migration shows how many sites
     actually chose it.
+
+## Errata and implementation notes
+
+Recorded as the phases land, so a reader of the decision can see where the
+implementation had to refine it.
+
+1. **Clean-cut migration (author decision, 2026-09-02).** No staged
+   warning release. GS0566/GS0567 are errors from the PR that introduces
+   them; the in-repo corpus is migrated in the same PR. Breaking-change row
+   10 is amended: `import Gsharp.Extensions.Go` is *deleted* for the
+   concurrency surface, not kept as a no-op (the `len`/`cap`/`append`/`delete`
+   gate, GS0317, is retired together with those built-ins in Phase 2's
+   final PR).
+2. **Migration footprint.** The corpus census measured 54 C# test files /
+   322 retired-built-in sites and 64 files including the `chan T` respelling
+   — about 1.7× the estimate in "Breaking changes". Nine `.gs` samples, not
+   seven.
+3. **Type of a constructed channel.** `let ch = chan[T](n)` has the static
+   type of the runtime class, `Gsharp.Concurrency.Chan[T]`, not the type
+   clause `chan[T]`. This is what makes D12's "no member" rows literally
+   true: `Length()`/`Capacity`/`Close()` are ordinary imported members of the
+   constructed class, and a `chan[T]`-typed handle (which may be any foreign
+   `Channel<T>`) reports the ordinary member-not-found error. `Chan[T]`
+   converts to `chan[T]` by identity, so the class name surfaces only in
+   hovers over inferred locals.
+4. **Lowering shape.** Channel operations are bound as ordinary imported
+   calls on a static runtime facade, `Gsharp.Concurrency.ChannelOps`
+   (`Receive`/`Receive2`/`Send`/`Close`, with `…Async` twins for Phase 3),
+   and construction as an imported constructor call. The compiler emits no
+   channel-specific IL; the fast-path/fallback dispatch of D2's matrix lives
+   in tested C#. The compiler core takes **no** project reference on the
+   runtime — the type is resolved through the reference set, and the SDK,
+   the driver probe, and the test hosts guarantee its presence.
+5. **`gsc` copy-local.** An emitted program references
+   `Gsharp.Runtime.Channels` whenever it touches a channel. Under MSBuild the
+   SDK's copy-local puts it beside the app; a direct `gsc /out:` run has no
+   such step, so `gsc` copies the bundled runtime beside the output when
+   (and only when) the emitted PE carries the AssemblyRef. Without this every
+   out-of-process test harness and every direct-driver user would have to
+   copy it by hand.
+6. **Phase 1 measurements (Linux x64, 20 cores, same-machine Go 1.27).**
+   Rendezvous round trip 1.18–1.30 µs/op vs Go 617 ns/op (≈2×, single
+   launch); closed receive 0.7 ns/op vs Go 32.5 ns/op — the lock-free
+   closed-and-drained fast path in `Chan<T>.TryReceive` is sound because
+   `closed` is monotonic and the buffer can only drain after close. Go's own
+   numbers on this machine differ 2.8× from the Apple-silicon reference,
+   which is D11's point about ratios versus absolute figures.
+7. **Select lock order.** The runtime orders gates by a process-wide
+   monotonic per-channel id (deliberately not a per-`Chan<T>` static, which
+   would be one counter per element type), a total order with no tiebreak —
+   the same property D8 step 6 asks of `RuntimeHelpers.GetHashCode` plus
+   identity.
+8. **`SelectWaiter.Add*` needs a `Chan<T>` overload.** A `Chan<T>` is both
+   a `Channel<T>` and an `ISelectable<T>`, so the two D8 overloads are
+   ambiguous for a constructed channel; the most specific overload resolves
+   it, and the Phase 4 emitter must call it.
+9. **Two-value receive spelling.** D3's original example, `let value, ok =
+   <-jobs`, collides with ADR-0168's mixed-binding rule, under which a `let`
+   on the first target does not distribute — `ok` would have to be an
+   existing variable. The declaring spelling is therefore the tuple
+   deconstruction `let (value, ok) = <-ch` (or `var (value, ok)`); the
+   multi-target `value, ok = <-ch` assigns two existing variables, and
+   ADR-0168's `let value, let ok = <-ch` declares both. Every form recognizes
+   the prefix `<-` syntactically and binds it as the `(T, bool)` tuple of
+   `ChannelOps.Receive2<T>`; a wrong target count is GS0554. The same
+   syntactic recognition drives `while let v = <-ch` (which bypasses
+   ADR-0163's nullable stripping, so a `T?` element stays `T?`, and gates
+   each clause on its own `ok` before the next clause receives) and
+   `for v in ch` (the collection is evaluated once; the loop is the
+   `while let` shape, so there is no new iteration kind). GS0555 is narrowed
+   to the one case the guidance fits: a `while let` whose initializer *is* a
+   channel handle rather than a receive from one.
+10. **Phase 3 interim: the blocking root bridge.** Until inference (Phase 3-3)
+    colors plain functions, a call to a `suspend func` from a function that is
+    neither suspending nor `async` binds through `Gsharp.Concurrency.Blocking.Wait`
+    and reports GS0558 as a *warning*; the synthesized entry point is exempt
+    (it is the root that blocks once, per D4). Phase 3-3 narrows GS0558 to the
+    `lock`-body case the ADR names. Channel operations inside `async` and
+    suspending bodies are rewritten to awaited `ChannelOps.ReceiveValueAsync /
+    ReceiveTupleAsync / SendAsync` by a lowering pass (`ChannelOperationRewriter`),
+    the blocking facade forms surviving only for non-state-machine bodies and
+    `lock` regions.
+11. **Inference as implemented (Phase 3-3).** `SuspensionInference` runs at the
+    end of `BindProgram` over the bound bodies: a worklist to a fixed point,
+    seeded by direct suspension points (blocking facade calls outside `lock`
+    bodies and blocking bridges to declared-suspending callees) and by calls
+    to suspending functions outside `go` operands; then a rewrite that retypes
+    calls to newly-inferred callees as `ValueTask[R]` and completes them
+    (implicit await in a suspending/async container, root bridge otherwise),
+    including inside function-literal bodies. Boundaries as implemented: the
+    entry point, `async`, `open`/`override`/abstract, interface members and
+    same-name/same-arity methods on implementing types, `.ctor`, accessors,
+    operators, P/Invoke, iterators, `Dispose`, synthesized functions, and
+    function literals (a lambda is its own boundary in this slice — D4's
+    "inferred silently" for lambdas, and GS0552/GS0553/GS0561 as errors, are
+    follow-ups; a suspension point inside a boundary keeps blocking today).
+    **GS0560 is not emitted by default**: with ADR-0006's public-by-default
+    top-level declarations it would fire on every Go-shaped program the ADR
+    itself shows; it is reserved for the `/strictapi` opt-in. GS0558 is
+    reported by the pass for the residual bridges, never at bind time.
+12. **Phase 3-4a measurements (decision gates G1/G2; `bench/concurrency/clr`,
+    Release, 20 cores, warmed rounds).** Threading the context through a
+    3-deep chain of synchronously-completing `ValueTask<int>` functions:
+    hidden parameter **≈15 ns/chain**, `AsyncLocal<Context>` read at each
+    level **≈24–54 ns/chain** (noisy). Goroutine spawn via
+    `UnsafeQueueUserWorkItem`: **≈290–330 ns** without `ExecutionContext`
+    flow, **≈320–490 ns** with `ExecutionContext.Capture` + `Run` per item.
+    G1: the hidden `Context` parameter stands (D7). G2: not flowing
+    `ExecutionContext` stands as the default (D5); the measured capture cost
+    is small enough that an opt-in host hook restoring it is viable later.
+    The hidden-parameter ABI itself (P3-4b) lands together with the D7
+    cancellation points in Phase 4, where the first consumer of an ambient
+    context appears; until then suspending functions take no context
+    parameter and channel operations run under `Context.None`. Both the
+    `ValueTask` return shape (Phase 3) and the hidden parameter (Phase 4)
+    precede the first release that carries either, so C# callers see one
+    ABI change, not two.
+13. **`go` inside a state-machine body.** Before Phase 3 a `go` statement in an
+    `async func` was a GS9998 (the closure synthesized for it was keyed by
+    bound-node identity, which the async rewriters do not preserve). Inference
+    made that shape common, so the closure is now found by the statement's
+    syntax; the rewriters preserve it.
+14. **Phase 3-5 as implemented.** `scope { … }` is lowered by the *binder* onto
+    `ScopeFrame` (`Enter`, the implicit `ctx`, `try { body } catch { record }
+    finally { Exit(bodyException) }`); the async pipeline turns `Exit` into an
+    awaited `ExitAsync` inside a state machine, and a scope is a suspension
+    point for inference. `go` dispatches through
+    `GoroutineRuntime.Start(Func<ValueTask>, IGoroutineSink?)` with the
+    enclosing frame as sink — one delegate and one work item per spawn, no
+    `Task`; the synthesized closure deriving from `GoroutineWorkItem` directly
+    (D5's no-delegate form) is a Phase 5 refinement. The bespoke scope
+    emitter and its `List<Task>`/`WhenAll` join are gone. GS0563 (free `go`
+    outside a scope) is not yet reported.
+15. **`go { … }` as implemented (Phase 3-6).** The parser desugars the block
+    form into the invocation of a synthesized zero-parameter function literal
+    over the block (`go func() { … }()`), with zero-width `func ( ) ( )`
+    tokens anchored at the block; the binder, closure synthesis and emitter
+    see the shape they already handle. A dedicated `GoStatementSyntax.Block`
+    is not needed for semantics; the formatter prints the desugared shape.
+16. **Nested scopes link their contexts.** A nested `scope` enters its frame
+    under the enclosing block's `ctx` (`ScopeFrame.Enter(outerCtx)`), so
+    `ctx.Parent` is the outer context and cancelling the outer block cancels
+    the inner one; only an outermost scope enters under `Context.None`. The
+    ambient-context plumbing for suspending functions (the hidden `Context`
+    parameter, D7) is still Phase 4.
+17. **An explicit `await` on a suspending call is a no-op.** The call is
+    already completed as an implicit await (or, in a not-yet-inferred plain
+    caller, as the `Blocking.Wait` bridge the inference pass later replaces);
+    `await twice(ch)` yields the completed call unchanged instead of GS0133
+    against the logical type. A genuine nested await (`await` on a call that
+    returns `Task[T]`) is unaffected. This is what C# and Go programmers — and
+    cs2gs — write, and it keeps the two spellings equivalent.
+18. **The scope catch exits through its finally.** The binder's synthesized
+    `catch (Exception e) { bodyException = e }` never completes normally
+    because `ScopeFrame.Exit(bodyException)` always throws when handed one;
+    `BoundCatchClause.ExitsThroughFinally` records that invariant so
+    control-flow and definite-assignment analysis treat the handler as
+    terminating — `func f() int32 { scope { return 1 } }` and an `out`
+    parameter assigned inside a scope both remain legal (issues #1615, #1642).
+19. **cs2gs (Phase 3-7).** A C# `async ValueTask`/`ValueTask<T>` method that
+    carries `[Suspending]` or names a `Gsharp.Concurrency` type or member
+    translates to `suspend func` with the awaited result type (ADR-0115 B.23
+    refinement); other `async ValueTask<T>` methods keep their explicit
+    envelope. The planned `G15-Concurrency-Console` corpus fixture is deferred:
+    the corpus is deliberately severed from the repository build, so a C#
+    fixture cannot reference the channel runtime without a `HintPath` into
+    `out/`, which the pipeline's reference partitioning would duplicate
+    against the SDK's implicit runtime reference on the G# side. The
+    translation is covered by in-memory translator tests that compile against
+    the real runtime and round-trip-bind the emitted G#.
+20. **Debugging gate as implemented (Phase 3-8).** Kickoffs carry
+    `[AsyncStateMachine(typeof(SM))]` (the state machine is nested in the
+    kickoff's declaring type and now marked `[CompilerGenerated]`, the two
+    conditions under which the runtime's `StackTrace` resolves `MoveNext`
+    frames to the logical function) and `[DebuggerStepThrough]`;
+    the Portable PDB carries the async-method-stepping blob per `MoveNext`
+    (catch handler offset, one yield/resume pair per await, from the hidden
+    await markers the lowering already emits). `StateMachineHoistedLocalScopes`
+    is not emitted yet — hoisted locals still appear under their field names
+    in a debugger — a follow-up rather than a gate. The e2e gate
+    (`debugger-e2e.sh`) breaks inside an inferred-suspending function by
+    file:line and steps over a channel receive onto the next two source lines;
+    the frame's displayed name is whatever the debugger derives from the
+    attribute, which netcoredbg may still print as `MoveNext`. Found on the
+    way: a compilation created without an explicit reference set bound
+    channel operations against the default resolver but skipped inference
+    (the pass received the caller's `null`); inference now uses the root
+    scope's resolver, so `new Compilation(tree)` and the hot-reload agent's
+    candidate builds colour functions exactly like `gsc` does.
+22. **Phase 4-1 as implemented.** `GsharpRuntime` carries the host-observable
+    budgets and diagnostics: `DeferGraceBudget` (5 s, `GSHARP_DEFER_GRACE_MS`),
+    `ScopeStallTimeout` (off by default, `GSHARP_SCOPE_STALL_MS`), the
+    `DeferGraceExpired` and `ScopeStalled` events, and counters. A stalled join
+    is *reported and still awaited* — a scope that promised to join keeps its
+    promise. `Context.Shielded(grace)` is the bounded shield D7 calls for: it
+    ignores the outer cancellation but cancels itself when the budget expires
+    and raises the hook. Pooling `ScopeFrame` behind an `IValueTaskSource`
+    (A5's sketch) is deferred to Phase 5, where the concurrency benchmark can
+    say whether one allocation per scope is worth the stale-completion risk.
+23. **D7 in two steps.** Step one (this phase) makes a channel operation park
+    on the innermost enclosing `scope`'s `ctx`, so a failing goroutine now
+    collapses siblings that are parked on a channel rather than leaving them
+    waiting forever — the semantics the D6 exit table always described but
+    that no operation could observe while every operation ran under
+    `Context.None`. It covers every operation lexically inside the block:
+    single- and two-value receives, sends, and channel `for … in` loops.
+    Step two is the hidden `Context` parameter (P3-4b, moved here), which
+    carries the same context *across calls* so an operation inside a callee
+    observes its caller's scope.
+24. **The D7 ABI as implemented: a trailing optional parameter, not a leading
+    one plus a bridge.** D7's table specifies a hidden *leading* `Context` and,
+    for public API, a synthesized public bridge that supplies `Context.None`.
+    Implemented instead: the context is appended as the **last** parameter and
+    emitted **optional with a `nil` default**. This meets the same goals — a
+    foreign caller binds the signature the G# source declares, and the ABI does
+    not lie — without a bridge per public function. That mattered concretely:
+    G# top-level declarations are public by default (ADR-0006), so nearly every
+    suspending function would need one, and the extra MethodDef row would have
+    to be planned, named and ordered in each of the ten emission loops that
+    build method rows. The trade is honest and recorded:
+
+    | Caller | Leading + bridge (specified) | Trailing optional (implemented) |
+    | --- | --- | --- |
+    | C# source | `f(args)` | `f(args)`, or `f(args, ctx)` to pass one |
+    | Another G# assembly | binds the impl through the bridge | binds the declared signature; the pass supplies the context |
+    | Reflection `Invoke` | `Invoke(o, args)` | must supply the parameter or `Type.Missing` |
+    | Cost | a bridge per public suspending function | none |
+
+    Only the reflection row is worse, and a caller that reflects over a
+    `ValueTask`-returning G# function is already writing against ADR-0174's
+    breaking change. `CSharpConsumer_CallsTheDeclaredSignature_AndMayPassAContext`
+    compiles a real C# program against a G# library and runs it.
+
+    Reflection is the one caller shape the "optional" half does not make
+    transparent: `MethodInfo.Invoke`'s default binder is strict about arity, so
+    `Invoke(null, null)` on a zero-parameter suspending function throws
+    `TargetParameterCountException`. The caller must pass the argument, either
+    a `Context` or `Type.Missing` under `BindingFlags.OptionalParamBinding`.
+    Measured, and now asserted by `e2etests/debugger-e2e.sh`, whose host had
+    been written before the parameter landed.
+25. **Two D7 cases the table leaves implicit.** An author who *declares* a
+    `ctx Context` parameter gets exactly that — the signature is untouched and
+    the operations park on their parameter (D7's "explicit" row, now also the
+    way a C# caller passes a context). A **variadic** function carries no
+    context at all: `...T` must stay positionally last, so appending one would
+    corrupt the call convention. Placing it *before* the variadic instead was
+    measured and rejected — the declaration is legal, but the parameter is not
+    skippable positionally, so `f(ch, 2, 3)` fails to compile (`CS1503`), and
+    when the variadic's element type is compatible with `Context` the call
+    compiles and *silently* binds the first variadic argument to the context.
+    So a variadic function runs its operations under `Context.None` — it loses
+    cross-call cancellation, not correctness — and an author who wants
+    cancellation declares `ctx Context` before the variadic, which works
+    (`AVariadicFunction_WithADeclaredContext_IsCancellable`). Giving the
+    compiler a way to inject one anyway would mean a companion overload for
+    this shape alone: the bridge idea of erratum 24, applied where it is the
+    only option rather than everywhere.
+26. **Cleanup shielding as implemented (the rest of D7).** A `defer` body is
+    lowered under a shielded context: the binder declares
+    `<defer$shield$N> = <ambient>.ShieldedForCleanup()` before the body and
+    disposes it after, and because that is an ordinary `Context` local the
+    suspension pass already reads it as the ambient context for the calls
+    inside — no new machinery. So cleanup that needs a channel completes while
+    the block around it is being cancelled, bounded by
+    `GsharpRuntime.DeferGraceBudget`. Shielding `Context.None` returns
+    `Context.None`, so a `defer` outside any scope — the common case — costs
+    nothing. `using` and `lock` cleanup are not shielded: their cleanup is
+    `Dispose`/`Monitor.Exit`, which never suspends. GS0565 (the advisory
+    warning that a deferred call suspends) is not emitted; the shield it
+    announces is applied unconditionally, so the warning is informational and
+    is deferred with GS0560 and GS0563.
+27. **D8 as implemented (Phase 4-4).** `select` is lowered by the *binder* onto
+    `SelectWaiter` — operands once, left to right; one waiter carrying every
+    arm; `Wait()`, which the async lowering turns into an awaited `WaitAsync()`
+    inside a state machine exactly as it does a scope's join; `NeedsReprobe`
+    driving a retry loop for foreign arms; `TakeValue[T]` into the arm's
+    binding; `Return()` in a `finally`. The fast path lives in the runtime:
+    `WaitAsync` already probes every arm under the gates from a random start,
+    so the compiler emits no probe loop of its own, and a `default` arm calls
+    the new `TryNow()`, which probes once in the same random order and commits
+    without registering. `Task.WhenAny`, the per-arm `AsTask()`, the re-probe
+    of the winner, and the receive-before-send source order are gone, with
+    them the bias the old shape had.
+
+    Two details worth recording. Without a `default` arm the wait returns only
+    once an arm has transferred, so the last arm is emitted as the
+    unconditional `else` — which is what keeps "a select whose every arm
+    returns is a select that returns" exact (issue #2890). And a select now
+    carries its own `finally` (returning the waiter), so a `return` out of a
+    select inside `fixed` shows two regions rather than one: the waiter release
+    nested inside the single shared unpin epilogue (issue #2900).
+
+    The bespoke emitter and its slot planning are dead and now throw if
+    reached; deleting `BoundSelectStatement` and `BoundScopeStatement`
+    outright, with the coverage-matrix regeneration that entails, is batched
+    into the Phase 4 cleanup.
+28. **D9 as implemented (Phase 4-5).** `after`, `tick` and `merge` are
+    G#-authored in `src/Sdk/Gsharp.Extensions/Concurrency/Concurrency.gs`,
+    `package Gsharp.Concurrency`, reached by bare name because the implicit
+    import now hoists that package's statics (`ImportSymbol.HoistsStatics`, set
+    only for this one import — an implicitly imported namespace should not
+    generally add callable names, and a user-declared `after` still wins).
+    `after`/`tick` return the runtime's timers, which are `ISelectable[T]`
+    rather than channels, so a select receive arm now accepts anything
+    selectable: `case <-after(d)` works without a timer pretending to be a
+    channel. `chunks` is not here — it belongs with D10's batch surface in
+    Phase 5.
+
+    `merge` takes `...chan[T]` rather than D9's `…in chan[T]`. Inference across
+    an assembly boundary cannot see a `Channel[int]` argument as a
+    `ChannelReader[T]` parameter, so the receive-only spelling would have made
+    every call site name its element explicitly. The *result* stays
+    `in chan[T]`, which is the half that carries ownership: the caller may only
+    receive from it.
+
+    Writing that one function surfaced four gaps that no closed-element program
+    reaches, each now fixed and tested
+    (`Adr0174GenericChannelEmitTests`): a directional channel could not be an
+    array element (parser, in both the type-clause and array-literal
+    positions), such an array could not be tokenized when its element was open
+    (the emitter had no channel case), a variadic whose tail element is a
+    composite mentioning a type parameter was rejected before inference ran,
+    the element could not be inferred through a channel type at all, and — the
+    dangerous one — the `chan[T]` to `in chan[T]` view call was silently
+    dropped whenever the element was open, because the two look
+    runtime-equivalent under erasure. That last one produced IL that hands a
+    `Channel[T]` where a `ChannelReader[T]` is expected: ILVerify rejects it and
+    the JIT segfaults.
+
+29. **The remaining D8 arms as implemented (Phase 4-6).** A `when` guard is
+    bound *before* a receive arm opens its scope, so `case let v = <-ch when v > 0`
+    is an error rather than a subtle one: the guard decides whether the arm is
+    registered at all, long before a value arrives. It is evaluated exactly
+    once, into a local outside the reprobe loop, and gates the arm's `Add*`
+    call. A disabled arm is never registered and so can never win, which is
+    what makes the "last arm is unconditional" dispatch still exact.
+
+    `case cancelled` is validated by the *suspension pass*, not the binder.
+    Whether a function has a context to observe is only known after the fixed
+    point has decided which functions carry one, so GS0557 is reported when the
+    lowered `AddCancelled` call is rewritten in a container with no ambient
+    context. This is also why a non-suspending boundary — an `open` method, an
+    interface implementation — now *adopts* a declared `ctx Context` parameter
+    as its ambient context: it never gains a hidden one, but an author who
+    spelled the parameter has said how the context arrives, and its channel
+    operations, scopes and selects should observe it too.
+
+    `SelectWaiter.Rent` is bound with a defaulted context and retargeted by the
+    same pass, exactly as `ScopeFrame.Enter` already was. This closes a Phase
+    4-4 gap that no test had reached: a `select` in a callee, with no lexical
+    `scope` of its own, parked on the default token and never saw the caller's
+    cancellation.
+
+    `case await` accepts `Task` and `Task[T]` only, because `SelectWaiter`
+    attaches its claiming continuation to a `Task`. A `ValueTask` operand
+    reports GS0133. A same-compilation result type travels symbolically for the
+    same reason a channel element does — `Task[T]` is invariant, so closing
+    `AddTask` over `object` would unbox a value that was never boxed.
+
+    Cancellation is consulted only *after* the gated channel arms, in both the
+    parking path and the non-blocking probe. Go's `ctx.Done()` is an ordinary
+    channel and takes part in the uniform choice; G# deliberately prefers
+    progress, so a select whose channel is ready does its work rather than bail
+    out. The probe had ignored the cancelled arm entirely, which made
+    `case cancelled` alongside `default` silently take `default`.
+
+30. **Select arm operands suppress bare struct literals (Phase 4-6).** Errata
+    item 27 recorded that a call-tailed operand swallowed the arm's body
+    through the trailing-object-initializer ambiguity. The other half of the
+    same collision is issue #1575's: `case <-ch { }`, an arm with an empty
+    body, read `ch { }` as an empty struct literal and reported GS0157. Arm
+    operands now suppress both, under the same rule a statement header uses — a
+    non-empty `Pair{Value: 41}` cannot open a body and is still a literal.
+
+31. **D15 as implemented (Phase 4-7).** `async let` is an ordinary `let`
+    carrying the `async` modifier — `VariableDeclarationSyntax.AsyncModifier`,
+    declared before `Keyword` so reflection-driven child enumeration stays in
+    source order — rather than a new statement node. Every existing declaration
+    shape (a type clause, an annotation, span and first/last-token lookups)
+    therefore keeps working, and no new `SyntaxKind` or coverage-matrix row was
+    needed.
+
+    The binder emits the cell and a `go` whose sink *and* result cell are both
+    it; the suspension pass wraps the operand in `cell.Run(…)`, choosing the
+    overload from the operand's **rewritten** type. That placement is
+    load-bearing: an inferred callee is typed `R` when the binder sees the
+    call and `ValueTask[R]` only after the fixed point, so a bind-time overload
+    choice would be wrong for half the programs. The same pass suppresses the
+    `Discard[T]` shaping an ordinary `go` wants — the whole point here is that
+    the result is kept.
+
+    `AsyncLetCell` is **not** generic in the result. A generic cell closes over
+    `System.Object` in metadata whenever the result is a same-compilation type,
+    while the call site believes it is closed over the user's type, and the
+    awaiter then dispatches through the wrong `IValueTaskSource[T]` — measured
+    as an `EntryPointNotFoundException`. The type parameter lives on
+    `Run[R]` and `AwaitAsync[R]` instead, where the compiler's symbolic
+    method-type-argument machinery already carries it. This is the same shape
+    `ChannelOps` uses for a channel element, and the reason `Chan[T]` can be
+    generic while this cannot is that a channel's element reaches the emitter
+    through a declared `chan[T]` type clause.
+
+    The child runs under the **cell's** context, not the enclosing block's. The
+    two are linked, so cancelling the block still collapses the child; the
+    separation is what lets scope exit cancel one unread binding without
+    disturbing its siblings. Before this the unread child was never unwound at
+    all, because it had never observed the context being cancelled.
+
+    Two deliberate deviations from D15's table, both worth stating:
+
+    - A failing `async let` does **not** cancel its siblings. D15 says the
+      child "participates in cancellation exactly as a `go` child does", and a
+      `go` child's failure cancels the frame. But `try { await a } catch { }`
+      must not kill `b`; that is Swift's rule for the same construct, for the
+      same reason. The failure still reaches the scope when nobody reads it.
+    - GS0569 is enforced twice — at name resolution, which gives the read's own
+      span, and by a walk over the block's bound body, which catches a receiver
+      position (`user.Name`) that resolves the symbol through another path. The
+      walk reports at the declaration, so the precise-span case is the one that
+      matters and the walk is the backstop.
+
+32. **D10 as implemented (Phase 5-1).** The batch surface is a set of extension
+    methods on `ChannelReader[T]` / `ChannelWriter[T]` — which is exactly what
+    the ADR's `func (ch in chan[T]) …` receiver spelling means — plus a
+    `Channel[T]` overload of each, because extension lookup on a plain
+    `chan[T]` receiver does not apply the directional view conversion first.
+    Without those overloads `ch.ReceiveBatch(…)` on a `chan[T]` is
+    member-not-found, which is not a distinction worth teaching. Filed as issue
+    #3877 — a G#-declared extension on `in chan[T]` binds on that receiver, so
+    only the imported path is missing the classification.
+
+    Writing them surfaced a real gap in D4: an imported `[Suspending]`
+    *extension* method was never completed at the call site. A suspending
+    static or instance import is; an extension bound through
+    `TryBindImportedExtensionCall` was not, so the caller was neither coloured
+    suspending nor given the implicit await, the call kept its `ValueTask[R]`
+    type, and even a spelled-out `await` was rejected because the container had
+    nothing to await in. The batch surface was therefore usable only inside a
+    function that already suspended for another reason. Fixed at the one
+    binding site.
+
+    `chunks` reaches `ChunkReader[T]` through a static `Chunks.Of[T]` rather
+    than the constructor, for the same reason `merge` takes `...chan[T]`
+    (errata 28): a `chan[T]` argument whose element is open is not applicable
+    to a `ChannelReader[T]` — or a `Channel[T]` — parameter. Constructor
+    applicability is a third path that neither the variadic nor the inference
+    fix from P4-5 covered. Filed as issue #3876; the static factory exists only
+    to route around it, and should be reconsidered once that lands.
+
+    `ChunkReader[T]` reads with `atLeast: 1`. A full-fill barrier here would
+    stall any pipeline whose producer is slower than the chunk size, which is
+    the common case a chunked loop exists to serve; `ReceiveBatch`'s explicit
+    `atLeast` remains the way to ask for one. Each chunk owns a fresh array:
+    the slogan is "share *buffers* by communicating", and communicated means
+    the receiver may keep it. A pooled overload stays gate G7's measured
+    follow-up.
+
+    GS0562 is reported by a walk over the bound bodies rather than at the call
+    site, because the question is about the receiver's *declaration* — was it
+    constructed with a capacity — and a batch call reaches the binder through
+    several paths. The walk finds locals initialised by a `Chan[T]` constructed
+    with a literal zero and reports every batch operation on them, including
+    `chunks(ch, n)`: that is the shape D10 exists to encourage, so it is the
+    likeliest way to reach the degenerate case.
 
 ## Addendum A — The ten patterns, three ways
 

@@ -1208,7 +1208,11 @@ internal sealed partial class OverloadResolver
                 && boundArguments[tailStart]?.Type is { } passThroughArgumentType
                 && IsVariadicCarrierPassThrough(passThroughArgumentType, carrierType);
 
-            if (!isSlicePassThrough && !(elementType is TypeParameterSymbol))
+            // A tail element that still mentions a type parameter — `...T`, but
+            // also a composite like `...in chan[T]` (ADR-0174 D9's `merge`) —
+            // cannot be classified until inference has run, so applicability is
+            // decided by the substituted signature instead of rejecting here.
+            if (!isSlicePassThrough && !TypeSymbol.ContainsTypeParameter(elementType))
             {
                 for (var i = tailStart; i < argumentCount && i < boundArguments.Count; i++)
                 {

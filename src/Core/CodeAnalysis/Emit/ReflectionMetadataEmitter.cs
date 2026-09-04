@@ -3947,6 +3947,7 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var c in smClasses)
         {
             var nestedHandle = this.cache.StructTypeDefs[c];
+            this.EmitCompilerGeneratedAttribute(nestedHandle);
             if (this.methodBodyPlanner.TryGetUserKickoffReceiverHandle(c, out var receiverEnclosing))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing);
@@ -3966,14 +3967,18 @@ internal sealed class ReflectionMetadataEmitter
         foreach (var s in smStructsOrdered)
         {
             var nestedHandle = this.cache.StructTypeDefs[s];
+            string enclosingTypeName;
             if (this.stateMachines.AsyncSmEnclosingClosures.TryGetValue(s, out var closureSym)
                 && this.cache.StructTypeDefs.TryGetValue(closureSym, out var closureHandle))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, closureHandle);
+                enclosingTypeName = CustomAttributeEncoder.GetMetadataTypeName(closureSym);
             }
-            else if (this.methodBodyPlanner.TryGetUserKickoffReceiverHandle(s, out var receiverEnclosing))
+            else if (this.methodBodyPlanner.TryGetUserKickoffReceiverHandle(s, out var receiverEnclosing)
+                && this.methodBodyPlanner.TryGetUserKickoffReceiverSymbol(s, out var receiverSym))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, receiverEnclosing);
+                enclosingTypeName = CustomAttributeEncoder.GetMetadataTypeName(receiverSym);
             }
             else
             {
@@ -3982,7 +3987,98 @@ internal sealed class ReflectionMetadataEmitter
                     ? ph
                     : defaultProgramHandle;
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
+                var programPkg = smPkg != null && programTypeDefHandles.ContainsKey(smPkg) ? smPkg : hostPkg;
+                enclosingTypeName = programPkg == null ? "<Program>" : programPkg.Name + ".<Program>";
             }
+
+            this.EmitCompilerGeneratedAttribute(nestedHandle);
+            this.EmitStateMachineKickoffDebugAttributes(s, enclosingTypeName);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0174 P3-8: <c>[CompilerGenerated]</c> on a synthesized state-machine
+    /// type. The runtime's <c>StackTrace</c> only tries to map a <c>MoveNext</c>
+    /// frame back to its logical method when the frame's declaring type is
+    /// marked compiler-generated; debuggers use the same signal to hide the
+    /// type's internals.
+    /// </summary>
+    /// <param name="typeHandle">The state machine's TypeDef.</param>
+    private void EmitCompilerGeneratedAttribute(TypeDefinitionHandle typeHandle)
+    {
+        var ctorRef = this.wellKnown.GetCompilerGeneratedAttributeCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: typeHandle,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    /// <summary>
+    /// ADR-0174 P3-8: stamps the kickoff of an async / suspending state machine
+    /// with <c>[AsyncStateMachine(typeof(SM))]</c> and <c>[DebuggerStepThrough]</c>.
+    /// The runtime's <c>StackTrace</c> resolves a <c>MoveNext</c> frame to the
+    /// logical function through the first (the state machine must be nested
+    /// in the kickoff's declaring type, which <c>EmitNestedTypeRows</c>
+    /// guarantees); debuggers step through the stub because of the second.
+    /// The state machine's serialized name is its nesting chain — the
+    /// enclosing TypeDef's metadata name, <c>+</c>, the struct's own name
+    /// with its generic arity suffix — with no assembly qualifier, since the
+    /// type lives in the assembly being emitted.
+    /// </summary>
+    /// <param name="stateMachine">The state-machine struct.</param>
+    /// <param name="enclosingTypeName">The metadata name of the TypeDef the struct is nested in.</param>
+    private void EmitStateMachineKickoffDebugAttributes(StructSymbol stateMachine, string enclosingTypeName)
+    {
+        FunctionSymbol? kickoff = null;
+        foreach (var plan in this.stateMachines.AsyncStateMachinePlans)
+        {
+            if (ReferenceEquals(plan.StateMachine.MaterializeAsStructSymbol(), stateMachine))
+            {
+                kickoff = plan.KickoffMethod;
+                break;
+            }
+        }
+
+        if (kickoff == null
+            || (!this.cache.FunctionHandles.TryGetValue(kickoff, out var kickoffHandle)
+                && !this.cache.MethodHandles.TryGetValue(kickoff, out kickoffHandle))
+            || kickoffHandle.IsNil)
+        {
+            return;
+        }
+
+        var ctorRef = this.wellKnown.GetAsyncStateMachineAttributeCtorRef();
+        if (!ctorRef.IsNil)
+        {
+            var smName = TypeDefEmitter.MangleGenericName(stateMachine.Name, stateMachine.TypeParameters);
+            var valueBlob = new BlobBuilder();
+            valueBlob.WriteUInt16(0x0001); // Prolog
+            valueBlob.WriteSerializedString(enclosingTypeName + "+" + smName);
+            valueBlob.WriteUInt16(0);      // NumNamed
+            this.emitCtx.Metadata.AddCustomAttribute(
+                parent: kickoffHandle,
+                constructor: ctorRef,
+                value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+        }
+
+        var stepThroughRef = this.wellKnown.GetDebuggerStepThroughAttributeCtorRef();
+        if (!stepThroughRef.IsNil)
+        {
+            var valueBlob = new BlobBuilder();
+            valueBlob.WriteUInt16(0x0001);
+            valueBlob.WriteUInt16(0);
+            this.emitCtx.Metadata.AddCustomAttribute(
+                parent: kickoffHandle,
+                constructor: stepThroughRef,
+                value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
         }
     }
 
@@ -4307,7 +4403,6 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<VariableSymbol, int> locals = new();
         private readonly Dictionary<BoundLabel, LabelHandle> labels = new();
         private readonly List<TypeSymbol> localTypes = new();
-        private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots = new();
         private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots = new();
         private readonly Dictionary<BoundDefaultExpression, int> defaultExpressionSlots = new();
         private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots = new();
@@ -4315,12 +4410,9 @@ internal sealed class ReflectionMetadataEmitter
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots = new();
         private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots = new();
         private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots = new();
-        private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots = new();
-        private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots = new();
         private readonly Dictionary<BoundExpression, int> receiverSpillSlots = new();
         private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots = new();
         private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots = new();
-        private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes = new();
         private readonly Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots = new();
         private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots = new();
         private readonly Dictionary<VariableSymbol, object> constValues = new();
@@ -4372,7 +4464,6 @@ internal sealed class ReflectionMetadataEmitter
                 this.locals,
                 this.localTypes,
                 this.labels,
-                this.appendSlots,
                 this.structLiteralSlots,
                 this.defaultExpressionSlots,
                 this.mapIndexSlots,
@@ -4380,11 +4471,8 @@ internal sealed class ReflectionMetadataEmitter
                 this.typePatternScratchSlots,
                 this.switchExpressionSlots,
                 this.channelOpSlots,
-                this.scopeFrameSlots,
-                this.selectStatementSlots,
                 this.receiverSpillSlots,
                 this.indexAssignmentValueSlots,
-                this.goEnclosingScopes,
                 this.liftedBinarySlots,
                 this.nullableCoalesceSpillSlots,
                 this.Il,
@@ -4415,14 +4503,6 @@ internal sealed class ReflectionMetadataEmitter
                         return found;
                     case BoundFixedStatement fixedStatement:
                         return Find(fixedStatement.Body, true);
-                    case BoundSelectStatement selectStatement:
-                        var selectFound = false;
-                        foreach (var arm in selectStatement.Cases)
-                        {
-                            selectFound |= Find(arm.Body, insideFixed);
-                        }
-
-                        return selectFound;
                     case BoundPatternSwitchStatement switchStatement:
                         var switchFound = false;
                         foreach (var arm in switchStatement.Arms)
@@ -4479,7 +4559,6 @@ internal sealed class ReflectionMetadataEmitter
                 this.locals,
                 parameters,
                 this.labels,
-                this.appendSlots,
                 this.structLiteralSlots,
                 this.defaultExpressionSlots,
                 this.mapIndexSlots,
@@ -4487,11 +4566,8 @@ internal sealed class ReflectionMetadataEmitter
                 this.typePatternScratchSlots,
                 this.switchExpressionSlots,
                 this.channelOpSlots,
-                this.scopeFrameSlots,
-                this.selectStatementSlots,
                 this.receiverSpillSlots,
                 this.indexAssignmentValueSlots,
-                this.goEnclosingScopes,
                 liftedBinarySlots: this.liftedBinarySlots,
                 nullableCoalesceSpillSlots: this.nullableCoalesceSpillSlots,
                 structThisParameter: structThisParameter,
@@ -4543,6 +4619,32 @@ internal sealed class ReflectionMetadataEmitter
         {
             encoder.Void();
         }
+    }
+
+    /// <summary>
+    /// ADR-0174 D4. Attaches the parameterless
+    /// <c>[Gsharp.Concurrency.SuspendingAttribute]</c> to a suspending
+    /// function's MethodDef. Skipped silently when the channel runtime is not in
+    /// the reference set (the function still compiles; only cross-assembly
+    /// recognition is lost).
+    /// </summary>
+    /// <param name="parent">The MethodDef row.</param>
+    internal void EmitSuspendingAttribute(EntityHandle parent)
+    {
+        var ctorRef = this.wellKnown.GetSuspendingAttributeCtorRef();
+        if (ctorRef.IsNil)
+        {
+            return;
+        }
+
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001); // Prolog
+        valueBlob.WriteUInt16(0);      // NumNamed
+
+        this.emitCtx.Metadata.AddCustomAttribute(
+            parent: parent,
+            constructor: ctorRef,
+            value: this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>

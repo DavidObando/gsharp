@@ -2398,10 +2398,14 @@ public static class CompletionComputer
         yield return "default";
         yield return "go";
         yield return "select";
+        yield return "scope";
+        yield return "defer";
+        yield return "when";
         yield return "try";
         yield return "catch";
         yield return "throw";
         yield return "async";
+        yield return "suspend";
         yield return "await";
     }
 }

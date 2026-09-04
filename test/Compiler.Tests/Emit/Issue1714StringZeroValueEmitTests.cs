@@ -134,17 +134,16 @@ public class Issue1714StringZeroValueEmitTests
     [Fact]
     public void EndToEnd_LocalStringDeclaration_LenIsZero()
     {
-        // Issue #3324: `len(s)` on a bare `var s string` local used to NRE —
+        // Issue #3324: `s.Length` on a bare `var s string` local used to NRE —
         // the CLR-default `null` fell straight into `.Length`. Direct
         // repro from the issue.
         const string source = """
             package i3324locallen
             import System
-            import Gsharp.Extensions.Go
 
             func Main() {
                 var s string
-                Console.WriteLine(len(s))
+                Console.WriteLine(s.Length)
             }
             """;
 

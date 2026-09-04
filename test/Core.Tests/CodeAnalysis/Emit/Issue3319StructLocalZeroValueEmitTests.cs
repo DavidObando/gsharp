@@ -53,7 +53,6 @@ public class Issue3319StructLocalZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3319MapField
 
-            import Gsharp.Extensions.Go
 
             struct S {
                 public var M map[string, int32]
@@ -62,7 +61,7 @@ public class Issue3319StructLocalZeroValueEmitTests
             func run() int32 {
                 var s S
                 s.M["a"] = 1
-                return len(s.M)
+                return s.M.Count
             }
 
             run()

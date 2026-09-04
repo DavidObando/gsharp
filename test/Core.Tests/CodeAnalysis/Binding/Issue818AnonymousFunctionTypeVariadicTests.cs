@@ -29,7 +29,7 @@ public class Issue818AnonymousFunctionTypeVariadicTests
     {
         // The exact repro from issue #818 — must bind and produce 4 + 1 = 5.
         var result = Evaluate(@"
-let f (int32, ...string) -> int32 = (a, args) -> len(args) + a
+let f (int32, ...string) -> int32 = (a, args) -> args.Length + a
 f(1, ""a"", ""b"", ""c"", ""d"")
 ");
         Assert.Empty(result.Diagnostics);
@@ -40,7 +40,7 @@ f(1, ""a"", ""b"", ""c"", ""d"")
     public void Issue818_PassThroughSlice_NoPack()
     {
         var result = Evaluate(@"
-let f (int32, ...string) -> int32 = (a, args) -> len(args) + a
+let f (int32, ...string) -> int32 = (a, args) -> args.Length + a
 f(10, []string{""a"", ""b""})
 ");
         Assert.Empty(result.Diagnostics);
@@ -51,7 +51,7 @@ f(10, []string{""a"", ""b""})
     public void Issue818_VariadicAnonymousType_EmptyTrailingArgs()
     {
         var result = Evaluate(@"
-let f (int32, ...string) -> int32 = (a, args) -> len(args) + a
+let f (int32, ...string) -> int32 = (a, args) -> args.Length + a
 f(7)
 ");
         Assert.Empty(result.Diagnostics);
@@ -131,7 +131,7 @@ f(7)
         // typed as the matching anonymous variadic function-type. This
         // exercises the call-site pack on the variable path.
         var result = Evaluate(@"
-let f (int32, ...string) -> int32 = (a, args) -> a + len(args)
+let f (int32, ...string) -> int32 = (a, args) -> a + args.Length
 f(3, ""x"", ""y"")
 ");
         Assert.Empty(result.Diagnostics);
@@ -166,7 +166,7 @@ let f (...int32, ...string) -> int32 = (xs, ys) -> 0
         // the variadic anonymous function-type slot. The implicit
         // conversion bridges the variadic-flag-only difference.
         var result = Evaluate(@"
-let count (int32, ...string) -> int32 = (a, args) -> a + len(args)
+let count (int32, ...string) -> int32 = (a, args) -> a + args.Length
 count(2, ""x"", ""y"", ""z"")
 ");
         Assert.Empty(result.Diagnostics);
@@ -175,7 +175,7 @@ count(2, ""x"", ""y"", ""z"")
 
     private static EmittedOracleResult Evaluate(string source)
     {
-        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
+        return EmittedOracle.Evaluate(source);
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)

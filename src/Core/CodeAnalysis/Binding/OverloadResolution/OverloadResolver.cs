@@ -156,6 +156,7 @@ internal sealed partial class OverloadResolver
     private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
     private readonly Func<TypeSymbol, bool, TypeSymbol> wrapAsTask;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
+    private readonly Func<BoundExpression, TypeSymbol, TextLocation, string, BoundExpression> completeSuspendingCall;
     private readonly TryGetFunctionLiteralDelegate tryGetFunctionLiteral;
     private readonly Action<TypeSymbol, TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>> inferTypeArguments;
     private readonly Func<TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>, TypeSymbol> substituteType;
@@ -230,6 +231,7 @@ internal sealed partial class OverloadResolver
     /// <c>System.Threading.Tasks.Task</c> / <c>Task&lt;T&gt;</c> for
     /// async kickoff-method call sites.</param>
     /// <param name="isAsyncIteratorReturnType">Callback that tests
+    /// <param name="completeSuspendingCall">ADR-0174 D4: finishes a call to a suspending function — implicit await in a suspending/async caller, a blocking root bridge (GS0558) elsewhere.</param>
     /// whether a return type is an async-iterator shape so async-wrap is
     /// suppressed.</param>
     /// <param name="tryGetFunctionLiteral">Callback that unwraps a bound
@@ -285,6 +287,7 @@ internal sealed partial class OverloadResolver
         Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
         Func<TypeSymbol, bool, TypeSymbol> wrapAsTask,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
+        Func<BoundExpression, TypeSymbol, TextLocation, string, BoundExpression> completeSuspendingCall,
         TryGetFunctionLiteralDelegate tryGetFunctionLiteral,
         Action<TypeSymbol, TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>> inferTypeArguments,
         Func<TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>, TypeSymbol> substituteType,
@@ -316,6 +319,7 @@ internal sealed partial class OverloadResolver
         this.createErasedFunctionLiteralAdapter = createErasedFunctionLiteralAdapter ?? throw new ArgumentNullException(nameof(createErasedFunctionLiteralAdapter));
         this.wrapAsTask = wrapAsTask ?? throw new ArgumentNullException(nameof(wrapAsTask));
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ?? throw new ArgumentNullException(nameof(isAsyncIteratorReturnType));
+        this.completeSuspendingCall = completeSuspendingCall ?? throw new ArgumentNullException(nameof(completeSuspendingCall));
         this.tryGetFunctionLiteral = tryGetFunctionLiteral ?? throw new ArgumentNullException(nameof(tryGetFunctionLiteral));
         this.inferTypeArguments = inferTypeArguments ?? throw new ArgumentNullException(nameof(inferTypeArguments));
         this.substituteType = substituteType ?? throw new ArgumentNullException(nameof(substituteType));

@@ -46,6 +46,7 @@ internal sealed class PortablePdbEmitter
     private static readonly Guid SourceLinkKind = new Guid("CC110556-A091-4D38-9FEC-25AB9A351A6A");
     private static readonly Guid CompilationOptionsKind = new Guid("B5FEEC05-8CD0-4A83-96DA-466284BB4BD8");
     private static readonly Guid CompilationMetadataReferencesKind = new Guid("7E4D4708-096E-4C5C-AEDA-CB10BA6A740D");
+    private static readonly Guid AsyncMethodSteppingInformationKind = new Guid("54FD2AC5-E925-401A-9C2A-F94F171072F8");
 
     /// <summary>
     /// Stable GSharp language GUID. Once a tool keys off this value (debugger,
@@ -176,6 +177,7 @@ internal sealed class PortablePdbEmitter
     /// for fully synthesized methods (e.g. async kickoff stubs). The tree is used to
     /// select the per-file <c>ImportScope</c> when writing <c>LocalScope</c> rows.
     /// </param>
+    /// <param name="asyncStepping">ADR-0174 P3-8: the await yield/resume offsets of a state machine's <c>MoveNext</c>, or <c>null</c> for any other body.</param>
     public void RecordMethod(
         MethodDefinitionHandle methodHandle,
         IReadOnlyList<SequencePoint>? sequencePoints,
@@ -183,7 +185,8 @@ internal sealed class PortablePdbEmitter
         IReadOnlyList<LocalConstantInfo>? constants,
         int ilCodeSize,
         StandaloneSignatureHandle localSignatureToken,
-        SyntaxTree? syntaxTree = null)
+        SyntaxTree? syntaxTree = null,
+        AsyncMethodSteppingInfo? asyncStepping = null)
     {
         if (methodHandle.IsNil)
         {
@@ -208,7 +211,7 @@ internal sealed class PortablePdbEmitter
 
         // Nothing for a debugger to anchor — skip the row entirely so Serialize
         // falls through to writing an empty MethodDebugInformation slot.
-        if (!hasUsableDocument && !hasLocals && !hasConstants)
+        if (!hasUsableDocument && !hasLocals && !hasConstants && asyncStepping == null)
         {
             return;
         }
@@ -220,7 +223,8 @@ internal sealed class PortablePdbEmitter
             constants ?? System.Array.Empty<LocalConstantInfo>(),
             ilCodeSize,
             localSignatureToken,
-            syntaxTree);
+            syntaxTree,
+            asyncStepping);
     }
 
     /// <summary>
@@ -389,6 +393,33 @@ internal sealed class PortablePdbEmitter
         // builder. Parent is the singleton Module row (RID 1); this is the
         // anchor that debuggers and symbol servers query against the module
         // identity rather than any particular method.
+        // ADR-0174 P3-8: async method stepping information per MoveNext
+        // (spec § "Async Method Stepping Information Blob"): the catch handler
+        // offset + 1 (0 when none), then per await the yield offset, the resume
+        // offset and the compressed row id of the resuming method (MoveNext
+        // itself).
+        foreach (var (rid, rec) in this.recordedMethods)
+        {
+            if (rec.AsyncStepping is not { } stepping)
+            {
+                continue;
+            }
+
+            var steppingBlob = new BlobBuilder();
+            steppingBlob.WriteUInt32((uint)(stepping.CatchHandlerOffset + 1));
+            foreach (var (yieldOffset, resumeOffset) in stepping.Awaits)
+            {
+                steppingBlob.WriteUInt32((uint)yieldOffset);
+                steppingBlob.WriteUInt32((uint)resumeOffset);
+                steppingBlob.WriteCompressedInteger(rid);
+            }
+
+            this.pdbMetadata.AddCustomDebugInformation(
+                parent: MetadataTokens.MethodDefinitionHandle(rid),
+                kind: this.pdbMetadata.GetOrAddGuid(AsyncMethodSteppingInformationKind),
+                value: this.pdbMetadata.GetOrAddBlob(steppingBlob));
+        }
+
         var moduleHandle = MetadataTokens.EntityHandle(TableIndex.Module, 1);
 
         if (!string.IsNullOrEmpty(this.options.SourceLinkFilePath) &&
@@ -724,8 +755,10 @@ internal sealed class PortablePdbEmitter
             IReadOnlyList<LocalConstantInfo>? constants,
             int ilCodeSize,
             StandaloneSignatureHandle localSignatureToken,
-            SyntaxTree? syntaxTree)
+            SyntaxTree? syntaxTree,
+            AsyncMethodSteppingInfo? asyncStepping)
         {
+            this.AsyncStepping = asyncStepping;
             this.Points = points;
             this.Locals = locals;
             this.Constants = constants;
@@ -751,6 +784,8 @@ internal sealed class PortablePdbEmitter
         /// <c>ImportScope</c> for each <c>LocalScope</c> row.
         /// </summary>
         public SyntaxTree? SyntaxTree { get; }
+
+        public AsyncMethodSteppingInfo? AsyncStepping { get; }
     }
 }
 

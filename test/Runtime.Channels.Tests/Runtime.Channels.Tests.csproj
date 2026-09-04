@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ADR-0174 Phase 1: pure C# tests of Gsharp.Runtime.Channels — real
+       threads, no compiler dependency, so the stress suite stays fast and
+       isolated. Auto-sharded by build/generate-ci-test-matrix.py. -->
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Runtime.Channels.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <Nullable>annotations</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj" />
+  </ItemGroup>
+
+</Project>

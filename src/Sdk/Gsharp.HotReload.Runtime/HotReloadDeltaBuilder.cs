@@ -89,6 +89,18 @@ internal sealed class HotReloadDeltaBuilder
         var previousReader = GetMetadataReader(previousPe);
         var currentReader = GetMetadataReader(currentPe);
 
+        // ADR-0174 P3-9: a method whose suspension changed (a channel
+        // operation or a call to a suspending function was added to, or
+        // removed from, a plain `func`) is compiled to a different shape
+        // (`R` <-> `ValueTask[R]`, plus a state machine); that is a signature
+        // change even though the source edit looks like a body edit, so it
+        // gets its own restart diagnostic before the generic shape check.
+        var suspensionChange = DetectSuspensionChange(previousReader, currentReader);
+        if (suspensionChange != null)
+        {
+            return HotReloadDelta.Unsupported(suspensionChange);
+        }
+
         var unsupportedReason = ValidateMetadataShape(previousReader, currentReader);
         if (unsupportedReason != null)
         {
@@ -285,6 +297,126 @@ internal sealed class HotReloadDeltaBuilder
         }
 
         return result;
+    }
+
+    private static string? DetectSuspensionChange(MetadataReader previous, MetadataReader current)
+    {
+        // A method that starts (or stops) suspending also gains (or loses) a
+        // state-machine type with its own MoveNext/SetStateMachine rows, so the
+        // MethodDef tables do not line up by row; match the user's methods by
+        // declaring type + name + parameter count instead and ignore the
+        // synthesized state machines themselves.
+        var currentByKey = new Dictionary<string, MethodDefinitionHandle>(StringComparer.Ordinal);
+        foreach (var handle in current.MethodDefinitions)
+        {
+            if (TryGetUserMethodKey(current, handle, out var key))
+            {
+                currentByKey.TryAdd(key, handle);
+            }
+        }
+
+        foreach (var handle in previous.MethodDefinitions)
+        {
+            if (!TryGetUserMethodKey(previous, handle, out var key) || !currentByKey.TryGetValue(key, out var currentHandle))
+            {
+                continue;
+            }
+
+            var wasSuspending = IsSuspending(previous, handle);
+            var isSuspending = IsSuspending(current, currentHandle);
+            if (wasSuspending == isSuspending)
+            {
+                continue;
+            }
+
+            var name = GetMethodDisplayName(current, currentHandle);
+            var direction = isSuspending
+                ? "now performs a channel operation or calls a suspending function, so it compiles to a 'ValueTask' state machine instead of a plain method"
+                : "no longer performs a channel operation or calls a suspending function, so it compiles to a plain method instead of a 'ValueTask' state machine";
+            return $"GSHR1002: method '{name}' changed suspension: it {direction} (ADR-0174). Restart required.";
+        }
+
+        return null;
+    }
+
+    private static bool TryGetUserMethodKey(MetadataReader reader, MethodDefinitionHandle handle, out string key)
+    {
+        key = string.Empty;
+        var method = reader.GetMethodDefinition(handle);
+        var type = reader.GetTypeDefinition(method.GetDeclaringType());
+        var typeName = reader.GetString(type.Name);
+        if (typeName.StartsWith("<", StringComparison.Ordinal) && typeName.Contains(">d__", StringComparison.Ordinal))
+        {
+            return false; // a synthesized state machine
+        }
+
+        // The count excludes a trailing `Context` (ADR-0174 D7): gaining or
+        // losing suspension gains or loses that parameter, and the key has to
+        // pair the two versions of the same method across exactly that change.
+        var parameterCount = method.GetParameters().Count;
+        if (parameterCount > 0 && HasTrailingHiddenContext(reader, method))
+        {
+            parameterCount--;
+        }
+
+        key = GetMethodDisplayName(reader, handle) + "/" + parameterCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return true;
+    }
+
+    private static bool HasTrailingHiddenContext(MetadataReader reader, MethodDefinition method)
+    {
+        var last = default(Parameter);
+        var found = false;
+        foreach (var handle in method.GetParameters())
+        {
+            var parameter = reader.GetParameter(handle);
+            if (!found || parameter.SequenceNumber > last.SequenceNumber)
+            {
+                last = parameter;
+                found = true;
+            }
+        }
+
+        return found && reader.GetString(last.Name) == "<>ctx";
+    }
+
+    // The compiler stamps [Gsharp.Concurrency.Suspending] on every suspending
+    // kickoff (declared or inferred); its presence is the suspension bit.
+    private static bool IsSuspending(MetadataReader reader, MethodDefinitionHandle methodHandle)
+    {
+        var method = reader.GetMethodDefinition(methodHandle);
+        foreach (var attributeHandle in method.GetCustomAttributes())
+        {
+            var attribute = reader.GetCustomAttribute(attributeHandle);
+            string? typeName = null;
+            string? typeNamespace = null;
+            switch (attribute.Constructor.Kind)
+            {
+                case HandleKind.MemberReference:
+                    var memberRef = reader.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+                    if (memberRef.Parent.Kind == HandleKind.TypeReference)
+                    {
+                        var typeRef = reader.GetTypeReference((TypeReferenceHandle)memberRef.Parent);
+                        typeName = reader.GetString(typeRef.Name);
+                        typeNamespace = reader.GetString(typeRef.Namespace);
+                    }
+
+                    break;
+                case HandleKind.MethodDefinition:
+                    var ctor = reader.GetMethodDefinition((MethodDefinitionHandle)attribute.Constructor);
+                    var typeDef = reader.GetTypeDefinition(ctor.GetDeclaringType());
+                    typeName = reader.GetString(typeDef.Name);
+                    typeNamespace = reader.GetString(typeDef.Namespace);
+                    break;
+            }
+
+            if (typeName == "SuspendingAttribute" && typeNamespace == "Gsharp.Concurrency")
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? ValidateMetadataShape(MetadataReader previous, MetadataReader current)

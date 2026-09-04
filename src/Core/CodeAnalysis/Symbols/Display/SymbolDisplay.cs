@@ -312,6 +312,11 @@ public static class SymbolDisplay
         {
             yield return "async";
         }
+
+        if (function.IsSuspending)
+        {
+            yield return "suspend";
+        }
     }
 
     private static void AppendAggregate(PartBuilder builder, SymbolDisplayFormat format, StructSymbol aggregate)
@@ -718,7 +723,7 @@ public static class SymbolDisplay
             case MapTypeSymbol map:
                 return $"map[{FormatType(map.KeyType)},{FormatType(map.ValueType)}]";
             case ChannelTypeSymbol channel:
-                return $"chan {FormatType(channel.ElementType)}";
+                return ChannelTypeSymbol.FormatName(FormatType(channel.ElementType), channel.Direction);
             case PointerTypeSymbol pointer:
                 return $"*{FormatType(pointer.PointeeType)}";
             case ByRefTypeSymbol byRef:

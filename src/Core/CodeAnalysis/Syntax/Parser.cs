@@ -392,15 +392,16 @@ public partial class Parser
         SyntaxToken? unsafeModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
             && (Peek(1).Kind == SyntaxKind.FuncKeyword
-                || Peek(1).Kind == SyntaxKind.AsyncKeyword))
+                || IsFunctionColorModifier(Peek(1).Kind)))
         {
             unsafeModifier = NextToken();
         }
 
         // Phase 5.1 / ADR-0023: an optional `async` modifier may precede
-        // `func` (with or without an accessibility modifier).
+        // `func` (with or without an accessibility modifier). ADR-0174 D4:
+        // `suspend` takes the same slot.
         SyntaxToken? asyncModifier = null;
-        if (Current.Kind == SyntaxKind.AsyncKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+        if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
         {
             asyncModifier = NextToken();
         }
@@ -760,4 +761,10 @@ public partial class Parser
         Diagnostics.ReportUnexpectedToken(new TextLocation(syntaxTree.Text, Current.Span), Current.Kind, kind);
         return SyntaxToken.Missing(syntaxTree, kind, Current.Position);
     }
+
+    /// <summary>ADR-0174 D4: <c>async</c> and <c>suspend</c> share the function-color modifier slot before <c>func</c>.</summary>
+    /// <param name="kind">A token kind.</param>
+    /// <returns><see langword="true"/> for either modifier keyword.</returns>
+    private static bool IsFunctionColorModifier(SyntaxKind kind)
+        => kind is SyntaxKind.AsyncKeyword or SyntaxKind.SuspendKeyword;
 }

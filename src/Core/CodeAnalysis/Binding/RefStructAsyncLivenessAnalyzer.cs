@@ -32,7 +32,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <c>scope</c>, <c>fixed</c>, and pattern-<c>switch</c> bodies are opaque to
 /// the outer graph and are recursively re-analyzed here, mirroring
 /// <see cref="DefiniteAssignmentAnalyzer"/>'s
-/// <c>ProcessTryStatement</c>/<c>ProcessSelectStatement</c>/etc. shape.
+/// <c>ProcessTryStatement</c>/<c>ProcessFixedStatement</c>/etc. shape.
 /// </para>
 /// <para>
 /// <c>try</c>/<c>finally</c> gets special "ambient live" treatment: an
@@ -75,7 +75,7 @@ internal static class RefStructAsyncLivenessAnalyzer
             return;
         }
 
-        if (enclosing.IsAsync)
+        if (enclosing.IsAsyncOrSuspending)
         {
             AnalyzeScope(body, diagnostics);
         }
@@ -301,17 +301,6 @@ internal static class RefStructAsyncLivenessAnalyzer
             case BoundTryStatement tryStmt:
                 ProcessTryBackward(tryStmt, live, interesting, diagnostics);
                 break;
-            case BoundSelectStatement selectStmt:
-                ProcessSelectBackward(selectStmt, live, interesting, diagnostics);
-                break;
-            case BoundScopeStatement scopeStmt:
-            {
-                var entry = AnalyzeRegion(scopeStmt.Body, live, new HashSet<VariableSymbol>(), interesting, diagnostics);
-                live.Clear();
-                live.UnionWith(entry);
-                break;
-            }
-
             case BoundFixedStatement fixedStmt:
                 ProcessFixedBackward(fixedStmt, live, interesting, diagnostics);
                 break;
@@ -381,45 +370,6 @@ internal static class RefStructAsyncLivenessAnalyzer
 
         live.Clear();
         live.UnionWith(tryLiveIn);
-    }
-
-    /// <summary>
-    /// <c>select</c> always blocks until exactly one arm's body runs; each
-    /// arm's channel/value expression is evaluated to decide readiness, so a
-    /// variable read there is live immediately before the whole statement.
-    /// </summary>
-    private static void ProcessSelectBackward(
-        BoundSelectStatement selectStmt,
-        HashSet<VariableSymbol> live,
-        HashSet<VariableSymbol> interesting,
-        DiagnosticBag? diagnostics)
-    {
-        var afterSelect = new HashSet<VariableSymbol>(live);
-        var union = new HashSet<VariableSymbol>();
-
-        foreach (var c in selectStmt.Cases)
-        {
-            var caseLiveIn = AnalyzeRegion(c.Body, afterSelect, new HashSet<VariableSymbol>(), interesting, diagnostics);
-            if (c.Variable != null)
-            {
-                caseLiveIn.Remove(c.Variable);
-            }
-
-            union.UnionWith(caseLiveIn);
-
-            if (c.Channel != null)
-            {
-                ApplyExpression(c.Channel, union, interesting, diagnostics, null);
-            }
-
-            if (c.Value != null)
-            {
-                ApplyExpression(c.Value, union, interesting, diagnostics, null);
-            }
-        }
-
-        live.Clear();
-        live.UnionWith(union);
     }
 
     /// <summary>The <c>fixed</c> body always runs unconditionally (no
@@ -670,7 +620,7 @@ internal static class RefStructAsyncLivenessAnalyzer
                 // real Body anywhere.
                 var loweredLambdaBody = (BoundBlockStatement)Lowerer.Lower(literal.Body);
 
-                if (literal.Function != null && literal.Function.IsAsync)
+                if (literal.Function != null && literal.Function.IsAsyncOrSuspending)
                 {
                     AnalyzeScope(loweredLambdaBody, diagnostics);
                 }

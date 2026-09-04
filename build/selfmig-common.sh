@@ -38,6 +38,11 @@ selfmig_excludes=(
   --exclude src/vs-gsharp/test/VsGsharp.UnitTests
   --exclude src/Sdk/Gsharp.Extensions
   --exclude tools/cs2gs/corpus/CompileGap-Library
+  # ADR-0174 D11: the concurrency benchmark's C# and Go sides are measurement
+  # apparatus, not migration targets. Translating the CLR baseline would
+  # measure the translator rather than the runtime, which is the one thing this
+  # harness must not do.
+  --exclude bench/concurrency/clr
 )
 
 # MSBuildWorkspace design-time project loads evaluate in Debug regardless of

@@ -109,7 +109,7 @@ internal sealed partial class ExpressionBinder
     private TypeSymbol MethodGroupObservableReturnType(FunctionSymbol function)
     {
         var declared = function.Type ?? TypeSymbol.Void;
-        if (function.IsAsync && !isAsyncIteratorReturnType(declared))
+        if (function.IsAsyncOrSuspending && !isAsyncIteratorReturnType(declared))
         {
             return lambdas.WrapAsTask(declared, function.AsyncReturnsValueTask);
         }

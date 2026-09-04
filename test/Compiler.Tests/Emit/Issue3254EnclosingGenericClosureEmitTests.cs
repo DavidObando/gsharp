@@ -100,7 +100,6 @@ public class Issue3254EnclosingGenericClosureEmitTests
         const string Source = """
             package Issue3254.Go
             import System
-            import Gsharp.Extensions.Go
 
             func Show[T](value T) int32 {
                 Console.WriteLine([]T{ value }.GetType())
@@ -144,7 +143,6 @@ public class Issue3254EnclosingGenericClosureEmitTests
             package Issue3254.AsyncGo
             import System
             import System.Threading.Tasks
-            import Gsharp.Extensions.Go
 
             async func Show[T](value T) {
                 await Task.Delay(1)

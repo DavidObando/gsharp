@@ -41,7 +41,7 @@ G# uses `nil`, not `null`, and nullability is part of the type. A non-nullable `
 
 ## How is concurrency modeled?
 
-G# combines a structured concurrency surface with .NET primitives. `go f` starts a concurrent call, `chan T` is backed by `System.Threading.Channels`, sends and receives use `<-`, and `select` chooses among channel operations. `scope` provides structured concurrency so child tasks are joined and failures propagate at the end of the scope. See [Concurrency](./guide/concurrency).
+G# combines a structured concurrency surface with .NET primitives. `go f` starts a concurrent call, `chan[T]` is backed by `System.Threading.Channels`, sends and receives use `<-`, and `select` chooses among channel operations. `scope` provides structured concurrency so child tasks are joined and failures propagate at the end of the scope. See [Concurrency](./guide/concurrency).
 
 ## How does `async` work?
 

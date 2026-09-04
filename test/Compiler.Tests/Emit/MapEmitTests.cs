@@ -70,10 +70,9 @@ public class MapEmitTests
         var source = """
             package P
             import System
-            import Gsharp.Extensions.Go
 
             var m = map[string,int32]{"a": 1, "b": 2, "c": 3}
-            Console.WriteLine(len(m))
+            Console.WriteLine(m.Count)
             """;
 
         var output = CompileAndRun(source);
@@ -86,11 +85,10 @@ public class MapEmitTests
         var source = """
             package P
             import System
-            import Gsharp.Extensions.Go
 
             var m = map[string,int32]{"a": 1, "b": 2}
-            delete(m, "a")
-            Console.WriteLine(len(m))
+            m.Remove("a")
+            Console.WriteLine(m.Count)
             Console.WriteLine(m["a"])
             Console.WriteLine(m["b"])
             """;
@@ -105,10 +103,9 @@ public class MapEmitTests
         var source = """
             package P
             import System
-            import Gsharp.Extensions.Go
 
             var m = map[int32,string]{}
-            Console.WriteLine(len(m))
+            Console.WriteLine(m.Count)
             """;
 
         var output = CompileAndRun(source);

@@ -411,7 +411,8 @@ public sealed class ReferenceResolver : IDisposable
 
     /// <summary>
     /// Resolves the references supplied to a driver and appends the bundled
-    /// Gsharp.Extensions assembly when it is available.
+    /// Gsharp.Extensions and Gsharp.Runtime.Channels assemblies when they are
+    /// available.
     /// </summary>
     /// <param name="referencePaths">Explicit reference paths.</param>
     /// <returns>The effective reference paths.</returns>
@@ -429,25 +430,8 @@ public sealed class ReferenceResolver : IDisposable
             }
         }
 
-        var extensionPath = FindBundledExtensionPath(AppContext.BaseDirectory);
-        var hasExtensionPath = false;
-        if (extensionPath != null)
-        {
-            foreach (var path in paths)
-            {
-                if (string.Equals(Path.GetFullPath(path), extensionPath, StringComparison.OrdinalIgnoreCase))
-                {
-                    hasExtensionPath = true;
-                    break;
-                }
-            }
-        }
-
-        if (extensionPath != null && !hasExtensionPath)
-        {
-            paths.Add(extensionPath);
-        }
-
+        AppendBundledPath(paths, FindBundledExtensionPath(AppContext.BaseDirectory));
+        AppendBundledPath(paths, FindBundledChannelsRuntimePath(AppContext.BaseDirectory));
         return paths;
     }
 
@@ -1173,11 +1157,44 @@ public sealed class ReferenceResolver : IDisposable
     {
         // Compiler cannot ProjectReference Gsharp.Extensions because its bootstrap
         // build already references Compiler; solution and SDK layouts provide it.
+        return FindBundledRuntimePath(baseDirectory, "Gsharp.Extensions.dll", "Gsharp.Extensions", "extensions");
+    }
+
+    internal static string? FindBundledChannelsRuntimePath(string baseDirectory)
+    {
+        // ADR-0174 D1. The compiler core deliberately takes no ProjectReference
+        // on the channel runtime (emitted programs bind whichever runtime is in
+        // the reference set); gsc/gsi ship it beside themselves, the solution
+        // layout has it under out/bin/<Config>/Gsharp.Runtime.Channels/, and
+        // the SDK NuGet under tools/channels/.
+        return FindBundledRuntimePath(baseDirectory, "Gsharp.Runtime.Channels.dll", "Gsharp.Runtime.Channels", "channels");
+    }
+
+    private static void AppendBundledPath(List<string> paths, string? bundledPath)
+    {
+        if (bundledPath == null)
+        {
+            return;
+        }
+
+        foreach (var path in paths)
+        {
+            if (string.Equals(Path.GetFullPath(path), bundledPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        paths.Add(bundledPath);
+    }
+
+    private static string? FindBundledRuntimePath(string baseDirectory, string fileName, string projectFolder, string sdkFolder)
+    {
         var candidates = new[]
         {
-            Path.Combine(baseDirectory, "Gsharp.Extensions.dll"),
-            Path.Combine(baseDirectory, "..", "Gsharp.Extensions", "Gsharp.Extensions.dll"),
-            Path.Combine(baseDirectory, "..", "extensions", "Gsharp.Extensions.dll"),
+            Path.Combine(baseDirectory, fileName),
+            Path.Combine(baseDirectory, "..", projectFolder, fileName),
+            Path.Combine(baseDirectory, "..", sdkFolder, fileName),
         };
 
         return candidates

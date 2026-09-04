@@ -1655,23 +1655,52 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindChannelReceiveExpression(UnaryExpressionSyntax syntax)
     {
-        // ADR-0082 / issue #722: gate the `<-ch` receive expression on
-        // `import Gsharp.Extensions.Go`.
-        binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.OperatorToken.Location, "<- (receive)");
-
+        // ADR-0174 D1/D3: `<-ch` lowers to ChannelOps.Receive<T>(ch, default) —
+        // the element's zero value on a closed channel, delivered without an
+        // exception. The operand may be any channel-shaped handle (D2's matrix);
+        // a send-only `out chan[T]` cannot be received from (GS0550).
         var operand = BindExpression(syntax.Operand);
         if (operand is BoundErrorExpression)
         {
             return operand;
         }
 
-        if (operand.Type is not ChannelTypeSymbol chan)
+        if (!ChannelTypeSymbol.TryGetChannelShape(operand.Type, out var elementType, out var direction, out _))
         {
             Diagnostics.ReportReceiveOperandIsNotChannel(syntax.Operand.Location, operand.Type);
             return new BoundErrorExpression(null);
         }
 
-        return new BoundChannelReceiveExpression(null, operand, chan.ElementType);
+        if (direction == ChannelDirection.Out)
+        {
+            Diagnostics.ReportReceiveFromSendOnlyChannel(syntax.OperatorToken.Location, operand.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        if (!EnsureChannelRuntime(syntax.OperatorToken.Location))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        return binderCtx.ChannelRuntime.BindReceive(syntax, operand, elementType, direction, binderCtx.AmbientContext());
+    }
+
+    /// <summary>
+    /// ADR-0174 D1: every channel operation lowers onto <c>Gsharp.Runtime.Channels</c>;
+    /// when that assembly is not in the reference set the construct cannot be
+    /// emitted, and the existing target-framework diagnostic names the missing type.
+    /// </summary>
+    /// <param name="location">Where to anchor the diagnostic.</param>
+    /// <returns><see langword="true"/> when the runtime is available.</returns>
+    internal bool EnsureChannelRuntime(TextLocation location)
+    {
+        if (binderCtx.ChannelRuntime.IsAvailable)
+        {
+            return true;
+        }
+
+        Diagnostics.ReportTargetFrameworkMemberUnavailable(location, ChannelRuntimeBinder.ChanTypeName);
+        return false;
     }
 
     private BoundExpression BindBinaryExpression(BinaryExpressionSyntax syntax)

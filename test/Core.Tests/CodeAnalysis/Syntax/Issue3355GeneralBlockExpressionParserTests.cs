@@ -116,7 +116,7 @@ public class Issue3355GeneralBlockExpressionParserTests
                 var X int32
             }
 
-            func F(ch chan int32) {
+            func F(ch chan[int32]) {
                 { let p = Point{X: 1} p } with { X = 2 }
                 { let selected = ch selected } <- 42
             }

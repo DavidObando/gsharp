@@ -7,7 +7,6 @@ namespace GSharp.Core.CodeAnalysis;
 internal static class DiagnosticDescriptors
 {
     internal const string AmbiguousOverloadCandidatesMessageFormat = " Candidates: {0}.";
-    internal const string GoBuiltinSuggestionMessageFormat = " or call '{0}' directly";
     internal const string NonVoidFallthroughGuardMessage = "Compiler-generated guard reached: non-void function fell through without returning a value.";
     internal const string ObsoleteUseDetailMessageFormat = ": '{0}'";
 
@@ -239,8 +238,10 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor OpenAndSealedCannotCombine = new("GS0312", DiagnosticSeverity.Error, "'open' and 'sealed' cannot be combined on the same declaration (ADR-0078).");
     internal static readonly DiagnosticDescriptor SealedHierarchyMissingCase = new("GS0313", DiagnosticSeverity.Warning, "Switch over sealed hierarchy '{0}' is missing a case for '{1}' (ADR-0078).");
     internal static readonly DiagnosticDescriptor ReceiverClauseOnOwnedType = new("GS0314", DiagnosticSeverity.Warning, "Receiver-clause methods are reserved for types this package does not own; declare '{0}' as a member of '{1}' instead (ADR-0079).");
-    internal static readonly DiagnosticDescriptor GoExtensionsImportRequired = new("GS0316", DiagnosticSeverity.Error, "'{0}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead (ADR-0082).");
-    internal static readonly DiagnosticDescriptor GoBuiltinRequiresImport = new("GS0317", DiagnosticSeverity.Error, "'{0}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go'{1} (ADR-0083).");
+
+    // GS0316 (GoExtensionsImportRequired) retired by ADR-0174 D13: channel syntax is the language, not a gated flavor.
+    // internal static readonly DiagnosticDescriptor GoExtensionsImportRequired = new("GS0316", DiagnosticSeverity.Error, "'{0}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead (ADR-0082).");
+    // GS0317 (GoBuiltinRequiresImport) retired by ADR-0174 D13: `len`/`cap`/`append`/`delete` are gone (GS0566 names the member replacement), so there is no import gate to miss.
     internal static readonly DiagnosticDescriptor ConflictingInterfaceDefaults = new("GS0318", DiagnosticSeverity.Error, "{0} '{1}' inherits conflicting default implementations of method '{2}' from interfaces '{3}' and '{4}'; declare an override on '{5}' to disambiguate (ADR-0085).");
     internal static readonly DiagnosticDescriptor InterfaceDefaultRemoved = new("GS0319", DiagnosticSeverity.Error, "{0} '{1}' relied on a default implementation of '{2}.{3}' that has been removed; declare an explicit override on '{4}' (ADR-0085).");
     internal static readonly DiagnosticDescriptor InterfaceAbstractMethodHasNoDefault = new("GS0320", DiagnosticSeverity.Error, "{0} '{1}' does not implement abstract interface method '{2}.{3}', and the interface provides no default body (ADR-0085).");
@@ -396,7 +397,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor UnconstrainedNullableSequenceElement = new("GS0508", DiagnosticSeverity.Error, "Nullable sequence element type '{0}?' is not supported because '{0}' is not constrained to 'struct' or a reference type.");
     internal static readonly DiagnosticDescriptor ExplicitLayoutReferenceStorageInvalid = new("GS0518", DiagnosticSeverity.Error, "Explicit-layout type '{0}' has invalid storage for reference-typed field '{1}': {2}; the CLR rejects incorrectly aligned references and reference/non-reference overlap.");
     internal static readonly DiagnosticDescriptor ByRefLikeInterpolationUnsupported = new("GS0519", DiagnosticSeverity.Error, "By-ref-like value of type '{0}' has no usable parameterless ToString method and cannot be used in an interpolated string on emitted execution paths.");
-    internal static readonly DiagnosticDescriptor ChannelRequiresInitializer = new("GS0520", DiagnosticSeverity.Error, "Channel-typed declaration '{0}' requires an explicit initializer — an auto-created channel has no sensible default (buffer size, ownership); initialize with 'make({1})' or 'make({1}, capacity)', or declare the slot as '({1})?' if the channel is genuinely optional (ADR-0159).");
+    internal static readonly DiagnosticDescriptor ChannelRequiresInitializer = new("GS0520", DiagnosticSeverity.Error, "Channel-typed declaration '{0}' requires an explicit initializer — an auto-created channel has no sensible default (buffer size, ownership); initialize with '{1}()' (rendezvous) or '{1}(capacity)', or declare the slot as '{1}?' if the channel is genuinely optional (ADR-0159).");
     internal static readonly DiagnosticDescriptor PointerGenericTypeArgument = new("GS0521", DiagnosticSeverity.Error, "Pointer and function-pointer types cannot be used as generic type arguments.");
     internal static readonly DiagnosticDescriptor ChannelLocalUsedBeforeAssignment = new("GS0522", DiagnosticSeverity.Error, "Channel-typed local '{0}' may be used before it is assigned — a path can reach this use without a preceding assignment, and a bare 'chan T' slot has no zero value; assign it on every path first, e.g. '{0} = make({1})' or '{0} = make({1}, capacity)' (ADR-0159, issue #3316).");
     internal static readonly DiagnosticDescriptor NilComparisonAlwaysConstant = new("GS0523", DiagnosticSeverity.Warning, "Comparison of non-nullable '{0}' with 'nil' is always {1} — a bare (non-'?') collection-typed value can never be nil (ADR-0159); remove the dead comparison or declare the operand as '({0})?'.");
@@ -428,6 +429,27 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor VariadicCarrierElementNotConstructible = new("GS0544", DiagnosticSeverity.Error, "Variadic carrier '{0}' cannot be constructed over element type '{1}' at this call site; use an array carrier ('...T') or pass the collection directly.");
     internal static readonly DiagnosticDescriptor InterpolatedStringHandlerUnavailable = new("GS0545", DiagnosticSeverity.Error, "Interpolated strings require '{0}', which the referenced target framework does not provide. Reference a framework that declares it, or build the string explicitly.");
     internal static readonly DiagnosticDescriptor TargetFrameworkMemberUnavailable = new("GS0546", DiagnosticSeverity.Error, "This construct lowers onto '{0}', which the referenced target framework does not provide. Reference a framework or package that declares it.");
+
+    // ADR-0174: goroutines and channels, wave 2 (GS0548–GS0568).
+    internal static readonly DiagnosticDescriptor RendezvousChannelConstructed = new("GS0548", DiagnosticSeverity.Warning, "'chan[{0}]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[{0}]()' if an unbounded buffer was intended (ADR-0174 D12).");
+    internal static readonly DiagnosticDescriptor SendOnReceiveOnlyChannel = new("GS0549", DiagnosticSeverity.Error, "Cannot send on the receive-only channel type '{0}'; only a 'chan[T]' or 'out chan[T]' handle can send (ADR-0174 D2).");
+    internal static readonly DiagnosticDescriptor ReceiveFromSendOnlyChannel = new("GS0550", DiagnosticSeverity.Error, "Cannot receive from the send-only channel type '{0}'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).");
+    internal static readonly DiagnosticDescriptor ChannelBindingTargetCount = new("GS0554", DiagnosticSeverity.Error, "'{0}' binds exactly {1}, not {2}: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).");
+    internal static readonly DiagnosticDescriptor SuspendingCallBlocks = new("GS0558", DiagnosticSeverity.Warning, "'{0}' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.");
+    internal static readonly DiagnosticDescriptor BatchOnRendezvousChannel = new("GS0562", DiagnosticSeverity.Warning, "'{0}' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay (ADR-0174 D10).");
+
+    internal static readonly DiagnosticDescriptor AsyncLetOutsideScope = new("GS0551", DiagnosticSeverity.Error, "'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block (ADR-0174 D15).");
+
+    internal static readonly DiagnosticDescriptor AsyncLetNeverAwaited = new("GS0559", DiagnosticSeverity.Warning, "'{0}' is never awaited, so its work is started and then cancelled at the end of the scope (ADR-0174 D15).");
+
+    internal static readonly DiagnosticDescriptor AsyncLetReadWithoutAwait = new("GS0569", DiagnosticSeverity.Error, "'{0}' is an 'async let' binding; read it with 'await {0}' so the suspension is visible (ADR-0174 D15).");
+
+    internal static readonly DiagnosticDescriptor SelectArmGuardIsNotBoolean = new("GS0556", DiagnosticSeverity.Error, "A select arm's 'when' guard must be a 'bool'; '{0}' is not (ADR-0174 D8).");
+    internal static readonly DiagnosticDescriptor SelectCancelledArmNeedsContext = new("GS0557", DiagnosticSeverity.Error, "'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter (ADR-0174 D8).");
+    internal static readonly DiagnosticDescriptor SelectChannelSentAndReceived = new("GS0564", DiagnosticSeverity.Warning, "'{0}' is both sent to and received from by this select, so it can complete by talking to itself (ADR-0174 D8).");
+    internal static readonly DiagnosticDescriptor WhileLetOverChannelNeedsReceive = new("GS0555", DiagnosticSeverity.Error, "'while let {0} = {1}' binds the channel itself; receive from it with 'while let {0} = <-{1}' to loop until the channel is closed (ADR-0174 D3).");
+    internal static readonly DiagnosticDescriptor RetiredBuiltin = new("GS0566", DiagnosticSeverity.Error, "'{0}' has been retired (ADR-0174); {1}");
+    internal static readonly DiagnosticDescriptor LegacyChanTypeClauseSyntax = new("GS0567", DiagnosticSeverity.Error, "The 'chan T' type-clause spelling has been removed; use 'chan[{0}]' instead (ADR-0174 D2).");
     internal static readonly DiagnosticDescriptor AmbiguousImportedTypeReference = new("GS0547", DiagnosticSeverity.Error, "Type '{0}' is ambiguous between imported '{1}' and imported '{2}'; it would bind '{3}' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).");
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

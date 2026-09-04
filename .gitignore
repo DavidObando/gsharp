@@ -344,3 +344,11 @@ package-lock.json
 # cs2gs migration run output (generated, do not commit)
 cs2gs-runs/
 test/Core.Tests/Baselines/*.actual
+
+# Golden-mismatch artifacts: every GoldenFile assertion writes a sibling
+# `.actual` when it fails, and one of those was committed by a `git add -A`.
+*.golden.txt.actual
+
+# ADR-0174 D11: the concurrency benchmark's working directory. The runner
+# compiles the G# scenario program here, and a compiled program is not source.
+out/bench-concurrency/

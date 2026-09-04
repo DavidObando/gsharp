@@ -37,6 +37,7 @@ cd "$ROOT"
 CONFIG=Release
 GSC_DLL="$ROOT/out/bin/$CONFIG/Compiler/gsc.dll"
 EXTENSIONS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Extensions/Gsharp.Extensions.dll"
+CHANNELS_DLL="$ROOT/out/bin/$CONFIG/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.dll"
 SAMPLES_DIR="$ROOT/samples"
 BASELINE_FILE="$ROOT/build/ilverify-known-failures.txt"
 TMP_BASE="${TMPDIR:-/tmp}"
@@ -50,7 +51,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Building gsc and Gsharp.Extensions ($CONFIG)"
+echo "==> Building gsc, Gsharp.Runtime.Channels and Gsharp.Extensions ($CONFIG)"
 # Gsharp.Extensions -> Gsharp.NET.Sdk packs gsgen via a raw <MSBuild> task, so
 # its restore does not flow transitively; restore the solution like CI does.
 dotnet restore GSharp.sln --nologo -v:q
@@ -58,6 +59,8 @@ dotnet build src/Compiler/Compiler.csproj -c "$CONFIG" --no-restore --nologo -v:
 dotnet build src/Sdk/Gsharp.Extensions/Gsharp.Extensions.csproj -c "$CONFIG" --no-restore --nologo -v:q
 [[ -f "$GSC_DLL" ]] || { echo "ERROR: gsc not found at $GSC_DLL"; exit 1; }
 [[ -f "$EXTENSIONS_DLL" ]] || { echo "ERROR: Gsharp.Extensions not found at $EXTENSIONS_DLL"; exit 1; }
+# ADR-0174 D1: the channel runtime is a Compiler ProjectReference, so it is built transitively.
+[[ -f "$CHANNELS_DLL" ]] || { echo "ERROR: Gsharp.Runtime.Channels not found at $CHANNELS_DLL"; exit 1; }
 
 echo "==> Restoring repo-local dotnet tools (dotnet-ilverify)"
 if ! dotnet tool run ilverify --version >/dev/null 2>&1; then
@@ -88,6 +91,9 @@ for dll in "$RUNTIME_DIR"/System.*.dll \
            "$RUNTIME_DIR"/Microsoft.Win32.Registry.dll; do
     [[ -f "$dll" ]] && REF_ARGS+=(-r "$dll")
 done
+# ADR-0174 D1: emitted programs reference the channel runtime whenever they
+# construct or operate on a channel; it is not a BCL assembly, so add it.
+REF_ARGS+=(-r "$CHANNELS_DLL")
 
 # Baseline: map assembly base name -> comma-separated ignored error codes.
 baseline_codes() {
@@ -176,11 +182,19 @@ verify_sample() {
 echo "==> Compiling and verifying golden samples from $SAMPLES_DIR"
 
 # Single-file samples: samples/*.gs with a sibling .golden.
+# A sample needs /r:Gsharp.Extensions when it names that namespace, and also
+# when it names Gsharp.Concurrency: ADR-0174 D9's `after`, `tick`, `merge` and
+# `chunks` are G#-authored and live in the Extensions assembly even though the
+# package is imported implicitly, so a caller never spells "Gsharp.Extensions".
+needs_extensions() {
+    grep -q -e "Gsharp.Extensions" -e "Gsharp.Concurrency" "$@"
+}
+
 for source in "$SAMPLES_DIR"/*.gs; do
     [[ -f "${source%.gs}.golden" ]] || continue
     name="$(basename "$source" .gs)"
     uses_extensions=no
-    grep -q "Gsharp.Extensions" "$source" && uses_extensions=yes
+    needs_extensions "$source" && uses_extensions=yes
     verify_sample "$name" "$uses_extensions" "$source"
 done
 
@@ -196,7 +210,7 @@ for dir in "$SAMPLES_DIR"/*/; do
     done < <(find "$dir" -maxdepth 1 -name '*.gs' | sort)
     [[ ${#sources[@]} -gt 0 ]] || continue
     uses_extensions=no
-    grep -q "Gsharp.Extensions" "${sources[@]}" && uses_extensions=yes
+    needs_extensions "${sources[@]}" && uses_extensions=yes
     verify_sample "$name" "$uses_extensions" "${sources[@]}"
 done
 

@@ -1285,7 +1285,110 @@ internal sealed partial class StatementBinder
             scope.GetCurrentDeclaringPackageName());
     }
 
+    // ADR-0174 D15: `async let name = expr` starts `expr` as a child of the
+    // enclosing scope and binds `name` to its eventual result:
+    //   let <cell> = AsyncLetCell[R].Start(<frame>)
+    //   go <expr>            // sink and result cell are <cell>
+    // The binding names `R`, not a handle, so a spawn cannot outlive the scope
+    // that owns it. Every read is `await name`, which reads the cell.
+    private BoundStatement BindAsyncLetDeclaration(VariableDeclarationSyntax syntax)
+    {
+        var asyncKeyword = syntax.AsyncModifier ?? syntax.Identifier;
+        if (syntax.Initializer == null)
+        {
+            Diagnostics.ReportAsyncLetOutsideScope(asyncKeyword.Location);
+            return BindErrorStatement();
+        }
+
+        if (binderCtx.ScopeFrames.Count == 0)
+        {
+            // GS0551: without an owner this is the unstructured Task that D15
+            // exists to avoid. Recover as an ordinary `let` so the body's other
+            // diagnostics still surface.
+            Diagnostics.ReportAsyncLetOutsideScope(asyncKeyword.Location);
+            return BindOrdinaryVariableDeclaration(syntax);
+        }
+
+        if (!binderCtx.ChannelRuntime.IsAvailable)
+        {
+            Diagnostics.ReportTargetFrameworkMemberUnavailable(asyncKeyword.Location, "Gsharp.Concurrency.AsyncLetCell");
+            return BindErrorStatement();
+        }
+
+        // The initializer is bound the way a `go` operand is: the child, not the
+        // spawning goroutine, consumes a suspending call's completion.
+        var expression = bindExpression(syntax.Initializer, canBeVoid: false);
+        if (expression is BoundErrorExpression)
+        {
+            return new BoundExpressionStatement(syntax, expression);
+        }
+
+        var resultType = expression.Type ?? TypeSymbol.Error;
+        if (expression is BoundAwaitExpression awaited)
+        {
+            expression = awaited.Expression;
+        }
+        else if (expression is BoundImportedCallExpression { Function.Name: "Wait" } bridge
+            && bridge.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking"
+            && bridge.Arguments.Length == 1)
+        {
+            expression = bridge.Arguments[0];
+        }
+        else if (AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(resultType, out var produced))
+        {
+            // An `async func` call (ADR-0023) is typed `Task[R]` and carries no
+            // caller-side await, and a CLR method may return `ValueTask[R]`
+            // outright. The binding names `R` either way; the child consumes
+            // the task on the goroutine, as `go` already does.
+            resultType = produced;
+        }
+
+        if (expression is not BoundCallExpression and
+            not BoundIndirectCallExpression and
+            not BoundUserInstanceCallExpression and
+            not BoundImportedCallExpression and
+            not BoundImportedInstanceCallExpression)
+        {
+            Diagnostics.ReportGoOperandIsNotACall(syntax.Initializer.Location);
+            return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+        }
+
+        var runtime = binderCtx.ChannelRuntime;
+        var frame = binderCtx.ScopeFrames.Peek();
+        var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
+        var cell = new LocalVariableSymbol($"<asynclet$cell${id}>", isReadOnly: true, runtime.AsyncLetCellType);
+        scope.TryDeclareVariable(cell);
+
+        var binding = new AsyncLetVariableSymbol(syntax.Identifier.Text, resultType, cell, syntax.Identifier);
+        if (!scope.TryDeclareVariable(binding))
+        {
+            Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, syntax.Identifier.Text);
+        }
+
+        binderCtx.AsyncLetCells.Peek().Add(binding);
+        return new BoundBlockStatement(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundVariableDeclaration(syntax, cell, runtime.BindAsyncLetStart(syntax, frame)),
+                new BoundGoStatement(
+                    syntax,
+                    expression,
+                    new BoundVariableExpression(null, cell),
+                    new BoundVariableExpression(null, cell),
+                    resultType)));
+    }
+
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)
+    {
+        if (syntax.IsAsyncLet)
+        {
+            return BindAsyncLetDeclaration(syntax);
+        }
+
+        return BindOrdinaryVariableDeclaration(syntax);
+    }
+
+    private BoundStatement BindOrdinaryVariableDeclaration(VariableDeclarationSyntax syntax)
     {
         // Issue #491 (ADR-0060 follow-up): a `let ref` / `var ref` declaration introduces a
         // ref-aliasing local. The local's IL slot stores a managed pointer (`T&`) into the
@@ -1740,9 +1843,9 @@ internal sealed partial class StatementBinder
             Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, "a top-level variable (it would be emitted as a heap-rooted static field)");
             rhsValid = false;
         }
-        else if (function.IsAsync || isIteratorReturnType(function.Type))
+        else if (function.IsAsyncOrSuspending || isIteratorReturnType(function.Type))
         {
-            var context = function.IsAsync ? "a local in an async function" : "a local in an iterator";
+            var context = function.IsAsyncOrSuspending ? "a local in an async function" : "a local in an iterator";
             Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, context + " (it would be hoisted into the state machine)");
             rhsValid = false;
         }
@@ -1802,7 +1905,32 @@ internal sealed partial class StatementBinder
         // `var (a, b, ...) = expr` counterpart. Phase 7.3 extends the RHS from
         // tuple-only to data structs, preserving single-eval via a synthetic local.
         var isReadOnly = syntax.Keyword.Kind == SyntaxKind.LetKeyword;
-        var initializer = bindExpression(syntax.Initializer);
+        BoundExpression initializer;
+        if (IsChannelReceiveSyntax(syntax.Initializer, out var receive))
+        {
+            // ADR-0174 D3: `let (v, ok) = <-ch` is the two-value receive — the
+            // element (its zero value once closed) and whether the channel
+            // delivered it — bound as a `(T, bool)` tuple so the ordinary
+            // deconstruction below does the rest.
+            if (syntax.Identifiers.Count != 2)
+            {
+                Diagnostics.ReportChannelBindingTargetCount(syntax.CloseParenToken.Location, "let (value, ok) = <-ch", "two names", syntax.Identifiers.Count);
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            var received = BindTwoValueReceive(receive, out _);
+            if (received == null)
+            {
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            initializer = received;
+        }
+        else
+        {
+            initializer = bindExpression(syntax.Initializer);
+        }
+
         if (initializer.Type == TypeSymbol.Error)
         {
             return new BoundExpressionStatement(syntax, initializer);

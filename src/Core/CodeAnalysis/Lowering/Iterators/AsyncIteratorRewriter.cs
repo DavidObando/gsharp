@@ -35,7 +35,10 @@ public static class AsyncIteratorRewriter
     /// <summary>
     /// Scans the bound program for async iterator functions and builds rewrite plans.
     /// </summary>
-    public static AsyncIteratorRewriteResult Rewrite(BoundProgram program)
+    /// <param name="program">The bound program.</param>
+    /// <param name="references">The compilation's reference resolver, used to lower channel operations onto their suspending forms (ADR-0174 D4); <see langword="null"/> leaves them blocking.</param>
+    /// <returns>The rewrite result.</returns>
+    public static AsyncIteratorRewriteResult Rewrite(BoundProgram program, ReferenceResolver? references = null)
     {
         if (program == null)
         {
@@ -63,6 +66,9 @@ public static class AsyncIteratorRewriter
             // Issue #2662: lower loops first so synthesized await-for locals
             // and awaits participate in state-machine slot/state allocation.
             var loweredBody = Lowerer.Lower(body);
+
+            // ADR-0174 D4: channel operations park the state machine, not a thread.
+            loweredBody = Async.ChannelOperationRewriter.Rewrite(loweredBody, references);
 
             // Run async lowering pipeline on the body: exception handler rewrite,
             // spill, ref-hoist. This lifts awaits to statement level.

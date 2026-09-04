@@ -69,12 +69,11 @@ public class Issue1483ReadOnlyDictionaryForRangeEmitTests
             package P1483b
             import System
             import System.Collections.Generic
-            import Gsharp.Extensions.Go
 
             func Issue1483Fold(d IReadOnlyDictionary[string, int32]) int32 {
                 var acc = 0
                 for k, v in d {
-                    acc = acc + v + len(k)
+                    acc = acc + v + k.Length
                 }
                 return acc
             }

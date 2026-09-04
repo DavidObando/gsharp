@@ -1340,7 +1340,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirstParameter);
-            GTypeReference returnType = this.MapReturnType(symbol, node);
+
+            // ADR-0174 D4: an `async ValueTask`/`ValueTask<T>` method that
+            // touches the Gsharp.Concurrency runtime (or carries [Suspending])
+            // is a G# `suspend func`; its return type is the awaited result,
+            // exactly as B.23 unwraps `async Task<T>`.
+            bool isEmittedSuspend = symbol != null && this.IsSuspendingCandidate(symbol, node);
+            GTypeReference returnType = this.MapReturnType(symbol, node, unwrapValueTask: isEmittedSuspend);
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(symbol);
 
             bool hasBody = node.Body != null || node.ExpressionBody != null;
@@ -1499,7 +1505,7 @@ public sealed partial class CSharpToGSharpTranslator
             // A rewritten analyzer test harness (#3686) delegates to the
             // synchronous G# verifier: there is nothing left to await, and an
             // `async` func returning `Task` cannot `return` a value.
-            bool isEmittedAsync = !isAsyncVoidHandler && !isAnalyzerHarness && symbol != null && symbol.IsAsync;
+            bool isEmittedAsync = !isAsyncVoidHandler && !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
 
             var method = new MethodDeclaration(
                 this.EmittedName(symbol, node.Identifier.ValueText),
@@ -1515,7 +1521,8 @@ public sealed partial class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceType,
-                isRefReturn: symbol != null && symbol.ReturnsByRef);
+                isRefReturn: symbol != null && symbol.ReturnsByRef,
+                isSuspend: isEmittedSuspend);
 
             return (method, isStatic);
         }

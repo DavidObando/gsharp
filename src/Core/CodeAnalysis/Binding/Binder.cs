@@ -218,7 +218,7 @@ public sealed class Binder
             createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
             createUserExtensionMethodGroupAdapter: group => Lambdas.CreateUserExtensionMethodGroupAdapter(group),
             getMethodGroupObservableReturnType: (method, returnType) =>
-                method.IsAsync && !IsAsyncIteratorReturnType(returnType)
+                method.IsAsyncOrSuspending && !IsAsyncIteratorReturnType(returnType)
                     ? Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
                     : returnType,
             isLvalue: ExpressionBinder.IsLvalue,
@@ -258,6 +258,7 @@ public sealed class Binder
             createErasedFunctionLiteralAdapter: (literal, targetFunctionType) => Lambdas.CreateErasedFunctionLiteralAdapter(literal, targetFunctionType),
             wrapAsTask: (t, useValueTask) => Lambdas.WrapAsTask(t, useValueTask),
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
+            completeSuspendingCall: (call, logicalType, location, calleeName) => Expressions.CompleteSuspendingCall(call, logicalType, location, calleeName),
             tryGetFunctionLiteral: LambdaBinder.TryGetFunctionLiteral,
             inferTypeArguments: InferTypeArguments,
             substituteType: (t, subst) => SubstituteType(t, subst, scope.References.MapClrTypeToReferences),
@@ -876,6 +877,16 @@ public sealed class Binder
             // may still write `import System` redundantly; lookup short-circuits
             // on the first matching import so duplicates are harmless.
             binder.scope.TryImport(new ImportSymbol("System", "System", declaration: null));
+
+            // ADR-0174 D9/D13: the concurrency library namespace is implicitly
+            // imported whenever the runtime assembly is in the reference set,
+            // so `Chan.Unbounded[T]()`, `ch.Close()` (an extension on a
+            // `chan[T]`), and the D9 helpers resolve with no import — the
+            // syntax (`go`, `chan[T]`, `<-`, `select`) never needed one.
+            if (binder.scope.References.TryResolveType(ChannelRuntimeBinder.ChanTypeName, out _))
+            {
+                binder.scope.TryImport(new ImportSymbol("Gsharp.Concurrency", "Gsharp.Concurrency", declaration: null, hoistsStatics: true));
+            }
         }
 
         // Resolve each syntax tree's package declaration to a PackageSymbol.
@@ -2356,6 +2367,31 @@ public sealed class Binder
         // the empty synthetic block unanchored — there is nothing to point at.
         SyntaxAnchoringWalker.Anchor(statement, statement.Statements.FirstOrDefault(s => s.Syntax is not null)?.Syntax);
 
+        // ADR-0174 D4: infer which functions suspend, retype the calls to them,
+        // and complete those calls (implicit await / blocking root bridge).
+        // Runs after every body is bound and anchored, so the fixed point sees
+        // the whole call graph; the entry point's body is one of the bodies.
+        var entryBodyWasTheStatementBlock = globalScope.EntryPoint is { } entryBefore
+            && functionBodies.TryGetValue(entryBefore, out var entryBodyBefore)
+            && ReferenceEquals(entryBodyBefore, statement);
+
+        // The root scope already fell back to ReferenceResolver.Default() when
+        // the caller passed none; inference must see the same references the
+        // bodies were bound against, or a references-less compilation would
+        // bind channel operations yet never colour the functions around them.
+        Suspension.SuspensionInference.Run(functionBodies, globalScope.EntryPoint, parentScope.References, diagnostics);
+
+        // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
+        // pointless. Reported here, over the bound bodies, because the question
+        // is about the receiver's declaration rather than the call.
+        RendezvousBatchAnalyzer.Run(functionBodies, diagnostics);
+        if (entryBodyWasTheStatementBlock && functionBodies.TryGetValue(globalScope.EntryPoint!, out var inferredEntryBody))
+        {
+            // The synthesized top-level block IS the entry point's body; a user
+            // `func Main()` keeps its own body and the (empty) statement block.
+            statement = inferredEntryBody;
+        }
+
         // Issue #3501 A2: union the ref-kind delegates synthesized while
         // binding top-level statements (already in globalScope.Delegates via
         // BindGlobalScope) with those synthesized while binding
@@ -3649,21 +3685,22 @@ public sealed class Binder
 
         if (syntax.IsChannel)
         {
-            // Phase 5.4 / ADR-0022: channel type clause `chan T`.
-            // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
-            // Reports GS0316 anchored at the `chan` keyword and recovers by
-            // binding the channel type as if the import were present.
-            // IsChannel implies the parser set ChanKeyword/ChanElementType.
-            var chanKeyword = Invariant.Required(syntax.ChanKeyword, "IsChannel implies the parser set ChanKeyword");
-            binderCtx.ReportIfGoExtensionsImportMissing(syntax, chanKeyword.Location, "chan");
-
+            // ADR-0174 D2: `chan[T]` / `in chan[T]` / `out chan[T]`. The
+            // parser recovers the retired `chan T` shape under GS0567 and it
+            // binds here as if the canonical spelling had been written.
             var elementType = BindTypeClause(Invariant.Required(syntax.ChanElementType, "IsChannel implies the parser set ChanElementType"));
             if (elementType == null)
             {
                 return null;
             }
 
-            return ChannelTypeSymbol.Get(elementType);
+            var direction = syntax.ChanDirectionToken?.Text switch
+            {
+                "in" => ChannelDirection.In,
+                "out" => ChannelDirection.Out,
+                _ => ChannelDirection.Both,
+            };
+            return ChannelTypeSymbol.Get(elementType, direction);
         }
 
         // Issue #1046: an array/slice whose element is itself a (non-identifier)
@@ -5456,6 +5493,17 @@ public sealed class Binder
         else if (parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym)
         {
             InferTypeArguments(ps.ElementType, asym.ElementType, substitution);
+        }
+        else if (parameterType is ChannelTypeSymbol pc
+            && ChannelTypeSymbol.TryGetChannelShape(argumentType, out var argumentElement, out _, out _))
+        {
+            // ADR-0174 D2/D9: `T` in `chan[T]` — including a directional
+            // parameter taking a bidirectional argument, since `chan[int32]`
+            // converts to `in chan[int32]` and the element is what is being
+            // inferred either way. Without this, `merge(a, b)` cannot infer its
+            // element and every generic channel function has to be called with
+            // an explicit type argument.
+            InferTypeArguments(pc.ElementType, argumentElement, substitution);
         }
         else if (parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa)
         {

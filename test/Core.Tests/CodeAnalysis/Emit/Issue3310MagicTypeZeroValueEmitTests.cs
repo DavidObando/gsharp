@@ -30,7 +30,6 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P2262Repro
 
-            import Gsharp.Extensions.Go
 
             func Fib(i int) long -> if i <= 0 { 0 } else if i == 1 { 1 } else { Fib(i-1)+Fib(i-2) }
 
@@ -40,7 +39,7 @@ public class Issue3310MagicTypeZeroValueEmitTests
                     numbers[i] = Fib(i)
                 }
 
-                return len(numbers)
+                return numbers.Count
             }
 
             run()
@@ -56,7 +55,6 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310MapZero
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
                 var m map[string, int32]
@@ -64,7 +62,7 @@ public class Issue3310MagicTypeZeroValueEmitTests
                     return -1
                 }
 
-                return len(m)
+                return m.Count
             }
 
             run()
@@ -80,13 +78,12 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310SliceZero
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
                 var xs []int32
-                var before = len(xs)
-                xs = append(xs, 7)
-                return before * 10 + len(xs)
+                var before = xs.Length
+                xs = []int32{7}
+                return before * 10 + xs.Length
             }
 
             run()
@@ -102,12 +99,11 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310ArrZero
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
                 var a [3]int32
                 a[2] = 9
-                return len(a) * 10 + a[2]
+                return a.Length * 10 + a[2]
             }
 
             run()
@@ -148,12 +144,11 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310GlobalZero
 
-            import Gsharp.Extensions.Go
 
             var counts map[string, int32]
             counts["a"] = 1
             counts["b"] = 2
-            len(counts)
+            counts.Count
             """);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Severity == GSharp.Core.CodeAnalysis.DiagnosticSeverity.Error);
@@ -169,7 +164,6 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310FieldZero
 
-            import Gsharp.Extensions.Go
 
             class C {
                 var m map[string, int32]
@@ -181,14 +175,14 @@ public class Issue3310MagicTypeZeroValueEmitTests
             func run() int32 {
                 var c = C()
                 c.m["a"] = 1
-                c.s = append(c.s, 5)
+                c.s = []int32{5}
                 c.a[1] = 9
                 var n = 0
                 for v in c.q {
                     n = n + 1
                 }
 
-                return len(c.m) * 1000 + len(c.s) * 100 + c.a[1] * 10 + n
+                return c.m.Count * 1000 + c.s.Length * 100 + c.a[1] * 10 + n
             }
 
             run()
@@ -207,7 +201,6 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310GenericFieldZero
 
-            import Gsharp.Extensions.Go
 
             class G[K, V any] {
                 var items map[K, V]
@@ -215,13 +208,13 @@ public class Issue3310MagicTypeZeroValueEmitTests
                 var q sequence[V]
                 func Use(k K, v V) int32 {
                     items[k] = v
-                    xs = append(xs, k)
+                    xs = []K{k}
                     var n = 0
                     for e in q {
                         n = n + 1
                     }
 
-                    return len(items) * 100 + len(xs) * 10 + n
+                    return items.Count * 100 + xs.Length * 10 + n
                 }
             }
 
@@ -245,7 +238,6 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310StaticFieldZero
 
-            import Gsharp.Extensions.Go
 
             class R {
                 shared {
@@ -255,7 +247,7 @@ public class Issue3310MagicTypeZeroValueEmitTests
 
             func run() int32 {
                 R.registry["k"] = 3
-                return len(R.registry)
+                return R.registry.Count
             }
 
             run()
@@ -273,7 +265,6 @@ public class Issue3310MagicTypeZeroValueEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3310StructZero
 
-            import Gsharp.Extensions.Go
 
             struct S {
                 var m map[string, int32]
@@ -282,7 +273,7 @@ public class Issue3310MagicTypeZeroValueEmitTests
             func run() int32 {
                 var s = S{}
                 s.m["z"] = 1
-                return len(s.m)
+                return s.m.Count
             }
 
             run()

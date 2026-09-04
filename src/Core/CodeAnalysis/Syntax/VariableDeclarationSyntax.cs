@@ -13,6 +13,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
 {
     // Backing fields for the properties the parser assigns after construction. Their setters
     // invalidate the node's cached span (issue #1675).
+    private SyntaxToken? asyncModifier;
     private SyntaxToken? scopedModifier;
     private SyntaxToken? refKindModifier;
     private TypeParameterListSyntax? typeParameterList;
@@ -83,6 +84,26 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     /// Gets the optional accessibility modifier token. Only meaningful for top-level declarations.
     /// </summary>
     public SyntaxToken? AccessibilityModifier { get; }
+
+    /// <summary>
+    /// Gets or sets the optional <c>async</c> modifier of an <c>async let</c>
+    /// binding (ADR-0174 D15). When non-null the initializer is started as a
+    /// child of the enclosing <c>scope</c> and the binding names its eventual
+    /// result, read with <c>await</c>. Declared before <see cref="Keyword"/> so
+    /// child enumeration stays in source order.
+    /// </summary>
+    public SyntaxToken? AsyncModifier
+    {
+        get => asyncModifier;
+        set
+        {
+            asyncModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this is an <c>async let</c> binding (ADR-0174 D15).</summary>
+    public bool IsAsyncLet => AsyncModifier != null;
 
     /// <summary>
     /// Gets the var keyword.

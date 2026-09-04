@@ -321,7 +321,6 @@ await for x in gen() {
         const string Source = @"package AsyncEmitGoScope
 import System
 import System.Threading.Tasks
-import Gsharp.Extensions.Go
 
 async func work() {
     await Task.Delay(1)

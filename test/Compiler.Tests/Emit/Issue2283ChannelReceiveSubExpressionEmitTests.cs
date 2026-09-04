@@ -66,9 +66,8 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
         const string source = """
             package Issue2283.AddOperand
             import System
-            import Gsharp.Extensions.Go
 
-            let ch = make(chan int32, 1)
+            let ch = chan[int32](1)
             ch <- 7
             var total = 0
             total = total + <-ch
@@ -85,9 +84,8 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
         const string source = """
             package Issue2283.LoopBreakContinue
             import System
-            import Gsharp.Extensions.Go
 
-            let ch = make(chan int32, 5)
+            let ch = chan[int32](5)
             for var i = 0; i < 5; i++ {
                 ch <- i
             }
@@ -114,11 +112,10 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
         const string source = """
             package Issue2283.CallArgument
             import System
-            import Gsharp.Extensions.Go
 
             func Sum2283(a int32, b int32) int32 -> a + b
 
-            let ch = make(chan int32, 1)
+            let ch = chan[int32](1)
             ch <- 5
             Console.WriteLine(Sum2283(10, <-ch))
             """;
@@ -135,9 +132,8 @@ public class Issue2283ChannelReceiveSubExpressionEmitTests
         const string source = """
             package Issue2283.StatementRoot
             import System
-            import Gsharp.Extensions.Go
 
-            let ch = make(chan int32, 1)
+            let ch = chan[int32](1)
             ch <- 3
             let v = <-ch
             Console.WriteLine(v)

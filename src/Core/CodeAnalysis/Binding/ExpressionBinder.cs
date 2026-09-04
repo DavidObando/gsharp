@@ -507,6 +507,8 @@ internal sealed partial class ExpressionBinder
                 return BindSwitchExpression((SwitchExpressionSyntax)syntax);
             case SyntaxKind.MakeChannelExpression:
                 return BindMakeChannelExpression((MakeChannelExpressionSyntax)syntax);
+            case SyntaxKind.ChannelCreationExpression:
+                return BindChannelCreationExpression((ChannelCreationExpressionSyntax)syntax);
             case SyntaxKind.TypeOfExpression:
                 return BindTypeOfExpression((TypeOfExpressionSyntax)syntax);
             case SyntaxKind.SizeOfExpression:
@@ -1856,6 +1858,12 @@ internal sealed partial class ExpressionBinder
     {
         switch (scope.TryLookupSymbol(name))
         {
+            case AsyncLetVariableSymbol asyncLet:
+                // ADR-0174 D15 / GS0569: the value may not have arrived. Every
+                // read of an `async let` binding is spelled `await name`, which
+                // BindAwaitExpression intercepts before the name ever binds.
+                Diagnostics.ReportAsyncLetReadWithoutAwait(location, asyncLet.Name);
+                return null;
             case VariableSymbol variable:
                 if (binderCtx.InConstructorInitializer
                     && (name == "this"

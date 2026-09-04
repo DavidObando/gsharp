@@ -869,6 +869,21 @@ is not a spelling gsc accepts today (GS0157).
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0547 | Error | `Type '<name>' is ambiguous between imported '<first>' and imported '<second>'; it would bind '<chosen>' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).` | `import Probe.Alpha` + `import Probe.Beta`, both exporting `Thing`, then a bare `Thing` |
+| GS0548 | Warning | `'chan[<T>]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[<T>]()' if an unbounded buffer was intended (ADR-0174 D12).` | `let ch = chan[int32]()` |
+| GS0549 | Error | `Cannot send on the receive-only channel type '<type>'; only a 'chan[T]' or 'out chan[T]' handle can send (ADR-0174 D2).` | `func f(ch in chan[int32]) { ch <- 1 }` |
+| GS0550 | Error | `Cannot receive from the send-only channel type '<type>'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).` | `func f(ch out chan[int32]) { let v = <-ch }` |
+| GS0554 | Error | `'<form>' binds exactly <count>, not <actual>: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).` | `let (v, ok, extra) = <-ch`; `for k, v in ch` |
+| GS0555 | Error | `'while let <name> = <expr>' binds the channel itself; receive from it with 'while let <name> = <-<expr>' to loop until the channel is closed (ADR-0174 D3).` | `while let v = ch { }` where `ch` is a `chan[int32]` |
+| GS0551 | Error | `'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block (ADR-0174 D15).` | `async let user = fetch(id)` written outside any `scope` |
+| GS0559 | Warning | `'<name>' is never awaited, so its work is started and then cancelled at the end of the scope (ADR-0174 D15).` | `scope { async let user = fetch(id) }` with no `await user` |
+| GS0562 | Warning | `'<name>' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay (ADR-0174 D10).` | `let ch = chan[int32]()` then `ch.ReceiveBatch(buffer, 1)` |
+| GS0569 | Error | `'<name>' is an 'async let' binding; read it with 'await <name>' so the suspension is visible (ADR-0174 D15).` | `async let user = fetch(id)` then `let copy = user` |
+| GS0558 | Warning | `'<name>' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.` | `suspend func take(ch chan[int32]) int32 { return <-ch }` then `func f(ch chan[int32]) int32 { return take(ch) }` |
+| GS0556 | Error | `A select arm's 'when' guard must be a 'bool'; '<type>' is not (ADR-0174 D8).` | `select { case <-ch when 1 { } }` |
+| GS0557 | Error | `'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter (ADR-0174 D8).` | `select { case cancelled { } case <-ch { } }` written outside any `scope` |
+| GS0564 | Warning | `'<name>' is both sent to and received from by this select, so it can complete by talking to itself (ADR-0174 D8).` | `select { case ch <- 1 { } case <-ch { } }` |
+| GS0566 | Error | `'<retired form>' has been retired (ADR-0174); <guidance naming the replacement>` | `make(chan int32, 3)` (use `chan[int32](3)`), `close(ch)` (use `ch.Close()`) |
+| GS0567 | Error | `The 'chan T' type-clause spelling has been removed; use 'chan[<T>]' instead (ADR-0174 D2).` | `var ch chan int32` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
@@ -1220,8 +1235,8 @@ nesting depth.
 | GS0311 | Error | `data` and `inline` are combined on the same declaration. |
 | GS0312 | Error | `open` and `sealed` are combined on the same declaration. |
 | GS0313 | Warning | Non-exhaustive `switch` over a sealed-hierarchy base or discriminated-union enum. |
-| GS0316 | Error | `'<form>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead.` |
-| GS0317 | Error | `'<name>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '<suggestion>' directly.` |
+| GS0316 | Retired | Retired by ADR-0174 (D13): the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
+| GS0317 | Retired | Retired by ADR-0174 (D13): `len`, `cap`, `append`, and `delete` are no longer built-ins, so there is no import gate to miss; a call to one reports GS0566 naming the member replacement. |
 | GS0330 | Error | An event is declared inside an interface `shared` block; interface static events are not supported. |
 | GS0331 | Error | `<Kind> '<C>' does not implement static-virtual interface method '<I>.<Name>', and the interface provides no default body.` |
 | GS0332 | Error | `<Kind> '<C>' declares instance method '<Name>' but interface '<I>.<Name>' is static-virtual; declare it inside a 'shared { … }' block.` |
@@ -1465,7 +1480,7 @@ parameterless method is available, preventing a GS9998 reflection exception.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0520 | Error | A `chan T` global or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`, or declare the slot as `(chan T)?` if the channel is genuinely optional. A **local** channel declaration is legal without an initializer: locals are flow-checked instead, and only an unassigned **use** is an error (GS0522 below). |
+| GS0520 | Error | A `chan[T]` global or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the empty-instance zero values; initialize with `chan[T]()` (rendezvous) or `chan[T](capacity)`, or declare the slot as `chan[T]?` if the channel is genuinely optional. A **local** channel declaration is legal without an initializer: locals are flow-checked instead, and only an unassigned **use** is an error (GS0522 below). |
 
 The other magic collection types (`map[K, V]`, `[]T`, `[N]T`, `sequence[T]`)
 bind a sound empty instance when declared without an initializer
@@ -1508,7 +1523,7 @@ this analysis applies only to kinds with no usable zero value.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, `[,]T`, or `chan T`. With sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `[,]?T`, `(chan T)?`) if it is genuinely optional. |
+| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, `[,]T`, or `chan[T]`. With sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `[,]?T`, `(chan T)?`) if it is genuinely optional. |
 
 The warning is static-type based and fires for both operand orders. It does
 NOT fire for `?`-typed operands (including interop values surfaced as `T?`,

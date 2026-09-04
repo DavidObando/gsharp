@@ -598,6 +598,11 @@ public partial class Parser
             case SyntaxKind.MapKeyword:
                 return ParsePostfixChain(ParseMapCreationExpression());
 
+            case SyntaxKind.ChanKeyword:
+                // ADR-0174 D12: `chan[T]()` / `chan[T](n)` — the type clause
+                // applied to arguments constructs the channel.
+                return ParsePostfixChain(ParseChannelCreationExpression());
+
             case SyntaxKind.FuncKeyword:
                 return ParsePostfixChain(ParseFunctionLiteralExpression());
 

@@ -1010,6 +1010,21 @@ is not a spelling gsc accepts today (GS0157).
 | ID | Severity | Message | Example |
 |---|---|---|---|
 | GS0547 | Error | `Type '<name>' is ambiguous between imported '<first>' and imported '<second>'; it would bind '<chosen>' only because that import comes first. Spell the name qualified, or add an 'import Alias = Namespace.Type', to say which one you mean (issue #3734).` | `import Probe.Alpha` + `import Probe.Beta`, both exporting `Thing`, then a bare `Thing` |
+| GS0548 | Warning | `'chan[<T>]()' constructs a rendezvous channel (capacity 0): a send completes only when a receiver takes the value. Pass a capacity for a buffered channel, or use 'Chan.Unbounded[<T>]()' if an unbounded buffer was intended (ADR-0174 D12).` | `let ch = chan[int32]()` |
+| GS0549 | Error | `Cannot send on the receive-only channel type '<type>'; only a 'chan[T]' or 'out chan[T]' handle can send (ADR-0174 D2).` | `func f(ch in chan[int32]) { ch <- 1 }` |
+| GS0550 | Error | `Cannot receive from the send-only channel type '<type>'; only a 'chan[T]' or 'in chan[T]' handle can receive (ADR-0174 D2).` | `func f(ch out chan[int32]) { let v = <-ch }` |
+| GS0554 | Error | `'<form>' binds exactly <count>, not <actual>: a channel receive yields the element and an 'ok' flag (ADR-0174 D3).` | `let (v, ok, extra) = <-ch`; `for k, v in ch` |
+| GS0555 | Error | `'while let <name> = <expr>' binds the channel itself; receive from it with 'while let <name> = <-<expr>' to loop until the channel is closed (ADR-0174 D3).` | `while let v = ch { }` where `ch` is a `chan[int32]` |
+| GS0551 | Error | `'async let' starts a child of the enclosing 'scope', and there is none here; put it inside a 'scope' block (ADR-0174 D15).` | `async let user = fetch(id)` written outside any `scope` |
+| GS0559 | Warning | `'<name>' is never awaited, so its work is started and then cancelled at the end of the scope (ADR-0174 D15).` | `scope { async let user = fetch(id) }` with no `await user` |
+| GS0562 | Warning | `'<name>' is a rendezvous channel (capacity 0), so a batch operation on it degenerates to that many sequential transfers; give it a capacity to make batching pay (ADR-0174 D10).` | `let ch = chan[int32]()` then `ch.ReceiveBatch(buffer, 1)` |
+| GS0569 | Error | `'<name>' is an 'async let' binding; read it with 'await <name>' so the suspension is visible (ADR-0174 D15).` | `async let user = fetch(id)` then `let copy = user` |
+| GS0558 | Warning | `'<name>' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.` | `suspend func take(ch chan[int32]) int32 { return <-ch }` then `func f(ch chan[int32]) int32 { return take(ch) }` |
+| GS0556 | Error | `A select arm's 'when' guard must be a 'bool'; '<type>' is not (ADR-0174 D8).` | `select { case <-ch when 1 { } }` |
+| GS0557 | Error | `'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter (ADR-0174 D8).` | `select { case cancelled { } case <-ch { } }` written outside any `scope` |
+| GS0564 | Warning | `'<name>' is both sent to and received from by this select, so it can complete by talking to itself (ADR-0174 D8).` | `select { case ch <- 1 { } case <-ch { } }` |
+| GS0566 | Error | `'<retired form>' has been retired (ADR-0174); <guidance naming the replacement>` | `make(chan int32, 3)` (use `chan[int32](3)`), `close(ch)` (use `ch.Close()`) |
+| GS0567 | Error | `The 'chan T' type-clause spelling has been removed; use 'chan[<T>]' instead (ADR-0174 D2).` | `var ch chan int32` |
 
 ## Pattern variable outside its definitely-assigned region (GS0532)
 
@@ -1053,91 +1068,35 @@ Cause/fix:
   normally with no diagnostic. See
   for the full rule, scope, and recovery rationale.
 
-## Go-flavored concurrency requires `import Gsharp.Extensions.Go` (GS0316)
+## Go-flavored concurrency gate (GS0316, retired)
 
-The per-file gate on the Go-flavored
-concurrency surface. The production concurrency surface is `scope` +
-`async`/`await`; the Go-flavored shapes (`go`, `chan T`, `<-` send,
-`<-` receive, `select`, `close(ch)`, `make(chan T[, cap])`) remain
-available but are opt-in. The binder checks for `import
-Gsharp.Extensions.Go` in the current compilation unit (not the
-project) before binding any of the gated forms and emits `GS0316`
-when the import is absent. The triggering form is named in the
-message so users see exactly what to add.
+ADR-0082 gated the Go-shaped concurrency surface (`go`, `chan`, `<-`, `select`,
+`close`, `make(chan …)`) behind `import Gsharp.Extensions.Go`. ADR-0174 (D13)
+retired the gate: the syntax is part of the language, `make`/`close` are
+replaced by `chan[T](…)` and `ch.Close()` (GS0566), and the concurrency library
+lives in the implicitly imported `Gsharp.Concurrency` namespace. GS0316 is never
+reported again and its identifier is not reused.
 
 | ID | Severity | Message |
-|----|----------|---------|
-| GS0316 | Error | `'<form>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead.` |
+|---|---|---|
+| GS0316 | Retired | Retired by ADR-0174 (D13): the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
 
-Cause/fix:
+## Go-style built-ins gate (GS0317, retired)
 
-- **GS0316** — any use of `go`, `chan` (in a type clause or inside
-  `make`), `<-` (send or receive), `select`, or `close(ch)` in a
-  source file that does not contain `import Gsharp.Extensions.Go`.
-  Add the import at the top of the file (right after the `package`
-  declaration is canonical), or rewrite the code on the
-  `scope` + `async`/`await` surface. The diagnostic is anchored at
-  the offending keyword/operator (`go`, `chan`, `<-`, `select`,
-  `close`); each `make(chan T)` site is reported once at its inner
-  `chan` keyword. The gate is **always opt-in**: `/noimplicitimports`
-  does not interact with it, and the implicit `System` import
-  toggle has no effect on whether `Gsharp.Extensions.Go` is in scope.
- See for the full rule, recovery strategy, and packaging
-  rationale.
-
-## Go-style built-ins require `import Gsharp.Extensions.Go` (GS0317)
-
-The per-file gate from
-to the Go-style built-in functions `len`, `cap`, `append`, and
-`delete`. The binder checks for `import Gsharp.Extensions.Go`
-in the current compilation unit before resolving any of these
-identifiers as built-ins and emits `GS0317` when the import is
-absent. The message names the offending built-in and, when there
-is a clean .NET-idiomatic replacement, names the replacement
-too — so users can fix the call site either by adding the
-import or by switching to the BCL equivalent.
+ADR-0083 gated the Go-style built-in functions `len`, `cap`, `append`, and
+`delete` behind a per-file `import Gsharp.Extensions.Go`, and GS0317 fired when
+the import was missing. ADR-0174 (D13) retired the built-ins themselves: every
+receiver already carries the member (`xs.Length`, `m.Count`, `m.Remove(k)`,
+`List[T].Add`, `ch.Length()`, `ch.Capacity`), so there is nothing left to gate.
+A call to a retired name reports [GS0566](#adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567)
+with a replacement computed for that site; a user-defined function of the same
+name is an ordinary call. The `Gsharp.Extensions.Go` namespace no longer exists,
+so the import itself is the ordinary unresolved-import error. GS0317 is never
+reported again and its identifier is not reused.
 
 | ID | Severity | Message |
-|----|----------|---------|
-| GS0317 | Error | `'<name>' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or call '<suggestion>' directly.` |
-
-`<suggestion>` is selected from the following table based on the
-built-in identifier and the bound type of its primary receiver:
-
-| Built-in | Receiver | `<suggestion>` |
-|----|----|----|
-| `len` | array / slice / string | `.Length` |
-| `len` | map | `.Count` |
-| `delete` | map | `.Remove(k)` |
-| `append` | slice | `List[T].Add` |
-| `cap` | any | — (import-only variant: "Add 'import Gsharp.Extensions.Go'.") |
-
-The diagnostic is anchored at the built-in identifier token. The
-`close(ch)` and `make(chan T)` shapes are part of the channel
-Cluster and keep firing **GS0316** rather than
-GS0317 — the suggested fix is the same import, but the message
-frames the `scope` + `async`/`await` alternative for the
-channel surface. The two diagnostics share the same
-`BinderContext.IsGoExtensionsImported` predicate, so a single
-`import Gsharp.Extensions.Go` unlocks both clusters at once.
-
-Recovery is identical to GS0316: the binder reports GS0317 and
-continues binding the call as if the import were present, so
-subsequent shape diagnostics (e.g. `GS0117` for a wrong-typed
-argument) still surface in the same pass.
-
-Cause/fix:
-
-- **GS0317** — any call to `len`, `cap`, `append`, or `delete`
-  in a source file that does not contain
-  `import Gsharp.Extensions.Go`. Add the import at the top of
-  the file (right after the `package` declaration is canonical),
-  or switch to the .NET-idiomatic alternative named in the
-  message: `array.Length` / `slice.Length` / `string.Length`
-  for `len` on length-bearing values, `map.Count` for `len` on
-  maps, `map.Remove(k)` for `delete`, and `List[T].Add` for
- The mutable-list shape of `append`. See for the
-  full rule and the deconfliction note with GS0316.
+|---|---|---|
+| GS0317 | Retired | Retired by ADR-0174 (D13): `len`, `cap`, `append`, and `delete` are no longer built-ins, so there is no import gate to miss; a call to one reports GS0566 naming the member replacement. |
 
 
 
@@ -2061,7 +2020,7 @@ parameterless method is available, preventing a GS9998 reflection exception.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0520 | Error | A `chan T` global or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the empty-instance zero values; initialize with `make(chan T)` or `make(chan T, capacity)`, or declare the slot as `(chan T)?` if the channel is genuinely optional. A **local** channel declaration is legal without an initializer: locals are flow-checked instead, and only an unassigned **use** is an error (GS0522 below). |
+| GS0520 | Error | A `chan[T]` global or field is declared without an initializer. An auto-created channel has no sensible default (buffer size, ownership), so channels are carved out of the empty-instance zero values; initialize with `chan[T]()` (rendezvous) or `chan[T](capacity)`, or declare the slot as `chan[T]?` if the channel is genuinely optional. A **local** channel declaration is legal without an initializer: locals are flow-checked instead, and only an unassigned **use** is an error (GS0522 below). |
 
 The other magic collection types (`map[K, V]`, `[]T`, `[N]T`, `sequence[T]`)
 bind a sound empty instance when declared without an initializer;
@@ -2102,7 +2061,7 @@ this analysis applies only to kinds with no usable zero value.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, `[,]T`, or `chan T`. With sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `[,]?T`, `(chan T)?`) if it is genuinely optional. |
+| GS0523 | Warning | A `== nil` / `!= nil` comparison whose non-nil operand's static type is a bare (non-`?`) `map[K, V]`, `[]T`, `[N]T`, `[,]T`, or `chan[T]`. With sound empty-instance zero values (and GS0520's mandatory channel initializer) such a value can never be nil, so the comparison is always false (`==`) or always true (`!=`) — typically a Go porting artifact. Remove the dead check, or declare the slot with the `?` spelling (`map[K, V]?`, `[]?T`, `[,]?T`, `(chan T)?`) if it is genuinely optional. |
 
 The warning is static-type based and fires for both operand orders. It does
 NOT fire for `?`-typed operands (including interop values surfaced as `T?`,

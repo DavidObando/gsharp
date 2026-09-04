@@ -69,7 +69,17 @@ public partial class Parser
 
         if (Current.Kind == SyntaxKind.ChanKeyword)
         {
-            return ParseChanTypeClause();
+            return ParseChanTypeClause(directionToken: null, legacyMakeOperand: false);
+        }
+
+        // ADR-0174 D2: `in chan[T]` / `out chan[T]`. `in` and `out` are the
+        // existing variance keywords (ADR-0021), contextual identifiers here;
+        // a channel direction appears only in type position, where neither
+        // the type-parameter form nor `for … in` can.
+        if (IsChannelDirectionHead())
+        {
+            var directionToken = NextToken();
+            return ParseChanTypeClause(directionToken, legacyMakeOperand: false);
         }
 
         // ADR-0040: sequence type `sequence[T]` — alias for IEnumerable[T].
@@ -167,7 +177,11 @@ public partial class Parser
             // type clause via `TypeClauseSyntax.CreateArray`. The common
             // `[]Identifier`/`[]Foo.Bar`/`[]List[int32]` forms keep the existing
             // flat representation so nothing regresses.
-            if (Current.Kind != SyntaxKind.IdentifierToken)
+            // ADR-0174 D2 adds one element shape that *does* begin with an
+            // identifier: `in`/`out` are contextual, so `[]in chan[T]` would
+            // otherwise take the flat path and read `in` as the element's type
+            // name.
+            if (Current.Kind != SyntaxKind.IdentifierToken || IsChannelDirectionHead())
             {
                 var nestedElement = ParseTypeClause();
                 var nestedQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
@@ -456,6 +470,14 @@ public partial class Parser
             return false;
         }
 
+        // ADR-0174 D2: `in chan[T]` / `out chan[T]` is a directional channel
+        // TYPE head, never an element named `in`/`out` (those are reserved
+        // identifiers in parameter position anyway).
+        if (IsChannelDirectionHead())
+        {
+            return false;
+        }
+
         switch (Peek(1).Kind)
         {
             case SyntaxKind.IdentifierToken:
@@ -528,23 +550,47 @@ public partial class Parser
             question);
     }
 
-    private TypeClauseSyntax ParseChanTypeClause()
+    private bool IsChannelDirectionHead()
+        => Current.Kind == SyntaxKind.IdentifierToken
+            && (Current.Text == "in" || Current.Text == "out")
+            && Peek(1).Kind == SyntaxKind.ChanKeyword;
+
+    private TypeClauseSyntax ParseChanTypeClause(SyntaxToken? directionToken, bool legacyMakeOperand)
     {
-        // Phase 5.4 / ADR-0022: channel type clause `chan T`.
+        // ADR-0174 D2: canonical channel type clause `chan[T]` with the
+        // element type INSIDE brackets, like `sequence[T]` and `map[K, V]`,
+        // optionally headed by `in`/`out`. A trailing `?` now unambiguously
+        // marks the whole channel nullable — `chan[int32]?` — while a nullable
+        // element is `chan[int32?]`; the `(chan T)?` grouping carve-out is gone.
         //
-        // Issue #3315 / ADR-0159 addendum: a trailing `?` binds to the ELEMENT
-        // type — `chan int32?` is `chan (int32?)` — because the greedy element
-        // ParseTypeClause consumes it, consistent with the suffix family
-        // (`[]T?` element-nullable per #1212, `(T) -> R?` return-nullable per
-        // ADR-0075). The nullable-CHANNEL spelling is the parenthesized form
-        // `(chan int32)?` (see ParseTupleTypeClause's grouping arm). The
-        // chan-level question below is therefore only reachable for the rare
-        // element shapes that do not themselves consume a trailing `?`
-        // (e.g. a managed function-pointer element).
+        // The retired juxtaposed shape `chan T` is still *recognized* so the
+        // parser can report a span-accurate GS0567 ("use 'chan[T]'") and bind
+        // it as if the canonical spelling had been written (ADR-0104's GS0366
+        // recovery pattern) — the file must not cascade. In a legacy
+        // `make(chan T…)` operand the enclosing `make` already reports GS0566,
+        // so the inner clause stays silent: one diagnostic per site.
         var chanKeyword = MatchToken(SyntaxKind.ChanKeyword);
-        var elementType = ParseTypeClause();
-        var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
-        return new TypeClauseSyntax(syntaxTree, chanKeyword, elementType, question);
+        if (Current.Kind == SyntaxKind.OpenSquareBracketToken)
+        {
+            var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
+            var elementType = ParseTypeClause();
+            var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+            var question = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
+            return new TypeClauseSyntax(syntaxTree, directionToken, chanKeyword, openBracket, elementType, closeBracket, question);
+        }
+
+        // Legacy `chan T`: the greedy element parse consumes a trailing `?`
+        // (that was `chan (int32?)`), so the recovered clause is `chan[T?]`.
+        var legacyElement = ParseTypeClause();
+        if (!legacyMakeOperand)
+        {
+            var start = directionToken?.Span.Start ?? chanKeyword.Span.Start;
+            var legacySpan = TextSpan.FromBounds(start, legacyElement.Span.End);
+            var elementText = syntaxTree.Text.ToString(legacyElement.Span);
+            Diagnostics.ReportLegacyChanTypeClauseSyntax(new TextLocation(syntaxTree.Text, legacySpan), elementText);
+        }
+
+        return new TypeClauseSyntax(syntaxTree, directionToken, chanKeyword, chanOpenBracketToken: null, legacyElement, chanCloseBracketToken: null, questionToken: null);
     }
 
     private TypeClauseSyntax ParseSequenceTypeClause()

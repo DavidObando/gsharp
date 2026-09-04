@@ -1269,7 +1269,8 @@ internal sealed partial class DeclarationBinder
                         || (isAsyncIteratorReturnType(returnType)
                             && methodSyntax.Body is { } methodBodyForSymbol
                             && IteratorDetection.ContainsYield(methodBodyForSymbol));
-                    methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
+                    methodSymbol.SuspendingKind = methodSyntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
+                    methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
                     // Issue #2834: an in-body compound-assignment operator
@@ -2483,7 +2484,8 @@ internal sealed partial class DeclarationBinder
                         || (isAsyncIteratorReturnType(returnType)
                             && methodSyntax.Body is { } methodBody
                             && IteratorDetection.ContainsYield(methodBody));
-                    methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask;
+                    methodSymbol.SuspendingKind = methodSyntax.IsSuspend ? SuspendingKind.Declared : SuspendingKind.None;
+                    methodSymbol.AsyncReturnsValueTask = returnTypeIsValueTask || methodSyntax.IsSuspend;
                     methodSymbol.IsUnsafe = methodSyntax.IsUnsafe || syntax.IsUnsafe;
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)

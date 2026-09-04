@@ -59,6 +59,11 @@ public class RefactoringBaselineTests
         "samples/GsharpExtensionsMixed.gs",
         "samples/GsharpExtensionsOptional.gs",
         "samples/GsharpExtensionsSequences.gs",
+
+        // ADR-0174 D9: `after` and `tick` are G#-authored helpers in
+        // Gsharp.Extensions, so this sample needs the same `/r:` the three
+        // above do. SampleConformanceTests stages it correctly.
+        "samples/Timeout.gs",
     };
 
     [Fact]

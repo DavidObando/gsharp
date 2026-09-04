@@ -1429,7 +1429,7 @@ internal sealed class UserTokenResolver
     /// <param name="fn">The function whose emitted return type to encode.</param>
     private void EncodeFunctionReturnSymbol(ReturnTypeEncoder encoder, FunctionSymbol fn)
     {
-        if (fn.IsAsync && fn.StateMachineType != null)
+        if (fn.IsAsyncOrSuspending && fn.StateMachineType != null)
         {
             foreach (var plan in this.outer.stateMachines.AsyncStateMachinePlans)
             {
@@ -1463,7 +1463,13 @@ internal sealed class UserTokenResolver
     internal BlobBuilder EncodeOpenMethodSignature(FunctionSymbol openMethod)
     {
         var sigBlob = new BlobBuilder();
-        var paramCount = openMethod.Parameters.Length - (openMethod.ExplicitReceiverParameter == null ? 0 : 1);
+
+        // ADR-0174 D7: a reference to a suspending function must describe the
+        // signature that was emitted — including its trailing `Context` — or
+        // the runtime resolves nothing and the call fails with a
+        // MissingMethodException at the first generic instantiation.
+        var emittedParameters = openMethod.EmittedParameters;
+        var paramCount = emittedParameters.Length - (openMethod.ExplicitReceiverParameter == null ? 0 : 1);
         new BlobEncoder(sigBlob)
             .MethodSignature(
                 isInstanceMethod: openMethod.IsInstanceMethod,
@@ -1473,7 +1479,7 @@ internal sealed class UserTokenResolver
                 r => this.EncodeFunctionReturnSymbol(r, openMethod),
                 ps =>
                 {
-                    foreach (var p in openMethod.Parameters)
+                    foreach (var p in emittedParameters)
                     {
                         if (ReferenceEquals(p, openMethod.ThisParameter))
                         {

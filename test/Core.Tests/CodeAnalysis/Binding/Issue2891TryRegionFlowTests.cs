@@ -268,7 +268,6 @@ public class Issue2891TryRegionFlowTests
             }
             """);
         yield return Case("TryInsideSelectBreak", """
-            import Gsharp.Extensions.Go
             func F() int32 {
                 outer: for {
                     select {
@@ -283,7 +282,6 @@ public class Issue2891TryRegionFlowTests
             }
             """);
         yield return Case("SelectInsideTryBreak", """
-            import Gsharp.Extensions.Go
             func F() int32 {
                 outer: for {
                     try {
@@ -310,7 +308,6 @@ public class Issue2891TryRegionFlowTests
             }
             """);
         yield return Case("TryInsideScopeBreak", """
-            import Gsharp.Extensions.Go
             func F() int32 {
                 for {
                     scope {
@@ -789,7 +786,6 @@ public class Issue2891TryRegionFlowTests
             }
             """);
         yield return Case("SelectInsideTryBreakOverriddenByReturn", """
-            import Gsharp.Extensions.Go
             func F() int32 {
                 for {
                     try {
@@ -803,7 +799,6 @@ public class Issue2891TryRegionFlowTests
             }
             """);
         yield return Case("ScopeInsideTryBreakOverriddenByReturn", """
-            import Gsharp.Extensions.Go
             func F() int32 {
                 for {
                     try {

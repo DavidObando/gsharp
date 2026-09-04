@@ -1,0 +1,97 @@
+{
+  "$comment": [
+    "ADR-0174 D11: the recorded medians the concurrency benchmark gates on.",
+    "",
+    "Every median is null until a nightly run measures it. The runner refuses",
+    "to check against a null, and --update-baseline may only tighten a ceiling",
+    "unless --allow-regression names a reason, the same ratchet discipline the",
+    "self-migration corpus uses. Do not hand-write a number here: a budget that",
+    "was not measured is worse than no budget, because it looks like evidence.",
+    "",
+    "target_vs_go is the ADR's aspiration; target_status stays 'provisional'",
+    "until the ratio has met it on three separate nights on the same hardware",
+    "class."
+  ],
+  "schemaVersion": 1,
+  "hardwareClass": null,
+  "toolchain": {
+    "dotnet": null,
+    "go": null
+  },
+  "tolerance": 0.15,
+  "launches": 7,
+  "scenarios": {
+    "buf64": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    },
+    "rendezvous": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    },
+    "closed-recv": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    },
+    "spawn": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    },
+    "select-ready": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    },
+    "select-park": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    },
+    "chunk64": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    },
+    "chunk1k": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": []
+    }
+  }
+}

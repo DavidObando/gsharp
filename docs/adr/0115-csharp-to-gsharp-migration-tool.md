@@ -346,6 +346,8 @@ A C# switch expression maps to the G# **`switch` expression** used in expression
 
 A C# `async` method maps to a G# **`async func`**, but the return type is the **UNWRAPPED result type** — the `async` modifier synthesizes the `Task`/`Task<T>` envelope itself (`samples/AsyncTask.gs`, `AsyncValueReturns.gs`). So `async Task<int> M()` → `async func M() int32 { … }` (not `Task[int32]`), and `async Task M()` → `async func M() { … }` (no return type). `await operand` maps to `await operand` unchanged. A **non-async** method that merely *returns* a `Task<T>` keeps its `Task[T]` return type (only `async` methods are unwrapped).
 
+ADR-0174 refinement: an `async ValueTask`/`ValueTask<T>` method that carries `[Gsharp.Concurrency.Suspending]` or names a `Gsharp.Concurrency` runtime type or member (`Chan<T>`, `ChannelOps`, `Context`, `ScopeFrame`, …) is what a G# `suspend func` compiles to, so it maps back to **`suspend func M() T`** with the awaited result type — the `suspend` modifier supplies the pooled `ValueTask` envelope. Any other `async ValueTask<T>` method keeps its explicit `ValueTask[T]` envelope as before.
+
 #### B.24 Predefined type as a static-call receiver → BCL type name
 
 A C# predefined-type keyword used as an **expression** receiver of a static call (`string.Concat(parts)`, `int.Parse(s)`) emits the **BCL type name** so the receiver resolves: `string` → `String`, `int` → `Int32`, etc. (`String.Concat(parts)`). The lowercase keyword would not resolve as a static-call target in G#.

@@ -444,7 +444,6 @@ public class Issue3311OpenMapMemberLookupEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3311ConcretePin
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
                 var m = map[string, int32]{"a": 40, "b": 2}
@@ -476,13 +475,12 @@ public class Issue3311OpenMapMemberLookupEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3311BuiltinPin
 
-            import Gsharp.Extensions.Go
 
             func Mix[K any](items map[K, int32], k K) int32 {
                 items[k] = 40
-                var total = items[k] + len(items)
-                delete(items, k)
-                return total + len(items) + 1
+                var total = items[k] + items.Count
+                items.Remove(k)
+                return total + items.Count + 1
             }
 
             func run() int32 {

@@ -40,6 +40,7 @@ CaseKeyword
 CatchClause
 CatchKeyword
 ChanKeyword
+ChannelCreationExpression
 ChannelReceiveExpression
 ChannelSendStatement
 CharacterToken
@@ -240,6 +241,7 @@ StringToken
 StructDeclaration
 StructKeyword
 StructLiteralExpression
+SuspendKeyword
 SwitchCase
 SwitchExpression
 SwitchExpressionArm
@@ -280,7 +282,6 @@ YieldStatement
 
 [BoundNodeKind]
 AddressOfExpression
-AppendExpression
 ArrayCreationExpression
 AsExpression
 AssignmentExpression
@@ -296,10 +297,6 @@ BinaryPattern
 BlockExpression
 BlockStatement
 CallExpression
-CapExpression
-ChannelCloseExpression
-ChannelReceiveExpression
-ChannelSendStatement
 ClrBinaryOperatorExpression
 ClrConstructorCallExpression
 ClrConversionCallExpression
@@ -350,8 +347,6 @@ LenExpression
 ListPattern
 LiteralExpression
 LocalFunctionDeclaration
-MakeChannelExpression
-MapDeleteExpression
 MapLiteralExpression
 MethodGroupExpression
 NotPattern
@@ -364,8 +359,6 @@ PropertyPattern
 PropertyPatternField
 RelationalPattern
 ReturnStatement
-ScopeStatement
-SelectStatement
 SizeOfExpression
 SlicePattern
 SpillSequenceExpression

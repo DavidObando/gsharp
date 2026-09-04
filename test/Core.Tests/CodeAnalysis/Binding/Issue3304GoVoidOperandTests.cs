@@ -23,7 +23,7 @@ public class Issue3304GoVoidOperandTests
         // Exact repro from #3304: void top-level function launched as a
         // goroutine, observable through a buffered channel rendezvous.
         var source = """
-            var done = make(chan int32, 1)
+            var done = chan[int32](1)
 
             func poke() {
                 done <- 42
@@ -47,13 +47,13 @@ public class Issue3304GoVoidOperandTests
         // `go b.Poke(...)` — void user-instance-call operand shape.
         var source = """
             class Box {
-                func Poke(ch chan int32) {
+                func Poke(ch chan[int32]) {
                     ch <- 7
                 }
             }
 
             func run() int32 {
-                let done = make(chan int32, 1)
+                let done = chan[int32](1)
                 let b = Box{}
                 go b.Poke(done)
                 return <-done
@@ -72,7 +72,7 @@ public class Issue3304GoVoidOperandTests
         // Void indirect-call operand: a function literal capturing an
         // enclosing local, launched by name (BoundIndirectCallExpression).
         var source = """
-            let ch = make(chan int32, 1)
+            let ch = chan[int32](1)
 
             func run() int32 {
                 let x = 10
@@ -97,7 +97,7 @@ public class Issue3304GoVoidOperandTests
         // scope exit, so the buffered send is guaranteed complete before the
         // receive that follows the scope.
         var source = """
-            let done = make(chan int32, 1)
+            let done = chan[int32](1)
 
             func poke() {
                 done <- 21
@@ -124,7 +124,7 @@ public class Issue3304GoVoidOperandTests
         // working, and its result is discarded rather than leaking into the
         // caller (see also Issue1651GoroutineIsolationEmittedOracleTests).
         var source = """
-            let started = make(chan int32, 1)
+            let started = chan[int32](1)
 
             func spawnee() int32 {
                 started <- 1
@@ -193,7 +193,7 @@ public class Issue3304GoVoidOperandTests
     private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: `go` is gated behind this import.
-        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var fullSource = source;
         return EmittedOracle.Evaluate(fullSource);
     }
 

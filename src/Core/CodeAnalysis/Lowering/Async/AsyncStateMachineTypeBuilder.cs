@@ -88,9 +88,9 @@ public static class AsyncStateMachineTypeBuilder
             throw new ArgumentNullException(nameof(kickoff));
         }
 
-        if (!kickoff.IsAsync)
+        if (!kickoff.IsAsyncOrSuspending)
         {
-            throw new ArgumentException("Kickoff method is not declared async.", nameof(kickoff));
+            throw new ArgumentException("Kickoff method is neither declared async nor suspending.", nameof(kickoff));
         }
 
         var returnClrType = ResolveAsyncReturnClrType(kickoff, references);
@@ -99,10 +99,15 @@ public static class AsyncStateMachineTypeBuilder
             return null;
         }
 
+        // ADR-0174 D4: a suspending function's task is never observed, so it
+        // uses the pooling ValueTask builder (amortized zero allocation per
+        // invocation). An `async func` keeps the ADR-0023 builders.
+        var methodAttributeBuilderType = kickoff.IsSuspending ? ResolvePoolingBuilder(kickoff, references) : null;
+
         // Resolve returns null when no builder type could be chosen at all --
         // a distinct outcome from resolving one whose members did not bind,
         // which is what IsValid reports. Both mean "no state machine".
-        var builderInfo = AsyncMethodBuilderInfo.Resolve(returnClrType, references);
+        var builderInfo = AsyncMethodBuilderInfo.Resolve(returnClrType, references, methodAttributeBuilderType);
         if (builderInfo == null || !builderInfo.IsValid)
         {
             return null;
@@ -147,7 +152,7 @@ public static class AsyncStateMachineTypeBuilder
             sm.ThisField = thisField;
         }
 
-        var hoist = AsyncCaptureWalker.Analyze(loweredBody, kickoff.Parameters);
+        var hoist = AsyncCaptureWalker.Analyze(loweredBody, kickoff.EmittedParameters);
 
         foreach (var parameter in hoist.Parameters)
         {
@@ -211,6 +216,19 @@ public static class AsyncStateMachineTypeBuilder
         }
 
         return result;
+    }
+
+    private static Type? ResolvePoolingBuilder(FunctionSymbol kickoff, ReferenceResolver? references)
+    {
+        if (references == null)
+        {
+            return null;
+        }
+
+        var name = kickoff.Type == TypeSymbol.Void
+            ? "System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder"
+            : "System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1";
+        return references.TryResolveType(name, requireExternalVisibility: false, out var builder) ? builder : null;
     }
 
     private static Type? ResolveAsyncReturnClrType(FunctionSymbol kickoff, ReferenceResolver? references)

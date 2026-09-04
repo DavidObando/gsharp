@@ -26,11 +26,10 @@ public class Issue2933AsyncSelectArmBindingTests
         yield return Case("MultipleAndDefault", "14,5\n", """
             package Issue2933.MultipleAndDefault
             import System
-            import Gsharp.Extensions.Go
 
             async func Run() string {
-                let empty = make(chan int32, 1)
-                let ready = make(chan int32, 1)
+                let empty = chan[int32](1)
+                let ready = chan[int32](1)
                 ready <- 4
                 var selected = 0
                 select {
@@ -51,10 +50,9 @@ public class Issue2933AsyncSelectArmBindingTests
         yield return Case("SendArm", "10\n", """
             package Issue2933.SendArm
             import System
-            import Gsharp.Extensions.Go
 
             async func Run() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 var result = 0
                 select {
                     case ch <- 3 { result = 7 }
@@ -67,18 +65,17 @@ public class Issue2933AsyncSelectArmBindingTests
         yield return Case("LoopAndNested", "6,7\n", """
             package Issue2933.LoopAndNested
             import System
-            import Gsharp.Extensions.Go
 
             async func Run() string {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 var total = 0
                 for i in 0 ... 3 {
                     ch <- i + 1
                     select { case let value = <-ch { total += value } }
                 }
 
-                let outer = make(chan int32, 1)
-                let inner = make(chan int32, 1)
+                let outer = chan[int32](1)
+                let inner = chan[int32](1)
                 outer <- 3
                 inner <- 4
                 var nested = 0
@@ -96,10 +93,9 @@ public class Issue2933AsyncSelectArmBindingTests
         yield return Case("AsyncLambdaAndCapture", "3,3\n", """
             package Issue2933.AsyncLambdaAndCapture
             import System
-            import Gsharp.Extensions.Go
 
             let run = async () -> {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 var direct = 0
                 var captured = 0
@@ -118,10 +114,9 @@ public class Issue2933AsyncSelectArmBindingTests
             package Issue2933.AwaitAfterRead
             import System
             import System.Threading.Tasks
-            import Gsharp.Extensions.Go
 
             async func Run() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 var result = 0
                 select {
@@ -138,11 +133,10 @@ public class Issue2933AsyncSelectArmBindingTests
         yield return Case("ReferenceAndStruct", "3,31\n", """
             package Issue2933.ReferenceAndStruct
             import System
-            import Gsharp.Extensions.Go
 
             async func Run() string {
-                let refs = make(chan string?, 1)
-                let structs = make(chan DateTime, 1)
+                let refs = chan[string?](1)
+                let structs = chan[DateTime](1)
                 refs <- "abc"
                 structs <- DateTime(2026, 7, 31)
                 var refResult = 0
@@ -163,10 +157,9 @@ public class Issue2933AsyncSelectArmBindingTests
         yield return Case("Unbuffered", "4\n", """
             package Issue2933.Unbuffered
             import System
-            import Gsharp.Extensions.Go
 
             async func Run() int32 {
-                let ch = make(chan int32)
+                let ch = Chan.Unbounded[int32]()
                 ch <- 4
                 var result = 0
                 select { case let value = <-ch { result = value } }
@@ -177,12 +170,11 @@ public class Issue2933AsyncSelectArmBindingTests
         yield return Case("ClosedChannelResetsBinding", "30\n", """
             package Issue2933.ClosedChannel
             import System
-            import Gsharp.Extensions.Go
 
             async func Run() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
-                close(ch)
+                ch.Close()
                 var result = 0
                 for i in 0 ... 2 {
                     select {
@@ -201,10 +193,9 @@ public class Issue2933AsyncSelectArmBindingTests
         const string Source = """
             package Issue2933.Parity
             import System
-            import Gsharp.Extensions.Go
 
             async func Async() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 var result = 0
                 select {
@@ -214,7 +205,7 @@ public class Issue2933AsyncSelectArmBindingTests
             }
 
             func Sync() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 var result = 0
                 select {
@@ -243,10 +234,9 @@ public class Issue2933AsyncSelectArmBindingTests
         const string Source = """
             package Issue2933.StateMachineKinds
             import System
-            import Gsharp.Extensions.Go
 
             async func AsyncFunction() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 var result = 0
                 select {
@@ -256,7 +246,7 @@ public class Issue2933AsyncSelectArmBindingTests
             }
 
             async func YieldInArm() async sequence[int32] {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 select {
                     case let value = <-ch { yield 7 + value }
@@ -264,7 +254,7 @@ public class Issue2933AsyncSelectArmBindingTests
             }
 
             async func YieldAfterArm() async sequence[int32] {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 3
                 var result = 0
                 select {
@@ -298,10 +288,9 @@ public class Issue2933AsyncSelectArmBindingTests
         const string Source = """
             package Issue2975.YieldThenRead
             import System
-            import Gsharp.Extensions.Go
 
             func Values() sequence[int32] {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 33
                 select {
                     case let value = <-ch {
@@ -330,10 +319,9 @@ public class Issue2933AsyncSelectArmBindingTests
         const string Source = """
             package Issue2975.LoopedYields
             import System
-            import Gsharp.Extensions.Go
 
             func Values() sequence[int32] {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 44
                 select {
                     case let value = <-ch {
@@ -363,11 +351,10 @@ public class Issue2933AsyncSelectArmBindingTests
         const string Source = """
             package Issue2975.NestedSelects
             import System
-            import Gsharp.Extensions.Go
 
             func Values() sequence[int32] {
-                let outer = make(chan int32, 1)
-                let inner = make(chan int32, 1)
+                let outer = chan[int32](1)
+                let inner = chan[int32](1)
                 outer <- 55
                 inner <- 66
                 select {

@@ -1,6 +1,6 @@
 # ADR-0022: `go` / `chan` / `select` → .NET lowering
 
-- **Status**: Accepted
+- **Status**: Accepted — amended by ADR-0174 (D2 `chan[T]` spelling and directions, D3 two-value receive and channel loops, D12 `Chan<T>` construction, D6 `scope` on a `ScopeFrame`, D8 `select` on one registered waiter with uniform-random choice and `when` / `await` / `cancelled` arms; channel operations now lower onto `Gsharp.Runtime.Channels.ChannelOps` and neither `scope` nor `select` survives as a bound node)
 - **Date**: 2026-05-23
 - **Phase**: Phase 5 (lock before 5.3)
 - **Related**: ADR-0002 (concurrency model), ADR-0023 (async state-machine strategy); execution plan §§5.3 – 5.7
@@ -21,7 +21,7 @@ preserves both backend descriptions as a historical implementation record:
 
 ### `go f(args)` statement
 
-`go` is a **statement** (not an expression). Its operand must be a function-call expression (`go f(args)`, `go obj.Method(args)`, `go lambda()`). Free-standing `go { … }` blocks are not legal — wrap them in a lambda: `go func() { … }()`.
+`go` is a **statement** (not an expression). Its operand must be a function-call expression (`go f(args)`, `go obj.Method(args)`, `go lambda()`). Free-standing `go { … }` blocks were not legal at the time — they had to be wrapped in a lambda, `go func() { … }()`; ADR-0174 D14 later made the block form legal.
 
 Lowering:
 

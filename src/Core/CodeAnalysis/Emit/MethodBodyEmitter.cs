@@ -53,7 +53,6 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<VariableSymbol, int> locals;
     private readonly Dictionary<ParameterSymbol, int> parameters;
     private readonly Dictionary<BoundLabel, LabelHandle> labels;
-    private readonly Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots;
     private readonly Dictionary<BoundStructLiteralExpression, int> structLiteralSlots;
     private readonly Dictionary<BoundDefaultExpression, int> defaultExpressionSlots;
     private readonly Dictionary<BoundIndexExpression, int> mapIndexSlots;
@@ -61,8 +60,6 @@ internal sealed partial class MethodBodyEmitter
     private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
     private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
     private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
-    private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
-    private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
     private readonly Dictionary<BoundExpression, int> receiverSpillSlots;
     private readonly Dictionary<BoundStackAllocExpression, int> stackAllocResultSlots;
     private readonly HashSet<BoundStackAllocExpression> materializedStackAllocs = new HashSet<BoundStackAllocExpression>();
@@ -80,7 +77,6 @@ internal sealed partial class MethodBodyEmitter
     // InvalidProgramException at run time). Track which receive nodes have
     // already had their try/catch materialised so every occurrence — root or
     // not — runs exactly once, at the start of its containing statement.
-    private readonly HashSet<BoundChannelReceiveExpression> materializedChannelReceives = new HashSet<BoundChannelReceiveExpression>();
 
     // Issue #1688: tracks which planned receiverSpillSlots entries have
     // already been evaluated-and-cached during this method's emission. A
@@ -94,7 +90,6 @@ internal sealed partial class MethodBodyEmitter
     private readonly HashSet<BoundExpression> spilledCompoundReceivers = new HashSet<BoundExpression>();
     private readonly Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots;
     private readonly Dictionary<BoundExpression, int> indexAssignmentValueSlots;
-    private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
     private readonly Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots;
     private readonly ParameterSymbol? structThisParameter;
     private readonly Lowering.Async.AsyncStateMachineFieldMap? asyncFieldMap;
@@ -138,6 +133,14 @@ internal sealed partial class MethodBodyEmitter
     private readonly List<SequencePoint> sequencePoints = new List<SequencePoint>();
     private int lastSequencePointIlOffset = -1;
 
+    // ADR-0174 P3-8: async stepping information for a MoveNext body — the
+    // yield/resume IL offsets of the hidden await markers keyed by state, and
+    // the outermost catch handler (the builder's SetException route).
+    private readonly SortedDictionary<int, int> awaitYieldOffsets = new SortedDictionary<int, int>();
+    private readonly SortedDictionary<int, int> awaitResumeOffsets = new SortedDictionary<int, int>();
+    private int tryDepth;
+    private int outermostCatchHandlerOffset = -1;
+
     // Tracks whether the current linear IL position is closed by ret, throw,
     // or an unconditional branch. A label or ordinary instruction reopens it.
     private bool currentPositionEndsInTerminator;
@@ -148,7 +151,6 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<VariableSymbol, int> locals,
         Dictionary<ParameterSymbol, int> parameters,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
         Dictionary<BoundDefaultExpression, int> defaultExpressionSlots,
         Dictionary<BoundIndexExpression, int> mapIndexSlots,
@@ -156,11 +158,8 @@ internal sealed partial class MethodBodyEmitter
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         Dictionary<BoundExpression, LiftedBinarySlots>? liftedBinarySlots = null,
         Dictionary<BoundBinaryExpression, int>? nullableCoalesceSpillSlots = null,
         ParameterSymbol? structThisParameter = null,
@@ -178,7 +177,6 @@ internal sealed partial class MethodBodyEmitter
         this.locals = locals;
         this.parameters = parameters;
         this.labels = labels;
-        this.appendSlots = appendSlots;
         this.structLiteralSlots = structLiteralSlots;
         this.defaultExpressionSlots = defaultExpressionSlots;
         this.mapIndexSlots = mapIndexSlots;
@@ -186,11 +184,8 @@ internal sealed partial class MethodBodyEmitter
         this.typePatternScratchSlots = typePatternScratchSlots;
         this.switchExpressionSlots = switchExpressionSlots;
         this.channelOpSlots = channelOpSlots;
-        this.scopeFrameSlots = scopeFrameSlots;
-        this.selectStatementSlots = selectStatementSlots;
         this.receiverSpillSlots = receiverSpillSlots;
         this.indexAssignmentValueSlots = indexAssignmentValueSlots;
-        this.goEnclosingScopes = goEnclosingScopes;
         this.liftedBinarySlots = liftedBinarySlots ?? new Dictionary<BoundExpression, LiftedBinarySlots>();
         this.nullableCoalesceSpillSlots = nullableCoalesceSpillSlots ?? new Dictionary<BoundBinaryExpression, int>();
         this.structThisParameter = structThisParameter;
@@ -219,6 +214,33 @@ internal sealed partial class MethodBodyEmitter
     }
 
     public IReadOnlyList<SequencePoint> SequencePoints => this.sequencePoints;
+
+    /// <summary>
+    /// Gets the async stepping information gathered while emitting this body
+    /// (ADR-0174 P3-8), or <c>null</c> when the body contains no await marker
+    /// — i.e. it is not a state machine's <c>MoveNext</c>.
+    /// </summary>
+    public AsyncMethodSteppingInfo? AsyncStepping
+    {
+        get
+        {
+            if (this.awaitYieldOffsets.Count == 0)
+            {
+                return null;
+            }
+
+            var awaits = ImmutableArray.CreateBuilder<(int Yield, int Resume)>(this.awaitYieldOffsets.Count);
+            foreach (var (state, yieldOffset) in this.awaitYieldOffsets)
+            {
+                if (this.awaitResumeOffsets.TryGetValue(state, out var resumeOffset))
+                {
+                    awaits.Add((yieldOffset, resumeOffset));
+                }
+            }
+
+            return new AsyncMethodSteppingInfo(this.outermostCatchHandlerOffset, awaits.ToImmutable());
+        }
+    }
 
     /// <summary>Issue #306: emits a single value expression onto the IL stack. Used by the constructor emitter to evaluate base-constructor argument expressions.</summary>
     /// <param name="expression">The bound value expression to emit.</param>
@@ -341,7 +363,6 @@ internal sealed partial class MethodBodyEmitter
 
         this.RecordSequencePointFor(statement);
         this.MaterializeSpilledStackAllocs(statement);
-        this.MaterializeSpilledChannelReceives(statement);
         switch (statement)
         {
             case BoundBlockStatement block:
@@ -427,22 +448,17 @@ internal sealed partial class MethodBodyEmitter
             case BoundGoStatement go:
                 this.EmitGoStatement(go);
                 break;
-            case BoundScopeStatement scope:
-                this.EmitScopeStatement(scope);
-                break;
             case BoundFixedStatement fixedStmt:
                 this.EmitFixedStatement(fixedStmt);
-                break;
-            case BoundChannelSendStatement cs:
-                this.EmitChannelSendStatement(cs);
-                break;
-            case BoundSelectStatement select:
-                this.EmitSelectStatement(select);
                 break;
             case BoundYieldStatement:
                 EmitDiagnosticException.Throw(statement.Syntax, "Internal error: yield reached the emitter before iterator lowering.");
                 break;
-            case BoundAwaitSequencePoint:
+            case BoundAwaitSequencePoint awaitMarker:
+                // ADR-0174 P3-8: the marker's offset is the yield/resume point
+                // the Portable PDB async-stepping blob reports for this await.
+                var markers = awaitMarker.Kind == BoundNodeKind.AwaitYieldPoint ? this.awaitYieldOffsets : this.awaitResumeOffsets;
+                markers.TryAdd(awaitMarker.State, this.il.Offset);
                 this.il.OpCode(ILOpCode.Nop);
                 break;
             default:
@@ -543,40 +559,6 @@ internal sealed partial class MethodBodyEmitter
 
             this.EmitStackAllocCore(sa);
             this.il.StoreLocal(this.stackAllocResultSlots[sa]);
-        }
-    }
-
-    // Issue #2283: before a statement's own IL is emitted (evaluation stack is
-    // empty here), materialise every `<-ch` channel-receive expression this
-    // statement contains, in source order, running each one's try/catch (see
-    // EmitChannelReceiveCore) at this empty-stack point and storing the
-    // result into its pre-allocated slot. The original operand position
-    // (EmitChannelReceiveExpression) then just loads that slot instead of
-    // re-emitting the try/catch — which would otherwise open a protected
-    // region while earlier operands of the same expression are still on the
-    // stack (ECMA-335 III.3.47 violation: ilverify TryNonEmptyStack /
-    // StackUnderflow, InvalidProgramException at run time). Nested statements
-    // are handled by their own EmitStatement pass, so this walker does not
-    // descend past the first statement boundary. This always runs — even for
-    // a receive that is already the whole statement — so there is exactly one
-    // code path, and it is unconditionally safe.
-    private void MaterializeSpilledChannelReceives(BoundStatement statement)
-    {
-        if (this.channelOpSlots.Count == 0)
-        {
-            return;
-        }
-
-        var receives = new List<BoundChannelReceiveExpression>();
-        new ChannelReceiveCollector(receives).Visit(statement);
-        foreach (var recv in receives)
-        {
-            if (!this.materializedChannelReceives.Add(recv))
-            {
-                continue;
-            }
-
-            this.EmitChannelReceiveCore(recv);
         }
     }
 
@@ -1249,9 +1231,6 @@ internal sealed partial class MethodBodyEmitter
                 }
 
                 return;
-            case BoundScopeStatement sc:
-                this.CollectLabels(sc.Body, sink);
-                return;
             case BoundFixedStatement fx:
                 this.CollectLabels(fx.Body, sink);
                 return;
@@ -1449,53 +1428,6 @@ internal sealed partial class MethodBodyEmitter
             if (node is BoundStackAllocExpression sa && this.spilled.ContainsKey(sa))
             {
                 this.sink.Add(sa);
-            }
-        }
-    }
-
-    // Issue #2283: collects every BoundChannelReceiveExpression directly
-    // contained in a single statement (mirrors SpilledStackAllocCollector —
-    // does not descend past the first statement boundary; nested statements
-    // run their own MaterializeSpilledChannelReceives pass). Post-order, so a
-    // receive nested inside another receive's channel sub-expression (however
-    // unlikely) is materialised innermost-first.
-    private sealed class ChannelReceiveCollector : BoundTreeWalker
-    {
-        private readonly List<BoundChannelReceiveExpression> sink;
-        private bool entered;
-
-        public ChannelReceiveCollector(List<BoundChannelReceiveExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        public override void VisitStatement(BoundStatement? node)
-        {
-            if (node == null)
-            {
-                return;
-            }
-
-            if (this.entered)
-            {
-                return;
-            }
-
-            this.entered = true;
-            base.VisitStatement(node);
-        }
-
-        public override void VisitExpression(BoundExpression? node)
-        {
-            if (node == null)
-            {
-                return;
-            }
-
-            base.VisitExpression(node);
-            if (node is BoundChannelReceiveExpression recv)
-            {
-                this.sink.Add(recv);
             }
         }
     }

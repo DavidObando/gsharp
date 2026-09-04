@@ -198,6 +198,12 @@ jobs:
       - name: Verify every test is run exactly once
         run: python3 build/verify-ci-test-partition.py | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # ADR-0174 D11: the nightly benchmark is worthless if a PR can silently
+      # break its registry, its G# program or its runner. Seconds here beat a
+      # red nightly nobody is watching.
+      - name: Verify the concurrency benchmark harness
+        run: python3 build/verify-concurrency-bench.py --smoke
+
   e2e:
     runs-on: ubuntu-latest
 

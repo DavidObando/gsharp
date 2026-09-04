@@ -77,7 +77,12 @@ generated sources whose metadata shape stays stable.
 
 Edits that add/remove types or members, change signatures, or introduce new
 metadata references are rejected explicitly as `GSHR1001` with “Restart
-required”; the SDK never silently reports such an edit as applied. Press
+required”; the SDK never silently reports such an edit as applied. An edit
+that changes whether a function *suspends* (adding a channel operation or a
+call to a suspending function to a plain `func`, or removing the last one)
+is a signature change in disguise — the method compiles to a `ValueTask`
+state machine instead of a plain method — and is rejected as `GSHR1002`
+naming the function (ADR-0174). Press
 <kbd>Ctrl</kbd>+<kbd>R</kbd> to restart. Set
 `<GsharpEnableHotReload>false</GsharpEnableHotReload>` to disable it, or set
 the property explicitly to `true` for another supported host.

@@ -896,10 +896,12 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
+        // Issue #3311 (open maps) and ADR-0174 D12 (channels over symbolic
+        // elements): surface the symbolic constructed BCL view.
         if (receiver?.Type is TypeSymbol receiverType
-            && MemberLookup.TryGetSymbolicOpenMapReceiverView(receiverType, out var mapView))
+            && MemberLookup.TryGetSymbolicOpenReceiverView(receiverType, out var symbolicView))
         {
-            effectiveType = mapView;
+            effectiveType = symbolicView;
             return true;
         }
 

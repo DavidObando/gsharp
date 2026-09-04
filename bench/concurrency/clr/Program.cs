@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Threading.Channels;
 using System.Threading.Tasks.Sources;
+using Gsharp.Concurrency;
 
 // ---------------------------------------------------------------------------
 // PART 1 — feasibility: can a G#-owned channel type derive from the BCL
@@ -163,8 +164,11 @@ static class Program
 {
     const int N = 1_000_000;
 
-    static async Task Main()
+    static async Task Main(string[] args)
     {
+        // --quick skips the 60 s starvation spike (ADR-0174 Evidence item 3),
+        // which is a correctness demonstration rather than a number to re-measure.
+        var quick = Array.IndexOf(args, "--quick") >= 0;
         Console.WriteLine($"runtime={Environment.Version} cores={Environment.ProcessorCount}");
         Console.WriteLine();
 
@@ -181,12 +185,14 @@ static class Program
             await ThroughputChunkedSimd();
             await ComputeStage();
             PingPongBounded1();
+            await PingPongRendezvous();
             ClosedReceiveCost();
             SpawnCost();
             await SelectCost();
+            await ContextAbiCost();
         }
         await ParkScale();
-        Starvation();
+        if (!quick) Starvation();
     }
 
     static async Task Interop()
@@ -427,6 +433,30 @@ static class Program
         Report("gs-pingpong", sw, R);
     }
 
+    // ADR-0174 Phase 1: the TRUE rendezvous baseline the ADR's D11 table was
+    // missing. Two goroutine-shaped tasks alternating over two capacity-0
+    // Chan<T>s — a send completes only when the receiver takes the value.
+    // This is what the Phase 3 lowering emits (await SendAsync/ReceiveAsync),
+    // so it is the honest G# number rather than a capacity-1 stand-in.
+    static async Task PingPongRendezvous()
+    {
+        const int R = 200_000;
+        var a = new Chan<int>();
+        var b = new Chan<int>();
+        var sw = Stopwatch.StartNew();
+        var echo = Task.Run(async () =>
+        {
+            for (int i = 0; i < R; i++)
+            {
+                var v = await a.ReceiveAsync();
+                await b.SendAsync(v.Value);
+            }
+        });
+        for (int i = 0; i < R; i++) { await a.SendAsync(i); await b.ReceiveAsync(); }
+        await echo; sw.Stop();
+        Report("gs-rendezvous", sw, R);
+    }
+
     static void ClosedReceiveCost()
     {
         const int R = 20_000;
@@ -438,12 +468,72 @@ static class Program
         var sw2 = Stopwatch.StartNew();
         for (int i = 0; i < R; i++) { if (!ch.Reader.TryRead(out _)) { } }
         sw2.Stop(); Report("closed-flag", sw2, R);
+
+        // ADR-0174 Phase 1: the real runtime's closed receive — TryReceive on a
+        // closed Chan<T> yields (zero, false) with no exception (D3).
+        var gs = new Chan<int>(1); gs.Close();
+        var sw3 = Stopwatch.StartNew();
+        for (int i = 0; i < R; i++) { gs.TryReceive(out _, out var ok); if (ok) throw new InvalidOperationException(); }
+        sw3.Stop(); Report("closed-chan", sw3, R);
     }
 
     sealed class Item : IThreadPoolWorkItem
     {
         public CountdownEvent? cd;
         public void Execute() => cd!.Signal();
+    }
+
+    // ADR-0174 Phase 3-4a (decision gate G1/G2): how the ambient Context should
+    // reach a suspending call. Three ways to thread it through a 3-deep chain of
+    // synchronously-completing suspending functions (the common, un-parked
+    // case), plus the cost of flowing ExecutionContext into a goroutine spawn,
+    // which D5 proposes NOT to do.
+    static readonly AsyncLocal<Context?> Ambient = new();
+
+    static ValueTask<int> LeafParam(Context ctx, int x) => ctx.IsCancelled ? throw new OperationCanceledException() : new ValueTask<int>(x + 1);
+    static async ValueTask<int> MidParam(Context ctx, int x) => await LeafParam(ctx, x) + 1;
+    static async ValueTask<int> TopParam(Context ctx, int x) => await MidParam(ctx, x) + 1;
+
+    static ValueTask<int> LeafLocal(int x) => (Ambient.Value ?? Context.None).IsCancelled ? throw new OperationCanceledException() : new ValueTask<int>(x + 1);
+    static async ValueTask<int> MidLocal(int x) => await LeafLocal(x) + 1;
+    static async ValueTask<int> TopLocal(int x) => await MidLocal(x) + 1;
+
+    static async Task ContextAbiCost()
+    {
+        const int R = 2_000_000;
+        using var ctx = Context.None.WithCancel();
+        long acc = 0;
+
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < R; i++) acc += await TopParam(ctx, i);
+        sw.Stop(); Report("ctx-param", sw, R);
+
+        Ambient.Value = ctx;
+        var sw2 = Stopwatch.StartNew();
+        for (int i = 0; i < R; i++) acc += await TopLocal(i);
+        sw2.Stop(); Report("ctx-asynclocal", sw2, R);
+        Ambient.Value = null;
+        if (acc == 42) Console.WriteLine();
+
+        const int S = 200_000;
+        var cd = new CountdownEvent(S);
+        var sw3 = Stopwatch.StartNew();
+        for (int i = 0; i < S; i++) ThreadPool.UnsafeQueueUserWorkItem(new Item { cd = cd }, preferLocal: true);
+        cd.Wait(); sw3.Stop(); Report("spawn-noec", sw3, S);
+
+        var cd2 = new CountdownEvent(S);
+        var sw4 = Stopwatch.StartNew();
+        for (int i = 0; i < S; i++)
+        {
+            var captured = ExecutionContext.Capture();
+            var item = new Item { cd = cd2 };
+            ThreadPool.UnsafeQueueUserWorkItem(static state =>
+            {
+                var (ec, it) = ((ExecutionContext?, Item))state!;
+                if (ec == null) it.Execute(); else ExecutionContext.Run(ec, static o => ((Item)o!).Execute(), it);
+            }, (captured, item), preferLocal: true);
+        }
+        cd2.Wait(); sw4.Stop(); Report("spawn-ec", sw4, S);
     }
 
     static void SpawnCost()

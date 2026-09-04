@@ -92,7 +92,10 @@ internal sealed class WellKnownReferences
     // consumers see them as extension methods at the call site rather than
     // as plain static helpers on `<Program>`.
     private MemberReferenceHandle? extensionAttributeCtorRef;
+    private MemberReferenceHandle? suspendingAttributeCtorRef;
     private MemberReferenceHandle? compilerGeneratedAttributeCtorRef;
+    private MemberReferenceHandle? asyncStateMachineAttributeCtorRef;
+    private MemberReferenceHandle? debuggerStepThroughAttributeCtorRef;
     private MemberReferenceHandle? preserveBaseOverridesAttributeCtorRef;
     private MemberReferenceHandle? unsafeValueTypeAttributeCtorRef;
     private MemberReferenceHandle? fixedBufferAttributeCtorRef;
@@ -427,6 +430,33 @@ internal sealed class WellKnownReferences
     /// <see langword="default"/> when the attribute type cannot be resolved
     /// from the reference closure (very old TFMs).
     /// </returns>
+    /// <summary>ADR-0174 D4: the parameterless constructor of <c>Gsharp.Concurrency.SuspendingAttribute</c>, or <c>default</c> when the runtime is not referenced.</summary>
+    /// <returns>The MemberRef, or <c>default</c>.</returns>
+    public MemberReferenceHandle GetSuspendingAttributeCtorRef()
+    {
+        if (this.suspendingAttributeCtorRef.HasValue)
+        {
+            return this.suspendingAttributeCtorRef.Value;
+        }
+
+        if (!this.emitCtx.References.TryResolveType("Gsharp.Concurrency.SuspendingAttribute", requireExternalVisibility: false, out var attrType) || attrType == null)
+        {
+            this.suspendingAttributeCtorRef = default(MemberReferenceHandle);
+            return default;
+        }
+
+        var attrTypeRef = this.getTypeReference(attrType);
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.suspendingAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.suspendingAttributeCtorRef.Value;
+    }
+
     public MemberReferenceHandle GetExtensionAttributeCtorRef()
     {
         if (this.extensionAttributeCtorRef.HasValue)
@@ -453,6 +483,70 @@ internal sealed class WellKnownReferences
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
         return this.extensionAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0174 P3-8: <c>[System.Runtime.CompilerServices.AsyncStateMachine(Type)]</c>,
+    /// stamped on every async / suspending kickoff so the runtime's
+    /// <c>StackTrace</c> and debuggers map a <c>MoveNext</c> frame back to
+    /// the logical function.
+    /// </summary>
+    /// <returns>The <c>.ctor(System.Type)</c> MemberRef.</returns>
+    public MemberReferenceHandle GetAsyncStateMachineAttributeCtorRef()
+    {
+        if (this.asyncStateMachineAttributeCtorRef.HasValue)
+        {
+            return this.asyncStateMachineAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.CompilerServices.AsyncStateMachineAttribute", requireExternalVisibility: false, out var resolved)
+            ? resolved
+            : typeof(System.Runtime.CompilerServices.AsyncStateMachineAttribute);
+        var systemType = this.emitCtx.References.TryResolveType("System.Type", requireExternalVisibility: false, out var resolvedSystemType)
+            ? resolvedSystemType
+            : typeof(Type);
+        var attrTypeRef = this.getTypeReference(attrType);
+        var systemTypeRef = this.getTypeReference(systemType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().Type(systemTypeRef, isValueType: false));
+
+        this.asyncStateMachineAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.asyncStateMachineAttributeCtorRef.Value;
+    }
+
+    /// <summary>
+    /// ADR-0174 P3-8: <c>[System.Diagnostics.DebuggerStepThrough]</c> for the
+    /// kickoff stub of a state machine, so a debugger stepping into a
+    /// suspending call lands on the first source line of the body rather than
+    /// in the stub that constructs and starts the state machine.
+    /// </summary>
+    /// <returns>The parameterless <c>.ctor</c> MemberRef.</returns>
+    public MemberReferenceHandle GetDebuggerStepThroughAttributeCtorRef()
+    {
+        if (this.debuggerStepThroughAttributeCtorRef.HasValue)
+        {
+            return this.debuggerStepThroughAttributeCtorRef.Value;
+        }
+
+        var attrType = this.emitCtx.References.TryResolveType("System.Diagnostics.DebuggerStepThroughAttribute", requireExternalVisibility: false, out var resolved)
+            ? resolved
+            : typeof(System.Diagnostics.DebuggerStepThroughAttribute);
+        var attrTypeRef = this.getTypeReference(attrType);
+
+        var ctorSig = new BlobBuilder();
+        new BlobEncoder(ctorSig).MethodSignature(isInstanceMethod: true)
+            .Parameters(0, r => r.Void(), _ => { });
+
+        this.debuggerStepThroughAttributeCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            attrTypeRef,
+            this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
+        return this.debuggerStepThroughAttributeCtorRef.Value;
     }
 
     /// <summary>

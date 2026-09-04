@@ -36,6 +36,21 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 internal sealed partial class MethodBodyEmitter
 {
 
+    /// <summary>
+    /// ADR-0174 D2: <c>chan[T]</c> to <c>in</c>/<c>out chan[T]</c> is a real
+    /// conversion — <c>get_Reader</c> / <c>get_Writer</c> — even when the two
+    /// sides look runtime-equivalent, which they do whenever the element is an
+    /// open type parameter. Without this the view call is dropped and a generic
+    /// function taking <c>in chan[T]</c> is handed a <c>Channel[T]</c>.
+    /// </summary>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The target type.</param>
+    /// <returns><see langword="true"/> when the conversion changes a channel's direction.</returns>
+    private static bool IsChannelDirectionChange(TypeSymbol? from, TypeSymbol? to)
+        => ChannelTypeSymbol.TryGetChannelShape(from, out _, out var fromDirection, out _)
+            && ChannelTypeSymbol.TryGetChannelShape(to, out _, out var toDirection, out _)
+            && fromDirection != toDirection;
+
     private void EmitConversion(BoundConversionExpression conv)
     {
         // ADR-0122 / issues #1014, #3268, and #3285: `nil` materialises a null
@@ -50,9 +65,31 @@ internal sealed partial class MethodBodyEmitter
 
         if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
             conv.Expression.Type,
-            conv.Type))
+            conv.Type)
+            && !IsChannelDirectionChange(conv.Expression.Type, conv.Type))
         {
             this.EmitExpression(conv.Expression);
+            return;
+        }
+
+        // ADR-0174 D2: the channel lattice. Same direction is identity at the
+        // IL level (`Chan<T>` IS a `Channel<T>`; a foreign `ChannelReader<T>`
+        // IS an `in chan[T]`). Narrowing a bidirectional handle to a
+        // directional one fetches the reader/writer view.
+        if (conv.Type is ChannelTypeSymbol targetChannel
+            && ChannelTypeSymbol.TryGetChannelShape(conv.Expression.Type, out _, out var sourceDirection, out _))
+        {
+            this.EmitExpression(conv.Expression);
+            if (sourceDirection == targetChannel.Direction)
+            {
+                return;
+            }
+
+            var elementClr = ResolveChannelElementClrType(targetChannel.ElementType);
+            var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
+            var view = BclMember.Getter(channelClr, targetChannel.Direction == ChannelDirection.In ? "Reader" : "Writer");
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.GetChannelMethodEntityHandle(view, targetChannel.ElementType));
             return;
         }
 

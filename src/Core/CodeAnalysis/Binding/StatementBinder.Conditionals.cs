@@ -1159,7 +1159,33 @@ internal sealed partial class StatementBinder
         ImmutableArray<ExpressionSyntax> targets,
         ExpressionSyntax valueSyntax)
     {
-        var tupleValue = bindExpression(valueSyntax);
+        BoundExpression tupleValue;
+        if (IsChannelReceiveSyntax(valueSyntax, out var receive))
+        {
+            // ADR-0174 D3: `v, ok = <-ch` (and ADR-0168's mixed `let v, ok = <-ch`,
+            // which declares `v` and assigns the existing `ok`) is the two-value
+            // receive — the element (its zero value once closed) and whether the
+            // channel delivered it. It is a `(T, bool)` tuple from here on, so
+            // the ordinary multi-assignment machinery does the rest.
+            if (targets.Length != 2)
+            {
+                Diagnostics.ReportChannelBindingTargetCount(syntax.Location, "value, ok = <-ch", "two targets", targets.Length);
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            var received = BindTwoValueReceive(receive, out _);
+            if (received == null)
+            {
+                return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
+            }
+
+            tupleValue = received;
+        }
+        else
+        {
+            tupleValue = bindExpression(valueSyntax);
+        }
+
         if (tupleValue.Type == TypeSymbol.Error)
         {
             return new BoundExpressionStatement(syntax, tupleValue);

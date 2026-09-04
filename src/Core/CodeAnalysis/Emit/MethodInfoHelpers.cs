@@ -243,12 +243,12 @@ internal static class MethodInfoHelpers
             return TypesMatch(interfaceMethod.Type, implementationMethod.Type, typeParameterMap);
         }
 
-        if (interfaceMethod.IsAsync == implementationMethod.IsAsync)
+        if (interfaceMethod.IsAsyncOrSuspending == implementationMethod.IsAsyncOrSuspending)
         {
             return TypesMatch(interfaceMethod.Type, implementationMethod.Type, typeParameterMap);
         }
 
-        if (implementationMethod.IsAsync)
+        if (implementationMethod.IsAsyncOrSuspending)
         {
             return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(interfaceMethod.Type, out var awaited)
                 && TypesMatch(awaited, implementationMethod.Type, typeParameterMap);

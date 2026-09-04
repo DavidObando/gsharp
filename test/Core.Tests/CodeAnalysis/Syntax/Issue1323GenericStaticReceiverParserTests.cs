@@ -73,7 +73,7 @@ class C { func F() int32 { return Box[List[int32]].Make(5) } }
             class Box[T] {}
             class Owner[T] { class Payload[U] {} }
             func Reify[T]() {
-                var value = Box[Owner[chan T].Payload[string]]()
+                var value = Box[Owner[chan[T]].Payload[string]]()
             }
             """;
 
@@ -86,7 +86,7 @@ class C { func F() int32 { return Box[List[int32]].Make(5) } }
         Assert.Equal(4, channel.Location.StartLine);
         Assert.Equal(26, channel.Location.StartCharacter);
         Assert.Equal(4, channel.Location.EndLine);
-        Assert.Equal(32, channel.Location.EndCharacter);
+        Assert.Equal(33, channel.Location.EndCharacter);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ class C { func F() int32 { return Box[List[int32]].Make(5) } }
         const string source = """
             package p
             struct Box[T] { shared { func Make(x int32) int32 { return x } } }
-            class C { func F() int32 { return Box[chan int32].Make(5) } }
+            class C { func F() int32 { return Box[chan[int32]].Make(5) } }
             """;
 
         var tree = SyntaxTree.Parse(source);
@@ -108,7 +108,7 @@ class C { func F() int32 { return Box[List[int32]].Make(5) } }
         Assert.Equal(2, channel.Location.StartLine);
         Assert.Equal(38, channel.Location.StartCharacter);
         Assert.Equal(2, channel.Location.EndLine);
-        Assert.Equal(48, channel.Location.EndCharacter);
+        Assert.Equal(49, channel.Location.EndCharacter);
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 # ADR-0082: Gate Go-flavored concurrency behind `import Gsharp.Extensions.Go`
 
-- **Status**: Accepted — supersession proposed by ADR-0174 (see the note below)
+- **Status**: Superseded by ADR-0174 (D13, implemented 2026-09-02): the gate, GS0316/GS0317, and the `Gsharp.Extensions.Go` namespace are removed
 - **Date**: 2026-06-12
 - **Phase**: Phase 6 (cleanup)
 - **Related**: ADR-0022 (go / chan / select lowering — the surface

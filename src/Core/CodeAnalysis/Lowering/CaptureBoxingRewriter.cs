@@ -782,7 +782,7 @@ internal static class CaptureBoxingRewriter
                     clausesChanged = true;
                 }
 
-                rewrittenClauses.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, body));
+                rewrittenClauses.Add(clause.WithBody(body));
             }
 
             var finallyBlock = node.FinallyBlock == null ? null : this.RewriteStatement(node.FinallyBlock);
@@ -881,42 +881,6 @@ internal static class CaptureBoxingRewriter
             }
 
             return new BoundSwitchExpression(null, discriminant, builder?.MoveToImmutable() ?? node.Arms, node.Type);
-        }
-
-        /// <inheritdoc/>
-        protected override BoundStatement RewriteSelectStatement(BoundSelectStatement node)
-        {
-            ImmutableArray<BoundSelectCase>.Builder? builder = null;
-            for (var i = 0; i < node.Cases.Length; i++)
-            {
-                var arm = node.Cases[i];
-                var channel = arm.Channel == null ? null : this.RewriteExpression(arm.Channel);
-                var value = arm.Value == null ? null : this.RewriteExpression(arm.Value);
-                var body = this.RewriteStatement(arm.Body);
-
-                if (arm.Variable != null && this.boxInfo.TryGetValue(arm.Variable, out var bi))
-                {
-                    body = PrependSeedStatements(body, this.BuildBoxSeedStatements(bi));
-                }
-
-                if (builder == null && (channel != arm.Channel || value != arm.Value || body != arm.Body))
-                {
-                    builder = ImmutableArray.CreateBuilder<BoundSelectCase>(node.Cases.Length);
-                    for (var j = 0; j < i; j++)
-                    {
-                        builder.Add(node.Cases[j]);
-                    }
-                }
-
-                builder?.Add(new BoundSelectCase(arm.CaseKind, channel, value, arm.Variable, body));
-            }
-
-            if (builder == null)
-            {
-                return node;
-            }
-
-            return new BoundSelectStatement(null, builder.MoveToImmutable());
         }
 
         /// <inheritdoc/>

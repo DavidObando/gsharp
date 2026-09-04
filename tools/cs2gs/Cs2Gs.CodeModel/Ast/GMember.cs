@@ -244,6 +244,7 @@ public sealed class MethodDeclaration : GMember
     /// cannot be both an extension method and an explicit interface
     /// implementation, so callers never set both.
     /// </param>
+    /// <param name="isSuspend">ADR-0174: whether the method renders as a <c>suspend func</c>; see <see cref="IsSuspend"/>.</param>
     public MethodDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
@@ -258,7 +259,8 @@ public sealed class MethodDeclaration : GMember
         IReadOnlyList<AttributeUse> attributes = null,
         GStatement expressionBody = null,
         bool isRefReturn = false,
-        GTypeReference explicitInterfaceType = null)
+        GTypeReference explicitInterfaceType = null,
+        bool isSuspend = false)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
@@ -274,6 +276,7 @@ public sealed class MethodDeclaration : GMember
         ExpressionBody = expressionBody;
         IsRefReturn = isRefReturn;
         ExplicitInterfaceType = explicitInterfaceType;
+        IsSuspend = isSuspend;
     }
 
     /// <summary>Gets the method name.</summary>
@@ -305,6 +308,15 @@ public sealed class MethodDeclaration : GMember
 
     /// <summary>Gets a value indicating whether the method is asynchronous.</summary>
     public bool IsAsync { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the method is a G# <c>suspend func</c>
+    /// (ADR-0174 D4): a C# <c>async ValueTask</c>/<c>ValueTask&lt;T&gt;</c>
+    /// method that is what a suspending function compiles to. Renders the
+    /// <c>suspend</c> modifier with the logical (awaited) return type;
+    /// mutually exclusive with <see cref="IsAsync"/>.
+    /// </summary>
+    public bool IsSuspend { get; }
 
     /// <summary>Gets the method attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }

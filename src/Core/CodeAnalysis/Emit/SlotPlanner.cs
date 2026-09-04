@@ -25,7 +25,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// <remarks>
 /// <para>
 /// PR-E-4 extracts the 16 nested collector classes (and the
-/// <see cref="SelectSlots"/> per-select value object they populate) out of
+/// per-construct slot dictionaries they populate) out of
 /// <see cref="ReflectionMetadataEmitter"/> into this dedicated component.
 /// The slot dictionaries themselves continue to live on the
 /// <c>ReflectionMetadataEmitter.BodyEmitter</c> nested type because they
@@ -78,9 +78,6 @@ internal sealed class SlotPlanner
     // ─────────────────────────── entry points ───────────────────────────
     public void CollectStructLiterals(BoundNode node, List<BoundStructLiteralExpression> sink)
         => new StructLiteralCollector(sink).Visit(node);
-
-    public void CollectAppends(BoundNode node, List<BoundAppendExpression> sink)
-        => new AppendCollector(sink).Visit(node);
 
     public void CollectNullConditional(BoundNode node, List<BoundNullConditionalAccessExpression> sink)
         => new NullConditionalCollector(sink).Visit(node);
@@ -263,11 +260,7 @@ internal sealed class SlotPlanner
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement? currentScope)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         var allocator = new PatternSwitchSlotAllocator(
             this.cache,
@@ -276,11 +269,7 @@ internal sealed class SlotPlanner
             patternSwitchSlots,
             typePatternScratchSlots,
             switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes,
-            currentScope);
+            channelOpSlots);
         allocator.Visit(node);
     }
 
@@ -294,10 +283,6 @@ internal sealed class SlotPlanner
         private readonly Dictionary<BoundTypePattern, int> typePatternScratchSlots;
         private readonly Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots;
         private readonly Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots;
-        private readonly Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots;
-        private readonly Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots;
-        private readonly Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes;
-        private BoundScopeStatement? currentScope;
 
         public PatternSwitchSlotAllocator(
             MetadataTokenCache cache,
@@ -306,11 +291,7 @@ internal sealed class SlotPlanner
             Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
             Dictionary<BoundTypePattern, int> typePatternScratchSlots,
             Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-            Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-            Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-            Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-            BoundScopeStatement? currentScope)
+            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
         {
             this.cache = cache;
             this.locals = locals;
@@ -319,10 +300,6 @@ internal sealed class SlotPlanner
             this.typePatternScratchSlots = typePatternScratchSlots;
             this.switchExpressionSlots = switchExpressionSlots;
             this.channelOpSlots = channelOpSlots;
-            this.scopeFrameSlots = scopeFrameSlots;
-            this.selectStatementSlots = selectStatementSlots;
-            this.goEnclosingScopes = goEnclosingScopes;
-            this.currentScope = currentScope;
         }
 
         public override void VisitExpression(BoundExpression? node)
@@ -420,31 +397,6 @@ internal sealed class SlotPlanner
             base.VisitAddressOfExpression(node);
         }
 
-        protected override void VisitGoStatement(BoundGoStatement node)
-        {
-            if (this.currentScope != null)
-            {
-                this.goEnclosingScopes[node] = this.currentScope;
-            }
-
-            base.VisitGoStatement(node);
-        }
-
-        protected override void VisitScopeStatement(BoundScopeStatement node)
-        {
-            AllocateScopeFrameSlots(node, this.localTypes, this.scopeFrameSlots);
-            var saved = this.currentScope;
-            this.currentScope = node;
-            try
-            {
-                base.VisitScopeStatement(node);
-            }
-            finally
-            {
-                this.currentScope = saved;
-            }
-        }
-
         // ADR-0125 / issue #1026: allocate IL slots for a `fixed` statement's
         // synthetic pinned local and its user-visible `*T` pointer local. The
         // pinned local's slot type is a PinnedTypeSymbol so the local-signature
@@ -476,24 +428,6 @@ internal sealed class SlotPlanner
             base.VisitFixedStatement(node);
         }
 
-        protected override void VisitSelectStatement(BoundSelectStatement node)
-        {
-            AllocateSelectSlots(node, this.locals, this.localTypes, this.selectStatementSlots);
-            base.VisitSelectStatement(node);
-        }
-
-        protected override void VisitChannelSendStatement(BoundChannelSendStatement node)
-        {
-            AllocateChannelSendSlots(node, this.localTypes, this.channelOpSlots);
-            base.VisitChannelSendStatement(node);
-        }
-
-        protected override void VisitChannelReceiveExpression(BoundChannelReceiveExpression node)
-        {
-            AllocateChannelReceiveSlots(node, this.localTypes, this.channelOpSlots);
-            base.VisitChannelReceiveExpression(node);
-        }
-
         protected override void VisitSwitchExpression(BoundSwitchExpression node)
         {
             if (!this.switchExpressionSlots.ContainsKey(node))
@@ -523,67 +457,6 @@ internal sealed class SlotPlanner
             }
         }
 
-        private static void AllocateScopeFrameSlots(
-            BoundScopeStatement node,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots)
-        {
-            if (scopeFrameSlots.ContainsKey(node))
-            {
-                return;
-            }
-
-            var tasks = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(List<System.Threading.Tasks.Task>)));
-            var cts = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.CancellationTokenSource)));
-            var awaiter = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
-            scopeFrameSlots[node] = (tasks, cts, awaiter);
-        }
-
-        private static void AllocateChannelSendSlots(
-            BoundChannelSendStatement node,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
-        {
-            if (channelOpSlots.ContainsKey(node))
-            {
-                return;
-            }
-
-            var vt = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)));
-            var ta = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter)));
-            channelOpSlots[node] = (vt, ta, -1, -1);
-        }
-
-        private static void AllocateChannelReceiveSlots(
-            BoundChannelReceiveExpression node,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
-        {
-            if (channelOpSlots.ContainsKey(node))
-            {
-                return;
-            }
-
-            var chType = (ChannelTypeSymbol)node.Channel.Type;
-
-            var vt = localTypes.Count;
-            localTypes.Add(ConstructChannelOperationType(
-                typeof(System.Threading.Tasks.ValueTask<>),
-                chType.ElementType));
-            var ta = localTypes.Count;
-            localTypes.Add(ConstructChannelOperationType(
-                typeof(System.Runtime.CompilerServices.TaskAwaiter<>),
-                chType.ElementType));
-            var result = localTypes.Count;
-            localTypes.Add(chType.ElementType);
-            channelOpSlots[node] = (vt, ta, result, -1);
-        }
-
         private static TypeSymbol ConstructChannelOperationType(Type openDefinition, TypeSymbol elementType)
         {
             var closedCarrier = openDefinition.MakeGenericType(
@@ -594,91 +467,6 @@ internal sealed class SlotPlanner
                     openDefinition,
                     ImmutableArray.Create(elementType))
                 : TypeSymbol.FromClrType(closedCarrier);
-        }
-
-        private static void AllocateSelectSlots(
-            BoundSelectStatement node,
-            Dictionary<VariableSymbol, int> locals,
-            List<TypeSymbol> localTypes,
-            Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots)
-        {
-            if (selectStatementSlots.ContainsKey(node))
-            {
-                return;
-            }
-
-            var channelSlots = new int[node.Cases.Length];
-            var valueSlots = new int[node.Cases.Length];
-            var outSlots = new int[node.Cases.Length];
-            Array.Fill(channelSlots, -1);
-            Array.Fill(valueSlots, -1);
-            Array.Fill(outSlots, -1);
-
-            for (var i = 0; i < node.Cases.Length; i++)
-            {
-                var arm = node.Cases[i];
-                if (arm.IsDefault)
-                {
-                    continue;
-                }
-
-                channelSlots[i] = localTypes.Count;
-                localTypes.Add(arm.Channel.Type);
-
-                if (arm.CaseKind == SelectCaseKind.Send)
-                {
-                    // A send arm whose channel expression failed to bind is
-                    // recovered with a null value (StatementBinder.Blocks);
-                    // there is no value to hold, and emit is unreachable for a
-                    // compilation that reported that diagnostic.
-                    if (arm.Value != null)
-                    {
-                        valueSlots[i] = localTypes.Count;
-                        localTypes.Add(arm.Value.Type);
-                    }
-
-                    continue;
-                }
-
-                var chType = (ChannelTypeSymbol)arm.Channel.Type;
-                if (arm.CaseKind == SelectCaseKind.ReceiveBind && arm.Variable != null)
-                {
-                    if (!locals.TryGetValue(arm.Variable, out var slot))
-                    {
-                        slot = localTypes.Count;
-                        locals[arm.Variable] = slot;
-                        localTypes.Add(arm.Variable.Type);
-                    }
-
-                    outSlots[i] = slot;
-                }
-                else
-                {
-                    outSlots[i] = localTypes.Count;
-                    localTypes.Add(chType.ElementType);
-                }
-            }
-
-            var tasksSlot = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task[])));
-            var waitValueTaskSlot = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)));
-            var whenAnyTaskSlot = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<System.Threading.Tasks.Task>)));
-            var whenAnyAwaiterSlot = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.TaskAwaiter<System.Threading.Tasks.Task>)));
-            var completedTaskSlot = localTypes.Count;
-            localTypes.Add(TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)));
-
-            selectStatementSlots[node] = new SelectSlots(
-                channelSlots,
-                valueSlots,
-                outSlots,
-                tasksSlot,
-                waitValueTaskSlot,
-                whenAnyTaskSlot,
-                whenAnyAwaiterSlot,
-                completedTaskSlot);
         }
 
         private static void AllocatePatternBindings(
@@ -802,22 +590,6 @@ internal sealed class SlotPlanner
         {
             this.sink.Add(node);
             base.VisitStructLiteralExpression(node);
-        }
-    }
-
-    private sealed class AppendCollector : BoundTreeWalker
-    {
-        private readonly List<BoundAppendExpression> sink;
-
-        public AppendCollector(List<BoundAppendExpression> sink)
-        {
-            this.sink = sink;
-        }
-
-        protected override void VisitAppendExpression(BoundAppendExpression node)
-        {
-            this.sink.Add(node);
-            base.VisitAppendExpression(node);
         }
     }
 
@@ -1958,50 +1730,4 @@ internal sealed class LiftedBinarySlots
     /// when the lifted operator returns <c>bool</c> (equality / ordering).
     /// </summary>
     public int ResultSlot { get; }
-}
-
-/// <summary>
-/// Per-<see cref="BoundSelectStatement"/> bundle of pre-allocated local
-/// slot indices that the body emitter consumes when lowering a
-/// <c>select</c> statement. Pre-allocated by
-/// <see cref="SlotPlanner"/>'s pattern-switch walker and stored in the
-/// per-method <c>selectStatementSlots</c> dictionary.
-/// </summary>
-internal sealed class SelectSlots
-{
-    public SelectSlots(
-        int[] channelSlots,
-        int[] valueSlots,
-        int[] outSlots,
-        int tasksSlot,
-        int waitValueTaskSlot,
-        int whenAnyTaskSlot,
-        int whenAnyAwaiterSlot,
-        int completedTaskSlot)
-    {
-        this.ChannelSlots = channelSlots;
-        this.ValueSlots = valueSlots;
-        this.OutSlots = outSlots;
-        this.TasksSlot = tasksSlot;
-        this.WaitValueTaskSlot = waitValueTaskSlot;
-        this.WhenAnyTaskSlot = whenAnyTaskSlot;
-        this.WhenAnyAwaiterSlot = whenAnyAwaiterSlot;
-        this.CompletedTaskSlot = completedTaskSlot;
-    }
-
-    public int[] ChannelSlots { get; }
-
-    public int[] ValueSlots { get; }
-
-    public int[] OutSlots { get; }
-
-    public int TasksSlot { get; }
-
-    public int WaitValueTaskSlot { get; }
-
-    public int WhenAnyTaskSlot { get; }
-
-    public int WhenAnyAwaiterSlot { get; }
-
-    public int CompletedTaskSlot { get; }
 }

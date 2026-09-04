@@ -30,8 +30,8 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Numeric conversions | Supported | Supported | Widening numeric conversions plus explicit conversions. |
 | `object` universal upper bound | Supported | Supported | Boxing and object equality are implemented. |
 | Nullable `T?`, `nil`, `!!`, `??`, `?.`, `?[i]` | Supported | Supported | The evaluator threw on a nil `!!`; `?[i]` short-circuited indexing to `nil` when the receiver was nil. |
-| Arrays and slices | Supported | Supported | Slices are backed by arrays; `append` copies. `len` / `cap` / `append` require `import Gsharp.Extensions.Go` (GS0317); the .NET-idiomatic alternative is `.Length` and (for mutable lists) `List[T].Add`. |
-| Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. Both require `import Gsharp.Extensions.Go` (GS0317); .NET-idiomatic alternatives are `.Remove(k)` and `.Count`. Iterable with range `for`: `for k, v in m` destructures entries, `for kv in m` yields `KeyValuePair[K,V]`; order unspecified. |
+| Arrays and slices | Supported | Supported | Slices are CLR arrays (`[]T` is `T[]`): length is `.Length`; the growable shape is `List[T].Add`. The Go-style `len` / `cap` / `append` built-ins are retired (ADR-0174, GS0566 names the replacement). |
+| Maps | Supported | Supported | Backed by `Dictionary[K,V]`: `.Remove(k)` and `.Count` are the members (the Go-style `delete` / `len` built-ins are retired, ADR-0174). Iterable with range `for`: `for k, v in m` destructures entries, `for kv in m` yields `KeyValuePair[K,V]`; order unspecified. |
 | Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. Tuple `==` / `!=` compare element-wise with short-circuit, single-evaluation semantics (ADR-0171). Named elements `(line int32, column int32)` / `(line: 1, column: 2)` resolve positionally; names are metadata (ADR-0172). |
 | Struct literals | Supported | Supported | Field initialization and field access are implemented. |
 | Data classes, data structs, `with`/copy | Supported | Supported | `data class` (reference) and `data struct` (value) synthesise equality, `with`-copy, and deconstruction. The `record` keyword is not supported; migrate to `data struct` (preserves value semantics) or `data class` (reference semantics). |
@@ -114,11 +114,12 @@ This matrix summarizes current feature support in the emitter, which every drive
 
 | Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
-| `go` | Supported | Supported with scheduling limits | Operand must be a call expression. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
+| `go` | Supported | Supported with scheduling limits | Operand must be a call expression. No import (ADR-0174). |
 | `scope` structured concurrency | Supported | Supported | Child tasks are joined and failures propagate. Not gated. |
-| Channels, send, receive, `close` | Supported | Supported | Backed by `System.Threading.Channels`. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
-| `select` | Supported | Supported | Receive, receive-bind, send, and default cases. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
+| Channels: `chan[T]`, `in` / `out` handles, send, receive, two-value receive, `for v in ch`, `while let v = <-ch`, `ch.Close()` | Supported | Supported | `chan[T]` **is** `System.Threading.Channels.Channel<T>`; `chan[T](…)` constructs the runtime's `Chan<T>` (rendezvous at capacity 0). No import (ADR-0174). |
+| `select` | Supported | Supported | Receive, receive-bind, send, and default cases. No import (ADR-0174). |
 | `async func` and `await` | Supported | Supported by blocking | Emit has state machines; the evaluator blocked on awaiters. Not gated. |
+| `suspend func` and inferred suspension | Supported | N/A | ADR-0174 D4: a plain `func` that performs a channel operation, or calls a function that suspends, is compiled as a `ValueTask[R]` state machine labelled `[Suspending]` and awaited implicitly by G# callers; `suspend func` pins the same shape at boundaries (`open`/`override`, interface members, lambdas). A call from a non-suspending, non-`async` function blocks and warns (GS0558). |
 | Async state-machine edge cases | Partial | N/A | Unsupported emit shapes report `GS0190`. |
 | `sequence[T]` and `yield` | Supported | Supported | Sync iterator state machines in emit; the evaluator collected sequence values. |
 | `async sequence[T]` and `await for` | Supported | Supported by blocking | Maps to `IAsyncEnumerable[T]`. |
@@ -145,7 +146,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | --- | --- | --- | --- |
 | `Gsharp.Extensions.Optional` | Supported | Supported | Extension helpers on `T?` (`Map`, `FlatMap`, `OrElse`, `OrCompute`, `OrThrow`, `IfPresent`, `Filter`). Value-typed (`T : struct`) helpers carry a `*Value` suffix and require `import Gsharp.Extensions.Optional`. |
 | `Gsharp.Extensions.Sequences` | Supported | Supported | Static builders (`Range`, `RangeStep`, `Iterate`, `Repeat`, `Of`, `Empty`), transformers (`Windowed`, `Chunked`, `Indexed`, `Pairwise`, `Interleave`), safe terminals (`FirstOrNil`, `LastOrNil`, `SingleOrNil` plus `*ValueOrNil` companions), and G#-shaped collectors (`ToSlice`, `ToMap`). Requires `import Gsharp.Extensions.Sequences`. |
-| `Gsharp.Extensions.Go` (gate) | Supported | Supported | Per-file `import Gsharp.Extensions.Go` unlocks the Go-flavored concurrency surface and the Go-style built-ins `len`, `cap`, `append`, `delete`, `make`. |
+| `Gsharp.Extensions.Go` (gate) | Removed | Removed | ADR-0174: the concurrency surface is the language, the Go-style built-ins are retired (GS0566), and the namespace is deleted. |
 | No auto-import policy | N/A | N/A | Nothing under `Gsharp.Extensions.*` is auto-imported — even when implicit imports are enabled. Each namespace is opt-in per file. |
 
 ## Tooling and build

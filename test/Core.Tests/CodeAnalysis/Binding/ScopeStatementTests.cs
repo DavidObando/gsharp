@@ -48,7 +48,7 @@ scope {
     public void Scope_WithSendInsideGo_Binds()
     {
         var source = @"
-let ch = make(chan int32, 1)
+let ch = chan[int32](1)
 
 func send() int32 {
     ch <- 7
@@ -125,11 +125,9 @@ scope {
     go boom()
 }
 ";
-        // ADR-0082 / issue #722: scope itself is not gated, but `go` is —
-        // prepend the import so the scoped goroutine binds successfully and
-        // the failure surfaces from the runtime, which is what this test
-        // actually exercises.
-        source = "import Gsharp.Extensions.Go\n" + source;
+        // The scoped goroutine binds without any import (ADR-0174 removed the
+        // gate), so the failure surfaces from the runtime, which is what this
+        // test actually exercises.
         var result = EmittedOracle.Evaluate(source);
 
         // The failure may surface either as an unhandled runtime exception
@@ -145,7 +143,7 @@ scope {
         // ADR-0082 / issue #722: prepend the Go-extensions import so
         // existing scope-with-go tests continue to exercise scope
         // semantics rather than the import gate.
-        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var fullSource = source;
         return EmittedOracle.Evaluate(fullSource);
     }
 }

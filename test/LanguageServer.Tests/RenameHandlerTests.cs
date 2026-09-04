@@ -179,7 +179,7 @@ public class RenameHandlerTests
                 mapping map[string]Box[int32],
                 pair (Box[int32], bool),
                 callback (Box[int32]) -> Box[string],
-                stream chan Box[int32]) {}
+                stream chan[Box[int32]]) {}
             """;
         const string declarationPath = "/test/lib.gs";
         const string usePath = "/test/main.gs";

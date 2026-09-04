@@ -27,19 +27,18 @@ public class Issue3304GoVoidOperandEmitTests
         const string Source = """
             package Issue3304GoVoid
             import System
-            import Gsharp.Extensions.Go
 
             class Box {
-                func Poke(ch chan int32) {
+                func Poke(ch chan[int32]) {
                     ch <- 7
                 }
             }
 
-            func poke(ch chan int32) {
+            func poke(ch chan[int32]) {
                 ch <- 42
             }
 
-            let done = make(chan int32, 1)
+            let done = chan[int32](1)
             go poke(done)
             Console.WriteLine(<-done)
 

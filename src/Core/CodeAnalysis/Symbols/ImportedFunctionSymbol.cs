@@ -65,6 +65,36 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// </summary>
     public TypeSymbol Type { get; }
 
+    /// <summary>
+    /// Gets a value indicating whether the method carries
+    /// <c>[Gsharp.Concurrency.Suspending]</c> (ADR-0174 D4): it was emitted by
+    /// G# as a suspending function, its CLR return type is <c>ValueTask</c> /
+    /// <c>ValueTask&lt;R&gt;</c>, and a G# call site awaits it implicitly,
+    /// seeing <see cref="LogicalReturnType"/>. Matched by attribute name so the
+    /// compiler core takes no reference on the runtime assembly.
+    /// </summary>
+    public bool IsSuspending => IsSuspendingMethod(Method);
+
+    /// <summary>Gets the logical G# return type: for a suspending method the awaited <c>R</c> (or <c>void</c>), otherwise <see cref="Type"/>.</summary>
+    public TypeSymbol LogicalReturnType
+        => IsSuspending && AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(Type, out var awaited) ? awaited : Type;
+
+    /// <summary>Reports whether <paramref name="method"/> carries <c>[Gsharp.Concurrency.Suspending]</c>.</summary>
+    /// <param name="method">A CLR method.</param>
+    /// <returns><see langword="true"/> for a G#-emitted suspending function.</returns>
+    public static bool IsSuspendingMethod(MethodInfo method)
+    {
+        foreach (var attribute in method.GetCustomAttributesData())
+        {
+            if (attribute.AttributeType.FullName == "Gsharp.Concurrency.SuspendingAttribute")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <inheritdoc/>
     public override DocumentationComment? GetDocumentation()
     {

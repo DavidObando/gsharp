@@ -8,6 +8,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sdk\Gsharp.NET.Sdk\Gsharp.NET.Sdk.csproj" />
+    <!-- ADR-0174 P3-9: the hot-reload suspension-flip test compiles channel code, which binds against the channel runtime beside the test host. -->
+    <ProjectReference Include="..\..\src\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj" />
     <ProjectReference Include="..\..\src\Sdk\Gsharp.HotReload.Runtime\Gsharp.HotReload.Runtime.csproj" />
     <ProjectReference Include="@(GsharpCompiler)" />
   </ItemGroup>

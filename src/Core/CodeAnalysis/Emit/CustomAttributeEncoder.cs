@@ -1270,7 +1270,7 @@ internal sealed class CustomAttributeEncoder
         return GetMetadataTypeName(type) + ", " + assemblyName;
     }
 
-    private static string GetMetadataTypeName(TypeSymbol type)
+    internal static string GetMetadataTypeName(TypeSymbol type)
     {
         string packageName;
         TypeSymbol? containingType;

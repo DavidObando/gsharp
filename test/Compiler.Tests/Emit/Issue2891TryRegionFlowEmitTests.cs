@@ -450,7 +450,6 @@ public class Issue2891TryRegionFlowEmitTests
             public var result = F()
             """);
         yield return Case("SelectInsideTryBreakOverriddenByReturn", 2, """
-            import Gsharp.Extensions.Go
             func F() int32 {
                 for {
                     try {
@@ -465,7 +464,6 @@ public class Issue2891TryRegionFlowEmitTests
             public var result = F()
             """);
         yield return Case("ScopeInsideTryBreakOverriddenByReturn", 4, """
-            import Gsharp.Extensions.Go
             func F() int32 {
                 for {
                     try {

@@ -7,15 +7,16 @@
 #pragma warning disable SA1615 // Element return value should be documented (mechanically lifted from ReflectionMetadataEmitter; original methods were private)
 #pragma warning disable SA1116 // The parameters should begin on the line after the declaration (preserves original formatting; reformat would break diff readability)
 
+using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Lowering.Iterators;
+using GSharp.Core.CodeAnalysis.Symbols;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
-using GSharp.Core.CodeAnalysis.Binding;
-using GSharp.Core.CodeAnalysis.Lowering.Iterators;
-using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Emit;
 
@@ -224,19 +225,6 @@ internal sealed class MethodBodyPlanner
                 }
 
                 break;
-            case BoundScopeStatement sc:
-                WalkStmtsForConsts(sc.Body, result);
-                break;
-            case BoundSelectStatement sel:
-                foreach (var arm in sel.Cases)
-                {
-                    if (arm.Body != null)
-                    {
-                        WalkStmtsForConsts(arm.Body, result);
-                    }
-                }
-
-                break;
         }
     }
 
@@ -328,13 +316,48 @@ internal sealed class MethodBodyPlanner
         return this.cache.StructTypeDefs.TryGetValue(owner, out enclosingHandle);
     }
 
+    /// <summary>
+    /// The symbol counterpart of <see cref="TryGetUserKickoffReceiverHandle"/>:
+    /// the user class or struct an async state machine is nested in, for
+    /// building its serialized metadata name (ADR-0174 P3-8).
+    /// </summary>
+    /// <param name="smSym">The state-machine struct.</param>
+    /// <param name="owner">The declaring user type, when the kickoff is one of its methods.</param>
+    /// <returns><see langword="true"/> when the kickoff lives on a user type with an emitted TypeDef.</returns>
+    public bool TryGetUserKickoffReceiverSymbol(StructSymbol smSym, [NotNullWhen(true)] out StructSymbol? owner)
+    {
+        owner = null;
+        FunctionSymbol? kickoff = null;
+        foreach (var plan in this.StateMachines.AsyncStateMachinePlans)
+        {
+            if (ReferenceEquals(plan.StateMachine.MaterializeAsStructSymbol(), smSym))
+            {
+                kickoff = plan.KickoffMethod;
+                break;
+            }
+        }
+
+        if (kickoff == null)
+        {
+            return false;
+        }
+
+        var candidate = (kickoff.ReceiverType as StructSymbol) ?? (kickoff.StaticOwnerType as StructSymbol);
+        if (candidate == null || !this.cache.StructTypeDefs.ContainsKey(candidate))
+        {
+            return false;
+        }
+
+        owner = candidate;
+        return true;
+    }
+
     public void CollectLocalsAndLabels(
         BoundBlockStatement body,
         FunctionSymbol? function,
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         Dictionary<BoundStructLiteralExpression, int> structLiteralSlots,
         Dictionary<BoundDefaultExpression, int> defaultExpressionSlots,
         Dictionary<BoundIndexExpression, int> mapIndexSlots,
@@ -342,19 +365,16 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
         Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
         Dictionary<BoundExpression, int> receiverSpillSlots,
         Dictionary<BoundExpression, int> indexAssignmentValueSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
         Dictionary<BoundExpression, LiftedBinarySlots> liftedBinarySlots,
         Dictionary<BoundBinaryExpression, int> nullableCoalesceSpillSlots,
         InstructionEncoder il,
         Dictionary<BoundStackAllocExpression, int>? stackAllocResultSlots = null)
     {
-        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 1);
+        this.CollectStatements(body.Statements, function, locals, localTypes, labels, il, pass: 1);
         this.CollectBlockExpressionLocals(body, locals, localTypes);
-        this.CollectStatements(body.Statements, function, locals, localTypes, labels, appendSlots, il, pass: 2);
+        this.CollectStatements(body.Statements, function, locals, localTypes, labels, il, pass: 2);
 
         // Phase B: pattern switch statements bring three classes of locals
         // into the host method:
@@ -372,10 +392,7 @@ internal sealed class MethodBodyPlanner
             patternSwitchSlots,
             typePatternScratchSlots,
             switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes);
+            channelOpSlots);
 
         // Phase 3.C.3b: each `?.` access introduces a synthetic capture
         // local in the bound tree; pre-allocate a slot for it.
@@ -418,15 +435,6 @@ internal sealed class MethodBodyPlanner
                 localTypes.Add(nc.Receiver.Type);
                 receiverSpillSlots[nc.Receiver] = wrapperSlot;
             }
-        }
-
-        foreach (var append in this.CollectAppends(body))
-        {
-            var srcSlot = localTypes.Count;
-            localTypes.Add(append.SliceType);
-            var dstSlot = localTypes.Count;
-            localTypes.Add(append.SliceType);
-            appendSlots[append] = (srcSlot, dstSlot);
         }
 
         foreach (var literal in this.CollectStructLiterals(body))
@@ -747,10 +755,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         foreach (var s in statements)
         {
@@ -761,11 +766,7 @@ internal sealed class MethodBodyPlanner
                 patternSwitchSlots,
                 typePatternScratchSlots,
                 switchExpressionSlots,
-                channelOpSlots,
-                scopeFrameSlots,
-                selectStatementSlots,
-                goEnclosingScopes,
-                currentScope: null);
+                channelOpSlots);
         }
     }
 
@@ -776,11 +777,7 @@ internal sealed class MethodBodyPlanner
         Dictionary<BoundPatternSwitchStatement, int> patternSwitchSlots,
         Dictionary<BoundTypePattern, int> typePatternScratchSlots,
         Dictionary<BoundSwitchExpression, (int Result, int Discriminant)> switchExpressionSlots,
-        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots,
-        Dictionary<BoundScopeStatement, (int Tasks, int Cts, int Awaiter)> scopeFrameSlots,
-        Dictionary<BoundSelectStatement, SelectSlots> selectStatementSlots,
-        Dictionary<BoundGoStatement, BoundScopeStatement> goEnclosingScopes,
-        BoundScopeStatement? currentScope)
+        Dictionary<BoundNode, (int VT, int TA, int Result, int Spare)> channelOpSlots)
     {
         // Issue #418 (P1-3): the legacy bespoke switch missed many expression
         // kinds (tuple/map literals, ?., CLR calls/indexers/properties,
@@ -795,11 +792,7 @@ internal sealed class MethodBodyPlanner
             patternSwitchSlots,
             typePatternScratchSlots,
             switchExpressionSlots,
-            channelOpSlots,
-            scopeFrameSlots,
-            selectStatementSlots,
-            goEnclosingScopes,
-            currentScope);
+            channelOpSlots);
     }
 
     private void CollectBlockExpressionLocals(BoundBlockStatement body, Dictionary<VariableSymbol, int> locals, List<TypeSymbol> localTypes)
@@ -1036,7 +1029,6 @@ internal sealed class MethodBodyPlanner
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         InstructionEncoder il,
         int pass)
     {
@@ -1088,33 +1080,10 @@ internal sealed class MethodBodyPlanner
                         }
 
                         break;
-                    case BoundScopeStatement sc:
-                        if (sc.Body is BoundBlockStatement scBlock)
-                        {
-                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        break;
                     case BoundFixedStatement fx:
                         if (fx.Body is BoundBlockStatement fxBlock)
                         {
-                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        break;
-                    case BoundSelectStatement sel:
-                        foreach (var arm in sel.Cases)
-                        {
-                            if (arm.Variable != null && !locals.ContainsKey(arm.Variable))
-                            {
-                                locals[arm.Variable] = localTypes.Count;
-                                localTypes.Add(arm.Variable.Type);
-                            }
-
-                            if (arm.Body is BoundBlockStatement armBlock)
-                            {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                            }
+                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
@@ -1133,12 +1102,12 @@ internal sealed class MethodBodyPlanner
                         // pattern scratch slots and pattern-binding locals).
                         foreach (var arm in ps.Arms)
                         {
-                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundTryStatement t:
-                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, il, pass);
                         foreach (var clause in t.CatchClauses)
                         {
                             // Issue #420 (P3-6): tolerate an elided catch variable
@@ -1151,17 +1120,17 @@ internal sealed class MethodBodyPlanner
                                 localTypes.Add(clause.Variable.Type);
                             }
 
-                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         if (t.FinallyBlock != null)
                         {
-                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundBlockStatement nestedBlock:
-                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, il, pass);
                         break;
                 }
             }
@@ -1183,27 +1152,10 @@ internal sealed class MethodBodyPlanner
                         }
 
                         break;
-                    case BoundScopeStatement sc:
-                        if (sc.Body is BoundBlockStatement scBlock)
-                        {
-                            this.CollectStatements(scBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        break;
                     case BoundFixedStatement fx:
                         if (fx.Body is BoundBlockStatement fxBlock)
                         {
-                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                        }
-
-                        break;
-                    case BoundSelectStatement sel:
-                        foreach (var arm in sel.Cases)
-                        {
-                            if (arm.Body is BoundBlockStatement armBlock)
-                            {
-                                this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
-                            }
+                            this.CollectStatements(fxBlock.Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
@@ -1213,25 +1165,25 @@ internal sealed class MethodBodyPlanner
                         // the pass==1 branch above for the full rationale).
                         foreach (var arm in ps.Arms)
                         {
-                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectArmBody(arm.Body, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundTryStatement t:
-                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(((BoundBlockStatement)t.TryBlock).Statements, function, locals, localTypes, labels, il, pass);
                         foreach (var clause in t.CatchClauses)
                         {
-                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)clause.Body).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         if (t.FinallyBlock != null)
                         {
-                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                            this.CollectStatements(((BoundBlockStatement)t.FinallyBlock).Statements, function, locals, localTypes, labels, il, pass);
                         }
 
                         break;
                     case BoundBlockStatement nestedBlock:
-                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+                        this.CollectStatements(nestedBlock.Statements, function, locals, localTypes, labels, il, pass);
                         break;
                 }
             }
@@ -1251,7 +1203,6 @@ internal sealed class MethodBodyPlanner
         Dictionary<VariableSymbol, int> locals,
         List<TypeSymbol> localTypes,
         Dictionary<BoundLabel, LabelHandle> labels,
-        Dictionary<BoundAppendExpression, (int Src, int Dst)> appendSlots,
         InstructionEncoder il,
         int pass)
     {
@@ -1262,19 +1213,12 @@ internal sealed class MethodBodyPlanner
 
         if (armBody is BoundBlockStatement armBlock)
         {
-            this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, appendSlots, il, pass);
+            this.CollectStatements(armBlock.Statements, function, locals, localTypes, labels, il, pass);
         }
         else
         {
-            this.CollectStatements(ImmutableArray.Create(armBody), function, locals, localTypes, labels, appendSlots, il, pass);
+            this.CollectStatements(ImmutableArray.Create(armBody), function, locals, localTypes, labels, il, pass);
         }
-    }
-
-    private IEnumerable<BoundAppendExpression> CollectAppends(BoundNode node)
-    {
-        var list = new List<BoundAppendExpression>();
-        this.slotPlanner.CollectAppends(node, list);
-        return list;
     }
 
     private IEnumerable<BoundIndexExpression> CollectMapIndexReads(BoundNode root)

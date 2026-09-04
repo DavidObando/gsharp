@@ -63,7 +63,7 @@ public static class BaseCallForwarderRewriter
                 continue;
             }
 
-            var isStateMachine = function.IsAsync || IteratorDetection.ContainsYield(body);
+            var isStateMachine = function.IsAsyncOrSuspending || IteratorDetection.ContainsYield(body);
             if (!isStateMachine)
             {
                 continue;

@@ -590,11 +590,10 @@ public class Issue3355GeneralBlockExpressionTests
     public void AwaitBlocksInSelectHeader_PreserveSourceOrder()
     {
         var result = EmittedOracle.Evaluate("""
-            import Gsharp.Extensions.Go
             import System.Threading.Tasks
 
             async func run() int32 {
-                let channel = make(chan int32, 1)
+                let channel = chan[int32](1)
                 var order = 0
                 select {
                     case {
@@ -839,10 +838,9 @@ public class Issue3355GeneralBlockExpressionTests
         Assert.Equal(42, throwing.Value);
 
         var channelSend = EmittedOracle.Evaluate("""
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                let channel = make(chan int32, 1)
+                let channel = chan[int32](1)
                 channel <- 1 + { return 42 0 }
                 return <-channel
             }
@@ -855,7 +853,6 @@ public class Issue3355GeneralBlockExpressionTests
         Assert.Equal(42, channelSend.Value);
 
         var goStatement = EmittedOracle.Evaluate("""
-            import Gsharp.Extensions.Go
 
             func consume(first int32, second int32) {
             }
@@ -873,14 +870,13 @@ public class Issue3355GeneralBlockExpressionTests
         Assert.Equal(42, goStatement.Value);
 
         var selectHeader = EmittedOracle.Evaluate("""
-            import Gsharp.Extensions.Go
 
-            func choose(first chan int32, second chan int32) chan int32 {
+            func choose(first chan[int32], second chan[int32]) chan[int32] {
                 return second
             }
 
             func run() int32 {
-                let channel = make(chan int32, 1)
+                let channel = chan[int32](1)
                 select {
                     case choose(channel, { return 42 channel }) <- 1 { let sent = true }
                     default { let skipped = true }
@@ -897,7 +893,6 @@ public class Issue3355GeneralBlockExpressionTests
         Assert.Equal(42, selectHeader.Value);
 
         var scopeBody = EmittedOracle.Evaluate("""
-            import Gsharp.Extensions.Go
 
             func combine(first int32, second int32) int32 {
                 return first + second

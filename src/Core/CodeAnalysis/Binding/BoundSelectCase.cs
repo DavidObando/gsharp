@@ -25,11 +25,30 @@ public sealed record BoundSelectCase
         BoundExpression? value,
         VariableSymbol? variable,
         BoundStatement body)
+        : this(caseKind, channel, value, variable, guard: null, body)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="BoundSelectCase"/> class.</summary>
+    /// <param name="caseKind">Which arm shape this is.</param>
+    /// <param name="channel">Channel, selectable or task operand; null for default and cancelled arms.</param>
+    /// <param name="value">Value expression for send arms; null otherwise.</param>
+    /// <param name="variable">Declared variable for a binding arm; null otherwise.</param>
+    /// <param name="guard">The arm's <c>when</c> guard (ADR-0174 D8); null when it has none.</param>
+    /// <param name="body">Bound case body.</param>
+    public BoundSelectCase(
+        SelectCaseKind caseKind,
+        BoundExpression? channel,
+        BoundExpression? value,
+        VariableSymbol? variable,
+        BoundExpression? guard,
+        BoundStatement body)
     {
         CaseKind = caseKind;
         Channel = channel;
         Value = value;
         Variable = variable;
+        Guard = guard;
         Body = body;
     }
 
@@ -44,6 +63,13 @@ public sealed record BoundSelectCase
 
     /// <summary>Gets the declared variable for receive-bind arms; null otherwise.</summary>
     public VariableSymbol? Variable { get; }
+
+    /// <summary>
+    /// Gets the arm's <c>when</c> guard (ADR-0174 D8), or <see langword="null"/>.
+    /// Evaluated once when the select is entered; a false guard keeps the arm
+    /// out of the waiter entirely.
+    /// </summary>
+    public BoundExpression? Guard { get; }
 
     /// <summary>Gets the bound case body.</summary>
     public BoundStatement Body { get; }

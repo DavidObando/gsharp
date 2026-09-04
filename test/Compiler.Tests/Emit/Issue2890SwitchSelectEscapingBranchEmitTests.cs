@@ -43,7 +43,6 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
     {
         const string Source = """
             package Issue2890.EmitSelectBreak
-            import Gsharp.Extensions.Go
 
             func F() int32 {
                 outer: for {
@@ -62,10 +61,9 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
     {
         const string Source = """
             package Issue2890.EmitSelectReturns
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 select {
                     case ch <- 1 { return 11 }
                     case <-ch { return 12 }
@@ -104,10 +102,9 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
     {
         const string Source = """
             package Issue2890.EmitSelectNoDefaultReturns
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 ch <- 12
                 select {
                     case ch <- 1 { return 11 }
@@ -128,10 +125,9 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
         const string Source = """
             package Issue2890.EmitSelectThrows
             import System
-            import Gsharp.Extensions.Go
 
             func F() int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 select {
                     case ch <- 1 { throw Exception("send") }
                     case <-ch { throw Exception("receive") }
@@ -151,10 +147,9 @@ public class Issue2890SwitchSelectEscapingBranchEmitTests
     {
         const string Source = """
             package Issue2890.EmitSwitchSelectReturns
-            import Gsharp.Extensions.Go
 
             func F(x int32) int32 {
-                let ch = make(chan int32, 1)
+                let ch = chan[int32](1)
                 switch x {
                     case 1 {
                         select {

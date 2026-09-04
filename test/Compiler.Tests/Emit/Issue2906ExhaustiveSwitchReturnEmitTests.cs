@@ -149,7 +149,6 @@ public class Issue2906ExhaustiveSwitchReturnEmitTests
             public var result = F(E.A) + F(E.B)
             """);
         yield return Case("SwitchInsideSelect", 2, """
-            import Gsharp.Extensions.Go
             enum E { A, B }
             func F(x E) int32 {
                 select {

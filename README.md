@@ -102,16 +102,15 @@ package: `gsharp-lib`, `gsharp-xunit`, `gsharp-web`.
 package pipeline
 
 import System
-import Gsharp.Extensions.Go
 
-func produce(ch chan int32) int32 {
+func produce(ch out chan[int32]) int32 {
     for var n = 1; n <= 3; n = n + 1 {
         ch <- n * 10
     }
     return 0
 }
 
-let ch = make(chan int32, 3)
+let ch = chan[int32](3)
 
 scope {
     go produce(ch)

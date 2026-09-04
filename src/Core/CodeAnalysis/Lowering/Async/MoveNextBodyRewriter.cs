@@ -289,9 +289,9 @@ public static class MoveNextBodyRewriter
             return new BoundLiteralExpression(null, value);
         }
 
-        private static BoundExpressionStatement Stmt(BoundExpression expr)
+        private static BoundExpressionStatement Stmt(BoundExpression expr, SyntaxNode? syntax = null)
         {
-            return new BoundExpressionStatement(null, expr);
+            return new BoundExpressionStatement(syntax, expr);
         }
 
         /// <summary>
@@ -316,12 +316,16 @@ public static class MoveNextBodyRewriter
                 if (node.Expression != null && ctx.retValLocal != null)
                 {
                     var rewrittenExpr = RewriteExpression(node.Expression);
+
+                    // ADR-0174 P3-8: the rewritten statement keeps the `return`'s
+                    // own anchor so the PDB still maps that source line inside
+                    // MoveNext and a debugger can break on it.
                     stmts.Add(new BoundExpressionStatement(
-                        null,
+                        node.Syntax,
                         new BoundAssignmentExpression(null, ctx.retValLocal, rewrittenExpr)));
                 }
 
-                stmts.Add(new BoundGotoStatement(null, ctx.plan.MoveNextPlan.ExpressionReturnLabel));
+                stmts.Add(new BoundGotoStatement(node.Expression != null && ctx.retValLocal != null ? null : node.Syntax, ctx.plan.MoveNextPlan.ExpressionReturnLabel));
                 return new BoundBlockStatement(null, stmts.ToImmutable());
             }
 
@@ -329,13 +333,13 @@ public static class MoveNextBodyRewriter
             {
                 if (node.Expression is BoundAwaitExpression awaitExpr)
                 {
-                    return EmitPerAwaitSequence(awaitExpr, resultTarget: null);
+                    return EmitPerAwaitSequence(awaitExpr, resultTarget: null, syntax: node.Syntax);
                 }
 
                 // Check if the expression is an assignment whose RHS is an await.
                 if (node.Expression is BoundAssignmentExpression assign && assign.Expression is BoundAwaitExpression assignAwait)
                 {
-                    return EmitPerAwaitSequence(assignAwait, resultTarget: assign.Variable);
+                    return EmitPerAwaitSequence(assignAwait, resultTarget: assign.Variable, syntax: node.Syntax);
                 }
 
                 return base.RewriteExpressionStatement(node);
@@ -345,7 +349,7 @@ public static class MoveNextBodyRewriter
             {
                 if (node.Initializer is BoundAwaitExpression awaitExpr)
                 {
-                    return EmitPerAwaitSequence(awaitExpr, resultTarget: node.Variable);
+                    return EmitPerAwaitSequence(awaitExpr, resultTarget: node.Variable, syntax: node.Syntax);
                 }
 
                 var rewrittenInit = node.Initializer != null ? RewriteExpression(node.Initializer) : null;
@@ -354,7 +358,7 @@ public static class MoveNextBodyRewriter
                 {
                     if (rewrittenInit != null)
                     {
-                        return Stmt(ctx.WriteField(field, rewrittenInit));
+                        return Stmt(ctx.WriteField(field, rewrittenInit), node.Syntax);
                     }
 
                     return new BoundBlockStatement(null, ImmutableArray<BoundStatement>.Empty);
@@ -773,7 +777,7 @@ public static class MoveNextBodyRewriter
                 return node;
             }
 
-            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol? resultTarget)
+            private BoundBlockStatement EmitPerAwaitSequence(BoundAwaitExpression awaitExpr, VariableSymbol? resultTarget, SyntaxNode? syntax = null)
             {
                 if (!ctx.awaitResumeMap.TryGetValue(awaitExpr, out var resumePoint))
                 {
@@ -826,7 +830,13 @@ public static class MoveNextBodyRewriter
                     var tempLocal = new LocalVariableSymbol(
                         "<>awaitable_" + resumePoint.State, isReadOnly: false, awaitableTypeSymbol);
                     ctx.allLocals.Add(tempLocal);
-                    stmts.Add(new BoundVariableDeclaration(null, tempLocal, rewrittenOperand));
+
+                    // ADR-0174 P3-8: the first statement of the await sequence
+                    // carries the awaiting source statement's anchor, so a
+                    // breakpoint on `let v = <-ch` binds inside MoveNext and a
+                    // step-over runs from this yield to its resume.
+                    stmts.Add(new BoundVariableDeclaration(syntax, tempLocal, rewrittenOperand));
+                    syntax = null;
                     getAwaiterReceiver = new BoundAddressOfExpression(null, new BoundVariableExpression(null, tempLocal));
                 }
                 else
@@ -840,7 +850,7 @@ public static class MoveNextBodyRewriter
                     shape.GetAwaiterMethod,
                     awaiterTypeSymbol,
                     ImmutableArray<BoundExpression>.Empty);
-                stmts.Add(new BoundVariableDeclaration(null, awaiterLocal, getAwaiterCall));
+                stmts.Add(new BoundVariableDeclaration(syntax, awaiterLocal, getAwaiterCall));
 
                 // if (awaiter.IsCompleted) goto resumeAfter;
                 var isCompletedGetter = shape.IsCompletedProperty.GetGetMethod();

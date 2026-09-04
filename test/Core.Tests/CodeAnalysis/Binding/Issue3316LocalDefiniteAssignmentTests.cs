@@ -10,7 +10,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <summary>
 /// Issue #3316 / ADR-0159 follow-up (a): definite-assignment analysis for
 /// no-zero-value locals, with the GS0520 channel carve-out as the first
-/// consumer. A bare <c>chan T</c> LOCAL now declares freely (on main the
+/// consumer. A bare <c>chan[T]</c> LOCAL now declares freely (on main the
 /// declaration itself reported GS0520); the error moves to any USE that
 /// some control-flow path can reach without a preceding assignment
 /// (GS0522 — C#'s CS0165 model). Zero-valued kinds (ints, maps/slices/
@@ -37,11 +37,10 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316Headline
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
-                c = make(chan int32, 1)
+                var c chan[int32]
+                c = chan[int32](1)
                 c <- 7
                 return <-c
             }
@@ -59,10 +58,9 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316UseRecv
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 return <-c
             }
 
@@ -79,10 +77,9 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316UseSend
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 c <- 1
                 return 0
             }
@@ -99,14 +96,13 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316UseArg
 
-            import Gsharp.Extensions.Go
 
-            func take(ch chan int32) int32 {
+            func take(ch chan[int32]) int32 {
                 return 0
             }
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 return take(c)
             }
 
@@ -124,10 +120,9 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316ExplicitDefault
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32 = default
+                var c chan[int32] = default
                 if c == nil {
                     return 1
                 }
@@ -149,15 +144,14 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316IfBoth
 
-            import Gsharp.Extensions.Go
 
             func run(cond bool) int32 {
-                var c chan int32
+                var c chan[int32]
                 if cond {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 1
                 } else {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 2
                 }
                 return <-c
@@ -176,12 +170,11 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316IfOne
 
-            import Gsharp.Extensions.Go
 
             func run(cond bool) int32 {
-                var c chan int32
+                var c chan[int32]
                 if cond {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                 }
                 c <- 1
                 return 0
@@ -201,14 +194,13 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316IfEarlyReturn
 
-            import Gsharp.Extensions.Go
 
             func run(cond bool) int32 {
-                var c chan int32
+                var c chan[int32]
                 if cond {
                     return 0
                 }
-                c = make(chan int32, 1)
+                c = chan[int32](1)
                 c <- 4
                 return <-c
             }
@@ -230,13 +222,12 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316LoopAfter
 
-            import Gsharp.Extensions.Go
 
             func run(n int32) int32 {
-                var c chan int32
+                var c chan[int32]
                 var i int32
                 for i < n {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     i = i + 1
                 }
                 c <- 1
@@ -255,11 +246,10 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316LoopBefore
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
-                c = make(chan int32, 3)
+                var c chan[int32]
+                c = chan[int32](3)
                 var i int32 = 0
                 var total int32 = 0
                 for i < 3 {
@@ -285,14 +275,13 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316LoopSameBody
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
                 var total int32 = 0
                 var i int32 = 0
                 for i < 2 {
-                    var c chan int32
-                    c = make(chan int32, 1)
+                    var c chan[int32]
+                    c = chan[int32](1)
                     c <- 5
                     total = total + <-c
                     i = i + 1
@@ -318,12 +307,11 @@ public class Issue3316LocalDefiniteAssignmentTests
             package P3316TryOnly
 
             import System
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 try {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                 } catch (e Exception) {
                 }
                 c <- 1
@@ -343,15 +331,14 @@ public class Issue3316LocalDefiniteAssignmentTests
             package P3316TryCatchBoth
 
             import System
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 try {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 1
                 } catch (e Exception) {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 2
                 }
                 return <-c
@@ -372,13 +359,12 @@ public class Issue3316LocalDefiniteAssignmentTests
             package P3316Finally
 
             import System
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 try {
                 } finally {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 6
                 }
                 return <-c
@@ -399,17 +385,16 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316SwitchAll
 
-            import Gsharp.Extensions.Go
 
             func run(x int32) int32 {
-                var c chan int32
+                var c chan[int32]
                 switch x {
                 case 1 {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 1
                 }
                 default {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 2
                 }
                 }
@@ -431,13 +416,12 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316SwitchNoDefault
 
-            import Gsharp.Extensions.Go
 
             func run(x int32) int32 {
-                var c chan int32
+                var c chan[int32]
                 switch x {
                 case 1 {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                 }
                 }
                 c <- 1
@@ -458,19 +442,18 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316SelectAll
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                let ready = make(chan int32, 1)
+                let ready = chan[int32](1)
                 ready <- 3
-                var c chan int32
+                var c chan[int32]
                 select {
                 case let v = <-ready {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- v
                 }
                 default {
-                    c = make(chan int32, 1)
+                    c = chan[int32](1)
                     c <- 9
                 }
                 }
@@ -490,10 +473,9 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316SelectChan
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 select {
                 case let v = <-c {
                     return v
@@ -522,12 +504,11 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316CaptureBefore
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 let f = func() int32 { return <-c }
-                c = make(chan int32, 1)
+                c = chan[int32](1)
                 c <- 1
                 return f()
             }
@@ -544,11 +525,10 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316CaptureAfter
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
-                c = make(chan int32, 1)
+                var c chan[int32]
+                c = chan[int32](1)
                 let f = func() int32 {
                     c <- 8
                     return <-c
@@ -581,16 +561,15 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316Goroutine
 
-            import Gsharp.Extensions.Go
 
-            func send(ch chan int32) int32 {
+            func send(ch chan[int32]) int32 {
                 ch <- 11
                 return 0
             }
 
             func run() int32 {
-                var c chan int32
-                c = make(chan int32)
+                var c chan[int32]
+                c = Chan.Unbounded[int32]()
                 go send(c)
                 return <-c
             }
@@ -608,14 +587,13 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316GoroutineBad
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 go func() {
                     c <- 11
                 }()
-                c = make(chan int32)
+                c = Chan.Unbounded[int32]()
                 return <-c
             }
 
@@ -633,14 +611,13 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316OutArg
 
-            import Gsharp.Extensions.Go
 
-            func mk(out ch chan int32) {
-                ch = make(chan int32, 1)
+            func mk(out ch chan[int32]) {
+                ch = chan[int32](1)
             }
 
             func run() int32 {
-                var c chan int32
+                var c chan[int32]
                 mk(&c)
                 c <- 3
                 return <-c
@@ -665,14 +642,13 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316ZeroValued
 
-            import Gsharp.Extensions.Go
 
             func run() int32 {
                 var i int32
                 var m map[int32, int32]
                 var sl []int32
                 m[1] = i
-                return m[1] + len(sl)
+                return m[1] + sl.Length
             }
 
             run()
@@ -691,9 +667,8 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316GlobalPin
 
-            import Gsharp.Extensions.Go
 
-            var c chan int32
+            var c chan[int32]
             0
             """);
 
@@ -706,14 +681,13 @@ public class Issue3316LocalDefiniteAssignmentTests
         var result = Compile("""
             package P3316Param
 
-            import Gsharp.Extensions.Go
 
-            func drain(c chan int32) int32 {
+            func drain(c chan[int32]) int32 {
                 return <-c
             }
 
             func run() int32 {
-                let c = make(chan int32, 1)
+                let c = chan[int32](1)
                 c <- 12
                 return drain(c)
             }

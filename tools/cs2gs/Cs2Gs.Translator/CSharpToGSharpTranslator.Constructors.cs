@@ -1153,7 +1153,7 @@ public sealed partial class CSharpToGSharpTranslator
             return null;
         }
 
-        private GTypeReference MapReturnType(IMethodSymbol symbol, MethodDeclarationSyntax node)
+        private GTypeReference MapReturnType(IMethodSymbol symbol, MethodDeclarationSyntax node, bool unwrapValueTask = false)
         {
             if (symbol != null)
             {
@@ -1202,8 +1202,14 @@ public sealed partial class CSharpToGSharpTranslator
                 // modifier synthesizes the `Task`/`Task<T>` envelope (samples
                 // AsyncTask.gs, AsyncValueReturns.gs). C# `async Task` → no return
                 // type; `async Task<int>` → `int32` (ADR-0115 §B async).
+                //
+                // ADR-0174 D4: a `suspend func` declares its logical result the
+                // same way, so a suspending candidate's `ValueTask`/`ValueTask<T>`
+                // is unwrapped too (unwrapValueTask); any other ValueTask method
+                // keeps the explicit envelope.
                 if (symbol.IsAsync &&
-                    returnType is INamedTypeSymbol { Name: "Task" } task &&
+                    returnType is INamedTypeSymbol { Name: "Task" or "ValueTask" } task &&
+                    (task.Name == "Task" || unwrapValueTask) &&
                     task.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
                 {
                     if (!task.IsGenericType)

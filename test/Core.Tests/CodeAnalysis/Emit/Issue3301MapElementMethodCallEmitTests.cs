@@ -157,13 +157,12 @@ public class Issue3301MapElementMethodCallEmitTests
         var result = EmittedOracle.Evaluate($$"""
             package P3301LenDelete
 
-            import Gsharp.Extensions.Go
 
             {{StructAndMapDecls}}
             m[2] = P{X: 7}
-            let before = len(m)
-            delete(m, 2)
-            before * 10 + len(m)
+            let before = m.Count
+            m.Remove(2)
+            before * 10 + m.Count
             """);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");

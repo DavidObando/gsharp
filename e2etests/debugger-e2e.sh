@@ -318,3 +318,181 @@ echo "==> netcoredbg session summary"
 grep -E "breakpoint-hit|stack-list-variables|variables=|name=\"a\"|name=\"b\"|name=\"sum\"|result=7" "$LOG" | head -20 || true
 
 echo "PASS: netcoredbg hit $GS_BREAK_FUNCTION at Lib.gs line $GS_BREAK_LINE — the SDK-produced Portable PDB drives a cross-language live debugger end-to-end."
+
+# ---------------------------------------------------------------------------
+# ADR-0174 P3-8 — the debugging gate for inferred suspension. A plain `func`
+# that receives from a channel is compiled as a suspending state machine;
+# the debugger must still (a) bind a file:line breakpoint inside its body,
+# (b) stop there with the G# source location, and (c) `-exec-next` across the
+# receive onto the next source line — driven by the Portable PDB's
+# async-method-stepping blob and the [AsyncStateMachine] kickoff attribute.
+# ---------------------------------------------------------------------------
+echo "==> ADR-0174: stepping through an inferred-suspending function"
+mkdir -p "$WORK/lib2"
+cp "$WORK/lib/global.json" "$WORK/lib/NuGet.config" "$WORK/lib2/"
+cat > "$WORK/lib2/Lib2.gsproj" <<EOF2
+<Project Sdk="Gsharp.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <DebugType>portable</DebugType>
+    <Optimize>false</Optimize>
+    <AssemblyName>GsLib2</AssemblyName>
+  </PropertyGroup>
+</Project>
+EOF2
+cat > "$WORK/lib2/Lib2.gs" <<'EOF2'
+package GsLib2
+import System
+public func Pipe() int32 {
+    let ch = chan[int32](1)
+    ch <- 20
+    let v = <-ch
+    var sum = v + 1
+    return sum
+}
+EOF2
+ASYNC_BREAK_LINE=6      # let v = <-ch
+ASYNC_NEXT_LINE_1=7     # var sum = v + 1
+ASYNC_NEXT_LINE_2=8     # return sum
+mkdir -p "$WORK/host2"
+cat > "$WORK/host2/Host2.csproj" <<EOF2
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+</Project>
+EOF2
+cat > "$WORK/host2/Program.cs" <<'EOF2'
+using System;
+using System.IO;
+using System.Reflection;
+using System.Threading.Tasks;
+public static class Program
+{
+    public static int Main()
+    {
+        var appDir = AppContext.BaseDirectory;
+        var asm = Assembly.LoadFrom(Path.Combine(appDir, "GsLib2.dll"));
+        var prog = asm.GetType("GsLib2.<Program>")!;
+        var pipe = prog.GetMethod("Pipe", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!;
+        // An inferred-suspending function returns ValueTask<int> and carries the
+        // ADR-0174 D7 hidden `Context` as a trailing OPTIONAL parameter. A C#
+        // caller compiled against it lets the compiler fill the default; a
+        // reflection caller has to say so, because Invoke's default binder is
+        // strict about arity. Passing Type.Missing under OptionalParamBinding is
+        // exactly the "a caller that predates the parameter still binds" claim
+        // the ABI makes (ADR-0174 errata 24), so this asserts it.
+        var pending = pipe.Invoke(
+            null,
+            BindingFlags.OptionalParamBinding,
+            binder: null,
+            new object[] { Type.Missing },
+            culture: null)!;
+        var task = (Task<int>)pending.GetType().GetMethod("AsTask")!.Invoke(pending, null)!;
+        var result = task.GetAwaiter().GetResult();
+        Console.WriteLine($"pipe={result}");
+        return result == 21 ? 0 : 1;
+    }
+}
+EOF2
+echo "==> dotnet build $WORK/lib2/Lib2.gsproj"
+dotnet build "$WORK/lib2/Lib2.gsproj" --nologo -v:q
+echo "==> dotnet build $WORK/host2/Host2.csproj"
+dotnet build "$WORK/host2/Host2.csproj" --nologo -v:q
+HOST2_BIN="$WORK/host2/bin/Debug/net10.0"
+cp "$WORK/lib2/bin/Debug/net10.0/GsLib2.dll" "$HOST2_BIN/GsLib2.dll"
+cp "$WORK/lib2/bin/Debug/net10.0/GsLib2.pdb" "$HOST2_BIN/GsLib2.pdb"
+cp "$WORK/lib2/bin/Debug/net10.0/Gsharp.Runtime.Channels.dll" "$HOST2_BIN/Gsharp.Runtime.Channels.dll"
+HOST2_EXE="$HOST2_BIN/Host2"
+LOG2="$WORK/dbg2.log"
+FIFO2="$WORK/dbg2.in"
+mkfifo "$FIFO2"
+exec 4<>"$FIFO2"
+( "$NETCOREDBG" --interpreter=mi < "$FIFO2" ) > "$LOG2" 2>&1 &
+DBG2_PID=$!
+{
+    echo "-file-exec-and-symbols $HOST2_EXE"
+    echo "-interpreter-exec console \"set just-my-code 0\""
+    echo "-break-insert -f Lib2.gs:$ASYNC_BREAK_LINE"
+    echo "-exec-run"
+} >&4
+
+# Waits until the log holds at least $1 "*stopped" events (or the debuggee
+# exits); prints the last one.
+wait_for_stopped() {
+    local want=$1 waited=0
+    while kill -0 "$DBG2_PID" 2>/dev/null; do
+        local have
+        have=$(grep -c "^\*stopped" "$LOG2" 2>/dev/null || true)
+        if [[ ${have:-0} -ge $want ]]; then
+            grep "^\*stopped" "$LOG2" | sed -n "${want}p"
+            return 0
+        fi
+        if grep -q '\*stopped,reason="exited' "$LOG2" 2>/dev/null; then
+            return 1
+        fi
+        sleep 0.2
+        waited=$((waited+1))
+        if [[ $waited -ge 300 ]]; then  # ~60s
+            return 1
+        fi
+    done
+    return 1
+}
+
+fail2() {
+    echo "FAIL: $*"
+    echo "----- log -----"
+    cat "$LOG2"
+    kill "$DBG2_PID" 2>/dev/null || true
+    exit 1
+}
+
+STOP_INDEX=0
+HIT2=""
+while :; do
+    STOP_INDEX=$((STOP_INDEX+1))
+    EVENT=$(wait_for_stopped "$STOP_INDEX") || fail2 "timed out waiting for the breakpoint inside the suspending function"
+    if [[ "$EVENT" == *'reason="breakpoint-hit"'* ]]; then
+        HIT2="$EVENT"
+        break
+    fi
+    echo "-exec-continue" >&4
+done
+[[ "$HIT2" == *"Lib2.gs"* ]] || fail2 "breakpoint hit was not on Lib2.gs"
+[[ "$HIT2" == *"line=\"$ASYNC_BREAK_LINE\""* ]] || fail2 "breakpoint hit was not on Lib2.gs:$ASYNC_BREAK_LINE"
+echo "-stack-list-frames" >&4
+sleep 1
+echo "-exec-next" >&4
+STOP_INDEX=$((STOP_INDEX+1))
+EVENT=$(wait_for_stopped "$STOP_INDEX") || fail2 "timed out stepping over the channel receive"
+[[ "$EVENT" == *'reason="end-stepping-range"'* ]] || fail2 "step over the receive did not end a stepping range: $EVENT"
+[[ "$EVENT" == *"line=\"$ASYNC_NEXT_LINE_1\""* ]] || fail2 "step over the receive did not land on Lib2.gs:$ASYNC_NEXT_LINE_1: $EVENT"
+echo "-exec-next" >&4
+STOP_INDEX=$((STOP_INDEX+1))
+EVENT=$(wait_for_stopped "$STOP_INDEX") || fail2 "timed out stepping to the return"
+[[ "$EVENT" == *"line=\"$ASYNC_NEXT_LINE_2\""* ]] || fail2 "second step did not land on Lib2.gs:$ASYNC_NEXT_LINE_2: $EVENT"
+echo "-break-delete 1" >&4
+echo "-exec-continue" >&4
+WAIT=0
+while kill -0 "$DBG2_PID" 2>/dev/null; do
+    if grep -q '\*stopped,reason="exited' "$LOG2" 2>/dev/null || grep -q "pipe=21" "$LOG2" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+    WAIT=$((WAIT+1))
+    if [[ $WAIT -ge 150 ]]; then
+        break
+    fi
+done
+echo "-gdb-exit" >&4 2>/dev/null || true
+exec 4>&-
+wait "$DBG2_PID" 2>/dev/null || true
+grep -q "pipe=21" "$LOG2" || fail2 "program did not complete (expected 'pipe=21' in output)"
+echo "==> netcoredbg async session summary"
+grep -E "breakpoint-hit|end-stepping-range|func=|pipe=21" "$LOG2" | head -12 || true
+echo "PASS: netcoredbg stopped inside the inferred-suspending GsLib2.Pipe at Lib2.gs:$ASYNC_BREAK_LINE and stepped over the channel receive onto lines $ASYNC_NEXT_LINE_1 and $ASYNC_NEXT_LINE_2 (ADR-0174 P3-8)."

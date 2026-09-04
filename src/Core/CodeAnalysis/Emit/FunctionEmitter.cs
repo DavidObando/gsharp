@@ -150,6 +150,7 @@ internal sealed class FunctionEmitter
         IReadOnlyList<LocalConstantInfo>? capturedConstants = null;
         int capturedCodeSize = 0;
         StandaloneSignatureHandle capturedLocalsSignature = default;
+        AsyncMethodSteppingInfo? capturedAsyncStepping = null;
         if (!this.emitCtx.MetadataOnly)
         {
             var moveNextBody = MoveNextBodyRewriter.Build(plan);
@@ -201,6 +202,7 @@ internal sealed class FunctionEmitter
             capturedConstants = MethodBodyPlanner.CollectLocalConstantInfo(session.ConstValues);
             capturedCodeSize = il.Offset;
             capturedLocalsSignature = localsSignature;
+            capturedAsyncStepping = emitter.AsyncStepping;
         }
 
         return new StateMachineEmitter.MoveNextBodyResult(
@@ -209,7 +211,8 @@ internal sealed class FunctionEmitter
             capturedLocals,
             capturedConstants,
             capturedCodeSize,
-            capturedLocalsSignature);
+            capturedLocalsSignature,
+            capturedAsyncStepping);
     }
 
     internal MethodDefinitionHandle EmitFunction(FunctionSymbol function, BoundBlockStatement body, bool isEntryPoint)
@@ -262,7 +265,7 @@ internal sealed class FunctionEmitter
         // Async kickoff body: replace the user body with the kickoff stub
         // that creates the state machine, initializes it, and calls Start.
         AsyncStateMachinePlan? asyncPlan = null;
-        if (function.IsAsync && function.StateMachineType != null)
+        if (function.IsAsyncOrSuspending && function.StateMachineType != null)
         {
             foreach (var plan in this.outer.stateMachines.AsyncStateMachinePlans)
             {
@@ -335,14 +338,15 @@ internal sealed class FunctionEmitter
                 }
 
                 var emittedParameterIndex = 0;
-                for (var i = 0; i < function.Parameters.Length; i++)
+                var emittedParameters = function.EmittedParameters;
+                for (var i = 0; i < emittedParameters.Length; i++)
                 {
-                    if (ReferenceEquals(function.Parameters[i], function.ThisParameter))
+                    if (ReferenceEquals(emittedParameters[i], function.ThisParameter))
                     {
                         continue;
                     }
 
-                    parameters[function.Parameters[i]] = emittedParameterIndex + paramSlotShift;
+                    parameters[emittedParameters[i]] = emittedParameterIndex + paramSlotShift;
                     emittedParameterIndex++;
                 }
 
@@ -412,7 +416,7 @@ internal sealed class FunctionEmitter
     {
         var sigBlob = new BlobBuilder();
         bool emitsExplicitReceiver = function.IsExtension && !function.IsInstanceMethod;
-        var signatureParameterCount = function.Parameters.Length
+        var signatureParameterCount = function.EmittedParameters.Length
             - (function.ExplicitReceiverParameter != null && !emitsExplicitReceiver ? 1 : 0);
         new BlobEncoder(sigBlob).MethodSignature(
                 isInstanceMethod: function.IsInstanceMethod,
@@ -445,7 +449,7 @@ internal sealed class FunctionEmitter
                 },
                 ps =>
                 {
-                    foreach (var p in function.Parameters)
+                    foreach (var p in function.EmittedParameters)
                     {
                         if (ReferenceEquals(p, function.ThisParameter)
                             && !emitsExplicitReceiver)
@@ -661,7 +665,7 @@ internal sealed class FunctionEmitter
             ? ImmutableArray<byte>.Empty
             : NullableFlagsBuilder.Build(function.Type);
         var paramFlagsList = new List<ImmutableArray<byte>>();
-        foreach (var p in function.Parameters)
+        foreach (var p in function.EmittedParameters)
         {
             if (ReferenceEquals(p, function.ThisParameter)
                 && !(function.IsExtension && !function.IsInstanceMethod))
@@ -705,7 +709,7 @@ internal sealed class FunctionEmitter
         var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle, ImmutableArray<byte> NullableFlags)>();
         var sequenceNumber = 1;
         var flagsIndex = 0;
-        foreach (var p in function.Parameters)
+        foreach (var p in function.EmittedParameters)
         {
             if (ReferenceEquals(p, function.ThisParameter))
             {
@@ -919,6 +923,13 @@ internal sealed class FunctionEmitter
         if (function.IsExtension && !function.IsInstanceMethod)
         {
             this.outer.EmitExtensionAttribute(handle);
+        }
+
+        // ADR-0174 D4: a suspending function is labelled so a G# caller in
+        // another assembly reads the logical return type and awaits implicitly.
+        if (function.IsSuspending)
+        {
+            this.outer.EmitSuspendingAttribute(handle);
         }
     }
 

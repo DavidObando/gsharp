@@ -278,20 +278,11 @@ public static class SpillSequenceSpiller
                 case BoundYieldStatement yieldStatement:
                     return RewriteYieldStatement(yieldStatement, builder);
 
-                case BoundChannelSendStatement channelSend:
-                    return RewriteChannelSendStatement(channelSend, builder);
-
                 case BoundGoStatement goStatement:
                     return RewriteGoStatement(goStatement, builder);
 
-                case BoundSelectStatement selectStatement:
-                    return RewriteSelectStatement(selectStatement, builder);
-
                 case BoundPatternSwitchStatement patternSwitchStatement:
                     return RewritePatternSwitchStatement(patternSwitchStatement, builder);
-
-                case BoundScopeStatement scopeStatement:
-                    return RewriteScopeStatement(scopeStatement, builder);
 
                 case BoundIfStatement ifStmt:
                     return RewriteIfStatement(ifStmt, builder);
@@ -333,24 +324,6 @@ public static class SpillSequenceSpiller
             }
         }
 
-        private bool RewriteScopeStatement(
-            BoundScopeStatement scopeStatement,
-            ImmutableArray<BoundStatement>.Builder builder)
-        {
-            var bodyBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
-            if (!RewriteStatementToList(scopeStatement.Body, bodyBuilder))
-            {
-                builder.Add(scopeStatement);
-                return false;
-            }
-
-            var body = bodyBuilder.Count == 1
-                ? bodyBuilder[0]
-                : new BoundBlockStatement(null, bodyBuilder.ToImmutable());
-            builder.Add(new BoundScopeStatement(scopeStatement.Syntax, body));
-            return true;
-        }
-
         private bool RewriteVariableDeclaration(BoundVariableDeclaration decl, ImmutableArray<BoundStatement>.Builder builder)
         {
             if (decl.Initializer == null || !HasAwait(decl.Initializer))
@@ -361,7 +334,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(decl.Initializer);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundVariableDeclaration(null, decl.Variable, spilled.Value));
+            builder.Add(new BoundVariableDeclaration(decl.Syntax, decl.Variable, spilled.Value));
             return true;
         }
 
@@ -399,7 +372,7 @@ public static class SpillSequenceSpiller
             FlushSideEffects(spilled, builder);
             if (spilled.Value is not BoundLiteralExpression)
             {
-                builder.Add(new BoundExpressionStatement(null, spilled.Value));
+                builder.Add(new BoundExpressionStatement(exprStmt.Syntax, spilled.Value));
             }
 
             return true;
@@ -420,7 +393,7 @@ public static class SpillSequenceSpiller
             // would leak an un-rewritten await to the emitter (issue #132).
             var spilled = SpillExpression(ret.Expression);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundReturnStatement(null, spilled.Value));
+            builder.Add(new BoundReturnStatement(ret.Syntax, spilled.Value));
             return true;
         }
 
@@ -522,56 +495,6 @@ public static class SpillSequenceSpiller
             return new BoundBlockExpression(null, spilled.SideEffects, spilled.Value);
         }
 
-        private bool RewriteSelectStatement(
-            BoundSelectStatement selectStatement,
-            ImmutableArray<BoundStatement>.Builder builder)
-        {
-            var spillHeader = selectStatement.Cases.Any(selectCase =>
-                (selectCase.Channel != null && HasAwait(selectCase.Channel))
-                || (selectCase.Value != null && HasAwait(selectCase.Value)));
-            var changed = spillHeader;
-            var cases = ImmutableArray.CreateBuilder<BoundSelectCase>(selectStatement.Cases.Length);
-
-            foreach (var selectCase in selectStatement.Cases)
-            {
-                var channel = selectCase.Channel;
-                if (spillHeader && channel != null)
-                {
-                    channel = SpillAndCaptureSelectOperand(channel, builder);
-                }
-
-                var value = selectCase.Value;
-                if (spillHeader && value != null)
-                {
-                    value = SpillAndCaptureSelectOperand(value, builder);
-                }
-
-                var bodyBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
-                var bodyChanged = RewriteStatementToList(selectCase.Body, bodyBuilder);
-                var body = bodyChanged
-                    ? bodyBuilder.Count == 1
-                        ? bodyBuilder[0]
-                        : new BoundBlockStatement(null, bodyBuilder.ToImmutable())
-                    : selectCase.Body;
-                changed |= bodyChanged;
-                cases.Add(new BoundSelectCase(
-                    selectCase.CaseKind,
-                    channel,
-                    value,
-                    selectCase.Variable,
-                    body));
-            }
-
-            if (!changed)
-            {
-                builder.Add(selectStatement);
-                return false;
-            }
-
-            builder.Add(new BoundSelectStatement(selectStatement.Syntax, cases.MoveToImmutable()));
-            return true;
-        }
-
         private BoundExpression SpillAndCaptureSelectOperand(
             BoundExpression expression,
             ImmutableArray<BoundStatement>.Builder builder)
@@ -588,45 +511,6 @@ public static class SpillSequenceSpiller
             return new BoundVariableExpression(null, temp);
         }
 
-        private bool RewriteChannelSendStatement(
-            BoundChannelSendStatement channelSend,
-            ImmutableArray<BoundStatement>.Builder builder)
-        {
-            var channelNeedsSpill = HasAwait(channelSend.Channel);
-            var valueNeedsSpill = HasAwait(channelSend.Value);
-            if (!channelNeedsSpill && !valueNeedsSpill)
-            {
-                builder.Add(channelSend);
-                return false;
-            }
-
-            var channel = channelSend.Channel;
-            if (channelNeedsSpill)
-            {
-                var spilledChannel = SpillExpression(channel);
-                FlushSideEffects(spilledChannel, builder);
-                channel = spilledChannel.Value;
-            }
-
-            if (valueNeedsSpill && !CanDeferAcrossLift(channel))
-            {
-                var channelTemp = MakeSpillTemp(channel.Type);
-                builder.Add(new BoundVariableDeclaration(null, channelTemp, channel));
-                channel = new BoundVariableExpression(null, channelTemp);
-            }
-
-            var value = channelSend.Value;
-            if (valueNeedsSpill)
-            {
-                var spilledValue = SpillExpression(value);
-                FlushSideEffects(spilledValue, builder);
-                value = spilledValue.Value;
-            }
-
-            builder.Add(new BoundChannelSendStatement(null, channel, value));
-            return true;
-        }
-
         private bool RewriteGoStatement(
             BoundGoStatement goStatement,
             ImmutableArray<BoundStatement>.Builder builder)
@@ -639,7 +523,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(goStatement.Expression);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundGoStatement(null, spilled.Value));
+            builder.Add(new BoundGoStatement(goStatement.Syntax, spilled.Value, goStatement.Sink, goStatement.ResultCell, goStatement.ResultType));
             return true;
         }
 
@@ -713,7 +597,7 @@ public static class SpillSequenceSpiller
                 return false;
             }
 
-            builder.Add(new BoundIfStatement(null, condition, thenStmt, elseStmt));
+            builder.Add(new BoundIfStatement(ifStmt.Syntax, condition, thenStmt, elseStmt));
             return true;
         }
 
@@ -747,7 +631,7 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(gotoStmt.Condition);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundConditionalGotoStatement(null, gotoStmt.Label, spilled.Value, gotoStmt.JumpIfTrue));
+            builder.Add(new BoundConditionalGotoStatement(gotoStmt.Syntax, gotoStmt.Label, spilled.Value, gotoStmt.JumpIfTrue));
             return true;
         }
 
@@ -772,7 +656,7 @@ public static class SpillSequenceSpiller
                 var body = RewriteNestedBody(clause.Body, out var clauseChanged);
                 catchesChanged |= clauseChanged;
                 catchBuilder.Add(clauseChanged
-                    ? new BoundCatchClause(clause.ExceptionType, clause.Variable, body)
+                    ? clause.WithBody(body)
                     : clause);
             }
 
@@ -1088,48 +972,10 @@ public static class SpillSequenceSpiller
                         len,
                         len.Operand,
                         operand => new BoundLenExpression(null, operand));
-                case BoundCapExpression cap:
-                    return SpillOneOperand(
-                        cap,
-                        cap.Operand,
-                        operand => new BoundCapExpression(null, operand));
-                case BoundAppendExpression append:
-                    return SpillTwoOperand(
-                        append,
-                        append.Slice,
-                        append.Element,
-                        (slice, element) =>
-                            new BoundAppendExpression(null, slice, element, append.SliceType));
                 case BoundStructLiteralExpression structLiteral:
                     return SpillStructLiteral(structLiteral);
-                case BoundMakeChannelExpression makeChannel:
-                    if (makeChannel.Capacity == null)
-                    {
-                        return Trivial(makeChannel);
-                    }
-
-                    return SpillOneOperand(
-                        makeChannel,
-                        makeChannel.Capacity,
-                        capacity => new BoundMakeChannelExpression(null, makeChannel.ChannelType, capacity));
-                case BoundChannelReceiveExpression channelReceive:
-                    return SpillOneOperand(
-                        channelReceive,
-                        channelReceive.Channel,
-                        channel => new BoundChannelReceiveExpression(null, channel, channelReceive.Type));
-                case BoundChannelCloseExpression channelClose:
-                    return SpillOneOperand(
-                        channelClose,
-                        channelClose.Channel,
-                        channel => new BoundChannelCloseExpression(null, channel));
                 case BoundMapLiteralExpression mapLiteral:
                     return SpillMapLiteral(mapLiteral);
-                case BoundMapDeleteExpression mapDelete:
-                    return SpillTwoOperand(
-                        mapDelete,
-                        mapDelete.Map,
-                        mapDelete.Key,
-                        (map, key) => new BoundMapDeleteExpression(null, map, key));
                 case BoundIsExpression isExpr:
                     return SpillOneOperand(
                         isExpr,

@@ -1,7 +1,7 @@
 // file: PortScan.gs
 //
 // Phase 5 exit sample. Combines the entire Go-shaped concurrency surface that
-// landed in Phase 5: `chan T` (5.4), send/receive (5.5), `go` (5.3), structured
+// landed in Phase 5: `chan[T]` (5.4), send/receive (5.5), `go` (5.3), structured
 // concurrency `scope { ... }` (5.7), and a `select { ... }` with a timeout arm
 // (5.6). The synthetic "scanner" assigns even
 // ports as open and odd ports as closed; the timeout demo prefers a pre-loaded
@@ -16,9 +16,8 @@ package GSharp.Samples.PortScan
 
 import System
 import System.Threading
-import Gsharp.Extensions.Go
 
-func scan(port int32, results chan int32) {
+func scan(port int32, results chan[int32]) {
     Thread.Sleep(5)
     if port % 2 == 0 {
         results <- port
@@ -27,7 +26,7 @@ func scan(port int32, results chan int32) {
     }
 }
 
-let results = make(chan int32, 4)
+let results = chan[int32](4)
 scope {
     go scan(80, results)
     go scan(81, results)
@@ -53,10 +52,11 @@ for i < 4 {
 Console.WriteLine("open ports: $opened")
 
 // Timeout demo: a slow worker that never arrives, raced against a buffered
-// "timeout" channel pre-loaded with a sentinel. The select picks the ready
-// arm deterministically (source order, TryRead succeeds first).
-let slow = make(chan int32, 1)
-let timeoutCh = make(chan int32, 1)
+// "timeout" channel pre-loaded with a sentinel. Only one arm is ever ready, so
+// the choice is deterministic without depending on the order the arms are
+// written — see Timeout.gs for the same shape written with `after(d)`.
+let slow = chan[int32](1)
+let timeoutCh = chan[int32](1)
 timeoutCh <- 1
 select {
 case let v = <-slow {

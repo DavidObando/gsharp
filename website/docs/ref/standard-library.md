@@ -38,61 +38,55 @@ G# does not perform cross-type operator promotion. Binary operators are defined 
 
 Shift counts are `int32`. Compound assignments exist for the corresponding binary operators: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `&^=`, `<<=`, and `>>=`.
 
-## Intrinsic functions and operations
+## Intrinsic operations
 
-These names are recognized specially by the binder. They are language intrinsics, not methods imported from the BCL.
+Channel operations are recognized specially by the binder; they are language syntax, not methods imported from the BCL, and they need no import (ADR-0174).
 
-| Intrinsic | Form | Supported operands | Result | Import required |
-| --- | --- | --- | --- | --- |
-| `len` | `len(x)` | arrays, slices, strings, maps | `int32` length/count | `Gsharp.Extensions.Go` |
-| `cap` | `cap(x)` | arrays, slices | `int32` capacity | `Gsharp.Extensions.Go` |
-| `append` | `append(slice, value)` | first argument must be `[]T`; second converts to `T` | new `[]T` containing the appended value | `Gsharp.Extensions.Go` |
-| `delete` | `delete(map, key)` | first argument must be `map[K,V]`; key converts to `K` | no value; removes the key if present | `Gsharp.Extensions.Go` |
-| `close` | `close(ch)` | `chan T` | no value; completes the channel writer | `Gsharp.Extensions.Go` |
-| `make` | `make(chan T)` or `make(chan T, capacity)` | channel creation only | `chan T` | `Gsharp.Extensions.Go` |
-| receive | `<-ch` | `chan T` | next `T` value, or the closed-channel default value | `Gsharp.Extensions.Go` |
-| send | `ch <- value` | left side `chan T`; value converts to `T` | statement | `Gsharp.Extensions.Go` |
+| Operation | Form | Operands | Result |
+| --- | --- | --- | --- |
+| construct | `chan[T]()`, `chan[T](capacity)`, `Chan.Unbounded[T]()` | rendezvous (capacity 0), buffered, unbounded | `Chan[T]`, which is a `chan[T]` |
+| receive | `<-ch` | `chan[T]` or `in chan[T]` | next `T`, or `T`'s zero value once the channel is closed and drained |
+| two-value receive | `let (v, ok) = <-ch`, `v, ok = <-ch` | `chan[T]` or `in chan[T]` | the element and whether the channel delivered it |
+| send | `ch <- value` | `chan[T]` or `out chan[T]`; value converts to `T` | statement |
+| drain | `for v in ch { … }`, `while let v = <-ch { … }` | `chan[T]` or `in chan[T]` | loops until the channel is closed |
+| close | `ch.Close()` | `chan[T]` or `out chan[T]` | member call; closing twice throws, `Dispose()` is idempotent |
+| `select` | `select { case … }` | channel operations | runs the first ready case |
 
-Every intrinsic above requires `import Gsharp.Extensions.Go` in the same compilation unit. The binder emits `GS0317` for `len`, `cap`, `append`, and `delete` without the import — the message names the .NET-idiomatic alternative (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`) when one exists. The channel-cluster intrinsics (`close`, `make(chan T)`, `<-`, `select`) report `GS0316` from the same root cause; a single `import Gsharp.Extensions.Go` unlocks both clusters.
-
-`make` is currently special-cased only for channel creation; it is not a general allocator for slices or maps.
+The Go-style built-in functions `len`, `cap`, `append`, `delete`, `close(ch)`, and `make(chan T)` are **retired** (ADR-0174 D12/D13). A call reports `GS0566` naming the member replacement for the site — `xs.Length`, `m.Count`, `m.Remove(k)`, `ch.Length()`, `ch.Capacity`, `ch.Close()`, `chan[T](n)` — and a user-defined function of the same name is an ordinary call. See [Go-style built-ins (retired)](../extensions/go-builtins) for the full table.
 
 ```gsharp
-import Gsharp.Extensions.Go
-
-let ch = make(chan int32, 3)
+let ch = chan[int32](3)
 ch <- 1
-close(ch)
+ch.Close()
 let value = <-ch
+let (after, ok) = <-ch   // 0, false
 ```
 
 ## Arrays and slices
 
-Fixed arrays use `[N]T`; slices use `[]T`. Literals use the same shape with an initializer body. Slices are backed by CLR arrays in the current implementation; `append` allocates and copies a new array.
+Fixed arrays use `[N]T`; slices use `[]T`. Literals use the same shape with an initializer body. A slice **is** a CLR array (`[]T` is `T[]`), so its length is `.Length` and there is no separate capacity; the growable shape is `List[T]` with `Add`.
 
 ```gsharp
-import Gsharp.Extensions.Go
+import System.Collections.Generic
 
 var nums = []int32{10, 20, 30}
-Console.WriteLine(len(nums))
-Console.WriteLine(cap(nums))
-nums = append(nums, 40)
-Console.WriteLine(nums[3])
+Console.WriteLine(nums.Length)
+var grown = List[int32]()
+grown.Add(40)
+Console.WriteLine(grown[0])
 ```
 
-Arrays and slices support indexing, index assignment when mutable, `len`, and `cap`. `for i in 0 ... len(nums)` is the common indexed loop form; `for x in nums` is the canonical iteration form. The legacy Go-style `for x := range nums` spelling is not supported. The `len`/`cap`/`append` calls above require `import Gsharp.Extensions.Go`; without the import, the equivalent `.NET`-idiomatic code uses `nums.Length` and a mutable `List[int32]` for `Add` semantics.
+Arrays and slices support indexing, index assignment when mutable, and `.Length`. `for i in 0 ... nums.Length` is the common indexed loop form; `for x in nums` is the canonical iteration form. The legacy Go-style `for x := range nums` spelling is not supported.
 
 ## Maps
 
-Map types are written `map[K,V]` and are backed by `Dictionary<K,V>`. Map literals use key/value entries, indexing reads values, index assignment writes values, `delete` removes a key, and `len` returns the current count. Both `delete` and `len` require `import Gsharp.Extensions.Go`; the .NET-idiomatic equivalents are `counts.Remove("missing")` and `counts.Count`.
+Map types are written `map[K,V]` and are backed by `Dictionary<K,V>` — the type **is** `Dictionary[K,V]`, so `.Remove(k)` removes a key and `.Count` is the current entry count. Map literals use key/value entries, indexing reads values, and index assignment writes values.
 
 ```gsharp
-import Gsharp.Extensions.Go
-
 var counts = map[string,int32]{"gsharp": 1}
 counts["gsharp"] = counts["gsharp"] + 1
-delete(counts, "missing")
-Console.WriteLine(len(counts))
+counts.Remove("missing")
+Console.WriteLine(counts.Count)
 ```
 
 The .NET `Dictionary[K,V]` type is also usable through CLR interop when you import `System.Collections.Generic`; that surface is the BCL, not the language-defined map intrinsic.
@@ -109,7 +103,6 @@ The `Gsharp.Extensions` assembly ships with `Gsharp.NET.Sdk` and is referenced b
 
 - `Gsharp.Extensions.Optional` — extension methods on `T?` for projection, fallback, side-effects, and filtering.
 - `Gsharp.Extensions.Sequences` — static builders and extension transformers over `sequence[T]`.
-- `Gsharp.Extensions.Go` — Go-flavored concurrency surface and built-ins gated behind the import.
 - `Gsharp.Extensions.Sync` — synchronization helpers for state shared across goroutines; currently `SyncMap[K, V]`.
 
 ### Gsharp.Extensions.Optional
@@ -170,10 +163,6 @@ G#-shaped collectors:
 | `ToMap` (selector form) | `func [T, K, V] (self sequence[T]) ToMap(keyFn (T) -> K, valueFn (T) -> V) map[K,V]` | Project each element to a `(K, V)` pair, then build the map. |
 
 `FirstOrNil` / `LastOrNil` / `SingleOrNil` (plus the `*ValueOrNil` companions), `Indexed`, `Of`, and `Empty` carry `[MethodImpl(MethodImplOptions.AggressiveInlining)]`. The iterator-block transformers (`Windowed`, `Chunked`, `Pairwise`, `Interleave`, `Range`, `RangeStep`, `Iterate`, `Repeat`) are intentionally **not** inlined — their bodies are compiler-generated state machines that the JIT does not inline.
-
-### Gsharp.Extensions.Go
-
-The Go-flavored concurrency cluster — `go`, `chan T`, `<-`, `select`, `close(ch)`, `make(chan T)` — and the Go-style built-ins `len`, `cap`, `append`, `delete`, `make` are all gated behind `import Gsharp.Extensions.Go`. The [Intrinsic functions](#intrinsic-functions-and-operations) table above summarises the diagnostic codes the binder emits when the import is missing.
 
 ### Gsharp.Extensions.Sync
 

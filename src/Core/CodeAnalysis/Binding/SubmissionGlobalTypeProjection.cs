@@ -53,10 +53,11 @@ internal static class SubmissionGlobalTypeProjection
         switch (declaredType)
         {
             case ChannelTypeSymbol declaredChannel:
-                if (TryGetChannelElement(clrFieldType, out var elementClr)
+                if (TryGetChannelElement(clrFieldType, out var elementClr, out var direction)
+                    && direction == declaredChannel.Direction
                     && TryProjectComponent(elementClr, declaredChannel.ElementType, references, out var element))
                 {
-                    return ChannelTypeSymbol.Get(element);
+                    return ChannelTypeSymbol.Get(element, direction);
                 }
 
                 break;
@@ -111,16 +112,35 @@ internal static class SubmissionGlobalTypeProjection
         return true;
     }
 
-    // Matches the emitted backing shape of `chan T` — a closed
-    // `System.Threading.Channels.Channel<T>` — by open-definition full name,
-    // so types seen through a MetadataLoadContext still match.
-    private static bool TryGetChannelElement(Type clrFieldType, [NotNullWhen(true)] out Type? elementClr)
+    // Matches the emitted backing shape of a channel type clause (ADR-0174 D2)
+    // — a closed `Channel<T>` (chan[T]), `ChannelReader<T>` (in chan[T]) or
+    // `ChannelWriter<T>` (out chan[T]) — by open-definition full name, so
+    // types seen through a MetadataLoadContext still match. The runtime's
+    // constructed `Chan<T>` is deliberately NOT matched: a global declared by
+    // construction (`let ch = chan[T](1)`) keeps its imported class type so
+    // `Length()`/`Capacity`/`Close()` stay bindable in later cells.
+    private static bool TryGetChannelElement(Type clrFieldType, [NotNullWhen(true)] out Type? elementClr, out ChannelDirection direction)
     {
         elementClr = null;
-        if (clrFieldType is not { IsGenericType: true }
-            || !string.Equals(clrFieldType.GetGenericTypeDefinition().FullName, "System.Threading.Channels.Channel`1", StringComparison.Ordinal))
+        direction = ChannelDirection.Both;
+        if (clrFieldType is not { IsGenericType: true })
         {
             return false;
+        }
+
+        switch (clrFieldType.GetGenericTypeDefinition().FullName)
+        {
+            case "System.Threading.Channels.Channel`1":
+                direction = ChannelDirection.Both;
+                break;
+            case "System.Threading.Channels.ChannelReader`1":
+                direction = ChannelDirection.In;
+                break;
+            case "System.Threading.Channels.ChannelWriter`1":
+                direction = ChannelDirection.Out;
+                break;
+            default:
+                return false;
         }
 
         elementClr = clrFieldType.GetGenericArguments()[0];

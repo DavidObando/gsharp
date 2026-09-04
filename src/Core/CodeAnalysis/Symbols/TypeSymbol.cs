@@ -1214,7 +1214,7 @@ public class TypeSymbol : Symbol
                 var channelElement = substitute(channel.ElementType);
                 result = ReferenceEquals(channelElement, channel.ElementType)
                     ? type
-                    : ChannelTypeSymbol.Get(channelElement);
+                    : ChannelTypeSymbol.Get(channelElement, channel.Direction);
                 return true;
             case MapTypeSymbol map:
                 var mapKey = substitute(map.KeyType);

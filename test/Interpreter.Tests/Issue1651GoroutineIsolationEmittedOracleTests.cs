@@ -53,7 +53,7 @@ public class Issue1651GoroutineIsolationEmittedOracleTests
         // locals-frame setup, about to hit `return`) concurrently with the
         // caller's remaining statements via a rendezvous channel.
         var source = """
-            let started = make(chan int32, 1)
+            let started = chan[int32](1)
 
             func spawnee() int32 {
                 started <- 1
@@ -112,7 +112,7 @@ public class Issue1651GoroutineIsolationEmittedOracleTests
         // not a fresh empty stack — it must still resolve variables its
         // closure captured from the enclosing scope, like a real closure.
         var source = """
-            let ch = make(chan int32, 1)
+            let ch = chan[int32](1)
 
             func run() int32 {
                 let x = 10
@@ -158,7 +158,7 @@ public class Issue1651GoroutineIsolationEmittedOracleTests
         System.Exception thrown = null;
         try
         {
-            result = EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
+            result = EmittedOracle.Evaluate(source);
         }
         catch (System.Exception ex)
         {
@@ -176,7 +176,7 @@ public class Issue1651GoroutineIsolationEmittedOracleTests
         // Baseline channel regression: unbuffered send/receive across a
         // fire-and-forget goroutine must still rendezvous correctly.
         var source = """
-            let ch = make(chan int32)
+            let ch = Chan.Unbounded[int32]()
 
             func send() int32 {
                 ch <- 7
@@ -251,7 +251,7 @@ public class Issue1651GoroutineIsolationEmittedOracleTests
     private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: `go` is gated behind this import.
-        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var fullSource = source;
         return EmittedOracle.Evaluate(fullSource);
     }
 

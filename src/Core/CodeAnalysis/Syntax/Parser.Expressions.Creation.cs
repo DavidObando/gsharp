@@ -325,9 +325,13 @@ public partial class Parser
         // right after the element identifier can only start a type-argument
         // list or dotted-name tail in this array-element-type position, never
         // an index or member-access expression.
+        // ADR-0174 D2: `in`/`out` are contextual identifiers, so an element type
+        // headed by one (`[]in chan[T]{ … }`) must take the composite path or
+        // the direction would be read as the element's type name.
         if (Current.Kind != SyntaxKind.IdentifierToken
             || Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
-            || Peek(1).Kind == SyntaxKind.DotToken)
+            || Peek(1).Kind == SyntaxKind.DotToken
+            || IsChannelDirectionHead())
         {
             var nestedElementType = ParseTypeClause();
             var (nestedOpenBrace, nestedElements, nestedCloseBrace, nestedHasElements) =
@@ -897,6 +901,13 @@ public partial class Parser
             return false;
         }
 
+        // ADR-0174 D2: a directional channel head, not an element name.
+        if ((Peek(pos).Text == "in" || Peek(pos).Text == "out")
+            && Peek(pos + 1).Kind == SyntaxKind.ChanKeyword)
+        {
+            return false;
+        }
+
         switch (Peek(pos + 1).Kind)
         {
             case SyntaxKind.IdentifierToken:
@@ -1056,11 +1067,30 @@ public partial class Parser
             return TryScanMapTypeClause(ref pos);
         }
 
+        // ADR-0174 D2: `[in|out] chan[T]?`, plus the retired `chan T` shape so
+        // ParseTypeClause can report its span-accurate GS0567.
+        if (Peek(pos).Kind == SyntaxKind.IdentifierToken
+            && (Peek(pos).Text == "in" || Peek(pos).Text == "out")
+            && Peek(pos + 1).Kind == SyntaxKind.ChanKeyword)
+        {
+            pos++;
+        }
+
         if (Peek(pos).Kind == SyntaxKind.ChanKeyword)
         {
             isComplex = true;
             pos++;
-            if (!TryScanTypeClause(ref pos))
+            if (Peek(pos).Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                pos++;
+                if (!TryScanTypeClause(ref pos) || Peek(pos).Kind != SyntaxKind.CloseSquareBracketToken)
+                {
+                    return false;
+                }
+
+                pos++;
+            }
+            else if (!TryScanTypeClause(ref pos))
             {
                 return false;
             }

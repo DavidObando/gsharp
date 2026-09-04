@@ -165,6 +165,15 @@ internal sealed class ClosureEmitter
     public Dictionary<BoundGoStatement, ClosureInfo> GoClosureInfos { get; } = [];
 
     /// <summary>
+    /// Gets the go closures by the go statement's syntax. A go statement inside an
+    /// async or suspending body reaches the emitter as a node the state-machine
+    /// rewriters rebuilt (its operand's locals became hoisted-field reads), so
+    /// node identity alone cannot find the closure synthesized from the
+    /// original body; the syntax can.
+    /// </summary>
+    public Dictionary<Syntax.SyntaxNode, ClosureInfo> GoClosureInfosBySyntax { get; } = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
     /// Gets the reverse map from a closure-invoke <see cref="FunctionSymbol"/> to
     /// its <see cref="ClosureInfo"/>. The root emitter reads this when
     /// constructing a <c>BodyEmitter</c> so nested-closure transitive
@@ -304,6 +313,26 @@ internal sealed class ClosureEmitter
         }
     }
 
+    /// <summary>Finds the closure synthesized for <paramref name="go"/>, by node or by its syntax.</summary>
+    /// <param name="go">A go statement as it reaches the emitter.</param>
+    /// <param name="info">The closure.</param>
+    /// <returns><see langword="true"/> when found.</returns>
+    public bool TryGetGoClosure(BoundGoStatement go, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ClosureInfo? info)
+    {
+        if (this.GoClosureInfos.TryGetValue(go, out info))
+        {
+            return true;
+        }
+
+        if (go.Syntax != null && this.GoClosureInfosBySyntax.TryGetValue(go.Syntax, out info))
+        {
+            return true;
+        }
+
+        info = null;
+        return false;
+    }
+
     public void SynthesizeGoClosures(List<BoundGoStatement> goStatements, PackageSymbol hostPackage)
     {
         foreach (var go in goStatements)
@@ -321,12 +350,17 @@ internal sealed class ClosureEmitter
             // discards the spawned Task — breaking structured scope-join and
             // producing invalid IL when the async target captures arguments.
             // Compare by metadata name across the base-type chain instead.
-            var isAsync = IsTaskClrType(go.Expression.Type?.ClrType);
-            var returnType = isAsync ? TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task)) : TypeSymbol.Void;
-            BoundStatement bodyStatement = isAsync
-                ? new BoundReturnStatement(null, go.Expression)
-                : new BoundExpressionStatement(null, go.Expression);
-            var body = new BoundBlockStatement(null, ImmutableArray.Create(bodyStatement));
+            // ADR-0174 D5: the goroutine body yields a plain ValueTask that the
+            // runtime's work item consumes exactly once. The binder shaped the
+            // operand (Discard<T> / Wrap) so it is either ValueTask-typed or void.
+            var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+            var returnType = valueTaskType;
+            var yieldsValueTask = go.Expression.Type?.ClrType?.FullName == "System.Threading.Tasks.ValueTask";
+            var body = yieldsValueTask
+                ? new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(null, go.Expression)))
+                : new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(
+                    new BoundExpressionStatement(null, go.Expression),
+                    new BoundReturnStatement(null, new BoundDefaultExpression(null, valueTaskType))));
 
             var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
             var info = this.SynthesizeDisplayClass(
@@ -339,6 +373,10 @@ internal sealed class ClosureEmitter
                 invokeName: "InvokeAction");
 
             this.GoClosureInfos[go] = info;
+            if (go.Syntax != null)
+            {
+                this.GoClosureInfosBySyntax[go.Syntax] = info;
+            }
         }
     }
 

@@ -1078,148 +1078,37 @@ internal sealed partial class ExpressionBinder
 
             case "len":
             case "cap":
-            {
-                if (syntax.Arguments.Count != 1)
-                {
-                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                var operand = BindExpression(syntax.Arguments[0]);
-                if (operand.Type == TypeSymbol.Error)
-                {
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                // ADR-0083 / issue #723: gate `len` / `cap` behind
-                // `import Gsharp.Extensions.Go`. Fired after operand
-                // binding so the receiver type drives the .NET-idiomatic
-                // suggestion (`.Length` vs `.Count`). Recovery binds the
-                // form as if the import were present, so the shape
-                // validation below still surfaces any genuine type
-                // mismatch in the same pass.
-                binderCtx.ReportIfGoBuiltinImportMissing(syntax, syntax.Identifier.Location, name, operand.Type);
-
-                var ok = operand.Type is ArrayTypeSymbol || operand.Type is SliceTypeSymbol
-                    || (name == "len"
-                        && (operand.Type == TypeSymbol.String
-                            || operand.Type is MapTypeSymbol or RectangularArrayTypeSymbol));
-                if (!ok)
-                {
-                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, operand.Type);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                result = name == "len"
-                    ? new BoundLenExpression(syntax, operand)
-                    : new BoundCapExpression(syntax, operand);
-                return true;
-            }
-
             case "append":
-            {
-                if (syntax.Arguments.Count != 2)
-                {
-                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 2, syntax.Arguments.Count);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                var slice = BindExpression(syntax.Arguments[0]);
-                if (slice.Type == TypeSymbol.Error)
-                {
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                // ADR-0083 / issue #723: gate `append` behind
-                // `import Gsharp.Extensions.Go`. No clean .NET-idiomatic
-                // replacement exists for grow-and-copy on a slice; the
-                // GS0317 suggestion recommends the import (or `List[T].Add`
-                // when the user wants mutable semantics).
-                binderCtx.ReportIfGoBuiltinImportMissing(syntax, syntax.Identifier.Location, name, slice.Type);
-
-                if (slice.Type is not SliceTypeSymbol sliceType)
-                {
-                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, slice.Type);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                var element = conversions.BindConversion(syntax.Arguments[1], sliceType.ElementType);
-                result = new BoundAppendExpression(syntax, slice, element, sliceType);
-                return true;
-            }
-
             case "delete":
-            {
-                // Phase 3.A.4: `delete(m, k)` removes key `k` from map `m`.
-                if (syntax.Arguments.Count != 2)
-                {
-                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 2, syntax.Arguments.Count);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                var mapExpr = BindExpression(syntax.Arguments[0]);
-                if (mapExpr.Type == TypeSymbol.Error)
-                {
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                // ADR-0083 / issue #723: gate `delete` behind
-                // `import Gsharp.Extensions.Go`. The GS0317 suggestion
-                // points at the BCL equivalent `.Remove(k)`.
-                binderCtx.ReportIfGoBuiltinImportMissing(syntax, syntax.Identifier.Location, name, mapExpr.Type);
-
-                if (mapExpr.Type is not MapTypeSymbol mapType)
-                {
-                    Diagnostics.ReportIntrinsicArgumentType(syntax.Arguments[0].Location, name, mapExpr.Type);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                var keyExpr = conversions.BindConversion(syntax.Arguments[1], mapType.KeyType);
-                result = new BoundMapDeleteExpression(syntax, mapExpr, keyExpr);
-                return true;
-            }
-
             case "close":
             {
-                // Phase 5.4 / ADR-0022: `close(ch)` marks the channel writer complete.
-                // ADR-0082 / issue #722: gate on `import Gsharp.Extensions.Go`.
-                // Per ADR-0083 §"Deconfliction with close", `close(ch)` keeps the
-                // GS0316 (channel-surface) message rather than the per-builtin
-                // GS0317; the import lookup is identical so callers see one
-                // diagnostic regardless of which built-in tripped first.
-                binderCtx.ReportIfGoExtensionsImportMissing(syntax, syntax.Identifier.Location, "close");
-
-                if (syntax.Arguments.Count != 1)
+                // ADR-0174 D12/D13 / GS0566: the Go-style built-ins are retired
+                // in favour of the members every receiver already has. A
+                // user-defined function of the same name is an ordinary call
+                // (the ADR keeps these names free for users), so only the bare,
+                // otherwise-undefined spelling reports. The arguments are still
+                // bound so their own diagnostics surface, and the first
+                // argument's type picks the replacement the message names for
+                // THIS site.
+                if (!scope.TryLookupFunctions(name).IsEmpty)
                 {
-                    Diagnostics.ReportWrongArgumentCount(syntax.Identifier.Location, name, 1, syntax.Arguments.Count);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
+                    return false;
                 }
 
-                var chanExpr = BindExpression(syntax.Arguments[0]);
-                if (chanExpr.Type == TypeSymbol.Error)
+                var arguments = ImmutableArray.CreateBuilder<BoundExpression>(syntax.Arguments.Count);
+                foreach (var argument in syntax.Arguments)
                 {
-                    result = new BoundErrorExpression(syntax);
-                    return true;
+                    arguments.Add(BindExpression(argument));
                 }
 
-                if (chanExpr.Type is not ChannelTypeSymbol)
-                {
-                    Diagnostics.ReportCloseOperandIsNotChannel(syntax.Arguments[0].Location, chanExpr.Type);
-                    result = new BoundErrorExpression(syntax);
-                    return true;
-                }
-
-                result = new BoundChannelCloseExpression(syntax, chanExpr);
+                var argumentTexts = syntax.Arguments
+                    .Select(argument => syntax.SyntaxTree.Text.ToString(argument.Span))
+                    .ToImmutableArray();
+                Diagnostics.ReportRetiredBuiltin(
+                    syntax.Location,
+                    syntax.SyntaxTree.Text.ToString(syntax.Span),
+                    RetiredBuiltins.GetReplacementGuidance(name, arguments.Count > 0 ? arguments[0].Type : null, argumentTexts));
+                result = new BoundErrorExpression(syntax);
                 return true;
             }
 

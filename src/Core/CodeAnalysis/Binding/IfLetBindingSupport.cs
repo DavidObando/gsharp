@@ -58,6 +58,11 @@ internal static class IfLetBindingSupport
     /// <param name="bindTypeClause">Binds the optional declared type clause.</param>
     /// <param name="bindExpression">Binds the initializer expression.</param>
     /// <param name="declareLocal">Declares the binding's local variable.</param>
+    /// <param name="reportNonNullableInitializer">
+    /// ADR-0174 D3: when supplied, reports a non-nullable initializer in place of
+    /// GS0296 so a caller can substitute a more specific diagnostic (GS0555 for a
+    /// <c>while let</c> whose initializer is a channel handle rather than a receive).
+    /// </param>
     /// <returns>The bound binding.</returns>
     internal static BoundIfLetBinding BindBindingClause(
         IfLetBindingClauseSyntax binding,
@@ -65,7 +70,8 @@ internal static class IfLetBindingSupport
         ConversionClassifier conversions,
         Func<TypeClauseSyntax, TypeSymbol?> bindTypeClause,
         Func<ExpressionSyntax, BoundExpression> bindExpression,
-        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> declareLocal)
+        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> declareLocal,
+        Action<IfLetBindingClauseSyntax, BoundExpression>? reportNonNullableInitializer = null)
     {
         TypeSymbol? declaredUnderlying = null;
         if (binding.TypeClause != null)
@@ -116,7 +122,15 @@ internal static class IfLetBindingSupport
         }
         else
         {
-            diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.ValueText, initializerType);
+            if (reportNonNullableInitializer != null)
+            {
+                reportNonNullableInitializer(binding, initializerExpr);
+            }
+            else
+            {
+                diagnostics.ReportIfLetInitializerMustBeNullable(binding.Initializer.Location, binding.Identifier.ValueText, initializerType);
+            }
+
             var errorVar = declareLocal(binding.Identifier, true, declaredUnderlying ?? initializerType);
             return new BoundIfLetBinding(errorVar, null, initializerExpr);
         }

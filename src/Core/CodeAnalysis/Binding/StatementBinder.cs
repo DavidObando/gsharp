@@ -360,7 +360,7 @@ internal sealed partial class StatementBinder
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
                     BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
-                    statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup));
+                    statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup, shieldCleanup: true));
                     return;
                 }
 
@@ -550,11 +550,43 @@ internal sealed partial class StatementBinder
         return clrType is { IsValueType: true } ? null : variable;
     }
 
+    /// <summary>
+    /// ADR-0174 D7: runs a <c>defer</c> body under a shielded context, so
+    /// cleanup that needs a channel still completes while the scope around it
+    /// is being cancelled, and cannot hold cancellation up forever — the shield
+    /// carries the host's grace budget. The shield is an ordinary
+    /// <c>Context</c> local declared before the body, which is exactly what the
+    /// suspension pass reads as the ambient context for the calls inside.
+    /// </summary>
+    /// <param name="cleanupStatement">The deferred body.</param>
+    /// <returns>The body wrapped in its shield.</returns>
+    private BoundStatement ShieldCleanup(BoundStatement cleanupStatement)
+    {
+        var runtime = binderCtx.ChannelRuntime;
+        var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);
+        var shield = new LocalVariableSymbol($"<defer$shield${id}>", isReadOnly: true, runtime.ContextType);
+        scope.TryDeclareVariable(shield);
+
+        return new BoundBlockStatement(
+            null,
+            ImmutableArray.Create<BoundStatement>(
+                new BoundVariableDeclaration(null, shield, runtime.BindShieldedContext(binderCtx.AmbientContext())),
+                new BoundTryStatement(
+                    null,
+                    new BoundBlockStatement(null, ImmutableArray.Create(cleanupStatement)),
+                    ImmutableArray<BoundCatchClause>.Empty,
+                    new BoundBlockStatement(
+                        null,
+                        ImmutableArray.Create<BoundStatement>(
+                            new BoundExpressionStatement(null, runtime.BindContextDispose(shield)))))));
+    }
+
     private BoundTryStatement BuildCleanupTryStatement(
         ImmutableArray<BoundStatement> protectedStatements,
         BoundExpression cleanup,
         VariableSymbol? initialized = null,
-        VariableSymbol? nilGuardedResource = null)
+        VariableSymbol? nilGuardedResource = null,
+        bool shieldCleanup = false)
     {
         var tryBlock = new BoundBlockStatement(null, protectedStatements);
         BoundStatement cleanupStatement = new BoundExpressionStatement(null, cleanup);
@@ -588,6 +620,11 @@ internal sealed partial class StatementBinder
                 new BoundVariableExpression(null, initialized),
                 cleanupStatement,
                 elseStatement: null);
+        }
+
+        if (shieldCleanup && binderCtx.ChannelRuntime.IsAvailable)
+        {
+            cleanupStatement = ShieldCleanup(cleanupStatement);
         }
 
         var finallyBlock = new BoundBlockStatement(null, ImmutableArray.Create(cleanupStatement));

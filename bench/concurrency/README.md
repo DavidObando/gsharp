@@ -4,24 +4,57 @@ Evidence harness for **ADR-0174** (goroutines and channels, wave 2). It exists
 to make the ADR's performance claims refutable, and to stop new ones from
 being asserted without measurement.
 
-> **Status: baseline only.** This is the Phase-0 spike promoted verbatim from
-> the ADR-0174 design work. It measures *today's* lowering and the CLR
-> primitives the ADR proposes to adopt. It does **not** yet measure G# — there
-> is no G# side until the phases land, and it is **not** wired into CI. D11
-> Phase 5 turns this into the gated suite.
+> **Status: the G# side and the runner exist; no budget has been measured.**
+> The Phase-0 spike measured *today's* lowering and the CLR primitives the ADR
+> proposes to adopt; Phase 1 added two rows over the real
+> `Gsharp.Runtime.Channels` assembly. Phase 5-2 adds the missing half: eight
+> paired scenarios written in **G#**, a registry, a runner with the two gates,
+> and a nightly workflow.
+>
+> **Every median in `baseline.json` is `null`, deliberately.** A budget that was
+> not measured is worse than no budget, because it reads as evidence. The gate
+> is armed by the first nightly runs, and `target_status` stays `provisional`
+> until a ratio has met its target on three separate nights on the same
+> hardware class (ADR-0174 P5-3).
+
+## Phase 3-4a rows (`ctx-param`, `ctx-asynclocal`, `spawn-noec`, `spawn-ec`)
+
+`ContextAbiCost` measures ADR-0174 decision gates G1/G2: how the ambient
+`Context` reaches a suspending call (hidden parameter vs an `AsyncLocal`
+read at every level of a 3-deep synchronously-completing chain), and the cost
+of flowing `ExecutionContext` into a goroutine spawn. Recorded in ADR-0174
+errata 12.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
-| `clr/` | C# baseline. Reproduces the exact call sequences the G# emitter produces today (`gs-*` rows), plus the CLR primitives ADR-0174 proposes (`best-*` rows). |
+| `gsharp/Bench.gs` | **The G# side.** Eight scenarios in the language itself, three in-process warm-up rounds, one `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
+| `scenarios.json` | The registry: which G# scenario pairs with which Go row, and what each one measures. |
+| `baseline.json` | The recorded medians, ceilings and Go ratios. Written only by `--update-baseline`, never by hand. |
+| `clr/` | C# baseline. Reproduces the exact call sequences the G# emitter produces today (`gs-*` rows), plus the CLR primitives ADR-0174 proposes (`best-*` rows). Kept as the spike reference now that the G# side exists. |
 | `go/` | Go baseline for the same scenarios. |
 
 ## Running
 
 ```sh
-# CLR side — Release is mandatory, Debug numbers are meaningless
+# The paired run: builds the G# program, launches both sides several times,
+# reports medians with a bootstrap confidence interval, and checks the gate.
+python3 build/run-concurrency-bench.py --go --check-baseline bench/concurrency/baseline.json
+
+# One scenario, fewer launches, while iterating
+python3 build/run-concurrency-bench.py --scenario rendezvous --launches 3
+
+# Record what was measured. Refuses to loosen a ceiling without a stated reason.
+python3 build/run-concurrency-bench.py --go --update-baseline bench/concurrency/baseline.json
+
+# Check the harness still hangs together (this runs on every PR)
+python3 build/verify-concurrency-bench.py --smoke
+
+# CLR spike reference — Release is mandatory, Debug numbers are meaningless
 cd clr && dotnet run -c Release
+# --quick skips the 60 s starvation demonstration (a correctness result, not a number)
+cd clr && dotnet run -c Release -- --quick
 
 # Go side
 cd go && go build -o baseline . && ./baseline
@@ -46,15 +79,32 @@ spike:
 5. **Separate the two gates.** Within-runtime regression (G# against its own
    last recorded number) is stable and can gate a PR. The G#-vs-Go ratio
    depends on the Go toolchain and the machine and must stay informational.
+   The runner enforces this: a scenario fails only when its median is above the
+   recorded ceiling **and** the confidence intervals are disjoint **and** the
+   hardware class matches. Any one of those alone produces false failures often
+   enough to get the gate switched off, which is the real failure mode.
 
 ## Known limits of the current numbers
 
 Carried here so they are not lost when the numbers are quoted:
 
-- **There is no rendezvous row.** Wave 1 has no rendezvous channel, so the
-  ping-pong row uses a capacity-1 bounded channel — *strictly easier* than
-  Go's unbuffered rendezvous, which cannot complete a send before a receiver
-  arrives. The real rendezvous baseline must be built in Phase 1.
+- **The rendezvous row is the Phase 1 runtime, not emitted G#.** `gs-rendezvous`
+  drives two capacity-0 `Chan<int>`s from two tasks with `await SendAsync` /
+  `await ReceiveAsync` — the exact shape the Phase 3 lowering emits — so it is
+  the honest rendezvous number wave 1 could not produce (`gs-pingpong` remains
+  the capacity-1 stand-in for comparison). First same-machine measurement
+  (Linux x64, 20 cores, .NET 10.0.11 / Go 1.27.0, round 3 of 3, single
+  launch): **`gs-rendezvous` 1.18–1.30 µs/op vs `go-pingpong` 617 ns/op ≈ 2×**.
+  The runtime completes waiters with `RunContinuationsAsynchronously = true`
+  (a thread-pool hop per hand-off, stack-safe under ping-pong chains); the
+  ADR's decision gate G6 measures the synchronous alternative before Phase 5
+  sets the budget. Note how machine-dependent the absolute numbers are: the
+  same Go program measured 219 ns/op on the ADR's Apple-silicon reference.
+- **`closed-chan` is the Phase 1 runtime's closed receive**: `TryReceive` on a
+  closed, drained `Chan<T>` takes a lock-free path (`closed` is monotonic and
+  the buffer can only drain after close) and measured **0.7 ns/op** vs
+  `closed-flag` (BCL `TryRead`) 3.8 ns and `go-closed` 32.5 ns on the same
+  machine — the ADR's 382× defect, removed.
 - **The `select` row is fast-path only**, over pre-filled channels, and it
   compares G#'s deterministic source-order probing against Go's randomized
   choice. It partly measures the semantic divergence D8 removes. The parking

@@ -1820,7 +1820,18 @@ internal sealed partial class ExpressionBinder
 
         var refKinds = ComputeArgumentRefKinds(parameters);
         overloads.ValidateRefArguments(bound, refKinds, methodName, ce.Location);
-        result = WrapWithHandlerPrelude(new BoundImportedCallExpression(ce, function, bound, refKinds, extensionTypeArgSymbolsForCall), extensionHandlerPrelude, ce);
+
+        // ADR-0174 D4: an imported `[Suspending]` extension — the batch surface
+        // of D10 is written this way — is completed at the call site like any
+        // other suspending call, so the caller sees `R` rather than
+        // `ValueTask[R]` and is coloured suspending by the call. The completion
+        // wraps the call itself, before any handler prelude, so an await lands
+        // on the call rather than on the prelude around it.
+        var extensionCall = CompleteImportedSuspendingCall(
+            new BoundImportedCallExpression(ce, function, bound, refKinds, extensionTypeArgSymbolsForCall),
+            function.Method,
+            ce.Location);
+        result = WrapWithHandlerPrelude(extensionCall, extensionHandlerPrelude, ce);
         return true;
     }
 

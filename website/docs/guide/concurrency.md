@@ -15,23 +15,30 @@ G#'s production concurrency surface is built on three pieces:
 - **`sequence[T]` + `async sequence[T]`** — synchronous and asynchronous
   iterators built on `yield` and consumed with `for` / `await for`.
 
-This guide focuses on the always-available surface. The optional
-Go-flavored layer (`go`, `chan T`, `select`, `close`, `make(chan ...)`)
-lives in [Extensions: Go-flavored concurrency](../extensions/go-concurrency).
+This guide focuses on the structured surface. The Go-flavored layer
+(`go`, `chan[T]`, `select`, `for v in ch`) is part of the language too and
+is documented in [Go-flavored concurrency](../extensions/go-concurrency).
 
 ## `scope` — structured concurrency
 
-`scope { ... }` runs its body and, before returning, joins every async
-operation that was registered with it. The two things that register with
-the enclosing scope are:
+`scope { ... }` runs its body and, before returning, joins every
+goroutine started inside it with `go call(...)`. Inside the block an
+implicit `ctx` of type `Gsharp.Concurrency.Context` is bound: the first
+failing goroutine cancels it immediately, so siblings that observe
+`ctx.IsCancelled` (or park on a channel) stop before the join completes.
+Exceptions are never dropped:
 
-1. `await expr` inside the scope — the awaited task becomes part of the
-   scope's join set.
-2. `go call(...)` inside the scope when `import Gsharp.Extensions.Go` is
-   present — the goroutine task is registered and joined.
+- the body throws and every goroutine succeeds — the body's exception
+  propagates unchanged;
+- goroutines fail — the scope throws a `Gsharp.Concurrency.ScopeException`
+  (an `AggregateException`) whose `FirstFailure` is the cause and whose
+  inner exceptions list every failure in completion order; sibling
+  cancellations caused by that failure are not listed;
+- both fail — the body's exception is first.
 
-Either way, exceptions from registered work surface as the scope
-unwinds, instead of being silently dropped.
+A `scope` is a suspension point: a function containing one is compiled as
+a suspending function (see below), so the join parks the state machine
+rather than a thread; only the entry point blocks.
 
 ```gsharp
 import System
@@ -101,6 +108,250 @@ var publish async (string) -> void = (msg string) -> Console.WriteLine(msg)
 `await` is a prefix expression and is only valid inside `async`
 contexts; using it elsewhere or on a non-awaitable operand is
 diagnosed.
+
+## `suspend func` — suspension without a task
+
+A `suspend func` is the shape a channel-consuming helper wants: it may
+suspend (on a channel operation or an `await`), but callers never see a
+`Task`. Inside another suspending function or an `async func` the call is
+awaited implicitly and yields the value directly:
+
+```gsharp
+suspend func take(ch in chan[int32]) int32 {
+    return <-ch
+}
+
+suspend func sum(ch in chan[int32], n int32) int32 {
+    var total = 0
+    for i in 0 ... n {
+        total = total + take(ch)   // implicit await; `take` yields int32
+    }
+    return total
+}
+```
+
+The emitted method returns `ValueTask[int32]`, so C# callers await it as
+usual. `async func` and `suspend func` are never combined on one declaration.
+
+You rarely need to write `suspend`: **suspension is inferred**. A plain
+`func` that receives, sends, drains a channel, or calls a function that does
+is compiled as a suspending function automatically, so the worker-pool and
+pipeline samples read exactly like Go and still park a state machine rather
+than a thread. The keyword is for the places inference cannot reach — an
+`open` or `override` method, an interface member, a method implementing
+one, a function literal — and for library authors who want to pin the
+contract. Inside those boundaries a call to a suspending function has nowhere
+to await, so it blocks the thread until the callee completes; the compiler
+says so with `GS0558`. Top-level statements are the one place that block is
+right, so the entry point calls suspending functions silently.
+
+### Timers and fan-in
+
+Two helpers come with the language, by bare name — the namespace they live in is
+imported for you:
+
+```gs
+select {
+case let job = <-work {
+    handle(job)
+}
+case <-after(TimeSpan.FromSeconds(2)) {
+    Console.WriteLine("timed out")
+}
+}
+
+for value in merge(left, right) {
+    Console.WriteLine(value)
+}
+```
+
+`after(d)` fires once; `tick(d)` fires every `d` until you dispose it, so hold
+it in a `using let` when you select on it in a loop. `merge` drains every input
+concurrently and closes its result once the last input closes; the result is
+receive-only, because only `merge` writes to it. Declaring your own `after` or
+`merge` shadows these.
+
+### Choosing among more than channels
+
+Three arm shapes cover what Go reaches for other tools to express.
+
+```gs
+scope {
+    var draining = false
+    select {
+    case let job = <-work when !draining {
+        handle(job)
+    }
+    case let page = await fetch {
+        render(page)
+    }
+    case cancelled {
+        Console.WriteLine("giving up")
+    }
+    }
+}
+```
+
+A `when` guard decides once, when the select is entered, whether its arm takes
+part at all. A false guard keeps the arm out of the waiter entirely, so it can
+never win — this is what Go expresses by setting a channel variable to `nil`.
+The guard is evaluated before the arm's binding exists, so it cannot mention
+`job`.
+
+`case await task` and `case let v = await task` let a `Task` or `Task[T]` race
+the channels on the same waiter. A losing task's continuation is removed when
+the select finishes, so a long-running one does not retain it.
+
+`case cancelled` turns the ambient context's cancellation into an arm. Without
+it a cancelled select unwinds with an `OperationCanceledException`; with it the
+arm runs instead. The arm needs a context to observe — an enclosing `scope`, a
+declared `ctx Context` parameter, or the one the compiler threads through a
+suspending call — and `GS0557` says so when there is none, because the arm
+would otherwise be silently unreachable. Cancellation is consulted only after
+the channel arms, so a select that can do its work does it rather than bail
+out.
+
+### Spawn now, use later
+
+`go` covers fire-and-forget. When you want the value a child produces, use
+`async let`.
+
+```gs
+scope {
+    async let user   = fetchUser(id)
+    async let orders = fetchOrders(id)
+    return render(await user, await orders)
+}
+```
+
+Both fetches start immediately, as children of the block, and run
+concurrently. The binding names the result, not a task: `await user` is a
+`User`. Reading it a second time returns the completed value without
+suspending.
+
+The `await` is required at every use. The read is where the suspension
+happens, and this language keeps suspension visible, so a bare `user` is
+`GS0569`.
+
+An `async let` needs a `scope` to own it (`GS0551` when there is none), which
+is what makes the spawn impossible to leak: the binding is not a value, so it
+cannot be stored, returned, or collected. A binding you never read has its
+child cancelled at the end of the block and joined there. If that child had
+already failed, the failure still reaches the block, so nothing is silently
+swallowed. `GS0559` points out that you started work only to cancel it.
+
+A failing `async let` does not cancel its siblings. Catching one child's
+failure leaves the others running, which is the difference between `async let`
+and a `go` inside the same block.
+
+### Batching, and `chunks`
+
+A channel operation moves one element and pays for one lock acquisition and,
+when it has to wait, one park. A data pipeline moving millions of elements
+should not pay that per element.
+
+```gs
+for batch in chunks(input, 1024) {
+    process(batch)
+}
+```
+
+`chunks(ch, n)` hands over whole buffers: `batch` is a `ReadOnlyMemory[T]` of
+up to `n` elements, and the loop is ordinary channel iteration — no extra
+goroutine, nothing more for the block to join. A batch arrives as soon as
+anything is available rather than waiting to fill, so a producer slower than
+the chunk size does not stall the consumer. Each batch owns its array, so a
+stage may keep or forward what it was handed.
+
+Underneath it, and available directly, are four operations on a channel
+handle:
+
+- `TryReceiveBatch(buffer)` and `TrySendBatch(items)` take a `Span[T]`. They
+  never wait, so a borrowed stack view is safe.
+- `ReceiveBatch(buffer, atLeast)` and `SendBatch(items)` take a `Memory[T]`.
+  They can park, and a destination that survives a park cannot be a `Span`.
+
+`atLeast = 1` is Go's `range` shape, take what is there. `atLeast =
+buffer.Length` is a full-fill barrier. Both are legitimate, which is why there
+is no default.
+
+A batch that is cut short returns the count it moved rather than throwing: a
+closed channel returns what it transferred and reports closed on the next
+call, and cancellation mid-batch returns the count so far. A bare throw would
+hide that count and a retry would duplicate elements.
+
+Batching a rendezvous channel is pointless — capacity 0 means one value in
+flight by definition, so a batch is that many sequential handovers — and
+`GS0562` says so.
+
+The slogan is **share buffers by communicating**. Not spans: a borrowed stack
+view is exactly the thing that cannot cross a suspension.
+
+### Cancellation
+
+The block's `ctx` is not only for your own checks: every channel operation
+inside a `scope` parks on it. When one goroutine fails, its siblings waiting on
+a channel unwind with an `OperationCanceledException` instead of waiting
+forever, `defer`s run, and the block collapses. An operation that already
+completed its transfer keeps its value — cancellation wins only before the
+transfer commits, so a receive never drops an element it has already taken.
+
+### Cleanup during cancellation
+
+A `defer` body runs shielded: it does not observe the cancellation that is
+unwinding the block, so cleanup that drains a channel or sends a completion
+signal still completes instead of being skipped. The shield carries a grace
+budget (five seconds by default, `GSHARP_DEFER_GRACE_MS`), so cleanup that
+blocks forever cannot hold cancellation up — when the budget expires the
+cleanup is abandoned and `GsharpRuntime.DeferGraceExpired` reports it.
+
+### How the context reaches a function
+
+Cancellation follows calls, not just blocks. A suspending function receives the
+caller's context as a trailing optional parameter the compiler supplies, so a
+receive inside a helper unwinds when the caller's `scope` is cancelled without
+either of you writing a parameter. Two cases are yours to steer:
+
+- Write `ctx Context` in the signature when you want it visible — a public API
+  whose callers choose the context, or one a C# caller passes to. The compiler
+  then uses your parameter and adds nothing.
+- A variadic function (`...T`) carries no context, because that parameter must
+  stay last and one placed before it could not be skipped by callers. Its
+  operations run uncancelled; declare `ctx Context` before the variadic
+  parameter when you need cancellation, and callers pass it there.
+
+From C#, a G# suspending function is an ordinary `ValueTask`-returning method:
+call it as its signature reads, or pass a `Gsharp.Concurrency.Context` as the
+last argument to make it cancellable. The compiler fills in the default for you
+— but reflection does not. `MethodInfo.Invoke`'s default binder is strict about
+arity, so a reflection caller has to pass the parameter, either as a context or
+as `Type.Missing` under `BindingFlags.OptionalParamBinding`:
+
+```csharp
+// Compiled call: the parameter is optional, so this is enough.
+var value = await GsLib.Pipe();
+
+// Reflection: say that the trailing optional is being defaulted.
+var pending = pipe.Invoke(
+    null,
+    BindingFlags.OptionalParamBinding,
+    binder: null,
+    new object[] { Type.Missing },
+    culture: null);
+```
+
+### Debugging and hot reload through suspension
+
+A suspending function is compiled to a state machine, but the tooling keeps the
+logical view. Its entry method carries `[AsyncStateMachine]`, so
+`Environment.StackTrace`, exception traces, and debuggers show
+`Pkg.<Program>.take(…)` rather than `<take>d__1.MoveNext`; the Portable PDB
+records where every receive, send, or suspending call yields and resumes, so
+stepping over a channel operation that parks lands on the next source line
+once the value arrives. Hot reload treats a change to whether a function
+suspends as the signature change it is: adding the first channel operation to
+a plain `func`, or removing the last one, is rejected with `GSHR1002` naming
+the function, and the process must be restarted.
 
 ## Sequences and async sequences
 
@@ -203,7 +454,6 @@ When sharing is unavoidable, the toolbox is, in order:
    read-modify-write is spelled `Update` and is atomic:
 
    ```gsharp
-   import Gsharp.Extensions.Go
    import Gsharp.Extensions.Sync
 
    func bump(m SyncMap[string, int32]) int32 {
@@ -232,8 +482,7 @@ for the full `SyncMap` API.
 ## See also
 
 - [Tutorial: Async and sequences](../tutorials/async-and-sequences)
-- [Extensions: Go-flavored concurrency](../extensions/go-concurrency)
-  — channels, `go`, `select`, and `close` for projects that import
-  `Gsharp.Extensions.Go`.
+- [Go-flavored concurrency](../extensions/go-concurrency)
+  — channels, `go`, `select`, and `ch.Close()`; no import required.
 - [Standard library: Gsharp.Extensions.Sync](../ref/standard-library#gsharpextensionssync)
   — the `SyncMap[K, V]` API reference.

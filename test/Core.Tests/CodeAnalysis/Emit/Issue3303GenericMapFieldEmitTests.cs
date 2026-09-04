@@ -38,8 +38,8 @@ public class Issue3303GenericMapFieldEmitTests
             init() { items = map[K, V]{} }
             func S(k K, v V) { items[k] = v }
             func L(k K) V { return items[k] }
-            func Len() int32 { return len(items) }
-            func Del(k K) { delete(items, k) }
+            func Len() int32 { return items.Count }
+            func Del(k K) { items.Remove(k) }
         }
         """;
 
@@ -56,7 +56,6 @@ public class Issue3303GenericMapFieldEmitTests
         var result = EmittedOracle.Evaluate($$"""
             package P3303Repro
 
-            import Gsharp.Extensions.Go
 
             {{GenericMapClass}}
 
@@ -79,7 +78,6 @@ public class Issue3303GenericMapFieldEmitTests
         var result = EmittedOracle.Evaluate($$"""
             package P3303LenDelete
 
-            import Gsharp.Extensions.Go
 
             {{GenericMapClass}}
 
@@ -107,7 +105,6 @@ public class Issue3303GenericMapFieldEmitTests
         var result = EmittedOracle.Evaluate($$"""
             package P3303StructValue
 
-            import Gsharp.Extensions.Go
 
             struct Pt { var X int32 }
 
@@ -132,7 +129,6 @@ public class Issue3303GenericMapFieldEmitTests
         var result = EmittedOracle.Evaluate($$"""
             package P3303StructKey
 
-            import Gsharp.Extensions.Go
 
             struct Pt { var X int32 }
 
@@ -187,7 +183,6 @@ public class Issue3303GenericMapFieldEmitTests
         var result = EmittedOracle.Evaluate($$"""
             package P3303Nested
 
-            import Gsharp.Extensions.Go
 
             {{GenericMapClass}}
 
@@ -296,13 +291,12 @@ public class Issue3303GenericMapFieldEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3303UnassignedNil
 
-            import Gsharp.Extensions.Go
 
             class H[K, V any] {
                 var items map[K, V]
                 init() { }
                 func IsNil() bool { return items == nil }
-                func Count() int32 { return len(items) }
+                func Count() int32 { return items.Count }
             }
 
             func run() int32 {
@@ -441,9 +435,8 @@ public class Issue3303GenericMapFieldEmitTests
         var result = EmittedOracle.Evaluate("""
             package P3303ChanPin
 
-            import Gsharp.Extensions.Go
 
-            var c = make(chan int32, 1)
+            var c = chan[int32](1)
             c != nil
             """);
 

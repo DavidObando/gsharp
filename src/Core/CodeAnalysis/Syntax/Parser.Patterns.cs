@@ -760,6 +760,32 @@ public partial class Parser
     private StatementSyntax ParseGoStatement()
     {
         var keyword = MatchToken(SyntaxKind.GoKeyword);
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            // ADR-0174 D14: `go { body }` is the block form — sugar for spawning
+            // a zero-parameter function literal and invoking it. The literal's
+            // `func ( )` and the invocation's `( )` are zero-width synthesized
+            // tokens anchored at the block, so the block's own tokens stay real.
+            var block = ParseBlockStatement();
+            var start = block.Span.Start;
+            var end = block.Span.End;
+            var literal = new FunctionLiteralExpressionSyntax(
+                syntaxTree,
+                new SyntaxToken(syntaxTree, SyntaxKind.FuncKeyword, start, string.Empty, null),
+                new SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, start, string.Empty, null),
+                new SeparatedSyntaxList<ParameterSyntax>(ImmutableArray<SyntaxNode>.Empty),
+                new SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, start, string.Empty, null),
+                returnTypeClause: null,
+                block);
+            var invocation = new CallExpressionSyntax(
+                syntaxTree,
+                literal,
+                new SyntaxToken(syntaxTree, SyntaxKind.OpenParenthesisToken, end, string.Empty, null),
+                new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
+                new SyntaxToken(syntaxTree, SyntaxKind.CloseParenthesisToken, end, string.Empty, null));
+            return new GoStatementSyntax(syntaxTree, keyword, invocation);
+        }
+
         var expression = ParseExpression();
         return new GoStatementSyntax(syntaxTree, keyword, expression);
     }
@@ -855,11 +881,79 @@ public partial class Parser
 
         var caseKeyword = MatchToken(SyntaxKind.CaseKeyword);
 
+        // case cancelled { ... } — the ambient context's cancellation
+        // (ADR-0174 D8). `cancelled` is contextual: an arm over a channel of
+        // that name still parses as a channel arm.
+        if (Current.Kind == SyntaxKind.IdentifierToken
+            && Current.Text == "cancelled"
+            && (Peek(1).Kind == SyntaxKind.OpenBraceToken
+                || (Peek(1).Kind == SyntaxKind.IdentifierToken && Peek(1).Text == "when")))
+        {
+            NextToken(); // consume `cancelled`
+            var (cancelledWhen, cancelledGuard) = ParseOptionalWhenGuard(bodyFollows: true);
+            var cancelledBody = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.Cancelled,
+                identifier: null,
+                channel: null,
+                value: null,
+                cancelledWhen,
+                cancelledGuard,
+                cancelledBody);
+        }
+
+        // case await task { ... } — a Task arm whose result is discarded.
+        if (Current.Kind == SyntaxKind.AwaitKeyword)
+        {
+            NextToken(); // consume `await`
+            var task = ParseArmOperand();
+            var (awaitWhen, awaitGuard) = ParseOptionalWhenGuard(bodyFollows: true);
+            var awaitBody = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.AwaitDiscard,
+                identifier: null,
+                task,
+                value: null,
+                awaitWhen,
+                awaitGuard,
+                awaitBody);
+        }
+
+        // case let v = await task { ... } — a Task[T] arm.
+        if (Current.Kind == SyntaxKind.LetKeyword
+            && Peek(1).Kind == SyntaxKind.IdentifierToken
+            && Peek(2).Kind == SyntaxKind.EqualsToken
+            && Peek(3).Kind == SyntaxKind.AwaitKeyword)
+        {
+            NextToken(); // consume `let`
+            var awaitIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            MatchToken(SyntaxKind.EqualsToken);
+            MatchToken(SyntaxKind.AwaitKeyword);
+            var task = ParseArmOperand();
+            var (awaitWhen, awaitGuard) = ParseOptionalWhenGuard(bodyFollows: true);
+            var awaitBody = ParseBlockStatement();
+            return new SelectCaseSyntax(
+                syntaxTree,
+                caseKeyword,
+                SelectCaseKind.AwaitBind,
+                awaitIdentifier,
+                task,
+                value: null,
+                awaitWhen,
+                awaitGuard,
+                awaitBody);
+        }
+
         // case <-ch { ... } — receive, discard.
         if (Current.Kind == SyntaxKind.LeftArrowToken)
         {
             NextToken(); // consume `<-`
-            var channel = ParseExpression();
+            var channel = ParseArmOperand();
+            var (discardWhen, discardGuard) = ParseOptionalWhenGuard(bodyFollows: true);
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -868,6 +962,8 @@ public partial class Parser
                 identifier: null,
                 channel,
                 value: null,
+                discardWhen,
+                discardGuard,
                 body);
         }
 
@@ -881,7 +977,8 @@ public partial class Parser
             var identifier = MatchToken(SyntaxKind.IdentifierToken);
             MatchToken(SyntaxKind.EqualsToken);
             MatchToken(SyntaxKind.LeftArrowToken);
-            var channel = ParseExpression();
+            var channel = ParseArmOperand();
+            var (bindWhen, bindGuard) = ParseOptionalWhenGuard(bodyFollows: true);
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -890,6 +987,8 @@ public partial class Parser
                 identifier,
                 channel,
                 value: null,
+                bindWhen,
+                bindGuard,
                 body);
         }
 
@@ -906,7 +1005,7 @@ public partial class Parser
                 colonEquals.Location,
                 $"case let {identifier.Text} = <-ch");
             MatchToken(SyntaxKind.LeftArrowToken);
-            var channel = ParseExpression();
+            var channel = ParseArmOperand();
             var body = ParseBlockStatement();
             return new SelectCaseSyntax(
                 syntaxTree,
@@ -921,7 +1020,8 @@ public partial class Parser
         // case ch <- v { ... } — send.
         var sendChannel = ParseExpression();
         MatchToken(SyntaxKind.LeftArrowToken);
-        var sendValue = ParseExpression();
+        var sendValue = ParseArmOperand();
+        var (sendWhen, sendGuard) = ParseOptionalWhenGuard(bodyFollows: true);
         var sendBody = ParseBlockStatement();
         return new SelectCaseSyntax(
             syntaxTree,
@@ -930,7 +1030,35 @@ public partial class Parser
             identifier: null,
             sendChannel,
             sendValue,
+            sendWhen,
+            sendGuard,
             sendBody);
+    }
+
+    /// <summary>
+    /// Parses the operand that sits immediately before a select arm's body
+    /// brace. Issue #1023's defect in another position: a call- or
+    /// indexer-tailed operand (<c>case ch &lt;- Pair(41) { … }</c>) would
+    /// otherwise read the arm's <c>{</c> as its own object initializer and
+    /// swallow the body. Bare struct literals are suppressed for the same
+    /// reason and by the same rule as a statement header's (issue #1575): an
+    /// empty <c>{ }</c> body after a name operand — <c>case &lt;-ch { }</c> —
+    /// is a body, not an empty struct literal.
+    /// </summary>
+    /// <returns>The parsed operand.</returns>
+    private ExpressionSyntax ParseArmOperand()
+    {
+        suppressTrailingObjectInitializer++;
+        suppressStructLiteral++;
+        try
+        {
+            return ParseExpression();
+        }
+        finally
+        {
+            suppressStructLiteral--;
+            suppressTrailingObjectInitializer--;
+        }
     }
 
     private StatementSyntax ParseExpressionStatement()

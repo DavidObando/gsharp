@@ -93,7 +93,7 @@ func Use() {{
     [Fact]
     public void ArrayOfChannel_Parses_WithNestedChannelElement()
     {
-        var type = LocalVarType("[]chan int32");
+        var type = LocalVarType("[]chan[int32]");
 
         Assert.True(type.IsSlice);
         Assert.True(type.HasNestedArrayElement);

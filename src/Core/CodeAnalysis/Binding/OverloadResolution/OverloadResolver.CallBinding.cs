@@ -2483,6 +2483,13 @@ internal sealed partial class OverloadResolver
                 returnType = wrapAsTask(returnType, function.AsyncReturnsValueTask);
             }
 
+            if (function.IsSuspending)
+            {
+                // ADR-0174 D4: the call is typed ValueTask[R]; the caller sees R.
+                var suspendingCall = CreatePossiblyElidedCall(syntax, function, finalBoundArguments, wrapAsTask(returnType, true), methodTypeArguments);
+                return completeSuspendingCall(suspendingCall, returnType, syntax.Location, function.Name);
+            }
+
             return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType, methodTypeArguments);
         }
 
@@ -2490,6 +2497,12 @@ internal sealed partial class OverloadResolver
         {
             var asyncReturn = wrapAsTask(function.Type, function.AsyncReturnsValueTask);
             return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, asyncReturn, methodTypeArguments);
+        }
+
+        if (function.IsSuspending)
+        {
+            var suspendingCall = CreatePossiblyElidedCall(syntax, function, finalBoundArguments, wrapAsTask(function.Type, true), methodTypeArguments);
+            return completeSuspendingCall(suspendingCall, function.Type, syntax.Location, function.Name);
         }
 
         return CreatePossiblyElidedCall(syntax, function, finalBoundArguments, returnType: null, methodTypeArguments);

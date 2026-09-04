@@ -35,7 +35,7 @@ m[""b""]
     {
         var source = @"
 let m = map[int32,string]{1: ""one"", 2: ""two"", 3: ""three""}
-len(m)
+m.Count
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -73,8 +73,8 @@ m[""a""] + m[""b""]
     {
         var source = @"
 var m = map[string,int32]{""a"": 1, ""b"": 2}
-delete(m, ""a"")
-len(m)
+m.Remove(""a"")
+m.Count
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -86,8 +86,8 @@ len(m)
     {
         var source = @"
 var m = map[string,int32]{""a"": 1}
-delete(m, ""never_there"")
-len(m)
+m.Remove(""never_there"")
+m.Count
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -99,7 +99,7 @@ len(m)
     {
         var source = @"
 let m = map[string,int32]{}
-len(m)
+m.Count
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -107,25 +107,17 @@ len(m)
     }
 
     [Fact]
-    public void Delete_NonMapArgument_Diagnoses()
+    public void Delete_IsRetired_ReportsGS0566_NamingRemove()
     {
-        var source = @"
-let s = []int32{1, 2, 3}
-delete(s, 0)
-";
-        var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
-    }
-
-    [Fact]
-    public void Delete_WrongArgCount_Diagnoses()
-    {
+        // ADR-0174 D13: `delete(m, k)` is retired; the message names `m.Remove(k)`.
         var source = @"
 let m = map[string,int32]{""a"": 1}
-delete(m)
+delete(m, ""a"")
 ";
         var result = Evaluate(source);
-        Assert.NotEmpty(result.Diagnostics);
+        var diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("GS0566", diagnostic.Id);
+        Assert.Contains("m.Remove(\"a\")", diagnostic.Message);
     }
 
     [Fact]
@@ -133,7 +125,7 @@ delete(m)
     {
         var source = @"
 var m map[string,int32] = map[string,int32]{""a"": 1}
-len(m)
+m.Count
 ";
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
@@ -142,9 +134,6 @@ len(m)
 
     private static EmittedOracleResult Evaluate(string source)
     {
-        // ADR-0083 / issue #723: prepend the Go extensions import so tests
-        // that exercise map `len` and `delete` keep binding/lowering rather
-        // than tripping the GS0317 gate.
-        return EmittedOracle.Evaluate("import Gsharp.Extensions.Go\n" + source);
+        return EmittedOracle.Evaluate(source);
     }
 }

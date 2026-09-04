@@ -291,7 +291,7 @@
         },
         {
           "name": "keyword.control.async.gsharp",
-          "match": "\\b(async|await|go)\\b"
+          "match": "\\b(async|suspend|await|go)\\b"
         },
         {
           "name": "keyword.declaration.gsharp",

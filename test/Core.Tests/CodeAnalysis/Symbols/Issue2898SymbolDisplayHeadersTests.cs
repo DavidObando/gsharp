@@ -139,10 +139,13 @@ public class Issue2898SymbolDisplayHeadersTests
             NullableTypeSymbol.Get(PointerTypeSymbol.Get(intType)),
             PointerTypeSymbol.Get(NullableTypeSymbol.Get(intType)),
             "*int32?");
-        AssertCanonicalCollision(
-            NullableTypeSymbol.Get(ChannelTypeSymbol.Get(intType)),
-            ChannelTypeSymbol.Get(NullableTypeSymbol.Get(intType)),
-            "chan int32?");
+        // ADR-0174 D2: bracketing the element removed the one collision the
+        // juxtaposed spelling could not avoid — a nullable channel and a
+        // channel of nullable now have distinct canonical spellings.
+        Assert.Equal("chan[int32]?", SymbolDisplay.ToTypeDisplayString(NullableTypeSymbol.Get(ChannelTypeSymbol.Get(intType))));
+        Assert.Equal("chan[int32?]", SymbolDisplay.ToTypeDisplayString(ChannelTypeSymbol.Get(NullableTypeSymbol.Get(intType))));
+        Assert.Equal("in chan[int32]", SymbolDisplay.ToTypeDisplayString(ChannelTypeSymbol.Get(intType, ChannelDirection.In)));
+        Assert.Equal("out chan[int32]", SymbolDisplay.ToTypeDisplayString(ChannelTypeSymbol.Get(intType, ChannelDirection.Out)));
         AssertCanonicalCollision(
             NullableTypeSymbol.Get(new PinnedTypeSymbol(intType)),
             new PinnedTypeSymbol(NullableTypeSymbol.Get(intType)),

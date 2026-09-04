@@ -28,12 +28,11 @@ internal sealed partial class ExpressionBinder
 {
     private BoundExpression BindMakeChannelExpression(MakeChannelExpressionSyntax syntax)
     {
-        // Phase 5.4 / ADR-0022: `make(chan T)` / `make(chan T, capacity)`.
-        // ADR-0082 / issue #722: the inner `chan` type clause carries the
-        // gate via BindTypeClause, so this site reports once via the
-        // `chan` form rather than once at `make` *and* once at `chan` (the
-        // user typically sees a single offending mistake — needing the
-        // import — and one diagnostic is plenty).
+        // ADR-0174 D12: the parser already reported GS0566 for the retired
+        // `make(chan T[, n])`. Bind it as the construction it names so the
+        // rest of the file keeps binding (no cascade). Note the SEMANTIC
+        // difference the diagnostic spells out: `make(chan T)` was unbounded,
+        // `chan[T]()` is a rendezvous channel.
         var typeSymbol = bindTypeClause(syntax.ChannelTypeClause);
         if (typeSymbol is not ChannelTypeSymbol chan)
         {
@@ -46,7 +45,58 @@ internal sealed partial class ExpressionBinder
             capacity = conversions.BindConversion(syntax.Capacity, TypeSymbol.Int32);
         }
 
-        return new BoundMakeChannelExpression(null, chan, capacity);
+        return BindChannelConstruction(syntax, syntax.Location, chan, capacity);
+    }
+
+    private BoundExpression BindChannelCreationExpression(ChannelCreationExpressionSyntax syntax)
+    {
+        // ADR-0174 D12: `chan[T]()` is a rendezvous channel, `chan[T](n)` a
+        // buffered one. The type clause applied to arguments — the same shape
+        // as `List[int32]()` and the exact parallel of `map[K,V]{…}`.
+        var typeSymbol = bindTypeClause(syntax.TypeClause);
+        if (typeSymbol is not ChannelTypeSymbol chan)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (syntax.Arguments.Count > 1)
+        {
+            Diagnostics.ReportWrongArgumentCount(syntax.OpenParenthesis.Location, chan.Name, expectedCount: 1, actualCount: syntax.Arguments.Count);
+            return new BoundErrorExpression(syntax);
+        }
+
+        BoundExpression? capacity = null;
+        if (syntax.Arguments.Count == 1)
+        {
+            capacity = conversions.BindConversion(syntax.Arguments[0], TypeSymbol.Int32);
+        }
+        else
+        {
+            // GS0548: advisory for the reader who wanted a buffer and did not
+            // supply one. Migrated `make(chan T)` sites are rewritten by
+            // GS0566, not warned about here.
+            Diagnostics.ReportRendezvousChannelConstructed(syntax.Location, chan.ElementType.Name);
+        }
+
+        return BindChannelConstruction(syntax, syntax.Location, chan, capacity);
+    }
+
+    private BoundExpression BindChannelConstruction(SyntaxNode syntax, TextLocation location, ChannelTypeSymbol chan, BoundExpression? capacity)
+    {
+        if (chan.Direction != ChannelDirection.Both)
+        {
+            // Only a bidirectional channel can be constructed; directional
+            // handles are views obtained by conversion.
+            Diagnostics.ReportWrongArgumentCount(location, chan.Name, expectedCount: 0, actualCount: 0);
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (!EnsureChannelRuntime(location))
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        return binderCtx.ChannelRuntime.BindConstruction(syntax, chan.ElementType, capacity);
     }
 
     internal BoundExpression BindTypeOfExpression(TypeOfExpressionSyntax syntax)

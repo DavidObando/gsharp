@@ -113,6 +113,35 @@ A sequence of `(utf8 name \0 utf8 value \0)` pairs. The Phase 6 set is:
 | `language` | `GSharp` |
 | `language-version` | `1.0` (placeholder until a language-version concept lands) |
 
+### `AsyncMethodSteppingInformation` blob layout (ADR-0174 P3-8)
+
+Kind GUID `54FD2AC5-E925-401A-9C2A-F94F171072F8`, parent = the `MoveNext`
+MethodDef of every async or suspending state machine (declared `async func`,
+`suspend func`, and a plain `func` the compiler infers to suspend):
+
+```
+uint32                catchHandlerOffset + 1   (0 when MoveNext has no catch)
+repeated per await:
+  uint32              yieldOffset              (IL offset of the hidden marker before the state save)
+  uint32              resumeOffset             (IL offset of the hidden marker after the resume dispatch)
+  compressed uint     resumeMethodRid          (MoveNext's own MethodDef row)
+```
+
+Statements inside a state machine keep the anchors of the source statements
+they came from — an await sequence is anchored at the awaiting statement, a
+hoisted local's write at its declaration — so a file:line breakpoint binds
+inside `MoveNext` and stepping walks the original lines.
+
+A debugger's step-over uses the pairs to run from a yield to the matching
+resume without stopping in the scheduler; the catch handler offset lets it
+skip the builder's `SetException` route. The kickoff method carries
+`[AsyncStateMachine(typeof(<f>d__N))]` and `[DebuggerStepThrough]`, so the
+runtime's `StackTrace` and debuggers show the logical function for a
+`MoveNext` frame and step-into lands on the body's first line. Exercised by
+`e2etests/debugger-e2e.sh` (breakpoint inside an inferred-suspending
+function, `-exec-next` across a channel receive) and
+`Adr0174AsyncDebugInfoTests`.
+
 ## PE-side debug directory (Phase 7)
 
 When `/debug` is on, the emitter populates the PE's `IMAGE_DIRECTORY_ENTRY_DEBUG`

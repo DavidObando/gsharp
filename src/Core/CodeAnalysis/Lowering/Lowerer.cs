@@ -102,28 +102,6 @@ public sealed class Lowerer : BoundTreeRewriter
     }
 
     /// <inheritdoc/>
-    /// <remarks>
-    /// Issue #1615: <c>scope { }</c> bodies are emitted as a protected
-    /// (try/finally) region so spawned tasks are always awaited — see
-    /// <c>MethodBodyEmitter.EmitScopeStatement</c>. A <c>return</c> lexically
-    /// inside a scope must therefore get the same store-to-temp +
-    /// goto-exit rewrite as a return inside a real try block, so counts
-    /// toward <see cref="tryNestingDepth"/> just like <see cref="RewriteTryStatement"/>.
-    /// </remarks>
-    protected override BoundStatement RewriteScopeStatement(BoundScopeStatement node)
-    {
-        this.tryNestingDepth++;
-        try
-        {
-            return base.RewriteScopeStatement(node);
-        }
-        finally
-        {
-            this.tryNestingDepth--;
-        }
-    }
-
-    /// <inheritdoc/>
     protected override BoundStatement RewritePatternSwitchStatement(BoundPatternSwitchStatement node)
     {
         var discriminant = RewriteExpression(node.Discriminant);
@@ -1722,18 +1700,11 @@ public sealed class Lowerer : BoundTreeRewriter
                 var flatCatches = ImmutableArray.CreateBuilder<BoundCatchClause>();
                 foreach (var clause in t.CatchClauses)
                 {
-                    flatCatches.Add(new BoundCatchClause(clause.ExceptionType, clause.Variable, Flatten(clause.Body)));
+                    flatCatches.Add(clause.WithBody(Flatten(clause.Body)));
                 }
 
                 var flatFinally = t.FinallyBlock == null ? null : (BoundStatement)Flatten(t.FinallyBlock);
                 builder.Add(new BoundTryStatement(null, flatTry, flatCatches.ToImmutable(), flatFinally));
-            }
-            else if (current is BoundScopeStatement scope)
-            {
-                // Phase 5.7: flatten the scope body so the evaluator's flat-statement
-                // walker sees lowered gotos/conditionals instead of nested blocks.
-                var flatScopeBody = Flatten(scope.Body);
-                builder.Add(new BoundScopeStatement(null, flatScopeBody));
             }
             else if (current is BoundFixedStatement fixedStmt)
             {
@@ -1759,18 +1730,6 @@ public sealed class Lowerer : BoundTreeRewriter
                 }
 
                 builder.Add(new BoundPatternSwitchStatement(null, ps.Discriminant, flatArms.ToImmutable(), ps.IsExhaustive));
-            }
-            else if (current is BoundSelectStatement sel)
-            {
-                // Phase 5.6: flatten each case body for the same reason.
-                var flatCases = ImmutableArray.CreateBuilder<BoundSelectCase>(sel.Cases.Length);
-                foreach (var arm in sel.Cases)
-                {
-                    var flatArmBody = Flatten(arm.Body);
-                    flatCases.Add(new BoundSelectCase(arm.CaseKind, arm.Channel, arm.Value, arm.Variable, flatArmBody));
-                }
-
-                builder.Add(new BoundSelectStatement(null, flatCases.ToImmutable()));
             }
             else
             {

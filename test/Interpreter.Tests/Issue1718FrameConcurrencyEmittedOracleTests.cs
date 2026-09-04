@@ -167,7 +167,7 @@ public class Issue1718FrameConcurrencyEmittedOracleTests
     private static EmittedOracleResult Evaluate(string source)
     {
         // ADR-0082 / issue #722: `go` is gated behind this import.
-        var fullSource = "import Gsharp.Extensions.Go\n" + source;
+        var fullSource = source;
         return EmittedOracle.Evaluate(fullSource);
     }
 
