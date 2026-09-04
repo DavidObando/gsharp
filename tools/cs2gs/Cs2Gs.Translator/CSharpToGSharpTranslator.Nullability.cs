@@ -1302,12 +1302,47 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #3886: the DECLARATION side deliberately never promotes a
+            // variadic carrier — `TranslateParameter` gates promotion on
+            // `!variadic` because "variadic params are never null-compared as a
+            // whole" — so a `params T[]` parameter is always emitted `...T`,
+            // whatever null evidence (`if (paths is null) throw`, a body
+            // `paths == null` guard) the fixpoint recorded against it. Asking
+            // `ShouldPromoteToNullableReference` about that parameter HERE
+            // therefore reports a widening that the emitted G# signature does
+            // not have, and the sink-contract check silently suppresses the
+            // `!!` bridge every nullable argument to it needs. That is exactly
+            // the migrated test/Compiler.Tests wall: `EmittedFixture.
+            // LoadTogether(params string[] assemblyPaths)` opens with
+            // `if (assemblyPaths is null) throw`, so every expanded call site
+            // passing a promoted `string?` lost its bridge and produced GS0154
+            // (plus, in that file, fifteen cascade "cannot find function"
+            // errors on the error-typed result).
+            //
+            // Mirror the declaration rule: a variadic carrier's contract is
+            // whatever its own annotation says, never a promoted one.
+            if (IsVariadicCarrierParameter(targetSymbol))
+            {
+                return true;
+            }
+
             bool targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences
                 .Any(reference => this.context.Compilation.ContainsSyntaxTree(reference.SyntaxTree)) == true;
 
             return !(targetDeclaredInThisCompilation
                 && this.ShouldPromoteToNullableReference(targetSymbol));
         }
+
+        // Issue #3886: whether <paramref name="symbol"/> is a parameter that
+        // `TranslateParameter` emits as an ADR-0173 variadic carrier (`...T` /
+        // `...List[T]`). Kept in lockstep with the `variadic` local there: only
+        // a genuine `params T[]` or a SUPPORTED params collection becomes a
+        // carrier — an unsupported shape (e.g. `params HashSet<T>`) gaps and
+        // keeps ordinary-parameter promotion.
+        private static bool IsVariadicCarrierParameter(ISymbol symbol) =>
+            symbol is IParameterSymbol { IsParams: true } parameter
+            && (parameter.Type is IArrayTypeSymbol
+                || IsSupportedParamsCollectionType(parameter.Type));
 
         // Issue #3865: true when <paramref name="targetSymbol"/> is a WRITE sink
         // (parameter, field or property) that exists only as CLR metadata and
