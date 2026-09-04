@@ -370,9 +370,19 @@ public sealed partial class CSharpToGSharpTranslator
         // still converts into a `T?` slot, so dropping a FLOW `?` can only
         // widen what binds.
         //
-        // The rewrite is scoped to the RETURN position, where the enclosing
-        // method's DECLARED return type settles the question and no flow state
-        // can reach it. Everywhere else an annotated type parameter on a
+        // The rewrite is scoped to positions where a DECLARED type settles the
+        // question and no flow state can reach it: the RETURN value, the
+        // right-hand side of a simple ASSIGNMENT, and an ARGUMENT. Issue #3907
+        // added the last two — `Gsharp.Runtime.Channels` is full of
+        // `[MaybeNullWhen(false)] out T value` parameters whose bodies say
+        // `value = default;`, which the return-only rewrite left as
+        // `default(T?)` in a `T` slot.
+        //
+        // Argument position reads the SUBSTITUTED parameter type, which is what
+        // keeps issue #2500 intact: `Same<T?>(default)` resolves to a parameter
+        // of type `T?` (annotated) and keeps its `?`, while
+        // `ReceiveResult[T](default, false)` resolves to one of type `T` and
+        // drops it. Everywhere else an annotated type parameter on a
         // `default` may be a genuinely AUTHORED `T?` that issue #2500 exists to
         // preserve — `Same<T?>(default)` / `Task.FromResult<T?>(default)` write
         // the nullable type argument explicitly and must keep emitting
@@ -383,9 +393,79 @@ public sealed partial class CSharpToGSharpTranslator
             TypeInfo info = this.context.GetTypeInfo(literal);
             return (info.ConvertedType ?? info.Type) is ITypeParameterSymbol
                 && resolved is NamedTypeReference { IsNullable: true } named
-                && this.ReturnsBareTypeParameter(literal)
+                && this.TargetIsBareTypeParameter(literal)
                     ? new NamedTypeReference(named.Name, named.TypeArguments, named.ContainingType)
                     : resolved;
+        }
+
+        // Whether the slot `literal` flows into is DECLARED as an unannotated
+        // type parameter, in any of the three positions where a declaration
+        // settles it (issue #3676 for returns, #3907 for the other two).
+        private bool TargetIsBareTypeParameter(LiteralExpressionSyntax literal)
+        {
+            return this.ReturnsBareTypeParameter(literal)
+                || this.AssignedToBareTypeParameter(literal)
+                || this.PassedToBareTypeParameter(literal);
+        }
+
+        // `value = default;` where `value` is declared `T` — most often an
+        // `[MaybeNullWhen(false)] out T`, whose attribute makes Roslyn's flow
+        // state maybe-null while the declared type stays a bare `T`.
+        private bool AssignedToBareTypeParameter(LiteralExpressionSyntax literal)
+        {
+            if (literal.Parent is not AssignmentExpressionSyntax assignment
+                || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                || assignment.Right != literal)
+            {
+                return false;
+            }
+
+            ISymbol target = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ITypeSymbol declared = target switch
+            {
+                IParameterSymbol parameter => parameter.Type,
+                ILocalSymbol local => local.Type,
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ => null,
+            };
+
+            return IsBareTypeParameter(declared);
+        }
+
+        // `M(default)` where the parameter is declared `T`. The parameter type
+        // is read off the RESOLVED (substituted) symbol, so an explicitly
+        // nullable type argument — `Same<T?>(default)`, issue #2500 — presents
+        // as annotated and keeps its `?`.
+        private bool PassedToBareTypeParameter(LiteralExpressionSyntax literal)
+        {
+            if (literal.Parent is not ArgumentSyntax argument
+                || argument.Parent is not BaseArgumentListSyntax argumentList
+                || argument.NameColon != null)
+            {
+                return false;
+            }
+
+            if (this.context.GetSymbolInfo(argumentList.Parent).Symbol is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            int index = argumentList.Arguments.IndexOf(argument);
+            if (index < 0 || index >= method.Parameters.Length)
+            {
+                // A `params` tail, or an argument list this overload does not
+                // line up with positionally; not a slot a declaration settles.
+                return false;
+            }
+
+            return IsBareTypeParameter(method.Parameters[index].Type);
+        }
+
+        private static bool IsBareTypeParameter(ITypeSymbol type)
+        {
+            return type is ITypeParameterSymbol
+                && type.NullableAnnotation != NullableAnnotation.Annotated;
         }
 
         // Whether `literal` is the value of a `return` in a method or local

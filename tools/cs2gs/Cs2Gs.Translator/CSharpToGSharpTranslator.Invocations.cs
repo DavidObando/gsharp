@@ -3691,10 +3691,20 @@ public sealed partial class CSharpToGSharpTranslator
                 && !targetType.IsNullable
                     ? MakeNullable(targetType)
                     : targetType;
+
+            // Issue #3907: a TUPLE target has no `T(expr)` spelling. That form
+            // renders as `(TaskArm, SelectWaiter)(state)`, which G# reads as a
+            // call on a parenthesized expression rather than a conversion —
+            // `((TaskArm, SelectWaiter))state!` in ArmDescriptor.cs came out as
+            // eight "variable doesn't exist" errors. `cast[(A, B)](expr)` is the
+            // only form that binds, and it is what the unambiguous flag emits.
+            bool unambiguous = this.CastUsesCheckedReferenceConversion(cast)
+                || targetSymbol is INamedTypeSymbol { IsTupleType: true };
+
             return new ConversionExpression(
                 conversionTargetType,
                 operand,
-                this.CastUsesCheckedReferenceConversion(cast));
+                unambiguous);
         }
 
         private bool CastUsesCheckedReferenceConversion(CastExpressionSyntax cast)

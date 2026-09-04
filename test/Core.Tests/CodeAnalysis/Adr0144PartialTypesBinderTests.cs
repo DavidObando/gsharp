@@ -24,6 +24,15 @@ namespace GSharp.Core.Tests.CodeAnalysis;
 /// before the two-phase shell/body binder runs — covering successful merges
 /// (single-file and cross-file), <c>shared { }</c>/init merging, and each new
 /// consistency diagnostic (GS0475-GS0483).
+/// </para>
+/// <para>
+/// Issue #3907 discrimination witness: the mutant is
+/// <c>PartialTypeMerger.GroupByKey</c> keying on <c>(package, name)</c> without
+/// arity, which merged a non-generic type with a same-named generic one and
+/// then reported GS0475/GS0480 against the mismatch it had manufactured.
+/// <c>NonGenericAndGenericPartsOfTheSameName_AreDistinctTypes</c> kills it;
+/// <c>PartialParts_SameArityDifferentParameterNames_StillReportGS0480</c>
+/// proves the check was narrowed rather than removed.
 /// </summary>
 public class Adr0144PartialTypesBinderTests
 {
@@ -971,6 +980,130 @@ partial class Foo {
         Assert.Contains(
             result.Diagnostics,
             d => d.Id == expectedId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #3907: a type is (name, arity), so `Chan` and `Chan[T]` are two
+    // types rather than two parts of one.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("partial class Box {")]
+    [InlineData("class Box {")]
+    public void NonGenericAndGenericPartsOfTheSameName_AreDistinctTypes(string nonGenericHeader)
+    {
+        // ADR-0174 D12's shape: a generic `Chan[T]` split across parts beside a
+        // non-generic `Chan` factory host. Both spellings of the non-generic
+        // part are legal — it is a different type, so `partial` is its own
+        // business.
+        var source = @"package App
+import System
+
+partial class Box[T] {
+    var value T
+}
+
+partial class Box[T] {
+    func Get() T {
+        return value
+    }
+}
+
+" + nonGenericHeader + @"
+    shared {
+        func Make[T](v T) Box[T] {
+            var b = Box[T]()
+            b.value = v
+            return b
+        }
+    }
+}
+
+let made = Box.Make[int32](42)
+Console.WriteLine(made.Get())
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "Issue3907-Arity-" + nonGenericHeader.GetHashCode().ToString("X"));
+        Assert.Contains("42", output);
+    }
+
+    [Fact]
+    public void NonGenericAndGenericInterfacesOfTheSameName_AreDistinctTypes()
+    {
+        // MergeInterfaces shares GroupByKey, so it shared the defect.
+        var source = @"package App
+import System
+
+partial interface IBox[T] {
+    func Get() T;
+}
+
+partial interface IBox {
+    func Describe() string;
+}
+
+class Holder : IBox[int32], IBox {
+    func Get() int32 {
+        return 7
+    }
+
+    func Describe() string {
+        return ""holder""
+    }
+}
+
+let h = Holder()
+Console.WriteLine(h.Get())
+Console.WriteLine(h.Describe())
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "Issue3907-ArityInterface");
+        Assert.Contains("7", output);
+        Assert.Contains("holder", output);
+    }
+
+    [Fact]
+    public void PartialParts_SameArityDifferentParameterNames_StillReportGS0480()
+    {
+        // The narrowing must not have removed the check: same arity, different
+        // type-parameter names, is still a genuine mismatch.
+        var source = @"package App
+
+partial class Box[T] {
+    var value T
+}
+
+partial class Box[U] {
+    var other int32
+}
+";
+        var diagnostics = Compile(source);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0480");
+    }
+
+    [Fact]
+    public void PartialParts_DifferentArity_ReportNeitherGS0475NorGS0480()
+    {
+        var source = @"package App
+
+partial class Box[T] {
+    var value T
+}
+
+class Box {
+    var marker int32
+}
+";
+        var diagnostics = Compile(source);
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "GS0475");
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Id == "GS0480");
+    }
+
+    private static IReadOnlyList<GSharp.Core.CodeAnalysis.Diagnostic> Compile(string source)
+    {
+        using var peStream = new MemoryStream();
+        return new Compilation(SyntaxTree.Parse(SourceText.From(source, "Test.gs")))
+        {
+            IsLibrary = true,
+        }.Emit(peStream).Diagnostics.ToArray();
     }
 
     private static string CompileLoadInvokeCaptureStdout(string source, string contextName)
