@@ -2515,7 +2515,7 @@ implementation had to refine it.
     | G3 | rendezvous target | **Re-set.** The provisional ceiling was ≤2.0× and the row now measures **0.85× Go on a 4-vCPU runner** and ~0.57× on a 20-core workstation, from ~3.2× before. The target must be re-derived from nightlies rather than merely marked "met" — and read with the pairing correction below. |
     | G5 | select boxing / node allocation | **Resolved.** The threshold was >160 B/op; a ready select now allocates **0 B** in steady state (issue #3902 S4). The arm descriptors became the pooled waiter's per-slot cache and the winning value stays in its producer's typed field. |
     | G6 | `RunContinuationsAsynchronously` | **Resolved: adopt, with a bounded budget.** Inline completion takes rendezvous from ~1000 → ~175 ns and select-park from ~1100 → ~300. Bounded by depth (16) and `TryEnsureSufficientExecutionStack`; the gate's 10 000-deep chain test exists and passes. **The correctness half is suppression, not the budget** — see below. |
-    | G7 | `chunks` fresh vs pooled arrays | **Still fires, and by less than it looked.** The threshold was >2.0× Go. On the un-warmed harness the rows read 2.68× (`chunk64`) and 4.93× (`chunk1k`); once both sides are warmed and duration-matched (errata 35) they read ~1.05× and ~2.0–3.0×, because Go improved more than G# did on those rows. `chunk64` now clears the gate; `chunk1k` does not. The research in #3902 showed the fresh array is *not* the dominant cost — the wasted probe arrays and the element-wise ring copy were, and both are fixed — so a pooled overload remains indicated for `chunk1k` alone. |
+    | G7 | `chunks` fresh vs pooled arrays | **Resolved as "no" — see errata 36.** Pooling measures 8%, against D10's promise that a communicated buffer may be kept. Previously read as: The threshold was >2.0× Go. On the un-warmed harness the rows read 2.68× (`chunk64`) and 4.93× (`chunk1k`); once both sides are warmed and duration-matched (errata 35) they read ~1.05× and ~2.0–3.0×, because Go improved more than G# did on those rows. `chunk64` now clears the gate; `chunk1k` does not. The research in #3902 showed the fresh array is *not* the dominant cost — the wasted probe arrays and the element-wise ring copy were, and both are fixed — so a pooled overload remains indicated for `chunk1k` alone. |
     | G4, G8, G9, G10, G11 | `Chan.Unbounded` usage, `await` at an `async let` use, `for batch of N`, defer grace, inference fallback | Unchanged; none is a performance gate and none blocked acceptance. |
 
     **G6's hazard was real, and the prototype that proposed it did not handle
@@ -2620,6 +2620,50 @@ implementation had to refine it.
     Still unexplained: G#'s `spawn` is consistently ~20% slower under the warmed
     harness. It is the same row that regressed inexplicably under the S2 work
     and then recovered on its own. Recorded rather than rationalised.
+
+36. **Gate G7 resolves: no pooled chunk overload (Phase 5-3).** G7 asked
+    whether `chunks()` should gain a pooled-array overload, with the rule
+    ">2.0× Go → pooled". Measured on this machine, interleaved, five paired
+    trials per side, after the S3 work removed the wasted probe arrays and the
+    element-wise ring copy:
+
+    | | fresh (shipped) | pooled (spike) | |
+    | --- | ---: | ---: | --- |
+    | `chunk64` | 8.02 | 7.36 | −8.2% |
+    | `chunk1k` | 3.25 | 3.01 | −7.4% |
+
+    Pooling wins every paired trial with no overlap, so the effect is real. It
+    is also **eight percent**, and the price is D10's central promise: the
+    slogan is "share *buffers* by communicating", and communicated means the
+    receiver may keep the chunk. A pooled chunk may not be kept. Making that
+    contract conditional — so every consumer must know which overload produced
+    the memory it holds — is not worth eight percent as a default, and as an
+    opt-in it is an API whose misuse is silent data corruption rather than an
+    error. **G7 closes as "no".** If a caller ever demonstrates a workload where
+    eight percent decides something, the overload can be reconsidered with that
+    workload as its evidence.
+
+    **The row still above the gate's threshold is not the one G7 was about.**
+    Since issue #3902's S1 corrected the pairings, `chunks()` has no Go
+    counterpart at all — it copies elements where Go passes a slice header, so
+    comparing them measured two different transports. The Go-paired rows are
+    `chunk64-arrays` and `chunk1k-arrays`, which send whole arrays on both
+    sides, and only the second exceeds 2.0×:
+
+    | row | G# ns/elem | Go | ratio | per-chunk |
+    | --- | ---: | ---: | ---: | --- |
+    | `chunk64-arrays` | 5.56 | 7.00 | **0.79×** | G# 356 ns, Go 448 ns |
+    | `chunk1k-arrays` | 2.95 | 1.10 | 2.68× | G# 3021 ns, Go 1126 ns |
+
+    Both rows perform ONE channel operation per chunk, so the transport cannot
+    explain a ratio that **inverts** between them — G# is faster at 64 elements
+    and 2.7× slower at 1024. What changes between the two is how much
+    per-element loop work amortizes against that single channel operation. The
+    evidence therefore points at scalar array read/write throughput, not at
+    channel performance, and a pooled chunk array would not move it. That is a
+    codegen question for a different ADR, and it is recorded here so the next
+    reader does not spend the effort on channels that the number appears to
+    demand.
 
 ## Addendum A — The ten patterns, three ways
 
