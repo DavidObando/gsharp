@@ -1398,7 +1398,9 @@ public static class GSharpPrinter
 
             case ForInStatement forIn:
                 var loopVars = string.IsNullOrEmpty(forIn.ValueName)
-                    ? forIn.VariableName
+                    ? forIn.VariableType == null
+                        ? forIn.VariableName
+                        : $"{forIn.VariableName} {RenderType(forIn.VariableType)}"
                     : $"{forIn.VariableName}, {forIn.ValueName}";
                 var forKeyword = forIn.IsAwait ? "await for" : "for";
                 return $"{pad}{forKeyword} {loopVars} in {RenderExpression(forIn.Iterable, indent)} {RenderBlock(forIn.Body, indent)}";

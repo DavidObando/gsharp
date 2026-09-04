@@ -19,6 +19,7 @@ public sealed class AwaitForRangeStatementSyntax : StatementSyntax
     /// <param name="awaitKeyword">The <c>await</c> keyword.</param>
     /// <param name="forKeyword">The <c>for</c> keyword.</param>
     /// <param name="identifier">The element identifier.</param>
+    /// <param name="typeClause">Optional declared type for the iteration variable.</param>
     /// <param name="colonEqualsToken">The legacy <c>:=</c> token, or null for canonical <c>in</c>.</param>
     /// <param name="rangeKeyword">The legacy <c>range</c> keyword, or null for canonical <c>in</c>.</param>
     /// <param name="inToken">The contextual <c>in</c> token, or null for legacy <c>:= range</c>.</param>
@@ -29,6 +30,7 @@ public sealed class AwaitForRangeStatementSyntax : StatementSyntax
         SyntaxToken awaitKeyword,
         SyntaxToken forKeyword,
         SyntaxToken identifier,
+        TypeClauseSyntax? typeClause,
         SyntaxToken? colonEqualsToken,
         SyntaxToken? rangeKeyword,
         SyntaxToken inToken,
@@ -39,6 +41,7 @@ public sealed class AwaitForRangeStatementSyntax : StatementSyntax
         AwaitKeyword = awaitKeyword;
         ForKeyword = forKeyword;
         Identifier = identifier;
+        TypeClause = typeClause;
         ColonEqualsToken = colonEqualsToken;
         RangeKeyword = rangeKeyword;
         InToken = inToken;
@@ -57,6 +60,9 @@ public sealed class AwaitForRangeStatementSyntax : StatementSyntax
 
     /// <summary>Gets the element identifier.</summary>
     public SyntaxToken Identifier { get; }
+
+    /// <summary>Gets the optional declared type for the iteration variable.</summary>
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>Gets the <c>:=</c> token.</summary>
     public SyntaxToken? ColonEqualsToken { get; }

@@ -45,11 +45,8 @@ public sealed class Issue2638TypedForEachTranslationTests
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         string printed = GSharpPrinter.Print(unit);
 
-        Assert.Contains("for __foreach0 in current", printed, StringComparison.Ordinal);
-        Assert.Contains(
-            "let r FileSystemAccessRule = (__foreach0 as FileSystemAccessRule)!!",
-            printed,
-            StringComparison.Ordinal);
+        Assert.Contains("for r FileSystemAccessRule in current", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__foreach", printed, StringComparison.Ordinal);
         Assert.Contains("sec.RemoveAccessRule(r)", printed, StringComparison.Ordinal);
         AssertTranslatedSourceCompiles(printed);
     }

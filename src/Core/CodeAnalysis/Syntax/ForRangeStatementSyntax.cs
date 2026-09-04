@@ -19,6 +19,7 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="keyword">The <c>for</c> keyword.</param>
     /// <param name="firstIdentifier">The first identifier (index/key, or value when alone).</param>
+    /// <param name="typeClause">Optional declared type for the single iteration variable.</param>
     /// <param name="commaToken">Optional comma separating the two identifiers.</param>
     /// <param name="secondIdentifier">Optional second identifier (the value).</param>
     /// <param name="colonEqualsToken">The legacy <c>:=</c> token, or null for canonical <c>in</c>.</param>
@@ -30,6 +31,7 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
         SyntaxTree syntaxTree,
         SyntaxToken keyword,
         SyntaxToken firstIdentifier,
+        TypeClauseSyntax? typeClause,
         SyntaxToken? commaToken,
         SyntaxToken? secondIdentifier,
         SyntaxToken? colonEqualsToken,
@@ -41,6 +43,7 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
     {
         Keyword = keyword;
         FirstIdentifier = firstIdentifier;
+        TypeClause = typeClause;
         CommaToken = commaToken;
         SecondIdentifier = secondIdentifier;
         ColonEqualsToken = colonEqualsToken;
@@ -58,6 +61,9 @@ public sealed class ForRangeStatementSyntax : StatementSyntax
 
     /// <summary>Gets the first identifier (index/key, or value when no second identifier is present).</summary>
     public SyntaxToken FirstIdentifier { get; }
+
+    /// <summary>Gets the optional declared type for the single iteration variable.</summary>
+    public TypeClauseSyntax? TypeClause { get; }
 
     /// <summary>Gets the optional comma separating the two identifiers.</summary>
     public SyntaxToken? CommaToken { get; }

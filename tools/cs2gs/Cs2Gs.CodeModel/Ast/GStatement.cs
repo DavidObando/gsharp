@@ -485,12 +485,19 @@ public sealed class ForInStatement : GStatement
     /// <param name="iterable">The iterated expression.</param>
     /// <param name="body">The loop body.</param>
     /// <param name="isAwait">Whether this is an asynchronous iteration (<c>await for</c>).</param>
-    public ForInStatement(string variableName, GExpression iterable, BlockStatement body, bool isAwait = false)
+    /// <param name="variableType">The optional declared iteration-variable type.</param>
+    public ForInStatement(
+        string variableName,
+        GExpression iterable,
+        BlockStatement body,
+        bool isAwait = false,
+        GTypeReference variableType = null)
     {
         VariableName = variableName;
         Iterable = iterable;
         Body = body;
         IsAwait = isAwait;
+        VariableType = variableType;
     }
 
     /// <summary>
@@ -511,6 +518,9 @@ public sealed class ForInStatement : GStatement
 
     /// <summary>Gets the iteration variable name (the key, for a key/value loop).</summary>
     public string VariableName { get; }
+
+    /// <summary>Gets the optional declared iteration-variable type.</summary>
+    public GTypeReference VariableType { get; }
 
     /// <summary>Gets the optional value iteration variable name (key/value loop), else <see langword="null"/>.</summary>
     public string ValueName { get; }

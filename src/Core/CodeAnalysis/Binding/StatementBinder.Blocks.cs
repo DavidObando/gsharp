@@ -2065,11 +2065,36 @@ internal sealed partial class StatementBinder
         }
 
         scope = new BoundScope(scope);
-        var variable = bindLocalVariable(
-            syntax.Identifier,
-            isReadOnly: false,
-            type: Invariant.Required(elementType, "an async enumerable has an element type"));
+        var sourceType = Invariant.Required(elementType, "an async enumerable has an element type");
+        VariableSymbol variable;
+        BoundStatement? typedVariablePrelude = null;
+        if (syntax.TypeClause == null)
+        {
+            variable = bindLocalVariable(syntax.Identifier, isReadOnly: false, type: sourceType);
+        }
+        else
+        {
+            var declaredType = bindTypeClause(syntax.TypeClause) ?? TypeSymbol.Error;
+            variable = new LocalVariableSymbol(
+                $"<awaitfor{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: false,
+                type: sourceType);
+            var declaredVariable = bindLocalVariable(syntax.Identifier, isReadOnly: false, type: declaredType);
+            var convertedValue = conversions.BindConversion(
+                syntax.TypeClause.Location,
+                new BoundVariableExpression(syntax, variable),
+                declaredType,
+                allowExplicit: true);
+            typedVariablePrelude = new BoundVariableDeclaration(syntax, declaredVariable, convertedValue);
+        }
+
         var body = BindLoopBody(syntax.Body, labelName, out var breakLabel, out var continueLabel);
+        if (typedVariablePrelude != null)
+        {
+            body = new BoundBlockStatement(
+                originatingSyntax,
+                ImmutableArray.Create(typedVariablePrelude, body));
+        }
 
         scope = scope.Pop();
 

@@ -112,6 +112,62 @@ sum
     }
 
     [Fact]
+    public void TypedForIn_OverNonGenericEnumerable_CastsEachElement()
+    {
+        var source = @"
+import System.Collections
+
+var values = ArrayList()
+values.Add(""a"")
+values.Add(""bb"")
+var total = 0
+for value string in values {
+    total = total + value.Length
+}
+total
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void TypedForIn_HeterogeneousEnumerable_ThrowsInvalidCastException()
+    {
+        var source = @"
+import System
+import System.Collections
+
+var values = ArrayList()
+values.Add(""ok"")
+values.Add(42)
+var caught = false
+try {
+    for value string in values {
+    }
+} catch (InvalidCastException) {
+    caught = true
+}
+caught
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
+    public void TypedForIn_ImpossibleElementConversion_Diagnoses()
+    {
+        var source = @"
+var values = []int32{1}
+for value string in values {
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0155");
+    }
+
+    [Fact]
     public void ForIn_OverUserPatternEnumerable_UsesGetEnumeratorPattern()
     {
         var source = @"
@@ -159,6 +215,23 @@ total
         var result = Evaluate(source);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void TypedAwaitForIn_ConvertsEachElement()
+    {
+        var source = @"
+import GSharp.Core.Tests.CodeAnalysis.Binding
+
+var total int64 = 0
+await for value int64 in AsyncStreamFixture.Counts() {
+    total = total + value
+}
+total
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6L, result.Value);
     }
 
     [Fact]
