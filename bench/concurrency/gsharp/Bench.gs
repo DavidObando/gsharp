@@ -23,24 +23,55 @@ package GSharp.Bench.Concurrency
 
 import System
 import System.Diagnostics
+import System.Threading
 
-let rounds = 3
-let ops = 200000
-let spawnOps = 50000
-let pingPongOps = 20000
+// Issue #3902 (H2): three of the eight scenario bodies never reached Tier1.
+// A scenario's `MoveNext` is entered ONCE and then loops, so call counting —
+// which needs 30 invocations — could never promote it, and only on-stack
+// replacement could. OSR does not fire for every G#-emitted body, and why is
+// still undetermined.
+//
+// So the harness stops depending on OSR. `warmupRounds` exceeds the runtime's
+// call-count threshold, at a cheap `warmupOps`, which promotes every body by
+// the ordinary path before the measured round runs. This sidesteps H2 rather
+// than solving it; H2 remains open, and matters wherever a hot loop inside a
+// suspending function does not park.
+// 120 rounds, not 40: a body that never parks is entered ONCE per call, and
+// promotion is two-stage — roughly 30 calls to earn an instrumented rejit, then
+// 30 more on that version to earn Tier1. Bodies that park reach both far sooner
+// because every resume is another entry. 120 clears it for all eight.
+let warmupRounds = 120
+let warmupOps = 4000
+
+// Issue #3902: counts are set so every scenario MEASURES for roughly a quarter
+// of a second. They used to run 1-5 ms, where timer granularity and the CPU's
+// own frequency ramp are a large fraction of the result — `chunk1k` measured
+// 1.3 ms. The Go side carries the matching counts; a row whose two sides run
+// for wildly different durations is not a comparison.
+let ops = 2000000
+let closedOps = 25000000
+let spawnOps = 750000
+let pingPongOps = 2000000
+let parkOps = 900000
+let chunk64Ops = 32000000
+let chunk1kOps = 75000000
 
 func report(name string, elapsed TimeSpan, count int32) {
     let perOp = elapsed.TotalNanoseconds / float64(count)
-    Console.WriteLine(name + " ns_per_op " + perOp.ToString("F2"))
+
+    // Elapsed milliseconds travel with the rate so a scenario that is too short
+    // to measure is visible as such rather than merely noisy. The Go side has
+    // always printed it; the runner reads the `ns_per_op` token either way.
+    Console.WriteLine(name + " ns_per_op " + perOp.ToString("F2") + " ms " + elapsed.TotalMilliseconds.ToString("F1"))
 }
 
 // A bounded channel driven producer-to-consumer: the shape a pipeline stage
 // has, and the row the ADR's throughput claim rests on.
-func buf64() TimeSpan {
+func buf64(count int32) TimeSpan {
     let ch = chan[int32](64)
     let sw = Stopwatch.StartNew()
     scope {
-        go produce(ch, ops)
+        go produce(ch, count)
         var seen = 0
         for v in ch {
             seen = seen + v - v + 1
@@ -61,11 +92,11 @@ func produce(ch out chan[int32], count int32) {
 
 // Capacity 0: a send completes only when a receiver takes the value, so this
 // measures the hand-off itself rather than the buffer.
-func rendezvous() TimeSpan {
+func rendezvous(count int32) TimeSpan {
     let ch = chan[int32](0)
     let sw = Stopwatch.StartNew()
     scope {
-        go produce(ch, pingPongOps)
+        go produce(ch, count)
         for v in ch {
             let ignored = v
         }
@@ -77,11 +108,11 @@ func rendezvous() TimeSpan {
 
 // The 382x defect ADR-0174 D2 removes: a receive from a closed, drained
 // channel used to raise an exception per call.
-func closedRecv() TimeSpan {
+func closedRecv(count int32) TimeSpan {
     let ch = chan[int32](1)
     ch.Close()
     let sw = Stopwatch.StartNew()
-    for i in 0 ... ops {
+    for i in 0 ... count {
         let (value, ok) = <-ch
         let ignored = value
     }
@@ -91,15 +122,15 @@ func closedRecv() TimeSpan {
 }
 
 // Spawn cost: `go` is a thread-pool work item, not a Task.
-func spawn() TimeSpan {
-    let done = chan[int32](spawnOps)
+func spawn(count int32) TimeSpan {
+    let done = chan[int32](count)
     let sw = Stopwatch.StartNew()
     scope {
-        for i in 0 ... spawnOps {
+        for i in 0 ... count {
             go signal(done)
         }
 
-        for j in 0 ... spawnOps {
+        for j in 0 ... count {
             let (value, ok) = <-done
             let ignored = value
         }
@@ -116,11 +147,11 @@ func signal(done out chan[int32]) {
 // A select whose arms are already ready: the fast path, no registration and no
 // park. Both arms are refilled each round so the uniform-random choice always
 // has two candidates.
-func selectReady() TimeSpan {
+func selectReady(count int32) TimeSpan {
     let a = chan[int32](1)
     let b = chan[int32](1)
     let sw = Stopwatch.StartNew()
-    for i in 0 ... ops {
+    for i in 0 ... count {
         a <- 1
         b <- 2
         select {
@@ -139,14 +170,14 @@ func selectReady() TimeSpan {
 
 // A select with no ready arm: registration on every arm, a park, and a
 // hand-off. This is the path wave 1 could not measure at all.
-func selectPark() TimeSpan {
+func selectPark(count int32) TimeSpan {
     let a = chan[int32](0)
     let b = chan[int32](0)
     let sw = Stopwatch.StartNew()
     scope {
-        go produce(a, pingPongOps)
+        go produce(a, count)
         var taken = 0
-        while taken < pingPongOps {
+        while taken < count {
             select {
             case let v = <-a {
                 taken = taken + 1
@@ -212,43 +243,43 @@ func produceBatched(ch chan[int32], count int32, size int32) {
 
 func run(name string) {
     if name == "buf64" {
-        report("buf64", buf64(), ops)
+        report("buf64", buf64(ops), ops)
     } else if name == "rendezvous" {
-        report("rendezvous", rendezvous(), pingPongOps)
+        report("rendezvous", rendezvous(pingPongOps), pingPongOps)
     } else if name == "closed-recv" {
-        report("closed-recv", closedRecv(), ops)
+        report("closed-recv", closedRecv(closedOps), closedOps)
     } else if name == "spawn" {
-        report("spawn", spawn(), spawnOps)
+        report("spawn", spawn(spawnOps), spawnOps)
     } else if name == "select-ready" {
-        report("select-ready", selectReady(), ops)
+        report("select-ready", selectReady(ops), ops)
     } else if name == "select-park" {
-        report("select-park", selectPark(), pingPongOps)
+        report("select-park", selectPark(parkOps), parkOps)
     } else if name == "chunk64" {
-        report("chunk64", chunked(64, ops), ops)
+        report("chunk64", chunked(64, chunk64Ops), chunk64Ops)
     } else if name == "chunk1k" {
-        report("chunk1k", chunked(1024, ops), ops)
+        report("chunk1k", chunked(1024, chunk1kOps), chunk1kOps)
     }
 }
 
+// Same work at a cheap op count, no output. Called warmupRounds times so the
+// runtime's call counter promotes every scenario body before it is measured.
 func runWarmup(name string) {
-    // Same work, no output: rounds 1 and 2 exist only to let the JIT tier up.
-    let sink = Console.Out
     if name == "buf64" {
-        let ignored = buf64()
+        let ignored = buf64(warmupOps)
     } else if name == "rendezvous" {
-        let ignored = rendezvous()
+        let ignored = rendezvous(warmupOps)
     } else if name == "closed-recv" {
-        let ignored = closedRecv()
+        let ignored = closedRecv(warmupOps)
     } else if name == "spawn" {
-        let ignored = spawn()
+        let ignored = spawn(warmupOps)
     } else if name == "select-ready" {
-        let ignored = selectReady()
+        let ignored = selectReady(warmupOps)
     } else if name == "select-park" {
-        let ignored = selectPark()
+        let ignored = selectPark(warmupOps)
     } else if name == "chunk64" {
-        let ignored = chunked(64, ops)
+        let ignored = chunked(64, warmupOps)
     } else if name == "chunk1k" {
-        let ignored = chunked(1024, ops)
+        let ignored = chunked(1024, warmupOps)
     }
 }
 
@@ -257,15 +288,23 @@ let requested = Environment.GetEnvironmentVariable("GSHARP_BENCH_SCENARIO")
 
 Console.WriteLine("runtime " + Environment.Version.ToString() + " cores " + Environment.ProcessorCount.ToString())
 
-for round in 0 ... rounds {
-    let reportable = round == rounds - 1
+for round in 0 ... warmupRounds {
     for name in all {
         if requested == nil || requested == "" || requested == name {
-            if reportable {
-                run(name)
-            } else {
-                runWarmup(name)
-            }
+            runWarmup(name)
         }
+    }
+}
+
+// Tier1 compilation is queued when the call counter trips and installed by a
+// background thread. Give it room to land before measuring, or the measured
+// round races the promotion it just paid for.
+Thread.Sleep(250)
+GC.Collect()
+GC.WaitForPendingFinalizers()
+
+for name in all {
+    if requested == nil || requested == "" || requested == name {
+        run(name)
     }
 }
