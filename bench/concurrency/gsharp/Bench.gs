@@ -52,6 +52,7 @@ let ops = 2000000
 let closedOps = 25000000
 let spawnOps = 750000
 let pingPongOps = 2000000
+let roundTripOps = 1000000
 let parkOps = 900000
 let chunk64Ops = 32000000
 let chunk1kOps = 75000000
@@ -91,7 +92,9 @@ func produce(ch out chan[int32], count int32) {
 }
 
 // Capacity 0: a send completes only when a receiver takes the value, so this
-// measures the hand-off itself rather than the buffer.
+// measures the hand-off itself rather than the buffer. ONE hand-off per counted
+// operation, which is why it has no Go counterpart — Go's `pingpong` counts a
+// round trip. `pingpong` below is the row that pairs with it (issue #3902 S1a).
 func rendezvous(count int32) TimeSpan {
     let ch = chan[int32](0)
     let sw = Stopwatch.StartNew()
@@ -104,6 +107,33 @@ func rendezvous(count int32) TimeSpan {
 
     sw.Stop()
     return sw.Elapsed
+}
+
+// Go's `pingpong`, shape for shape: a round trip over two rendezvous channels,
+// counted per ROUND TRIP and therefore two hand-offs per operation. The rows
+// this replaces compared one hand-off against two and flattered G# by 2x.
+func pingpong(count int32) TimeSpan {
+    let a = chan[int32](0)
+    let b = chan[int32](0)
+    let sw = Stopwatch.StartNew()
+    scope {
+        go echo(a, b, count)
+        for i in 0 ... count {
+            a <- i
+            let got = <-b
+            let ignored = got
+        }
+    }
+
+    sw.Stop()
+    return sw.Elapsed
+}
+
+func echo(a in chan[int32], b out chan[int32], count int32) {
+    for i in 0 ... count {
+        let v = <-a
+        b <- v
+    }
 }
 
 // The 382x defect ADR-0174 D2 removes: a receive from a closed, drained
@@ -121,18 +151,15 @@ func closedRecv(count int32) TimeSpan {
     return sw.Elapsed
 }
 
-// Spawn cost: `go` is a thread-pool work item, not a Task.
+// Spawn cost: `go` is a thread-pool work item, not a Task. Go's counterpart
+// times the spawn and a WaitGroup join, so this does the same — it used to add
+// a send and a receive per goroutine that Go never paid for (issue #3902 S1c).
+// `scope` exit IS the join.
 func spawn(count int32) TimeSpan {
-    let done = chan[int32](count)
     let sw = Stopwatch.StartNew()
     scope {
         for i in 0 ... count {
-            go signal(done)
-        }
-
-        for j in 0 ... count {
-            let (value, ok) = <-done
-            let ignored = value
+            go noop()
         }
     }
 
@@ -140,13 +167,15 @@ func spawn(count int32) TimeSpan {
     return sw.Elapsed
 }
 
-func signal(done out chan[int32]) {
-    done <- 1
+func noop() {
 }
 
-// A select whose arms are already ready: the fast path, no registration and no
+// A select whose arms are ALREADY READY: the fast path, no registration and no
 // park. Both arms are refilled each round so the uniform-random choice always
-// has two candidates.
+// has two candidates. Four channel operations per counted iteration (two sends,
+// the select, one drain), so it has NO Go counterpart — `select-stream` below
+// is the row that pairs with Go. Keeping this one G#-only is what preserves a
+// genuine ready-path measurement for gate G5 (issue #3902 S1b).
 func selectReady(count int32) TimeSpan {
     let a = chan[int32](1)
     let b = chan[int32](1)
@@ -166,6 +195,42 @@ func selectReady(count int32) TimeSpan {
 
     sw.Stop()
     return sw.Elapsed
+}
+
+// Go's `selectCost`, shape for shape: a producer fills one buffered arm and the
+// timed loop performs exactly ONE select receive per counted operation. The
+// consumer outruns the producer, so this measures a MIX of ready and parked
+// selects — which is what Go's row measures too, and why it is a separate row
+// from `select-ready` rather than a replacement for it.
+func selectStream(count int32) TimeSpan {
+    let a = chan[int32](1024)
+    let b = chan[int32](1024)
+    let sw = Stopwatch.StartNew()
+    scope {
+        go feed(a, count)
+        var got = 0
+        while got < count {
+            select {
+            case let v = <-a {
+                got = got + 1
+            }
+            case let w = <-b {
+                got = got + 1
+            }
+            }
+        }
+    }
+
+    sw.Stop()
+    return sw.Elapsed
+}
+
+// Like `produce` but leaves the channel open: a closed arm would make the
+// select return immediately with the zero value and miscount the loop.
+func feed(ch out chan[int32], count int32) {
+    for i in 0 ... count {
+        ch <- i
+    }
 }
 
 // A select with no ready arm: registration on every arm, a park, and a
@@ -241,6 +306,49 @@ func produceBatched(ch chan[int32], count int32, size int32) {
 }
 
 
+// Go's chunk rows send whole `[]int` slices over a `chan []int`; the `chunks()`
+// rows above are a G# construct that copies elements into a fresh array per
+// chunk. Comparing the two measured different transports (issue #3902 S1d), so
+// this is the row that pairs with Go, and `chunk64`/`chunk1k` are now G#-only.
+func chunkedArrays(size int32, count int32) TimeSpan {
+    let ch = chan[[]int32](64)
+    let sw = Stopwatch.StartNew()
+    scope {
+        go produceArrays(ch, count, size)
+        var sum = 0
+        for batch in ch {
+            var i = 0
+            while i < batch.Length {
+                sum = sum + batch[i]
+                i = i + 1
+            }
+        }
+    }
+
+    sw.Stop()
+    return sw.Elapsed
+}
+
+// `chan[[]int32]` rather than `out chan[[]int32]`: the directional view
+// conversion does not apply when the element type is an array, so the `out`
+// form does not bind (issue #3924). Bidirectional is only a workaround here.
+func produceArrays(ch chan[[]int32], count int32, size int32) {
+    var sent = 0
+    while sent < count {
+        var chunk = [size]int32{}
+        var i = 0
+        while i < size && sent + i < count {
+            chunk[i] = sent + i
+            i = i + 1
+        }
+
+        ch <- chunk
+        sent = sent + i
+    }
+
+    ch.Close()
+}
+
 func run(name string) {
     if name == "buf64" {
         report("buf64", buf64(ops), ops)
@@ -252,12 +360,20 @@ func run(name string) {
         report("spawn", spawn(spawnOps), spawnOps)
     } else if name == "select-ready" {
         report("select-ready", selectReady(ops), ops)
+    } else if name == "select-stream" {
+        report("select-stream", selectStream(ops), ops)
     } else if name == "select-park" {
         report("select-park", selectPark(parkOps), parkOps)
     } else if name == "chunk64" {
         report("chunk64", chunked(64, chunk64Ops), chunk64Ops)
     } else if name == "chunk1k" {
         report("chunk1k", chunked(1024, chunk1kOps), chunk1kOps)
+    } else if name == "pingpong" {
+        report("pingpong", pingpong(roundTripOps), roundTripOps)
+    } else if name == "chunk64-arrays" {
+        report("chunk64-arrays", chunkedArrays(64, chunk64Ops), chunk64Ops)
+    } else if name == "chunk1k-arrays" {
+        report("chunk1k-arrays", chunkedArrays(1024, chunk1kOps), chunk1kOps)
     }
 }
 
@@ -274,16 +390,24 @@ func runWarmup(name string) {
         let ignored = spawn(warmupOps)
     } else if name == "select-ready" {
         let ignored = selectReady(warmupOps)
+    } else if name == "select-stream" {
+        let ignored = selectStream(warmupOps)
     } else if name == "select-park" {
         let ignored = selectPark(warmupOps)
     } else if name == "chunk64" {
         let ignored = chunked(64, warmupOps)
     } else if name == "chunk1k" {
         let ignored = chunked(1024, warmupOps)
+    } else if name == "pingpong" {
+        let ignored = pingpong(warmupOps)
+    } else if name == "chunk64-arrays" {
+        let ignored = chunkedArrays(64, warmupOps)
+    } else if name == "chunk1k-arrays" {
+        let ignored = chunkedArrays(1024, warmupOps)
     }
 }
 
-let all = []string{"buf64", "rendezvous", "closed-recv", "spawn", "select-ready", "select-park", "chunk64", "chunk1k"}
+let all = []string{"buf64", "rendezvous", "pingpong", "closed-recv", "spawn", "select-ready", "select-stream", "select-park", "chunk64", "chunk1k", "chunk64-arrays", "chunk1k-arrays"}
 let requested = Environment.GetEnvironmentVariable("GSHARP_BENCH_SCENARIO")
 
 Console.WriteLine("runtime " + Environment.Version.ToString() + " cores " + Environment.ProcessorCount.ToString())
