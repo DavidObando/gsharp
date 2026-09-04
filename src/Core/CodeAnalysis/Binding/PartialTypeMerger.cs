@@ -29,8 +29,9 @@ internal static class PartialTypeMerger
 {
     /// <summary>
     /// Merges the <c>partial</c> struct/class declarations of
-    /// <paramref name="declarations"/> that share a <c>(package, name)</c> key,
-    /// leaving lone declarations (and non-partial duplicate groups) untouched.
+    /// <paramref name="declarations"/> that share a
+    /// <c>(package, name, arity)</c> key, leaving lone declarations (and
+    /// non-partial duplicate groups) untouched.
     /// </summary>
     /// <param name="declarations">The top-level struct/class declarations across every tree.</param>
     /// <param name="packageByTree">Maps each syntax tree to its owning package (for the grouping key).</param>
@@ -71,8 +72,9 @@ internal static class PartialTypeMerger
 
     /// <summary>
     /// Merges the <c>partial</c> interface declarations of
-    /// <paramref name="declarations"/> that share a <c>(package, name)</c> key,
-    /// leaving lone declarations (and non-partial duplicate groups) untouched.
+    /// <paramref name="declarations"/> that share a
+    /// <c>(package, name, arity)</c> key, leaving lone declarations (and
+    /// non-partial duplicate groups) untouched.
     /// </summary>
     /// <param name="declarations">The top-level interface declarations across every tree.</param>
     /// <param name="packageByTree">Maps each syntax tree to its owning package (for the grouping key).</param>
@@ -116,14 +118,23 @@ internal static class PartialTypeMerger
     {
         // Preserve first-appearance order of the groups for determinism of the
         // returned list.
-        var order = new List<(string Package, string Name)>();
-        var groups = new Dictionary<(string Package, string Name), List<T>>();
+        //
+        // Issue #3907: arity is part of the key. A type is identified by name
+        // AND type-parameter count, so `Chan` and `Chan[T]` are two types, not
+        // two parts of one — which is what ADR-0174 D12 declares (a non-generic
+        // factory host beside the generic channel). Grouping on the name alone
+        // merged them, then reported GS0475/GS0480 against a mismatch it had
+        // manufactured, and the poisoned type parameter list turned into 172
+        // "Type 'T' doesn't exist" downstream. The non-partial path already
+        // distinguished the two, so this only brings the partial path in line.
+        var order = new List<(string Package, string Name, int Arity)>();
+        var groups = new Dictionary<(string Package, string Name, int Arity), List<T>>();
 
         foreach (var decl in declarations)
         {
             var packageName = packageByTree.TryGetValue(decl.SyntaxTree, out var pkg) ? pkg.Name : string.Empty;
             var name = GetIdentifier(decl)?.Text ?? string.Empty;
-            var key = (packageName, name);
+            var key = (packageName, name, GetArity(decl));
             if (!groups.TryGetValue(key, out var list))
             {
                 list = new List<T>();
@@ -164,6 +175,19 @@ internal static class PartialTypeMerger
         StructDeclarationSyntax s => s.Identifier,
         InterfaceDeclarationSyntax i => i.Identifier,
         _ => null,
+    };
+
+    /// <summary>
+    /// The declaration's type-parameter count, which together with the name
+    /// identifies the type (issue #3907). A missing list is arity zero.
+    /// </summary>
+    /// <param name="decl">The declaration.</param>
+    /// <returns>The type-parameter count.</returns>
+    private static int GetArity(MemberSyntax decl) => decl switch
+    {
+        StructDeclarationSyntax s => s.TypeParameterList?.Parameters.Count ?? 0,
+        InterfaceDeclarationSyntax i => i.TypeParameterList?.Parameters.Count ?? 0,
+        _ => 0,
     };
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -654,20 +678,24 @@ internal static class PartialTypeMerger
             return nested;
         }
 
-        // Group the nested structs and interfaces by name (order-preserving).
+        // Group the nested structs and interfaces by name and arity (order-preserving).
         var structGroups = GroupByKey(nested.OfType<StructDeclarationSyntax>(), EmptyPackages);
         var interfaceGroups = GroupByKey(nested.OfType<InterfaceDeclarationSyntax>(), EmptyPackages);
 
-        var mergedStructByName = new Dictionary<string, StructDeclarationSyntax>(System.StringComparer.Ordinal);
-        var mergedInterfaceByName = new Dictionary<string, InterfaceDeclarationSyntax>(System.StringComparer.Ordinal);
+        // Issue #3907: keyed by (name, arity), matching GroupByKey. On the name
+        // alone a nested `Box` and `Box[T]` would collide here — the second
+        // merge would overwrite the first and the rebuild below would drop one
+        // of the two types outright.
+        var mergedStructByName = new Dictionary<(string Name, int Arity), StructDeclarationSyntax>();
+        var mergedInterfaceByName = new Dictionary<(string Name, int Arity), InterfaceDeclarationSyntax>();
         foreach (var g in structGroups.Where(g => g.Count > 1 && g.Any(d => d.IsPartial)))
         {
-            mergedStructByName[g[0].Identifier?.Text ?? string.Empty] = MergeStructGroup(g, diagnostics);
+            mergedStructByName[(g[0].Identifier?.Text ?? string.Empty, GetArity(g[0]))] = MergeStructGroup(g, diagnostics);
         }
 
         foreach (var g in interfaceGroups.Where(g => g.Count > 1 && g.Any(d => d.IsPartial)))
         {
-            mergedInterfaceByName[g[0].Identifier?.Text ?? string.Empty] = MergeInterfaceGroup(g, diagnostics);
+            mergedInterfaceByName[(g[0].Identifier?.Text ?? string.Empty, GetArity(g[0]))] = MergeInterfaceGroup(g, diagnostics);
         }
 
         // No nested partial group to merge at this level — but a lone nested
@@ -684,15 +712,15 @@ internal static class PartialTypeMerger
             return nested;
         }
 
-        var emittedStruct = new HashSet<string>(System.StringComparer.Ordinal);
-        var emittedInterface = new HashSet<string>(System.StringComparer.Ordinal);
+        var emittedStruct = new HashSet<(string Name, int Arity)>();
+        var emittedInterface = new HashSet<(string Name, int Arity)>();
         var result = ImmutableArray.CreateBuilder<MemberSyntax>();
         foreach (var member in nested)
         {
             switch (member)
             {
                 case StructDeclarationSyntax s:
-                    var sName = s.Identifier?.Text ?? string.Empty;
+                    var sName = (s.Identifier?.Text ?? string.Empty, GetArity(s));
                     if (mergedStructByName.TryGetValue(sName, out var mergedStruct))
                     {
                         if (emittedStruct.Add(sName))
@@ -710,7 +738,7 @@ internal static class PartialTypeMerger
                     break;
 
                 case InterfaceDeclarationSyntax iface:
-                    var iName = iface.Identifier?.Text ?? string.Empty;
+                    var iName = (iface.Identifier?.Text ?? string.Empty, GetArity(iface));
                     if (mergedInterfaceByName.TryGetValue(iName, out var mergedIface))
                     {
                         if (emittedInterface.Add(iName))

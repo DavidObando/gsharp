@@ -37,6 +37,11 @@ namespace Cs2Gs.Tests;
 /// </para>
 ///
 /// <para>
+/// Issue #3907 extends the fifth to assignment and argument position; the
+/// discrimination witness is the pair of "keeps nullable" tests, which fail if
+/// the rewrite ever stops consulting the DECLARED type and simply strips every
+/// <c>?</c> off a <c>default</c>.
+///
 /// The fifth is unrelated to generated code: a bare <c>default</c> literal
 /// target-typed to an unconstrained type parameter picks up Roslyn's
 /// FLOW-derived <c>T?</c> ("maybe default") rather than the declared bare
@@ -419,6 +424,107 @@ namespace Demo
 
         Assert.Contains("func Missing[T class]() T?", printed[0]);
         Assert.Contains("return default(T?)", printed[0]);
+    }
+
+    /// <summary>
+    /// Issue #3907: the same flow-vs-declared confusion in ASSIGNMENT position.
+    /// <c>Gsharp.Runtime.Channels</c> is built on
+    /// <c>[MaybeNullWhen(false)] out T value</c> parameters whose bodies say
+    /// <c>value = default;</c> — the attribute makes Roslyn's flow state
+    /// maybe-null while the DECLARED parameter type stays a bare <c>T</c>, so
+    /// the return-only rewrite left <c>default(T?)</c> in a <c>T</c> slot.
+    /// </summary>
+    [Fact]
+    public void BareDefault_AssignedToMaybeNullWhenOutParameter_EmitsDefaultOfBareT()
+    {
+        string[] printed = TranslateEnabled(
+            ("Node.cs", @"
+using System.Diagnostics.CodeAnalysis;
+
+namespace Demo
+{
+    public class Node<T>
+    {
+        public bool TryTake([MaybeNullWhen(false)] out T value)
+        {
+            value = default;
+            return false;
+        }
+    }
+}"));
+
+        Assert.Contains("value = default(T)", printed[0]);
+        Assert.DoesNotContain("default(T?)", printed[0]);
+    }
+
+    /// <summary>
+    /// Issue #3907: a field the author DECLARED <c>T?</c> keeps its <c>?</c>.
+    /// The rewrite reads the declaration, so it must not follow the assignment
+    /// blindly — this is the assignment-position counterpart of the
+    /// <c>T?</c>-return test above.
+    /// </summary>
+    [Fact]
+    public void BareDefault_AssignedToDeclaredNullableField_KeepsNullable()
+    {
+        string[] printed = TranslateEnabled(
+            ("Node.cs", @"
+namespace Demo
+{
+    public class Node<T>
+    {
+        private T? slot;
+
+        public void Clear()
+        {
+            slot = default;
+        }
+    }
+}"));
+
+        Assert.Contains("slot = default(T?)", printed[0]);
+    }
+
+    /// <summary>
+    /// Issue #3907: ARGUMENT position, read off the SUBSTITUTED parameter type.
+    /// <c>ReceiveResult[T](default, false)</c> passes a bare <c>T</c> slot and
+    /// must drop the flow <c>?</c>; issue #2500's <c>Same&lt;T?&gt;(default)</c>
+    /// resolves to a parameter of type <c>T?</c> and must keep it. Both are
+    /// asserted here so neither can regress without the other noticing.
+    /// </summary>
+    [Fact]
+    public void BareDefault_AsArgument_FollowsTheSubstitutedParameterType()
+    {
+        string[] printed = TranslateEnabled(
+            ("Result.cs", @"
+namespace Demo
+{
+    public readonly struct Result<T>
+    {
+        public Result(T value, bool ok)
+        {
+            this.Value = value;
+            this.Ok = ok;
+        }
+
+        public T Value { get; }
+
+        public bool Ok { get; }
+
+        public static Result<T> Empty => new Result<T>(default, false);
+    }
+
+    public static class Same
+    {
+        public static T Of<T>(T value) => value;
+
+        public static T? Nullable<T>()
+            where T : class
+            => Of<T?>(default);
+    }
+}"));
+
+        Assert.Contains("Result[T](default(T), false)", printed[0]);
+        Assert.Contains("Of[T?](default(T?))", printed[0]);
     }
 
     private static string[] TranslateEnabled(params (string Path, string Source)[] sources)
