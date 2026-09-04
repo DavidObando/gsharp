@@ -2471,13 +2471,24 @@ implementation had to refine it.
     Neither mode is *the* number, and the ADR should stop implying there is one.
     The JIT row is what a deployed G# program does; the AOT row is what the
     language does once compilation is out of the way, and it is the only mode
-    that compares like-for-like with Go's ahead-of-time binary. They differ per
-    scenario rather than by a constant — AOT is markedly better on the parking
-    rows (`select-park` ~950 vs ~1080 ns, `rendezvous` ~800–970 vs ~1000–1130)
-    and slightly worse on `select-ready`, where dynamic PGO wins. Each carries
-    its own ceiling in `baseline.json` (`schemaVersion: 2`), because a JIT
-    regression and an AOT regression mean different things and neither should
-    mask the other.
+    that compares like-for-like with Go's ahead-of-time binary.
+
+    **Which mode wins is hardware-dependent, and that is the finding.** On a
+    20-core workstation AOT takes the parking rows (`select-park` ~990 vs ~1050
+    ns, `rendezvous` ~960 vs ~1210) and loses `select-ready`, where dynamic PGO
+    is worth ~28%. On the 4-vCPU CI runner the ranking inverts almost
+    everywhere — `buf64` 230 (aot) vs 129 (jit), `rendezvous` 682 vs 520,
+    `select-ready` 265 vs 240 — with AOT ahead only on `closed-recv` and
+    `chunk64`. Dynamic PGO appears to matter more when there are fewer cores to
+    hide a bad inlining decision behind, though that mechanism is a guess and
+    has not been measured. What is not a guess is that a single G# figure would
+    have to pick a mode, and the pick would change the answer differently per
+    row and per machine.
+
+    Each mode therefore carries its own ceiling in `baseline.json`
+    (`schemaVersion: 2`): a JIT regression and an AOT regression mean different
+    things, neither should mask the other, and the hardware class already
+    recorded per run is what makes either comparable across nights.
 
     Consequences for the gates: **G3, G5, G6 and G7 must be resolved against
     pinned measurements**, not against anything recorded before this change.

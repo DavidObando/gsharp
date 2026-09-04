@@ -90,9 +90,11 @@ spike:
    the pinned-tier JIT row. Neither is "the" number: the JIT row is what a
    deployed G# program does, the AOT row is what the language does once
    compilation is out of the way, and it is the only mode that compares
-   like-for-like with Go's ahead-of-time binary. They differ per scenario rather
-   than by a constant, which is exactly why reporting one alone misleads. Each
-   carries its own ceiling in `baseline.json`.
+   like-for-like with Go's ahead-of-time binary. Which one wins differs per
+   scenario **and per machine** — AOT takes the parking rows on a 20-core
+   workstation and loses most rows on the 4-vCPU CI runner — which is exactly
+   why reporting one alone misleads. Each carries its own ceiling in
+   `baseline.json`; compare a row only against runs of the same hardware class.
 6. **Separate the two gates.** Within-runtime regression (G# against its own
    last recorded number) is stable and can gate a PR. The G#-vs-Go ratio
    depends on the Go toolchain and the machine and must stay informational.
