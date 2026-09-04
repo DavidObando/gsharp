@@ -100,6 +100,98 @@ func main() int32 {
         }
     }
 
+    [Fact]
+    public void ConstReferencingAnotherTypesConstDeclaredLater_FoldsToCorrectValue()
+    {
+        // Issue #3896: the #1193 fixpoint above runs once PER TYPE, so a const
+        // whose value lives in a type bound LATER never folded and was reported
+        // GS0376 — order dependence between types that C# does not have, and
+        // that took src/Core (and with it six banked self-migration apps) out.
+        // The B-before-A order is the failing one; A-before-B always worked.
+        const string Source = @"package P
+class B {
+    shared {
+        const Copy string = A.Name
+    }
+}
+class A {
+    shared {
+        const Name string = ""Gsharp.Concurrency.Chan`1""
+    }
+}
+func getName() string {
+    return B.Copy
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ConstReferencingAnotherTypesConstDeclaredLater_FoldsToCorrectValue));
+        try
+        {
+            Assert.Equal("Gsharp.Concurrency.Chan`1", GetProgramMethod(asm, "getName").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void ConstChainAcrossThreeTypesInReverseOrder_FoldsToCorrectValue()
+    {
+        // The cross-type retry must be a FIXPOINT, not a single extra pass: C
+        // needs B, which needs A, and all three are declared innermost-last.
+        const string Source = @"package P
+class C {
+    shared {
+        const Value int32 = B.Value + 1
+    }
+}
+class B {
+    shared {
+        const Value int32 = A.Value + 1
+    }
+}
+class A {
+    shared {
+        const Value int32 = 40
+    }
+}
+func total() int32 {
+    return C.Value
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ConstChainAcrossThreeTypesInReverseOrder_FoldsToCorrectValue));
+        try
+        {
+            Assert.Equal(42, GetProgramMethod(asm, "total").Invoke(null, null));
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    [Fact]
+    public void GenuinelyNonConstantInitializer_StillReportsGS0376()
+    {
+        // Anti-vacuity: deferring the report to the compilation-wide pass must
+        // not lose it. A call result is not a constant in any pass order.
+        const string Source = @"package P
+import System
+class Q {
+    shared {
+        const Bad string = Guid.NewGuid().ToString()
+    }
+}
+";
+        var tree = SyntaxTree.Parse(SourceText.From(Source));
+        var compilation = new Compilation(tree);
+        using var peStream = new MemoryStream();
+        var result = compilation.Emit(peStream);
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0376" && d.Message.Contains("Bad", StringComparison.Ordinal));
+    }
+
     private static (Assembly asm, AssemblyLoadContext ctx) CompileToAssembly(string source, string contextName)
     {
         using var peStream = new MemoryStream();
