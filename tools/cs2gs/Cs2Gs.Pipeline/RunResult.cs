@@ -107,6 +107,25 @@ public sealed class AppResult
     [JsonPropertyName("fingerprints")]
     [JsonPropertyOrder(6)]
     public List<string> Fingerprints { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Gets or sets the mirrored test failures the test-parity allow-list
+    /// covered for this app (issue #3885). Present on a GREEN app: a run that
+    /// passes only because of the allow-list must still say so, or the list
+    /// becomes the invisible kind.
+    /// </summary>
+    [JsonPropertyName("allowedTestFailures")]
+    [JsonPropertyOrder(7)]
+    public List<string> AllowedTestFailures { get; set; } = new List<string>();
+
+    /// <summary>
+    /// Gets or sets the allow-list entries for this app whose test did not fail
+    /// in a completed run (issue #3885) — they are stale and should be removed.
+    /// Advisory: reported, never a reason the gate goes red.
+    /// </summary>
+    [JsonPropertyName("staleAllowListEntries")]
+    [JsonPropertyOrder(8)]
+    public List<string> StaleAllowListEntries { get; set; } = new List<string>();
 }
 
 /// <summary>

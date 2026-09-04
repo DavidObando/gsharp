@@ -14,6 +14,9 @@ single whole run would have produced:
   * an app that failed translate was never handed to a shard, so its later
     stages are filled in as ``skipped`` — the same shape the whole run's
     short-circuit produces;
+  * ``allowedTestFailures``/``staleAllowListEntries`` (issue #3885) come from
+    the shard too: they are a stage-4 verdict, and dropping them here would make
+    an allow-listed pass indistinguishable from an unconditional one;
   * ``succeeded`` is the conjunction, ``unverified`` is recomputed with the
     whole run's rule (nothing failed, but something was skipped);
   * an app that translated but that no shard reported on is a sharding bug, not
@@ -53,6 +56,12 @@ def merge_app(migrate_app: dict, shard_app: dict | None) -> dict:
         "stages": stages,
         "artifacts": list(migrate_app.get("artifacts", [])),
         "fingerprints": list(migrate_app.get("fingerprints", [])),
+        # Issue #3885: the test-parity allow-list verdict is produced by the
+        # shard that ran stage 4, and it has to survive the merge -- a run that
+        # is green only because of the allow-list must still say which failures
+        # it excused, and which entries no longer fire.
+        "allowedTestFailures": [],
+        "staleAllowListEntries": [],
     }
 
     if not translated:
@@ -75,6 +84,8 @@ def merge_app(migrate_app: dict, shard_app: dict | None) -> dict:
     merged["succeeded"] = bool(shard_app.get("succeeded", False))
     merged["artifacts"] += list(shard_app.get("artifacts", []))
     merged["fingerprints"] += list(shard_app.get("fingerprints", []))
+    merged["allowedTestFailures"] = list(shard_app.get("allowedTestFailures", []))
+    merged["staleAllowListEntries"] = list(shard_app.get("staleAllowListEntries", []))
     if not merged["succeeded"]:
         merged["failureCategory"] = shard_app.get("failureCategory")
     else:

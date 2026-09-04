@@ -101,6 +101,15 @@ public sealed class PipelineOptions
     public bool CompileViaSdk { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets the test-parity failure allow-list (issue #3885): the
+    /// individually-named migrated tests whose failure is a policy exclusion
+    /// rather than a defect, so an app whose failing set is a SUBSET of it still
+    /// reports green. <see langword="null"/> is treated as
+    /// <see cref="TestParityAllowList.Empty"/> — every failure fails the app.
+    /// </summary>
+    public TestParityAllowList TestParityAllowList { get; set; }
+
+    /// <summary>
     /// Gets or sets the canonical source-project to generated-project mapping
     /// established before migration starts.
     /// </summary>

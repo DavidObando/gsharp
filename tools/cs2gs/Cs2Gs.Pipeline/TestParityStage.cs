@@ -270,6 +270,7 @@ public sealed class TestParityStage : IMigrationStage
         StageExecutionContext context, ProcessRunResult result)
     {
         this.Note(context, result.Output ?? string.Empty);
+        TestParityAllowList allowList = context.Options.TestParityAllowList ?? TestParityAllowList.Empty;
         if (result.ExitCode == 0)
         {
             // Issue #3869: exit code 0 is NOT evidence that tests ran. `dotnet
@@ -284,6 +285,13 @@ public sealed class TestParityStage : IMigrationStage
                 string ranNote = $"mirrored test run: {ExecutedTestCount(result.Output)} case(s) executed " +
                     $"(>= {minimumExpected} expected from the C# original's [Fact] methods).";
                 this.Note(context, ranNote);
+
+                // Issue #3885: an app whose tests ALL pass still has to answer
+                // for its allow-list entries. Without this, the only run in
+                // which a stale entry could surface is one that is failing for
+                // other reasons — and the list would never shrink.
+                this.RecordAllowList(
+                    context, allowList.Evaluate(context.App.Id, Array.Empty<string>()));
                 return StageOutcome.Passed();
             }
 
@@ -301,12 +309,136 @@ public sealed class TestParityStage : IMigrationStage
         // after the emitter when the real signal is a runtime failure, and
         // discards the per-test outcomes.
         string output = result.Output ?? "dotnet test failed without output.";
+        if (!CompletedTestRun(output))
+        {
+            return StageOutcome.Failed(new[]
+            {
+                context.Triage.TestParityLibraryBuildFailure(output, EmittedGsRelative(context)),
+            });
+        }
+
+        if (this.AllowListAbsolves(context, allowList, output))
+        {
+            return StageOutcome.Passed();
+        }
+
         return StageOutcome.Failed(new[]
         {
-            CompletedTestRun(output)
-                ? context.Triage.TestParityLibraryTestFailure(output, EmittedGsRelative(context))
-                : context.Triage.TestParityLibraryBuildFailure(output, EmittedGsRelative(context)),
+            context.Triage.TestParityLibraryTestFailure(output, EmittedGsRelative(context)),
         });
+    }
+
+    /// <summary>
+    /// Issue #3885: whether every failure this completed run reported is on the
+    /// allow-list, in which case the app is green despite a non-zero
+    /// <c>dotnet test</c> exit.
+    /// <para>
+    /// The bar is deliberately higher than "the names I could parse are all
+    /// allowed". Three things must hold together, and each guards a way this
+    /// mechanism could quietly become a licence to pass:
+    /// </para>
+    /// <list type="number">
+    /// <item><description>
+    /// The parsed failure names must ACCOUNT FOR every failure the run summary
+    /// counts. If the console output names fewer failures than
+    /// <c>Failed: N</c> reports, some failure is unaccounted for and could be
+    /// anything; the allow-list is refused rather than trusted.
+    /// </description></item>
+    /// <item><description>
+    /// The unallowed set must be EMPTY. "Some failures were allowed" is not the
+    /// test; "the failing set is a subset of the allowed set" is.
+    /// </description></item>
+    /// <item><description>
+    /// The #3872/#3869 evidence that tests actually RAN still applies verbatim.
+    /// An allow-list entry excuses a test that fails, never a suite that never
+    /// executed: an app running zero tests fails whatever is on the list.
+    /// </description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="context">The stage context.</param>
+    /// <param name="allowList">The loaded allow-list.</param>
+    /// <param name="output">The captured <c>dotnet test</c> output of a completed run.</param>
+    /// <returns><see langword="true"/> when the app may be reported green.</returns>
+    private bool AllowListAbsolves(
+        StageExecutionContext context, TestParityAllowList allowList, string output)
+    {
+        IReadOnlyList<string> failed = TestParityAllowList.ParseFailedTestNames(output);
+        TestParityAllowListVerdict verdict = allowList.Evaluate(context.App.Id, failed);
+        this.RecordAllowList(context, verdict);
+
+        if (verdict.AllowedFailures.Count == 0)
+        {
+            return false;
+        }
+
+        int reported = TestParityAllowList.ReportedFailureCount(output);
+        if (failed.Count != reported)
+        {
+            string unaccounted =
+                $"test-parity allow-list REFUSED: parsed {failed.Count} per-test failure name(s) " +
+                $"but the run summary reports {reported} failure(s). An unaccounted-for failure " +
+                "could be anything, so the app fails (#3885).";
+            this.Note(context, unaccounted);
+            return false;
+        }
+
+        if (verdict.UnallowedFailures.Count > 0)
+        {
+            string unlisted = string.Join(Environment.NewLine + "  ", verdict.UnallowedFailures);
+            string header = $"test-parity allow-list NOT APPLIED — " +
+                $"{verdict.UnallowedFailures.Count} failure(s) are not on the list (#3885):";
+            this.Note(context, header + Environment.NewLine + "  " + unlisted);
+            return false;
+        }
+
+        // The #3872 guard is NOT waived by an allow-list. A suite that failed to
+        // run its tests must still fail even when the failures it did report are
+        // all allowed.
+        int minimumExpected = CountCSharpFactMethods(context);
+        string hollow = DescribeHollowTestRun(output, minimumExpected);
+        if (hollow is not null)
+        {
+            string neverRan =
+                "test-parity allow-list REFUSED: the run does not show tests actually " +
+                "executing, which an allow-list never waives (#3872/#3869): " + hollow;
+            this.Note(context, neverRan);
+            return false;
+        }
+
+        string passedNote =
+            $"mirrored test-parity PASSED with {verdict.AllowedFailures.Count} ALLOW-LISTED " +
+            $"failure(s) and no others; {ExecutedTestCount(output)} case(s) executed " +
+            $"(>= {minimumExpected} expected from the C# original's [Fact] methods) (#3885).";
+        this.Note(context, passedNote);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3885 requirement 3 — report, never hide. Both halves of the
+    /// verdict are written to the stage log AND published on the context so the
+    /// run record (and through it the gate summary) names every allow-listed
+    /// failure that occurred, and every entry that no longer fires.
+    /// </summary>
+    /// <param name="context">The stage context.</param>
+    /// <param name="verdict">The allow-list verdict.</param>
+    private void RecordAllowList(StageExecutionContext context, TestParityAllowListVerdict verdict)
+    {
+        foreach (string allowed in verdict.AllowedFailures)
+        {
+            context.AllowedTestFailures.Add(allowed);
+            this.Note(context, "test-parity allow-listed failure: " + allowed);
+        }
+
+        foreach (TestParityAllowListEntry stale in verdict.StaleEntries)
+        {
+            // Advisory, never fatal (see TestParityAllowListVerdict.StaleEntries):
+            // a hard failure here would make the PR that FIXES a test red.
+            context.StaleTestAllowListEntries.Add(stale.ToString());
+            string staleNote =
+                "test-parity allow-list entry is STALE — no longer failing, remove from the " +
+                "allow-list: " + stale;
+            this.Note(context, staleNote);
+        }
     }
 
     private static int CountFactMethods(string source)

@@ -867,6 +867,13 @@ public sealed class MigrationPipeline
             shortCircuited = true;
         }
 
+        // Issue #3885: carry the test-parity allow-list verdict into the run
+        // record, PASS or FAIL. The gate summary reads it back so an app that
+        // is green only because of the allow-list still names the failures it
+        // was excused, and a stale entry is visible without reading a log.
+        appResult.AllowedTestFailures.AddRange(context.AllowedTestFailures);
+        appResult.StaleAllowListEntries.AddRange(context.StaleTestAllowListEntries);
+
         if (appResult.Succeeded && appResult.Stages.Any(s => s.Status == "skipped"))
         {
             // No stage failed, but at least one was genuinely unverified
