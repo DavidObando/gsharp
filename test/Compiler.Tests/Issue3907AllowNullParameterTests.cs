@@ -309,7 +309,7 @@ Console.WriteLine(""unreachable"")
     /// name the exact shape it requires without depending on a reflection
     /// context.
     /// </summary>
-    private sealed class SignatureText : ISignatureTypeProvider<string, object?>
+    private sealed class SignatureText : ISignatureTypeProvider<string, object>
     {
         public string GetPrimitiveType(PrimitiveTypeCode typeCode) => typeCode switch
         {
@@ -321,9 +321,9 @@ Console.WriteLine(""unreachable"")
             _ => typeCode.ToString(),
         };
 
-        public string GetGenericTypeParameter(object? genericContext, int index) => "!" + index;
+        public string GetGenericTypeParameter(object genericContext, int index) => "!" + index;
 
-        public string GetGenericMethodParameter(object? genericContext, int index) => "!!" + index;
+        public string GetGenericMethodParameter(object genericContext, int index) => "!!" + index;
 
         public string GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind)
             => reader.GetString(reader.GetTypeDefinition(handle).Name);
@@ -331,7 +331,7 @@ Console.WriteLine(""unreachable"")
         public string GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind)
             => reader.GetString(reader.GetTypeReference(handle).Name);
 
-        public string GetTypeFromSpecification(MetadataReader reader, object? genericContext, TypeSpecificationHandle handle, byte rawTypeKind)
+        public string GetTypeFromSpecification(MetadataReader reader, object genericContext, TypeSpecificationHandle handle, byte rawTypeKind)
             => reader.GetTypeSpecification(handle).DecodeSignature(this, genericContext);
 
         public string GetGenericInstantiation(string genericType, System.Collections.Immutable.ImmutableArray<string> typeArguments)
