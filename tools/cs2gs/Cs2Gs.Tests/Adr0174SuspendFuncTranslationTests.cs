@@ -118,6 +118,61 @@ public static class Plain
         Assert.DoesNotContain("suspend", rendered, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AsyncValueTask_DeclaredInsideTheRuntime_KeepsTheExplicitEnvelope()
+    {
+        // Issue #3907: inside Gsharp.Concurrency itself the runtime-usage probe
+        // is trivially true for every method, so it labelled the runtime's own
+        // private helpers `suspend`. Those return their ValueTask to a
+        // fast-path caller un-awaited, which a suspend func cannot express
+        // (ADR-0174 D4 makes every call an implicit await).
+        string rendered = Render(@"
+using System.Threading.Tasks;
+
+namespace Gsharp.Concurrency;
+
+public static class Inside
+{
+    public static ValueTask<int> Fast(Chan<int> ch) => Slow(ch);
+
+    private static async ValueTask<int> Slow(Chan<int> ch)
+    {
+        await Task.CompletedTask;
+        return 1;
+    }
+}
+");
+
+        Assert.Contains("async func Slow(ch Chan[int32]) ValueTask[int32] {", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("suspend", rendered, StringComparison.Ordinal);
+        AssertRoundTripBinds(rendered);
+    }
+
+    [Fact]
+    public void AsyncValueTask_InsideTheRuntime_MarkedSuspending_StillRendersSuspendFunc()
+    {
+        // The attribute stays authoritative inside the runtime: #3882 marks
+        // exactly the ChannelBatchExtensions methods that really are the
+        // suspend ABI, and the #3907 narrowing must not reach them.
+        string rendered = Render(@"
+using System.Threading.Tasks;
+
+namespace Gsharp.Concurrency;
+
+public static class InsideMarked
+{
+    [Suspending]
+    public static async ValueTask<int> Ready()
+    {
+        await Task.CompletedTask;
+        return 7;
+    }
+}
+");
+
+        Assert.Contains("suspend func Ready() int32 {", rendered, StringComparison.Ordinal);
+    }
+
     private static void AssertRoundTripBinds(string rendered)
     {
         RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);

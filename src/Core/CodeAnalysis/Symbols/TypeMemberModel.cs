@@ -1105,12 +1105,27 @@ public static class TypeMemberModel
                 continue;
             }
 
+            // Issue #3907: an ADR-0149 explicit-interface implementation
+            // (`func (IFoo) Bar(…)`) is NOT a member of the implementing type's
+            // own lookup surface — C# and the CLR reach it only through the
+            // interface. It keeps its plain Name in the symbol table (only the
+            // METADATA name is mangled), so leaving it here put it in the
+            // overload set for `Bar(…)` written inside the type, where it beat
+            // or tied the ordinary method it was meant to delegate to. In the
+            // migrated Gsharp.Runtime.Channels that turned
+            // `Chan<T>.TrySendLocked`'s `SendOutcome` helper into the `bool`
+            // explicit implementation calling itself.
+            if (m.HasExplicitInterfaceClause || m.ExplicitInterfaceClauseTarget != null)
+            {
+                continue;
+            }
+
             if (builder != null)
             {
                 var hidden = false;
                 foreach (var existing in builder)
                 {
-                    if (BoundScope.FunctionSignaturesEqual(existing, m))
+                    if (BoundScope.FunctionSignaturesEqual(existing, m) || Overrides(existing, m))
                     {
                         hidden = true;
                         break;
@@ -1126,5 +1141,39 @@ public static class TypeMemberModel
             builder ??= ImmutableArray.CreateBuilder<FunctionSymbol>();
             builder.Add(m);
         }
+    }
+
+    /// <summary>
+    /// Issue #3907: reports whether <paramref name="derived"/> (already in the
+    /// overload set, found first by the this-first hierarchy walk) overrides
+    /// <paramref name="baseCandidate"/>, so the base declaration must not be
+    /// added a second time.
+    /// </summary>
+    /// <remarks>
+    /// The signature comparison above cannot see this on a GENERIC hierarchy.
+    /// <c>class Derived[T] : Base[T]</c> gives each level its own
+    /// <c>TypeParameterSymbol</c> named <c>T</c>, so
+    /// <c>Commit(value T)</c> on the base and on the override are not
+    /// signature-equal by symbol identity, both entered the set, and every call
+    /// became <c>GS0266 ambiguous between multiple overloads</c>. The override
+    /// LINK the binder already recorded says what the type comparison cannot.
+    /// </remarks>
+    /// <param name="derived">The candidate already in the overload set.</param>
+    /// <param name="baseCandidate">The base-class candidate being considered.</param>
+    /// <returns><see langword="true"/> when the base candidate is already represented.</returns>
+    private static bool Overrides(FunctionSymbol derived, FunctionSymbol baseCandidate)
+    {
+        // Bounded by the depth of the override chain, which the binder builds
+        // acyclically; the guard is belt-and-braces against a malformed chain.
+        var depth = 0;
+        for (var current = derived.OverriddenMethod; current != null && depth < 64; current = current.OverriddenMethod, depth++)
+        {
+            if (ReferenceEquals(current, baseCandidate))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
