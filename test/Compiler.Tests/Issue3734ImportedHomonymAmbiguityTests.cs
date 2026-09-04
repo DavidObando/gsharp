@@ -239,6 +239,61 @@ public class Issue3734ImportedHomonymAmbiguityTests
         Assert.Equal("beta" + Environment.NewLine, stdout);
     }
 
+    [Fact]
+    public void AnImplicitImport_LosesToAWrittenOne_AndMakesNothingAmbiguous()
+    {
+        // ADR-0174 added `Gsharp.Concurrency` to the implicit import set, and it
+        // exports `Context` — an ordinary name for a user type (an EF DbContext,
+        // an HTTP context, a parser context). A namespace the author never asked
+        // for must neither shadow the one they wrote nor collide with it: it is
+        // a fallback, consulted only when no written import resolves the name.
+        //
+        // The regression this pins is a silent-wrong-code shape when the two
+        // types happen to be compatible, and GS0547 when they are not; before
+        // the fix the translated `test/NullableIncludeInference` corpus app
+        // stopped compiling on exactly this.
+        (int exitCode, string output, string stdout) = CompileAndRun("""
+            package Probe.App
+
+            import System
+            import Probe.Alpha
+
+            class Context {
+                shared {
+                    func Name() string { return "user-context" }
+                }
+            }
+
+            Console.WriteLine(Context.Name())
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("GS0547", output, StringComparison.Ordinal);
+        Assert.Equal("user-context" + Environment.NewLine, stdout);
+    }
+
+    [Fact]
+    public void AnImplicitImport_StillSuppliesANameNobodyElseDoes()
+    {
+        // The other half: the fallback has to still work, or `Context` would be
+        // unreachable without an explicit `import Gsharp.Concurrency`.
+        (int exitCode, string output, string stdout) = CompileAndRun("""
+            package Probe.App
+
+            import System
+
+            func describe(ctx Context) string {
+                return ctx.IsCancelled ? "cancelled" : "live"
+            }
+
+            Console.WriteLine(describe(Context.None))
+            """);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("GS0547", output, StringComparison.Ordinal);
+        Assert.Equal("live" + Environment.NewLine, stdout);
+    }
+
     private static (int ExitCode, string Output, string Stdout) CompileAndRun(string appSource)
     {
         (int exitCode, string output) = Build(appSource, out string workDir, out string appPath);

@@ -2958,12 +2958,22 @@ public sealed class BoundScope
     /// while detecting whether two or more EXPLICITLY WRITTEN, non-alias
     /// imports each resolve a DIFFERENT type under that name.
     /// <para>
-    /// Compiler-synthesized imports (the implicit <c>System</c>) and alias
-    /// imports never make a name ambiguous: the first applies to every file
-    /// and cannot be removed by the author, and the second already names its
-    /// target explicitly. Two imports whose targets resolve to the SAME
-    /// <see cref="System.Type"/> are not a collision either — the choice does
-    /// not matter.
+    /// Compiler-synthesized imports (the implicit <c>System</c> and, since
+    /// ADR-0174, <c>Gsharp.Concurrency</c>) and alias imports never make a name
+    /// ambiguous: the first applies to every file and cannot be removed by the
+    /// author, and the second already names its target explicitly. Two imports
+    /// whose targets resolve to the SAME <see cref="System.Type"/> are not a
+    /// collision either — the choice does not matter.
+    /// </para>
+    /// <para>
+    /// An implicit import is also a FALLBACK for resolution, not a competitor:
+    /// it contributes a type only when no explicitly written import resolves
+    /// the name. A namespace the author never asked for must not shadow one
+    /// they did. <c>Gsharp.Concurrency.Context</c> is why this matters —
+    /// <c>Context</c> is an ordinary name for a user type (an EF DbContext, an
+    /// HTTP context, a parser context), and before this an implicit import
+    /// carrying one both won first-import-wins and made the author's own
+    /// <c>Context</c> ambiguous.
     /// </para>
     /// </summary>
     /// <param name="lookupName">The type name to append to each import target (mangled for generics).</param>
@@ -2981,6 +2991,7 @@ public sealed class BoundScope
         ambiguity = null;
 
         System.Type? firstExplicit = null;
+        System.Type? firstImplicit = null;
         foreach (var import in EnumerateImports())
         {
             if (!References.TryResolveType(import.Target + "." + lookupName, out var candidate))
@@ -2993,11 +3004,24 @@ public sealed class BoundScope
                 continue;
             }
 
-            // First-import-wins: the answer is exactly what it was before
-            // #3734, ambiguous or not.
+            // An implicit import is a fallback, never a competitor: it is held
+            // back and consulted only if no written import resolves the name,
+            // so a namespace the author never asked for can neither shadow
+            // theirs nor collide with it. `HoistsStatics` is about reaching
+            // bare FUNCTION names (ADR-0174 D9's `after`, `merge`) and says
+            // nothing about type resolution; conflating the two is what let
+            // `Gsharp.Concurrency.Context` shadow a user's own `Context`.
+            if (import.IsImplicit)
+            {
+                firstImplicit ??= candidate;
+                continue;
+            }
+
+            // First-import-wins among written imports: the answer is exactly
+            // what it was before #3734, ambiguous or not.
             type ??= candidate;
 
-            if ((import.IsImplicit && !import.HoistsStatics) || import.IsAlias)
+            if (import.IsAlias)
             {
                 continue;
             }
@@ -3015,6 +3039,7 @@ public sealed class BoundScope
             }
         }
 
+        type ??= firstImplicit;
         return type != null;
     }
 
