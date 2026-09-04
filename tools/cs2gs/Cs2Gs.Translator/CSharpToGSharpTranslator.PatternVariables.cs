@@ -39,7 +39,14 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             var binders = new List<ILocalSymbol>();
 
-            GPattern native = this.BuildNativePattern(isPattern.Pattern, binders);
+            PatternSyntax pattern = isPattern.Pattern;
+            bool lowerNegation = HasUnsupportedBindingUnderTopLevelNot(pattern);
+            if (lowerNegation)
+            {
+                pattern = StripTopLevelNegation(pattern, out _);
+            }
+
+            GPattern native = this.BuildNativePattern(pattern, binders);
             foreach (ILocalSymbol binder in binders)
             {
                 this.state.PatternBindings[binder] =
@@ -47,7 +54,36 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.NativePatternVariables.Add(binder);
             }
 
-            return new PatternTestExpression(receiver, native);
+            GExpression test = new PatternTestExpression(receiver, native);
+            return lowerNegation
+                ? new UnaryExpression("!", new ParenthesizedExpression(test))
+                : test;
+        }
+
+        private static bool HasUnsupportedBindingUnderTopLevelNot(PatternSyntax pattern)
+        {
+            while (pattern is ParenthesizedPatternSyntax parenthesized)
+            {
+                pattern = parenthesized.Pattern;
+            }
+
+            if (pattern is not UnaryPatternSyntax unary
+                || !unary.OperatorToken.IsKind(SyntaxKind.NotKeyword)
+                || !PatternIntroducesBinding(unary.Pattern))
+            {
+                return false;
+            }
+
+            return unary.Pattern switch
+            {
+                DeclarationPatternSyntax declaration =>
+                    declaration.Designation is not SingleVariableDesignationSyntax,
+                RecursivePatternSyntax recursive =>
+                    recursive.Designation is not SingleVariableDesignationSyntax
+                    || recursive.PropertyPatternClause?.Subpatterns
+                        .Any(subpattern => PatternIntroducesBinding(subpattern.Pattern)) == true,
+                _ => true,
+            };
         }
 
         /// <summary>

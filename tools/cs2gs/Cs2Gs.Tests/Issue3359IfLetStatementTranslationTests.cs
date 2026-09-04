@@ -156,11 +156,11 @@ public sealed class C
     /// A binder READ after an exiting then-branch is legal in C#. ADR-0166 /
     /// issue #3409: G# scopes the variable of <c>!(x is { } t)</c> to the
     /// statements after an <c>if</c> whose then-branch always exits, so the
-    /// negated pattern lowers to <c>!(… is { } tag)</c> and the variable leaks
+    /// negated pattern lowers to <c>… is not { } tag</c> and the variable leaks
     /// — no hoisted nullable local, no <c>== nil</c> guard.
     /// </summary>
     [Fact]
-    public void NegatedEarlyExit_LowersToBangIsAndLeaksTheVariable()
+    public void NegatedEarlyExit_UsesNativeNotAndLeaksTheVariable()
     {
         string printed = Translate(NodeType + @"
 public sealed class C
@@ -172,7 +172,7 @@ public sealed class C
     }
 }");
 
-        Assert.Contains("if !(node.StartTag is { } tag) {", printed, StringComparison.Ordinal);
+        Assert.Contains("if node.StartTag is not { } tag {", printed, StringComparison.Ordinal);
         Assert.Contains("Console.WriteLine(tag", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("if let", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("== nil", printed, StringComparison.Ordinal);

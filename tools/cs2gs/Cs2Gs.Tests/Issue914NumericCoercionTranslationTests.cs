@@ -203,7 +203,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if !(box is TrunBox trun) {", printed);
+        Assert.Contains("if box is not TrunBox trun {", printed);
         Assert.Contains("return trun.DoThing()", printed);
         Assert.DoesNotContain("as TrunBox", printed);
         Assert.DoesNotContain("== nil", printed);
@@ -239,7 +239,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("if !(child.Box is TrunBox trun) {", printed);
+        Assert.Contains("if child.Box is not TrunBox trun {", printed);
         Assert.Contains("return trun.DoThing()", printed);
         Assert.DoesNotContain("as TrunBox", printed);
         Assert.DoesNotContain("== nil", printed);

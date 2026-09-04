@@ -78,7 +78,7 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
         string codebehind = File.ReadAllText(Path.Combine(appDirectory, "LibraryView.axaml.gs"));
         Assert.Contains("open partial class LibraryView : UserControl", codebehind, StringComparison.Ordinal);
         // ADR-0166 / issue #3409: the negated guard keeps its C# shape and name.
-        Assert.Contains("if !(DataContext is State vm) || booksGrid == nil", codebehind, StringComparison.Ordinal);
+        Assert.Contains("if DataContext is not State vm || booksGrid == nil", codebehind, StringComparison.Ordinal);
         Assert.Contains("vm.Count = booksGrid", codebehind, StringComparison.Ordinal);
         Assert.Contains("override async func OnLoaded", codebehind, StringComparison.Ordinal);
         Assert.Contains("RoutedEventArgs) void", codebehind, StringComparison.Ordinal);
