@@ -148,6 +148,19 @@ public sealed class CSharpTypeMapper
 
     private Dictionary<CSharpCompilation, Dictionary<string, HashSet<string>>> sourceNestedSimpleNames;
 
+    /// <summary>
+    /// Issue #3841: the constructed delegate types whose CLR identity is
+    /// load-bearing in the compilation currently being translated, computed
+    /// once per compilation by <see cref="CollectIdentityCriticalDelegates(Compilation)"/>.
+    /// </summary>
+    private HashSet<INamedTypeSymbol> identityCriticalDelegates;
+
+    /// <summary>
+    /// Issue #3841: the compilation <see cref="identityCriticalDelegates"/> was
+    /// computed for; a different one recomputes the set.
+    /// </summary>
+    private Compilation identityCriticalDelegatesCompilation;
+
     private HashSet<string> sourceDeclaredTypeNames;
 
     /// <summary>
@@ -483,56 +496,6 @@ public sealed class CSharpTypeMapper
         }
 
         return this.Map(type, context, location);
-    }
-
-    /// <summary>
-    /// Issue #3841: maps a METHOD/CONSTRUCTOR PARAMETER's type, keeping a
-    /// delegate parameter's nominal name (<c>Predicate[T]</c>) instead of the
-    /// arrow form (<c>(T) -&gt; bool</c>) when — and only when — the arrow form
-    /// would give two members of the same overload set identical G# signatures.
-    /// <para>
-    /// Issue #2835 established that CLR delegates are nominally typed and
-    /// scoped identity preservation to SOURCE-declared delegates. That leaves
-    /// imported delegates erased, so a legal C# overload set such as
-    /// <c>Add(Predicate&lt;T&gt;)</c> / <c>Add(Func&lt;T, bool&gt;)</c> is
-    /// translated into two members with the same signature and gsc correctly
-    /// rejects the result with <c>GS0264</c>. gsc itself declares and
-    /// dispatches that overload set fine — the duplicate is manufactured here.
-    /// </para>
-    /// <para>
-    /// Preserving every imported delegate's nominal name would rewrite
-    /// <c>Func</c>/<c>Action</c> across the whole corpus for no benefit, so the
-    /// rule is scoped to the colliding members: a parameter keeps its nominal
-    /// delegate name only when some sibling overload's parameters erase to the
-    /// same arrow shape at every position.
-    /// </para>
-    /// </summary>
-    /// <param name="parameter">The parameter symbol being translated.</param>
-    /// <param name="parameterType">
-    /// The type to map. Normally <c>parameter.Type</c>; for a variadic
-    /// (<c>params T[]</c>) parameter the caller passes the ELEMENT type
-    /// instead, in which case no collision rule applies.
-    /// </param>
-    /// <param name="context">The translation context that accumulates diagnostics.</param>
-    /// <param name="location">The originating C# source location for diagnostics.</param>
-    /// <returns>The canonical G# type reference for the parameter.</returns>
-    public GTypeReference MapParameterType(
-        IParameterSymbol parameter,
-        ITypeSymbol parameterType,
-        TranslationContext context,
-        Location location)
-    {
-        if (parameter != null
-            && SymbolEqualityComparer.Default.Equals(parameter.Type, parameterType)
-            && parameterType is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null }
-            && OverloadSetErasesToDuplicate(parameter))
-        {
-            // MapEventType is the existing identity-preserving entry point
-            // (an event's handler type is ABI-sensitive for the same reason).
-            return this.MapEventType(parameterType, context, location);
-        }
-
-        return this.Map(parameterType, context, location);
     }
 
     /// <summary>
@@ -1525,9 +1488,17 @@ public sealed class CSharpTypeMapper
             // reasoning `MapEventType` already applies to an event's own handler
             // type, now extended to every type position. Imported/BCL delegates
             // keep the arrow form.
+            //
+            // Issue #3841: ALSO except an imported delegate whose identity is
+            // load-bearing in this compilation — one that discriminates an
+            // overload set the arrow form would collapse into a single G#
+            // signature (`Add(Predicate<T>)` / `Add(Func<T, bool>)`, GS0264).
+            // Scoped to the exact CONSTRUCTED delegate types involved, so every
+            // other Func/Action keeps the arrow form. See
+            // IsIdentityCriticalDelegate.
             if (named.TypeKind == TypeKind.Delegate && named.DelegateInvokeMethod != null)
             {
-                if (IsSourceDeclaredDelegate(named))
+                if (IsSourceDeclaredDelegate(named) || this.IsIdentityCriticalDelegate(named, context))
                 {
                     return named.IsGenericType
                         ? new NamedTypeReference(
@@ -2610,40 +2581,137 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
-    /// Issue #3841: whether <paramref name="parameter"/>'s owning member has a
-    /// sibling in the same overload set whose parameters erase to the SAME G#
-    /// arrow shape at every position — i.e. whether printing the arrow form
-    /// here would manufacture a duplicate signature (GS0264 / duplicate
-    /// <c>init</c>).
+    /// Issue #3841: whether <paramref name="named"/> is a delegate type whose
+    /// IDENTITY is load-bearing somewhere in the compilation being translated,
+    /// i.e. it appears in a parameter position of an overload set that would
+    /// otherwise erase to one G# signature (<c>Add(Predicate&lt;T&gt;)</c> /
+    /// <c>Add(Func&lt;T, bool&gt;)</c>). Such a delegate keeps its nominal name
+    /// in EVERY type position within that compilation.
+    /// <para>
+    /// The set is keyed on the CONSTRUCTED type, not the definition: a
+    /// compilation with a colliding <c>Func&lt;int, bool&gt;</c> overload keeps
+    /// <c>Func[int32, bool]</c> nominal, while every other <c>Func</c>
+    /// instantiation in that same compilation still renders in ADR-0115 §B.8
+    /// arrow form. That is what keeps this from being a corpus-wide
+    /// readability regression.
+    /// </para>
+    /// <para>
+    /// The whole compilation is in scope (not just the colliding declarations)
+    /// because the identity has to survive on the VALUE side too. Fixing only
+    /// the declarations turns "does not compile (GS0264)" into "compiles and
+    /// reaches the wrong overload": a local written
+    /// <c>Predicate&lt;int&gt; p = Always;</c> that erased to
+    /// <c>(int32) -&gt; bool</c> makes gsc pick the <c>Func</c> member for both
+    /// calls — verified by the executing regression test.
+    /// </para>
     /// </summary>
-    /// <param name="parameter">The parameter symbol being translated.</param>
-    /// <returns><see langword="true"/> when the overload set collides after erasure.</returns>
-    private static bool OverloadSetErasesToDuplicate(IParameterSymbol parameter)
+    /// <param name="named">The candidate delegate type.</param>
+    /// <param name="context">The translation context that owns the compilation.</param>
+    /// <returns><see langword="true"/> when the delegate's identity is load-bearing.</returns>
+    private bool IsIdentityCriticalDelegate(INamedTypeSymbol named, TranslationContext context)
     {
-        if (parameter.ContainingSymbol is not IMethodSymbol method
-            || method.ContainingType is not INamedTypeSymbol containingType)
+        if (context?.Compilation == null)
         {
             return false;
         }
 
-        foreach (ISymbol candidate in containingType.GetMembers(method.Name))
+        if (!ReferenceEquals(this.identityCriticalDelegatesCompilation, context.Compilation))
         {
-            if (candidate is not IMethodSymbol sibling
-                || SymbolEqualityComparer.Default.Equals(sibling, method)
-                || sibling.MethodKind != method.MethodKind
-                || sibling.Arity != method.Arity
-                || sibling.Parameters.Length != method.Parameters.Length)
+            this.identityCriticalDelegatesCompilation = context.Compilation;
+            this.identityCriticalDelegates = CollectIdentityCriticalDelegates(context.Compilation);
+        }
+
+        return this.identityCriticalDelegates.Contains(named);
+    }
+
+    /// <summary>
+    /// Issue #3841: walks every type declared in <paramref name="compilation"/>
+    /// and collects the delegate types that discriminate an otherwise-colliding
+    /// overload set. See <see cref="IsIdentityCriticalDelegate"/>.
+    /// </summary>
+    /// <param name="compilation">The compilation being translated.</param>
+    /// <returns>The constructed delegate types whose identity must be preserved.</returns>
+    private static HashSet<INamedTypeSymbol> CollectIdentityCriticalDelegates(Compilation compilation)
+    {
+        var critical = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var pending = new Stack<INamespaceOrTypeSymbol>();
+        pending.Push(compilation.Assembly.GlobalNamespace);
+        while (pending.Count > 0)
+        {
+            INamespaceOrTypeSymbol current = pending.Pop();
+            foreach (ISymbol member in current.GetMembers())
             {
-                continue;
+                if (member is INamespaceOrTypeSymbol nested and (INamespaceSymbol or INamedTypeSymbol))
+                {
+                    pending.Push(nested);
+                }
             }
 
-            if (ParametersEraseAlike(method, sibling))
+            if (current is INamedTypeSymbol type)
             {
-                return true;
+                CollectIdentityCriticalDelegates(type, critical);
             }
         }
 
-        return false;
+        return critical;
+    }
+
+    /// <summary>
+    /// Issue #3841: adds <paramref name="type"/>'s erasure-colliding delegate
+    /// parameter types to <paramref name="critical"/>.
+    /// </summary>
+    /// <param name="type">The declared type to inspect.</param>
+    /// <param name="critical">The accumulating set.</param>
+    private static void CollectIdentityCriticalDelegates(
+        INamedTypeSymbol type,
+        HashSet<INamedTypeSymbol> critical)
+    {
+        List<IMethodSymbol> methods = type.GetMembers().OfType<IMethodSymbol>().ToList();
+        for (var i = 0; i < methods.Count; i++)
+        {
+            for (var j = i + 1; j < methods.Count; j++)
+            {
+                IMethodSymbol left = methods[i];
+                IMethodSymbol right = methods[j];
+                if (!string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+                    || left.MethodKind != right.MethodKind
+                    || left.Arity != right.Arity
+                    || left.Parameters.Length != right.Parameters.Length
+                    || !ParametersEraseAlike(left, right))
+                {
+                    continue;
+                }
+
+                for (var k = 0; k < left.Parameters.Length; k++)
+                {
+                    AddIfDistinctDelegates(left.Parameters[k].Type, right.Parameters[k].Type, critical);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #3841: records a pair of DISTINCT delegate types that erase to the
+    /// same arrow. Positions where the two overloads agree exactly carry no
+    /// identity burden and are left alone.
+    /// </summary>
+    /// <param name="left">The first overload's parameter type.</param>
+    /// <param name="right">The second overload's parameter type.</param>
+    /// <param name="critical">The accumulating set.</param>
+    private static void AddIfDistinctDelegates(
+        ITypeSymbol left,
+        ITypeSymbol right,
+        HashSet<INamedTypeSymbol> critical)
+    {
+        if (SymbolEqualityComparer.Default.Equals(left, right)
+            || left is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } leftDelegate
+            || right is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } rightDelegate)
+        {
+            return;
+        }
+
+        critical.Add(leftDelegate);
+        critical.Add(rightDelegate);
     }
 
     /// <summary>
@@ -2655,6 +2723,7 @@ public sealed class CSharpTypeMapper
     /// <returns><see langword="true"/> when the two erase to one signature.</returns>
     private static bool ParametersEraseAlike(IMethodSymbol left, IMethodSymbol right)
     {
+        var sawDelegateDifference = false;
         for (var i = 0; i < left.Parameters.Length; i++)
         {
             IParameterSymbol a = left.Parameters[i];
@@ -2665,9 +2734,14 @@ public sealed class CSharpTypeMapper
             {
                 return false;
             }
+
+            sawDelegateDifference |= !SymbolEqualityComparer.Default.Equals(a.Type, b.Type);
         }
 
-        return true;
+        // Two members that agree at every position are not an overload set at
+        // all (C# would have rejected them); only a difference that erasure
+        // hides makes this collision cs2gs's to repair.
+        return sawDelegateDifference;
     }
 
     /// <summary>
