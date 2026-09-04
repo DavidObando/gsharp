@@ -1560,6 +1560,11 @@ is not a handler). A clause that an earlier **unfiltered** clause already covers
 can never run and is rejected (`GS0573`); an earlier *filtered* clause may
 decline, so it does not shadow a later clause.
 
+The handler is reached only when its filter evaluates to `true`. Pattern
+variables in the filter's definitely-assigned-when-true set are therefore in
+scope throughout the handler, including after an `await` in an async handler.
+Variables assigned only on a false path are not in scope there.
+
 #### Throw expressions
 
 `throw` is also usable as an **expression** (a *throw-expression*), mirroring C#.

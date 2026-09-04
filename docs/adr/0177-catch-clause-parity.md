@@ -181,19 +181,21 @@ so the translated text stops inventing names the author never wrote. This
 retires family 1 of #3897 outright and removes 187 of the corpus's synthetic
 tokens.
 
-One residue survives, and it is not a filter-expressiveness gap in G#. A G#
-`when` filter is a single *expression*, but translating a C# filter can require
-hoisted *statements* — a scrutinee spill, or storage for a pattern designation
-the handler body then reads, as in `when (ex.InnerException is AggregateException agg)`.
-Those statements have nowhere to go: not before the `try` (the catch binder is
-out of scope there), and not inside a filter expression. Such a clause therefore
-keeps the pre-ADR-0177 shape — prologue, then `if !(filter) { rethrow }`, then
-the handler body — which is faithful *except* when a later sibling could receive
-the same exception, since a real filter would have declined to it. `TranslateTry`
-retains a much-reduced `HasOverlappingLaterSibling` for exactly that case and
-reports it unsupported rather than silently emitting different control flow
-(#1724, #2235). Every filter that is already a pure expression — the common
-case, including `out var` inline in the filter — takes the native path.
+**Follow-up.** A pattern variable definitely assigned when the filter is true
+is in scope throughout the handler, matching C#:
+
+```gsharp
+catch (e InvalidOperationException)
+    when e.InnerException is ArgumentException arg {
+    Console.WriteLine(arg.ParamName)
+}
+```
+
+This closes the last cs2gs residue. A C# filter with a pattern designation now
+uses the native G# pattern directly; it needs no scrutinee spill, in-handler
+test, `rethrow` fallback, or `HasOverlappingLaterSibling` analysis. The rule is
+the same flow rule already used by boolean conditions and guarded switch arms:
+only variables in the filter's `when true` set enter the handler scope.
 
 ## Consequences
 

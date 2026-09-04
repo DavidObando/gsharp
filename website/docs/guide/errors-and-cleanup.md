@@ -63,6 +63,16 @@ clause exactly as it does in C#. A filter cannot `await` (`GS0572`) because ther
 is no suspension point in the first pass, and a clause that an earlier
 *unfiltered* clause already covers can never run (`GS0573`).
 
+A pattern variable definitely assigned when the filter succeeds is visible
+throughout the handler:
+
+```gsharp
+catch (e InvalidOperationException)
+    when e.InnerException is ArgumentException arg {
+    Console.WriteLine(arg.ParamName)
+}
+```
+
 ```gsharp
 func requireName(name string?) string {
     return name ?? throw ArgumentNullException("name")

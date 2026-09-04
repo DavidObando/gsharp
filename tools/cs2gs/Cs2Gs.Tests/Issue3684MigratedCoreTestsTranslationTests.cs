@@ -20,13 +20,12 @@ public class Issue3684MigratedCoreTestsTranslationTests
 {
     /// <summary>
     /// Family F12: an exception filter that introduces a PATTERN DESIGNATION.
-    /// The #1724 rethrow lowering translates the filter into the catch body,
-    /// but the designation's storage and the scrutinee spill were hoisted to
-    /// the seam enclosing the whole <c>try</c> — outside the catch, where
-    /// neither the catch binder nor the designation is in scope.
+    /// ADR-0177's filter-binding follow-up scopes the designation into the
+    /// handler, so the C# clause translates directly to one native G# filter:
+    /// no spill, in-handler test, or <c>rethrow</c> fallback.
     /// </summary>
     [Fact]
-    public void CatchFilterWithPatternDesignation_KeepsItsSpillsInsideTheCatch()
+    public void CatchFilterWithPatternDesignation_UsesANativeFilter()
     {
         string printed = TranslateUnit(@"
 using System;
@@ -52,9 +51,13 @@ namespace Demo
 }
 ");
 
-        int catchIndex = printed.IndexOf("} catch (", StringComparison.Ordinal);
-        Assert.True(catchIndex >= 0, "expected a translated catch clause in:\n" + printed);
-        Assert.DoesNotContain("ex.InnerException", printed.Substring(0, catchIndex), StringComparison.Ordinal);
+        Assert.Contains(
+            "} catch (ex InvalidOperationException) when ex.InnerException is ArgumentException arg {",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("return arg.ParamName", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("rethrow", printed, StringComparison.Ordinal);
     }
 
     /// <summary>

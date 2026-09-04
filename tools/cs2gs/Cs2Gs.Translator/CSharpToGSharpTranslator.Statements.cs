@@ -1797,19 +1797,9 @@ public sealed partial class CSharpToGSharpTranslator
         {
             BlockStatement tryBlock = this.TranslateBlock(node.Block);
 
-            // ADR-0177 E: G# catch clauses are now at C# parity — a clause may be
-            // typed-and-unbound (`catch (T)`), bare (`catch`), and may carry a
-            // `when` filter the compiler emits as a real CLR filter region. So a
-            // C# clause maps to exactly one G# clause and the machinery this used
-            // to need is gone: no synthetic `__caught` binders (issue #3897
-            // family 1), and no merging of overlapping filtered siblings into one
-            // hand-replayed matcher (#2235). Top-to-bottom matching, filter timing
-            // in the first pass, and fall-through to the next sibling on a false
-            // filter are the CLR's job again.
             var catches = new List<CatchClause>();
-            for (int catchIndex = 0; catchIndex < node.Catches.Count; catchIndex++)
+            foreach (CatchClauseSyntax catchClause in node.Catches)
             {
-                CatchClauseSyntax catchClause = node.Catches[catchIndex];
                 string variableName = null;
                 GTypeReference exceptionType = null;
                 if (catchClause.Declaration != null)
@@ -1823,75 +1813,14 @@ public sealed partial class CSharpToGSharpTranslator
                         catchClause.Declaration.Identifier);
                 }
 
-                if (catchClause.Filter == null)
-                {
-                    catches.Add(new CatchClause(variableName, exceptionType, this.TranslateBlock(catchClause.Block)));
-                    continue;
-                }
-
-                // Issue #3684 (F12): translating a filter can require hoisted
-                // statements — a scrutinee spill, or storage for a pattern
-                // designation it introduces, as in
-                // `when (ex.InnerException is AggregateException agg)`. Translate
-                // it under its own statement seam so those statements are caught
-                // here rather than leaking to the seam enclosing the whole `try`,
-                // where the catch binder is not even in scope.
-                List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
-                var filterPrologue = new List<GStatement>();
-                this.state.PendingSpillPrologue = filterPrologue;
-                GExpression filter;
-                try
-                {
-                    filter = this.TranslateExpression(catchClause.Filter.FilterExpression);
-                }
-                finally
-                {
-                    this.state.PendingSpillPrologue = outerSpillPrologue;
-                }
-
-                if (filterPrologue.Count == 0)
-                {
-                    catches.Add(new CatchClause(
-                        variableName, exceptionType, this.TranslateBlock(catchClause.Block), filter));
-                    continue;
-                }
-
-                // A G# filter is a single expression, so a filter that needs
-                // statements cannot be one — and those statements have nowhere
-                // else to go: not before the `try` (the catch binder is out of
-                // scope there), and not into the handler body alone (the handler
-                // reads the designation they materialize). Fall back to the
-                // pre-ADR-0177 lowering for this clause only: run the filter at
-                // the top of the handler and `rethrow` when it is false. That is
-                // faithful only when no later sibling could receive the same
-                // exception, since a real false filter would fall through to it
-                // (issue #1724); when one could, say so rather than silently
-                // emitting different control flow (#2235).
-                if (this.HasOverlappingLaterSibling(node, catchIndex))
-                {
-                    const string unsupportedFilter =
-                        "This 'catch' filter needs hoisted statements (a scrutinee spill or a pattern "
-                        + "designation), so it cannot be expressed as a G# 'when' expression, and a later "
-                        + "'catch' clause could receive the same exception — so running the filter inside "
-                        + "the handler would change which clause handles it (ADR-0177; issues #1724, #2235). "
-                        + "Rewrite the filter as a single expression, or move the test into the handler body.";
-                    this.context.ReportUnsupported(catchClause.Filter, unsupportedFilter);
-                }
-
-                BlockStatement filteredBody = this.TranslateBlock(catchClause.Block);
-
-                // ADR-0176: `rethrow`, not `throw ex`, so an exception whose
-                // filter said "not mine" leaves the try with its original throw
-                // site intact, as it would in C# where the filter never caught it.
-                var rethrowIfFalse = new IfStatement(
-                    new UnaryExpression("!", filter),
-                    new BlockStatement(new List<GStatement> { new RethrowStatement() }));
-                var statements = new List<GStatement>(filterPrologue) { rethrowIfFalse };
-                statements.AddRange(filteredBody.Statements);
+                GExpression filter = catchClause.Filter == null
+                    ? null
+                    : this.TranslateExpression(catchClause.Filter.FilterExpression);
                 catches.Add(new CatchClause(
                     variableName,
                     exceptionType,
-                    new BlockStatement(statements, filteredBody.IsUnsafe)));
+                    this.TranslateBlock(catchClause.Block),
+                    filter));
             }
 
             BlockStatement finallyBlock = node.Finally != null
@@ -1899,83 +1828,6 @@ public sealed partial class CSharpToGSharpTranslator
                 : null;
 
             return new TryStatement(tryBlock, catches, finallyBlock);
-        }
-
-        /// <summary>
-        /// Whether any catch clause after <paramref name="filteredIndex"/> could
-        /// still receive the same exception once that clause's <c>when</c> filter
-        /// is false. Only the in-handler filter fallback above needs this: a
-        /// native G# filter needs no such analysis, because the CLR does the
-        /// falling through itself (issues #1724, #2235).
-        /// </summary>
-        /// <param name="node">The <c>try</c> statement being translated.</param>
-        /// <param name="filteredIndex">The index of the filtered clause being lowered.</param>
-        /// <returns><see langword="true"/> when a later sibling could plausibly match.</returns>
-        private bool HasOverlappingLaterSibling(TryStatementSyntax node, int filteredIndex)
-        {
-            ITypeSymbol filteredType = this.CatchClauseType(node, filteredIndex);
-            for (int i = filteredIndex + 1; i < node.Catches.Count; i++)
-            {
-                if (!AreDisjointExceptionTypes(filteredType, this.CatchClauseType(node, i)))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private ITypeSymbol CatchClauseType(TryStatementSyntax node, int catchIndex)
-        {
-            CatchClauseSyntax clause = node.Catches[catchIndex];
-            return clause.Declaration != null
-                ? this.context.GetTypeInfo(clause.Declaration.Type).Type
-                : this.context.Compilation.GetTypeByMetadataName("System.Exception");
-        }
-
-        /// <summary>
-        /// Whether two exception types can be <em>proven</em> disjoint — no
-        /// runtime exception object can be an instance of both. Only single-
-        /// inheritance class types can be proven disjoint this way (neither
-        /// derives from the other); anything else (unresolved types, interfaces,
-        /// or an equal/derived relationship) is treated conservatively as
-        /// possibly-overlapping, per the "when in doubt, don't silently diverge"
-        /// rule this method exists to serve.
-        /// </summary>
-        /// <param name="left">The first exception type, or <see langword="null"/> if unresolved.</param>
-        /// <param name="right">The second exception type, or <see langword="null"/> if unresolved.</param>
-        /// <returns><see langword="true"/> only when the types are provably disjoint.</returns>
-        private static bool AreDisjointExceptionTypes(ITypeSymbol left, ITypeSymbol right)
-        {
-            if (left == null || right == null)
-            {
-                return false;
-            }
-
-            if (left.TypeKind != TypeKind.Class || right.TypeKind != TypeKind.Class)
-            {
-                return false;
-            }
-
-            if (SymbolEqualityComparer.Default.Equals(left, right))
-            {
-                return false;
-            }
-
-            return !DerivesFromOrEquals(left, right) && !DerivesFromOrEquals(right, left);
-        }
-
-        private static bool DerivesFromOrEquals(ITypeSymbol type, ITypeSymbol potentialBaseOrSelf)
-        {
-            for (ITypeSymbol t = type; t != null; t = t.BaseType)
-            {
-                if (SymbolEqualityComparer.Default.Equals(t, potentialBaseOrSelf))
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private GStatement TranslateUsingStatement(UsingStatementSyntax node)

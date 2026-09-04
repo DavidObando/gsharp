@@ -136,6 +136,49 @@ try {
     }
 
     /// <summary>
+    /// ADR-0177 §E follow-up: the handler runs only after its filter returned
+    /// true, so a pattern variable definitely assigned on that path is visible
+    /// throughout the handler. Before this change the body reported GS0532 for
+    /// <c>arg</c>, which is the witness of discrimination.
+    /// </summary>
+    [Fact]
+    public void FilterPatternBinding_IsVisibleInTheHandler()
+    {
+        const string source = @"
+package P
+import System
+
+try {
+    throw InvalidOperationException(""outer"", ArgumentException(""inner"", ""value""))
+} catch (e InvalidOperationException) when e.InnerException is ArgumentException arg {
+    Console.WriteLine(arg.ParamName)
+}
+";
+        Assert.Equal("value", CompileLoadRun(source, "Adr0177-FilterBinding").Trim());
+    }
+
+    /// <summary>
+    /// The scope follows definite assignment, not mere syntax containment: a
+    /// variable assigned only when the filter is false is unavailable in the
+    /// handler, which is reached on the true path.
+    /// </summary>
+    [Fact]
+    public void FilterPatternBinding_AssignedOnlyWhenFalse_IsNotVisible()
+    {
+        const string source = @"
+package P
+import System
+
+try {
+    throw InvalidOperationException(""outer"", ArgumentException(""inner""))
+} catch (e InvalidOperationException) when !(e.InnerException is ArgumentException arg) {
+    Console.WriteLine(arg.Message)
+}
+";
+        Assert.Contains(Compile(source), d => d.Id == "GS0532");
+    }
+
+    /// <summary>
     /// ADR-0177 §C, verification item 4: an exception thrown out of a filter is
     /// swallowed by the runtime and the filter is treated as false — it neither
     /// propagates nor handles the original. The next sibling therefore runs.
@@ -206,7 +249,8 @@ try {
     /// <summary>
     /// ADR-0177 §C, verification item 6: filters survive async lowering. The
     /// handler awaits (so the clause is rewritten onto the state machine's
-    /// trampoline) and the filter still selects between two same-typed clauses.
+    /// trampoline), and a pattern variable introduced by the filter remains
+    /// available after that suspension.
     /// </summary>
     [Fact]
     public void FilteredClause_SurvivesAsyncLowering()
@@ -218,19 +262,16 @@ import System.Threading.Tasks
 
 async func run() Task[string] {
     try {
-        throw FormatException(""boom"")
-    } catch (e FormatException) when e.Message == ""other"" {
+        throw InvalidOperationException(""outer"", ArgumentException(""inner""))
+    } catch (e InvalidOperationException) when e.InnerException is ArgumentException arg {
         await Task.Yield()
-        return ""first""
-    } catch (e FormatException) when e.Message == ""boom"" {
-        await Task.Yield()
-        return ""second:"" + e.Message
+        return arg.Message
     }
 }
 
 Console.WriteLine(run().GetAwaiter().GetResult())
 ";
-        Assert.Equal("second:boom", CompileLoadRun(source, "Adr0177-Async").Trim());
+        Assert.Equal("inner", CompileLoadRun(source, "Adr0177-Async").Trim());
     }
 
     /// <summary>

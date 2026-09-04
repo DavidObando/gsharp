@@ -361,12 +361,19 @@ internal sealed partial class StatementBinder
                 : bindLocalVariable(catchSyntax.Identifier, isReadOnly: true, type: catchType);
 
             var filter = BindCatchFilter(catchSyntax);
+            var (filterWhenTrue, _) = PatternVariables.Classify(filter);
 
             exceptionHandlerRegions.Push(catchSyntax);
             BoundStatement body;
             try
             {
-                body = BindBlockStatement(catchSyntax.Body);
+                // The handler runs only when its filter returned true, so any
+                // pattern variables the filter definitely assigns on that path
+                // are in scope and assigned throughout the handler.
+                body = PatternVariables.BindInScope(
+                    binderCtx,
+                    filterWhenTrue,
+                    () => BindBlockStatement(catchSyntax.Body));
             }
             finally
             {
