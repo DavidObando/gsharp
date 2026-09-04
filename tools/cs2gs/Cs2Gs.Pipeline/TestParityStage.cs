@@ -384,12 +384,10 @@ public sealed class TestParityStage : IMigrationStage
 
         if (verdict.UnallowedFailures.Count > 0)
         {
-            string notAllowed =
-                $"test-parity allow-list NOT APPLIED: {verdict.UnallowedFailures.Count} " +
-                "failure(s) are not on the list, so the app fails regardless of the " +
-                "allow-listed ones (#3885):" + Environment.NewLine + "  " +
-                string.Join(Environment.NewLine + "  ", verdict.UnallowedFailures);
-            this.Note(context, notAllowed);
+            string unlisted = string.Join(Environment.NewLine + "  ", verdict.UnallowedFailures);
+            string header = $"test-parity allow-list NOT APPLIED — " +
+                $"{verdict.UnallowedFailures.Count} failure(s) are not on the list (#3885):";
+            this.Note(context, header + Environment.NewLine + "  " + unlisted);
             return false;
         }
 
