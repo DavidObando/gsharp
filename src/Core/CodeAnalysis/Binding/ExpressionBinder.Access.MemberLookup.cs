@@ -121,30 +121,54 @@ internal sealed partial class ExpressionBinder
             && namedIndex == index;
     }
 
+    /// <summary>
+    /// Issue #3887: the single chokepoint every member access, method call,
+    /// index and null-conditional step routes through. When the receiver's type
+    /// is ALREADY <see cref="TypeSymbol.Error"/>, the lookup below cannot
+    /// succeed and will report <c>GS0158 Cannot find member</c> /
+    /// <c>GS0159 Cannot find function</c> naming a member that usually exists
+    /// on the type the user actually meant. The receiver can only be
+    /// error-typed downstream of an expression that was already diagnosed, so
+    /// those two reports are provably redundant with that first diagnostic —
+    /// and they dominate triage: one bad argument was measured producing
+    /// sixteen of them, all naming reflection surface, on a wall with no
+    /// reflection defect in it.
+    /// <para>
+    /// The suppression deliberately keys off the receiver's TYPE rather than
+    /// its node kind. The binder already short-circuited on a
+    /// <see cref="BoundErrorExpression"/> node, but node identity is exactly
+    /// what a binding loses: once the poison flows through a local
+    /// (<c>let loaded = broken()</c>) the receiver is an ordinary variable
+    /// reference that merely HAS the error type. Keying off the type makes the
+    /// suppression survive inference.
+    /// </para>
+    /// <para>
+    /// The lookup still RUNS and the diagnostic is still ADDED to the bag —
+    /// only its visibility changes. Suppression here must alter which
+    /// diagnostics are emitted and never what binds; see
+    /// <see cref="DiagnosticBag.SuppressMemberLookupCascadeIn{T}"/> for the two
+    /// narrower-looking designs that violate that and the session tests that
+    /// caught each of them.
+    /// </para>
+    /// </summary>
     private BoundExpression BindAccessorStep(
         BoundExpression? receiver,
         ImportedClassSymbol? classSymbol,
         ExpressionSyntax rightPart,
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
-    {
-        // Issue #3887: a receiver whose type is already the error type carries
-        // no members by construction, so every lookup on it fails and reports a
-        // NEW independent `GS0158 Cannot find member` / `GS0159 Cannot find
-        // function` naming a member that usually exists on the type the user
-        // actually meant. The receiver only became error-typed because some
-        // earlier expression was already diagnosed, so those reports are
-        // provably redundant with that first diagnostic and actively
-        // misdirecting: they name members and mechanisms unrelated to the real
-        // cause. Fold the whole access to an error expression here instead —
-        // the same suppression C# performs for error types — which keeps the
-        // poison propagating through inference (`let x = broken(); x.M().N()`)
-        // without emitting a diagnostic per hop.
-        if (receiver != null && receiver.Type == TypeSymbol.Error)
-        {
-            return new BoundErrorExpression(rightPart);
-        }
+        => receiver != null && receiver.Type == TypeSymbol.Error
+            ? Diagnostics.SuppressMemberLookupCascadeIn(
+                () => BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart))
+            : BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart);
 
+    private BoundExpression BindAccessorStepCore(
+        BoundExpression? receiver,
+        ImportedClassSymbol? classSymbol,
+        ExpressionSyntax rightPart,
+        ExpressionSyntax? receiverSyntax = null,
+        int? receiverStart = null)
+    {
         switch (rightPart)
         {
             case UnaryExpressionSyntax unary

@@ -27,6 +27,19 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
 
     private readonly Stack<List<Diagnostic>> transactions = new();
 
+    // Issue #3887: the GS0158/GS0159 diagnostics raised by a member lookup on a
+    // receiver that is already error-typed. They stay in `diagnostics` — the
+    // binder's speculative-rebind paths use Count deltas and TruncateTo as
+    // their success signal, so removing an entry outright silently changes
+    // which overload/lookup path the binder commits to — and are filtered only
+    // when diagnostics are READ.
+    private readonly HashSet<Diagnostic> cascadeSuppressed = new(ReferenceEqualityComparer.Instance);
+
+    // Issue #3887: nesting depth of member lookups performed on a receiver
+    // whose type is already TypeSymbol.Error. See
+    // SuppressMemberLookupCascadeIn.
+    private int memberLookupCascadeDepth;
+
     /// <summary>
     /// Gets the number of diagnostics currently held in the bag. Used together
     /// with <see cref="TruncateTo"/> to discard speculative diagnostics emitted
@@ -39,7 +52,7 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
     /// Creates an immutable snapshot of the diagnostics currently held in the bag.
     /// </summary>
     /// <returns>An immutable array of diagnostics in insertion order.</returns>
-    public ImmutableArray<Diagnostic> ToImmutableArray() => diagnostics.ToImmutable();
+    public ImmutableArray<Diagnostic> ToImmutableArray() => Visible().ToImmutableArray();
 
     /// <summary>
     /// Removes every diagnostic added after the bag reached <paramref name="count"/>
@@ -66,7 +79,7 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
     }
 
     /// <inheritdoc/>
-    public IEnumerator<Diagnostic> GetEnumerator() => diagnostics.GetEnumerator();
+    public IEnumerator<Diagnostic> GetEnumerator() => Visible().GetEnumerator();
 
     /// <inheritdoc/>
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
@@ -140,6 +153,55 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
         }
     }
 
+    /// <summary>
+    /// Issue #3887: runs a member lookup whose receiver is already error-typed,
+    /// dropping only the <c>GS0158 Cannot find member</c> / <c>GS0159 Cannot
+    /// find function</c> that such a lookup is guaranteed to produce.
+    /// <para>
+    /// The receiver can only carry <c>TypeSymbol.Error</c> downstream of an
+    /// expression that was already diagnosed, so those two reports are always
+    /// redundant with that earlier diagnostic — and actively misdirecting,
+    /// since they name members that exist on the type the user meant. Every
+    /// other diagnostic the lookup raises is kept.
+    /// </para>
+    /// <para>
+    /// Nothing about BINDING changes — this alters which diagnostics are
+    /// emitted, never what binds. Two narrower-looking designs were tried and
+    /// are wrong:
+    /// </para>
+    /// <list type="number">
+    /// <item>Returning an error expression instead of performing the lookup.
+    /// Member resolution has load-bearing side effects, and skipping it made
+    /// an unrelated type stop resolving in a REPL session
+    /// (<c>Issue710NullConditionalIndexingEmittedSessionTests</c>).</item>
+    /// <item>Dropping the diagnostic in <c>Add</c>. The binder's speculative
+    /// rebinds use <see cref="Count"/> deltas and <see cref="TruncateTo"/> as
+    /// their success signal, so never adding an entry silently changes which
+    /// lookup path the binder COMMITS to — the same session tests failed
+    /// again, for a second, different reason.</item>
+    /// </list>
+    /// <para>
+    /// So the entry is added exactly as before and merely marked; the filter
+    /// happens when diagnostics are read. Count, TruncateTo and every binding
+    /// decision see the bag unchanged.
+    /// </para>
+    /// </summary>
+    /// <typeparam name="T">The result type of the binding operation.</typeparam>
+    /// <param name="bind">The member-lookup operation.</param>
+    /// <returns>The result of <paramref name="bind"/>.</returns>
+    internal T SuppressMemberLookupCascadeIn<T>(Func<T> bind)
+    {
+        memberLookupCascadeDepth++;
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            memberLookupCascadeDepth--;
+        }
+    }
+
     internal Transaction BeginTransaction()
     {
         var added = new List<Diagnostic>();
@@ -147,8 +209,31 @@ public sealed partial class DiagnosticBag : IEnumerable<Diagnostic>
         return new Transaction(this, added);
     }
 
+    /// <summary>
+    /// Issue #3887: the diagnostics a caller should SEE — everything in the bag
+    /// except the redundant member-lookup cascade recorded by
+    /// <see cref="SuppressMemberLookupCascadeIn{T}"/>. The bag itself keeps
+    /// those entries so <see cref="Count"/> and <see cref="TruncateTo"/> retain
+    /// their exact meaning for the binder's speculative-rebind paths.
+    /// </summary>
+    private IEnumerable<Diagnostic> Visible()
+        => cascadeSuppressed.Count == 0
+            ? diagnostics
+            : diagnostics.Where(d => !cascadeSuppressed.Contains(d));
+
     private void Add(Diagnostic diagnostic)
     {
+        // Issue #3887: mark — do NOT drop — the "cannot find member/function"
+        // pair raised inside a lookup on an already-error-typed receiver. It
+        // still enters the bag so Count keeps its exact current meaning (see
+        // cascadeSuppressed), and is filtered out when diagnostics are read.
+        if (memberLookupCascadeDepth > 0
+            && (diagnostic.Id == DiagnosticDescriptors.UnableToFindMember.Id
+                || diagnostic.Id == DiagnosticDescriptors.UnableToFindFunction.Id))
+        {
+            cascadeSuppressed.Add(diagnostic);
+        }
+
         if (duplicateSuppressions.TryPeek(out var existing))
         {
             for (var i = 0; i < existing.Count; i++)

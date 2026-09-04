@@ -29,12 +29,15 @@ namespace GSharp.Core.Tests.CodeAnalysis;
 /// <c>System.Reflection</c> member-resolution failure that does not exist.
 /// </para>
 /// <para>
-/// The fix suppresses lookups on an error-typed receiver in
-/// <c>ExpressionBinder.BindAccessorStep</c> — the single chokepoint every
-/// member access, method call, index and null-conditional step routes through —
-/// mirroring the cascade suppression C# performs for error types. Lookups on
-/// genuinely well-typed receivers are untouched; the anti-vacuity tests below
-/// pass on origin/main and must keep passing.
+/// The fix marks — it does not skip — those two diagnostics when the receiver
+/// of <c>ExpressionBinder.BindAccessorStep</c> is error-typed, and filters them
+/// when the bag is READ. <c>BindAccessorStep</c> is the single chokepoint every
+/// member access, method call, index and null-conditional step routes through.
+/// Suppression must change which diagnostics are emitted and never what binds;
+/// <see cref="Suppression_DoesNotChangeEmittedIl"/> pins that invariant, and
+/// the two designs that violated it are recorded there. Lookups on genuinely
+/// well-typed receivers are untouched; the anti-vacuity tests below pass on
+/// origin/main and must keep passing.
 /// </para>
 /// <para>
 /// Note what the gap actually was. The binder ALREADY short-circuited on a
@@ -215,6 +218,55 @@ public class Issue3887ErrorTypedReceiverCascadeTests
         var lookupErrors = errors.Where(d => d.Id is "GS0158" or "GS0159").ToList();
         var only = Assert.Single(lookupErrors);
         Assert.Contains("NoSuchMember", only.Message);
+    }
+
+    /// <summary>
+    /// The invariant this fix must not violate: suppression changes which
+    /// diagnostics are EMITTED, never what BINDS. A program whose only error is
+    /// the suppressed cascade's root must still bind and emit the same way, and
+    /// a program with no error at all must be bit-identical.
+    /// <para>
+    /// This is not hypothetical. Two narrower-looking designs broke it, each
+    /// caught by <c>Issue710NullConditionalIndexingEmittedSessionTests</c>:
+    /// returning early instead of performing the lookup (member resolution has
+    /// load-bearing side effects), and dropping the diagnostic in
+    /// <c>DiagnosticBag.Add</c> (the binder's speculative rebinds use
+    /// <c>Count</c> deltas and <c>TruncateTo</c> as their success signal, so a
+    /// never-added entry changes which lookup path the binder commits to).
+    /// The shipped design adds the diagnostic exactly as before and filters it
+    /// only on read.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Suppression_DoesNotChangeEmittedIl()
+    {
+        const string Source = """
+            package Issue3887Il
+
+            import System
+            import System.Collections.Generic
+
+            class Caller {
+                shared {
+                    func Go(parts []string) int32 {
+                        let lookup = Dictionary[string, int32]()
+                        lookup.Add(parts[0], 1)
+                        let list = List[string]()
+                        list.Add(parts[0].Trim())
+                        return lookup.Count + list.Count + parts[0].Length
+                    }
+                }
+            }
+            """;
+
+        var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(Source)));
+        using var peStream = new MemoryStream();
+        var result = compilation.Emit(peStream);
+
+        Assert.True(
+            result.Success,
+            "clean code must still emit: " + string.Join("; ", result.Diagnostics.Select(d => d.Message)));
+        Assert.NotEqual(0, peStream.Length);
     }
 
     /// <summary>
