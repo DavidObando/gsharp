@@ -1080,6 +1080,10 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     type = this.PromoteIfUsedAsNullable(type, symbol);
                     type = this.PromoteIfGeneratedPropertyTargetNullable(type, symbol);
+
+                    // Issue #3848 (family B): a generated `T[]` field written a
+                    // maybe-null ELEMENT renders `[]T?`.
+                    type = this.PromoteArrayElementIfGeneratedNullElement(type, symbol);
                 }
 
                 // T2: a field initializer (ADR-0115 §B.3) comes either from a
@@ -2598,6 +2602,11 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     type = this.PromoteIfInitializerNullable(type, symbol, node.Initializer.Value);
                 }
+
+                // Issue #3848 (family B): a generated `T[]` property written a
+                // maybe-null ELEMENT renders `[]T?` — `Command.Arguments`,
+                // written `[uri, range.Start]` with `uri` a `string?`.
+                type = this.PromoteArrayElementIfGeneratedNullElement(type, symbol);
             }
 
             // Issue #1907: register a synthesized backing field BEFORE mapping the

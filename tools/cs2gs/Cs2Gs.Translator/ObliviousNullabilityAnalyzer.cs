@@ -89,6 +89,11 @@ internal static class ObliviousNullabilityAnalyzer
     // from a promoted generated declaration reaches. Cached like `NullTargets`.
     private static readonly ConditionalWeakTable<Compilation, HashSet<string>> ForwardedTargets = new();
 
+    // Issue #3848 (family B): per-compilation set of generated ARRAY-typed
+    // declarations some source writes a maybe-null ELEMENT into. Cached like
+    // `NullTargets`.
+    private static readonly ConditionalWeakTable<Compilation, HashSet<string>> NullElementTargets = new();
+
     // Which source expressions a transitive return/forwarding edge follows.
     private enum SourceScope
     {
@@ -250,6 +255,99 @@ internal static class ObliviousNullabilityAnalyzer
 
         return false;
     }
+
+    /// <summary>
+    /// Issue #3848 (family B): whether <paramref name="symbol"/> is an
+    /// evidence-decided generated declaration of ARRAY type whose ELEMENT slot
+    /// some source writes a maybe-null value into — <c>Command.Arguments</c>
+    /// (a generated <c>object[]</c>) written <c>[uri, range.Start]</c> with
+    /// <c>uri</c> a hand-authored <c>string?</c>.
+    ///
+    /// <para><b>This is #3676/#3851's rule at element granularity, NOT #3930's
+    /// forwarding rule.</b> Nothing is forwarded here and nothing is seeded from
+    /// a promoted declaration: <c>uri</c> is an ordinary, compiler-CHECKED
+    /// <c>string?</c> parameter, and <see cref="IsPromotedByPureForwarding"/>
+    /// rejects a parameter read outright (clause 6). What makes the write
+    /// admissible in C# and inadmissible in G# is the same single fact #3676
+    /// found: the sink is declared in an <c>&lt;auto-generated/&gt;</c> file, so
+    /// the compiler suppressed the CS8601 it would otherwise have raised for
+    /// storing a maybe-null value into a non-null element slot, and the
+    /// annotation was therefore never checked against this write. Believe the
+    /// write.</para>
+    ///
+    /// <para><b>The ELEMENT, never the array (ADR-0132).</b> The promotion this
+    /// evidence licenses is <c>object[]</c> → <c>[]object?</c>, an
+    /// element-nullable array. It is emphatically not <c>[]object</c> →
+    /// <c>([]object)?</c>: the array reference itself is not null here, one of
+    /// the values in it is. Declaration-level promotion
+    /// (<see cref="IsGeneratedDeclarationAssignedNull"/>) answers the other
+    /// question and is deliberately left alone — a collection expression's own
+    /// flow state is <c>NotNull</c>, so it never fires on this shape at all.</para>
+    ///
+    /// <para><b>Scope.</b> Fields and properties only, whose declared type is an
+    /// array of an unannotated REFERENCE element type, written by an
+    /// array-shaped literal (a collection expression, or an array creation with
+    /// an initializer) in an assignment — which is also the object-initializer
+    /// member shape — or in a field/property initializer. That is exactly the
+    /// node population <see cref="IsGeneratedDeclarationAssignedNull"/> already
+    /// collects; only the granularity of the evidence differs. A spread element
+    /// (<c>[..xs]</c>) contributes no evidence: its elements are not visible
+    /// here, so the conservative answer is "no".</para>
+    /// </summary>
+    /// <param name="compilation">The compilation being translated.</param>
+    /// <param name="symbol">The declaration symbol to test.</param>
+    /// <param name="siblingCompilations">Other projects loaded in the same run, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when a maybe-null element is written into the declaration.</returns>
+    public static bool IsGeneratedArrayElementAssignedNull(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        if (compilation == null
+            || symbol is not (IFieldSymbol or IPropertySymbol)
+            || !IsEvidenceDecidedGeneratedDeclaration(symbol)
+            || !HasPromotableArrayElement(symbol)
+            || symbol.OriginalDefinition.GetDocumentationCommentId() is not { } id)
+        {
+            return false;
+        }
+
+        // The same existential union `IsGeneratedDeclarationAssignedNull` takes,
+        // and for the same reason: a declaration must translate identically
+        // whichever project of the run is being emitted.
+        if (NullArrayElementTargets(compilation).Contains(id))
+        {
+            return true;
+        }
+
+        if (siblingCompilations != null)
+        {
+            foreach (CSharpCompilation sibling in siblingCompilations)
+            {
+                if (sibling != null && NullArrayElementTargets(sibling).Contains(id))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3848 (family B): whether <paramref name="symbol"/> declares an
+    /// array whose element type is an unannotated reference type — the only
+    /// shape whose element slot there is anything to widen.
+    /// </summary>
+    /// <param name="symbol">The declaration symbol to test.</param>
+    /// <returns><see langword="true"/> when the element slot is promotable.</returns>
+    public static bool HasPromotableArrayElement(ISymbol symbol) =>
+        symbol switch
+        {
+            IFieldSymbol field => IsPromotableArrayElement(field.Type),
+            IPropertySymbol property => IsPromotableArrayElement(property.Type),
+            _ => false,
+        };
 
     /// <summary>
     /// Issue #3848 (family A): whether <paramref name="symbol"/> is promoted to
@@ -1096,6 +1194,132 @@ internal static class ObliviousNullabilityAnalyzer
 
         return targets;
     }
+
+    // Issue #3848 (family B): every generated ARRAY-typed member of
+    // `compilation` that some source writes an array-shaped literal with a
+    // maybe-null ELEMENT into. Keyed and cached exactly like `NullTargets`.
+    private static HashSet<string> NullArrayElementTargets(CSharpCompilation compilation) =>
+        NullElementTargets.GetValue(compilation, ComputeNullArrayElementTargets);
+
+    private static HashSet<string> ComputeNullArrayElementTargets(Compilation compilation)
+    {
+        var targets = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (SyntaxTree tree in compilation.SyntaxTrees)
+        {
+            SemanticModel model = null;
+            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
+            {
+                // The same two node shapes `ComputeNullAssignmentTargets`
+                // collects — `x.Member = […]`, which is also the
+                // object-initializer member `new T { Member = […] }`, and a
+                // field/property initializer. Only the granularity of the
+                // evidence read out of them differs.
+                (ISymbol Target, ExpressionSyntax Value) write = node switch
+                {
+                    AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) =>
+                        (Model().GetSymbolInfo(assignment.Left).Symbol, assignment.Right),
+                    EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax or PropertyDeclarationSyntax } initializer =>
+                        (Model().GetDeclaredSymbol(initializer.Parent), initializer.Value),
+                    _ => (null, null),
+                };
+
+                if (write.Target is IFieldSymbol or IPropertySymbol
+                    && IsEvidenceDecidedGeneratedDeclaration(write.Target)
+                    && HasPromotableArrayElement(write.Target)
+                    && write.Target.OriginalDefinition.GetDocumentationCommentId() is { } id
+                    && !targets.Contains(id))
+                {
+                    foreach (ExpressionSyntax element in ArrayLiteralElements(write.Value))
+                    {
+                        if (WritesNull(Model(), element))
+                        {
+                            targets.Add(id);
+                            break;
+                        }
+                    }
+                }
+
+                SemanticModel Model() => model ??= compilation.GetSemanticModel(tree);
+            }
+        }
+
+        return targets;
+    }
+
+    // The element expressions of an array-shaped literal: a C# 12 collection
+    // expression, or an explicit/implicit array creation carrying an
+    // initializer. Nested initializers (a rectangular or jagged literal) are
+    // flattened to their leaves. A SPREAD element contributes nothing — its
+    // elements are not visible here, so it is no evidence either way.
+    // Anything that is not one of those shapes yields no elements at all,
+    // which is what keeps this evidence to writes whose element values this
+    // translator can actually see.
+    private static IEnumerable<ExpressionSyntax> ArrayLiteralElements(ExpressionSyntax value)
+    {
+        switch (value)
+        {
+            case ParenthesizedExpressionSyntax parenthesized:
+                foreach (ExpressionSyntax element in ArrayLiteralElements(parenthesized.Expression))
+                {
+                    yield return element;
+                }
+
+                break;
+
+            case CollectionExpressionSyntax collection:
+                foreach (CollectionElementSyntax element in collection.Elements)
+                {
+                    if (element is ExpressionElementSyntax expression)
+                    {
+                        yield return expression.Expression;
+                    }
+                }
+
+                break;
+
+            case ArrayCreationExpressionSyntax { Initializer: { } explicitInitializer }:
+                foreach (ExpressionSyntax element in InitializerLeaves(explicitInitializer))
+                {
+                    yield return element;
+                }
+
+                break;
+
+            case ImplicitArrayCreationExpressionSyntax implicitCreation:
+                foreach (ExpressionSyntax element in InitializerLeaves(implicitCreation.Initializer))
+                {
+                    yield return element;
+                }
+
+                break;
+        }
+    }
+
+    private static IEnumerable<ExpressionSyntax> InitializerLeaves(InitializerExpressionSyntax initializer)
+    {
+        foreach (ExpressionSyntax element in initializer.Expressions)
+        {
+            if (element is InitializerExpressionSyntax nested)
+            {
+                foreach (ExpressionSyntax leaf in InitializerLeaves(nested))
+                {
+                    yield return leaf;
+                }
+            }
+            else
+            {
+                yield return element;
+            }
+        }
+    }
+
+    // An array of an unannotated REFERENCE element type: the only shape whose
+    // element slot there is anything to widen. A value-typed element never
+    // receives a null, and an already-`T?` element already renders nullable.
+    private static bool IsPromotableArrayElement(ITypeSymbol type) =>
+        type is IArrayTypeSymbol { ElementType: { IsReferenceType: true } element }
+        && element.NullableAnnotation != NullableAnnotation.Annotated;
 
     // Issue #3848: the pure-forwarding closure for one compilation, keyed like
     // `NullTargets` above so it is computed at most once per compilation.
