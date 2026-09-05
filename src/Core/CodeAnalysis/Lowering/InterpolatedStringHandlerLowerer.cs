@@ -4,9 +4,11 @@
 
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -15,11 +17,13 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 
 /// <summary>
 /// Emit-time (IL-only) lowering of <see cref="BoundInterpolatedStringExpression"/>
-/// to the C# 10 interpolated-string-handler pattern (issue #368, ADR-0055).
+/// to the C# 10 interpolated-string-handler pattern, or to composite formatting
+/// when the target framework does not provide that handler (issues #368/#3769,
+/// ADR-0055).
 /// </summary>
 /// <remarks>
-/// Each interpolation node is rewritten into a <see cref="BoundBlockExpression"/>
-/// that does the following.
+/// When the target provides the default handler, each interpolation node is
+/// rewritten into a <see cref="BoundBlockExpression"/> that does the following.
 /// <list type="number">
 /// <item>declares a <c>System.Runtime.CompilerServices.DefaultInterpolatedStringHandler</c>
 /// value-type local and constructs it with <c>(literalLength, formattedCount)</c>.</item>
@@ -37,33 +41,35 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// the real type-argument symbol is encoded into the emitted MethodSpec), so the
 /// hole value is passed by its natural representation.
 /// </para>
+/// <para>
+/// When the target does not provide the default handler, ordinary string
+/// interpolation instead lowers to <c>String.Format(string, object[])</c>.
+/// That target-compatible path boxes value-type holes and preserves composite
+/// formatting, alignment, evaluation order, and literal-brace escaping.
+/// User-defined interpolated-string handlers are unaffected.
+/// </para>
 /// This rewrite is applied only on the emit path; the tree-walk interpreter
 /// renders <see cref="BoundInterpolatedStringExpression"/> directly.
 /// </remarks>
 internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewriter
 {
     private readonly DiagnosticBag diagnostics = new();
+    private readonly ReferenceResolver references;
 
-    // Issue #3730: the DefaultInterpolatedStringHandler surface resolved from
-    // the compilation's reference closure. Null when the target framework does
-    // not declare the required shape; `missingHandlerMember` then names the
-    // first member it failed to provide, and the first interpolation site
-    // reports GS0545 rather than silently lowering onto the host SDK's handler.
+    // Issue #3730/#3769: the DefaultInterpolatedStringHandler surface resolved
+    // from the target reference closure. Null when the target does not declare
+    // the required shape; ordinary string interpolation then uses String.Format.
     private readonly DefaultInterpolatedStringHandlerShape? handler;
-    private readonly string? missingHandlerMember;
 
     private int counter;
-    private bool reportedMissingHandler;
+    private MethodInfo? stringFormat;
 
     private InterpolatedStringHandlerLowerer(ReferenceResolver references)
     {
-        if (DefaultInterpolatedStringHandlerShape.TryResolve(references, out var shape, out var missing))
+        this.references = references;
+        if (DefaultInterpolatedStringHandlerShape.TryResolve(references, out var shape, out _))
         {
             this.handler = shape;
-        }
-        else
-        {
-            this.missingHandlerMember = missing;
         }
     }
 
@@ -171,24 +177,13 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             return this.RewriteUserHandler(node, node.Handler, literalLength, formattedCount);
         }
 
-        // Issue #3730: the target framework does not provide the handler surface
-        // this lowering emits calls against. Report it at the interpolation
-        // instead of lowering onto the host SDK's handler, which produced an
-        // assembly whose TypeRef pointed at the host's System.Private.CoreLib.
+        // Issue #3769: a handler supplied only by ReferenceResolver's host
+        // fallback is not part of the target framework. Use the pre-C# 10
+        // composite-format lowering instead of leaking System.Private.CoreLib
+        // into the emitted assembly.
         if (this.handler == null)
         {
-            // The condition is compilation-wide, and `Lower` walks the same
-            // interpolation through both the function bodies and the top-level
-            // statement, so report it once rather than once per visit.
-            if (!this.reportedMissingHandler)
-            {
-                this.reportedMissingHandler = true;
-                this.diagnostics.ReportInterpolatedStringHandlerUnavailable(
-                    node.Syntax?.Location ?? default,
-                    Invariant.Required(this.missingHandlerMember, "a null handler shape always records the member it could not resolve"));
-            }
-
-            return node;
+            return this.RewriteStringFormat(node);
         }
 
         foreach (var part in node.Parts)
@@ -291,6 +286,116 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             ImmutableArray<BoundExpression>.Empty);
 
         return new BoundBlockExpression(node.Syntax, statements.ToImmutable(), result);
+    }
+
+    private BoundExpression RewriteStringFormat(BoundInterpolatedStringExpression node)
+    {
+        var (parts, leading) = this.PrepareParts(node);
+        var format = new StringBuilder();
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
+
+        foreach (var part in parts)
+        {
+            if (part.IsLiteral)
+            {
+                AppendEscapedFormatLiteral(
+                    format,
+                    Invariant.Required(
+                        part.Literal,
+                        "a literal part is created by BoundInterpolatedStringPart.FromLiteral, which stores string.Empty rather than null"));
+                continue;
+            }
+
+            var value = Invariant.Required(part.Value, "a formatted interpolated-string part has a bound value");
+            if (TypeSymbol.IsByRefLike(value.Type))
+            {
+                var toString = FindByRefLikeToString(value.Type);
+                if (toString == null)
+                {
+                    this.diagnostics.ReportByRefLikeInterpolationUnsupported(
+                        part.HoleSyntax?.Location ?? value.Syntax?.Location ?? node.Syntax?.Location ?? default,
+                        value.Type);
+                    return node;
+                }
+
+                value = new BoundImportedInstanceCallExpression(
+                    node.Syntax,
+                    value,
+                    toString,
+                    TypeSymbol.String,
+                    ImmutableArray<BoundExpression>.Empty);
+            }
+
+            var index = arguments.Count;
+            arguments.Add(value.Type == TypeSymbol.Object
+                ? value
+                : new BoundConversionExpression(null, TypeSymbol.Object, value));
+
+            format.Append('{').Append(index.ToString(CultureInfo.InvariantCulture));
+            if (part.Alignment.HasValue)
+            {
+                format.Append(',').Append(part.Alignment.Value.ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (part.Format != null)
+            {
+                format.Append(':').Append(part.Format);
+            }
+
+            format.Append('}');
+        }
+
+        var argumentArray = new BoundArrayCreationExpression(
+            null,
+            ArrayTypeSymbol.Get(TypeSymbol.Object, arguments.Count),
+            arguments.ToImmutable());
+        var result = new BoundClrStaticCallExpression(
+            node.Syntax,
+            this.GetStringFormatMethod(),
+            TypeSymbol.String,
+            ImmutableArray.Create<BoundExpression>(
+                new BoundLiteralExpression(null, format.ToString()),
+                argumentArray));
+
+        return leading.IsEmpty
+            ? result
+            : new BoundBlockExpression(node.Syntax, leading, result);
+    }
+
+    private MethodInfo GetStringFormatMethod()
+    {
+        if (this.stringFormat != null)
+        {
+            return this.stringFormat;
+        }
+
+        if (!this.references.TryResolveType("System.String", requireExternalVisibility: false, out var stringType)
+            || !this.references.TryResolveType("System.Object", requireExternalVisibility: false, out var objectType))
+        {
+            throw new InvalidOperationException("String.Format cannot be resolved from the target reference set.");
+        }
+
+        this.stringFormat = stringType.GetMethod(
+            nameof(string.Format),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            types: new[] { stringType, objectType.MakeArrayType() },
+            modifiers: null)
+            ?? throw new InvalidOperationException("String.Format(string, object[]) cannot be resolved from the target reference set.");
+        return this.stringFormat;
+    }
+
+    private static void AppendEscapedFormatLiteral(StringBuilder builder, string text)
+    {
+        foreach (var character in text)
+        {
+            if (character is '{' or '}')
+            {
+                builder.Append(character);
+            }
+
+            builder.Append(character);
+        }
     }
 
     /// <summary>

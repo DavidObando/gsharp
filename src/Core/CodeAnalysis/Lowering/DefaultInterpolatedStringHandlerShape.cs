@@ -102,8 +102,8 @@ internal sealed class DefaultInterpolatedStringHandlerShape
     /// Resolves the handler surface from <paramref name="references"/>. Returns
     /// <see langword="false"/> — naming the missing member in
     /// <paramref name="missingMember"/> — when the target framework does not
-    /// declare the shape the lowering needs, so the caller can report a
-    /// diagnostic instead of emitting a reference the target cannot resolve.
+    /// declare the shape the lowering needs, so the caller can select a
+    /// target-compatible non-handler lowering.
     /// </summary>
     /// <param name="references">The compilation's reference closure.</param>
     /// <param name="shape">The resolved handler surface.</param>
@@ -117,7 +117,8 @@ internal sealed class DefaultInterpolatedStringHandlerShape
         shape = null;
         missingMember = null;
 
-        if (!references.TryResolveType(HandlerTypeFullName, out var handlerType))
+        if (!references.TryResolveType(HandlerTypeFullName, out var handlerType)
+            || references.IsHostFallback(handlerType))
         {
             missingMember = HandlerTypeFullName;
             return false;

@@ -8,8 +8,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -52,6 +54,12 @@ public class Issue3730InterpolatedStringHandlerTargetFrameworkTests
 let count = 3
 let label = ""value""
 let text = ""$label = $count""
+
+class Formatter {
+    func Describe(label string, count int32) string {
+        return ""$label = $count""
+    }
+}
 ";
 
     /// <summary>
@@ -186,7 +194,7 @@ let text = ""$label = $count""
     /// handler must produce a <c>TypeRef</c> scoped to <em>that closure's</em>
     /// <c>System.Runtime</c> and must never mention the host's
     /// <c>System.Private.CoreLib</c>; a closure that declares no handler must
-    /// produce GS0545 rather than an assembly.
+    /// fall back to target-compatible composite formatting.
     /// </summary>
     [Fact]
     public void EmitTargetsTheReferencedFrameworksHandler()
@@ -215,18 +223,17 @@ let text = ""$label = $count""
 
         Assert.True(packs >= 1, "no Microsoft.NETCore.App.Ref targeting pack was available");
 
-        // The handler-less target. On main this compiled successfully and the
-        // emitted assembly carried a TypeRef into the host's
-        // System.Private.CoreLib.
+        // The handler-less target uses String.Format rather than failing or
+        // lowering onto the host's handler.
         using var netStandard = NetStandardClosure();
         var (netStandardDiagnostics, netStandardImage) = Compile(netStandard);
 
-        var reported = Assert.Single(netStandardDiagnostics, d => d.Id == "GS0545");
-        Assert.Contains(
-            DefaultInterpolatedStringHandlerShape.HandlerTypeFullName,
-            reported.Message,
-            StringComparison.Ordinal);
-        Assert.Null(netStandardImage);
+        Assert.DoesNotContain(netStandardDiagnostics, d => d.Id == "GS0545");
+        var netStandardBytes = Required(netStandardImage, "an emitted assembly for netstandard");
+        var (_, netStandardHandlerScopes) = ReadHandlerReferences(netStandardBytes);
+        Assert.Empty(netStandardHandlerScopes);
+        Assert.NotEqual("System.Private.CoreLib", Assert.Single(ReadStringFormatScopes(netStandardBytes)));
+        Assert.Equal("value = 3", ExecuteDescribe(netStandardBytes));
     }
 
     /// <summary>
@@ -236,12 +243,15 @@ let text = ""$label = $count""
     /// probe can tell the two apart.
     /// </summary>
     [Fact]
-    public void HostDeclaresTheHandler_ButTheNetStandardTargetDoesNot()
+    public void HostFallbackHandler_IsObservableAndNotATargetHandler()
     {
         Assert.NotNull(Type.GetType(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName));
 
         using var netStandard = NetStandardClosure();
-        Assert.False(netStandard.TryResolveType(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName, out _));
+        Assert.True(netStandard.TryResolveType(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName, out var handler));
+        Assert.True(
+            netStandard.IsHostFallback(handler),
+            $"resolved from unexpected assembly '{handler.Assembly.FullName}'");
         Assert.False(DefaultInterpolatedStringHandlerShape.TryResolve(netStandard, out _, out var missing));
         Assert.Equal(DefaultInterpolatedStringHandlerShape.HandlerTypeFullName, missing);
     }
@@ -342,6 +352,55 @@ let text = ""$label = $count""
         return (assemblyRefs, handlerScopes);
     }
 
+    private static IReadOnlyList<string> ReadStringFormatScopes(byte[] image)
+    {
+        using var peReader = new PEReader(System.Collections.Immutable.ImmutableArray.Create(image));
+        var metadata = PEReaderExtensions.GetMetadataReader(peReader);
+        var scopes = new List<string>();
+        foreach (var handle in metadata.MemberReferences)
+        {
+            var member = metadata.GetMemberReference(handle);
+            if (metadata.GetString(member.Name) != "Format" || member.Parent.Kind != HandleKind.TypeReference)
+            {
+                continue;
+            }
+
+            var parent = metadata.GetTypeReference((TypeReferenceHandle)member.Parent);
+            if (metadata.GetString(parent.Namespace) != "System" || metadata.GetString(parent.Name) != "String")
+            {
+                continue;
+            }
+
+            scopes.Add(parent.ResolutionScope.Kind == HandleKind.AssemblyReference
+                ? metadata.GetString(metadata.GetAssemblyReference((AssemblyReferenceHandle)parent.ResolutionScope).Name)
+                : parent.ResolutionScope.Kind.ToString());
+        }
+
+        return scopes;
+    }
+
+    private static string ExecuteDescribe(byte[] image)
+    {
+        var context = new AssemblyLoadContext($"gs3769-{Guid.NewGuid():N}", isCollectible: true);
+        try
+        {
+            using var stream = new MemoryStream(image);
+            var assembly = context.LoadFromStream(stream);
+            var formatter = Required(
+                assembly.GetType("Issue3730.Formatter", throwOnError: true),
+                "the emitted Formatter type");
+            var instance = Required(Activator.CreateInstance(formatter), "a Formatter instance");
+            var describe = Required(
+                formatter.GetMethod("Describe", BindingFlags.Public | BindingFlags.Instance),
+                "Formatter.Describe");
+            return Assert.IsType<string>(describe.Invoke(instance, new object[] { "value", 3 }));
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+
     /// <summary>
     /// The host runtime plus every installed targeting pack — every closure that
     /// is expected to declare a handler.
@@ -389,19 +448,15 @@ let text = ""$label = $count""
     /// <returns>The netstandard reference closure.</returns>
     private static ReferenceResolver NetStandardClosure()
     {
-        var packRoot = Path.Combine(DotnetRoot(), "packs", "NETStandard.Library.Ref");
-        var refDirectory = Directory.Exists(packRoot)
-            ? Directory
-                .EnumerateDirectories(packRoot)
-                .OrderBy(d => d, StringComparer.Ordinal)
-                .Select(version => Directory.EnumerateDirectories(Path.Combine(version, "ref")).OrderBy(d => d, StringComparer.Ordinal).LastOrDefault())
-                .LastOrDefault(d => d != null)
-            : null;
+        var refDirectory = typeof(Issue3730InterpolatedStringHandlerTargetFrameworkTests).Assembly
+            .GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "NetStandard20ReferenceDirectory")
+            .Value;
 
-        if (refDirectory == null)
+        if (string.IsNullOrEmpty(refDirectory) || !Directory.Exists(refDirectory))
         {
             throw new Xunit.Sdk.XunitException(
-                $"prerequisite missing: no NETStandard.Library.Ref targeting pack under '{packRoot}'");
+                $"prerequisite missing: netstandard2.0 reference directory '{refDirectory}'");
         }
 
         return ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory, "*.dll"));
