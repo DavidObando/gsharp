@@ -138,7 +138,7 @@ cs2gs_tally_lookup() {
 
 # Writes the markdown job-summary section for a migrated tree to stdout.
 #
-#   cs2gs_counter_report <migrated-tree> <heading>
+#   cs2gs_counter_report <migrated-tree> <heading> [subtitle]
 #
 # Two tables under one heading: the corpus-wide counters, then the synthetic
 # `__identifier` breakdown per family with the catch-all row last. Both carry a
@@ -149,7 +149,7 @@ cs2gs_tally_lookup() {
 # Callers append the output to $GITHUB_STEP_SUMMARY, print it, or both. It is
 # pure text — this function neither gates nor exits.
 cs2gs_counter_report() {
-  local tree=$1 heading=$2
+  local tree=$1 heading=$2 subtitle=${3:-}
   local tmp code_lines raw_lines code_ids raw_ids code_tally raw_tally
   tmp=$(mktemp -d)
   code_lines="$tmp/code" raw_lines="$tmp/raw"
@@ -175,6 +175,10 @@ cs2gs_counter_report() {
 
   echo "### $heading"
   echo ''
+  if [[ -n "$subtitle" ]]; then
+    echo "$subtitle"
+    echo ''
+  fi
   echo "| counter | code | raw |"
   echo "|---|---:|---:|"
   echo "| \`.gs\` files | $gs_files | $gs_files |"
@@ -224,12 +228,12 @@ cs2gs_counter_report() {
 
 # Convenience wrapper: print the report to the log AND to the job summary.
 cs2gs_emit_counter_report() {
-  local tree=$1 heading=$2 report
+  local tree=$1 heading=$2 subtitle=${3:-} report
   if [[ ! -d "$tree" ]]; then
     echo "cs2gs counters: no migrated tree at '$tree'; skipping the summary." >&2
     return 0
   fi
-  report=$(cs2gs_counter_report "$tree" "$heading")
+  report=$(cs2gs_counter_report "$tree" "$heading" "$subtitle")
   printf '%s\n' "$report"
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     printf '%s\n' "$report" >> "$GITHUB_STEP_SUMMARY"

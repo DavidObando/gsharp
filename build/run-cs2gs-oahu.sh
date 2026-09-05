@@ -69,7 +69,8 @@ set -e
 
 # Before the exit check: a failed migration still produced whatever it emitted,
 # and the counters over a partial tree are more useful than none.
-cs2gs_emit_counter_report "$migrated_dir" 'cs2gs Oahu: readability counters' || true
+cs2gs_emit_counter_report "$migrated_dir" 'cs2gs Oahu: readability counters' \
+  'Counts only — Oahu has no ratcheting baseline, so nothing here gates the job.' || true
 
 if (( migrate_exit != 0 )); then
   exit "$migrate_exit"

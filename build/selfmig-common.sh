@@ -167,7 +167,8 @@ selfmig_apply_baseline() {
   # are untouched, and nothing below participates in the pass/fail decision.
   if [[ -n "${selfmig_measured_tree:-}" && -d "${selfmig_measured_tree:-}" ]]; then
     cs2gs_emit_counter_report "$selfmig_measured_tree" \
-      'cs2gs self-migration: readability counters (gsharp)' || true
+      'cs2gs self-migration: readability counters (gsharp)' \
+      'Breakdown only — the gated numbers are the table above; nothing here changes the verdict.' || true
   fi
 
   local status=0
