@@ -3135,6 +3135,19 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            // Issue #3970: a public static field or property whose type is a
+            // CLR delegate (e.g. `static let Cb Func[string] = ...`) is
+            // invokable through the same call syntax used on a variable —
+            // `Reg.Cb()`. Static method lookup above only consulted methods
+            // named `Cb`, so the delegate member would otherwise miss. This
+            // is the static counterpart of the instance delegate-member
+            // fallback in BindAccessorCall and must run before the nested-
+            // type-constructor and "cannot find function" fallbacks below.
+            if (TryBindClrStaticDelegateMemberInvocation(classSymbol, methodName, arguments, ce, argumentNames, out var staticDelegateMemberCall))
+            {
+                return staticDelegateMemberCall;
+            }
+
             // Issue #569: when no static/instance method matches, check whether
             // the call identifier names a nested type of the outer class. If so,
             // bind as a constructor invocation — this unifies the call-expression

@@ -1149,6 +1149,111 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #3970: static counterpart to
+    /// <see cref="TryBindClrDelegateMemberInvocation"/>. When a static call
+    /// <c>Type.Member(args)</c> against an imported class matches no static
+    /// method, fall back to a public static field or property of the same
+    /// name whose type is a CLR delegate (e.g. <c>static let Cb Func[string]
+    /// = ...</c> invoked as <c>Reg.Cb()</c>). Reuses
+    /// <see cref="ImportedClassSymbol.TryLookupMember"/> for the same
+    /// property-then-field precedence the static member-read path already
+    /// uses, then lowers to a load of the delegate value (with a null
+    /// receiver) followed by an <c>Invoke(args)</c> dispatch. Returns
+    /// <see langword="true"/> when a delegate-typed static member matched and
+    /// the call was bound (the resulting expression may be a
+    /// <see cref="BoundErrorExpression"/> if argument resolution failed).
+    /// </summary>
+    private bool TryBindClrStaticDelegateMemberInvocation(
+        ImportedClassSymbol classSymbol,
+        string methodName,
+        ImmutableArray<BoundExpression> arguments,
+        CallExpressionSyntax ce,
+        ImmutableArray<string> argumentNames,
+        [NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+        if (!classSymbol.TryLookupMember(methodName, ne: null, out var member))
+        {
+            return false;
+        }
+
+        System.Type? memberClrType = member switch
+        {
+            PropertyInfo p => p.PropertyType,
+            FieldInfo f => f.FieldType,
+            _ => null,
+        };
+        if (memberClrType == null || !ClrTypeUtilities.IsDelegateType(memberClrType))
+        {
+            return false;
+        }
+
+        TypeSymbol memberTypeSymbol = member switch
+        {
+            PropertyInfo p2 => ClrNullability.GetPropertyTypeSymbol(p2),
+            FieldInfo f2 => ClrNullability.GetFieldTypeSymbol(f2),
+            _ => TypeSymbol.FromClrType(memberClrType),
+        };
+
+        BoundExpression delegateLoad = ApplyMemberNarrowing(
+            new BoundClrPropertyAccessExpression(null, null, member, memberTypeSymbol));
+        var effectiveMemberType = delegateLoad.Type;
+
+        if (ce.NullableQuestionToken == null
+            && overloads.TryReportNullableDelegateReceiver(
+                effectiveMemberType,
+                ce.Identifier.Location,
+                methodName,
+                nullSafeInvocation: "?(...)"))
+        {
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        var underlyingDelegateClr = memberClrType;
+
+        LocalVariableSymbol? capture = null;
+        BoundExpression invokeReceiver = delegateLoad;
+        if (ce.NullableQuestionToken != null)
+        {
+            var captureType = effectiveMemberType is NullableTypeSymbol nullableMember
+                ? nullableMember.UnderlyingType
+                : effectiveMemberType;
+            var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: captureType);
+            invokeReceiver = new BoundVariableExpression(null, capture);
+        }
+
+        // Reuse the same Invoke-overload-resolution path the instance
+        // delegate-member call and the bare delegate-variable call share.
+        if (TryBindInheritedClrInstanceCall(invokeReceiver, underlyingDelegateClr, "Invoke", arguments, ce, out var invokeCall, argumentNames: argumentNames))
+        {
+            result = capture == null
+                ? invokeCall
+                : BuildNullConditionalDelegateInvocation(ce, delegateLoad, capture, invokeCall);
+            return true;
+        }
+
+        // No applicable Invoke overload — most likely an argument-count or
+        // type mismatch. Report against the member name (not "Invoke") so the
+        // diagnostic points to what the user wrote.
+        var invoke = memberClrType.GetMethodSafe("Invoke");
+        var expectedArity = invoke?.GetParameters().Length ?? 0;
+        if (arguments.Length != expectedArity)
+        {
+            Diagnostics.ReportWrongArgumentCount(ce.Location, methodName, expectedArity, arguments.Length);
+        }
+        else
+        {
+            Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
+        }
+
+        result = new BoundErrorExpression(null);
+        return true;
+    }
+
+    /// <summary>
     /// Issue #296: resolves an instance method call against an imported CLR
     /// base class for a GSharp class receiver that inherits it. Uses the same
     /// overload resolution as direct imported-instance calls; <c>GetMethods</c>
