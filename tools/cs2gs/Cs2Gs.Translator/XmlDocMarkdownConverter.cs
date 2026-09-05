@@ -157,11 +157,11 @@ internal static class XmlDocMarkdownConverter
             return null;
         }
 
-        // Issue #3501 follow-up: NormalizeInlineWhitespace collapses the
-        // source's own `///` line breaks, so a multi-line C# summary would
-        // otherwise become ONE arbitrarily long prose line (the top source
-        // of >300-char lines in the repo self-migration). Re-wrap prose at a
-        // readable width; fenced content (```…```) is untouched.
+        // ADR-0179 phase 9a: prose lines already arrive with the author's own
+        // `///` line structure preserved (see SplitInlineIntoLines), so this
+        // pass is a BACKSTOP, not the layout: it only re-wraps a line the
+        // author themselves wrote longer than the budget. Fenced content
+        // (```…```) is untouched.
         var wrapped = new List<string>(output.Count);
         bool inFence = false;
         foreach (string line in output)
@@ -228,7 +228,7 @@ internal static class XmlDocMarkdownConverter
 
     /// <summary>
     /// Splits a prose line at spaces, re-merging any run of words that sits
-    /// inside an unclosed inline span — an odd number of backticks, an
+    /// inside an unclosed inline span — an unterminated code span, an
     /// unclosed <c>[</c>, or an unclosed link-target <c>](…</c> — so
     /// Markdown links and code spans survive wrapping as single atoms.
     /// </summary>
@@ -258,7 +258,6 @@ internal static class XmlDocMarkdownConverter
 
     private static bool HasOpenInlineSpan(string text)
     {
-        int backticks = 0;
         int bracketDepth = 0;
         int linkParenDepth = 0;
         for (int i = 0; i < text.Length; i++)
@@ -266,7 +265,20 @@ internal static class XmlDocMarkdownConverter
             char c = text[i];
             if (c == '`')
             {
-                backticks++;
+                // ADR-0179 phase 9a: brackets inside a code span are CODE, not
+                // Markdown. Counting them is what made `` `?[` `` (a `<c>`
+                // element naming the null-conditional index operator) leave
+                // bracketDepth open forever, so every remaining word merged
+                // into one unsplittable atom and the whole comment emitted as
+                // a single >300-char line. Skip the span wholesale; an
+                // unterminated one is genuinely open.
+                int close = text.IndexOf('`', i + 1);
+                if (close < 0)
+                {
+                    return true;
+                }
+
+                i = close;
             }
             else if (c == '[')
             {
@@ -291,7 +303,7 @@ internal static class XmlDocMarkdownConverter
             }
         }
 
-        return (backticks % 2) != 0 || bracketDepth > 0 || linkParenDepth > 0;
+        return bracketDepth > 0 || linkParenDepth > 0;
     }
 
     private static void AppendBlockContent(List<string> output, IEnumerable<XNode> nodes)
@@ -311,12 +323,9 @@ internal static class XmlDocMarkdownConverter
 
         void FlushInline()
         {
-            string text = NormalizeInlineWhitespace(inline.ToString());
+            string text = inline.ToString();
             inline.Clear();
-            if (text.Length > 0)
-            {
-                lines.Add(text);
-            }
+            lines.AddRange(SplitInlineIntoLines(text));
         }
 
         void BlankSeparator()
@@ -450,6 +459,51 @@ internal static class XmlDocMarkdownConverter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// ADR-0179 phase 9a: renders an inline run as Markdown lines that KEEP
+    /// the author's own <c>///</c> line breaks.
+    /// </summary>
+    /// <remarks>
+    /// The run's newlines are exactly the source comment's line boundaries —
+    /// <see cref="Convert"/> joins the stripped <c>///</c> lines with
+    /// <c>'\n'</c>, and every inline element renders to a single line — so
+    /// splitting here can never cut a code span or a link in half. Collapsing
+    /// them instead (the previous behaviour) turned an eight-line
+    /// <c>&lt;remarks&gt;</c> into one 424-character line and left the width
+    /// entirely to a re-wrap pass; a comment's line structure is the author's,
+    /// not the translator's, so it is preserved rather than recomputed.
+    /// Whitespace WITHIN a line is still normalized, runs of blank lines
+    /// collapse to one (the Markdown paragraph break), and the run's leading
+    /// and trailing blanks are dropped.
+    /// </remarks>
+    private static List<string> SplitInlineIntoLines(string text)
+    {
+        var lines = new List<string>();
+        foreach (string raw in text.Split('\n'))
+        {
+            string normalized = NormalizeInlineWhitespace(raw);
+            if (normalized.Length == 0)
+            {
+                // Leading blanks are dropped; interior runs collapse to one.
+                if (lines.Count > 0 && lines[^1].Length > 0)
+                {
+                    lines.Add(string.Empty);
+                }
+
+                continue;
+            }
+
+            lines.Add(normalized);
+        }
+
+        while (lines.Count > 0 && lines[^1].Length == 0)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        return lines;
     }
 
     private static string NormalizeInlineWhitespace(string text)
