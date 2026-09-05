@@ -487,6 +487,37 @@ Order: GSA0001 → GSA0003 → GSA0004 → GSA0002 → GSA0005; harness and pari
      lowers to `BinaryOperatorKind` rather than `Op.Kind` — `Op` exists only
      on the built-in node.
 
+     `CalledFunction` carries `Name` and `ContainingType` and nothing more,
+     because the other two members a rule reaches through `TargetMethod` have
+     no honest answer on a callee symbol (PR #3968 review):
+
+     * `ReturnType` is answered by the call NODE. G#'s callee symbol holds the
+       DECLARATION's return type, so a constructed generic call reports the
+       type parameter — measured on `Identity[int32](1)`: `symbol=T` against
+       `node=global::System.Int32`. Roslyn's `TargetMethod` is the
+       *constructed* method, so the node's type is the faithful reading, and it
+       is right for an imported generic closed over a user-defined type too
+       (whose reflected return type is a placeholder) without consulting either
+       symbol.
+     * `OverriddenMethod` is REJECTED at a call site rather than answered. An
+       imported callee has no G# override chain, so any value would be null for
+       every call into metadata, and a member analyzers branch on must not
+       silently say "no". Reaching it is a `CS2GS-GAP`. The declaring-symbol
+       surface is unaffected: `IMethodSymbol.OverriddenMethod` still maps to
+       `FunctionSymbol.OverriddenMethod`, which GSA0005 walks — now carrying an
+       Adapted note, because a source method overriding an imported CLR base
+       records its target in `ExternalOverriddenMethod` and so reads null there
+       too.
+
+     The `Invocation` dispatch row names every node a Roslyn invocation
+     reaches, not just the static ones: `receiver.Method()` is a
+     `BoundUserInstanceCallExpression`, and omitting it meant a migrated
+     invocation rule never fired on the most ordinary call in the language.
+     Constructor calls are absent by design (Roslyn models those as
+     `ObjectCreation`); `BoundIndirectCallExpression` and
+     `BoundBaseClassCallExpression`'s property-accessor form stay out because
+     neither has a callee symbol to report.
+
      The dispatch set is deliberately separate from the enum-member rename: a
      bare `OperationKind` READ (`node.Kind == OperationKind.TypeOf`) still
      translates to the one kind it names, because a read tests one node's

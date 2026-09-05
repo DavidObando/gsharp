@@ -14,8 +14,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// Used by synthesized code (state-machine bodies) where no user-facing symbol exists.
 /// </summary>
 #pragma warning disable CS1591
-public sealed class BoundClrStaticCallExpression : BoundExpression
+public sealed class BoundClrStaticCallExpression : BoundCallOperationExpression
 {
+    private ImportedFunctionSymbol? calledFunction;
+
     public BoundClrStaticCallExpression(
         SyntaxNode? syntax,
         MethodInfo method,
@@ -34,6 +36,9 @@ public sealed class BoundClrStaticCallExpression : BoundExpression
     public override BoundNodeKind Kind => BoundNodeKind.ClrStaticCallExpression;
 
     /// <inheritdoc/>
+    public override Symbol CalledFunction => calledFunction ??= ImportedCallee(Method, Type);
+
+    /// <inheritdoc/>
     public override TypeSymbol Type { get; }
 
     /// <summary>
@@ -44,7 +49,7 @@ public sealed class BoundClrStaticCallExpression : BoundExpression
     /// <summary>
     /// Gets the provided arguments.
     /// </summary>
-    public ImmutableArray<BoundExpression> Arguments { get; }
+    public override ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>
     /// Gets the per-argument ref-kind annotations. May be default (all-None).

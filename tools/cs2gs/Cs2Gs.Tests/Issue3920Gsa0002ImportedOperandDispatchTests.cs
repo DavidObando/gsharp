@@ -161,9 +161,10 @@ namespace GSharp.Core.CodeAnalysis.Syntax
     }
 
     // A migrated analyzer that reads IInvocationOperation.TargetMethod.ReturnType.
-    // The map lowers that to `CalledFunction.Type`, so the call-site symbol
-    // surface must carry `Type` — a bare `Symbol` does not, and this source
-    // failed to bind with `GS0158: Cannot find member Type`.
+    // Roslyn's TargetMethod is the CONSTRUCTED method, so its ReturnType is the
+    // call site's; G#'s callee symbol carries the DECLARATION's, which for a
+    // constructed generic call is the type parameter. The read is answered by
+    // the call node instead.
     private const string ReturnTypeAnalyzerSource = @"
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
@@ -186,10 +187,74 @@ public sealed class ReturnTypeAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeCall(OperationAnalysisContext context)
     {
         var operation = (IInvocationOperation)context.Operation;
-        if (operation.TargetMethod.ReturnType.Name == ""Int32"" && operation.TargetMethod.OverriddenMethod is null)
+        if (operation.TargetMethod.ReturnType.Name == ""Int32"")
         {
             context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
         }
+    }
+}
+";
+
+    // The same shape reaching TargetMethod.OverriddenMethod, which has no honest
+    // answer at a call site: an imported callee has no G# override chain.
+    private const string OverriddenMethodAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class OverriddenMethodAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST3920D"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterOperationAction(AnalyzeCall, OperationKind.Invocation);
+
+    private static void AnalyzeCall(OperationAnalysisContext context)
+    {
+        var operation = (IInvocationOperation)context.Operation;
+        if (operation.TargetMethod.OverriddenMethod != null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+        }
+    }
+}
+";
+
+    // The indirect registration again, but with the arguments NAMED and
+    // REORDERED, so a guard keyed on syntactic position never inspects the
+    // array at all.
+    private const string NamedReorderedKindsAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class NamedReorderedAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST3920E"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    private static readonly OperationKind[] Kinds = new[] { OperationKind.BinaryOperator };
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterOperationAction(operationKinds: Kinds, action: AnalyzeBinary);
+
+    private static void AnalyzeBinary(OperationAnalysisContext context)
+    {
+        var operation = (IBinaryOperation)context.Operation;
+        context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
     }
 }
 ";
@@ -255,25 +320,79 @@ public sealed class ConversionAnalyzer : DiagnosticAnalyzer
 ";
 
     /// <summary>
-    /// Widening the NODE side must not narrow the SYMBOL side (PR #3963
-    /// review): <c>TargetMethod.ReturnType</c> and <c>TargetMethod.OverriddenMethod</c>
-    /// are mapped members, so the call-site symbol surface has to carry them.
-    /// Typed as bare <c>Symbol</c> this bound with
-    /// <c>GS0158: Cannot find member Type</c>; the assertion is that the
-    /// translated analyzer BINDS, which is falsifiable by construction.
+    /// PR #3968 review, findings 1 and 2 — one fix covers both. A call-site
+    /// <c>ReturnType</c> read is answered by the call NODE, not by the callee
+    /// symbol: the symbol carries the declaration's type, so a constructed
+    /// generic call reports the type parameter (measured:
+    /// <c>symbol=T</c> vs <c>node=global::System.Int32</c>), and an imported
+    /// generic method closed over a user-defined type reflects a placeholder.
+    /// Reading the node sidesteps both without consulting either.
     /// </summary>
     [Fact]
-    public void MappedTargetMethodMembers_StillBindOnTheSharedCalleeSurface()
+    public void TargetMethodReturnType_IsAnsweredByTheCallNode()
     {
         (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
             TranslateAnalyzerSource(ReturnTypeAnalyzerSource);
 
-        Assert.Contains("operation.CalledFunction.Type", printed, StringComparison.Ordinal);
-        Assert.Contains("operation.CalledFunction.OverriddenMethod", printed, StringComparison.Ordinal);
+        Assert.Contains("operation.Type.Name", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("CalledFunction.Type", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            diagnostics,
+            d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+                && d.Message.Contains("TargetMethod.ReturnType", StringComparison.Ordinal));
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBinds(printed);
     }
 
+    /// <summary>
+    /// PR #3968 review, finding 3, taking the reviewer's "or reject this
+    /// mapping" branch. An imported callee has no G# override chain, so a
+    /// call-site <c>OverriddenMethod</c> would answer null for every call into
+    /// metadata — and a member analyzers BRANCH on must not silently say "no".
+    /// It is a gap instead. The declaring-symbol surface
+    /// (<c>FunctionSymbol.OverriddenMethod</c>, which GSA0005 walks) is
+    /// untouched.
+    /// </summary>
+    [Fact]
+    public void TargetMethodOverriddenMethod_IsALoudGapRatherThanASilentNull()
+    {
+        (_, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(OverriddenMethodAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal("CS2GS-GAP", gap.DiagnosticId);
+        Assert.Contains("OverriddenMethod", gap.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PR #3968 review, finding 5: an argument's ROLE comes from the parameter
+    /// it binds to, never from its position. Named arguments reorder freely, and
+    /// <c>RegisterOperationAction(operationKinds: Kinds, action: H)</c> put the
+    /// indirect array where a positional check expected the handler — so the
+    /// guard skipped it and the silent one-to-one fallback survived inside the
+    /// change meant to remove it.
+    /// </summary>
+    [Fact]
+    public void NamedAndReorderedRegistrationArguments_AreStillGuarded()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(NamedReorderedKindsAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal("CS2GS-GAP", gap.DiagnosticId);
+        Assert.Contains("RegisterOperationAction", gap.Message, StringComparison.Ordinal);
+
+        // The falsifier: the emitted registration really is the incomplete one,
+        // so silence here would have been a live bug rather than a theoretical.
+        Assert.Contains("Kinds", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ClrBinaryOperatorExpression", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// <summary>
     /// A registration whose kinds are named indirectly cannot be fanned out,
     /// and a quiet one-to-one fallback would reintroduce #3920 in a shape that

@@ -18,7 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <c>this</c> argument is the bound receiver; user arguments correspond
 /// 1:1 with <see cref="FunctionSymbol.Parameters"/>.
 /// </summary>
-public sealed class BoundUserInstanceCallExpression : BoundExpression
+public sealed class BoundUserInstanceCallExpression : BoundCallOperationExpression
 {
     private readonly TypeSymbol? returnTypeOverride;
 
@@ -54,7 +54,7 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
 
     public FunctionSymbol Method { get; }
 
-    public ImmutableArray<BoundExpression> Arguments { get; }
+    public override ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>
     /// Gets the call-site (explicit or inferred) method type arguments for a
@@ -96,4 +96,7 @@ public sealed class BoundUserInstanceCallExpression : BoundExpression
     public override TypeSymbol Type => returnTypeOverride ?? Method.Type;
 
     public override BoundNodeKind Kind => BoundNodeKind.UserInstanceCallExpression;
+
+    /// <inheritdoc/>
+    public override Symbol CalledFunction => Method;
 }

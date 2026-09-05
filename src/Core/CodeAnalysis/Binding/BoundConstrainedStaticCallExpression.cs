@@ -22,8 +22,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// variant carries <see cref="ClrMethod"/>/<see cref="ConstrainedInterfaceType"/>
 /// instead of <see cref="InterfaceMethod"/>.
 /// </summary>
-public sealed class BoundConstrainedStaticCallExpression : BoundExpression
+public sealed class BoundConstrainedStaticCallExpression : BoundCallOperationExpression
 {
+    private ImportedFunctionSymbol? calledFunction;
+
     /// <summary>Initializes a new instance of the <see cref="BoundConstrainedStaticCallExpression"/> class for a source-interface static-virtual slot.</summary>
     /// <param name="syntax">The originating syntax.</param>
     /// <param name="typeParameter">The receiver type parameter (the <c>T</c> in <c>T.M(...)</c>).</param>
@@ -73,6 +75,13 @@ public sealed class BoundConstrainedStaticCallExpression : BoundExpression
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.ConstrainedStaticCallExpression;
 
+    /// <summary>
+    /// Gets the callee symbol. Exactly one of <see cref="InterfaceMethod"/> and
+    /// <see cref="ClrMethod"/> is set, so this is always answerable.
+    /// </summary>
+    public override Symbol CalledFunction
+        => InterfaceMethod ?? (Symbol)(calledFunction ??= ImportedCallee(ClrMethod!, Type));
+
     /// <inheritdoc/>
     // ReturnType is always supplied by both constructors (see call sites), so this
     // fallback chain is dead in practice; ClrMethod! is safe because the only way
@@ -90,7 +99,7 @@ public sealed class BoundConstrainedStaticCallExpression : BoundExpression
     public MethodInfo? ClrMethod { get; }
 
     /// <summary>Gets the bound argument expressions in declared order.</summary>
-    public ImmutableArray<BoundExpression> Arguments { get; }
+    public override ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>Gets the per-argument ref-kind annotations for the <see cref="ClrMethod"/> shape. May be default (all-None).</summary>
     public ImmutableArray<RefKind> ArgumentRefKinds { get; }

@@ -135,6 +135,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (this.TryTranslateCalleeSurfaceMember(member, out result))
+            {
+                return true;
+            }
+
             if (member.Name.Identifier.Text == "OperatorKind"
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "OperatorKind" } operatorKind
                 && RoslynTypeMetadataName(operatorKind.ContainingType) == "Microsoft.CodeAnalysis.Operations.IBinaryOperation")
@@ -638,7 +643,6 @@ public sealed partial class CSharpToGSharpTranslator
             var arguments = new List<GExpression>();
             var expanded = false;
             var unexpandable = false;
-            var first = true;
             foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
             {
                 if (argument.Expression is MemberAccessExpressionSyntax kindAccess
@@ -647,7 +651,6 @@ public sealed partial class CSharpToGSharpTranslator
                     && RoslynAnalyzerApiMap.TryMapOperationKindDispatch(kindField.Name, out string[] boundNodeKinds))
                 {
                     expanded = true;
-                    first = false;
                     foreach (string boundNodeKind in boundNodeKinds)
                     {
                         arguments.Add(new MemberAccessExpression(
@@ -657,28 +660,30 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                // Every argument after the handler names operation kinds. One
-                // that names them INDIRECTLY — a local, a field, an array or
-                // ImmutableArray creation — cannot be fanned out here, and
-                // letting it fall through to the one-to-one enum rename would
-                // emit a registration that binds, runs, and is dispatched zero
-                // times over imported code. That is precisely the silent
-                // failure #3920 exists to remove, so it is reported as an
-                // unsupported translation instead.
+                // An argument that names operation kinds INDIRECTLY — a local, a
+                // field, an array or ImmutableArray creation — cannot be fanned
+                // out here, and letting it fall through to the one-to-one enum
+                // rename emits a registration that binds, runs, and is dispatched
+                // zero times over imported code. That is the silence #3920 exists
+                // to remove, so it is reported as unsupported instead.
                 //
-                // A DIRECT `OperationKind.X` whose kind simply has no fan-out
-                // row is not that case: the enum rename is the whole answer for
-                // it, and the round-trip binder is already the backstop if the
-                // renamed kind does not exist. Flagging those would trade a
-                // silent wrong answer for a loud wrong one.
-                if (!first
-                    && !IsDirectOperationKindAccess(argument.Expression, this.context)
-                    && NamesOperationKinds(argument.Expression, this.context))
+                // The role of an argument comes from the PARAMETER it binds to,
+                // never from its position: named arguments reorder freely, and
+                // `RegisterOperationAction(operationKinds: Kinds, action: H)`
+                // put the indirect array where a positional check expected the
+                // handler and slipped past the guard entirely (PR #3968 review).
+                //
+                // A kind spelled DIRECTLY but carrying no fan-out row is not
+                // this failure mode: the enum rename is the whole answer for it,
+                // and the round-trip binder already backstops a renamed kind
+                // that does not exist. Flagging those would trade a silent wrong
+                // answer for a loud wrong one.
+                if (BindsToOperationKindsParameter(argument, this.context)
+                    && !IsDirectOperationKindAccess(argument.Expression, this.context))
                 {
                     unexpandable = true;
                 }
 
-                first = false;
                 arguments.Add(this.TranslateExpression(argument.Expression));
             }
 
@@ -726,6 +731,78 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// The two members a migrated analyzer reaches through
+        /// <c>IInvocationOperation.TargetMethod</c> that the callee SYMBOL
+        /// cannot answer honestly (PR #3968 review).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <c>ReturnType</c> is answered by the call NODE. G#'s callee symbol
+        /// carries the declaration's return type, so a constructed generic call
+        /// reports the type parameter — measured directly: an analyzer over
+        /// <c>Identity[int32](1)</c> saw <c>symbol=T</c> against
+        /// <c>node=global::System.Int32</c>. Roslyn's <c>TargetMethod</c> is the
+        /// CONSTRUCTED method, so the node's type is the faithful reading, and
+        /// it is right for the imported-generic case too without consulting a
+        /// reflected placeholder.
+        /// </para>
+        /// <para>
+        /// <c>OverriddenMethod</c> has no honest answer at a call site: an
+        /// imported callee has no G# override chain, so any value would be null
+        /// for every call into metadata. It is reported as a gap rather than
+        /// answered — a member analyzers branch on must not silently say "no".
+        /// </para>
+        /// </remarks>
+        /// <param name="member">The member access.</param>
+        /// <param name="result">The rewritten expression.</param>
+        /// <returns>True when this hook handled the access.</returns>
+        private bool TryTranslateCalleeSurfaceMember(
+            MemberAccessExpressionSyntax member, out GExpression result)
+        {
+            result = null;
+            string name = member.Name.Identifier.Text;
+            if (name is not ("ReturnType" or "OverriddenMethod")
+                || member.Expression is not MemberAccessExpressionSyntax { Name.Identifier.Text: "TargetMethod" } targetMethod
+                || this.context.GetSymbolInfo(targetMethod).Symbol is not IPropertySymbol { Name: "TargetMethod" } property
+                || RoslynTypeMetadataName(property.ContainingType) != "Microsoft.CodeAnalysis.Operations.IInvocationOperation")
+            {
+                return false;
+            }
+
+            if (name == "OverriddenMethod")
+            {
+                const string GapNote =
+                    "'TargetMethod.OverriddenMethod' has no G# counterpart at a call site: an imported callee "
+                    + "carries no override chain, so every call into metadata would read null. Rewrite the rule "
+                    + "against the declaring symbol, where FunctionSymbol.OverriddenMethod is meaningful.";
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    GapNote,
+                    member.GetLocation(),
+                    TranslationSeverity.Unsupported)
+                {
+                    DiagnosticId = "CS2GS-GAP",
+                });
+                return false;
+            }
+
+            const string ShapeNote =
+                "'TargetMethod.ReturnType' translated as the call node's own type: G#'s callee symbol carries "
+                + "the DECLARATION's return type, so a constructed generic call would report the type parameter.";
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                ShapeNote,
+                member.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+            result = new MemberAccessExpression(
+                this.TranslateExpression(targetMethod.Expression), "Type", isArrow: false);
+            return true;
+        }
+
+        /// <summary>
         /// Whether an argument spells one operation kind directly, as
         /// <c>OperationKind.X</c>.
         /// </summary>
@@ -739,16 +816,56 @@ public sealed partial class CSharpToGSharpTranslator
                 && RoslynTypeMetadataName(field.ContainingType) == "Microsoft.CodeAnalysis.OperationKind";
 
         /// <summary>
-        /// Whether an argument denotes operation kinds at all — one, or a
-        /// sequence of them. Anything else is not this rewrite's business.
+        /// The parameter an argument binds to, by NAME when the argument is
+        /// named and by position otherwise, with a trailing <c>params</c> array
+        /// absorbing the tail.
         /// </summary>
-        /// <param name="expression">The argument expression.</param>
+        /// <param name="argument">The argument syntax.</param>
         /// <param name="context">The translation context.</param>
-        /// <returns>True when the argument's type is <c>OperationKind</c> or a sequence of it.</returns>
-        private static bool NamesOperationKinds(
-            ExpressionSyntax expression, TranslationContext context)
+        /// <returns>The bound parameter, or null when it cannot be determined.</returns>
+        private static IParameterSymbol DetermineParameter(
+            ArgumentSyntax argument, TranslationContext context)
         {
-            ITypeSymbol type = context.GetTypeInfo(expression).Type;
+            if (argument.Parent is not BaseArgumentListSyntax list
+                || list.Parent is null
+                || context.GetSymbolInfo(list.Parent).Symbol is not IMethodSymbol method)
+            {
+                return null;
+            }
+
+            if (argument.NameColon is { Name.Identifier.ValueText: { Length: > 0 } named })
+            {
+                return method.Parameters.FirstOrDefault(p => p.Name == named);
+            }
+
+            int index = list.Arguments.IndexOf(argument);
+            if (index < 0)
+            {
+                return null;
+            }
+
+            if (index < method.Parameters.Length)
+            {
+                return method.Parameters[index];
+            }
+
+            IParameterSymbol last = method.Parameters.LastOrDefault();
+            return last is { IsParams: true } ? last : null;
+        }
+
+        /// <summary>
+        /// Whether an argument binds to the <c>operationKinds</c> parameter of
+        /// <c>RegisterOperationAction</c> — the question "is this argument a
+        /// kind?" answered from the SYMBOL, so named arguments in any order are
+        /// classified correctly (PR #3968 review).
+        /// </summary>
+        /// <param name="argument">The argument syntax.</param>
+        /// <param name="context">The translation context.</param>
+        /// <returns>True when the argument supplies operation kinds.</returns>
+        private static bool BindsToOperationKindsParameter(
+            ArgumentSyntax argument, TranslationContext context)
+        {
+            ITypeSymbol type = DetermineParameter(argument, context)?.Type;
             if (type is null)
             {
                 return false;
