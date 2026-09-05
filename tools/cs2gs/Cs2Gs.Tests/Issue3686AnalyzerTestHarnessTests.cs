@@ -359,7 +359,8 @@ public static class Tool
     <ProjectReference Include=""..\Analyzer\Analyzer.csproj"" />
     <PackageReference Include=""Microsoft.CodeAnalysis.CSharp"" Version=""5.6.0"" />
   </ItemGroup>
-</Project>");
+</Project>",
+            isAnalyzerTestProject: true);
 
         List<XElement> references = transformed.Descendants()
             .Where(e => e.Name.LocalName == "Reference")
@@ -403,6 +404,50 @@ public static class Tool
         Assert.Contains(
             transformed.Descendants().Where(e => e.Name.LocalName == "PackageReference"),
             p => p.Attribute("Include")?.Value == "Microsoft.CodeAnalysis.CSharp");
+    }
+
+    /// <summary>
+    /// Issue #3791: project transformation consumes the semantic detector's
+    /// verdict. A structural analyzer reference and an unused analyzer-testing
+    /// package do not claim a library consumer; adding the declared harness
+    /// plus referenced-analyzer instantiation flips both stages together.
+    /// </summary>
+    [Fact]
+    public void AnalyzerDetectorAndProjectTransformer_Agree()
+    {
+        const string projectXml = @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <ItemGroup>
+    <ProjectReference Include=""..\Analyzer\Analyzer.csproj"" />
+    <PackageReference Include=""Microsoft.CodeAnalysis.CSharp"" Version=""5.6.0"" />
+    <PackageReference Include=""Microsoft.CodeAnalysis.CSharp.Analyzer.Testing.XUnit"" Version=""1.1.2"" />
+  </ItemGroup>
+</Project>";
+
+        LoadedCSharpProject tooling = LoadToolingProject();
+        bool toolingVerdict = AnalyzerProjectDetector.IsAnalyzerTestProject(tooling.Compilation);
+        XDocument toolingProject = TransformPair(projectXml, toolingVerdict);
+
+        Assert.False(toolingVerdict);
+        Assert.DoesNotContain(
+            toolingProject.Descendants().Where(e => e.Name.LocalName == "Reference"),
+            r => r.Attribute("Include")?.Value?.StartsWith("GSharp.", StringComparison.Ordinal) == true);
+        Assert.Contains(
+            toolingProject.Descendants().Where(e => e.Name.LocalName == "PackageReference"),
+            p => p.Attribute("Include")?.Value == "Microsoft.CodeAnalysis.CSharp.Analyzer.Testing.XUnit");
+
+        LoadedCSharpProject tests = Load(
+            new[] { ("Harness.cs", HarnessSource), ("Tests.cs", TestsUsing("new Sample.SampleAnalyzer()")) },
+            CSharpProjectLoader.RuntimeReferences().Append(CompileAnalyzerToReference()).ToList());
+        bool testsVerdict = AnalyzerProjectDetector.IsAnalyzerTestProject(tests.Compilation);
+        XDocument testProject = TransformPair(projectXml, testsVerdict);
+
+        Assert.True(testsVerdict);
+        Assert.Contains(
+            testProject.Descendants().Where(e => e.Name.LocalName == "Reference"),
+            r => r.Attribute("Include")?.Value == "GSharp.CodeAnalysis.Analyzers.Testing");
+        Assert.DoesNotContain(
+            testProject.Descendants().Where(e => e.Name.LocalName == "PackageReference"),
+            p => p.Attribute("Include")?.Value?.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal) == true);
     }
 
     private static string TestsUsing(string construction) => @"
@@ -486,7 +531,7 @@ public sealed class SampleAnalyzerTests
                 + string.Join("\n", errors.Select(d => d.Message)) + "\n---\n" + printed);
     }
 
-    private static XDocument TransformPair(string testProjectXml)
+    private static XDocument TransformPair(string testProjectXml, bool isAnalyzerTestProject = false)
     {
         string root = Path.Combine(Path.GetTempPath(), "cs2gs-3686-" + Guid.NewGuid().ToString("N"));
         try
@@ -512,7 +557,8 @@ public sealed class SampleAnalyzerTests
                 testProjectPath,
                 testDirectory,
                 "Gsharp.NET.Sdk/1.0.0",
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                isAnalyzerTestProject);
         }
         finally
         {

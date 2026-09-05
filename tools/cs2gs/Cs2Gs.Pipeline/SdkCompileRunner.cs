@@ -86,6 +86,7 @@ public sealed class SdkCompileRunner
     /// <param name="artifactDirectory">The external build and log directory.</param>
     /// <param name="config">The build configuration.</param>
     /// <param name="generatedProjectPaths">The complete source-to-generated project map.</param>
+    /// <param name="isAnalyzerTestProject">The translate-stage detector's analyzer-test-project verdict.</param>
     /// <param name="warningsNotAsErrors">
     /// Issue #3782: diagnostic ids to keep at warning severity for this build
     /// despite the mirror's <c>TreatWarningsAsErrors</c>. The redundant-<c>!!</c>
@@ -99,6 +100,7 @@ public sealed class SdkCompileRunner
         string artifactDirectory,
         string config,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
+        bool isAnalyzerTestProject,
         string warningsNotAsErrors = null)
     {
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
@@ -119,7 +121,8 @@ public sealed class SdkCompileRunner
             sourceProjectPath,
             projectDirectory,
             sdkMoniker,
-            generatedProjectPaths);
+            generatedProjectPaths,
+            isAnalyzerTestProject);
         project.Save(generatedProjectPath, System.Xml.Linq.SaveOptions.DisableFormatting);
 
         string projectNugetConfig = Directory.EnumerateFiles(projectDirectory)

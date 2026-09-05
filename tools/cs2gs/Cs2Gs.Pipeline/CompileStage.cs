@@ -82,6 +82,7 @@ public sealed class CompileStage : IMigrationStage
                         context.ArtifactDir,
                         context.Options.Config,
                         context.Options.GeneratedProjectPaths,
+                        context.IsAnalyzerTestProject,
                         survey ? NullAssertionPolishPass.SurveyWarningsNotAsErrors : null)
                     : runner.Compile(
                         context.ProjectOutputDir,
