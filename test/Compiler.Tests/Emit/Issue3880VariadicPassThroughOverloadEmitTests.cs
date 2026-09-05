@@ -129,6 +129,42 @@ public class Issue3880VariadicPassThroughOverloadEmitTests
         Assert.Equal($"generic-carrier{Environment.NewLine}generic-carrier{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void GenericExpandedForm_ClosesTheElementTypeBeforeRanking()
+    {
+        // The carrier's twin. `Elem[T](values ...T)` vs `Elem(values ...object)`
+        // called as `Elem("a", "b")` binds in EXPANDED form, so ranking uses the
+        // element type — which was left OPEN. `string` against `T` and `string`
+        // against `object` landed on the same conversion kind, the candidates
+        // tied per-argument, and the later non-generic-over-generic tie-break
+        // handed the call to the `object` overload. csc on net10.0 infers
+        // T = string, sees an identity, and prints "generic-elem".
+        //
+        // This one does NOT need the ParamTypes tie-break to go wrong, which is
+        // why the earlier reasoning that the expanded path was harmless (its
+        // ParamTypes stays null) did not hold: CompareUserConversions compares
+        // conversion KINDS first and returns before ParamTypes is read.
+        var output = CompileAndRun("""
+            package P
+            import System
+
+            class Pick {
+                shared {
+                    func Elem[T](values ...T) string { return "generic-elem" }
+                    func Elem(values ...object) string { return "object-elem" }
+                }
+            }
+
+            func run() {
+                Console.WriteLine(Pick.Elem("a", "b"))
+            }
+
+            run()
+            """);
+
+        Assert.Equal($"generic-elem{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3880_overload_").FullName;
