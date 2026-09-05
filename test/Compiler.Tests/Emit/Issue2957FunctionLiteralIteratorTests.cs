@@ -295,7 +295,7 @@ public sealed class Issue2957FunctionLiteralIteratorTests
             if (signature.ReadSignatureHeader().Kind == SignatureKind.Field
                 && signature.ReadSignatureTypeCode() == expectedCode
                 && signature.ReadCompressedInteger() == expectedOrdinal
-                && ParentUsesGenericMethodTypeArguments(metadata, member.Parent))
+                && ParentUsesGenericTypeArguments(metadata, member.Parent))
             {
                 return;
             }
@@ -305,12 +305,32 @@ public sealed class Issue2957FunctionLiteralIteratorTests
             $"Member reference '{memberName}' did not encode {expectedCode}({expectedOrdinal}).");
     }
 
-    private static bool ParentUsesGenericMethodTypeArguments(
+    /// <summary>
+    /// The state-machine field's MemberRef must be parented at a TypeSpec that
+    /// instantiates the state machine over a TYPE PARAMETER — never over an
+    /// erased <c>object</c>, which is the failure #2957 guards against.
+    /// </summary>
+    /// <remarks>
+    /// Issue #3933 changed WHICH KIND of parameter that is, and the change is
+    /// the point of that fix. This lambda is capture-free and lexically inside
+    /// <c>Factory[T]</c>, so it used to be hoisted to a static method on
+    /// <c>&lt;Program&gt;</c> and generic-promoted (#2118), making the kickoff's
+    /// self-instantiation read <c>&lt;Invoke&gt;d__2&lt;!!0, !!1&gt;</c> —
+    /// generic METHOD parameters. It is now hosted on a display class nested
+    /// inside <c>Factory`1</c> and reified over its parameters, so <c>Invoke</c>
+    /// is an instance method of a generic type and the same TypeSpec correctly
+    /// reads <c>&lt;Invoke&gt;d__2&lt;!0, !1&gt;</c>. The ordinals — what this
+    /// test is actually about — are unchanged.
+    /// </remarks>
+    /// <param name="metadata">The metadata reader.</param>
+    /// <param name="parent">The MemberRef's parent handle.</param>
+    /// <returns><see langword="true"/> when the parent is a TypeSpec instantiated over a type parameter.</returns>
+    private static bool ParentUsesGenericTypeArguments(
         MetadataReader metadata,
         EntityHandle parent)
     {
         const byte GenericInstance = 0x15;
-        const byte GenericMethodParameter = 0x1e;
+        const byte GenericTypeParameter = 0x13;
         if (parent.Kind != HandleKind.TypeSpecification)
         {
             return false;
@@ -326,7 +346,7 @@ public sealed class Issue2957FunctionLiteralIteratorTests
         signature.ReadByte();
         signature.ReadCompressedInteger();
         return signature.ReadCompressedInteger() > 0
-            && signature.ReadByte() == GenericMethodParameter;
+            && signature.ReadByte() == GenericTypeParameter;
     }
 
     private static int? ReadMethodReturnTypeParameterOrdinal(

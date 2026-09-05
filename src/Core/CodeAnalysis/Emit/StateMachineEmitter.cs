@@ -265,11 +265,22 @@ internal sealed class StateMachineEmitter
             StructSymbol classSym,
             ImmutableArray<TypeParameterSymbol> sourceTypeParameters,
             ImmutableArray<TypeParameterSymbol> classTypeParameters)
+            : this(plan, classSym, sourceTypeParameters, classTypeParameters, ImmutableArray<TypeParameterSymbol>.Empty)
+        {
+        }
+
+        public IteratorStateMachineInfo(
+            IteratorStateMachinePlan plan,
+            StructSymbol classSym,
+            ImmutableArray<TypeParameterSymbol> sourceTypeParameters,
+            ImmutableArray<TypeParameterSymbol> classTypeParameters,
+            ImmutableArray<TypeParameterSymbol> sourceTypeParameterOrigins)
         {
             this.Plan = plan;
             this.ClassSym = classSym;
             this.SourceTypeParameters = sourceTypeParameters;
             this.ClassTypeParameters = classTypeParameters;
+            this.SourceTypeParameterOrigins = sourceTypeParameterOrigins;
         }
 
         public IteratorStateMachinePlan Plan { get; }
@@ -292,6 +303,22 @@ internal sealed class StateMachineEmitter
         public ImmutableArray<TypeParameterSymbol> ClassTypeParameters { get; }
 
         /// <summary>
+        /// Gets, for a state machine whose containing type is a SYNTHESIZED
+        /// closure / lambda host (issue #3933), the ORIGINAL lexically enclosing
+        /// type parameters that the host's own parameters clone, in the same
+        /// slot order (i.e. the host's
+        /// <see cref="StructSymbol.ReifiedFromTypeParameters"/>). The lowered
+        /// iterator body still names those originals — it was bound against the
+        /// user's `Factory[T]` / `make[U]`, not against the host's clones — so
+        /// without an entry keyed by the original the encoder falls through to
+        /// an <c>MVar</c> slot that does not exist inside MoveNext. This is the
+        /// iterator counterpart of the async path's #2180
+        /// <c>ReifiedFromTypeParameters</c> mapping. Empty for a real user
+        /// receiver.
+        /// </summary>
+        public ImmutableArray<TypeParameterSymbol> SourceTypeParameterOrigins { get; }
+
+        /// <summary>
         /// Issue #810 + #1465 + #2951: returns the emit-time remap from each
         /// original receiver/method type parameter to its corresponding
         /// class-type-parameter ordinal on the synthesized state machine, or
@@ -309,6 +336,14 @@ internal sealed class StateMachineEmitter
             for (var i = 0; i < this.SourceTypeParameters.Length; i++)
             {
                 map[this.SourceTypeParameters[i]] = i;
+            }
+
+            // Issue #3933: alias each ORIGINAL lexically enclosing parameter
+            // onto the same slot its clone occupies — see
+            // SourceTypeParameterOrigins for why the body names the originals.
+            for (var i = 0; i < this.SourceTypeParameterOrigins.Length; i++)
+            {
+                map[this.SourceTypeParameterOrigins[i]] = i;
             }
 
             return map;
@@ -449,7 +484,25 @@ internal sealed class StateMachineEmitter
         if (containingType != null)
         {
             var definition = containingType.Definition ?? containingType;
-            builder.AddRange(StructSymbol.CollectEnclosingTypeParameters(definition));
+
+            // Issue #3933: a SYNTHESIZED closure / lambda host that was reified
+            // over its lexical encloser's type parameters ALREADY re-declares
+            // them as its own (that is what ReifiedFromTypeParameters records),
+            // and #1512/#3933 then nest it inside that encloser so it shares the
+            // encloser's accessibility domain. Walking the enclosing chain here
+            // as well would count each of those parameters TWICE — for a lambda
+            // inside `Factory`1[T]`'s `make[U]` the state machine came out at
+            // arity 3 (`T`, `T'`, `U'`) instead of 2, and the extra slot made
+            // every hoisted field's signature name a parameter the kickoff's
+            // self-instantiation never supplies: `TypeLoadException` ("has a
+            // field of an illegal type") at the first call. A real user nested
+            // type has an empty reified list and still needs the chain, so this
+            // narrows to the synthesized case only.
+            if (definition.ReifiedFromTypeParameters.IsDefaultOrEmpty)
+            {
+                builder.AddRange(StructSymbol.CollectEnclosingTypeParameters(definition));
+            }
+
             if (!definition.TypeParameters.IsDefaultOrEmpty)
             {
                 builder.AddRange(definition.TypeParameters);
@@ -462,6 +515,23 @@ internal sealed class StateMachineEmitter
         }
 
         return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Issue #3933: the ORIGINAL lexically enclosing type parameters that the
+    /// containing SYNTHESIZED closure / lambda host re-declared as its own,
+    /// aligned 1:1 with the leading entries of
+    /// <see cref="GetIteratorTypeParametersInScope"/>. Empty for a real user
+    /// receiver, which has nothing to alias.
+    /// </summary>
+    /// <param name="function">The iterator kickoff function.</param>
+    /// <returns>The originals in state-machine slot order, or empty.</returns>
+    private static ImmutableArray<TypeParameterSymbol> GetIteratorSourceTypeParameterOrigins(FunctionSymbol function)
+    {
+        var containingType = function.ReceiverType as StructSymbol
+            ?? function.StaticOwnerType as StructSymbol;
+        var definition = containingType == null ? null : containingType.Definition ?? containingType;
+        return definition?.ReifiedFromTypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
     }
 
     #region Iterator state-machine synthesis
@@ -768,7 +838,12 @@ internal sealed class StateMachineEmitter
                                 parameterValueFactory,
                                 thisProxyField,
                                 thisProxyValue)))));
-            this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(plan, smClass, scopeTPs, classTPs);
+            this.IteratorStateMachineInfos[smClass] = new IteratorStateMachineInfo(
+                plan,
+                smClass,
+                scopeTPs,
+                classTPs,
+                GetIteratorSourceTypeParameterOrigins(plan.Function));
 
             // Issue #2907: closure materialization inside the SYNC MoveNext body is
             // emitter-owned and bypasses IteratorMoveNextBodyBuilder's variable->field
