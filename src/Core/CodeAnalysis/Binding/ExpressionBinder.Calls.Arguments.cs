@@ -684,12 +684,23 @@ internal sealed partial class ExpressionBinder
             // is a real generic instantiation with the same token shape — so
             // the binder decides it, and only where the generic reading has
             // already failed: the member is not itself callable.
-            if (TryBindIndexedCallableMemberInvocation(ce, memberLoad, arguments, out result))
+            //
+            // The indexed value REPLACES the callable and falls through, so
+            // everything below — named-delegate ref kinds, variadic packing,
+            // optional and named arguments — applies to it unchanged. An
+            // earlier revision converted the arguments here instead, which
+            // implemented only fixed-arity by-value shapes and rejected
+            // `b.Named[k](",", "a", "b", "c")` against a variadic named
+            // delegate.
+            if (!TryBindAmbiguousBracketAsIndex(ce, memberLoad, out var indexedValue)
+                || indexedValue.Type is not { } indexedType
+                || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexedType, out functionType))
             {
-                return true;
+                return false;
             }
 
-            return false;
+            memberLoad = indexedValue;
+            callableType = indexedType;
         }
 
         if (callableType is DelegateTypeSymbol namedDelegate)
@@ -839,8 +850,42 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        return TypeMemberModel.TryGetPropertyWithOwner(receiverType, memberName, out var property, out _)
-            && property is { HasGetter: true };
+        if (TypeMemberModel.TryGetPropertyWithOwner(receiverType, memberName, out var property, out _)
+            && property is { HasGetter: true })
+        {
+            return true;
+        }
+
+        // Issue #3880: the parser ambiguity this recovery exists for is
+        // receiver-AGNOSTIC — `x.Callbacks[key]()` reads identically whether
+        // `Callbacks` is declared in this compilation or comes from a
+        // referenced assembly. Recognising only source members would make the
+        // feature work or not purely by where the receiver was declared, which
+        // is not something a user can reason about from the call site. So the
+        // imported CLR field/property shapes are recognised on the same terms
+        // TryBindClrDelegateMemberInvocation uses: a readable non-indexer
+        // property first, then a field.
+        if (receiverType.ClrType is { } receiverClrType)
+        {
+            var clrProperty = ClrTypeUtilities.SafeGetProperty(
+                receiverClrType,
+                memberName,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+            if (clrProperty is { CanRead: true } && clrProperty.GetIndexParameters().Length == 0)
+            {
+                return true;
+            }
+
+            if (ClrTypeUtilities.SafeGetField(
+                    receiverClrType,
+                    memberName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static) != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -859,13 +904,12 @@ internal sealed partial class ExpressionBinder
     /// reports the generic-reading diagnostic the caller would have produced.
     /// </para>
     /// </summary>
-    private bool TryBindIndexedCallableMemberInvocation(
+    private bool TryBindAmbiguousBracketAsIndex(
         CallExpressionSyntax ce,
         BoundExpression memberLoad,
-        ImmutableArray<BoundExpression> arguments,
-        [NotNullWhen(true)] out BoundExpression? result)
+        [NotNullWhen(true)] out BoundExpression? indexed)
     {
-        result = null;
+        indexed = null;
 
         if (ce.NullableQuestionToken != null
             || !IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList)
@@ -876,47 +920,20 @@ internal sealed partial class ExpressionBinder
         }
 
         var mark = Diagnostics.Count;
-        var indexed = BindIndexAgainstTarget(
+        var bound = BindIndexAgainstTarget(
             memberLoad,
             new NameExpressionSyntax(ce.SyntaxTree, indexIdentifier),
             ce.Identifier.Location);
 
-        if (indexed is BoundErrorExpression
+        if (bound is BoundErrorExpression
             || Diagnostics.Count != mark
-            || indexed.Type == null
-            || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexed.Type, out var indexedFunctionType)
-            || indexedFunctionType.ParameterTypes.Length != arguments.Length)
+            || bound.Type == null)
         {
             Diagnostics.TruncateTo(mark);
             return false;
         }
 
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
-        for (var i = 0; i < arguments.Length; i++)
-        {
-            var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
-            var argument = arguments[i];
-            if (argument is BoundErrorExpression { Syntax: LambdaExpressionSyntax lambda }
-                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(indexedFunctionType.ParameterTypes[i], out var lambdaTarget))
-            {
-                argument = lambdas.BindLambdaExpression(lambda, lambdaTarget);
-            }
-
-            convertedArgs.Add(conversions.BindConversion(argLoc, argument, indexedFunctionType.ParameterTypes[i]));
-        }
-
-        if (Diagnostics.Count != mark)
-        {
-            Diagnostics.TruncateTo(mark);
-            return false;
-        }
-
-        result = BuildDelegateMemberInvocation(
-            ce,
-            indexed,
-            indexed.Type,
-            indexedFunctionType,
-            convertedArgs.MoveToImmutable());
+        indexed = bound;
         return true;
     }
 
@@ -1030,7 +1047,7 @@ internal sealed partial class ExpressionBinder
             System.Reflection.FieldInfo f => f.FieldType,
             _ => null,
         };
-        if (memberClrType == null || !ClrTypeUtilities.IsDelegateType(memberClrType))
+        if (memberClrType == null)
         {
             return false;
         }
@@ -1044,6 +1061,29 @@ internal sealed partial class ExpressionBinder
 
         BoundExpression delegateLoad = ApplyMemberNarrowing(
             new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol));
+
+        if (!ClrTypeUtilities.IsDelegateType(memberClrType))
+        {
+            // Issue #3880, the imported twin of the source-receiver recovery in
+            // TryBindUserCallableMemberInvocation. `x.Callbacks[key]()` where
+            // `Callbacks` is a CLR field/property of a referenced assembly is
+            // the SAME parser ambiguity; binding it only for source-declared
+            // receivers would make the feature depend on which assembly the
+            // type happened to be compiled into. The indexed value replaces the
+            // delegate load and falls through to the same `Invoke` dispatch
+            // below, which already owns named arguments, ref/in/out and
+            // variadic packing.
+            if (!TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue)
+                || indexedValue.Type?.ClrType is not { } indexedClrType
+                || !ClrTypeUtilities.IsDelegateType(indexedClrType))
+            {
+                return false;
+            }
+
+            delegateLoad = indexedValue;
+            memberClrType = indexedClrType;
+        }
+
         var effectiveMemberType = delegateLoad.Type;
 
         if (ce.NullableQuestionToken == null
