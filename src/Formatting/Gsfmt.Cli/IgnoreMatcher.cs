@@ -12,11 +12,11 @@ namespace GSharp.Gsfmt;
 
 internal static class IgnoreMatcher
 {
-    public static bool IsIgnored(string path)
+    public static bool IsIgnored(string path, string searchRoot)
     {
         string fullPath = Path.GetFullPath(path);
         if (fullPath.EndsWith(".g.gs", StringComparison.OrdinalIgnoreCase)
-            || HasExcludedDirectory(fullPath))
+            || HasExcludedDirectory(Path.GetRelativePath(Path.GetFullPath(searchRoot), fullPath)))
         {
             return true;
         }
@@ -70,9 +70,12 @@ internal static class IgnoreMatcher
         return ignored;
     }
 
-    private static bool HasExcludedDirectory(string fullPath)
+    private static bool HasExcludedDirectory(string relativePath)
     {
-        string[] segments = fullPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        // Relative to the search root: a checkout that itself lives under a
+        // directory called `out` must not have every file ignored, which would
+        // turn `--check` into a silent pass.
+        string[] segments = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         foreach (string segment in segments)
         {
             if (segment is "bin" or "obj" or "out")

@@ -102,6 +102,54 @@ public sealed class GSharpFormatterTests
     }
 
     [Fact]
+    public void Format_PreservesImportOrderWhenACommentSitsInTheImportBlock()
+    {
+        const string input =
+            "package Demo\n"
+            + "import b.x\n"
+            + "import a.y // only for y\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("import a.y // only for y", formatted, StringComparison.Ordinal);
+        Assert.True(
+            formatted.IndexOf("import b.x", StringComparison.Ordinal)
+                < formatted.IndexOf("import a.y", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Format_PreservesImportOrderWhenACommentIntroducesTheImportBlock()
+    {
+        const string input =
+            "package Demo\n"
+            + "\n"
+            + "// only for x\n"
+            + "import b.x\n"
+            + "import a.y\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+        Assert.True(
+            formatted.IndexOf("import b.x", StringComparison.Ordinal)
+                < formatted.IndexOf("import a.y", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Format_KeepsBlockCommentsInline()
+    {
+        const string input = "func main() {\nlet a = /* why */ 1\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("let a = /* why */ 1", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Format_DoesNotSplitPayloadEnumDeclarationHead()
     {
         const string input = "enum Shape { Circle(r float64); Square(s float64); Empty }\n";

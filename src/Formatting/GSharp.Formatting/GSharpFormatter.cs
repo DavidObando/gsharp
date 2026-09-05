@@ -19,6 +19,8 @@ public static class GSharpFormatter
 {
     private const int MaxLineWidth = 120;
 
+    private const long MaxDiffTraceEntries = 8_000_000;
+
     private enum DiffKind
     {
         Equal,
@@ -152,6 +154,20 @@ public static class GSharpFormatter
             }
         }
 
+        // A comment is not part of an import's span, so one at either end of
+        // the block would stay put while the lines move, re-attaching it to
+        // another import. The round-trip check compares comments as an
+        // unordered set and cannot see that, so refuse to sort instead.
+        int firstLine = Math.Max(0, original.GetLineIndex(imports[0].Span.Start) - 1);
+        int lastLine = original.GetLineIndex(imports[^1].Span.End);
+        if (SyntaxTree.ParseTokens(original).Any(token =>
+            token.Kind is SyntaxKind.CommentToken or SyntaxKind.DocumentationCommentToken
+            && original.GetLineIndex(token.Span.Start) >= firstLine
+            && original.GetLineIndex(token.Span.Start) <= lastLine))
+        {
+            return original;
+        }
+
         string[] lines = imports
             .Select(import => source.Substring(import.Span.Start, import.Span.Length).Trim())
             .OrderBy(line => line, StringComparer.Ordinal)
@@ -231,10 +247,15 @@ public static class GSharpFormatter
     {
         string[] originalLines = SplitLines(original);
         string[] formattedLines = SplitLines(formatted);
-        List<DiffOperation> operations = DiffLines(
+        List<DiffOperation>? operations = DiffLines(
             originalLines,
             formattedLines,
             compareLineContentOnly);
+        if (operations is null)
+        {
+            return ImmutableArray.Create(new TextEdit(new TextSpan(0, original.Length), formatted));
+        }
+
         int[] offsets = new int[originalLines.Length + 1];
         for (int i = 0; i < originalLines.Length; i++)
         {
@@ -381,7 +402,9 @@ public static class GSharpFormatter
         int start = 0;
         for (int i = 0; i < text.Length; i++)
         {
-            if (text[i] != '\n')
+            // `SourceText` treats a lone CR as a line break, so this must too:
+            // the line starts it produces are matched against these offsets.
+            if (text[i] != '\n' && !(text[i] == '\r' && (i + 1 >= text.Length || text[i + 1] != '\n')))
             {
                 continue;
             }
@@ -398,7 +421,7 @@ public static class GSharpFormatter
         return lines.ToArray();
     }
 
-    private static List<DiffOperation> DiffLines(
+    private static List<DiffOperation>? DiffLines(
         string[] original,
         string[] formatted,
         bool compareLineContentOnly)
@@ -412,6 +435,15 @@ public static class GSharpFormatter
 
         for (; distance <= maximum; distance++)
         {
+            // The trace keeps one frontier per edit-distance step, so a large
+            // file whose every line changes would need O(D * (N + M)) ints.
+            // Give up instead and let the caller fall back to replacing the
+            // whole document.
+            if ((long)trace.Count * frontier.Length > MaxDiffTraceEntries)
+            {
+                return null;
+            }
+
             trace.Add((int[])frontier.Clone());
             for (int diagonal = -distance; diagonal <= distance; diagonal += 2)
             {

@@ -67,9 +67,14 @@ public static class SyntaxFacts
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
 
-        return left.Kind is SyntaxKind.CommentToken
-            or SyntaxKind.DocumentationCommentToken
-            or SyntaxKind.SemicolonToken;
+        // A `//` comment runs to the end of its line, so the next token is
+        // necessarily on a new one. A `/* */` comment does not: it can sit
+        // mid-expression, where a break would cross a newline-sensitive
+        // boundary and change the program.
+        return left.Kind == SyntaxKind.DocumentationCommentToken
+            || left.Kind == SyntaxKind.SemicolonToken
+            || (left.Kind == SyntaxKind.CommentToken
+                && left.Text.StartsWith("//", StringComparison.Ordinal));
     }
 
     /// <summary>

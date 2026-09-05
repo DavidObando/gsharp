@@ -167,7 +167,7 @@ internal static class Program
             if (File.Exists(fullPath))
             {
                 if (fullPath.EndsWith(".gs", StringComparison.OrdinalIgnoreCase)
-                    && !IgnoreMatcher.IsIgnored(fullPath))
+                    && !IgnoreMatcher.IsIgnored(fullPath, Path.GetDirectoryName(fullPath) ?? fullPath))
                 {
                     files.Add(fullPath);
                 }
@@ -196,7 +196,7 @@ internal static class Program
 
                 foreach (string file in Directory.EnumerateFiles(directory, "*.gs"))
                 {
-                    if (!IgnoreMatcher.IsIgnored(file))
+                    if (!IgnoreMatcher.IsIgnored(file, fullPath))
                     {
                         files.Add(Path.GetFullPath(file));
                     }

@@ -6,7 +6,7 @@ draft: false
 
 # Canonical formatting (`gsfmt`)
 
-`gsfmt` is G#'s canonical formatter. It has no layout options: every source file uses 4-space indentation, K&R braces, a fixed 120-column width, no trailing whitespace, and exactly one final LF newline. Imports are sorted, duplicate blank lines collapse, comments retain their text and line structure, and formatting is rejected if the parsed program or comment set changes.
+`gsfmt` is G#'s canonical formatter. It has no layout options: every source file uses 4-space indentation, K&R braces, a fixed 120-column width, no trailing whitespace, and exactly one final LF newline. Imports are sorted unless a comment or a duplicate local name makes reordering unsafe, duplicate blank lines collapse, comments retain their text and line structure, and formatting is rejected if the parsed program or comment set changes.
 
 ## Install
 
@@ -29,7 +29,7 @@ gsfmt [flags] [path ...]
 
 Paths default to the current directory and directories recurse through `.gs` files. With redirected standard input and no paths, `gsfmt` reads stdin and writes the result to stdout. Parse or I/O errors exit 2; `--check` exits 1 only for unformatted input.
 
-`bin/`, `obj/`, `out/`, and `*.g.gs` are always excluded. A `.gsfmtignore` file uses gitignore-style patterns, with the nearest ancestor rules taking precedence.
+`bin/`, `obj/`, and `out/` directories below a formatted path, and `*.g.gs` files, are always excluded. A `.gsfmtignore` file uses gitignore-style patterns, with the nearest ancestor rules taking precedence.
 
 ## Build and editor integration
 

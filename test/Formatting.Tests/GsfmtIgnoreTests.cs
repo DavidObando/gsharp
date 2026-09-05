@@ -26,9 +26,30 @@ public sealed class GsfmtIgnoreTests
 
         try
         {
-            Assert.True(IgnoreMatcher.IsIgnored(ignored));
-            Assert.False(IgnoreMatcher.IsIgnored(included));
-            Assert.True(IgnoreMatcher.IsIgnored(generated));
+            Assert.True(IgnoreMatcher.IsIgnored(ignored, root));
+            Assert.False(IgnoreMatcher.IsIgnored(included, root));
+            Assert.True(IgnoreMatcher.IsIgnored(generated, root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IsIgnored_ExcludesBuildOutputOnlyBelowTheSearchRoot()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "out", "gsfmt-ignore-" + Guid.NewGuid().ToString("N"));
+        string source = Path.Combine(root, "Source.gs");
+        string output = Path.Combine(root, "obj", "Generated.gs");
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        File.WriteAllText(source, string.Empty);
+        File.WriteAllText(output, string.Empty);
+
+        try
+        {
+            Assert.False(IgnoreMatcher.IsIgnored(source, root));
+            Assert.True(IgnoreMatcher.IsIgnored(output, root));
         }
         finally
         {
