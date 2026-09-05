@@ -462,6 +462,23 @@ internal sealed partial class OverloadResolver
                 ? variadicElement
                 : null;
 
+            // Issue #3880: the EXPANDED-form element type needs closing for the
+            // same reason #3964 closed the carrier one line further down.
+            // Ranking `Elem[T](values ...T)` against `Elem(values ...object)`
+            // for `Elem("a", "b")` compared `string` to the OPEN `T` (which
+            // erases to object) and to `object`, landed both candidates on the
+            // same conversion kind, and let the later non-generic-over-generic
+            // tie-break hand the call to the `object` overload — where C#
+            // infers `T = string`, sees an identity, and picks the generic one.
+            // Closing the element type is enough on its own: the per-argument
+            // kind comparison in CompareUserConversions runs before ParamTypes
+            // is ever consulted, so an expanded tail slot can misrank without
+            // the reference "better conversion target" tie-break participating.
+            if (elementType != null && candSubstitution != null)
+            {
+                elementType = Binder.SubstituteType(elementType, candSubstitution);
+            }
+
             // Issue #3880: a single trailing argument that already IS the
             // variadic carrier (`F(existingArray)` against `F(xs ...string)`)
             // binds the candidate in NORMAL form, not expanded form — the same
