@@ -2348,6 +2348,14 @@ internal sealed partial class ExpressionBinder
         IReadOnlyList<Type> delegateParameterTypes,
         Func<TypeSymbol, Type?> projectType)
     {
+        if (delegateParameterTypes.Any(type => type.ContainsGenericParameters))
+        {
+            return ResolveSingleMethodGroupInferenceSignature(
+                argument,
+                delegateParameterTypes.Count,
+                projectType);
+        }
+
         if (argument is BoundClrMethodGroupExpression clrGroup)
         {
             var receiver = clrGroup.Receiver;
@@ -2466,6 +2474,94 @@ internal sealed partial class ExpressionBinder
                 !ReferenceEquals(candidate.Method, other.Method)
                 && IsBetterMethodGroupConversion(other.Conversions, candidate.Conversions))).ToList();
         return best.Count == 1 ? best[0].Signature : null;
+    }
+
+    private static (Type[] Parameters, Type Return)? ResolveSingleMethodGroupInferenceSignature(
+        BoundExpression argument,
+        int delegateArity,
+        Func<TypeSymbol, Type?> projectType)
+    {
+        if (argument is BoundClrMethodGroupExpression clrGroup)
+        {
+            MethodInfo? method = null;
+            var parameterOffset = 0;
+            foreach (var possibleMethod in clrGroup.Candidates)
+            {
+                var candidateOffset = clrGroup.Receiver != null && possibleMethod.IsStatic ? 1 : 0;
+                if (possibleMethod.GetParameters().Length - candidateOffset != delegateArity)
+                {
+                    continue;
+                }
+
+                if (method != null)
+                {
+                    return null;
+                }
+
+                method = possibleMethod;
+                parameterOffset = candidateOffset;
+            }
+
+            if (method == null || method.ContainsGenericParameters)
+            {
+                return null;
+            }
+
+            var parameters = method.GetParameters();
+            return (
+                parameters.Skip(parameterOffset).Select(parameter => parameter.ParameterType).ToArray(),
+                method.ReturnType);
+        }
+
+        if (argument is not BoundMethodGroupExpression userGroup)
+        {
+            return null;
+        }
+
+        FunctionSymbol? candidate = null;
+        var userParameterOffset = 0;
+        foreach (var possibleCandidate in userGroup.Candidates)
+        {
+            var candidateOffset = possibleCandidate.IsExtension && userGroup.Receiver != null ? 1 : 0;
+            if (possibleCandidate.Parameters.Length - candidateOffset != delegateArity)
+            {
+                continue;
+            }
+
+            if (candidate != null)
+            {
+                return null;
+            }
+
+            candidate = possibleCandidate;
+            userParameterOffset = candidateOffset;
+        }
+
+        if (candidate == null || candidate.IsGeneric)
+        {
+            return null;
+        }
+
+        var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
+            ? TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
+            : null;
+        var projectedParameters = new Type[delegateArity];
+        for (var i = 0; i < projectedParameters.Length; i++)
+        {
+            var parameter = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + userParameterOffset].Type)
+                ?? candidate.Parameters[i + userParameterOffset].Type;
+            if (projectType(parameter) is not { } projected)
+            {
+                return null;
+            }
+
+            projectedParameters[i] = projected;
+        }
+
+        var returnType = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
+        return projectType(returnType) is { } projectedReturn
+            ? (projectedParameters, projectedReturn)
+            : null;
     }
 
     internal static bool TryCloseMethodGroupCandidate(

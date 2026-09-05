@@ -932,6 +932,41 @@ public class ImportedMemberMatrixTests
     }
 
     [Fact]
+    public void ImportedGenericFunction_InfersTypeFromSingleCandidateMethodGroupParameters()
+    {
+        const string csSource = """
+            using System;
+
+            namespace ImportedSingleMethodGroupInference.CSharp
+            {
+                public static class Api
+                {
+                    public static void RunOnly<T>(Action<T> action) => action(default!);
+                    public static void Emit(int value) => Console.WriteLine("emit" + value);
+                }
+            }
+            """;
+
+        const string source = """
+            package ImportedSingleMethodGroupInference.Probe
+            import System
+            import ImportedSingleMethodGroupInference.CSharp
+
+            func EmitSource(value int32) { Console.WriteLine("source" + value.ToString()) }
+
+            Api.RunOnly(Api.Emit)
+            Api.RunOnly(EmitSource)
+            """;
+
+        Assert.Equal(
+            $"emit0{Environment.NewLine}source0{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                csSource,
+                source,
+                "ImportedSingleMethodGroupInference.CSharp"));
+    }
+
+    [Fact]
     public void SourceAndImportedMethodGroups_RefKindMismatchesStayDiagnosed()
     {
         const string sourceDefined = """

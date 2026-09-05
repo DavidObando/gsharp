@@ -1533,18 +1533,25 @@ internal static class ClrOverloadResolution
         }
 
         var closedInputs = new Type[delegateParameters.Length];
+        var inputsClosed = true;
         for (var i = 0; i < delegateParameters.Length; i++)
         {
             if (!TryCloseInferredType(delegateParameters[i], bounds, out var closedInput)
                 || closedInput is null)
             {
-                return false;
+                inputsClosed = false;
+                break;
             }
 
             closedInputs[i] = closedInput;
         }
 
-        var signature = methodGroupInference(argumentIndex, closedInputs);
+        // Issue #3766: an open delegate input cannot drive overload
+        // resolution, but a single arity-matching candidate is unambiguous and
+        // can supply the missing input bounds.
+        var signature = methodGroupInference(
+            argumentIndex,
+            inputsClosed ? closedInputs : delegateParameters);
         if (!signature.HasValue
             || signature.Value.Parameters.Length != delegateParameters.Length
             || signature.Value.Return is null)
