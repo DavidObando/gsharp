@@ -3152,7 +3152,8 @@ public sealed class Conversion
             return false;
         }
 
-        if (!IsCrossContextIdenticalElement(fromElement, toElement))
+        if (!IsCrossContextIdenticalElement(fromElement, toElement)
+            && !AreSameRuntimeChannelElement(fromElement, toElement))
         {
             return false;
         }
@@ -3179,6 +3180,52 @@ public sealed class Conversion
         conversion = Conversion.None;
         return true;
     }
+
+    // Issue #3924: the element of a channel recovered from CLR metadata — the
+    // constructed `Chan<T>` that `chan[T](n)` builds, or a foreign
+    // `Channel<T>`/`ChannelReader<T>`/`ChannelWriter<T>` — is whatever
+    // `TypeSymbol.FromClrType` mints for the reflected type argument. For a
+    // structural G# shape that has no CLR counterpart symbol (`[]int32` comes
+    // back as an `ImportedTypeSymbol` over `int32[]`, `map[string,int32]` as
+    // one over `Dictionary<string, int32>`) that is never the
+    // `SliceTypeSymbol`/`MapTypeSymbol` the `chan[T]` type clause bound, so the
+    // element check above — which compares symbol shapes — fails even though
+    // both sides denote one runtime type. `Channel<T>` is invariant, so
+    // sameness of the elements' CLR types is exactly the question the
+    // direction lattice needs answered. Compare the EFFECTIVE CLR type
+    // (`ProjectElement` projects the element the same way): a
+    // `NullableTypeSymbol` borrows its underlying type's `ClrType`, and only
+    // the lifted form keeps `chan[int32?]` distinct from `chan[int32]`.
+    //
+    // One side must BE that metadata-recovered form for this to apply. A CLR
+    // type is coarser than the G# symbol above it — `[3]int32` and `[4]int32`
+    // are both `int32[]`, which is why
+    // `AreRuntimeEquivalentIgnoringReferenceNullability` compares the lengths
+    // instead — so where both sides still carry their symbols (two `chan[T]`
+    // type clauses) that finer answer is the right one and stands unchanged.
+    // The erasure is only unavoidable once an element has been through
+    // reflection: `chan[[3]int32](1)` and `chan[[4]int32](1)` construct the
+    // same `Chan<int32[]>`, and no comparison downstream of that can tell them
+    // apart.
+    //
+    // "Came back from reflection" means an imported symbol carrying NO
+    // symbolic type arguments, which is precisely what `FromClrType` mints
+    // (`ImportedTypeSymbol.Get`) and what `GetConstructed` — the
+    // source-constructed form — does not. A source-constructed generic still
+    // holds its arguments as symbols, and its own `ClrType` may have erased
+    // them to close over `object`: `List[Foo]` and `List[Bar]` over two
+    // same-compilation structs are one `List<object>`. Comparing THAT would
+    // conflate elements that are not the same type at all, so a
+    // source-constructed element is left to the symbol comparison above,
+    // which reads the arguments it still has.
+    private static bool AreSameRuntimeChannelElement(TypeSymbol from, TypeSymbol to)
+        => (IsMetadataRecoveredElement(from) || IsMetadataRecoveredElement(to))
+            && ClrTypeUtilities.AreSame(
+                NullableTypeSymbol.GetEffectiveClrType(from),
+                NullableTypeSymbol.GetEffectiveClrType(to));
+
+    private static bool IsMetadataRecoveredElement(TypeSymbol type)
+        => type is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: true };
 
     // Issue #2299: element-level identity check used by
     // `TryClassifyWrappedElementIdentity`. Reference-equal elements are
