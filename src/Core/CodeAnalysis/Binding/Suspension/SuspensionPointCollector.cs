@@ -87,11 +87,18 @@ internal sealed class SuspensionPointCollector : BoundTreeWalker
     /// <inheritdoc/>
     protected override void VisitImportedCallExpression(BoundImportedCallExpression node)
     {
-        if (goDepth == 0 && lockDepth == 0
-            && (ChannelRuntimeBinder.IsFacadeCall(node, "Receive")
+        var isFacadeOperation =
+            (ChannelRuntimeBinder.IsFacadeCall(node, "Receive")
                 || ChannelRuntimeBinder.IsFacadeCall(node, "Receive2")
-                || ChannelRuntimeBinder.IsFacadeCall(node, "Send")
-                || LockRegions.IsBlockingBridge(node)))
+                || ChannelRuntimeBinder.IsFacadeCall(node, "Send"))
+
+            // A facade call the AUTHOR wrote with its own token is an ordinary
+            // blocking library call, not a lowered channel operator: the
+            // suspension pass has nothing to retarget on it, so coloring the
+            // caller would change its ABI for no gain (ADR-0174 D4/D7).
+            && !ChannelRuntimeBinder.HasAuthorWrittenCancellation(node);
+
+        if (goDepth == 0 && lockDepth == 0 && (isFacadeOperation || LockRegions.IsBlockingBridge(node)))
         {
             facts.HasDirectPoint = true;
         }

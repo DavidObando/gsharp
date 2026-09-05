@@ -671,6 +671,36 @@ internal sealed class ChannelRuntimeBinder
             && call.Function.ImportedClass.ClassType.FullName == ChannelOpsTypeName;
 
     /// <summary>
+    /// ADR-0174 D4/D7: distinguishes a facade call the BINDER lowered from a
+    /// channel operator (<c>&lt;-ch</c>, <c>ch &lt;- v</c>, a channel
+    /// <c>range</c>, a <c>select</c> arm) from one the AUTHOR wrote by name.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every lowered operation is bound with a cancellation the binder
+    /// itself supplied — the uncancellable default token when no lexical scope
+    /// encloses it, or that scope's <c>Context</c> when one does — precisely so
+    /// the suspension pass can later park it on the ambient context via
+    /// <see cref="RetargetFacadeCancellation"/>. A call written out as
+    /// <c>ChannelOps.Receive2(ch, token)</c> has already chosen its
+    /// cancellation, so there is nothing for that pass to retarget: it is an
+    /// ordinary blocking call to a public library method.</para>
+    /// <para>That distinction is load-bearing for the COLORING. Marking the
+    /// caller suspending prepends a hidden <c>Context</c> parameter and retypes
+    /// the return as <c>ValueTask</c> — an ABI change — which is the point for a
+    /// channel operator but is pure cost for a written facade call, whose body
+    /// the pass leaves untouched. It also breaks callers that reflect over the
+    /// signature: an xUnit <c>[Fact]</c> that drains a channel through the
+    /// facade is rejected at discovery as "not allowed to have parameters"
+    /// (#3501, migrated <c>test/Extensions.Tests</c>).</para>
+    /// </remarks>
+    /// <param name="call">A facade call, already matched by <see cref="IsFacadeCall"/>.</param>
+    /// <returns><see langword="true"/> when the trailing cancellation argument was written by the author rather than supplied by the binder.</returns>
+    public static bool HasAuthorWrittenCancellation(BoundImportedCallExpression call)
+        => call.Arguments.Length != 0
+            && call.Arguments[^1] is not BoundDefaultExpression
+            && call.Arguments[^1].Type?.ClrType?.FullName == CancellationTokenTypeName;
+
+    /// <summary>
     /// ADR-0174 D7: rebinds a facade call that was bound with the
     /// uncancellable default token so it parks on <paramref name="context"/>
     /// instead. Used by the suspension pass for operations that no lexical
