@@ -3054,13 +3054,34 @@ public sealed partial class CSharpToGSharpTranslator
                         this.context.GetDeclaredSymbol(forEach),
                         forEach.Identifier.ValueText);
                     BlockStatement loopBody = this.TranslateStatementAsBlock(forEach.Statement);
+
+                    // Issue #3935: an IDENTITY element conversion means the
+                    // declared type IS the sequence's element type, so a typed
+                    // range clause (#3925) adds no information — and it actively
+                    // LOSES information, because the type comes from the loop's
+                    // type SYNTAX and so never passes through the oblivious
+                    // null-taint promotion every other declaration sink uses.
+                    // `foreach ((string Path, byte[] Original) t in props)` then
+                    // re-spelled an element the analysis had promoted to
+                    // `([]uint8)?` everywhere else as a bare `[]uint8`, and the
+                    // live `t.Original == null` guard folded into GS0523. Omitting
+                    // the redundant annotation lets G# infer the promoted element
+                    // type. A real element conversion still emits its type, which
+                    // is what #3925 replaced `__foreachN` synthesis with.
                     GTypeReference loopVariableType = null;
-                    if (!forEach.Type.IsVar)
+                    if (!forEach.Type.IsVar
+                        && !this.context.SemanticModel
+                            .GetForEachStatementInfo(forEach)
+                            .ElementConversion
+                            .IsIdentity)
                     {
                         ITypeSymbol targetSymbol = this.context.GetTypeInfo(forEach.Type).Type;
                         loopVariableType = targetSymbol != null
                             ? this.typeMapper.Map(targetSymbol, this.context, forEach.Type.GetLocation())
                             : new NamedTypeReference(forEach.Type.ToString());
+                        loopVariableType = this.PromoteIfUsedAsNullable(
+                            loopVariableType,
+                            this.context.GetDeclaredSymbol(forEach));
                     }
 
                     return new[]
