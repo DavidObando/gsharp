@@ -247,6 +247,14 @@ internal static class RoslynAnalyzerApiMap
     /// </summary>
     private static readonly Dictionary<string, string[]> OperationKindDispatch = new(StringComparer.Ordinal)
     {
+        // KNOWN LIMITATION, unchanged by #3920 and not fixable here: a
+        // non-lifted same-compilation user-defined operator binds to
+        // BoundCallExpression (ExpressionBinder.Operators.cs), so it reaches an
+        // Invocation registration rather than a BinaryOperator one — as it
+        // already did before this map became one-to-many. Adding CallExpression
+        // to this row would not fix it and would send every ordinary call to
+        // the binary handler; separating the two needs the bound tree to record
+        // that a call came from operator syntax.
         ["BinaryOperator"] = new[] { "BinaryExpression", "ClrBinaryOperatorExpression" },
         ["Invocation"] = new[] { "CallExpression", "ImportedCallExpression", "ImportedInstanceCallExpression" },
     };
@@ -284,7 +292,7 @@ internal static class RoslynAnalyzerApiMap
         [("Microsoft.CodeAnalysis.Operations.IInvocationOperation", "TargetMethod")] = new(
             null,
             "CalledFunction",
-            "BoundCallOperationExpression.CalledFunction is Symbol-typed: an imported callee is an ImportedFunctionSymbol, not a FunctionSymbol (#3920)."),
+            "BoundCallOperationExpression.CalledFunction is CallableSymbol-typed: an imported callee is an ImportedFunctionSymbol and a same-compilation one a FunctionSymbol, and the shared base carries ReturnType (as Type) and OverriddenMethod (#3920)."),
         [("Microsoft.CodeAnalysis.IMethodSymbol", "OverriddenMethod")] = new(null, "OverriddenMethod"),
         [("Microsoft.CodeAnalysis.IMethodSymbol", "ReturnType")] = new(null, "Type"),
         [("Microsoft.CodeAnalysis.IParameterSymbol", "IsOptional")] = new(null, "HasExplicitDefaultValue"),

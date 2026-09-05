@@ -11,7 +11,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <summary>
 /// Represents an imported function symbol in the language.
 /// </summary>
-public sealed class ImportedFunctionSymbol : Symbol
+public sealed class ImportedFunctionSymbol : CallableSymbol
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ImportedFunctionSymbol"/> class.
@@ -63,7 +63,7 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// <summary>
     /// Gets the imported function type.
     /// </summary>
-    public TypeSymbol Type { get; }
+    public override TypeSymbol Type { get; }
 
     /// <summary>
     /// Gets a value indicating whether the method carries

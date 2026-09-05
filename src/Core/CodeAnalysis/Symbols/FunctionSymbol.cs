@@ -25,7 +25,7 @@ internal enum NullableSequenceSpecializationKind
 /// <summary>
 /// Represents a function symbol in the language.
 /// </summary>
-public sealed class FunctionSymbol : Symbol
+public sealed class FunctionSymbol : CallableSymbol
 {
     /// <summary>The unspeakable name of the hidden <c>Context</c> parameter (ADR-0174 D7).</summary>
     public const string HiddenContextParameterName = "<>ctx";
@@ -201,7 +201,7 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>
     /// Gets the type of the function.
     /// </summary>
-    public TypeSymbol Type { get; }
+    public override TypeSymbol Type { get; }
 
     /// <summary>
     /// Gets the declaration of the function.
@@ -261,7 +261,7 @@ public sealed class FunctionSymbol : Symbol
     public bool IsAbstract { get; set; }
 
     /// <summary>Gets or sets the base method this method overrides. Set by the binder when <see cref="IsOverride"/> is true and a matching open base method is found; <c>null</c> otherwise.</summary>
-    public FunctionSymbol? OverriddenMethod { get; set; }
+    public override FunctionSymbol? OverriddenMethod { get; set; }
 
     /// <summary>
     /// Gets or sets the imported CLR virtual method this method overrides.

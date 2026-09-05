@@ -60,7 +60,7 @@ public sealed class BoundCallExpression : BoundCallOperationExpression
     public override BoundNodeKind Kind => BoundNodeKind.CallExpression;
 
     /// <inheritdoc/>
-    public override Symbol CalledFunction => Function;
+    public override CallableSymbol CalledFunction => Function;
 
     /// <inheritdoc/>
     public override TypeSymbol Type => ReturnType ?? Function.Type;
