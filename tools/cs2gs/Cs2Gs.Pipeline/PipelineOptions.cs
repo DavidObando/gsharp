@@ -102,8 +102,8 @@ public sealed class PipelineOptions
 
     /// <summary>
     /// Gets or sets a value indicating whether emitted G# is passed through
-    /// the ADR-0179 canonical formatter. Enabled by default; formatter
-    /// failures preserve the printer output and produce a triage artifact.
+    /// the ADR-0179 canonical formatter. Disabled by default during phase 7a;
+    /// formatter failures preserve the printer output and produce a triage artifact.
     /// </summary>
     public bool FormatOutput { get; set; }
 

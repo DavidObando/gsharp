@@ -10,15 +10,15 @@ package GSharp.Samples.ChannelOwnership
 
 import System
 
-func fill(ch out chan [int32], count int32) {
+func fill(ch out chan[int32], count int32) {
     for i in 1 ... count + 1 {
         ch <- i * i
     }
     ch.Close()
 }
 
-func squares(count int32) in chan [int32] {
-    let ch = chan [int32](2)
+func squares(count int32) in chan[int32] {
+    let ch = chan[int32](2)
     go fill(ch, count)
     return ch
 }

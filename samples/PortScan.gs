@@ -17,7 +17,7 @@ package GSharp.Samples.PortScan
 import System
 import System.Threading
 
-func scan(port int32, results chan [int32]) {
+func scan(port int32, results chan[int32]) {
     Thread.Sleep(5)
     if port % 2 == 0 {
         results <- port
@@ -26,7 +26,7 @@ func scan(port int32, results chan [int32]) {
     }
 }
 
-let results = chan [int32](4)
+let results = chan[int32](4)
 scope {
     go scan(80, results)
     go scan(81, results)
@@ -55,8 +55,8 @@ Console.WriteLine("open ports: $opened")
 // "timeout" channel pre-loaded with a sentinel. Only one arm is ever ready, so
 // the choice is deterministic without depending on the order the arms are
 // written — see Timeout.gs for the same shape written with `after(d)`.
-let slow = chan [int32](1)
-let timeoutCh = chan [int32](1)
+let slow = chan[int32](1)
+let timeoutCh = chan[int32](1)
 timeoutCh <- 1
 select {
     case let v = <- slow {

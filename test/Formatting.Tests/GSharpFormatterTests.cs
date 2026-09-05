@@ -68,6 +68,51 @@ public sealed class GSharpFormatterTests
     }
 
     [Fact]
+    public void Format_KeepsMagicTypesAndConditionalIndexAdjacent()
+    {
+        const string input =
+            "func use(ch chan[int32], values map[string,int32], items sequence[int32], xs []int32){\n"
+            + "let first=xs?[0]\n"
+            + "}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("chan[int32]", result.Text!.ToString(), StringComparison.Ordinal);
+        Assert.Contains("map[string, int32]", result.Text!.ToString(), StringComparison.Ordinal);
+        Assert.Contains("sequence[int32]", result.Text!.ToString(), StringComparison.Ordinal);
+        Assert.Contains("xs?[0]", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_PreservesImportOrderWhenLocalNamesCollide()
+    {
+        const string input =
+            "package Demo\n"
+            + "import X = System.Math\n"
+            + "import X = System.Console\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+        Assert.True(
+            formatted.IndexOf("System.Math", StringComparison.Ordinal)
+                < formatted.IndexOf("System.Console", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Format_DoesNotSplitPayloadEnumDeclarationHead()
+    {
+        const string input = "enum Shape { Circle(r float64); Square(s float64); Empty }\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.StartsWith("enum Shape {", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Format_PreservesNewlineSensitiveReturn()
     {
         const string input = "func value() int32 {\nreturn\n42\n}\n";
@@ -124,6 +169,21 @@ public sealed class GSharpFormatterTests
         Assert.Equal(applied, result.Text!.ToString());
         Assert.StartsWith("func first(){\nreturn 1\n}\n", applied, StringComparison.Ordinal);
         Assert.Contains("func second() {\n    return 2\n}", applied, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FormatRange_DoesNotCoalesceAnAdjacentLineOutsideTheRange()
+    {
+        const string input = "func run() {\nvar x = 1\nvar y = 2\n}\n";
+        int start = input.IndexOf("var x", StringComparison.Ordinal);
+
+        FormatResult result = GSharpFormatter.Format(
+            SourceText.From(input),
+            new TextSpan(start, "var x = 1".Length));
+        string applied = ApplyEdits(input, result.Edits);
+
+        Assert.Contains("\n    var x = 1\n", applied, StringComparison.Ordinal);
+        Assert.Contains("\nvar y = 2\n", applied, StringComparison.Ordinal);
     }
 
     [Fact]

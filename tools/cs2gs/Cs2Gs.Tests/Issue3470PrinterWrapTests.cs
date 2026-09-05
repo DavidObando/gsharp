@@ -17,9 +17,10 @@ using Xunit;
 
 namespace Cs2Gs.Tests
 {
-    // Issue #3470 / ADR-0179: the printer emits syntax without owning layout;
-    // the canonical formatter wraps boolean chains, argument lists, and member
-    // chains once the one-line form exceeds the shared width.
+    // Issue #3470 / ADR-0179 phase 7a: the printer retains its proven wrapping
+    // until the canonical formatter's cs2gs post-pass is ready to become the
+    // phase 7b default. These tests run both layers so either path regressing
+    // long-expression layout is caught.
     public sealed class Issue3470PrinterWrapTests
     {
         [Fact]

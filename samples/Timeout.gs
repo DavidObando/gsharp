@@ -14,7 +14,7 @@ package GSharp.Samples.Timeout
 import Gsharp.Concurrency
 import System
 
-let quiet = chan [int32](1)
+let quiet = chan[int32](1)
 
 scope {
     select {

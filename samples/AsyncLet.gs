@@ -14,13 +14,13 @@ package GSharp.Samples.AsyncLet
 import System
 
 func fetchUser(id int32) string {
-    let ch = chan [string](1)
+    let ch = chan[string](1)
     ch <- "user-" + id.ToString()
     return <-ch
 }
 
 func fetchOrders(id int32) int32 {
-    let ch = chan [int32](1)
+    let ch = chan[int32](1)
     ch <- id * 3
     return <-ch
 }

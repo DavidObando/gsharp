@@ -68,7 +68,7 @@ public func tick(period TimeSpan) TickTimer {
 /// ```
 /// @param inputs The channels to drain.
 /// @returns A receive-only channel carrying every input's values.
-public func merge[T](inputs ...chan [T]) in chan [T] {
+public func merge[T](inputs ...chan[T]) in chan[T] {
     let merged = Chan.Unbounded[T]()
     go mergeInto[T](merged, inputs)
     return merged
@@ -78,7 +78,7 @@ public func merge[T](inputs ...chan [T]) in chan [T] {
 // once every forwarder has finished — including when one of them fails, in
 // which case the scope's exception reaches the free-goroutine hook rather than
 // leaving the consumer waiting on a channel nobody will close.
-func mergeInto[T](merged chan [T], inputs[] chan [T]) {
+func mergeInto[T](merged chan[T], inputs[] chan[T]) {
     try {
         scope {
             for input in inputs {
@@ -90,7 +90,7 @@ func mergeInto[T](merged chan [T], inputs[] chan [T]) {
     }
 }
 
-func forwardInto[T](input in chan [T], merged out chan [T]) {
+func forwardInto[T](input in chan[T], merged out chan[T]) {
     for value in input {
         merged <- value
     }
@@ -115,6 +115,6 @@ func forwardInto[T](input in chan [T], merged out chan [T]) {
 /// @param source The channel to read.
 /// @param size The maximum number of elements per batch.
 /// @returns A receive-only channel of batches.
-public func chunks[T](source chan [T], size int32) in chan [ReadOnlyMemory[T]] {
+public func chunks[T](source chan[T], size int32) in chan[ReadOnlyMemory[T]] {
     return Chunks.Of[T](source, size)
 }

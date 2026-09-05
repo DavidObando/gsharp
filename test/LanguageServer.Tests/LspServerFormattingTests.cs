@@ -73,7 +73,8 @@ public class LspServerFormattingTests
     [Fact]
     public async Task RangeFormattingAsync_FormatsIntersectingSource()
     {
-        var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\nvar y = 2\n}\n");
+        const string source = "func foo() {\nvar x = 1\nvar y = 2\n}\n";
+        var (server, uri, gsPath) = await OpenDocumentAsync(source);
         try
         {
             var edits = await server.RangeFormattingAsync(new DocumentRangeFormattingParams
@@ -87,7 +88,9 @@ public class LspServerFormattingTests
                 Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
             });
 
-            Assert.NotEmpty(edits);
+            string formatted = ApplyEdits(source, edits);
+            Assert.Contains("\n    var x = 1\n", formatted);
+            Assert.Contains("\nvar y = 2\n", formatted);
         }
         finally
         {

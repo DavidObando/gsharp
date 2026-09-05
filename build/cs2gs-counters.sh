@@ -96,7 +96,7 @@ cs2gs_raw_lines() {
 
 # Prints "<reducible> <single-atom-bounded> <total>" for lines wider than 300
 # characters. A line is single-atom-bounded when its indentation plus the
-# widest string/dotted-identifier atom already exceeds the budget; no formatter
+# widest string/identifier atom already exceeds the budget; no formatter
 # can shorten that line without changing the token stream (ADR-0179).
 cs2gs_long_line_counts() {
   local tree=$1
@@ -107,7 +107,7 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 string_atom = re.compile(r'"(?:\\.|[^"\\])*"')
-identifier_atom = re.compile(r'\b[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\b')
+identifier_atom = re.compile(r'\b[A-Za-z_$][A-Za-z0-9_$]*\b')
 reducible = atomic = 0
 
 for path in root.rglob("*.gs"):

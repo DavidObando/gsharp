@@ -10,15 +10,15 @@ package GSharp.Samples.WorkerPool
 
 import System
 
-func worker(id int32, jobs in chan [int32], results out chan [int32]) {
+func worker(id int32, jobs in chan[int32], results out chan[int32]) {
     for job in jobs {
         results <- job * job
     }
 }
 
 let jobCount = 20
-let jobs = chan [int32](jobCount)
-let results = chan [int32](jobCount)
+let jobs = chan[int32](jobCount)
+let results = chan[int32](jobCount)
 
 for job in 1 ... jobCount + 1 {
     jobs <- job

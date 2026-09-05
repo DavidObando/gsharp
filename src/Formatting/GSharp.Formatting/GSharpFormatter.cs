@@ -98,7 +98,7 @@ public static class GSharpFormatter
         if (span is TextSpan requested)
         {
             TextSpan requestedLines = ExpandToFullLines(original, requested);
-            edits = edits.Where(edit => Intersects(edit.Span, requestedLines)).ToImmutableArray();
+            edits = RestrictEditsToLines(originalString, edits, requestedLines);
             if (edits.IsEmpty)
             {
                 return new FormatResult(
@@ -129,6 +129,15 @@ public static class GSharpFormatter
 
         ImportSyntax[] imports = tree.Root.Members.OfType<ImportSyntax>().ToArray();
         if (imports.Length < 2)
+        {
+            return original;
+        }
+
+        string[] localNames = imports
+            .Select(import => import.AliasIdentifier?.ValueText
+                ?? (import.Identifiers.Length == 0 ? string.Empty : import.Identifiers[^1].ValueText))
+            .ToArray();
+        if (localNames.GroupBy(name => name, StringComparer.Ordinal).Any(group => group.Count() > 1))
         {
             return original;
         }
@@ -188,8 +197,9 @@ public static class GSharpFormatter
         return ImmutableArray<Diagnostic>.Empty;
     }
 
-    private static IEnumerable<string> SignificantTokens(SourceText text)
+    private static ImmutableArray<string> SignificantTokens(SourceText text)
     {
+        var result = ImmutableArray.CreateBuilder<string>();
         foreach (SyntaxToken token in SyntaxTree.ParseTokens(text))
         {
             if (token.Kind is SyntaxKind.WhitespaceToken
@@ -199,17 +209,20 @@ public static class GSharpFormatter
                 continue;
             }
 
-            yield return ((int)token.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            result.Add(((int)token.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 + "\0"
-                + token.ValueText;
+                + token.ValueText);
         }
+
+        return result.ToImmutable();
     }
 
-    private static IEnumerable<string> Comments(SourceText text) =>
+    private static ImmutableArray<string> Comments(SourceText text) =>
         SyntaxTree.ParseTokens(text)
             .Where(token => token.Kind is SyntaxKind.CommentToken or SyntaxKind.DocumentationCommentToken)
             .Select(token => token.ValueText)
-            .OrderBy(comment => comment, StringComparer.Ordinal);
+            .OrderBy(comment => comment, StringComparer.Ordinal)
+            .ToImmutableArray();
 
     private static ImmutableArray<TextEdit> CreateLineEdits(
         string original,
@@ -286,6 +299,80 @@ public static class GSharpFormatter
         }
 
         return source;
+    }
+
+    private static ImmutableArray<TextEdit> RestrictEditsToLines(
+        string original,
+        ImmutableArray<TextEdit> edits,
+        TextSpan requestedLines)
+    {
+        string[] originalLines = SplitLines(original);
+        int[] offsets = new int[originalLines.Length + 1];
+        for (int i = 0; i < originalLines.Length; i++)
+        {
+            offsets[i + 1] = offsets[i] + originalLines[i].Length;
+        }
+
+        int requestedStart = FindLineBoundary(offsets, requestedLines.Start);
+        int requestedEnd = FindLineBoundary(offsets, requestedLines.End);
+        var result = ImmutableArray.CreateBuilder<TextEdit>();
+        foreach (TextEdit edit in edits)
+        {
+            int editStart = FindLineBoundary(offsets, edit.Span.Start);
+            int editEnd = FindLineBoundary(offsets, edit.Span.End);
+            int deletedLineCount = editEnd - editStart;
+            string[] replacementLines = SplitLines(edit.NewText);
+
+            if (deletedLineCount == 0)
+            {
+                if (editStart >= requestedStart && editStart < requestedEnd)
+                {
+                    result.Add(edit);
+                }
+
+                continue;
+            }
+
+            int selectedStart = Math.Max(editStart, requestedStart);
+            int selectedEnd = Math.Min(editEnd, requestedEnd);
+            if (selectedStart >= selectedEnd)
+            {
+                continue;
+            }
+
+            if (replacementLines.Length == deletedLineCount)
+            {
+                int replacementStart = selectedStart - editStart;
+                result.Add(new TextEdit(
+                    TextSpan.FromBounds(offsets[selectedStart], offsets[selectedEnd]),
+                    string.Concat(replacementLines.Skip(replacementStart).Take(selectedEnd - selectedStart))));
+            }
+            else if (replacementLines.Length == 0)
+            {
+                result.Add(new TextEdit(
+                    TextSpan.FromBounds(offsets[selectedStart], offsets[selectedEnd]),
+                    string.Empty));
+            }
+            else if (editStart >= requestedStart && editEnd <= requestedEnd)
+            {
+                result.Add(edit);
+            }
+        }
+
+        return result.ToImmutable();
+    }
+
+    private static int FindLineBoundary(int[] offsets, int position)
+    {
+        for (int i = 0; i < offsets.Length; i++)
+        {
+            if (offsets[i] == position)
+            {
+                return i;
+            }
+        }
+
+        throw new InvalidOperationException("Formatter edits must align to complete source lines.");
     }
 
     private static string[] SplitLines(string text)
@@ -411,9 +498,6 @@ public static class GSharpFormatter
         return reversed;
     }
 
-    private static bool Intersects(TextSpan left, TextSpan right) =>
-        left.Start <= right.End && right.Start <= left.End;
-
     private static TextSpan ExpandToFullLines(SourceText text, TextSpan span)
     {
         int startLine = text.GetLineIndex(Math.Min(span.Start, Math.Max(0, text.Length - 1)));
@@ -474,20 +558,26 @@ public static class GSharpFormatter
             return result;
         }
 
-        private static IEnumerable<SyntaxToken> EnumerateTokens(SyntaxNode node)
+        private static ImmutableArray<SyntaxToken> EnumerateTokens(SyntaxNode node)
+        {
+            var result = ImmutableArray.CreateBuilder<SyntaxToken>();
+            AddTokens(node, result);
+            return result.ToImmutable();
+        }
+
+        private static void AddTokens(
+            SyntaxNode node,
+            ImmutableArray<SyntaxToken>.Builder result)
         {
             if (node is SyntaxToken token)
             {
-                yield return token;
-                yield break;
+                result.Add(token);
+                return;
             }
 
             foreach (SyntaxNode child in node.GetChildren())
             {
-                foreach (SyntaxToken descendant in EnumerateTokens(child))
-                {
-                    yield return descendant;
-                }
+                AddTokens(child, result);
             }
         }
 
@@ -568,6 +658,11 @@ public static class GSharpFormatter
                     .ToArray();
                 for (int i = 1; i < children.Length; i++)
                 {
+                    if (children[i - 1].Span.End > children[i].Span.Start)
+                    {
+                        continue;
+                    }
+
                     int breakCount = IsMemberBlankLine(children[i - 1], children[i]) ? 2 : 1;
                     breaksBefore[LeadingTriviaPosition(children[i].Span.Start)] = breakCount;
                 }
@@ -848,8 +943,16 @@ public static class GSharpFormatter
 
             if (right == SyntaxKind.OpenSquareBracketToken
                 && left is SyntaxKind.IdentifierToken
+                    or SyntaxKind.ChanKeyword
+                    or SyntaxKind.MapKeyword
+                    or SyntaxKind.SequenceKeyword
                     or SyntaxKind.CloseParenthesisToken
                     or SyntaxKind.CloseSquareBracketToken)
+            {
+                return Doc.Empty;
+            }
+
+            if (right == SyntaxKind.QuestionOpenBracketToken)
             {
                 return Doc.Empty;
             }
