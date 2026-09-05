@@ -985,7 +985,7 @@ public static class SymbolDisplay
         if (clrType.IsArray)
         {
             return clrType.GetArrayRank() == 1
-                ? $"{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}[]"
+                ? $"[]{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}"
                 : $"[{new string(',', clrType.GetArrayRank() - 1)}]{FormatClrTypeName(clrType.GetElementType(), qualifyNames)}";
         }
 
