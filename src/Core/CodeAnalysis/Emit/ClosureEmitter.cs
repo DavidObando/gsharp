@@ -230,9 +230,25 @@ internal sealed class ClosureEmitter
                 // capture-bearing #1335 path does. Issue #2668 extends the same
                 // placement to async lambdas so their MoveNext methods retain
                 // access to private static members of the lexical encloser.
-                // Generic enclosers are skipped because a nested type would have
-                // to re-declare the encloser's type parameters, which this
-                // synthesis does not model.
+                // Issue #3933: generic enclosers used to be skipped here, because
+                // a nested type must re-declare the encloser's type parameters
+                // (ECMA-335 §II.10.3.1) and this synthesis did not model that.
+                // The consequence was the exact bug #1469 exists to prevent, just
+                // one type-parameter away: a capture-free lambda inside a GENERIC
+                // type that reads a `private` member of that type stayed on
+                // `<Program>`, was generic-promoted by #2118 so the field access
+                // read `Node`1<!!T>::secret`, and failed ILVerify with
+                // `FieldAccess: Field is not visible` / threw
+                // `FieldAccessException` at the first call. The capturing sibling
+                // has handled this since #1512 by reifying the display class over
+                // the encloser's type parameters before nesting it, and the
+                // reification (SynthesizedClosureReifier, driven from
+                // SynthesizeDisplayClass) is entirely shape-independent of whether
+                // the class carries capture fields. So the zero-capture host now
+                // goes through the same machinery, passing the encloser's OWN
+                // type-parameter list as `requiredTypeParameters` so the nested
+                // host re-declares them positionally even when the lambda body
+                // happens to reference only some of them (or none).
                 // All other non-capturing lambdas keep the existing top-level
                 // `<Program>` static placement.
                 //
@@ -249,8 +265,7 @@ internal sealed class ClosureEmitter
                 // exists for), always keep them on the top-level `<Program>`
                 // static placement.
                 if (literal.Function.IsGeneric
-                    || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing
-                    || !zeroCaptureEnclosing.TypeParameters.IsDefaultOrEmpty)
+                    || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing)
                 {
                     continue;
                 }
@@ -263,7 +278,8 @@ internal sealed class ClosureEmitter
                     literal.Function.Type,
                     literal.Body,
                     hostPackage,
-                    invokeName: "Invoke");
+                    invokeName: "Invoke",
+                    requiredTypeParameters: zeroCaptureEnclosing.TypeParameters);
 
                 this.ClosureInfos[literal] = hostInfo;
 
@@ -387,7 +403,8 @@ internal sealed class ClosureEmitter
         TypeSymbol returnType,
         BoundBlockStatement body,
         PackageSymbol hostPackage,
-        string invokeName)
+        string invokeName,
+        ImmutableArray<TypeParameterSymbol> requiredTypeParameters = default)
     {
         var packageName = hostPackage?.Name ?? string.Empty;
         var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>(capturedVariables.Length);
@@ -452,6 +469,46 @@ internal sealed class ClosureEmitter
         LambdaEnclosingTypeParameterCollector.Collect(body, bodyTypeParameters);
         enclosingRefSink.AddRange(bodyTypeParameters);
         var origTPs = SynthesizedClosureReifier.CollectOrdered(enclosingRefSink);
+
+        // Issue #3933: when the display class is about to be nested inside a
+        // GENERIC encloser, re-declare that encloser's type parameters
+        // positionally (ECMA-335 §II.10.3.1, and what csc emits for `<>c`)
+        // rather than trusting discovery.
+        //
+        // Discovery is signature- and body-driven, and for a CAPTURING closure
+        // that is enough — it holds the encloser's parameters in its own capture
+        // fields, so they are always in the scanned set. A CAPTURE-FREE host has
+        // no such guarantee: the lambda may reference only SOME of the
+        // encloser's parameters (inside `Pair[T, U]`, mentioning only `U`) or
+        // none of them in any scanned position. The dangerous case is the last
+        // one — a body that reaches the encloser only through a path the
+        // collector does not walk, e.g. a call to a `private shared` member,
+        // which the emitter renders as `Reg`1<!0>::Bump`. Reified from discovery
+        // alone that host has arity 0, the `!0` has no slot, and the result
+        // ILVERIFIES CLEAN and throws BadImageFormatException at the first call
+        // (measured, not assumed). Seeding the ordered list with the encloser's
+        // own parameters makes the re-declaration total and closes that hole for
+        // every such path at once.
+        //
+        // The seed is a no-op whenever discovery already found exactly the
+        // encloser's parameters — the common case, and the one #3933 reported —
+        // because CollectOrdered emits class parameters ahead of method
+        // parameters by ordinal, which is the same order the seed imposes.
+        if (!requiredTypeParameters.IsDefaultOrEmpty)
+        {
+            var seeded = ImmutableArray.CreateBuilder<TypeParameterSymbol>(requiredTypeParameters.Length + origTPs.Length);
+            seeded.AddRange(requiredTypeParameters);
+            foreach (var tp in origTPs)
+            {
+                if (!requiredTypeParameters.Contains(tp))
+                {
+                    seeded.Add(tp);
+                }
+            }
+
+            origTPs = seeded.ToImmutable();
+        }
+
         StructSymbol constructedClass = closureClass;
         if (!origTPs.IsDefaultOrEmpty)
         {

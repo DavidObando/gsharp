@@ -35,8 +35,9 @@
 # here means "the hot core still migrates", never "this PR migrates fine".
 # The banner printed at the end says so out loud on purpose.
 #
-# In particular it does NOT cover src/Sdk/Gsharp.Runtime.Channels, i.e. it
-# would NOT have caught #3905 — see the note under guard_apps.
+# As of #3933 it DOES cover src/Sdk/Gsharp.Runtime.Channels, so it now covers
+# all three of the incidents above rather than two — see the note under
+# guard_apps.
 #
 # Usage: run-cs2gs-selfmig-pr-guard.sh
 # Environment:
@@ -64,25 +65,30 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 #   tools/cs2gs/Cs2Gs.CodeModel   Core -> CodeModel -> Translator, the chain
 #                                 #3836 names.
 #   tools/cs2gs/Cs2Gs.Translator  cs2gs is inside its own corpus (#3831).
+#   src/Sdk/Gsharp.Runtime.Channels  #3905's root, and a ProjectReference
+#                                 leaf, so it costs this job only a couple of
+#                                 minutes. ADDED BY #3933, see below.
 #
-# DELIBERATELY ABSENT, and the first thing to add back:
+# ADDED BY #3933. Channels was deliberately absent through five PRs because
+# this guard runs translate -> compile -> ilverify -> test-parity and the app
+# had never been ilverify-green: adding it earlier would have produced exactly
+# the red-from-day-one guard that gets ignored or disabled. That reason is now
+# gone. The app went 194 -> 0 compile artifacts (#3910/#3914/#3916/#3927,
+# closing #3907) and then 19 -> 1 -> 0 ilverify findings (#3934 for #3932's
+# roots A-D, #3933 for root E), and a targeted four-app run measured on
+# f7fde6d2f reads PASS/PASS/PASS/PASS on all four stages. That closes the
+# hazard this whole script exists for on the one app it did not cover — the
+# hazard has now fired four times (#3831, #3896, #3905, and #3915's rewrite
+# adding four unseen artifacts between #3916's base and its merge).
 #
-#   src/Sdk/Gsharp.Runtime.Channels — #3905's root, referenced by eight
-#   projects, and a ProjectReference leaf, so it would cost this job about
-#   four minutes and would make the guard cover all three incidents instead
-#   of two. It is left out only because it is RED ON MAIN TODAY (#3907: the
-#   #3905 crash fix un-blinded 327 diagnostics), and a guard that is red from
-#   day one gets ignored or disabled. Measured on 03b6e1e8d, adding it gives
-#   4/5 rather than 5/5 — a real failure, not a harness artifact, which is
-#   itself evidence this job detects the thing it is for. Add the line back
-#   the moment #3907 closes; nothing else needs to change.
-#
-# The same reasoning governs tools/cs2gs/Cs2Gs.Tests, which #3836 names as the
-# natural second step: it has ~9 known migration failures and would be red by
-# construction until those clear.
+# STILL DELIBERATELY ABSENT: tools/cs2gs/Cs2Gs.Tests, which #3836 names as the
+# natural next step. It has ~9 known migration failures and would be red by
+# construction until those clear — the same reasoning that kept Channels out
+# until today.
 guard_apps=(
   src/Analyzers/InternalAnalyzers/InternalAnalyzers.csproj
   src/Core/Core.csproj
+  src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.csproj
   tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.csproj
   tools/cs2gs/Cs2Gs.Translator/Cs2Gs.Translator.csproj
 )
