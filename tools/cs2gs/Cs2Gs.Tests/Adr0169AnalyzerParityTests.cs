@@ -11,7 +11,6 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Analyzers;
 using Cs2Gs.Translator.Loading;
-using GSharp.InternalAnalyzers;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Xunit;
@@ -137,8 +136,14 @@ namespace App
         LoadedCSharpProject corpus = CSharpProjectLoader.LoadInMemory(new[] { ("Corpus.cs", CorpusSource) });
         Assert.True(corpus.BoundWithoutErrors, string.Join("\n", corpus.ErrorDiagnostics));
 
+        // Issue #3880: the Roslyn control is compiled from the analyzer's own
+        // source rather than named through the InternalAnalyzers project
+        // reference, which does not survive self-migration (ADR-0169 retargets
+        // that project onto the G# analyzer API).
+        DiagnosticAnalyzer roslynAnalyzer = Adr0169TranslatedAnalyzerHarness.CompileRoslynAnalyzer(
+            "StructFieldDefsReadAnalyzer.cs", "StructFieldDefsReadAnalyzer");
         var withAnalyzers = corpus.Compilation.WithAnalyzers(
-            ImmutableArray.Create<DiagnosticAnalyzer>(new StructFieldDefsReadAnalyzer()));
+            ImmutableArray.Create<DiagnosticAnalyzer>(roslynAnalyzer));
         return withAnalyzers.GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult()
             .Where(d => d.Id == "GSA0001")
             .OrderBy(d => d.Location.SourceSpan.Start)

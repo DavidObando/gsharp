@@ -6,10 +6,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Analyzers;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Emit;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -33,6 +37,51 @@ public static class DiagnosticDescriptors
         ""GSA0001"", ""T"", ""M"", ""GSharp.InternalAnalyzers"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
 }
 ";
+
+    /// <summary>
+    /// Issue #3880: builds the parity tests' ROSLYN control by compiling one
+    /// real analyzer's own C# source with Roslyn and instantiating it out of
+    /// the emitted assembly, instead of naming the type from a project
+    /// reference on <c>src/Analyzers/InternalAnalyzers</c>.
+    /// <para>
+    /// The project reference does not survive self-migration: cs2gs retargets
+    /// <c>InternalAnalyzers</c> onto the G# analyzer API (ADR-0169), so the
+    /// migrated <c>StructFieldDefsReadAnalyzer</c> is a
+    /// <c>GSharpDiagnosticAnalyzer</c> and
+    /// <c>ImmutableArray.Create[DiagnosticAnalyzer](StructFieldDefsReadAnalyzer())</c>
+    /// has no applicable overload — the whole Roslyn half of the parity check
+    /// stops binding. Compiling the analyzer's source is also the more honest
+    /// control: it is exactly what the G# half already does (translate and
+    /// compile the same file), so both sides now start from the same bytes on
+    /// disk rather than one side starting from a build output.
+    /// </para>
+    /// </summary>
+    /// <param name="analyzerFileName">The analyzer source file name under <c>src/Analyzers/InternalAnalyzers</c>.</param>
+    /// <param name="analyzerTypeName">The analyzer type's simple name.</param>
+    /// <returns>A live Roslyn analyzer instance.</returns>
+    public static DiagnosticAnalyzer CompileRoslynAnalyzer(string analyzerFileName, string analyzerTypeName)
+    {
+        string analyzerDirectory = Path.Combine(
+            FindRepoRoot(), "src", "Analyzers", "InternalAnalyzers");
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            (analyzerFileName, File.ReadAllText(Path.Combine(analyzerDirectory, analyzerFileName))),
+            ("DiagnosticDescriptors.cs", File.ReadAllText(Path.Combine(analyzerDirectory, "DiagnosticDescriptors.cs"))),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+
+        using var peStream = new MemoryStream();
+        EmitResult emitResult = project.Compilation.Emit(peStream);
+        Assert.True(
+            emitResult.Success,
+            $"Roslyn control analyzer {analyzerTypeName} should compile:\n"
+                + string.Join("\n", emitResult.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+
+        Assembly assembly = Assembly.Load(peStream.ToArray());
+        Type analyzerType = assembly.GetType("GSharp.InternalAnalyzers." + analyzerTypeName, throwOnError: true);
+        return (DiagnosticAnalyzer)Activator.CreateInstance(analyzerType);
+    }
 
     /// <summary>
     /// Translates and compiles the real GSA0001 into an analyzer assembly.
