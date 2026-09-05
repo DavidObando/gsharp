@@ -79,6 +79,10 @@ public sealed class BoundConstrainedStaticCallExpression : BoundCallOperationExp
     /// Gets the callee symbol. Exactly one of <see cref="InterfaceMethod"/> and
     /// <see cref="ClrMethod"/> is set, so this is always answerable.
     /// </summary>
+    // `ClrMethod!` is safe for the same reason the Type fallback above is:
+    // exactly one of InterfaceMethod/ClrMethod is set, and the only way to reach
+    // that arm is InterfaceMethod being null, which happens exclusively via the
+    // ClrMethod-taking constructor overload, which requires a non-null clrMethod.
     public override Symbol CalledFunction
         => InterfaceMethod ?? (Symbol)(calledFunction ??= ImportedCallee(ClrMethod!, Type));
 
