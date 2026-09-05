@@ -187,6 +187,15 @@ internal sealed partial class OverloadResolver
             return false;
         }
 
+        if (userGroup.Candidates.Length == 1
+            && userGroup.FunctionType is { } naturalType
+            && naturalType.ParameterTypes.Length == delegateArity)
+        {
+            parameters = naturalType.ParameterTypes.ToArray();
+            returnType = naturalType.ReturnType;
+            return true;
+        }
+
         FunctionSymbol? candidate = null;
         var parameterOffsetForUser = 0;
         foreach (var possibleCandidate in userGroup.Candidates)
@@ -214,6 +223,14 @@ internal sealed partial class OverloadResolver
         var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
             ? TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
             : null;
+        if (candidateOwner == null
+            && !candidate.IsExtension
+            && userGroup.Receiver?.Type is StructSymbol receiverStruct
+            && candidate.ReceiverType is StructSymbol declaredReceiver)
+        {
+            candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver);
+        }
+
         parameters = new TypeSymbol[delegateArity];
         for (var i = 0; i < parameters.Length; i++)
         {
@@ -221,7 +238,15 @@ internal sealed partial class OverloadResolver
                 ?? candidate.Parameters[i + parameterOffsetForUser].Type;
         }
 
-        returnType = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
+        var observableReturn = candidate.Type ?? TypeSymbol.Void;
+        if (candidate.IsAsyncOrSuspending
+            && !candidate.IsAsyncVoid
+            && !isAsyncIteratorReturnType(observableReturn))
+        {
+            observableReturn = wrapAsTask(observableReturn, candidate.AsyncReturnsValueTask);
+        }
+
+        returnType = candidateOwner?.SubstituteMemberType(observableReturn) ?? observableReturn;
         return true;
     }
 

@@ -62,9 +62,16 @@ public class Issue3760UserGenericMethodGroupEmitTests
             func Map[TOut](value int32, f Func[int32, TOut]) TOut { return f(value) }
         }
 
+        class Holder[T] {
+            func Accept(value T) { }
+            func Accept(value T, extra int32) { }
+        }
+
+        async func AsyncText(value int32) string { return value.ToString() }
         func Map[TOut](value int32, f Func[int32, TOut]) TOut { return f(value) }
         func RunG[TIn](value TIn, a Action[TIn]) { a(value) }
         func RunOnly[TIn](a Action[TIn]) { }
+        func Accept[TIn, TOut](f Func[TIn, TOut]) { }
 
         """;
 
@@ -77,6 +84,26 @@ public class Issue3760UserGenericMethodGroupEmitTests
     {
         string output = CompileAndRun(Preamble + """
             RunOnly(Helper.Emit)
+            """);
+
+        Assert.Equal(string.Empty, output);
+    }
+
+    [Fact]
+    public void FreeGenericFunction_UsesObservableAsyncMethodGroupReturn()
+    {
+        string output = CompileAndRun(Preamble + """
+            Accept(AsyncText)
+            """);
+
+        Assert.Equal(string.Empty, output);
+    }
+
+    [Fact]
+    public void FreeGenericFunction_SubstitutesConstructedMethodGroupReceiver()
+    {
+        string output = CompileAndRun(Preamble + """
+            RunOnly(Holder[int32]().Accept)
             """);
 
         Assert.Equal(string.Empty, output);

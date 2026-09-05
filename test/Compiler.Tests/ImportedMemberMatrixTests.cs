@@ -942,6 +942,7 @@ public class ImportedMemberMatrixTests
                 public static class Api
                 {
                     public static void RunOnly<T>(Action<T> action) => action(default!);
+                    public static void Accept<TIn, TOut>(Func<TIn, TOut> function) { }
                     public static void Emit(int value) => Console.WriteLine("emit" + value);
                 }
             }
@@ -953,9 +954,11 @@ public class ImportedMemberMatrixTests
             import ImportedSingleMethodGroupInference.CSharp
 
             func EmitSource(value int32) { Console.WriteLine("source" + value.ToString()) }
+            async func AsyncText(value int32) string { return value.ToString() }
 
             Api.RunOnly(Api.Emit)
             Api.RunOnly(EmitSource)
+            Api.Accept(AsyncText)
             """;
 
         Assert.Equal(

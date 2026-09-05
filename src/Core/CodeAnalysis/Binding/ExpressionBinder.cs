@@ -2518,6 +2518,26 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
+        if (userGroup.Candidates.Length == 1
+            && userGroup.FunctionType is { } naturalType
+            && naturalType.ParameterTypes.Length == delegateArity)
+        {
+            var naturalParameters = new Type[delegateArity];
+            for (var i = 0; i < naturalParameters.Length; i++)
+            {
+                if (projectType(naturalType.ParameterTypes[i]) is not { } projected)
+                {
+                    return null;
+                }
+
+                naturalParameters[i] = projected;
+            }
+
+            return projectType(naturalType.ReturnType) is { } naturalReturn
+                ? (naturalParameters, naturalReturn)
+                : null;
+        }
+
         FunctionSymbol? candidate = null;
         var userParameterOffset = 0;
         foreach (var possibleCandidate in userGroup.Candidates)
@@ -2545,6 +2565,14 @@ internal sealed partial class ExpressionBinder
         var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
             ? TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
             : null;
+        if (candidateOwner == null
+            && !candidate.IsExtension
+            && userGroup.Receiver?.Type is StructSymbol receiverStruct
+            && candidate.ReceiverType is StructSymbol declaredReceiver)
+        {
+            candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver);
+        }
+
         var projectedParameters = new Type[delegateArity];
         for (var i = 0; i < projectedParameters.Length; i++)
         {
@@ -2556,6 +2584,11 @@ internal sealed partial class ExpressionBinder
             }
 
             projectedParameters[i] = projected;
+        }
+
+        if (candidate.IsAsyncOrSuspending && !candidate.IsAsyncVoid)
+        {
+            return null;
         }
 
         var returnType = candidateOwner?.SubstituteMemberType(candidate.Type) ?? candidate.Type ?? TypeSymbol.Void;
