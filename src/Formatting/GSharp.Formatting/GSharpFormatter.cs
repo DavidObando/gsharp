@@ -160,10 +160,12 @@ public static class GSharpFormatter
         // unordered set and cannot see that, so refuse to sort instead.
         int firstLine = Math.Max(0, original.GetLineIndex(imports[0].Span.Start) - 1);
         int lastLine = original.GetLineIndex(imports[^1].Span.End);
+        int blockStart = original.Lines[firstLine].Start;
+        int blockEnd = original.Lines[lastLine].SpanIncludingLineBreak.End;
         if (SyntaxTree.ParseTokens(original).Any(token =>
             token.Kind is SyntaxKind.CommentToken or SyntaxKind.DocumentationCommentToken
-            && original.GetLineIndex(token.Span.Start) >= firstLine
-            && original.GetLineIndex(token.Span.Start) <= lastLine))
+            && token.Span.Start >= blockStart
+            && token.Span.Start < blockEnd))
         {
             return original;
         }
