@@ -461,13 +461,12 @@ internal sealed class ReflectionMetadataEmitter
         // consulted both — this is the async path catching up. Instance methods
         // were unaffected, which is why the failure needed a `shared async
         // func` on a generic type to surface at all.
-        var receiverDef = (kickoff?.ReceiverType as StructSymbol ?? kickoff?.StaticOwnerType as StructSymbol) is { } receiver
-            ? (receiver.Definition ?? receiver)
-            : null;
-        var classTPs = receiverDef?.TypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
-        var methodTPs = kickoff == null || kickoff.TypeParameters.IsDefaultOrEmpty
-            ? ImmutableArray<TypeParameterSymbol>.Empty
-            : kickoff.TypeParameters;
+        //
+        // Issue #3939: the same decision is needed by the KICKOFF BODY, which
+        // self-instantiates the struct this method reifies, so both now read it
+        // from one primitive on StateMachineEmitter instead of each deriving it
+        // — the kickoff's copy had never picked up the `StaticOwnerType` half.
+        var (receiverDef, classTPs, methodTPs) = StateMachineEmitter.GetAsyncKickoffGenericScope(kickoff);
 
         if (classTPs.IsDefaultOrEmpty && methodTPs.IsDefaultOrEmpty)
         {
