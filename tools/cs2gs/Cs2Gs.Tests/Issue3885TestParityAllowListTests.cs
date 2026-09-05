@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using Cs2Gs.Pipeline;
 using Xunit;
 
@@ -590,31 +591,58 @@ public sealed class Issue3885TestParityAllowListTests
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// The file the gate actually reads must load, must carry exactly the three
-    /// #3885 entries, and must NOT have grown the defects under investigation
-    /// (#3848/#3849 in InternalAnalyzers.Tests / LanguageServer.Tests /
-    /// GeneratorHost.Tests) — those are defects, not policy, and an allow-list
-    /// that absorbs them stops meaning anything.
+    /// The file the gate actually reads must load, and every entry in it must be
+    /// well-formed and attributed. It must NOT have grown the defects under
+    /// investigation (#3848/#3849 in InternalAnalyzers.Tests /
+    /// LanguageServer.Tests / GeneratorHost.Tests) — those are defects, not
+    /// policy, and an allow-list that absorbs them stops meaning anything.
+    /// <para>
+    /// This deliberately does NOT pin a population. It once asserted exactly the
+    /// three seeded #3885 entries, and the gate then reported all three as no
+    /// longer failing: the mirror became faithful enough for those layout-coupled
+    /// assertions to hold, so the entries were removed and this test failed for
+    /// doing its job backwards. A policy register's contents are expected to
+    /// change; pinning the count makes correctly retiring an entry look like a
+    /// regression. What must never change are the INVARIANTS below, and an empty
+    /// list is the healthiest state this file can be in.
+    /// </para>
     /// </summary>
     [Fact]
-    public void CommittedAllowList_LoadsAndHoldsOnlyTheSeededEntries()
+    public void CommittedAllowList_LoadsAndEveryEntryIsWellFormedAndAttributed()
     {
         string path = Path.Combine(RepoRoot(), TestParityAllowList.DefaultRelativePath);
         Assert.True(File.Exists(path), path);
 
+        // Load validates: it throws on a malformed file or an unjustified entry.
         TestParityAllowList list = TestParityAllowList.Load(path);
 
-        Assert.Equal(3, list.Entries.Count);
-        Assert.All(list.Entries, entry => Assert.Equal(SdkTestsAppId, entry.App));
-        Assert.All(list.Entries, entry => Assert.Equal("#3885", entry.Issue));
-        Assert.Equal(3, list.EntriesFor(SdkTestsAppId).Count);
+        Assert.All(list.Entries, entry =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(entry.App));
+            Assert.False(string.IsNullOrWhiteSpace(entry.Test));
+            Assert.True(
+                entry.Reason.Length >= TestParityAllowList.MinimumReasonLength,
+                "entry lacks a substantive reason: " + entry.Test);
 
-        // Every seeded entry must actually fire against the observed run.
-        TestParityAllowListVerdict verdict = list.Evaluate(
-            SdkTestsAppId, TestParityAllowList.ParseFailedTestNames(SdkTestsOutput));
-        Assert.Equal(3, verdict.AllowedFailures.Count);
-        Assert.Empty(verdict.UnallowedFailures);
-        Assert.Empty(verdict.StaleEntries);
+            // Attribution is what makes an entry auditable later.
+            Assert.False(
+                string.IsNullOrWhiteSpace(entry.Issue),
+                "entry has no tracking issue: " + entry.Test);
+        });
+
+        // One entry, one test. A duplicate is a merge accident, and it would make
+        // the stale-entry report ambiguous.
+        Assert.DoesNotContain(
+            list.Entries.GroupBy(entry => entry.App + "|" + entry.Test, StringComparer.Ordinal),
+            group => group.Count() > 1);
+
+        // The apps whose parity failures are DEFECTS may never appear here. This
+        // is the assertion that actually keeps the hole small.
+        Assert.DoesNotContain(
+            list.Entries,
+            entry => entry.App.Contains("InternalAnalyzers.Tests", StringComparison.Ordinal)
+                || entry.App.Contains("LanguageServer.Tests", StringComparison.Ordinal)
+                || entry.App.Contains("GeneratorHost.Tests", StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------------
