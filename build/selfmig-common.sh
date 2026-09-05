@@ -147,7 +147,7 @@ selfmig_apply_baseline() {
   bang_ceiling=$(jq -r '.nullAssertionCeiling' "$baseline")
 
   local summary
-  summary="self-migration: $green/$total green (floor $green_floor); labels=$labels (ceiling $label_ceiling); __local_=$lifts (ceiling $lift_ceiling); lines>300=$long_lines reducible (ceiling $long_ceiling), $long_lines_atomic single-atom-bounded; bangs=$bangs (ceiling $bang_ceiling)"
+  summary="self-migration: $green/$total green (floor $green_floor); labels=$labels (ceiling $label_ceiling); __local_=$lifts (ceiling $lift_ceiling); lines>300=$long_lines reducible (ceiling $long_ceiling), ${long_lines_atomic:-0} single-atom-bounded; bangs=$bangs (ceiling $bang_ceiling)"
   echo "$summary"
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
@@ -159,7 +159,7 @@ selfmig_apply_baseline() {
       echo "| synthetic labels | $labels | ceiling $label_ceiling |"
       echo "| \`__local_\` lifts | $lifts | ceiling $lift_ceiling |"
       echo "| lines >300 chars (reducible) | $long_lines | ceiling $long_ceiling |"
-      echo "| lines >300 chars (single-atom-bounded) | $long_lines_atomic | report only |"
+      echo "| lines >300 chars (single-atom-bounded) | ${long_lines_atomic:-0} | report only |"
       echo "| \`!!\` assertions | $bangs | ceiling $bang_ceiling |"
       echo ''
     } >> "$GITHUB_STEP_SUMMARY"
