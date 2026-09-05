@@ -2,6 +2,11 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# Issue #3501: the same readability counters the self-migration reports, so the
+# three corpora are comparable at a glance. Counts only — Oahu has no ratcheting
+# baseline and deliberately gets no ceilings here.
+# shellcheck source=build/cs2gs-counters.sh
+source "$repo_root/build/cs2gs-counters.sh"
 manifest="$repo_root/tools/cs2gs/external/oahu.json"
 label=${OAHU_GATE_LABEL:-pinned}
 work_root=${OAHU_GATE_ROOT:-"${TMPDIR:-/tmp}/gsharp-cs2gs-oahu/$label"}
@@ -61,6 +66,10 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --config Release | tee "$log_file"
 migrate_exit=${PIPESTATUS[0]}
 set -e
+
+# Before the exit check: a failed migration still produced whatever it emitted,
+# and the counters over a partial tree are more useful than none.
+cs2gs_emit_counter_report "$migrated_dir" 'cs2gs Oahu: readability counters' || true
 
 if (( migrate_exit != 0 )); then
   exit "$migrate_exit"
