@@ -24,10 +24,6 @@ public static class GSharpPrinter
 {
     private const string IndentUnit = "    ";
 
-    // Issue #3470: column budget for statement-level wrapping (see
-    // RenderWrappable).
-    private const int MaxLineWidth = 120;
-
     // Unary operators (`+ - ! ^ * & <-`) bind at precedence 6 in G#'s
     // grammar — higher than every binary operator — per
     // SyntaxFacts.GetUnaryOperatorPrecedence.
@@ -490,119 +486,13 @@ public static class GSharpPrinter
     private static string RenderExpression(GExpression expression, int indent) =>
         RenderExpression(expression, indent, 0);
 
-    // Issue #3470: the printer renders each statement on one line regardless
-    // of source formatting, producing 300+ character lines from deliberately
-    // wrapped boolean chains and argument lists. Statement-level value
-    // positions render through this budgeted entry point instead: when the
-    // one-line form exceeds the column budget, `&&`/`||` chains break after
-    // each operator and long argument lists break after `(` and each comma —
-    // both continuations gsc's parser accepts (trailing-operator and
-    // open-delimiter line joining). Anything else keeps the one-line form.
+    // ADR-0179: the printer owns syntax selection only. Layout is the
+    // GSharp.Formatting post-pass, so every former wrapping call funnels to
+    // the ordinary flat expression renderer.
     private static string RenderWrappable(GExpression expression, int indent, int prefixWidth)
     {
-        string single = RenderExpression(expression, indent);
-
-        // Issue #3501 B2: the budget applies to the FIRST line — an
-        // expression whose one-line head is over budget wraps even when a
-        // block-bodied lambda argument already made the render multi-line
-        // (previously any embedded newline bailed the whole statement out,
-        // which accounted for most residual >300-char lines).
-        int firstLineEnd = single.IndexOf('\n');
-        int firstLineLength = firstLineEnd < 0 ? single.Length : firstLineEnd;
-        if (prefixWidth + firstLineLength <= MaxLineWidth)
-        {
-            return single;
-        }
-
-        return RenderWrapped(expression, indent, prefixWidth) ?? single;
-    }
-
-    private static string RenderWrapped(GExpression expression, int indent, int prefixWidth)
-    {
-        string continuation = Indent(indent + 1);
-        if (expression is BinaryExpression { Operator: "&&" or "||" } chainRoot)
-        {
-            var operands = new List<GExpression>();
-            void Flatten(GExpression node)
-            {
-                if (node is BinaryExpression nested && nested.Operator == chainRoot.Operator)
-                {
-                    Flatten(nested.Left);
-                    Flatten(nested.Right);
-                }
-                else
-                {
-                    operands.Add(node);
-                }
-            }
-
-            Flatten(chainRoot);
-            int operandMin = GetBinaryPrecedence(chainRoot.Operator) + 1;
-            var parts = operands.Select(operand =>
-            {
-                string text = RenderExpression(operand, indent + 1, operandMin);
-
-                // Only invocation operands wrap further: re-flattening a
-                // parenthesized lower-precedence sub-chain here would drop
-                // the parentheses the precedence-aware render just added.
-                return operand is InvocationExpression
-                        && text.IndexOf('\n') < 0
-                        && continuation.Length + text.Length > MaxLineWidth
-                    ? RenderWrapped(operand, indent + 1, continuation.Length) ?? text
-                    : text;
-            });
-            return string.Join($" {chainRoot.Operator}\n{continuation}", parts);
-        }
-
-        // Issue #3501 B2: a long postfix chain (`a.B(x).C().D`) breaks
-        // before each dot — gsc parses leading-dot continuations — which
-        // reads better than exploding one link's argument list. Only plain
-        // `.` links participate (never `->` pointer access), and only when
-        // the chain has at least two links.
-        if (TryFlattenAccessChain(expression, out GExpression chainHead, out List<string> chainLinks)
-            && chainLinks.Count >= 2)
-        {
-            string headText = RenderExpression(chainHead, indent);
-            var chain = new StringBuilder(headText);
-            foreach (string link in chainLinks)
-            {
-                chain.Append('\n').Append(continuation).Append(link);
-            }
-
-            return chain.ToString();
-        }
-
-        if (expression is InvocationExpression { Arguments.Count: > 0 } invocation)
-        {
-            string target = RenderExpression(invocation.Target, indent);
-            string typeArgs = invocation.TypeArguments.Count == 0
-                ? string.Empty
-                : $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
-            IEnumerable<string> argTexts = invocation.Arguments.Select(argument =>
-                RenderWrappable(argument, indent + 1, continuation.Length));
-            return $"{target}{typeArgs}(\n{continuation}"
-                + string.Join($",\n{continuation}", argTexts)
-                + ")";
-        }
-
-        // Issue #3501: a construction WITH an object initializer
-        // (`new T(...) { A = x, B = y }` → `T(…){A: …}`-style G#) escaped
-        // every wrap — the construction wraps through the invocation branch
-        // above, and each member initializer takes its own line.
-        if (expression is ObjectCreationInitializerExpression objectCreationWrap)
-        {
-            string construction =
-                RenderWrapped(objectCreationWrap.Construction, indent, prefixWidth)
-                ?? RenderExpression(objectCreationWrap.Construction, indent);
-            IEnumerable<string> memberTexts = objectCreationWrap.MemberInitializers.Select(f =>
-                $"{f.Name} = {RenderExpression(f.Value, indent + 1)}");
-            return construction
-                + "{\n" + continuation
-                + string.Join($",\n{continuation}", memberTexts)
-                + "}";
-        }
-
-        return null;
+        _ = prefixWidth;
+        return RenderExpression(expression, indent);
     }
 
     private static string RenderExpressionCore(GExpression expression, int indent)
@@ -1338,51 +1228,6 @@ public static class GSharpPrinter
 
         var first = next.Text[0];
         return char.IsLetterOrDigit(first) || first == '_';
-    }
-
-    private static bool TryFlattenAccessChain(
-        GExpression expression,
-        out GExpression head,
-        out List<string> links)
-    {
-        head = expression;
-        links = new List<string>();
-        var reversed = new List<string>();
-        GExpression current = expression;
-        while (true)
-        {
-            if (current is InvocationExpression { Target: MemberAccessExpression { IsArrow: false } call } chainCall)
-            {
-                string typeArgs = chainCall.TypeArguments.Count == 0
-                    ? string.Empty
-                    : $"[{string.Join(", ", chainCall.TypeArguments.Select(RenderType))}]";
-                string args = string.Join(
-                    ", ",
-                    chainCall.Arguments.Select(a => RenderExpression(a, 0)));
-                reversed.Add($".{call.MemberName}{typeArgs}({args})");
-                current = call.Target;
-                continue;
-            }
-
-            if (current is MemberAccessExpression { IsArrow: false } access)
-            {
-                reversed.Add($".{access.MemberName}");
-                current = access.Target;
-                continue;
-            }
-
-            break;
-        }
-
-        if (reversed.Count < 2)
-        {
-            return false;
-        }
-
-        head = current;
-        reversed.Reverse();
-        links = reversed;
-        return true;
     }
 
     private static string RenderStatement(GStatement statement, int indent)
@@ -2297,29 +2142,9 @@ public static class GSharpPrinter
         sb.Append(method.Name);
         sb.Append(RenderTypeParameterList(method.TypeParameters));
         string parameterList = RenderParameterList(method.Parameters);
-
-        // Issue #3501 B2: a signature whose one-line form exceeds the budget
-        // wraps its parameter list after `(` and each comma — the same
-        // continuation shapes gsc parses in call positions.
-        int signatureLineStart = sb.ToString().LastIndexOf('\n') + 1;
-        int signatureLineLength = sb.Length - signatureLineStart;
-        if (method.Parameters.Count > 1
-            && signatureLineLength + parameterList.Length + 2 > MaxLineWidth)
-        {
-            string parameterPad = Indent(indent + 1);
-            sb.Append("(\n");
-            sb.Append(parameterPad);
-            sb.Append(string.Join(
-                ",\n" + parameterPad,
-                method.Parameters.Select(RenderParameter)));
-            sb.Append(')');
-        }
-        else
-        {
-            sb.Append('(');
-            sb.Append(parameterList);
-            sb.Append(')');
-        }
+        sb.Append('(');
+        sb.Append(parameterList);
+        sb.Append(')');
 
         if (method.ReturnType != null)
         {
@@ -2440,30 +2265,10 @@ public static class GSharpPrinter
         }
 
         sb.Append("init");
-
-        // Issue #3501: same budgeted parameter-list wrap the func-header
-        // renderer applies — `init`/`convenience init` headers were the
-        // dominant string-free >300-char lines in the migrated corpus.
         string ctorParameterList = RenderParameterList(constructor.Parameters);
-        int ctorLineStart = sb.ToString().LastIndexOf('\n') + 1;
-        int ctorLineLength = sb.Length - ctorLineStart;
-        if (constructor.Parameters.Count > 1
-            && ctorLineLength + ctorParameterList.Length + 2 > MaxLineWidth)
-        {
-            string ctorParameterPad = Indent(indent + 1);
-            sb.Append("(\n");
-            sb.Append(ctorParameterPad);
-            sb.Append(string.Join(
-                ",\n" + ctorParameterPad,
-                constructor.Parameters.Select(RenderParameter)));
-            sb.Append(')');
-        }
-        else
-        {
-            sb.Append('(');
-            sb.Append(ctorParameterList);
-            sb.Append(')');
-        }
+        sb.Append('(');
+        sb.Append(ctorParameterList);
+        sb.Append(')');
 
         if (constructor.BaseArguments != null)
         {

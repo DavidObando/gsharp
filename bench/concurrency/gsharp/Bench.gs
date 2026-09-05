@@ -69,7 +69,7 @@ func report(name string, elapsed TimeSpan, count int32) {
 // A bounded channel driven producer-to-consumer: the shape a pipeline stage
 // has, and the row the ADR's throughput claim rests on.
 func buf64(count int32) TimeSpan {
-    let ch = chan[int32](64)
+    let ch = chan [int32](64)
     let sw = Stopwatch.StartNew()
     scope {
         go produce(ch, count)
@@ -83,7 +83,7 @@ func buf64(count int32) TimeSpan {
     return sw.Elapsed
 }
 
-func produce(ch out chan[int32], count int32) {
+func produce(ch out chan [int32], count int32) {
     for i in 0 ... count {
         ch <- i
     }
@@ -96,7 +96,7 @@ func produce(ch out chan[int32], count int32) {
 // operation, which is why it has no Go counterpart — Go's `pingpong` counts a
 // round trip. `pingpong` below is the row that pairs with it (issue #3902 S1a).
 func rendezvous(count int32) TimeSpan {
-    let ch = chan[int32](0)
+    let ch = chan [int32](0)
     let sw = Stopwatch.StartNew()
     scope {
         go produce(ch, count)
@@ -113,8 +113,8 @@ func rendezvous(count int32) TimeSpan {
 // counted per ROUND TRIP and therefore two hand-offs per operation. The rows
 // this replaces compared one hand-off against two and flattered G# by 2x.
 func pingpong(count int32) TimeSpan {
-    let a = chan[int32](0)
-    let b = chan[int32](0)
+    let a = chan [int32](0)
+    let b = chan [int32](0)
     let sw = Stopwatch.StartNew()
     scope {
         go echo(a, b, count)
@@ -129,7 +129,7 @@ func pingpong(count int32) TimeSpan {
     return sw.Elapsed
 }
 
-func echo(a in chan[int32], b out chan[int32], count int32) {
+func echo(a in chan [int32], b out chan [int32], count int32) {
     for i in 0 ... count {
         let v = <-a
         b <- v
@@ -139,7 +139,7 @@ func echo(a in chan[int32], b out chan[int32], count int32) {
 // The 382x defect ADR-0174 D2 removes: a receive from a closed, drained
 // channel used to raise an exception per call.
 func closedRecv(count int32) TimeSpan {
-    let ch = chan[int32](1)
+    let ch = chan [int32](1)
     ch.Close()
     let sw = Stopwatch.StartNew()
     for i in 0 ... count {
@@ -167,8 +167,7 @@ func spawn(count int32) TimeSpan {
     return sw.Elapsed
 }
 
-func noop() {
-}
+func noop() { }
 
 // A select whose arms are ALREADY READY: the fast path, no registration and no
 // park. Both arms are refilled each round so the uniform-random choice always
@@ -177,19 +176,19 @@ func noop() {
 // is the row that pairs with Go. Keeping this one G#-only is what preserves a
 // genuine ready-path measurement for gate G5 (issue #3902 S1b).
 func selectReady(count int32) TimeSpan {
-    let a = chan[int32](1)
-    let b = chan[int32](1)
+    let a = chan [int32](1)
+    let b = chan [int32](1)
     let sw = Stopwatch.StartNew()
     for i in 0 ... count {
         a <- 1
         b <- 2
         select {
-        case let v = <-a {
-            let drained = <-b
-        }
-        case let w = <-b {
-            let drained = <-a
-        }
+            case let v = <- a {
+                let drained = <-b
+            }
+            case let w = <- b {
+                let drained = <-a
+            }
         }
     }
 
@@ -203,20 +202,20 @@ func selectReady(count int32) TimeSpan {
 // selects — which is what Go's row measures too, and why it is a separate row
 // from `select-ready` rather than a replacement for it.
 func selectStream(count int32) TimeSpan {
-    let a = chan[int32](1024)
-    let b = chan[int32](1024)
+    let a = chan [int32](1024)
+    let b = chan [int32](1024)
     let sw = Stopwatch.StartNew()
     scope {
         go feed(a, count)
         var got = 0
         while got < count {
             select {
-            case let v = <-a {
-                got = got + 1
-            }
-            case let w = <-b {
-                got = got + 1
-            }
+                case let v = <- a {
+                    got = got + 1
+                }
+                case let w = <- b {
+                    got = got + 1
+                }
             }
         }
     }
@@ -227,7 +226,7 @@ func selectStream(count int32) TimeSpan {
 
 // Like `produce` but leaves the channel open: a closed arm would make the
 // select return immediately with the zero value and miscount the loop.
-func feed(ch out chan[int32], count int32) {
+func feed(ch out chan [int32], count int32) {
     for i in 0 ... count {
         ch <- i
     }
@@ -236,20 +235,20 @@ func feed(ch out chan[int32], count int32) {
 // A select with no ready arm: registration on every arm, a park, and a
 // hand-off. This is the path wave 1 could not measure at all.
 func selectPark(count int32) TimeSpan {
-    let a = chan[int32](0)
-    let b = chan[int32](0)
+    let a = chan [int32](0)
+    let b = chan [int32](0)
     let sw = Stopwatch.StartNew()
     scope {
         go produce(a, count)
         var taken = 0
         while taken < count {
             select {
-            case let v = <-a {
-                taken = taken + 1
-            }
-            case let w = <-b {
-                taken = taken + 1
-            }
+                case let v = <- a {
+                    taken = taken + 1
+                }
+                case let w = <- b {
+                    taken = taken + 1
+                }
             }
         }
     }
@@ -267,7 +266,7 @@ func selectPark(count int32) TimeSpan {
 // a time would measure the producer, not the chunked transport, and would
 // report a ratio tens of times worse than the thing it claims to compare.
 func chunked(size int32, count int32) TimeSpan {
-    let ch = chan[int32](1024)
+    let ch = chan [int32](1024)
     let sw = Stopwatch.StartNew()
     scope {
         go produceBatched(ch, count, size)
@@ -283,7 +282,7 @@ func chunked(size int32, count int32) TimeSpan {
 
 // One buffer, reused: the point of the row is the transport, not the
 // allocator. `size` is at most `maxChunk` for both scenarios.
-func produceBatched(ch chan[int32], count int32, size int32) {
+func produceBatched(ch chan [int32], count int32, size int32) {
     var chunk = [1024]int32{}
     var sent = 0
     while sent < count {
@@ -305,13 +304,12 @@ func produceBatched(ch chan[int32], count int32, size int32) {
     ch.Close()
 }
 
-
 // Go's chunk rows send whole `[]int` slices over a `chan []int`; the `chunks()`
 // rows above are a G# construct that copies elements into a fresh array per
 // chunk. Comparing the two measured different transports (issue #3902 S1d), so
 // this is the row that pairs with Go, and `chunk64`/`chunk1k` are now G#-only.
 func chunkedArrays(size int32, count int32) TimeSpan {
-    let ch = chan[[]int32](64)
+    let ch = chan [[]int32](64)
     let sw = Stopwatch.StartNew()
     scope {
         go produceArrays(ch, count, size)
@@ -332,7 +330,7 @@ func chunkedArrays(size int32, count int32) TimeSpan {
 // `chan[[]int32]` rather than `out chan[[]int32]`: the directional view
 // conversion does not apply when the element type is an array, so the `out`
 // form does not bind (issue #3924). Bidirectional is only a workaround here.
-func produceArrays(ch chan[[]int32], count int32, size int32) {
+func produceArrays(ch chan [[]int32], count int32, size int32) {
     var sent = 0
     while sent < count {
         var chunk = [size]int32{}
@@ -407,7 +405,20 @@ func runWarmup(name string) {
     }
 }
 
-let all = []string{"buf64", "rendezvous", "pingpong", "closed-recv", "spawn", "select-ready", "select-stream", "select-park", "chunk64", "chunk1k", "chunk64-arrays", "chunk1k-arrays"}
+let all = []string{
+    "buf64",
+    "rendezvous",
+    "pingpong",
+    "closed-recv",
+    "spawn",
+    "select-ready",
+    "select-stream",
+    "select-park",
+    "chunk64",
+    "chunk1k",
+    "chunk64-arrays",
+    "chunk1k-arrays"
+}
 let requested = Environment.GetEnvironmentVariable("GSHARP_BENCH_SCENARIO")
 
 Console.WriteLine("runtime " + Environment.Version.ToString() + " cores " + Environment.ProcessorCount.ToString())

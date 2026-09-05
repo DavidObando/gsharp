@@ -81,6 +81,7 @@ public class SdkLayoutTests
         Assert.Equal("Managed", props["TargetRuntime"]);
         Assert.Contains("Gsharp.NET.Sdk.dll", props["GsharpToolFullPath"]);
         Assert.Contains("gsc.dll", props["GsharpCompilerFullPath"]);
+        Assert.Contains("gsfmt.dll", props["GsharpFormatterFullPath"]);
         Assert.Contains("Gsharp.NET.Current.Sdk.targets", props["LanguageTargets"]);
     }
 
@@ -205,6 +206,16 @@ public class SdkLayoutTests
         Assert.Contains(
             doc.Descendants(MsbuildNs + "ProjectCapability"),
             capability => (string)capability.Attribute("Include") == "SupportsHotReload");
+
+        var formatCheck = doc.Descendants(MsbuildNs + "Target")
+            .Single(target => (string)target.Attribute("Name") == "GsharpFormatCheck");
+        Assert.Equal("CoreCompile", (string)formatCheck.Attribute("BeforeTargets"));
+        Assert.Contains("$(GsharpFormatOnBuild)", (string)formatCheck.Attribute("Condition"));
+        string formatCommand = (string)formatCheck.Element(MsbuildNs + "Exec").Attribute("Command");
+        Assert.Contains("$(GsharpFormatterFullPath)", formatCommand);
+        Assert.Contains("--check", formatCommand);
+        Assert.DoesNotContain("--write", formatCommand);
+
         var hotReloadManifest = doc.Descendants(MsbuildNs + "None")
             .Single(item => (string)item.Attribute("Include") == "$(GsharpHotReloadManifestPath)");
         Assert.Equal("PreserveNewest", (string)hotReloadManifest.Attribute("CopyToOutputDirectory"));

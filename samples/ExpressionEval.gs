@@ -12,8 +12,7 @@ package GSharp.Samples.ExpressionEval
 
 import System
 
-sealed interface Expr {
-}
+sealed interface Expr { }
 
 class Lit : Expr {
     var Value int32

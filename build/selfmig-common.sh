@@ -105,8 +105,9 @@ selfmig_hash_tree() {
       | xargs -0 -n 200 "${hasher[@]}" | sort -k2 )
 }
 
-# Computes the four readability metrics over a migrated tree, into the caller's
-# `labels`, `lifts`, `long_lines` and `bangs` variables.
+# Computes the readability metrics over a migrated tree. `long_lines` is the
+# formatter-reducible count gated by the baseline; `long_lines_atomic` is
+# reported separately because changing it requires changing a token.
 #
 # Issue #3895: `bangs` is a function of the TREE, and a tree has two distinct
 # states in this pipeline. The migrate job measures the freshly-TRANSLATED tree;
@@ -125,7 +126,8 @@ selfmig_measure() {
   selfmig_measured_tree=$migrated_dir
   labels=$(selfmig_code_grep "$migrated_dir" '__(switchExit|iteratorExit|gotoCase|gotoDefault|patternGuardEnd)')
   lifts=$(selfmig_code_grep "$migrated_dir" '__local_')
-  long_lines=$(find "$migrated_dir" -name '*.gs' -exec awk 'length($0)>300' {} + 2>/dev/null | wc -l | tr -d ' ')
+  local long_lines_total
+  read -r long_lines long_lines_atomic long_lines_total < <(cs2gs_long_line_counts "$migrated_dir")
   bangs=$(selfmig_code_grep "$migrated_dir" '!!')
 }
 
@@ -145,7 +147,7 @@ selfmig_apply_baseline() {
   bang_ceiling=$(jq -r '.nullAssertionCeiling' "$baseline")
 
   local summary
-  summary="self-migration: $green/$total green (floor $green_floor); labels=$labels (ceiling $label_ceiling); __local_=$lifts (ceiling $lift_ceiling); lines>300=$long_lines (ceiling $long_ceiling); bangs=$bangs (ceiling $bang_ceiling)"
+  summary="self-migration: $green/$total green (floor $green_floor); labels=$labels (ceiling $label_ceiling); __local_=$lifts (ceiling $lift_ceiling); lines>300=$long_lines reducible (ceiling $long_ceiling), $long_lines_atomic single-atom-bounded; bangs=$bangs (ceiling $bang_ceiling)"
   echo "$summary"
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
@@ -156,7 +158,8 @@ selfmig_apply_baseline() {
       echo "| green apps | $green/$total | floor $green_floor |"
       echo "| synthetic labels | $labels | ceiling $label_ceiling |"
       echo "| \`__local_\` lifts | $lifts | ceiling $lift_ceiling |"
-      echo "| lines >300 chars | $long_lines | ceiling $long_ceiling |"
+      echo "| lines >300 chars (reducible) | $long_lines | ceiling $long_ceiling |"
+      echo "| lines >300 chars (single-atom-bounded) | $long_lines_atomic | report only |"
       echo "| \`!!\` assertions | $bangs | ceiling $bang_ceiling |"
       echo ''
     } >> "$GITHUB_STEP_SUMMARY"
@@ -185,7 +188,7 @@ selfmig_apply_baseline() {
     status=1
   fi
   if (( long_lines > long_ceiling )); then
-    echo "GATE: >300-char line count $long_lines exceeded ceiling $long_ceiling." >&2
+    echo "GATE: reducible >300-char line count $long_lines exceeded ceiling $long_ceiling." >&2
     status=1
   fi
   if (( bangs > bang_ceiling )); then

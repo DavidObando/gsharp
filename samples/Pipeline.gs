@@ -14,14 +14,14 @@ package GSharp.Samples.Pipeline
 
 import System
 
-func generate(out1 out chan[int32], count int32) {
+func generate(out1 out chan [int32], count int32) {
     for i in 1 ... count + 1 {
         out1 <- i
     }
     out1.Close()
 }
 
-func square(src in chan[int32], dst out chan[int32]) {
+func square(src in chan [int32], dst out chan [int32]) {
     for v in src {
         dst <- v * v
     }
@@ -29,8 +29,8 @@ func square(src in chan[int32], dst out chan[int32]) {
 }
 
 scope {
-    let numbers = chan[int32](4)
-    let squares = chan[int32](4)
+    let numbers = chan [int32](4)
+    let squares = chan [int32](4)
 
     go generate(numbers, 5)
     go square(numbers, squares)

@@ -14,21 +14,21 @@ import System.Collections.Generic
 class Sequences {
     shared {
         // `(int32, T)` element type — the issue's `Indexed` spelling.
-        func Indexed[T](source IEnumerable[T]) sequence[(int32, T)] {
+        func Indexed[T](source IEnumerable[T]) sequence [(int32, T)] {
             var index = 0
             for v in source {
-                yield (index, v)
+                yield(index, v)
                 index = index + 1
             }
         }
 
         // `(T, T)` element type — the issue's `Pairwise` spelling.
-        func Pairwise[T](source IEnumerable[T]) sequence[(T, T)] {
+        func Pairwise[T](source IEnumerable[T]) sequence [(T, T)] {
             var first = true
-            var prev T = default(T)
+            var prev T = default (T)
             for v in source {
                 if !first {
-                    yield (prev, v)
+                    yield(prev, v)
                 }
                 prev = v
                 first = false

@@ -9,8 +9,8 @@
 package GSharp.Example.GenericMethodTypeArgs
 
 import System
-import System.Linq
 import System.Collections.Generic
+import System.Linq
 
 // Static generic method, single explicit type argument, no value arguments.
 // Inference cannot supply the element type, so the explicit `[string]` is

@@ -14,9 +14,9 @@ let p = Point{x: 3, y: 4}
 let same = p.copy()
 let movedX = p.copy(x: 10)
 let movedBoth = p.copy(x: 10, y: 20)
-let viaWith = p with { x = 10 }
+let viaWith = p with{x = 10}
 let (px, py) = p
-let { y = namedY, x = namedX } = movedBoth
+let {y = namedY, x = namedX} = movedBoth
 
 Console.WriteLine(p == same)
 Console.WriteLine(movedX == viaWith)

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Formatting.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Formatting\GSharp.Formatting\GSharp.Formatting.csproj" />
+    <ProjectReference Include="..\..\src\Formatting\Gsfmt.Cli\Gsfmt.Cli.csproj" />
+  </ItemGroup>
+
+</Project>

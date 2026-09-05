@@ -93,7 +93,8 @@
         },
         "editor.suggestOnTriggerCharacters": true,
         "editor.quickSuggestionsDelay": 10,
-        "editor.wordBasedSuggestions": "off"
+        "editor.wordBasedSuggestions": "off",
+        "editor.formatOnSave": true
       }
     },
     "themes": [
@@ -161,17 +162,6 @@
             ],
             "default": "off",
             "description": "Trace communication between VS Code and the GSharp language server."
-          },
-          "gsharp.formatting.indentSize": {
-            "type": "number",
-            "default": 4,
-            "minimum": 1,
-            "description": "Number of spaces per indentation level. Takes effect after restarting the language server."
-          },
-          "gsharp.formatting.useTabs": {
-            "type": "boolean",
-            "default": false,
-            "description": "Use tabs instead of spaces for indentation. Takes effect after restarting the language server."
           },
           "gsharp.diagnostics.enableOnType": {
             "type": "boolean",

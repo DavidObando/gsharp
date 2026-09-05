@@ -187,6 +187,7 @@ REPL and `.gs` file runner.
 | [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) | MSBuild SDK — `dotnet build`, `run`, `test`, and `pack` for `.gsproj` projects, including Roslyn source-generator hosting and code analyzers. |
 | [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) | `dotnet new` templates: console, library, xUnit, web. |
 | [`Gsharp.Repl`](https://www.nuget.org/packages/Gsharp.Repl/) | `gsi` — interactive REPL and file runner. |
+| [`Gsharp.Gsfmt`](https://www.nuget.org/packages/Gsharp.Gsfmt/) | `gsfmt` — the option-free canonical G# formatter used by editors, CI, the SDK, and `cs2gs`. |
 | [`Gsharp.Cs2Gs`](https://www.nuget.org/packages/Gsharp.Cs2Gs/) | `cs2gs` — migrates C# projects to G#, including Roslyn analyzers and their tests. |
 
 `cs2gs` doubles as the compiler's quality gate: every C# syntax construct is
@@ -208,6 +209,7 @@ is recorded as [Architecture Decision Records](docs/adr/).
 src/
   Core/               # Compiler front-end: syntax, binder, lowering, symbols, emit
   Compiler/           # gsc — command-line compiler driver
+  Formatting/         # GSharp.Formatting library and gsfmt CLI
   Repl/               # gsi — interactive REPL
   LanguageServer/     # LSP server backing the editor experience
   Sdk/                # MSBuild SDK, templates, and Gsharp.Extensions

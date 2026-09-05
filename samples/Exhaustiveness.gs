@@ -7,13 +7,17 @@ package GSharp.Samples.Exhaustiveness
 
 import System
 
-enum Color { Red, Green, Blue }
+enum Color {
+    Red,
+    Green,
+    Blue
+}
 
 let color = Color.Green
 let label = switch color {
-  case Color.Red: "red"
-  case Color.Green: "green"
-  case Color.Blue: "blue"
+    case Color.Red: "red"
+    case Color.Green: "green"
+    case Color.Blue: "blue"
 }
 
 Console.WriteLine("color is $label")

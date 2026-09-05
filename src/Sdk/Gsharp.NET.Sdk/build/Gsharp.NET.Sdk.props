@@ -9,6 +9,7 @@
          sit alongside this .props in ../tools/. -->
     <GsharpToolFullPath Condition=" '$(GsharpToolFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\task\Gsharp.NET.Sdk.dll</GsharpToolFullPath>
     <GsharpCompilerFullPath Condition=" '$(GsharpCompilerFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\compiler\gsc.dll</GsharpCompilerFullPath>
+    <GsharpFormatterFullPath Condition=" '$(GsharpFormatterFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\formatter\gsfmt.dll</GsharpFormatterFullPath>
 
     <!-- ADR-0145 §E/§F: the gsgen source-generator host. In a packed
          Gsharp.NET.Sdk NuGet it sits alongside this .props under

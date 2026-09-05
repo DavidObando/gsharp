@@ -13,17 +13,17 @@ struct Loud {
     var V int32
 }
 
-func (a Loud) operator ==(b Loud) bool {
+func (a Loud) operator == (b Loud) bool {
     Console.WriteLine("loud")
     return a.V == b.V
 }
 
-func (a Loud) operator !=(b Loud) bool {
+func (a Loud) operator != (b Loud) bool {
     Console.WriteLine("loud")
     return a.V != b.V
 }
 
-func mk(tag string) (int32, string) {
+func mk(tag string)(int32, string) {
     Console.WriteLine("eval $tag")
     return (1, "x")
 }

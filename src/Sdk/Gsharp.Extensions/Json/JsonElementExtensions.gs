@@ -18,17 +18,17 @@ import System.Text.Json
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the decoded string value, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetStringOrNil(name string) string? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.String {
-    return nil
-  }
-  return value.GetString()
+func (element JsonElement) GetStringOrNil(name string) string? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.String {
+        return nil
+    }
+    return value.GetString()
 }
 
 /// Returns the named JSON string property parsed as a `Guid`.
@@ -45,20 +45,20 @@ func(element JsonElement) GetStringOrNil(name string) string? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the parsed `Guid`, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetGuidOrNil(name string) Guid? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.String {
-    return nil
-  }
-  if !value.TryGetGuid(out var guid) {
-    return nil
-  }
-  return guid
+func (element JsonElement) GetGuidOrNil(name string) Guid? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.String {
+        return nil
+    }
+    if !value.TryGetGuid(out var guid) {
+        return nil
+    }
+    return guid
 }
 
 /// Returns the named JSON string property parsed as a `DateTimeOffset`.
@@ -75,20 +75,20 @@ func(element JsonElement) GetGuidOrNil(name string) Guid? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the parsed timestamp with its offset, or `nil` when unavailable or invalid.
-func(element JsonElement) GetDateTimeOffsetOrNil(name string) DateTimeOffset? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.String {
-    return nil
-  }
-  if !value.TryGetDateTimeOffset(out var timestamp) {
-    return nil
-  }
-  return timestamp
+func (element JsonElement) GetDateTimeOffsetOrNil(name string) DateTimeOffset? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.String {
+        return nil
+    }
+    if !value.TryGetDateTimeOffset(out var timestamp) {
+        return nil
+    }
+    return timestamp
 }
 
 /// Returns the named JSON string property decoded from Base64.
@@ -104,20 +104,20 @@ func(element JsonElement) GetDateTimeOffsetOrNil(name string) DateTimeOffset? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the decoded byte slice, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetBytesFromBase64OrNil(name string) []?uint8 {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.String {
-    return nil
-  }
-  if !value.TryGetBytesFromBase64(out var bytes) {
-    return nil
-  }
-  return bytes
+func (element JsonElement) GetBytesFromBase64OrNil(name string)[]?uint8 {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.String {
+        return nil
+    }
+    if !value.TryGetBytesFromBase64(out var bytes) {
+        return nil
+    }
+    return bytes
 }
 
 /// Returns the named JSON number property as an `int32`.
@@ -134,20 +134,20 @@ func(element JsonElement) GetBytesFromBase64OrNil(name string) []?uint8 {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the `int32` value, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetInt32OrNil(name string) int32? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.Number {
-    return nil
-  }
-  if !value.TryGetInt32(out var number) {
-    return nil
-  }
-  return number
+func (element JsonElement) GetInt32OrNil(name string) int32? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.Number {
+        return nil
+    }
+    if !value.TryGetInt32(out var number) {
+        return nil
+    }
+    return number
 }
 
 /// Returns the named JSON number property as an `int64`.
@@ -164,20 +164,20 @@ func(element JsonElement) GetInt32OrNil(name string) int32? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the `int64` value, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetInt64OrNil(name string) int64? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.Number {
-    return nil
-  }
-  if !value.TryGetInt64(out var number) {
-    return nil
-  }
-  return number
+func (element JsonElement) GetInt64OrNil(name string) int64? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.Number {
+        return nil
+    }
+    if !value.TryGetInt64(out var number) {
+        return nil
+    }
+    return number
 }
 
 /// Returns the named JSON number property as a finite `float64`.
@@ -194,23 +194,23 @@ func(element JsonElement) GetInt64OrNil(name string) int64? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the finite `float64` value, or `nil` when unavailable or invalid.
-func(element JsonElement) GetFloat64OrNil(name string) float64? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.Number {
-    return nil
-  }
-  if !value.TryGetDouble(out var number) {
-    return nil
-  }
-  if !float64.IsFinite(number) {
-    return nil
-  }
-  return number
+func (element JsonElement) GetFloat64OrNil(name string) float64? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.Number {
+        return nil
+    }
+    if !value.TryGetDouble(out var number) {
+        return nil
+    }
+    if !float64.IsFinite(number) {
+        return nil
+    }
+    return number
 }
 
 /// Returns the named JSON number property as a `decimal`.
@@ -227,20 +227,20 @@ func(element JsonElement) GetFloat64OrNil(name string) float64? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the `decimal` value, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetDecimalOrNil(name string) decimal? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.Number {
-    return nil
-  }
-  if !value.TryGetDecimal(out var number) {
-    return nil
-  }
-  return number
+func (element JsonElement) GetDecimalOrNil(name string) decimal? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.Number {
+        return nil
+    }
+    if !value.TryGetDecimal(out var number) {
+        return nil
+    }
+    return number
 }
 
 /// Returns the named JSON Boolean property.
@@ -256,17 +256,17 @@ func(element JsonElement) GetDecimalOrNil(name string) decimal? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the Boolean value, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetBoolOrNil(name string) bool? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.True && value.ValueKind != JsonValueKind.False {
-    return nil
-  }
-  return value.GetBoolean()
+func (element JsonElement) GetBoolOrNil(name string) bool? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.True && value.ValueKind != JsonValueKind.False {
+        return nil
+    }
+    return value.GetBoolean()
 }
 
 /// Returns the named JSON array property as a `JsonElement`.
@@ -283,17 +283,17 @@ func(element JsonElement) GetBoolOrNil(name string) bool? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the array element, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetArrayOrNil(name string) JsonElement? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.Array {
-    return nil
-  }
-  return value
+func (element JsonElement) GetArrayOrNil(name string) JsonElement? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.Array {
+        return nil
+    }
+    return value
 }
 
 /// Returns the named nested JSON object property as a `JsonElement`.
@@ -310,15 +310,15 @@ func(element JsonElement) GetArrayOrNil(name string) JsonElement? {
 ///
 /// @param name the case-sensitive property name to read.
 /// @returns the nested object, or `nil` when the property is unavailable or invalid.
-func(element JsonElement) GetObjectOrNil(name string) JsonElement? {
-  if element.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  if !element.TryGetProperty(name, out var value) {
-    return nil
-  }
-  if value.ValueKind != JsonValueKind.Object {
-    return nil
-  }
-  return value
+func (element JsonElement) GetObjectOrNil(name string) JsonElement? {
+    if element.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    if !element.TryGetProperty(name, out var value) {
+        return nil
+    }
+    if value.ValueKind != JsonValueKind.Object {
+        return nil
+    }
+    return value
 }

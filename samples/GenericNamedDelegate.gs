@@ -24,17 +24,17 @@ delegate Predicate[T any](value T) bool;
 delegate Converter[TIn any, TOut any](x TIn) TOut;
 
 // Type parameter nested inside a composite type (`[]T`) in both positions.
-delegate Mapper[T any](items []T) []T;
+delegate Mapper[T any](items[]T)[]T;
 
-var isPositive Predicate[int32] = func(value int32) bool {
+var isPositive Predicate[int32] = func (value int32) bool {
     return value > 0
 }
 
-var toLabel Converter[int32, string] = func(x int32) string {
+var toLabel Converter[int32, string] = func (x int32) string {
     return "n=" + x.ToString()
 }
 
-var identity Mapper[int32] = func(items []int32) []int32 {
+var identity Mapper[int32] = func (items[]int32)[]int32 {
     return items
 }
 

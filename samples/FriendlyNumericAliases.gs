@@ -13,16 +13,29 @@ package FriendlyNumericAliases
 
 import System
 
-func sumAlias(a int, b int) int { return a + b }
-func sumCanonical(a int32, b int32) int32 { return a + b }
+func sumAlias(a int, b int) int {
+    return a + b
+}
 
-func bytesPerWord(w byte) int { return int(w) * int(w) }
+func sumCanonical(a int32, b int32) int32 {
+    return a + b
+}
 
-func widen(s short, l long) long { return long(s) + l }
+func bytesPerWord(w byte) int {
+    return int(w) * int(w)
+}
 
-func averageFloat(a float, b float) float { return (a + b) / 2.0F }
+func widen(s short, l long) long {
+    return long(s) + l
+}
 
-func averageDouble(a double, b double) double { return (a + b) / 2.0 }
+func averageFloat(a float, b float) float {
+    return (a + b) / 2.0F
+}
+
+func averageDouble(a double, b double) double {
+    return (a + b) / 2.0
+}
 
 let x int = sumAlias(2, 3)
 let y int32 = sumCanonical(x, 4)

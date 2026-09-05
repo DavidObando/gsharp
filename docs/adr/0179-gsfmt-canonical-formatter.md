@@ -1,6 +1,6 @@
 # ADR-0179: `gsfmt` — one canonical G# form, one formatting engine
 
-- **Status**: Proposed
+- **Status**: Accepted — implemented 2026-09-05
 - **Date**: 2026-09-05
 - **Related**: ADR-0115 §B canonical G# output; ADR-0169 analyzer framework; ADR-0027 no Roslyn in gsc. Issues #916 (G# formatter), #892 (`var`→`let`), #1660 (range formatting withdrawn), #3501 (self-migration readability), #3931 (LanguageServer.Tests parity hang)
 
@@ -435,6 +435,10 @@ no consumer and cannot regress anything.
 | 8 | Repo adoption | `gsfmt -w` over hand-written `.gs`; CI `gsfmt --check`. | `gsfmt --check` in CI |
 | 9 | The other 62 | 9a: cs2gs preserves doc-comment line structure (−32). 9b: backtick-safe raw strings — split a literal containing a backtick into concatenation, as Go does (−30, not −61: see the correction above). **DONE, #3950**, measured 631 → 565 locally. | — |
 
+**Implementation note (September 5, 2026):** phases 1–8 were implemented
+together when the ADR was accepted, including the formatter library and CLI,
+language-server/SDK/cs2gs adoption, repository rewrite, and CI gate.
+
 **Sequencing note:** Phase 9 was listed last but had the best ratio in the plan — one
 small, self-contained cs2gs PR removing ~62 long lines that no formatter work can
 touch. It was **done first**, for exactly that reason — and it is what finally made
@@ -503,7 +507,7 @@ touch. It was **done first**, for exactly that reason — and it is what finally
    32 long comment lines are cs2gs failing to preserve line structure it had, which is
    Phase 9a.
 4. Blank-line policy: `gofmt` preserves author blank lines (collapsing runs to one);
-   `GSharpPrinter` emits exactly one between members. Proposal: preserve up to one,
-   insert one where ADR-0115 §B.2 requires. Needs a decision before Phase 2.
+   `GSharpPrinter` emits exactly one between members. **Resolved 2026-09-05:**
+   preserve up to one and insert one where ADR-0115 §B.2 requires.
 5. Does the SDK `GsharpFormatCheck` target ever become on-by-default for new projects
    from `Gsharp.Templates`? Deferred to post-Phase-8 data.

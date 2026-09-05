@@ -1,7 +1,7 @@
 package ProjectRefApp
 
-import System
 import ProjectRefLib
+import System
 
 var greeter = Greeter("project-ref")
 Console.WriteLine(greeter.Greet())

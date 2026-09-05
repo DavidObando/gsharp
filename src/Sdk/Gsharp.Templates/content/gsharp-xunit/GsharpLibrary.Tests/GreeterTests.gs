@@ -7,8 +7,8 @@
 
 package GsharpLibrary.Tests
 
-import Xunit
 import GsharpLibrary
+import Xunit
 
 class GreeterTests {
     @Fact

@@ -11,19 +11,19 @@ class Vector2 {
     var Y int32
 }
 
-func (a Vector2) operator +(b Vector2) Vector2 {
+func (a Vector2) operator + (b Vector2) Vector2 {
     return Vector2{X: a.X + b.X, Y: a.Y + b.Y}
 }
 
-func (a Vector2) operator -() Vector2 {
+func (a Vector2) operator - () Vector2 {
     return Vector2{X: -a.X, Y: -a.Y}
 }
 
-func (a Vector2) operator ==(b Vector2) bool {
+func (a Vector2) operator == (b Vector2) bool {
     return a.X == b.X && a.Y == b.Y
 }
 
-func (a Vector2) operator !=(b Vector2) bool {
+func (a Vector2) operator != (b Vector2) bool {
     return a.X != b.X || a.Y != b.Y
 }
 

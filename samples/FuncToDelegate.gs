@@ -13,17 +13,25 @@ import System
 
 // Return position: a factory that RETURNS a delegate built from a func literal.
 func makeDoubler() Func[int32, int32] {
-    return func(x int32) int32 { return x * 2 }
+    return func (x int32) int32 {
+        return x * 2
+    }
 }
 
 // Assignment position: a func literal assigned to a named generic delegate.
-var isBig Predicate[int32] = func(x int32) bool { return x > 2 }
+var isBig Predicate[int32] = func (x int32) bool {
+    return x > 2
+}
 
 // Assignment position: a func literal assigned to a parameterless delegate.
-var greet Action = func() { Console.WriteLine("hello from Action") }
+var greet Action = func () {
+    Console.WriteLine("hello from Action")
+}
 
 // A func-typed value adapted to a named delegate type (delegate adaptation).
-var raw = func(x int32) int32 { return x + 100 }
+var raw = func (x int32) int32 {
+    return x + 100
+}
 var bump Func[int32, int32] = raw
 
 var doubler = makeDoubler()

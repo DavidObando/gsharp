@@ -172,11 +172,11 @@
     {
       "id": "editor.formatting",
       "area": "editor",
-      "title": "Whole-document formatting",
+      "title": "Canonical document, range, and on-type formatting",
       "vsPath": "standard-lsp",
-      "implementationIds": ["server:textDocument/formatting"],
+      "implementationIds": ["server:textDocument/formatting", "server:textDocument/rangeFormatting", "server:textDocument/onTypeFormatting"],
       "acceptanceCoverageIds": ["VS26-LSP-FORMATTING"],
-      "serverCapabilities": ["DocumentFormattingProvider"],
+      "serverCapabilities": ["DocumentFormattingProvider", "DocumentRangeFormattingProvider", "DocumentOnTypeFormattingProvider"],
       "vscodeContributions": [],
       "vscodeCommands": []
     },
@@ -603,12 +603,12 @@
     {
       "id": "config.formatting",
       "area": "config",
-      "title": "Indent size and tabs",
+      "title": "Canonical option-free formatting",
       "vsPath": "native-vs-equivalent",
-      "implementationIds": ["vscode:ServerManager.initializationOptions", "vs:LanguageClientPolicy.CreateInitializationOptions"],
+      "implementationIds": ["server:GSharpFormatter", "vscode:configurationDefaults.editor.formatOnSave"],
       "acceptanceCoverageIds": ["VS26-CONFIG-FORMATTING"],
       "serverCapabilities": [],
-      "vscodeContributions": ["configuration:gsharp.formatting.indentSize", "configuration:gsharp.formatting.useTabs"],
+      "vscodeContributions": [],
       "vscodeCommands": []
     },
     {

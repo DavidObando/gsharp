@@ -1,0 +1,3 @@
+# Visual Studio item/project templates contain $placeholder$ tokens that are
+# substituted before the result becomes valid G# source.
+/src/vs-gsharp/templates/

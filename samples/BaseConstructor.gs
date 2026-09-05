@@ -19,8 +19,7 @@ import System
 // `MyError` extends System.Exception, whose accessible constructors all require
 // arguments. The primary-constructor parameter `Detail` is forwarded to the
 // base `Exception(string)` ctor, so the inherited `Message` property is set.
-class MyError(Detail string) : Exception(Detail) {
-}
+class MyError(Detail string) : Exception(Detail) { }
 
 var e = MyError("boom")
 Console.WriteLine(e.Message)
@@ -28,8 +27,7 @@ Console.WriteLine(e.Detail)
 
 // A base-constructor argument may be an arbitrary expression over the primary
 // parameters rather than a bare parameter reference.
-class LabeledError(Label string) : Exception(Label + "!") {
-}
+class LabeledError(Label string) : Exception(Label + "!") { }
 
 var le = LabeledError("warn")
 Console.WriteLine(le.Message)
@@ -41,8 +39,7 @@ open class Animal(Name string) {
     }
 }
 
-class Dog(Pet string) : Animal(Pet) {
-}
+class Dog(Pet string) : Animal(Pet) { }
 
 var d = Dog("Rex")
 Console.WriteLine(d.Speak())

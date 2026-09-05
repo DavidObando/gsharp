@@ -627,6 +627,12 @@ internal static class Program
                     case "--translate-only":
                         translateOnly = true;
                         break;
+                    case "--format":
+                        options.FormatOutput = true;
+                        break;
+                    case "--no-format":
+                        options.FormatOutput = false;
+                        break;
                     case "--via-sdk":
                         options.CompileViaSdk = true;
                         break;
@@ -752,6 +758,8 @@ internal static class Program
         Console.WriteLine("  --translate-only  Repository migration only (issue #3668): run stage 1 across the WHOLE");
         Console.WriteLine("                    repository and stop, writing a per-app validation-context.json so");
         Console.WriteLine("                    'cs2gs validate' shards can run stages 2-4 in parallel elsewhere.");
+        Console.WriteLine("  --format          Run gsfmt over emitted G# (default; ADR-0179).");
+        Console.WriteLine("  --no-format       Keep the legacy printer layout.");
         Console.WriteLine();
         Console.WriteLine("validate options: run 'cs2gs validate --help'.");
         Console.WriteLine();

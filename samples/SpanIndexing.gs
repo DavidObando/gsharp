@@ -13,7 +13,7 @@ import System
 
 // Read: a `ReadOnlySpan[int32]` indexed inside an arithmetic loop sum. The
 // indexer returns `ref readonly int32` and auto-dereferences to `int32`.
-func sumSpan(values []int32) int32 {
+func sumSpan(values[]int32) int32 {
     var s ReadOnlySpan[int32] = values
     var total = 0
     var i = 0
@@ -27,7 +27,7 @@ func sumSpan(values []int32) int32 {
 
 // Write: a `Span[int32]` element assignment stores through the `ref int32`
 // returned by `get_Item`, then the elements are read back and summed.
-func writeBack(values []int32) int32 {
+func writeBack(values[]int32) int32 {
     var s Span[int32] = values
     s[0] = 100
     s[2] = 300

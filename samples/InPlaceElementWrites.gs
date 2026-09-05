@@ -14,12 +14,18 @@ struct Point {
     var Y int32
 
     prop Sum int32 {
-        get { return X + Y }
+        get {
+            return X + Y
+        }
     }
 
     prop Tagged int32 {
-        get { return Y }
-        set { Y = value }
+        get {
+            return Y
+        }
+        set {
+            Y = value
+        }
     }
 
     func Bump() {
@@ -40,7 +46,7 @@ func idx() int32 {
     return 0
 }
 
-func grab() []Point {
+func grab()[]Point {
     return ss
 }
 

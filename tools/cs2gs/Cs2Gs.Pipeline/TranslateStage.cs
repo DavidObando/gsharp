@@ -14,6 +14,8 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Formatting;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -418,6 +420,21 @@ public sealed class TranslateStage : IMigrationStage
                         throw new TranslationCrashException(document.FilePath, ex);
                     }
 
+                    string formatFailure = null;
+                    if (context.Options.FormatOutput)
+                    {
+                        FormatResult format = GSharpFormatter.Format(SourceText.From(printed, document.FilePath));
+                        if (format.Diagnostics.IsEmpty)
+                        {
+                            printed = format.Text!.ToString();
+                        }
+                        else
+                        {
+                            formatFailure = "gsfmt post-pass: "
+                                + string.Join("; ", format.Diagnostics.Select(diagnostic => diagnostic.Message));
+                        }
+                    }
+
                     string gsRelativePath;
                     if (unitIndex == 0)
                     {
@@ -464,6 +481,11 @@ public sealed class TranslateStage : IMigrationStage
                         IsFromReferencedProject = isReferencedProject,
                     };
                     context.EmittedFiles.Add(emitted);
+
+                    if (!isReferencedProject && formatFailure is not null)
+                    {
+                        artifacts.Add(context.Triage.RoundTripFailure(emitted, formatFailure));
+                    }
 
                     if (isReferencedProject)
                     {

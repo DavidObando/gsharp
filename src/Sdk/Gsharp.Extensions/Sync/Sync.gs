@@ -121,7 +121,7 @@ class SyncMap[K, V any] {
     ///          write monitor; must not be `nil`.
     /// @returns the value produced by `f` and stored.
     /// @exception ArgumentNullException `f` is `nil`.
-    func Update(key K, f (V) -> V) V {
+    func Update(key K, f(V) -> V) V {
         if f == nil {
             throw ArgumentNullException("f")
         }
@@ -173,7 +173,7 @@ class SyncMap[K, V any] {
     ///
     /// @returns a new slice holding the snapshot keys, in no particular
     ///          order.
-    func Keys() []K {
+    func Keys()[]K {
         // List + ToArray: a slice is a fixed CLR array, and the growable
         // shape is `List[T]` + `Add` (ADR-0174 D13 retired `append`).
         var ks = List[K]()
@@ -192,7 +192,7 @@ class SyncMap[K, V any] {
     ///
     /// @param action invoked with each key and value; must not be `nil`.
     /// @exception ArgumentNullException `action` is `nil`.
-    func Range(action (K, V) -> void) {
+    func Range(action(K, V) -> void) {
         if action == nil {
             throw ArgumentNullException("action")
         }

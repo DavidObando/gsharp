@@ -10,17 +10,17 @@
 
 package GSharp.Samples.ScopeAll
 
-import System
 import Gsharp.Concurrency
+import System
 
-func succeed(results out chan[int32], value int32, ready out chan[bool]) {
+func succeed(results out chan [int32], value int32, ready out chan [bool]) {
     results <- value
     ready <- true
 }
 
 // Waits for both healthy workers before failing, so the sample's output does
 // not depend on how the pool happens to schedule them.
-func failAfter(ready in chan[bool], workers int32) {
+func failAfter(ready in chan [bool], workers int32) {
     for i in 0 ... workers {
         let (_, ok) = <-ready
     }
@@ -28,8 +28,8 @@ func failAfter(ready in chan[bool], workers int32) {
     throw Exception("worker failed")
 }
 
-let results = chan[int32](4)
-let ready = chan[bool](2)
+let results = chan [int32](4)
+let ready = chan [bool](2)
 
 try {
     scope {

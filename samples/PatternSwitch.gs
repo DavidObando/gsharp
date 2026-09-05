@@ -8,43 +8,79 @@ package GSharp.Samples.PatternSwitch
 
 import System
 
-open class Animal { var Name string }
-class Dog : Animal { var Bark int32 }
-class Cat : Animal { var Purr int32 }
+open class Animal {
+    var Name string
+}
+
+class Dog : Animal {
+    var Bark int32
+}
+
+class Cat : Animal {
+    var Purr int32
+}
 
 func describe(n int32) {
-  switch n {
-    case 0 { Console.WriteLine("zero") }
-    case < 0 { Console.WriteLine("negative") }
-    case > 100 { Console.WriteLine("huge") }
-    default { Console.WriteLine("positive small") }
-  }
+    switch n {
+        case 0 {
+            Console.WriteLine("zero")
+        }
+        case < 0 {
+            Console.WriteLine("negative")
+        }
+        case > 100 {
+            Console.WriteLine("huge")
+        }
+        default {
+            Console.WriteLine("positive small")
+        }
+    }
 }
 
 func name(a Animal) {
-  switch a {
-    case d is Dog { Console.WriteLine("dog ${d.Name} barks ${d.Bark}") }
-    case c is Cat { Console.WriteLine("cat ${c.Name} purrs ${c.Purr}") }
-    default { Console.WriteLine("unknown") }
-  }
+    switch a {
+        case d is Dog {
+            Console.WriteLine("dog ${d.Name} barks ${d.Bark}")
+        }
+        case c is Cat {
+            Console.WriteLine("cat ${c.Name} purrs ${c.Purr}")
+        }
+        default {
+            Console.WriteLine("unknown")
+        }
+    }
 }
 
-func shape(xs []int32) {
-  switch xs {
-    case [1, _, 3] { Console.WriteLine("bookended-3") }
-    case [_] { Console.WriteLine("singleton") }
-    default { Console.WriteLine("other") }
-  }
+func shape(xs[]int32) {
+    switch xs {
+        case [1, _, 3] {
+            Console.WriteLine("bookended-3")
+        }
+        case [_] {
+            Console.WriteLine("singleton")
+        }
+        default {
+            Console.WriteLine("other")
+        }
+    }
 }
 
-data struct Point { var X int32 var Y int32 }
+data struct Point {
+    var X int32 var Y int32
+}
 
 func origin(p Point) {
-  switch p {
-    case { X: 0, Y: 0 } { Console.WriteLine("origin") }
-    case { X: > 0, Y: > 0 } { Console.WriteLine("Q1") }
-    default { Console.WriteLine("elsewhere") }
-  }
+    switch p {
+        case {X: 0, Y: 0} {
+            Console.WriteLine("origin")
+        }
+        case {X: > 0, Y: > 0} {
+            Console.WriteLine("Q1")
+        }
+        default {
+            Console.WriteLine("elsewhere")
+        }
+    }
 }
 
 describe(-5)

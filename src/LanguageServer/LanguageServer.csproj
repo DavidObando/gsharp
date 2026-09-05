@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="@(GsharpCore)" />
+    <ProjectReference Include="..\Formatting\GSharp.Formatting\GSharp.Formatting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

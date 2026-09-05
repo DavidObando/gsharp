@@ -64,6 +64,8 @@ Useful `migrate` options:
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
 | `--baseline <file>` | Gate on the gap ledger. New and regressed fingerprints fail; known-open gaps are tolerated. |
 | `--baseline-strict` | Also fail on stale ledger entries. Intended for nightly checks. |
+| `--format` | Run the canonical formatter over emitted G#. This is the default. |
+| `--no-format` | Keep the legacy printer layout for comparison or formatter triage. |
 
 ## Roslyn analyzer projects
 

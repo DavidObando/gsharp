@@ -10,11 +10,11 @@
 
 package GSharp.Example.SequencesHelpers
 
-import System
-import System.Linq
-import System.Collections.Generic
 import Gsharp.Extensions.Optional
 import Gsharp.Extensions.Sequences
+import System
+import System.Collections.Generic
+import System.Linq
 
 // --- Builders ----------------------------------------------------------------
 
@@ -29,7 +29,14 @@ for v in Sequences.RangeStep(0, 10, 3) {
 }
 
 Console.WriteLine("Iterate (Take 5):")
-let powers = Sequences.Iterate(1, func(n int32) int32 { return n * 2 }).Take(5)
+let powers = Sequences
+    .Iterate(
+    1,
+    func (n int32) int32 {
+        return n * 2
+    }
+)
+    .Take(5)
 for v in powers {
     Console.WriteLine(v)
 }
@@ -115,7 +122,13 @@ let m1 = pairs.ToMap()
 Console.WriteLine("ToMap(pairs)[two]: " + m1["two"].ToString())
 
 let words = Sequences.Of("alpha", "beta", "gamma")
-let m2 = words.ToMap(
-    func(s string) string { return s.Substring(0, 1) },
-    func(s string) int32 { return s.Length })
+let m2 = words
+    .ToMap(
+    func (s string) string {
+        return s.Substring(0, 1)
+    },
+    func (s string) int32 {
+        return s.Length
+    }
+)
 Console.WriteLine("ToMap(words)[a]: " + m2["a"].ToString())

@@ -39,8 +39,7 @@ Console.WriteLine(bytes.Length)
 Console.WriteLine(b.Describe("buffer"))
 
 // A fully-qualified imported base type also resolves.
-class Args : System.EventArgs {
-}
+class Args : System.EventArgs { }
 
 var a = Args{}
 Console.WriteLine(a.ToString())

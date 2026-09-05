@@ -200,6 +200,13 @@
           "System.Reflection.MetadataLoadContext": "[9.0.0, )"
         }
       },
+      "gsharp.formatting": {
+        "type": "Project",
+        "dependencies": {
+          "GSharp.Core": "[1.0.0, )",
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
+      },
       "GSharp.Gsharp.Extensions": {
         "type": "Project",
         "dependencies": {
@@ -210,6 +217,7 @@
         "type": "Project",
         "dependencies": {
           "GSharp.Core": "[1.0.0, )",
+          "GSharp.Formatting": "[1.0.0, )",
           "MessagePack": "[2.5.301, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )",
           "StreamJsonRpc": "[2.22.11, )"

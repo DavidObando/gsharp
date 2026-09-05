@@ -10,15 +10,17 @@
 
 package GsharpWebApp
 
-import System
 import Microsoft.AspNetCore.Builder
 import Microsoft.AspNetCore.Routing
 import Microsoft.Extensions.Hosting
+import System
 
 var builder = WebApplication.CreateBuilder()
 var app = builder.Build()
 
-var hello Func[string] = func() string { return "Hello from GSharp on ASP.NET Core!" }
+var hello Func[string] = func () string {
+    return "Hello from GSharp on ASP.NET Core!"
+}
 app.MapGet("/", hello)
 
 // Start Kestrel and block until the process is stopped.

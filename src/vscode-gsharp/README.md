@@ -31,8 +31,6 @@ Rich language support for the [G# programming language](https://github.com/David
 | `gsharp.server.path` | `""` | Path to the GSharp Language Server executable |
 | `gsharp.server.waitForDebugger` | `false` | Wait for a debugger to attach to the language server |
 | `gsharp.trace.server` | `"off"` | Trace LSP communication (`off`, `messages`, `verbose`) |
-| `gsharp.formatting.indentSize` | `4` | Spaces per indentation level |
-| `gsharp.formatting.useTabs` | `false` | Use tabs instead of spaces |
 | `gsharp.diagnostics.enableOnType` | `true` | Run diagnostics on every keystroke |
 | `gsharp.completion.triggerOnDot` | `true` | Trigger completion after typing `.` |
 | `gsharp.codeLens.enableReferences` | `true` | Show reference counts |
@@ -41,6 +39,8 @@ Rich language support for the [G# programming language](https://github.com/David
 | `gsharp.coldStartCache.enable` | `true` | Persist language-service project metadata |
 
 Language feature settings take effect after running **GSharp: Restart Language Server**.
+Formatting is canonical and option-free: 4 spaces, K&R braces, and a fixed
+120-column width. Format-on-save is enabled for G# by default.
 
 ## Commands
 

@@ -32,6 +32,12 @@ public static class ServerCapabilitiesFactory
             DocumentSymbolProvider = true,
             WorkspaceSymbolProvider = true,
             DocumentFormattingProvider = true,
+            DocumentRangeFormattingProvider = true,
+            DocumentOnTypeFormattingProvider = new DocumentOnTypeFormattingOptions
+            {
+                FirstTriggerCharacter = "}",
+                MoreTriggerCharacter = new[] { ";", "\n" },
+            },
             FoldingRangeProvider = true,
             SelectionRangeProvider = true,
             LinkedEditingRangeProvider = true,
@@ -54,11 +60,6 @@ public static class ServerCapabilitiesFactory
                 ? new CodeLensOptions { ResolveProvider = false }
                 : null,
 
-            // Range formatting and on-type formatting are intentionally not advertised (see
-            // issue #1660): FormattingEngine only produces a correct whole-document result, and
-            // advertising a partial-range capability that silently rewrites the whole document
-            // on every "}"/";"/newline keystroke is worse than not offering it. Whole-document
-            // formatting (DocumentFormattingProvider above) remains fully supported.
             SemanticTokensProvider = new SemanticTokensOptions
             {
                 Legend = SemanticTokensHandler.Legend,

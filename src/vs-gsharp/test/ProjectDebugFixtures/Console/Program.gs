@@ -1,12 +1,13 @@
 package VsAcceptance.Console
 
+import Newtonsoft.Json
 import System
 import System.Threading
-import Newtonsoft.Json
 import VsAcceptance.Library
 
 func ParseExpectedException() int32 {
     return Int32.Parse("expected exception") // BREAKPOINT:exception
+
 }
 
 func StepTarget(value int32) int32 {
@@ -25,6 +26,7 @@ try {
     var parsed = ParseExpectedException()
 } catch (e FormatException) {
     Console.WriteLine(e.Message) // BREAKPOINT:catch-handler
+
 }
 
 Thread.Sleep(1000)

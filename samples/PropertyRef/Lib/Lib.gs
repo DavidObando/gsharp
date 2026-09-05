@@ -13,7 +13,9 @@ class Rect {
     prop Width int32
     prop Height int32
     prop Area int32 {
-        get { return this.Width * this.Height }
+        get {
+            return this.Width * this.Height
+        }
     }
 }
 
@@ -21,11 +23,17 @@ class Rect {
 class Clamped {
     prop raw int32
     prop Value int32 {
-        get { return this.raw }
+        get {
+            return this.raw
+        }
         set(v) {
-            if v < 0 { this.raw = 0 }
-            else if v > 100 { this.raw = 100 }
-            else { this.raw = v }
+            if v < 0 {
+                this.raw = 0
+            } else if v > 100 {
+                this.raw = 100
+            } else {
+                this.raw = v
+            }
         }
     }
 }
@@ -33,18 +41,24 @@ class Clamped {
 // Virtual and override properties
 open class Animal {
     open prop Sound string {
-        get { return "..." }
+        get {
+            return "..."
+        }
     }
 }
 
 class Dog : Animal {
     override prop Sound string {
-        get { return "Woof" }
+        get {
+            return "Woof"
+        }
     }
 }
 
 class Cat : Animal {
     override prop Sound string {
-        get { return "Meow" }
+        get {
+            return "Meow"
+        }
     }
 }

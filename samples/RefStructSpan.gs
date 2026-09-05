@@ -22,7 +22,7 @@ func firstThree(text string) string {
 }
 
 // A `ReadOnlySpan[int32]` local over an array, read for its length.
-func spanLength(values []int32) int32 {
+func spanLength(values[]int32) int32 {
     var span ReadOnlySpan[int32] = values
     return span.Length
 }

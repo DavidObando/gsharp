@@ -12,15 +12,15 @@ package GSharp.Example.TupleArrowElements
 
 import System
 
-func mk() ((int32) -> int32, (int32) -> int32) {
+func mk()((int32) -> int32, (int32) -> int32) {
     return ((x int32) -> x + 1, (x int32) -> x * 2)
 }
 
-func mkZeroArg() (() -> int32, () -> int32) {
+func mkZeroArg()(() -> int32, () -> int32) {
     return (() -> 10, () -> 32)
 }
 
-func mkNamed() (f (int32) -> int32, g () -> int32) {
+func mkNamed()(f(int32) -> int32, g() -> int32) {
     return ((x int32) -> x - 1, () -> 7)
 }
 
@@ -35,10 +35,10 @@ let f = named.f
 let g = named.g
 Console.WriteLine(f(10) + g())
 
-let mixed ((int32) -> int32, int32) = ((x int32) -> x * x, 6)
+let mixed((int32) -> int32, int32) = ((x int32) -> x * x, 6)
 let (square, n) = mixed
 Console.WriteLine(square(n))
 
 // The ADR-0137 parenthesized-nullable function type keeps its meaning.
-var maybe ((int32) -> int32)? = nil
+var maybe((int32) -> int32)?= nil
 Console.WriteLine(maybe == nil)

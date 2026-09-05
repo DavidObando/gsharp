@@ -13,8 +13,6 @@ internal static class LanguageClientPolicy
             : Environment.ExpandEnvironmentVariables(configuredPath);
 
     public static IReadOnlyDictionary<string, object> CreateInitializationOptions(
-        int indentSize,
-        bool useTabs,
         bool diagnosticsOnType = true,
         bool completionTriggerOnDot = true,
         bool referenceCodeLens = true,
@@ -23,8 +21,6 @@ internal static class LanguageClientPolicy
         bool coldStartCache = true)
         => new Dictionary<string, object>
         {
-            ["formattingIndentSize"] = Math.Max(1, indentSize),
-            ["formattingUseTabs"] = useTabs,
             ["diagnosticsOnType"] = diagnosticsOnType,
             ["completionTriggerOnDot"] = completionTriggerOnDot,
             ["referenceCodeLens"] = referenceCodeLens,

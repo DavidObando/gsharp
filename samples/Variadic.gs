@@ -17,7 +17,7 @@ func sum(nums ...int32) int32 {
     return total
 }
 
-func Of[T](values ...T) []T {
+func Of[T](values ...T)[]T {
     return values
 }
 

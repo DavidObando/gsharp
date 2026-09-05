@@ -13,6 +13,66 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 public static class SyntaxFacts
 {
     /// <summary>
+    /// Determines whether a formatter may introduce a line break between two
+    /// significant tokens without crossing one of G#'s newline-sensitive
+    /// grammar boundaries (ADR-0179).
+    /// </summary>
+    /// <param name="left">The token before the candidate break.</param>
+    /// <param name="right">The token after the candidate break.</param>
+    /// <returns><see langword="true"/> when a new line break is grammar-safe.</returns>
+    public static bool IsBreakLegalBetween(SyntaxToken left, SyntaxToken right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+
+        // An open range ends at a newline, postfix continuations stop at a
+        // newline, and a leading star starts a dereference statement.
+        if (left.Kind == SyntaxKind.DotDotToken
+            || right.Kind is SyntaxKind.StarToken
+                or SyntaxKind.OpenParenthesisToken
+                or SyntaxKind.OpenBraceToken
+                or SyntaxKind.PlusPlusToken
+                or SyntaxKind.MinusMinusToken)
+        {
+            return false;
+        }
+
+        // These statements carry an optional same-line operand/target. A
+        // formatter must not split the keyword from one that parsed.
+        if (left.Kind is SyntaxKind.ReturnKeyword
+            or SyntaxKind.BreakKeyword
+            or SyntaxKind.ContinueKeyword
+            or SyntaxKind.FallthroughKeyword
+            or SyntaxKind.ThrowKeyword)
+        {
+            return false;
+        }
+
+        // Pattern designations and contextual type trials are also
+        // same-line constructs. Conservatively keep adjacent identifiers on
+        // the same line; the layout engine has no useful wrap point here.
+        return left.Kind != SyntaxKind.IdentifierToken
+            || right.Kind != SyntaxKind.IdentifierToken;
+    }
+
+    /// <summary>
+    /// Determines whether canonical layout requires a line break between two
+    /// significant tokens (ADR-0179).
+    /// </summary>
+    /// <param name="left">The token before the boundary.</param>
+    /// <param name="right">The token after the boundary.</param>
+    /// <returns><see langword="true"/> when the boundary is always a line break.</returns>
+    public static bool IsBreakRequiredBetween(SyntaxToken left, SyntaxToken right)
+    {
+        ArgumentNullException.ThrowIfNull(left);
+        ArgumentNullException.ThrowIfNull(right);
+
+        return left.Kind is SyntaxKind.CommentToken
+            or SyntaxKind.DocumentationCommentToken
+            or SyntaxKind.SemicolonToken;
+    }
+
+    /// <summary>
     /// Gets the presendence for unary operators. A higher number indicates higher presendence.
     /// </summary>
     /// <param name="kind">The syntax kind to evaluate.</param>

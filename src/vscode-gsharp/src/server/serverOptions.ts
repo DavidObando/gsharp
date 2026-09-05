@@ -1,8 +1,6 @@
 import * as vscode from 'vscode';
 
 export interface GSharpInitializationOptions {
-  formattingIndentSize: number;
-  formattingUseTabs: boolean;
   diagnosticsOnType: boolean;
   completionTriggerOnDot: boolean;
   referenceCodeLens: boolean;
@@ -14,8 +12,6 @@ export interface GSharpInitializationOptions {
 export function getServerOptions() {
   const config = vscode.workspace.getConfiguration('gsharp');
   const initializationOptions: GSharpInitializationOptions = {
-    formattingIndentSize: Math.max(1, config.get<number>('formatting.indentSize', 4)),
-    formattingUseTabs: config.get<boolean>('formatting.useTabs', false),
     diagnosticsOnType: config.get<boolean>('diagnostics.enableOnType', true),
     completionTriggerOnDot: config.get<boolean>('completion.triggerOnDot', true),
     referenceCodeLens: config.get<boolean>('codeLens.enableReferences', true),

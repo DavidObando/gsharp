@@ -69,6 +69,11 @@ jobs:
         # GenerateRuntimeConfigurationFiles writing `gsc.runtimeconfig.json`.
         run: dotnet build GSharp.sln --configuration Release --no-restore -graph
 
+      - name: Check canonical G# formatting
+        run: |
+          dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
+          dotnet out/bin/Release/Gsfmt.Cli/gsfmt.dll --check .
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@v5
         with:

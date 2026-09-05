@@ -46,8 +46,6 @@ public sealed class GSharpLanguageClient : ILanguageClient, ILanguageClientCusto
         {
             GSharpOptions options = GSharpPackage.Options;
             return LanguageClientPolicy.CreateInitializationOptions(
-                options.IndentSize,
-                options.UseTabs,
                 options.EnableDiagnosticsOnType,
                 options.TriggerCompletionOnDot,
                 options.EnableReferenceCodeLens,

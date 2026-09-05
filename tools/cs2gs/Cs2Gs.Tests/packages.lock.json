@@ -335,6 +335,7 @@
           "GSharp.Cs2Gs.CodeModel": "[1.0.0, )",
           "GSharp.Cs2Gs.ProjectLoading": "[1.0.0, )",
           "GSharp.Cs2Gs.Translator": "[1.0.0, )",
+          "GSharp.Formatting": "[1.0.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },
@@ -361,6 +362,13 @@
         "dependencies": {
           "GSharp.Cs2Gs.CodeModel": "[1.0.0, )",
           "Microsoft.CodeAnalysis.CSharp": "[5.6.0, )",
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
+      },
+      "gsharp.formatting": {
+        "type": "Project",
+        "dependencies": {
+          "GSharp.Core": "[1.0.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },

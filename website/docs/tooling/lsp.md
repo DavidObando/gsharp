@@ -48,7 +48,7 @@ The server capability factory enables the following:
 | Document highlights | `textDocument/documentHighlight`. |
 | Document symbols | `textDocument/documentSymbol`. |
 | Workspace symbols | `workspace/symbol`. |
-| Formatting | `textDocument/formatting` (whole-document only). Range and on-type formatting were intentionally dropped; the server no longer advertises those capabilities and handles the corresponding requests as safe no-ops. |
+| Formatting | Canonical `textDocument/formatting`, `textDocument/rangeFormatting`, and `textDocument/onTypeFormatting`, all backed by `GSharp.Formatting`. |
 | Folding ranges | `textDocument/foldingRange`. |
 | Selection ranges | `textDocument/selectionRange`. |
 | Linked editing | `textDocument/linkedEditingRange`. |
@@ -82,7 +82,7 @@ The VS Code setting `gsharp.coldStartCache.enable` controls the cold-start cache
 ## Feature notes and limitations
 
 - Completion is scope-aware. Dot member completion still uses the server trigger character, and VS Code quick suggestions invoke the same completion provider as you type ordinary code. Type-clause positions additionally surface `async (T) -> R` and `async sequence[T]` snippets so the async-type spellings are discoverable without having to know they exist.
-- Formatting is a lexer-based whole-document formatter with a canonical whitespace pass; current implementation uses two-space indentation internally.
+- Formatting is syntax-aware, semantics-checked, and option-free: 4-space indentation, K&R braces, and a fixed 120-column width.
 - Rename, linked editing, references, CodeLens, implementation, and type-definition results are computed from the compiler's semantic lookup model and are strongest for symbols in the current project/document model.
 - The server serializes handlers through a single gate so edits and reads are processed in order. Incremental binding/model caches reduce repeated work; handlers are not processed in parallel.
 

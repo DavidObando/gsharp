@@ -10,11 +10,11 @@ package GSharp.Example.NamedTupleElements
 
 import System
 
-func divmod(a int32, b int32) (quotient int32, remainder int32) {
+func divmod(a int32, b int32)(quotient int32, remainder int32) {
     return a / b, a % b
 }
 
-let pos (line int32, column int32) = (3, 5)
+let pos(line int32, column int32) = (3, 5)
 Console.WriteLine(pos.line)
 Console.WriteLine(pos.column)
 Console.WriteLine(pos.Item1)
@@ -22,13 +22,13 @@ Console.WriteLine(pos.Item1)
 let labeled = (line: 7, column: 9)
 Console.WriteLine(labeled.line + labeled.column)
 
-let unnamed (int32, int32) = pos
+let unnamed(int32, int32) = pos
 Console.WriteLine(unnamed.Item2)
 
 let r = divmod(17, 5)
 Console.WriteLine("${r.quotient} rem ${r.remainder}")
 
-let nested (inner (a int32, b int32), tag string) = ((a: 1, b: 2), "x")
+let nested(inner(a int32, b int32), tag string) = ((a: 1, b: 2), "x")
 Console.WriteLine(nested.inner.b)
 
 Console.WriteLine(pos == (3, 5))

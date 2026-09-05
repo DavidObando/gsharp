@@ -272,12 +272,6 @@ public sealed class InitializeParams
 
 public sealed class LanguageServerInitializationOptions
 {
-    [JsonPropertyName("formattingIndentSize")]
-    public int FormattingIndentSize { get; set; } = 4;
-
-    [JsonPropertyName("formattingUseTabs")]
-    public bool FormattingUseTabs { get; set; }
-
     [JsonPropertyName("diagnosticsOnType")]
     public bool DiagnosticsOnType { get; set; } = true;
 

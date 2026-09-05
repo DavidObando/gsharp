@@ -94,6 +94,53 @@ cs2gs_raw_lines() {
   find "$tree" -name '*.gs' -type f -exec cat {} + 2>/dev/null || true
 }
 
+# Prints "<reducible> <single-atom-bounded> <total>" for lines wider than 300
+# characters. A line is single-atom-bounded when its indentation plus the
+# widest string/dotted-identifier atom already exceeds the budget; no formatter
+# can shorten that line without changing the token stream (ADR-0179).
+cs2gs_long_line_counts() {
+  local tree=$1
+  python3 - "$tree" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+string_atom = re.compile(r'"(?:\\.|[^"\\])*"')
+identifier_atom = re.compile(r'\b[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\b')
+reducible = atomic = 0
+
+for path in root.rglob("*.gs"):
+    in_raw = False
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if len(raw_line) <= 300:
+            if raw_line.count("`") % 2:
+                in_raw = not in_raw
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip())
+        widest = 0
+        if in_raw:
+            widest = len(raw_line.lstrip())
+        else:
+            widest = max(
+                [len(match.group(0)) for match in string_atom.finditer(raw_line)]
+                + [len(match.group(0)) for match in identifier_atom.finditer(raw_line)]
+                + [0]
+            )
+
+        if indent + 8 + widest > 300:
+            atomic += 1
+        else:
+            reducible += 1
+
+        if raw_line.count("`") % 2:
+            in_raw = not in_raw
+
+print(reducible, atomic, reducible + atomic)
+PY
+}
+
 # Counts occurrences of an extended regex in a stream on stdin.
 #
 # A ZERO-match metric is success, not failure: without the `|| true`, the
@@ -165,11 +212,11 @@ cs2gs_counter_report() {
   awk -F'\t' '{ c[$1]++ } END { for (f in c) print f, c[f] }' "$code_ids" > "$code_tally"
   awk -F'\t' '{ c[$1]++ } END { for (f in c) print f, c[f] }' "$raw_ids" > "$raw_tally"
 
-  local gs_files bangs bangs_raw long_lines syn_total syn_total_raw
+  local gs_files bangs bangs_raw long_lines atomic_long_lines total_long_lines syn_total syn_total_raw
   gs_files=$(find "$tree" -name '*.gs' -type f | wc -l | tr -d ' ')
   bangs=$(cs2gs_count_stream '!!' < "$code_lines")
   bangs_raw=$(cs2gs_count_stream '!!' < "$raw_lines")
-  long_lines=$(awk 'length($0)>300' "$raw_lines" | wc -l | tr -d ' ')
+  read -r long_lines atomic_long_lines total_long_lines < <(cs2gs_long_line_counts "$tree")
   syn_total=$(wc -l < "$code_ids" | tr -d ' ')
   syn_total_raw=$(wc -l < "$raw_ids" | tr -d ' ')
 
@@ -183,7 +230,9 @@ cs2gs_counter_report() {
   echo "|---|---:|---:|"
   echo "| \`.gs\` files | $gs_files | $gs_files |"
   echo "| \`!!\` null assertions | $bangs | $bangs_raw |"
-  echo "| lines >300 chars | $long_lines | $long_lines |"
+  echo "| lines >300 chars (reducible) | $long_lines | $long_lines |"
+  echo "| lines >300 chars (single-atom-bounded) | $atomic_long_lines | $atomic_long_lines |"
+  echo "| lines >300 chars (total) | $total_long_lines | $total_long_lines |"
   echo "| synthetic \`__\` identifiers | $syn_total | $syn_total_raw |"
   echo ''
   echo "Synthetic \`__identifier\`s by family (#3501 target: all zero)"

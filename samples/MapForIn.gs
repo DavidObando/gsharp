@@ -10,7 +10,7 @@ package GSharp.Example.MapForIn
 
 import System
 
-var inventory = map[string, int32]{"apples": 3, "bananas": 5, "cherries": 12}
+var inventory = map [string, int32]{"apples": 3, "bananas": 5, "cherries": 12}
 
 // Two-variable form: name binds as string, count as int32.
 var totalItems = 0
@@ -31,7 +31,7 @@ Console.WriteLine(weighted)
 
 // break and continue work as in every loop; maps also iterate inside
 // generic functions when K or V is an in-scope type parameter.
-func CountLargeStocks[K any](m map[K, int32], threshold int32) int32 {
+func CountLargeStocks[K any](m map [K, int32], threshold int32) int32 {
     var n = 0
     for k, v in m {
         if v < threshold {

@@ -9,7 +9,9 @@ package GSharp.Samples.DiscriminatedUnion
 
 import System
 
-enum Shape {
+enum
+
+Shape {
     Circle(r float64);
     Square(s float64);
     Empty

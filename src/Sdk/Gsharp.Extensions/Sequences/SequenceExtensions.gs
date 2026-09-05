@@ -238,7 +238,7 @@ func (source IEnumerable[T]) FirstOrNil[T struct]() T? {
 /// @returns the last element wrapped as `T?`, or `nil` when empty.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
 func (source IEnumerable[T]) LastOrNil[T class]() T? {
-    var result T? = nil
+    var result T?= nil
     for item in source {
         result = item
     }
@@ -263,7 +263,7 @@ func (source IEnumerable[T]) LastOrNil[T class]() T? {
 /// @returns the last element wrapped as `T?`, or `nil` when empty.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
 func (source IEnumerable[T]) LastOrNil[T struct]() T? {
-    var result T? = nil
+    var result T?= nil
     for item in source {
         result = item
     }
@@ -351,7 +351,7 @@ func (source IEnumerable[T]) SingleOrNil[T struct]() T? {
 /// See also [ToMap](cref:Gsharp.Extensions.Sequences.ToMap).
 ///
 /// @returns a new `[]T` containing every element of `source` in iteration order.
-func (source IEnumerable[T]) ToSlice[T]() []T {
+func (source IEnumerable[T]) ToSlice[T]()[]T {
     // Materialize via List[T] because the open-generic
     // `IEnumerable[T].ToArray()` extension currently binds to
     // `Object[]` in the G# binder. List[T].ToArray() does the right
@@ -406,7 +406,7 @@ func (source IEnumerable[(TKey, TValue)]) ToMap[TKey, TValue]() Dictionary[TKey,
 /// @returns a new `Dictionary[TKey, TValue]` built from the projected pairs.
 /// @exception ArgumentNullException `keyFn` or `valueFn` is `nil`.
 /// @exception ArgumentException `keyFn` produces the same key for two distinct elements.
-func (source IEnumerable[T]) ToMap[T, TKey, TValue](keyFn (T) -> TKey, valueFn (T) -> TValue) Dictionary[TKey, TValue] {
+func (source IEnumerable[T]) ToMap[T, TKey, TValue](keyFn(T) -> TKey, valueFn(T) -> TValue) Dictionary[TKey, TValue] {
     if keyFn == nil {
         throw ArgumentNullException("keyFn")
     }
@@ -469,7 +469,7 @@ func IndexedIterator[T](source IEnumerable[T]) IEnumerable[(int32, T)] {
     try {
         var i = 0
         while enumerator.MoveNext() {
-            yield (i, enumerator.Current)
+            yield(i, enumerator.Current)
             i++
         }
     } finally {
@@ -479,10 +479,10 @@ func IndexedIterator[T](source IEnumerable[T]) IEnumerable[(int32, T)] {
 
 func PairwiseIterator[T](source IEnumerable[T]) IEnumerable[(T, T)] {
     var hasPrevious = false
-    var previous T = default(T)
+    var previous T = default (T)
     for item in source {
         if hasPrevious {
-            yield (previous, item)
+            yield(previous, item)
         }
 
         previous = item

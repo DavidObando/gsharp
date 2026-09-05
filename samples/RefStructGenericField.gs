@@ -26,7 +26,7 @@ func firstLen(w Window) int32 {
 }
 
 func Main() {
-    var nums []int32 = []int32{10, 20, 30}
+    var nums[]int32 = []int32{10, 20, 30}
     var span ReadOnlySpan[int32] = nums
     var w Window = Window{data: span}
     Console.WriteLine(firstLen(w))

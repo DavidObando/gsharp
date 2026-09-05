@@ -10,7 +10,7 @@ package GsharpLibrary
 
 import System
 
-@assembly:InternalsVisibleTo("GsharpLibrary.Tests")
+@assembly: InternalsVisibleTo("GsharpLibrary.Tests")
 
 class Greeter {
     func Greet(name string) string {

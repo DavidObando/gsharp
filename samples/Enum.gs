@@ -6,13 +6,17 @@ package GSharp.Samples.Enum
 
 import System
 
-enum Color { Red, Green, Blue }
+enum Color {
+    Red,
+    Green,
+    Blue
+}
 
 let color = Color.Green
 let label = switch color {
-  case Color.Red: "red"
-  case Color.Green: "green"
-  default: "blue"
+    case Color.Red: "red"
+    case Color.Green: "green"
+    default: "blue"
 }
 
 Console.WriteLine(label)

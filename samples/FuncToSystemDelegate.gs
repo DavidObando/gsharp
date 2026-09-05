@@ -13,11 +13,15 @@ package GSharp.Samples.FuncToSystemDelegate
 import System
 
 // var form: a named generic delegate value widens to System.Delegate.
-var f Func[string] = func() string { return "hi" }
+var f Func[string] = func () string {
+    return "hi"
+}
 var d Delegate = f
 
 // lambda-literal form: a func literal assigned straight to a Delegate slot.
-var g Delegate = func() string { return "yo" }
+var g Delegate = func () string {
+    return "yo"
+}
 
 Console.WriteLine(d.Method.Name)
 Console.WriteLine(g.Method.Name)

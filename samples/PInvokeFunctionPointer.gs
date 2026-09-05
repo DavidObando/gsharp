@@ -42,7 +42,7 @@ func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;
 // address of a named entry point; G# encodes the return slot as an
 // ELEMENT_TYPE_FNPTR signature blob.
 @DllImport("libc", EntryPoint: "dlsym")
-func native_dlsym(handle nint, name string) unmanaged[Cdecl] () -> void;
+func native_dlsym(handle nint, name string) unmanaged[Cdecl]() -> void;
 
 func compareInt64(a nint, b nint) int32 {
     let av = Marshal.ReadInt64(a)

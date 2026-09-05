@@ -7,13 +7,17 @@ package GSharp.Samples.NullableFlow
 
 import System
 
-let opt string? = "hello"
+let opt string?= "hello"
 switch opt {
-case s is string { Console.WriteLine(opt.Length) }
-case _ { Console.WriteLine("nothing") }
+    case s is string {
+        Console.WriteLine(opt.Length)
+    }
+    case _ {
+        Console.WriteLine("nothing")
+    }
 }
 
-let s string? = "world"
+let s string?= "world"
 if !String.IsNullOrEmpty(s) {
-  Console.WriteLine(s.Length)
+    Console.WriteLine(s.Length)
 }

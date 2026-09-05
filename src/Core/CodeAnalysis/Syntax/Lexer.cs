@@ -595,7 +595,7 @@ public sealed class Lexer
     // closed alphabet of immutable strings, so a uniform run (all same char) is looked up
     // in a shared cache instead of substringed fresh every time. Non-uniform whitespace and
     // every other trivial-text kind (comments, numbers, strings) fall back to the substring:
-    // their exact text is observed by consumers (for example FormattingEngine reads
+    // their exact text is observed by consumers (for example GSharpFormatter reads
     // WhitespaceToken/CommentToken .Text verbatim to preserve user line breaks and comment
     // content), so it cannot be replaced by a placeholder.
     private string GetTrivialText(int start, int length)

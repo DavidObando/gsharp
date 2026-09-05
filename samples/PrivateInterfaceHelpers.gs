@@ -30,8 +30,7 @@ interface ICalculator {
     }
 }
 
-class Calc : ICalculator {
-}
+class Calc : ICalculator { }
 
 class CustomCalc : ICalculator {
     // Custom override of the public default — the private helper remains

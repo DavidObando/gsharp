@@ -98,7 +98,7 @@ class Sequences {
         /// @param values the elements to materialize as the sequence.
         /// @returns an array view of `values`, typed as `[]T`.
         @MethodImpl(MethodImplOptions.AggressiveInlining)
-        func Of[T](values ...T) []T {
+        func Of[T](values ...T)[]T {
             return values
         }
 
@@ -186,7 +186,7 @@ class Sequences {
         /// @param next the successor function applied to the previous value; must not be `nil`.
         /// @returns an infinite `IEnumerable[T]` of repeated `next` applications.
         /// @exception ArgumentNullException `next` is `nil`.
-        func Iterate[T](seed T, next (T) -> T) IEnumerable[T] {
+        func Iterate[T](seed T, next(T) -> T) IEnumerable[T] {
             if next == nil {
                 throw ArgumentNullException("next")
             }
@@ -216,24 +216,30 @@ class Sequences {
         // ---- Private iterator bodies (state-machine entry points) --------
 
         func RangeIterator(start int32, count int32) IEnumerable[int32] {
-            for var i = 0; i < count; i++ {
+            for var i = 0;
+            i < count;
+            i++ {
                 yield start + i
             }
         }
 
         func RangeStepIterator(start int32, end int32, step int32) IEnumerable[int32] {
             if step > 0 {
-                for var i = start; i < end; i = i + step {
+                for var i = start;
+                i < end;
+                i = i + step {
                     yield i
                 }
             } else {
-                for var i = start; i > end; i = i + step {
+                for var i = start;
+                i > end;
+                i = i + step {
                     yield i
                 }
             }
         }
 
-        func IterateIterator[T](seed T, next (T) -> T) IEnumerable[T] {
+        func IterateIterator[T](seed T, next(T) -> T) IEnumerable[T] {
             var current = seed
             while true {
                 yield current

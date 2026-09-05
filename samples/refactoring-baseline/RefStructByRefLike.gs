@@ -22,4 +22,3 @@ func runTotal() int32 {
 }
 
 Console.WriteLine(runTotal())
-

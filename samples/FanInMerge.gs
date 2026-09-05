@@ -11,21 +11,21 @@ package GSharp.Samples.FanInMerge
 
 import System
 
-func produce(ch out chan[int32], start int32, count int32) {
+func produce(ch out chan [int32], start int32, count int32) {
     for i in start ... start + count {
         ch <- i
     }
     ch.Close()
 }
 
-func forward(src in chan[int32], dst out chan[int32], done out chan[bool]) {
+func forward(src in chan [int32], dst out chan [int32], done out chan [bool]) {
     for v in src {
         dst <- v
     }
     done <- true
 }
 
-func closeWhenDone(dst out chan[int32], done in chan[bool], forwarders int32) {
+func closeWhenDone(dst out chan [int32], done in chan [bool], forwarders int32) {
     for i in 0 ... forwarders {
         let (_, ok) = <-done
         if !ok {
@@ -35,17 +35,17 @@ func closeWhenDone(dst out chan[int32], done in chan[bool], forwarders int32) {
     dst.Close()
 }
 
-func merge(a in chan[int32], b in chan[int32]) in chan[int32] {
-    let merged = chan[int32](8)
-    let done = chan[bool](2)
+func merge(a in chan [int32], b in chan [int32]) in chan [int32] {
+    let merged = chan [int32](8)
+    let done = chan [bool](2)
     go forward(a, merged, done)
     go forward(b, merged, done)
     go closeWhenDone(merged, done, 2)
     return merged
 }
 
-let evens = chan[int32](4)
-let odds = chan[int32](4)
+let evens = chan [int32](4)
+let odds = chan [int32](4)
 go produce(evens, 0, 10)
 go produce(odds, 100, 10)
 

@@ -8,44 +8,44 @@ package GSharp.Samples.Select
 import System
 import System.Threading
 
-func delayedSend(ch chan[int32]) {
+func delayedSend(ch chan [int32]) {
     Thread.Sleep(10)
     ch <- 40
 }
 
-let ready = chan[int32](1)
+let ready = chan [int32](1)
 ready <- 7
 select {
-case let v = <-ready {
-    Console.WriteLine("recv: $v")
-}
+    case let v = <- ready {
+        Console.WriteLine("recv: $v")
+    }
 }
 
-let sendCh = chan[int32](1)
+let sendCh = chan [int32](1)
 select {
-case sendCh <- 11 {
-    Console.WriteLine("sent")
-}
+    case sendCh <- 11 {
+        Console.WriteLine("sent")
+    }
 }
 let sentValue = <-sendCh
 Console.WriteLine(sentValue)
 
-let empty = chan[int32](1)
+let empty = chan [int32](1)
 select {
-case let v = <-empty {
-    Console.WriteLine("unexpected: $v")
-}
-default {
-    Console.WriteLine("default")
-}
+    case let v = <- empty {
+        Console.WriteLine("unexpected: $v")
+    }
+    default {
+        Console.WriteLine("default")
+    }
 }
 
 let blocking = Chan.Unbounded[int32]()
 scope {
     go delayedSend(blocking)
     select {
-    case let v = <-blocking {
-        Console.WriteLine("blocked: $v")
-    }
+        case let v = <- blocking {
+            Console.WriteLine("blocked: $v")
+        }
     }
 }
