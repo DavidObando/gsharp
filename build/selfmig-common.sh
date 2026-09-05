@@ -10,6 +10,12 @@
 #
 # Sourced, never executed. Callers set `repo_root` before sourcing.
 
+# Issue #3501: the counter definitions themselves are shared with the OTHER two
+# corpora (Oahu, code-exploder) so all three report the same table. Only the
+# ceilings below are specific to the self-migration.
+# shellcheck source=build/cs2gs-counters.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cs2gs-counters.sh"
+
 # E2E fixtures that are not migration targets are excluded via --exclude.
 # The Visual Studio extension stays in C# by decision (like the VSCode
 # extension stays in TypeScript), so all three vs-gsharp apps are excluded:
@@ -63,6 +69,14 @@ selfmig_build_prerequisites() {
 # Metrics count CODE, not fixtures: migrated test sources embed expected-output
 # strings (and docs quote constructs), so lines containing a string quote or
 # leading with a comment marker are excluded before counting.
+#
+# The line filter now lives in build/cs2gs-counters.sh (cs2gs_code_lines) so the
+# three corpora measure identically; the counting semantics here are UNCHANGED,
+# and deliberately so. The quote exclusion undercounts (#3937: a removed `!!` on
+# a line reading `Arguments: []object{uri!!, ...}` was invisible to the metric),
+# but every ceiling in tools/cs2gs/selfmig-baseline.json was measured through
+# it, so "fixing" it would silently move all of them. The gated numbers keep the
+# old behaviour; the raw counts are reported alongside in the counter table.
 selfmig_code_grep() {
   local migrated_dir=$1 pattern=$2
   # A ZERO-match metric is success, not failure: without the || true, the
@@ -70,8 +84,7 @@ selfmig_code_grep() {
   # the ceilings are ever checked (exactly what happened once the synthetic
   # label count reached 0).
   local count
-  count=$(grep -rhE "$pattern" "$migrated_dir" --include='*.gs' 2>/dev/null \
-    | grep -v '"' | grep -vE '^[[:space:]]*//' | grep -oE "$pattern" | wc -l | tr -d ' ') || true
+  count=$(cs2gs_code_lines "$migrated_dir" | cs2gs_count_stream "$pattern") || true
   echo "${count:-0}"
 }
 
@@ -107,6 +120,9 @@ selfmig_hash_tree() {
 # commit produce byte-identical trees (measured on #3895).
 selfmig_measure() {
   local migrated_dir=$1
+  # Remembered so selfmig_apply_baseline can add the per-family synthetic
+  # breakdown (#3501) to the job summary without changing its signature.
+  selfmig_measured_tree=$migrated_dir
   labels=$(selfmig_code_grep "$migrated_dir" '__(switchExit|iteratorExit|gotoCase|gotoDefault|patternGuardEnd)')
   lifts=$(selfmig_code_grep "$migrated_dir" '__local_')
   long_lines=$(find "$migrated_dir" -name '*.gs' -exec awk 'length($0)>300' {} + 2>/dev/null | wc -l | tr -d ' ')
@@ -142,7 +158,17 @@ selfmig_apply_baseline() {
       echo "| \`__local_\` lifts | $lifts | ceiling $lift_ceiling |"
       echo "| lines >300 chars | $long_lines | ceiling $long_ceiling |"
       echo "| \`!!\` assertions | $bangs | ceiling $bang_ceiling |"
+      echo ''
     } >> "$GITHUB_STEP_SUMMARY"
+  fi
+
+  # Issue #3501: the per-family synthetic-identifier breakdown, printed to the
+  # log and appended to the job summary. It is ADDITIVE — the gated rows above
+  # are untouched, and nothing below participates in the pass/fail decision.
+  if [[ -n "${selfmig_measured_tree:-}" && -d "${selfmig_measured_tree:-}" ]]; then
+    cs2gs_emit_counter_report "$selfmig_measured_tree" \
+      'cs2gs self-migration: readability counters (gsharp)' \
+      'Breakdown only — the gated numbers are the table above; nothing here changes the verdict.' || true
   fi
 
   local status=0
