@@ -62,6 +62,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 #   src/Core                      the dependency root of most of the corpus,
 #                                 and #3896's blast radius.
 #   src/Analyzers/InternalAnalyzers  Core's analyzer ProjectReference.
+#   src/Formatting/GSharp.Formatting  ADR-0179's canonical formatting engine;
+#                                 guarded before cs2gs consumes it transitively.
 #   tools/cs2gs/Cs2Gs.CodeModel   Core -> CodeModel -> Translator, the chain
 #                                 #3836 names.
 #   tools/cs2gs/Cs2Gs.Translator  cs2gs is inside its own corpus (#3831).
@@ -88,6 +90,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 guard_apps=(
   src/Analyzers/InternalAnalyzers/InternalAnalyzers.csproj
   src/Core/Core.csproj
+  src/Formatting/GSharp.Formatting/GSharp.Formatting.csproj
   src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.csproj
   tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.csproj
   tools/cs2gs/Cs2Gs.Translator/Cs2Gs.Translator.csproj

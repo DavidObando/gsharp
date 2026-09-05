@@ -15,6 +15,7 @@ using System.Threading.Tasks;
 using GSharp.Core.CodeAnalysis.Diagnostics;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using GSharp.LanguageServer.Protocol;
 using StreamJsonRpc;
 using Range = GSharp.LanguageServer.Protocol.Range;
@@ -56,8 +57,6 @@ public sealed class LspServer
     private bool clientSupportsPullDiagnostics;
     private bool clientSupportsDiagnosticRefresh;
     private Timer refreshTimer;
-    private string defaultFormattingIndent = "  ";
-    private bool hasConfiguredFormatting;
     private LanguageServerInitializationOptions initializationOptions = new LanguageServerInitializationOptions();
     private string pendingWorkspaceRootPath;
     private CancellationTokenSource backgroundLoadCts;
@@ -85,9 +84,7 @@ public sealed class LspServer
     {
         this.pendingWorkspaceRootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
         this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
-        this.hasConfiguredFormatting = request?.InitializationOptions != null;
         this.initializationOptions = request?.InitializationOptions ?? new LanguageServerInitializationOptions();
-        this.defaultFormattingIndent = ResolveDefaultFormattingIndent(this.initializationOptions);
 
         return Task.FromResult(new InitializeResult
         {
@@ -669,26 +666,34 @@ public sealed class LspServer
     public Task<TextEdit[]> FormattingAsync(DocumentFormattingParams request, CancellationToken cancellationToken = default)
         => this.ReadDocumentAsync(
             request.TextDocument,
-            (content, ct) => this.FormatDocument(content, request.Options),
+            (content, ct) => this.FormatDocument(content),
             Array.Empty<TextEdit>(),
             cancellationToken);
 
-    // Range formatting and on-type formatting are not advertised in ServerCapabilitiesFactory
-    // (see issue #1660): implementing correct partial-range formatting on top of the
-    // whole-token-stream FormattingEngine would require re-deriving per-statement offsets and
-    // splicing them back into an unrelated slice of the document, which is substantially more
-    // risk than value for a formatter that already produces a correct, idempotent whole-document
-    // result. These handlers are kept registered as safe no-ops in case a non-conformant client
-    // invokes them despite the missing capability; they intentionally do not fall back to a
-    // whole-document format, since that would reintroduce the whole-document mangling this fix
-    // removes for the range/on-type case.
     [JsonRpcMethod("textDocument/rangeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> RangeFormattingAsync(DocumentRangeFormattingParams request, CancellationToken cancellationToken = default)
-        => Task.FromResult(Array.Empty<TextEdit>());
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) =>
+            {
+                int start = SemanticLookup.ToOffset(content, request.Range.Start);
+                int end = SemanticLookup.ToOffset(content, request.Range.End);
+                return this.FormatDocument(content, TextSpan.FromBounds(Math.Min(start, end), Math.Max(start, end)));
+            },
+            Array.Empty<TextEdit>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/onTypeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> OnTypeFormattingAsync(DocumentOnTypeFormattingParams request, CancellationToken cancellationToken = default)
-        => Task.FromResult(Array.Empty<TextEdit>());
+        => this.ReadDocumentAsync(
+            request.TextDocument,
+            (content, ct) =>
+            {
+                int position = SemanticLookup.ToOffset(content, request.Position);
+                return this.FormatDocument(content, new TextSpan(position, 0));
+            },
+            Array.Empty<TextEdit>(),
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/implementation", UseSingleObjectParameterDeserialization = true)]
     public Task<Location[]> ImplementationAsync(ImplementationParams request, CancellationToken cancellationToken = default)
@@ -1274,28 +1279,6 @@ public sealed class LspServer
         }
     }
 
-    /// <summary>
-    /// Reads the typed initialization options to compute the indent unit used when a formatting
-    /// request does not itself supply <see cref="FormattingOptions"/>.
-    /// </summary>
-    private static string ResolveDefaultFormattingIndent(LanguageServerInitializationOptions initializationOptions)
-    {
-        const string fallback = "  ";
-        if (initializationOptions == null)
-        {
-            return fallback;
-        }
-
-        if (initializationOptions.FormattingUseTabs)
-        {
-            return "\t";
-        }
-
-        return initializationOptions.FormattingIndentSize > 0
-            ? new string(' ', initializationOptions.FormattingIndentSize)
-            : fallback;
-    }
-
     // Re-evaluates diagnostics for open documents once background workspace discovery has
     // finished. A file opened before discovery completed was initially bound without its
     // project's references. Pull clients are asked to re-pull; push-only clients get a new
@@ -1454,44 +1437,24 @@ public sealed class LspServer
         return document.GetSemanticTokens();
     }
 
-    private TextEdit[] FormatDocument(DocumentContent content, FormattingOptions options)
+    private TextEdit[] FormatDocument(DocumentContent content, TextSpan? span = null)
     {
         var sourceText = content.SyntaxTree.Text;
-        var originalText = sourceText.ToString();
-        var indent = this.hasConfiguredFormatting
-            ? this.defaultFormattingIndent
-            : ResolveIndent(options, this.defaultFormattingIndent);
-        var formatted = FormattingEngine.Format(originalText, indent);
-        if (formatted == originalText)
+        GSharp.Formatting.FormatResult result = span is TextSpan requested
+            ? GSharp.Formatting.GSharpFormatter.Format(sourceText, requested)
+            : GSharp.Formatting.GSharpFormatter.Format(sourceText);
+        if (!result.Diagnostics.IsEmpty || !result.Changed)
         {
             return Array.Empty<TextEdit>();
         }
 
-        var lastLine = sourceText.Lines.Length - 1;
-        var lastChar = sourceText.Lines[lastLine].Length;
-        return new[]
-        {
-            new TextEdit
+        return result.Edits
+            .Select(edit => new TextEdit
             {
-                Range = new Range(new Position(0, 0), new Position(lastLine, lastChar)),
-                NewText = formatted,
-            },
-        };
-    }
-
-    /// <summary>
-    /// Resolves the indent unit for clients that do not supply the shared initialization
-    /// contract. Clients that do configure G# formatting use <see cref="defaultFormattingIndent"/>
-    /// directly so their G#-specific setting is not silently replaced by the editor-wide value.
-    /// </summary>
-    private static string ResolveIndent(FormattingOptions options, string fallback)
-    {
-        if (options == null || options.TabSize <= 0)
-        {
-            return fallback;
-        }
-
-        return options.InsertSpaces ? new string(' ', options.TabSize) : "\t";
+                Range = SemanticLookup.ToRange(sourceText, edit.Span),
+                NewText = edit.NewText,
+            })
+            .ToArray();
     }
 
     private Range ComputePrepareRename(DocumentContent content, PrepareRenameParams request, CancellationToken ct = default)

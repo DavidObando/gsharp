@@ -13,7 +13,7 @@ import System
 
 // 1. Local nullable-reference target. The first `??=` fills in the
 // default; the second is a no-op because the variable is already set.
-var greeting string? = nil
+var greeting string?= nil
 greeting ??= "hello"
 Console.WriteLine(greeting)
 greeting ??= "ignored"
@@ -21,7 +21,7 @@ Console.WriteLine(greeting)
 
 // 2. Local nullable value-type target. Same semantics — the second
 // `??=` does not overwrite the already-set value.
-var answer int32? = nil
+var answer int32?= nil
 answer ??= 42
 Console.WriteLine(answer)
 answer ??= 99
@@ -49,7 +49,7 @@ func computeDefault() string {
     return "computed"
 }
 
-var slot string? = nil
+var slot string?= nil
 slot ??= computeDefault()
 Console.WriteLine("slot=$slot counter=$counter")
 slot ??= computeDefault()

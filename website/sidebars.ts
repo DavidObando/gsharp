@@ -81,6 +81,7 @@ const sidebars: SidebarsConfig = {
 
   toolingSidebar: [
     'tooling/gsc',
+    'tooling/gsfmt',
     'tooling/repl',
     'tooling/sdk-projects',
     'tooling/analyzers',

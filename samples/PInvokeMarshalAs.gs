@@ -43,10 +43,7 @@ func native_strlen_utf8(@MarshalAs(UnmanagedType.LPUTF8Str) s string) nuint;
 // a real `memcpy` call this prevents the runtime from passing an
 // arbitrary chunk of memory past the managed allocation.
 @DllImport("libc", EntryPoint: "memcpy")
-func native_memcpy(
-    dest nint,
-    @MarshalAs(UnmanagedType.LPArray, SizeParamIndex: 2) src []int32,
-    n nuint) nint;
+func native_memcpy(dest nint, @MarshalAs(UnmanagedType.LPArray, SizeParamIndex: 2) src[]int32, n nuint) nint;
 
 // `@MarshalAs(UnmanagedType.I4)` widens the G# `bool` to a 4-byte
 // signed integer, matching the C idiom of `void f(int flag)`. The

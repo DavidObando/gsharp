@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Microsoft.VisualStudio.Validation": {
+        "type": "Direct",
+        "requested": "[17.8.8, )",
+        "resolved": "17.8.8",
+        "contentHash": "rWXThIpyQd4YIXghNkiv2+VLvzS+MCMKVRDR0GAMlflsdo+YcAN2g2r5U1Ah98OFjQMRexTFtXQQ2LkajxZi3g=="
+      },
+      "Nerdbank.GitVersioning": {
+        "type": "Direct",
+        "requested": "[3.11.13-beta, )",
+        "resolved": "3.11.13-beta",
+        "contentHash": "eQjDhod5E9dpL/UJ65c53VO2Cp1bXMzNRmrVwWt7ryAHltxotThkBDp8VdLjkJtMBnRrc6237vxKAbSpUcChMg=="
+      },
+      "StyleCop.Analyzers": {
+        "type": "Direct",
+        "requested": "[1.2.0-beta.556, )",
+        "resolved": "1.2.0-beta.556",
+        "contentHash": "llRPgmA1fhC0I0QyFLEcjvtM2239QzKr/tcnbsjArLMJxJlu0AA5G7Fft0OI30pHF3MW63Gf4aSSsjc5m82J1Q==",
+        "dependencies": {
+          "StyleCop.Analyzers.Unstable": "1.2.0.556"
+        }
+      },
+      "StyleCop.Analyzers.Unstable": {
+        "type": "Transitive",
+        "resolved": "1.2.0.556",
+        "contentHash": "zvn9Mqs/ox/83cpYPignI8hJEM2A93s2HkHs8HYMOAQW0PkampyoErAiIyKxgTLqbbad29HX/shv/6LGSjPJNQ=="
+      },
+      "System.Reflection.MetadataLoadContext": {
+        "type": "Transitive",
+        "resolved": "9.0.0",
+        "contentHash": "nGdCUVhEQ9/CWYqgaibYEDwIJjokgIinQhCnpmtZfSXdMS6ysLZ8p9xvcJ8VPx6Xpv5OsLIUrho4B9FN+VV/tw=="
+      },
+      "GSharp.Core": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )",
+          "System.Reflection.MetadataLoadContext": "[9.0.0, )"
+        }
+      },
+      "gsharp.formatting": {
+        "type": "Project",
+        "dependencies": {
+          "GSharp.Core": "[1.0.0, )",
+          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
+        }
+      }
+    }
+  }
+}

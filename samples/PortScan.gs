@@ -41,11 +41,11 @@ var opened = 0
 var i = 0
 for i < 4 {
     select {
-    case let v = <-results {
-        if v > 0 {
-            opened = opened + 1
+        case let v = <- results {
+            if v > 0 {
+                opened = opened + 1
+            }
         }
-    }
     }
     i = i + 1
 }
@@ -59,10 +59,10 @@ let slow = chan[int32](1)
 let timeoutCh = chan[int32](1)
 timeoutCh <- 1
 select {
-case let v = <-slow {
-    Console.WriteLine("got value: $v")
-}
-case <-timeoutCh {
-    Console.WriteLine("timed out")
-}
+    case let v = <- slow {
+        Console.WriteLine("got value: $v")
+    }
+    case <- timeoutCh {
+        Console.WriteLine("timed out")
+    }
 }

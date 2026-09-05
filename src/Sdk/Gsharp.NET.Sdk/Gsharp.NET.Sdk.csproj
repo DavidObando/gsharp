@@ -126,6 +126,29 @@
             Visible="false" />
     </ItemGroup>
   </Target>
+
+  <Target Name="PackGsharpFormatter" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <_GsharpFormatterPublishDir>$(IntermediateOutputPath)gsfmt-publish\</_GsharpFormatterPublishDir>
+      <_GsharpFormatterStagingOutDir>$(IntermediateOutputPath)gsfmt-staging\bin\</_GsharpFormatterStagingOutDir>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_GsharpFormatterPublishDir)" Condition="Exists('$(_GsharpFormatterPublishDir)')" />
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\..\Formatting\Gsfmt.Cli\Gsfmt.Cli.csproj"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);TargetFramework=$(GsharpCompilerPackageTargetFramework);PublishDir=$(_GsharpFormatterPublishDir);BaseOutputPath=$(_GsharpFormatterStagingOutDir);GsharpObjRoot=$(IntermediateOutputPath)gsfmt-staging-obj;SelfContained=false;PublishReadyToRun=false;PublishSingleFile=false" />
+    <ItemGroup>
+      <_GsharpFormatterPayload Include="$(_GsharpFormatterPublishDir)**\*" />
+    </ItemGroup>
+    <Error Condition="'@(_GsharpFormatterPayload)' == ''"
+           Text="gsfmt publish output is empty under '$(_GsharpFormatterPublishDir)'." />
+    <ItemGroup>
+      <None Include="@(_GsharpFormatterPayload)"
+            Pack="true"
+            PackagePath="tools\formatter\"
+            Visible="false" />
+    </ItemGroup>
+  </Target>
+
   <!-- ADR-0145 §E/§F: publish the gsgen source-generator host (and its full
        closure — GeneratorHost + cs2gs translator + Core) into a staging dir and
        pack everything under tools/gsgen/. Mirrors PackGsharpCompiler. The publish

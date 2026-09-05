@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
+    <RootNamespace>GSharp.Gsfmt</RootNamespace>
+    <AssemblyName>gsfmt</AssemblyName>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>gsfmt</ToolCommandName>
+    <PackageId>Gsharp.Gsfmt</PackageId>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Title>GSharp canonical formatter</Title>
+    <Description>Canonical formatter for G# source files.</Description>
+    <PackageTags>gsharp;formatter;gsfmt;cli</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GSharp.Formatting\GSharp.Formatting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="GSharp.Formatting.Tests" />
+  </ItemGroup>
+
+</Project>

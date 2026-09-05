@@ -62,7 +62,7 @@ import System.Runtime.CompilerServices
 /// @returns `f(self)` when the receiver carries a value, otherwise `nil`.
 /// @exception ArgumentNullException `f` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) Map[T class, U class](f (T) -> U) U? {
+func (self T?) Map[T class, U class](f(T) -> U) U? {
     if f == nil {
         throw ArgumentNullException("f")
     }
@@ -95,7 +95,7 @@ func (self T?) Map[T class, U class](f (T) -> U) U? {
 /// @returns `f(self.Value)` when the receiver has a value, otherwise `nil`.
 /// @exception ArgumentNullException `f` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) Map[T struct, U struct](f (T) -> U) U? {
+func (self T?) Map[T struct, U struct](f(T) -> U) U? {
     if f == nil {
         throw ArgumentNullException("f")
     }
@@ -135,7 +135,7 @@ func (self T?) Map[T struct, U struct](f (T) -> U) U? {
 /// @returns `f(self)` when the receiver carries a value, otherwise `nil`.
 /// @exception ArgumentNullException `f` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) FlatMap[T class, U class](f (T) -> U?) U? {
+func (self T?) FlatMap[T class, U class](f(T) -> U?) U? {
     if f == nil {
         throw ArgumentNullException("f")
     }
@@ -171,7 +171,7 @@ func (self T?) FlatMap[T class, U class](f (T) -> U?) U? {
 /// @returns `f(self.Value)` when the receiver has a value, otherwise `nil`.
 /// @exception ArgumentNullException `f` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) FlatMap[T struct, U struct](f (T) -> U?) U? {
+func (self T?) FlatMap[T struct, U struct](f(T) -> U?) U? {
     if f == nil {
         throw ArgumentNullException("f")
     }
@@ -259,7 +259,7 @@ func (self T?) OrElse[T struct](defaultValue T) T {
 /// @returns the receiver's value when present, otherwise `defaultFactory()`.
 /// @exception ArgumentNullException `defaultFactory` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) OrCompute[T class](defaultFactory () -> T) T {
+func (self T?) OrCompute[T class](defaultFactory() -> T) T {
     if defaultFactory == nil {
         throw ArgumentNullException("defaultFactory")
     }
@@ -291,7 +291,7 @@ func (self T?) OrCompute[T class](defaultFactory () -> T) T {
 /// @returns the receiver's value when present, otherwise `defaultFactory()`.
 /// @exception ArgumentNullException `defaultFactory` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) OrCompute[T struct](defaultFactory () -> T) T {
+func (self T?) OrCompute[T struct](defaultFactory() -> T) T {
     if defaultFactory == nil {
         throw ArgumentNullException("defaultFactory")
     }
@@ -376,7 +376,7 @@ func (self T?) OrThrow[T struct](message string) T {
 /// @param action the callback to invoke on the present value; must not be `nil`.
 /// @exception ArgumentNullException `action` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) IfPresent[T class](action (T) -> void) {
+func (self T?) IfPresent[T class](action(T) -> void) {
     if action == nil {
         throw ArgumentNullException("action")
     }
@@ -403,7 +403,7 @@ func (self T?) IfPresent[T class](action (T) -> void) {
 /// @param action the callback to invoke on the present value; must not be `nil`.
 /// @exception ArgumentNullException `action` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) IfPresent[T struct](action (T) -> void) {
+func (self T?) IfPresent[T struct](action(T) -> void) {
     if action == nil {
         throw ArgumentNullException("action")
     }
@@ -434,7 +434,7 @@ func (self T?) IfPresent[T struct](action (T) -> void) {
 /// @returns the receiver when present and accepted by `predicate`, otherwise `nil`.
 /// @exception ArgumentNullException `predicate` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) Filter[T class](predicate (T) -> bool) T? {
+func (self T?) Filter[T class](predicate(T) -> bool) T? {
     if predicate == nil {
         throw ArgumentNullException("predicate")
     }
@@ -469,7 +469,7 @@ func (self T?) Filter[T class](predicate (T) -> bool) T? {
 /// @returns the receiver when present and accepted by `predicate`, otherwise `nil`.
 /// @exception ArgumentNullException `predicate` is `nil`.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
-func (self T?) Filter[T struct](predicate (T) -> bool) T? {
+func (self T?) Filter[T struct](predicate(T) -> bool) T? {
     if predicate == nil {
         throw ArgumentNullException("predicate")
     }

@@ -33,7 +33,9 @@ Console.WriteLine(always42())
 // Block body with an explicit `return` — the return-type rule (ADR-0076
 // §3) picks the common type of every value-producing return path. Here
 // the only return yields int32, so `inc` binds to `(int32) -> int32`.
-let inc = (n int32) -> { return n + 1 }
+let inc = (n int32) -> {
+    return n + 1
+}
 Console.WriteLine(inc(41))
 
 // Void return — when the body's only effect is a void-returning method
@@ -51,5 +53,5 @@ Console.WriteLine(addBase(7))
 // Target-typing (existing path, kept by ADR-0076 §2 case 1): when the
 // binding has an explicit function-type, the lambda's parameter types
 // may be omitted and are filled from the target.
-let twice (int32) -> int32 = (x) -> x * 2
+let twice(int32) -> int32 = (x) -> x * 2
 Console.WriteLine(twice(21))

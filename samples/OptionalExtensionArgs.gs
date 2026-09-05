@@ -12,8 +12,8 @@
 package GSharp.Example.OptionalExtensionArgs
 
 import System
-import System.Linq
 import System.Collections.Generic
+import System.Linq
 
 var list = List[int32]()
 list.Add(1)
@@ -25,7 +25,12 @@ list.Add(6)
 
 // CountBy groups by the key selector; the optional comparer argument is
 // omitted, so it must resolve to the trailing-optional overload.
-var counts = list.CountBy(func(x int32) int32 { return x % 2 })
+var counts = list
+    .CountBy(
+    func (x int32) int32 {
+        return x % 2
+    }
+)
 for kv in counts {
     Console.WriteLine(kv.Key)
     Console.WriteLine(kv.Value)

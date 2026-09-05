@@ -12,27 +12,25 @@ using Xunit;
 namespace GSharp.LanguageServer.Tests;
 
 /// <summary>
-/// Regression coverage for issue #1660: multi-statement bodies no longer collapse onto one
-/// line, formatting options (request-level and server initializationOptions) are honored, and
-/// the range/on-type formatting capabilities are not advertised since FormattingEngine only
-/// supports whole-document formatting.
+/// ADR-0179 coverage for canonical whole-document, range, and on-type formatting.
 /// </summary>
 public class LspServerFormattingTests
 {
     [Fact]
-    public void ServerCapabilities_DoNotAdvertiseRangeOrOnTypeFormatting()
+    public void ServerCapabilities_AdvertiseCanonicalFormattingSurfaces()
     {
         var capabilities = ServerCapabilitiesFactory.Create();
 
         Assert.True(capabilities.DocumentFormattingProvider);
-        Assert.False(capabilities.DocumentRangeFormattingProvider);
-        Assert.Null(capabilities.DocumentOnTypeFormattingProvider);
+        Assert.True(capabilities.DocumentRangeFormattingProvider);
+        Assert.NotNull(capabilities.DocumentOnTypeFormattingProvider);
     }
 
     [Fact]
     public async Task FormattingAsync_MultiStatementBody_KeepsStatementsOnSeparateLines()
     {
-        var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\nvar y = 2\n}\n");
+        const string source = "func foo() {\nvar x = 1\nvar y = 2\n}\n";
+        var (server, uri, gsPath) = await OpenDocumentAsync(source);
         try
         {
             var edits = await server.FormattingAsync(new DocumentFormattingParams
@@ -41,8 +39,9 @@ public class LspServerFormattingTests
                 Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
             });
 
-            var edit = Assert.Single(edits);
-            Assert.Equal($"func foo () {{{Environment.NewLine}  var x = 1{Environment.NewLine}  var y = 2{Environment.NewLine}}}{Environment.NewLine}", edit.NewText);
+            string formatted = ApplyEdits(source, edits);
+            Assert.Contains("    var x = 1", formatted);
+            Assert.Contains("    var y = 2", formatted);
         }
         finally
         {
@@ -51,9 +50,10 @@ public class LspServerFormattingTests
     }
 
     [Fact]
-    public async Task FormattingAsync_HonorsRequestFormattingOptions()
+    public async Task FormattingAsync_IgnoresRequestFormattingOptions()
     {
-        var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\n}\n");
+        const string source = "func foo() {\nvar x = 1\n}\n";
+        var (server, uri, gsPath) = await OpenDocumentAsync(source);
         try
         {
             var edits = await server.FormattingAsync(new DocumentFormattingParams
@@ -62,8 +62,7 @@ public class LspServerFormattingTests
                 Options = new FormattingOptions { TabSize = 4, InsertSpaces = true },
             });
 
-            var edit = Assert.Single(edits);
-            Assert.Contains("    var x = 1", edit.NewText);
+            Assert.Contains("    var x = 1", ApplyEdits(source, edits));
         }
         finally
         {
@@ -72,9 +71,10 @@ public class LspServerFormattingTests
     }
 
     [Fact]
-    public async Task RangeFormattingAsync_ReturnsEmptyEdits_DoesNotRewriteWholeDocument()
+    public async Task RangeFormattingAsync_FormatsIntersectingSource()
     {
-        var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\nvar y = 2\n}\n");
+        const string source = "func foo() {\nvar x = 1\nvar y = 2\n}\n";
+        var (server, uri, gsPath) = await OpenDocumentAsync(source);
         try
         {
             var edits = await server.RangeFormattingAsync(new DocumentRangeFormattingParams
@@ -88,7 +88,9 @@ public class LspServerFormattingTests
                 Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
             });
 
-            Assert.Empty(edits);
+            string formatted = ApplyEdits(source, edits);
+            Assert.Contains("\n    var x = 1\n", formatted);
+            Assert.Contains("\nvar y = 2\n", formatted);
         }
         finally
         {
@@ -97,7 +99,7 @@ public class LspServerFormattingTests
     }
 
     [Fact]
-    public async Task OnTypeFormattingAsync_ReturnsEmptyEdits_DoesNotRewriteWholeDocument()
+    public async Task OnTypeFormattingAsync_FormatsAtTheCaret()
     {
         var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\nvar y = 2\n}\n");
         try
@@ -110,7 +112,7 @@ public class LspServerFormattingTests
                 Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
             });
 
-            Assert.Empty(edits);
+            Assert.NotEmpty(edits);
         }
         finally
         {
@@ -119,33 +121,10 @@ public class LspServerFormattingTests
     }
 
     [Fact]
-    public async Task InitializeAsync_FormattingIndentSizeInitializationOption_IsUsedWhenRequestOmitsOptions()
+    public async Task InitializeAsync_FeatureOptions_DoNotChangeCanonicalFormatting()
     {
-        var (server, uri, gsPath) = await OpenDocumentAsync("func foo() {\nvar x = 1\n}\n", indentSize: 4, useTabs: false);
-        try
-        {
-            var edits = await server.FormattingAsync(new DocumentFormattingParams
-            {
-                TextDocument = new TextDocumentIdentifier { Uri = uri },
-                Options = null,
-            });
-
-            var edit = Assert.Single(edits);
-            Assert.Contains("    var x = 1", edit.NewText);
-        }
-        finally
-        {
-            Directory.Delete(Path.GetDirectoryName(Path.GetDirectoryName(gsPath))!, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task InitializeAsync_FormattingSetting_TakesPrecedenceOverEditorWideOptions()
-    {
-        var (server, uri, gsPath) = await OpenDocumentAsync(
-            "func foo() {\nvar x = 1\n}\n",
-            indentSize: 4,
-            useTabs: false);
+        const string source = "func foo() {\nvar x = 1\n}\n";
+        var (server, uri, gsPath) = await OpenDocumentAsync(source, initialize: true);
         try
         {
             var edits = await server.FormattingAsync(new DocumentFormattingParams
@@ -154,7 +133,7 @@ public class LspServerFormattingTests
                 Options = new FormattingOptions { TabSize = 2, InsertSpaces = true },
             });
 
-            Assert.Contains("    var x = 1", Assert.Single(edits).NewText);
+            Assert.Contains("    var x = 1", ApplyEdits(source, edits));
         }
         finally
         {
@@ -162,8 +141,33 @@ public class LspServerFormattingTests
         }
     }
 
+    private static string ApplyEdits(string source, TextEdit[] edits)
+    {
+        foreach (TextEdit edit in edits.OrderByDescending(item => item.Range.Start.Line)
+            .ThenByDescending(item => item.Range.Start.Character))
+        {
+            int start = ToOffset(source, edit.Range.Start);
+            int end = ToOffset(source, edit.Range.End);
+            source = source.Substring(0, start) + edit.NewText + source.Substring(end);
+        }
+
+        return source;
+    }
+
+    private static int ToOffset(string source, Position position)
+    {
+        int offset = 0;
+        for (int line = 0; line < position.Line; line++)
+        {
+            int next = source.IndexOf('\n', offset);
+            offset = next < 0 ? source.Length : next + 1;
+        }
+
+        return System.Math.Min(source.Length, offset + position.Character);
+    }
+
     private static async Task<(LspServer Server, DocumentUri Uri, string GsPath)> OpenDocumentAsync(
-        string text, int? indentSize = null, bool? useTabs = null)
+        string text, bool initialize = false)
     {
         var rootDir = Path.Combine(Path.GetTempPath(), "gsfmt_" + System.Guid.NewGuid().ToString("N"));
         var projDir = Path.Combine(rootDir, "Demo");
@@ -180,14 +184,13 @@ public class LspServerFormattingTests
         WorkspaceInitializer.Initialize(workspace, rootDir);
         var server = new LspServer(new DocumentContentService(), workspace);
 
-        if (indentSize.HasValue || useTabs.HasValue)
+        if (initialize)
         {
             await server.InitializeAsync(new InitializeParams
             {
                 InitializationOptions = new LanguageServerInitializationOptions
                 {
-                    FormattingIndentSize = indentSize ?? 2,
-                    FormattingUseTabs = useTabs ?? false,
+                    DiagnosticsOnType = false,
                 },
             });
         }

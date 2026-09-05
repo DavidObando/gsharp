@@ -7,6 +7,6 @@ package GSharp.Refactoring.NullablePropertyRead
 
 import System
 
-var x int32? = 7
+var x int32?= 7
 Console.WriteLine(x.HasValue)
 Console.WriteLine(x.Value)

@@ -167,8 +167,7 @@ func spawn(count int32) TimeSpan {
     return sw.Elapsed
 }
 
-func noop() {
-}
+func noop() { }
 
 // A select whose arms are ALREADY READY: the fast path, no registration and no
 // park. Both arms are refilled each round so the uniform-random choice always
@@ -184,12 +183,12 @@ func selectReady(count int32) TimeSpan {
         a <- 1
         b <- 2
         select {
-        case let v = <-a {
-            let drained = <-b
-        }
-        case let w = <-b {
-            let drained = <-a
-        }
+            case let v = <- a {
+                let drained = <-b
+            }
+            case let w = <- b {
+                let drained = <-a
+            }
         }
     }
 
@@ -211,12 +210,12 @@ func selectStream(count int32) TimeSpan {
         var got = 0
         while got < count {
             select {
-            case let v = <-a {
-                got = got + 1
-            }
-            case let w = <-b {
-                got = got + 1
-            }
+                case let v = <- a {
+                    got = got + 1
+                }
+                case let w = <- b {
+                    got = got + 1
+                }
             }
         }
     }
@@ -244,12 +243,12 @@ func selectPark(count int32) TimeSpan {
         var taken = 0
         while taken < count {
             select {
-            case let v = <-a {
-                taken = taken + 1
-            }
-            case let w = <-b {
-                taken = taken + 1
-            }
+                case let v = <- a {
+                    taken = taken + 1
+                }
+                case let w = <- b {
+                    taken = taken + 1
+                }
             }
         }
     }
@@ -304,7 +303,6 @@ func produceBatched(ch chan[int32], count int32, size int32) {
 
     ch.Close()
 }
-
 
 // Go's chunk rows send whole `[]int` slices over a `chan []int`; the `chunks()`
 // rows above are a G# construct that copies elements into a fresh array per
@@ -404,7 +402,20 @@ func runWarmup(name string) {
     }
 }
 
-let all = []string{"buf64", "rendezvous", "pingpong", "closed-recv", "spawn", "select-ready", "select-stream", "select-park", "chunk64", "chunk1k", "chunk64-arrays", "chunk1k-arrays"}
+let all = []string{
+    "buf64",
+    "rendezvous",
+    "pingpong",
+    "closed-recv",
+    "spawn",
+    "select-ready",
+    "select-stream",
+    "select-park",
+    "chunk64",
+    "chunk1k",
+    "chunk64-arrays",
+    "chunk1k-arrays"
+}
 let requested = Environment.GetEnvironmentVariable("GSHARP_BENCH_SCENARIO")
 
 Console.WriteLine("runtime " + Environment.Version.ToString() + " cores " + Environment.ProcessorCount.ToString())

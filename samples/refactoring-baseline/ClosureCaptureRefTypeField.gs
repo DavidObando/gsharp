@@ -9,13 +9,15 @@ import System
 
 class Holder {
     var Value int32
-    init() {}
+    init() { }
 }
 
 func run() int32 {
     var h = Holder()
     h.Value = 42
-    var getter = func() int32 { return h.Value }
+    var getter = func () int32 {
+        return h.Value
+    }
     return getter()
 }
 

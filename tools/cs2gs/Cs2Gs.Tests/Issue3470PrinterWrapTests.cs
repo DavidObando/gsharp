@@ -9,18 +9,18 @@ using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Formatting;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests
 {
-    // Issue #3470: the printer rendered every statement on one line, turning
-    // deliberately wrapped boolean chains and argument lists into 300+
-    // character lines. Statement-level value positions now wrap `&&`/`||`
-    // chains after each operator and long argument lists after `(` and each
-    // comma once the one-line form exceeds the column budget; short
-    // statements keep the one-line form.
+    // Issue #3470 / ADR-0179 phase 7a: the printer retains its proven wrapping
+    // until the canonical formatter's cs2gs post-pass is ready to become the
+    // phase 7b default. These tests run both layers so either path regressing
+    // long-expression layout is caught.
     public sealed class Issue3470PrinterWrapTests
     {
         [Fact]
@@ -167,7 +167,9 @@ namespace Cs2Gs.Tests
                 document.SemanticModel,
                 document.FilePath);
             CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-            return GSharpPrinter.Print(unit);
+            FormatResult formatted = GSharpFormatter.Format(SourceText.From(GSharpPrinter.Print(unit)));
+            Assert.Empty(formatted.Diagnostics);
+            return formatted.Text!.ToString();
         }
     }
 }

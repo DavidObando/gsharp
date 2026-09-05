@@ -10,8 +10,8 @@
 
 package GSharp.Samples.ScopeAll
 
-import System
 import Gsharp.Concurrency
+import System
 
 func succeed(results out chan[int32], value int32, ready out chan[bool]) {
     results <- value

@@ -14,8 +14,12 @@ import System
 class Joiner {
     func Join(sep string, parts ...string) string {
         var s = ""
-        for var i = 0; i < parts.Length; i++ {
-            if i > 0 { s = s + sep }
+        for var i = 0;
+        i < parts.Length;
+        i++ {
+            if i > 0 {
+                s = s + sep
+            }
             s = s + parts[i]
         }
         return s
@@ -24,7 +28,7 @@ class Joiner {
 
 class Sequences {
     shared {
-        func Of[T](values ...T) []T {
+        func Of[T](values ...T)[]T {
             return values
         }
     }
@@ -33,21 +37,23 @@ class Sequences {
 interface IAdder {
     func Add(values ...int32) int32 {
         var total = 0
-        for var i = 0; i < values.Length; i++ {
+        for var i = 0;
+        i < values.Length;
+        i++ {
             total = total + values[i]
         }
         return total
     }
 }
 
-class Calc : IAdder {
-}
+class Calc : IAdder { }
 
 class Tags {
-    var Values []string
+    var Values[]string
     init(vs ...string) {
         Values = vs
     }
+
     func Count() int32 {
         return Values.Length
     }
@@ -85,7 +91,9 @@ Console.WriteLine(v.Count())
 // (5) lambda (function-literal form). The body sees []int32; the
 // indirect call through a function-typed variable supplies a single
 // []T argument explicitly (see ADR-0102 §5 caveat).
-let pack = func(xs ...int32) int32 { return xs.Length }
+let pack = func (xs ...int32) int32 {
+    return xs.Length
+}
 Console.WriteLine(pack([]int32{7, 8, 9}))
 
 let arrow = (xs ...int32) -> xs.Length

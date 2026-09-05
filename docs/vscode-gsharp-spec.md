@@ -204,16 +204,6 @@ Ship six bundled color themes inspired by the G# logo, optimized for GSharp's se
             "default": "off",
             "description": "Trace communication between VS Code and the GSharp language server."
           },
-          "gsharp.formatting.indentSize": {
-            "type": "number",
-            "default": 4,
-            "description": "Number of spaces per indentation level."
-          },
-          "gsharp.formatting.useTabs": {
-            "type": "boolean",
-            "default": false,
-            "description": "Use tabs instead of spaces for indentation."
-          },
           "gsharp.diagnostics.enableOnType": {
             "type": "boolean",
             "default": true,
@@ -437,9 +427,9 @@ These features need to be added to the GSharp Language Server to reach parity wi
 | LSP Method | Priority | Description |
 | --- | --- | --- |
 | `textDocument/publishDiagnostics` | P0 | Push diagnostics (errors/warnings) to the client |
-| `textDocument/formatting` | P0 | Format entire document |
-| `textDocument/rangeFormatting` | P1 | Format selection |
-| `textDocument/onTypeFormatting` | P1 | Format on `;`, `}`, newline |
+| `textDocument/formatting` | P0 | ✅ Canonical whole-document formatting |
+| `textDocument/rangeFormatting` | P1 | ✅ Canonical selection formatting |
+| `textDocument/onTypeFormatting` | P1 | ✅ Canonical formatting on `;`, `}`, newline |
 | `textDocument/semanticTokens/full` | P0 | Semantic token highlighting |
 | `textDocument/semanticTokens/range` | P1 | Semantic tokens for visible range |
 | `textDocument/inlayHint` | P1 | Parameter name / type inlay hints |
@@ -790,8 +780,8 @@ Telemetry respects the user's `telemetry.telemetryLevel` setting.
 ### Phase 2 — Rich Editing (v0.2)
 
 - [ ] Semantic tokens (full semantic highlighting)
-- [ ] Document formatting & range formatting
-- [ ] On-type formatting
+- [x] Document formatting & range formatting
+- [x] On-type formatting
 - [ ] Inlay hints (parameter names, inferred types)
 - [ ] CodeLens (references, test run/debug)
 - [ ] Workspace symbol search
@@ -869,5 +859,6 @@ vscode-gsharp/
 4. **Server update mechanism**: How do we update the language server binary independently of the extension?
    - Recommendation: Bundle with extension; updates require extension version bump.
 
-5. **Formatter**: Should formatting be handled in the language server or as a separate tool (like `dotnet format`)?
-   - Recommendation: In the language server for tight integration, but expose a CLI tool as well.
+5. **Formatter**: Resolved by ADR-0179 on September 5, 2026. The
+   `GSharp.Formatting` library is linked in-process by the language server,
+   and the same engine ships as the standalone `gsfmt` CLI.

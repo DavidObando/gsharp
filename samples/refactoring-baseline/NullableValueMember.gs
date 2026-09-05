@@ -6,8 +6,8 @@ package GSharp.Refactoring.NullableValueMember
 
 import System
 
-var s string? = "hi"
-var n int32? = s?.Length
+var s string?= "hi"
+var n int32?= s?.Length
 if n.HasValue {
     Console.WriteLine(n.Value)
 } else {

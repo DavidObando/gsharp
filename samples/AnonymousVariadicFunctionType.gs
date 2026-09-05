@@ -12,7 +12,7 @@ import System
 // Field-typed variable: the slot's type is the anonymous variadic
 // function-type. The bound lambda is regular-form; the binder bridges
 // the variadic-flag-only difference.
-let f (int32, ...string) -> int32 = (a, args) -> a + args.Length
+let f(int32, ...string) -> int32 = (a, args) -> a + args.Length
 
 // Auto-pack: trailing positional args become a fresh []string slice.
 Console.WriteLine(f(1, "a", "b", "c"))
@@ -25,6 +25,6 @@ Console.WriteLine(f(7))
 
 // No-fixed shape: `(...T) -> R` works too — every positional argument
 // participates in the pack.
-let g (...int32) -> int32 = (xs) -> xs.Length
+let g(...int32) -> int32 = (xs) -> xs.Length
 Console.WriteLine(g(1, 2, 3, 4, 5))
 Console.WriteLine(g())

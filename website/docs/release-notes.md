@@ -11,6 +11,7 @@ G# is pre-1.0. The repository's version base is currently `0.4`, and product ver
 
 ### Breaking changes
 
+- **G# formatting is now canonical and option-free** (ADR-0179). `gsfmt` and the language server always use 4-space indentation, K&R braces, a fixed 120-column width, and LF output; LSP tab-size and insert-spaces options are ignored. Range and on-type formatting are now available, and the VS Code extension enables format-on-save for `.gs` files by default.
 - **`chan T` is respelled `chan[T]`** (ADR-0174 D2). The element type moves inside brackets like `sequence[T]` and `map[K, V]`; `in chan[T]` / `out chan[T]` are the receive-only / send-only handles (`ChannelReader<T>` / `ChannelWriter<T>`), `chan[T]?` is a nullable channel and `chan[T?]` a channel of nullable — the `(chan T)?` grouping carve-out is gone. The legacy spelling is rejected with `GS0567`, which names the exact replacement.
 - **`make(chan T[, n])` is retired** in favour of `chan[T]()` (rendezvous — capacity 0, Go's unbuffered channel), `chan[T](n)`, and `Chan.Unbounded[T]()` (the wave-1 behavior of `make(chan T)`, now named). `GS0566` names the replacement per site; note the semantic change for the no-capacity form.
 - **`close(ch)` is retired** in favour of the member `ch.Close()` (`GS0566`). Closing twice throws (Go's panic); `Dispose()` is the idempotent close, so `using let` works. `len(ch)` / `cap(ch)` become `ch.Length()` / `ch.Capacity` on a channel you constructed.

@@ -16,8 +16,6 @@ const serverManager = fs.readFileSync(
 );
 
 const initializationSettings = [
-  'formatting.indentSize',
-  'formatting.useTabs',
   'diagnostics.enableOnType',
   'completion.triggerOnDot',
   'codeLens.enableReferences',
@@ -36,6 +34,12 @@ describe('language server settings', () => {
 
   it('does not declare the unused start timeout setting', () => {
     expect(properties['gsharp.server.startTimeout']).toBeUndefined();
+  });
+
+  it('uses the canonical formatter on save without indentation settings', () => {
+    expect(manifest.contributes.configurationDefaults['[gsharp]']['editor.formatOnSave']).toBe(true);
+    expect(properties['gsharp.formatting.indentSize']).toBeUndefined();
+    expect(properties['gsharp.formatting.useTabs']).toBeUndefined();
   });
 
   it('uses vscode-languageclient native protocol tracing', () => {

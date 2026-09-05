@@ -69,6 +69,19 @@
     <Error Text="G# hot reload requires a .NETCoreApp target framework version 10.0 or newer." />
   </Target>
 
+  <Target Name="GsharpFormatCheck"
+          BeforeTargets="CoreCompile"
+          Condition=" '$(GsharpFormatOnBuild)' == 'true' and '$(DesignTimeBuild)' != 'true' ">
+    <ItemGroup>
+      <_GsharpFormatSource Include="@(Compile)"
+                           Condition=" '%(Extension)' == '.gs' " />
+    </ItemGroup>
+    <Error Condition="!Exists('$(GsharpFormatterFullPath)')"
+           Text="GsharpFormatOnBuild requires gsfmt at '$(GsharpFormatterFullPath)'." />
+    <Exec Condition=" '@(_GsharpFormatSource)' != '' "
+          Command="dotnet &quot;$(GsharpFormatterFullPath)&quot; --check @(_GsharpFormatSource->'&quot;%(FullPath)&quot;', ' ')" />
+  </Target>
+
   <!-- dotnet-watch's first ordinary `dotnet build` does not carry its
        DotNetWatchBuild marker. The following design-time build does. Rebuild
        this TFM once with the runtime bootstrap before watch launches it. -->

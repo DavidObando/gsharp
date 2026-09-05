@@ -1,7 +1,7 @@
 package PackageRef
 
-import System
 import Newtonsoft.Json
+import System
 
 var result = JsonConvert.SerializeObject("hello")
 Console.WriteLine(result)

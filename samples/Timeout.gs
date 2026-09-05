@@ -11,30 +11,30 @@
 
 package GSharp.Samples.Timeout
 
-import System
 import Gsharp.Concurrency
+import System
 
 let quiet = chan[int32](1)
 
 scope {
     select {
-    case let v = <-quiet {
-        Console.WriteLine("got value: $v")
-    }
-    case <-after(TimeSpan.FromMilliseconds(50)) {
-        Console.WriteLine("timed out")
-    }
+        case let v = <- quiet {
+            Console.WriteLine("got value: $v")
+        }
+        case <- after(TimeSpan.FromMilliseconds(50)) {
+            Console.WriteLine("timed out")
+        }
     }
 }
 
 scope {
     ctx.TryCancel()
     select {
-    case let v = <-quiet {
-        Console.WriteLine("got value: $v")
-    }
-    case cancelled {
-        Console.WriteLine("cancelled")
-    }
+        case let v = <- quiet {
+            Console.WriteLine("got value: $v")
+        }
+        case cancelled {
+            Console.WriteLine("cancelled")
+        }
     }
 }

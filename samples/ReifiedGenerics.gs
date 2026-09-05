@@ -23,8 +23,7 @@ data struct Box[T any] {
     var Value T
 }
 
-class Pair[A, B any](First A, Second B) {
-}
+class Pair[A, B any](First A, Second B) { }
 
 func Identity[T any](value T) T {
     return value

@@ -10,6 +10,7 @@
     <ProjectReference Include="..\Cs2Gs.ProjectLoading\Cs2Gs.ProjectLoading.csproj" />
     <ProjectReference Include="..\Cs2Gs.CodeModel\Cs2Gs.CodeModel.csproj" />
     <ProjectReference Include="..\..\..\src\Core\Core.csproj" />
+    <ProjectReference Include="..\..\..\src\Formatting\GSharp.Formatting\GSharp.Formatting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -50,7 +50,8 @@ public sealed class InitializationOptionsTests
     {
         string json = JsonSerializer.Serialize(new LanguageServerInitializationOptions());
 
-        Assert.Contains("\"formattingIndentSize\":4", json);
+        Assert.DoesNotContain("formattingIndentSize", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("formattingUseTabs", json, StringComparison.Ordinal);
         Assert.Contains("\"diagnosticsOnType\":true", json);
         Assert.Contains("\"completionTriggerOnDot\":true", json);
         Assert.Contains("\"referenceCodeLens\":true", json);

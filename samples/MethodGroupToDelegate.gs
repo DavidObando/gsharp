@@ -17,7 +17,7 @@ func twice(x int32) int32 {
     return x * 2
 }
 
-func apply(g (int32) -> int32, v int32) int32 {
+func apply(g(int32) -> int32, v int32) int32 {
     return g(v)
 }
 
@@ -30,7 +30,7 @@ var f Func[int32, int32] = inc
 Console.WriteLine(f.Invoke(41))
 
 // Method group -> native (T) -> R delegate, invoked directly.
-var nf (int32) -> int32 = twice
+var nf(int32) -> int32 = twice
 Console.WriteLine(nf(21))
 
 // Method group passed as a callback argument.

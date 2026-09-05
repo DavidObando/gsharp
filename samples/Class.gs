@@ -27,8 +27,7 @@ Console.WriteLine(q.X)
 var origin = Point{}
 Console.WriteLine(origin.X + origin.Y)
 
-class Vec(X int32, Y int32) {
-}
+class Vec(X int32, Y int32) { }
 
 var v = Vec(5, 7)
 Console.WriteLine(v.X + v.Y)
@@ -100,4 +99,3 @@ class Square(Side int32) : IShape {
 
 var sq = Square(4)
 Console.WriteLine(sq.Area())
-

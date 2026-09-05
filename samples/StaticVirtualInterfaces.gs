@@ -18,7 +18,7 @@ import System
 // supply Add. A default body would make the slot "static virtual" —
 // implementers may override but don't have to.
 sealed interface IAdd {
-    shared {
+    shared{
         func Add(a int32, b int32) int32;
 
         func Zero() int32 {

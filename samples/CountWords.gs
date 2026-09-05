@@ -26,10 +26,7 @@ package GSharp.Example.CountWords
 import System
 import System.Collections.Generic
 
-var words = [12]string{
-    "the", "quick", "brown", "fox", "jumps", "over",
-    "the", "lazy", "dog", "the", "quick", "fox",
-}
+var words = [12]string{"the", "quick", "brown", "fox", "jumps", "over", "the", "lazy", "dog", "the", "quick", "fox",}
 
 var counts = Dictionary[string, int32]()
 

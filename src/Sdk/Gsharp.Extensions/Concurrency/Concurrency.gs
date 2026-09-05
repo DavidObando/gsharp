@@ -78,7 +78,7 @@ public func merge[T](inputs ...chan[T]) in chan[T] {
 // once every forwarder has finished — including when one of them fails, in
 // which case the scope's exception reaches the free-goroutine hook rather than
 // leaving the consumer waiting on a channel nobody will close.
-func mergeInto[T](merged chan[T], inputs []chan[T]) {
+func mergeInto[T](merged chan[T], inputs[] chan[T]) {
     try {
         scope {
             for input in inputs {

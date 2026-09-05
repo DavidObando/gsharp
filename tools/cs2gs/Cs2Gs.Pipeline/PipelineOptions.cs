@@ -101,6 +101,13 @@ public sealed class PipelineOptions
     public bool CompileViaSdk { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets a value indicating whether emitted G# is passed through
+    /// the ADR-0179 canonical formatter. Disabled by default during phase 7a;
+    /// formatter failures preserve the printer output and produce a triage artifact.
+    /// </summary>
+    public bool FormatOutput { get; set; }
+
+    /// <summary>
     /// Gets or sets the test-parity failure allow-list (issue #3885): the
     /// individually-named migrated tests whose failure is a policy exclusion
     /// rather than a defect, so an app whose failing set is a SUBSET of it still

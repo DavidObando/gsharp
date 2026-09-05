@@ -37,7 +37,8 @@ class Book(First Contact, Second Contact, Third Contact) {
 var book = Book(
     Contact("Alice", "alice@example.com"),
     Contact("Bob", "bob@example.com"),
-    Contact("Carol", "carol@example.com"))
+    Contact("Carol", "carol@example.com")
+)
 
 var hit = book.Find("Bob")
 Console.WriteLine(hit?.Display() ?? "no match")

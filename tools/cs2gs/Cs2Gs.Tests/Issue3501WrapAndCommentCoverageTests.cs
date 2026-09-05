@@ -9,13 +9,15 @@ using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Formatting;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests
 {
-    // Issue #3501 B2+B3: the wrap pass extends to invocations whose
+    // Issue #3501 B2+B3 / ADR-0179: the canonical wrap pass extends to invocations whose
     // arguments are multi-line lambdas (first-line budget), long postfix
     // chains (leading-dot continuations), and long declaration signatures;
     // comment coverage extends to trailing same-line comments and comments
@@ -167,7 +169,9 @@ namespace Cs2Gs.Tests
                 document.SemanticModel,
                 document.FilePath);
             CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-            return GSharpPrinter.Print(unit);
+            FormatResult formatted = GSharpFormatter.Format(SourceText.From(GSharpPrinter.Print(unit)));
+            Assert.Empty(formatted.Diagnostics);
+            return formatted.Text!.ToString();
         }
     }
 }

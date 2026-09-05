@@ -15,17 +15,17 @@ struct Fahrenheit {
 }
 
 // Implicit: a Celsius flows into a float64 wherever one is expected.
-func operator implicit (c Celsius) float64 {
+func operator implicit(c Celsius) float64 {
     return c.degrees
 }
 
 // Explicit: build a Celsius from a float64 with a cast.
-func operator explicit (d float64) Celsius {
+func operator explicit(d float64) Celsius {
     return Celsius{degrees: d}
 }
 
 // Explicit: convert Celsius to Fahrenheit.
-func operator explicit (c Celsius) Fahrenheit {
+func operator explicit(c Celsius) Fahrenheit {
     return Fahrenheit{degrees: c.degrees * 9.0 / 5.0 + 32.0}
 }
 

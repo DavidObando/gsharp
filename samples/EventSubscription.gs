@@ -9,7 +9,7 @@ import System
 
 var domain = AppDomain.CurrentDomain
 
-domain.ProcessExit += func(sender Object, e EventArgs) {
+domain.ProcessExit += func (sender Object, e EventArgs) {
     Console.WriteLine("would only fire if not removed")
 }
 

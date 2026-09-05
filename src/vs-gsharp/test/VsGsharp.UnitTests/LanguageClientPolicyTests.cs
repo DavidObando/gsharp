@@ -17,22 +17,10 @@ public sealed class LanguageClientPolicyTests
     }
 
     [Fact]
-    public void CreateInitializationOptions_ClassifiesFormattingSettings()
-    {
-        IReadOnlyDictionary<string, object> options =
-            LanguageClientPolicy.CreateInitializationOptions(0, useTabs: true);
-
-        Assert.Equal(1, options["formattingIndentSize"]);
-        Assert.Equal(true, options["formattingUseTabs"]);
-    }
-
-    [Fact]
     public void CreateInitializationOptions_UsesSharedFeatureContract()
     {
         IReadOnlyDictionary<string, object> options =
             LanguageClientPolicy.CreateInitializationOptions(
-                indentSize: 2,
-                useTabs: false,
                 diagnosticsOnType: false,
                 completionTriggerOnDot: false,
                 referenceCodeLens: false,
@@ -40,7 +28,7 @@ public sealed class LanguageClientPolicyTests
                 typeInlayHints: false,
                 coldStartCache: false);
 
-        Assert.Equal(8, options.Count);
+        Assert.Equal(6, options.Count);
         Assert.Equal(false, options["diagnosticsOnType"]);
         Assert.Equal(false, options["completionTriggerOnDot"]);
         Assert.Equal(false, options["referenceCodeLens"]);

@@ -8,9 +8,18 @@ import System.Collections.ObjectModel
 // exactly like C#'s `new T { Member = { ... } }`. Because it is an Add — not
 // an assignment — the property needs no setter.
 class Bag {
-    prop Items IList[int32] { get; init; }
-    prop Names Collection[string] { get; init; }
-    prop Lookup IDictionary[string, int32] { get; init; }
+    prop Items IList[int32] {
+        get;
+        init;
+    }
+    prop Names Collection[string] {
+        get;
+        init;
+    }
+    prop Lookup IDictionary[string, int32] {
+        get;
+        init;
+    }
 
     init() {
         Items = List[int32]()
@@ -20,21 +29,17 @@ class Bag {
 }
 
 // Empty initializer: no Add calls, the constructed collection stays empty.
-var empty = Bag{ Items: {} }
+var empty = Bag{Items: {}}
 Console.WriteLine(empty.Items.Count)
 
 // Single element.
-var one = Bag{ Items: { 42 } }
+var one = Bag{Items: {42}}
 Console.WriteLine(one.Items.Count)
 Console.WriteLine(one.Items[0])
 
 // Many elements across list, collection, and dictionary get-only properties.
 // Dictionary entries accept both `"k": v` and `["k"] = v` spellings.
-var b = Bag{
-    Items: { 10, 20, 30 },
-    Names: { "alice", "bob" },
-    Lookup: { "a": 1, ["b"] = 2 },
-}
+var b = Bag{Items: {10, 20, 30}, Names: {"alice", "bob"}, Lookup: {"a": 1, ["b"] = 2},}
 Console.WriteLine(b.Items.Count)
 Console.WriteLine(b.Items[0])
 Console.WriteLine(b.Items[2])

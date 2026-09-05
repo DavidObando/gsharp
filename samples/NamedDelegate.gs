@@ -23,11 +23,11 @@ delegate Combine(a int32, b int32) int32;
 
 // A `func` literal converts implicitly to the matching named delegate type,
 // just like it converts to Action/Func today (issue #295).
-var hello Greeter = func(name string) {
+var hello Greeter = func (name string) {
     Console.WriteLine("hello, " + name)
 }
 
-var sum Combine = func(a int32, b int32) int32 {
+var sum Combine = func (a int32, b int32) int32 {
     return a + b
 }
 

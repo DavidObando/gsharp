@@ -1,7 +1,7 @@
 package SourceGen
 
-import System
 import CommunityToolkit.Mvvm.ComponentModel
+import System
 
 // ADR-0145 §E/§F: the `@ObservableProperty` attribute is consumed by the
 // CommunityToolkit.Mvvm Roslyn source generator. The Gsharp.NET.Sdk runs that

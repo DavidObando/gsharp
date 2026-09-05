@@ -7,8 +7,7 @@ package GSharp.Samples.Sealed
 
 import System
 
-sealed class Shape {
-}
+sealed class Shape { }
 
 class Circle : Shape {
     var Radius float64

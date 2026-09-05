@@ -20,4 +20,3 @@ import System.Runtime.InteropServices
 func NativeStrLen(text string) nint;
 
 Console.WriteLine(NativeStrLen("Hello, world!"))
-

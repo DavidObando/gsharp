@@ -503,10 +503,8 @@ public static class GSharpPrinter
         string single = RenderExpression(expression, indent);
 
         // Issue #3501 B2: the budget applies to the FIRST line — an
-        // expression whose one-line head is over budget wraps even when a
-        // block-bodied lambda argument already made the render multi-line
-        // (previously any embedded newline bailed the whole statement out,
-        // which accounted for most residual >300-char lines).
+        // expression whose one-line head is over budget even when a
+        // block-bodied lambda argument already made the render multi-line.
         int firstLineEnd = single.IndexOf('\n');
         int firstLineLength = firstLineEnd < 0 ? single.Length : firstLineEnd;
         if (prefixWidth + firstLineLength <= MaxLineWidth)
@@ -541,10 +539,6 @@ public static class GSharpPrinter
             var parts = operands.Select(operand =>
             {
                 string text = RenderExpression(operand, indent + 1, operandMin);
-
-                // Only invocation operands wrap further: re-flattening a
-                // parenthesized lower-precedence sub-chain here would drop
-                // the parentheses the precedence-aware render just added.
                 return operand is InvocationExpression
                         && text.IndexOf('\n') < 0
                         && continuation.Length + text.Length > MaxLineWidth
@@ -554,11 +548,6 @@ public static class GSharpPrinter
             return string.Join($" {chainRoot.Operator}\n{continuation}", parts);
         }
 
-        // Issue #3501 B2: a long postfix chain (`a.B(x).C().D`) breaks
-        // before each dot — gsc parses leading-dot continuations — which
-        // reads better than exploding one link's argument list. Only plain
-        // `.` links participate (never `->` pointer access), and only when
-        // the chain has at least two links.
         if (TryFlattenAccessChain(expression, out GExpression chainHead, out List<string> chainLinks)
             && chainLinks.Count >= 2)
         {
@@ -585,17 +574,13 @@ public static class GSharpPrinter
                 + ")";
         }
 
-        // Issue #3501: a construction WITH an object initializer
-        // (`new T(...) { A = x, B = y }` → `T(…){A: …}`-style G#) escaped
-        // every wrap — the construction wraps through the invocation branch
-        // above, and each member initializer takes its own line.
         if (expression is ObjectCreationInitializerExpression objectCreationWrap)
         {
             string construction =
                 RenderWrapped(objectCreationWrap.Construction, indent, prefixWidth)
                 ?? RenderExpression(objectCreationWrap.Construction, indent);
-            IEnumerable<string> memberTexts = objectCreationWrap.MemberInitializers.Select(f =>
-                $"{f.Name} = {RenderExpression(f.Value, indent + 1)}");
+            IEnumerable<string> memberTexts = objectCreationWrap.MemberInitializers.Select(field =>
+                $"{field.Name} = {RenderExpression(field.Value, indent + 1)}");
             return construction
                 + "{\n" + continuation
                 + string.Join($",\n{continuation}", memberTexts)
@@ -1358,7 +1343,7 @@ public static class GSharpPrinter
                     : $"[{string.Join(", ", chainCall.TypeArguments.Select(RenderType))}]";
                 string args = string.Join(
                     ", ",
-                    chainCall.Arguments.Select(a => RenderExpression(a, 0)));
+                    chainCall.Arguments.Select(argument => RenderExpression(argument, 0)));
                 reversed.Add($".{call.MemberName}{typeArgs}({args})");
                 current = call.Target;
                 continue;
@@ -2299,8 +2284,7 @@ public static class GSharpPrinter
         string parameterList = RenderParameterList(method.Parameters);
 
         // Issue #3501 B2: a signature whose one-line form exceeds the budget
-        // wraps its parameter list after `(` and each comma — the same
-        // continuation shapes gsc parses in call positions.
+        // wraps its parameter list after `(` and each comma.
         int signatureLineStart = sb.ToString().LastIndexOf('\n') + 1;
         int signatureLineLength = sb.Length - signatureLineStart;
         if (method.Parameters.Count > 1
@@ -2441,9 +2425,8 @@ public static class GSharpPrinter
 
         sb.Append("init");
 
-        // Issue #3501: same budgeted parameter-list wrap the func-header
-        // renderer applies — `init`/`convenience init` headers were the
-        // dominant string-free >300-char lines in the migrated corpus.
+        // Issue #3501: constructors use the same budgeted parameter-list wrap
+        // as function headers.
         string ctorParameterList = RenderParameterList(constructor.Parameters);
         int ctorLineStart = sb.ToString().LastIndexOf('\n') + 1;
         int ctorLineLength = sb.Length - ctorLineStart;

@@ -16,5 +16,3 @@ Console.WriteLine(empties.Length)
 
 var t = Activator.CreateInstance[Tag]()
 Console.WriteLine(t.Name == nil)
-
-
