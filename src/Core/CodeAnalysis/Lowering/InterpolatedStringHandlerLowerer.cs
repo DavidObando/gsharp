@@ -22,8 +22,8 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// ADR-0055).
 /// </summary>
 /// <remarks>
-/// Each interpolation node is rewritten into a <see cref="BoundBlockExpression"/>
-/// that does the following.
+/// When the target provides the default handler, each interpolation node is
+/// rewritten into a <see cref="BoundBlockExpression"/> that does the following.
 /// <list type="number">
 /// <item>declares a <c>System.Runtime.CompilerServices.DefaultInterpolatedStringHandler</c>
 /// value-type local and constructs it with <c>(literalLength, formattedCount)</c>.</item>
@@ -40,6 +40,13 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// reflection <see cref="System.Type"/>, over an <c>object</c> placeholder while
 /// the real type-argument symbol is encoded into the emitted MethodSpec), so the
 /// hole value is passed by its natural representation.
+/// </para>
+/// <para>
+/// When the target does not provide the default handler, ordinary string
+/// interpolation instead lowers to <c>String.Format(string, object[])</c>.
+/// That target-compatible path boxes value-type holes and preserves composite
+/// formatting, alignment, evaluation order, and literal-brace escaping.
+/// User-defined interpolated-string handlers are unaffected.
 /// </para>
 /// This rewrite is applied only on the emit path; the tree-walk interpreter
 /// renders <see cref="BoundInterpolatedStringExpression"/> directly.
@@ -173,9 +180,8 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
         // Issue #3769: a handler supplied only by ReferenceResolver's host
         // fallback is not part of the target framework. Use the pre-C# 10
         // composite-format lowering instead of leaking System.Private.CoreLib
-        // into the emitted assembly. The same fallback covers older handler
-        // shapes that lack the overload required by this interpolation.
-        if (this.handler == null || !this.HasRequiredAppendFormatted(node))
+        // into the emitted assembly.
+        if (this.handler == null)
         {
             return this.RewriteStringFormat(node);
         }
@@ -280,21 +286,6 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
             ImmutableArray<BoundExpression>.Empty);
 
         return new BoundBlockExpression(node.Syntax, statements.ToImmutable(), result);
-    }
-
-    private bool HasRequiredAppendFormatted(BoundInterpolatedStringExpression node)
-    {
-        var shape = Invariant.Required(this.handler, "the handler shape is resolved before its overloads are inspected");
-        foreach (var part in node.Parts)
-        {
-            if (part.IsHole
-                && shape.GetAppendFormatted(part.Alignment.HasValue, part.Format != null).Method == null)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private BoundExpression RewriteStringFormat(BoundInterpolatedStringExpression node)
