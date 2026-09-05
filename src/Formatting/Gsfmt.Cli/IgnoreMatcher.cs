@@ -38,7 +38,8 @@ internal static class IgnoreMatcher
         while (ignoreFiles.Count > 0)
         {
             string ignorePath = ignoreFiles.Pop();
-            string root = Path.GetDirectoryName(ignorePath)!;
+            string root = Path.GetDirectoryName(ignorePath)
+                ?? throw new InvalidOperationException("An ignore file must have a parent directory.");
             string relative = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
             if (relative.StartsWith("../", StringComparison.Ordinal))
             {

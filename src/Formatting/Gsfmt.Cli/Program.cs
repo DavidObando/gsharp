@@ -58,6 +58,8 @@ internal static class Program
             return 2;
         }
 
+        string formatted = result.Text?.ToString()
+            ?? throw new InvalidOperationException("Successful formatting must return text.");
         if (options.Check)
         {
             return result.Changed ? 1 : 0;
@@ -77,13 +79,13 @@ internal static class Program
         {
             if (result.Changed)
             {
-                Console.Out.Write(UnifiedDiff(name, original, result.Text!.ToString()));
+                Console.Out.Write(UnifiedDiff(name, original, formatted));
             }
 
             return 0;
         }
 
-        Console.Out.Write(result.Text!.ToString());
+        Console.Out.Write(formatted);
         return 0;
     }
 
@@ -116,11 +118,13 @@ internal static class Program
                 continue;
             }
 
+            string formatted = result.Text?.ToString()
+                ?? throw new InvalidOperationException("Successful formatting must return text.");
             if (!result.Changed)
             {
                 if (!options.Write && !options.List && !options.Check && !options.Diff)
                 {
-                    Console.Out.Write(result.Text!.ToString());
+                    Console.Out.Write(formatted);
                 }
 
                 continue;
@@ -134,15 +138,15 @@ internal static class Program
 
             if (options.Write)
             {
-                File.WriteAllText(path, result.Text!.ToString());
+                File.WriteAllText(path, formatted);
             }
             else if (options.Diff)
             {
-                Console.Out.Write(UnifiedDiff(path, original, result.Text!.ToString()));
+                Console.Out.Write(UnifiedDiff(path, original, formatted));
             }
             else if (!options.Check && !options.List)
             {
-                Console.Out.Write(result.Text!.ToString());
+                Console.Out.Write(formatted);
             }
         }
 
