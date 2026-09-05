@@ -34,9 +34,11 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // `record` was removed in v0.2; the lexer still recognises it so the parser
   // can emit the GS0307 migration diagnostic, so we keep it here for fidelity.
   // `type` stopped being a reserved keyword in issue #3510: it now parses
-  // contextually, only at member position, as the retired
-  // `type Name = delegate func(...)` recovery spelling superseded by the
-  // canonical `delegate Name(...) R;` declaration.
+  // contextually, only at member position. `type Name = Target` remains a
+  // valid, currently-accepted erased-alias declaration; only the delegate
+  // specialization, `type Name = delegate func(...)`, is a retired recovery
+  // spelling superseded by the canonical `delegate Name(...) R;`
+  // declaration.
   const contextualKeywords =
     /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|extension|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
 
