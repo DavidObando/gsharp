@@ -18,7 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// directly to the interface method body without re-entering the
 /// implementer's v-table.
 /// </summary>
-public sealed class BoundBaseInterfaceCallExpression : BoundExpression
+public sealed class BoundBaseInterfaceCallExpression : BoundCallOperationExpression
 {
     /// <summary>Initializes a new instance of the <see cref="BoundBaseInterfaceCallExpression"/> class.</summary>
     /// <param name="syntax">The originating syntax.</param>
@@ -44,6 +44,9 @@ public sealed class BoundBaseInterfaceCallExpression : BoundExpression
     public override BoundNodeKind Kind => BoundNodeKind.BaseInterfaceCallExpression;
 
     /// <inheritdoc/>
+    public override Symbol CalledFunction => Method;
+
+    /// <inheritdoc/>
     public override TypeSymbol Type => Method.Type;
 
     /// <summary>Gets the implicit <c>this</c> receiver — a <see cref="BoundVariableExpression"/> reading the enclosing method's first parameter.</summary>
@@ -56,5 +59,5 @@ public sealed class BoundBaseInterfaceCallExpression : BoundExpression
     public FunctionSymbol Method { get; }
 
     /// <summary>Gets the bound argument expressions in declared order.</summary>
-    public ImmutableArray<BoundExpression> Arguments { get; }
+    public override ImmutableArray<BoundExpression> Arguments { get; }
 }

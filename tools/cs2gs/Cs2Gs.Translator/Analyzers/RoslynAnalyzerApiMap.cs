@@ -247,8 +247,34 @@ internal static class RoslynAnalyzerApiMap
     /// </summary>
     private static readonly Dictionary<string, string[]> OperationKindDispatch = new(StringComparer.Ordinal)
     {
+        // KNOWN LIMITATION, unchanged by #3920 and not fixable here: a
+        // non-lifted same-compilation user-defined operator binds to
+        // BoundCallExpression (ExpressionBinder.Operators.cs), so it reaches an
+        // Invocation registration rather than a BinaryOperator one — as it
+        // already did before this map became one-to-many. Adding CallExpression
+        // to this row would not fix it and would send every ordinary call to
+        // the binary handler; separating the two needs the bound tree to record
+        // that a call came from operator syntax.
         ["BinaryOperator"] = new[] { "BinaryExpression", "ClrBinaryOperatorExpression" },
-        ["Invocation"] = new[] { "CallExpression", "ImportedCallExpression", "ImportedInstanceCallExpression" },
+
+        // Every node a Roslyn Invocation reaches. `receiver.Method()` — the most
+        // ordinary call there is — is a UserInstanceCallExpression, and leaving
+        // it out meant a migrated invocation rule never fired on it at all
+        // (PR #3968 review). Constructor calls are absent by design: Roslyn
+        // models those as ObjectCreation, not Invocation. The two call shapes
+        // still absent have no callee symbol to report — IndirectCallExpression
+        // invokes a delegate value, and BaseClassCallExpression's
+        // property-accessor form carries neither symbol nor MethodInfo.
+        ["Invocation"] = new[]
+        {
+            "CallExpression",
+            "UserInstanceCallExpression",
+            "ImportedCallExpression",
+            "ImportedInstanceCallExpression",
+            "ClrStaticCallExpression",
+            "ConstrainedStaticCallExpression",
+            "BaseInterfaceCallExpression",
+        },
     };
 
     /// <summary>
@@ -284,8 +310,11 @@ internal static class RoslynAnalyzerApiMap
         [("Microsoft.CodeAnalysis.Operations.IInvocationOperation", "TargetMethod")] = new(
             null,
             "CalledFunction",
-            "BoundCallOperationExpression.CalledFunction is Symbol-typed: an imported callee is an ImportedFunctionSymbol, not a FunctionSymbol (#3920)."),
-        [("Microsoft.CodeAnalysis.IMethodSymbol", "OverriddenMethod")] = new(null, "OverriddenMethod"),
+            "BoundCallOperationExpression.CalledFunction is Symbol-typed and carries Name/ContainingType only: ReturnType is answered by the call node (the callee symbol holds the DECLARATION's type) and OverriddenMethod is not answerable for an imported callee (#3920, PR #3968 review)."),
+        [("Microsoft.CodeAnalysis.IMethodSymbol", "OverriddenMethod")] = new(
+            null,
+            "OverriddenMethod",
+            "FunctionSymbol.OverriddenMethod is the SOURCE override chain only: a method overriding an imported CLR base records its target in ExternalOverriddenMethod, and an imported method has no chain at all, so both report null where Roslyn reports a symbol (PR #3968 review). Review override-chain walks that must see across the metadata boundary."),
         [("Microsoft.CodeAnalysis.IMethodSymbol", "ReturnType")] = new(null, "Type"),
         [("Microsoft.CodeAnalysis.IParameterSymbol", "IsOptional")] = new(null, "HasExplicitDefaultValue"),
         [("Microsoft.CodeAnalysis.INamedTypeSymbol", "BaseType")] = new(null, "BaseType"),

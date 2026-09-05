@@ -89,15 +89,13 @@ public sealed class BoundImportedInstanceCallExpression : BoundCallOperationExpr
 
     /// <summary>
     /// Gets the called method as a symbol (ADR-0169, issue #3920). Built on
-    /// demand from <see cref="Method"/>: this node stores the reflected
-    /// method rather than a symbol, and only the analyzer surface needs one.
+    /// demand from <see cref="Method"/> with THIS node's return type, so an
+    /// imported generic method closed over a user-defined type reports the
+    /// constructed type rather than the reflected placeholder (PR #3968
+    /// review).
     /// </summary>
     public override Symbol CalledFunction
-        => calledFunction ??= new ImportedFunctionSymbol(
-            Method.Name,
-            new ImportedClassSymbol(Method.DeclaringType ?? typeof(object), declaration: null),
-            Method,
-            declaration: null);
+        => calledFunction ??= ImportedCallee(Method, Type);
 
     /// <inheritdoc/>
     public override TypeSymbol Type { get; }

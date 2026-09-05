@@ -89,7 +89,11 @@ codegen distinction, so an analyzer must not have to know it: the nodes in each
 family derive from a shared analyzer-facing base —
 `BoundBinaryOperationExpression` (`Left`, `Right`, `BinaryOperatorKind`) and
 `BoundCallOperationExpression` (`CalledFunction`, `Arguments`) — and a rule
-registers every `BoundNodeKind` in the family. Registering one is a rule that
+registers every `BoundNodeKind` in the family. "Every" is literal: the call
+family spans same-compilation static and instance, imported static and
+instance, constrained static-virtual, base-interface and raw CLR static, and
+leaving out the instance case alone made `receiver.Method()` invisible to every
+migrated invocation rule. Registering one is a rule that
 silently sees a fraction of the program; it is how the migrated GSA0002
 observed none of the reflection-`Type` code it exists to police, since imported
 operands are exactly the ones it cares about.

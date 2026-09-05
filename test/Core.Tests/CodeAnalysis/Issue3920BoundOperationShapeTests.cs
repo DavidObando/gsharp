@@ -141,6 +141,74 @@ class C {
     }
 
     /// <summary>
+    /// PR #3968 review: <c>receiver.Method()</c> — the most ordinary call there
+    /// is — binds to <c>BoundUserInstanceCallExpression</c>, which was outside
+    /// the shared base and outside the dispatch set. A migrated invocation rule
+    /// therefore never fired on it AT ALL; measured before the fix, this source
+    /// produced no diagnostic.
+    /// </summary>
+    [Fact]
+    public void SameCompilationInstanceCall_IsSeenAsACallOperation()
+    {
+        GSharpAnalyzerVerifier<AnyCallAnalyzer>.VerifyAnalyzer(
+            @"package App
+
+class C {
+    func Value() int32 {
+        return 1
+    }
+
+    func Use() int32 {
+        return [|Value()|]
+    }
+}
+",
+            "TESTGSA3920D");
+    }
+
+    /// <summary>
+    /// The falsifier: a body with no call at all must stay silent, so the test
+    /// above is evidence the handler ran rather than evidence it fires blindly.
+    /// </summary>
+    [Fact]
+    public void BodyWithoutACall_IsNotReported()
+    {
+        GSharpAnalyzerVerifier<AnyCallAnalyzer>.VerifyAnalyzer(
+            @"package App
+
+func Use(value int32) int32 {
+    return value + 1
+}
+");
+    }
+
+    /// <summary>
+    /// PR #3968 review, and the reason cs2gs answers
+    /// <c>TargetMethod.ReturnType</c> from the call NODE rather than from the
+    /// callee symbol: for a constructed generic call the symbol still carries
+    /// the DECLARATION's return type. Measured on
+    /// <c>Identity[int32](1)</c>: <c>symbol=T</c> against
+    /// <c>node=global::System.Int32</c>. Roslyn's <c>TargetMethod</c> is the
+    /// constructed method, so the node's type is the faithful reading.
+    /// </summary>
+    [Fact]
+    public void ConstructedGenericCall_KeepsTheCallSiteReturnTypeOnTheNode()
+    {
+        GSharpAnalyzerVerifier<GenericReturnTypeAnalyzer>.VerifyAnalyzer(
+            @"package App
+
+func Identity[T](value T) T {
+    return value
+}
+
+func Use() int32 {
+    return [|Identity[int32](1)|]
+}
+",
+            "TESTGSA3920E");
+    }
+
+    /// <summary>
     /// Reports every equality binary operation, whatever node the binder chose
     /// for it.
     /// </summary>
@@ -218,6 +286,80 @@ class C {
         }
     }
 
+    /// <summary>Reports every call, whatever node the binder chose for it.</summary>
+    [GSharpDiagnosticAnalyzer]
+    public sealed class AnyCallAnalyzer : GSharpDiagnosticAnalyzer
+    {
+        private static readonly DiagnosticDescriptor Rule = new(
+            "TESTGSA3920D",
+            "Call operation",
+            "A call operation.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        /// <inheritdoc/>
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+        /// <inheritdoc/>
+        public override void Initialize(AnalysisContext context)
+            => context.RegisterBoundNodeAction(
+                Analyze,
+                BoundNodeKind.CallExpression,
+                BoundNodeKind.UserInstanceCallExpression,
+                BoundNodeKind.ImportedCallExpression,
+                BoundNodeKind.ImportedInstanceCallExpression,
+                BoundNodeKind.ClrStaticCallExpression,
+                BoundNodeKind.ConstrainedStaticCallExpression,
+                BoundNodeKind.BaseInterfaceCallExpression);
+
+        private static void Analyze(BoundNodeAnalysisContext context)
+        {
+            var operation = (BoundCallOperationExpression)context.BoundNode;
+            Assert.NotNull(operation.CalledFunction);
+            context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.Location));
+        }
+    }
+
+    /// <summary>
+    /// Reports a call whose NODE type is <c>int32</c> while its callee symbol
+    /// still says <c>T</c> — the divergence that makes the node the right
+    /// source for a translated <c>ReturnType</c> read.
+    /// </summary>
+    [GSharpDiagnosticAnalyzer]
+    public sealed class GenericReturnTypeAnalyzer : GSharpDiagnosticAnalyzer
+    {
+        private static readonly DiagnosticDescriptor Rule = new(
+            "TESTGSA3920E",
+            "Constructed generic call",
+            "A constructed generic call.",
+            "Testing",
+            DiagnosticSeverity.Warning,
+            isEnabledByDefault: true);
+
+        /// <inheritdoc/>
+        public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+        /// <inheritdoc/>
+        public override void Initialize(AnalysisContext context)
+            => context.RegisterBoundNodeAction(Analyze, BoundNodeKind.CallExpression);
+
+        private static void Analyze(BoundNodeAnalysisContext context)
+        {
+            var operation = (BoundCallOperationExpression)context.BoundNode;
+            if (operation.CalledFunction.Name != "Identity")
+            {
+                return;
+            }
+
+            Assert.Equal(
+                "global::System.Int32",
+                operation.Type.ToDisplayString(DisplayFormat.FullyQualified));
+            Assert.Equal("T", ((FunctionSymbol)operation.CalledFunction).Type.ToDisplayString(DisplayFormat.FullyQualified));
+            context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.Location));
+        }
+    }
+
     /// <summary>
     /// Reports <c>object.ReferenceEquals</c> calls, identified through
     /// <see cref="BoundCallOperationExpression.CalledFunction"/> and its
@@ -242,8 +384,12 @@ class C {
             => context.RegisterBoundNodeAction(
                 Analyze,
                 BoundNodeKind.CallExpression,
+                BoundNodeKind.UserInstanceCallExpression,
                 BoundNodeKind.ImportedCallExpression,
-                BoundNodeKind.ImportedInstanceCallExpression);
+                BoundNodeKind.ImportedInstanceCallExpression,
+                BoundNodeKind.ClrStaticCallExpression,
+                BoundNodeKind.ConstrainedStaticCallExpression,
+                BoundNodeKind.BaseInterfaceCallExpression);
 
         private static void Analyze(BoundNodeAnalysisContext context)
         {

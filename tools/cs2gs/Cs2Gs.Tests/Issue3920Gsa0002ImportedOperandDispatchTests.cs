@@ -6,7 +6,11 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
+using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Translator;
 using Cs2Gs.Translator.Analyzers;
+using Cs2Gs.Translator.Loading;
 using GSharp.CodeAnalysis.Analyzers.Testing;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Analyzers;
@@ -154,5 +158,314 @@ namespace GSharp.Core.CodeAnalysis.Syntax
         GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
 
         GSharpAnalyzerVerifier.VerifyAnalyzer(analyzer, result.GsWithMarkers, ids);
+    }
+
+    // A migrated analyzer that reads IInvocationOperation.TargetMethod.ReturnType.
+    // Roslyn's TargetMethod is the CONSTRUCTED method, so its ReturnType is the
+    // call site's; G#'s callee symbol carries the DECLARATION's, which for a
+    // constructed generic call is the type parameter. The read is answered by
+    // the call node instead.
+    private const string ReturnTypeAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReturnTypeAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST3920A"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterOperationAction(AnalyzeCall, OperationKind.Invocation);
+
+    private static void AnalyzeCall(OperationAnalysisContext context)
+    {
+        var operation = (IInvocationOperation)context.Operation;
+        if (operation.TargetMethod.ReturnType.Name == ""Int32"")
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+        }
+    }
+}
+";
+
+    // The same shape reaching TargetMethod.OverriddenMethod, which has no honest
+    // answer at a call site: an imported callee has no G# override chain.
+    private const string OverriddenMethodAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class OverriddenMethodAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST3920D"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterOperationAction(AnalyzeCall, OperationKind.Invocation);
+
+    private static void AnalyzeCall(OperationAnalysisContext context)
+    {
+        var operation = (IInvocationOperation)context.Operation;
+        if (operation.TargetMethod.OverriddenMethod != null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+        }
+    }
+}
+";
+
+    // The indirect registration again, but with the arguments NAMED and
+    // REORDERED, so a guard keyed on syntactic position never inspects the
+    // array at all.
+    private const string NamedReorderedKindsAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class NamedReorderedAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST3920E"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    private static readonly OperationKind[] Kinds = new[] { OperationKind.BinaryOperator };
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterOperationAction(operationKinds: Kinds, action: AnalyzeBinary);
+
+    private static void AnalyzeBinary(OperationAnalysisContext context)
+    {
+        var operation = (IBinaryOperation)context.Operation;
+        context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+    }
+}
+";
+
+    // The same registration, with the kinds named INDIRECTLY. cs2gs cannot fan
+    // these out, and the one-to-one fallback would emit a registration that
+    // binds, runs, and is dispatched zero times over imported code — the exact
+    // silence #3920 exists to remove.
+    private const string IndirectKindsAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class IndirectKindsAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST3920B"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    private static readonly OperationKind[] Kinds = new[] { OperationKind.BinaryOperator };
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterOperationAction(AnalyzeBinary, Kinds);
+
+    private static void AnalyzeBinary(OperationAnalysisContext context)
+    {
+        var operation = (IBinaryOperation)context.Operation;
+        context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+    }
+}
+";
+
+    // A registration for a kind with no fan-out row, spelled DIRECTLY. The
+    // enum rename is the whole answer here, so the indirection guard must not
+    // fire: trading a silent wrong answer for a loud wrong one is not a fix.
+    private const string DirectUnmappedKindAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ConversionAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST3920C"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterOperationAction(AnalyzeConversion, OperationKind.Conversion);
+
+    private static void AnalyzeConversion(OperationAnalysisContext context)
+        => context.ReportDiagnostic(Diagnostic.Create(Rule, context.Operation.Syntax.GetLocation()));
+}
+";
+
+    /// <summary>
+    /// PR #3968 review, findings 1 and 2 — one fix covers both. A call-site
+    /// <c>ReturnType</c> read is answered by the call NODE, not by the callee
+    /// symbol: the symbol carries the declaration's type, so a constructed
+    /// generic call reports the type parameter (measured:
+    /// <c>symbol=T</c> vs <c>node=global::System.Int32</c>), and an imported
+    /// generic method closed over a user-defined type reflects a placeholder.
+    /// Reading the node sidesteps both without consulting either.
+    /// </summary>
+    [Fact]
+    public void TargetMethodReturnType_IsAnsweredByTheCallNode()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(ReturnTypeAnalyzerSource);
+
+        Assert.Contains("operation.Type.Name", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("CalledFunction.Type", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            diagnostics,
+            d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
+                && d.Message.Contains("TargetMethod.ReturnType", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBinds(printed);
+    }
+
+    /// <summary>
+    /// PR #3968 review, finding 3, taking the reviewer's "or reject this
+    /// mapping" branch. An imported callee has no G# override chain, so a
+    /// call-site <c>OverriddenMethod</c> would answer null for every call into
+    /// metadata — and a member analyzers BRANCH on must not silently say "no".
+    /// It is a gap instead. The declaring-symbol surface
+    /// (<c>FunctionSymbol.OverriddenMethod</c>, which GSA0005 walks) is
+    /// untouched.
+    /// </summary>
+    [Fact]
+    public void TargetMethodOverriddenMethod_IsALoudGapRatherThanASilentNull()
+    {
+        (_, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(OverriddenMethodAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal("CS2GS-GAP", gap.DiagnosticId);
+        Assert.Contains("OverriddenMethod", gap.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PR #3968 review, finding 5: an argument's ROLE comes from the parameter
+    /// it binds to, never from its position. Named arguments reorder freely, and
+    /// <c>RegisterOperationAction(operationKinds: Kinds, action: H)</c> put the
+    /// indirect array where a positional check expected the handler — so the
+    /// guard skipped it and the silent one-to-one fallback survived inside the
+    /// change meant to remove it.
+    /// </summary>
+    [Fact]
+    public void NamedAndReorderedRegistrationArguments_AreStillGuarded()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(NamedReorderedKindsAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal("CS2GS-GAP", gap.DiagnosticId);
+        Assert.Contains("RegisterOperationAction", gap.Message, StringComparison.Ordinal);
+
+        // The falsifier: the emitted registration really is the incomplete one,
+        // so silence here would have been a live bug rather than a theoretical.
+        Assert.Contains("Kinds", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ClrBinaryOperatorExpression", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// <summary>
+    /// A registration whose kinds are named indirectly cannot be fanned out,
+    /// and a quiet one-to-one fallback would reintroduce #3920 in a shape that
+    /// compiles, runs, and reports nothing. It is a loud gap instead: a wrong
+    /// answer that announces itself beats a wrong answer that does not.
+    /// </summary>
+    [Fact]
+    public void IndirectlyNamedOperationKinds_AreALoudGapRatherThanASilentOneToOne()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(IndirectKindsAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal("CS2GS-GAP", gap.DiagnosticId);
+        Assert.Contains("RegisterOperationAction", gap.Message, StringComparison.Ordinal);
+
+        // The falsifier for the guard itself: the emitted registration really
+        // is the incomplete one, so silence here would have been a real bug
+        // rather than a theoretical one.
+        Assert.Contains("RegisterBoundNodeAction(AnalyzeBinary, Kinds)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("ClrBinaryOperatorExpression", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The falsifier for the guard's REACH: a kind spelled directly but
+    /// carrying no fan-out row still translates through the plain enum rename.
+    /// A guard that fired here would turn every unrelated operation-kind
+    /// registration into a spurious gap.
+    /// </summary>
+    [Fact]
+    public void DirectlyNamedKindWithoutAFanOutRow_IsNotAGap()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(DirectUnmappedKindAnalyzerSource);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("BoundNodeKind.ConversionExpression", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>Translates one analyzer source in ADR-0169 analyzer mode.</summary>
+    /// <param name="source">The C# analyzer source.</param>
+    /// <returns>The printed G# and the translation diagnostics.</returns>
+    private static (string Printed, IReadOnlyList<TranslationDiagnostic> Diagnostics) TranslateAnalyzerSource(
+        string source)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Analyzer.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+
+        var translator = new CSharpToGSharpTranslator(analyzerApiMode: true);
+        LoadedDocument document = project.Documents
+            .Single(d => Path.GetFileName(d.FilePath) == "Analyzer.cs");
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(translator.TranslateDocument(document, context));
+        return (printed, context.Diagnostics.ToList());
+    }
+
+    /// <summary>Binds printed G# against the real GSharp.Core.</summary>
+    /// <param name="printed">The printed G# source.</param>
+    private static void AssertBinds(string printed)
+    {
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From(printed, "analyzer.gs"));
+        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(
+            new[] { typeof(Diagnostic).Assembly.Location });
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, tree) { IsLibrary = true };
+        var errors = tree.Diagnostics
+            .Concat(compilation.GlobalScope.Diagnostics)
+            .Concat(compilation.BoundProgram.Diagnostics)
+            .Where(d => d.IsError)
+            .Select(d => d.Id + ": " + d.Message)
+            .ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors));
     }
 }
