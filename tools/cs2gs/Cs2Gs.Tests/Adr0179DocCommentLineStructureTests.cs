@@ -96,6 +96,36 @@ namespace Cs2Gs.Tests
             TranslationTestValidation.AssertBinds(printed);
         }
 
+        [Fact]
+        public void CodeSpanWrappedAcrossSourceLines_DoesNotStartALineWithAStrayTag()
+        {
+            // Issue #3501: src/Sdk/Gsharp.NET.Sdk/GsgenTask.cs writes
+            // `<c>dotnet &lt;tool&gt;.dll @rsp</c>` with the author's own line
+            // break falling INSIDE the code span, right before `@rsp`. Phase
+            // 9a preserves that line structure, so the emitted G# began a doc
+            // line with `@rsp` — which gsc reads as a block tag and rejects
+            // with GS0231 "Unknown documentation tag", failing the whole
+            // project. The break carries no meaning inside a span, so it heals.
+            string printed = Translate("""
+                public class Widget
+                {
+                    /// <summary>Short.</summary>
+                    /// <remarks>
+                    /// Modeled EXACTLY on the build task: same <c>dotnet &lt;tool&gt;.dll
+                    /// @rsp</c> process launch, the same response-file writer.
+                    /// </remarks>
+                    public int Mass() => 42;
+                }
+                """);
+
+            Assert.All(DocLines(printed), line => Assert.False(
+                line.StartsWith("/// @rsp", StringComparison.Ordinal),
+                "A doc line must not start with an unknown block tag: " + line));
+            Assert.Contains("@rsp`", printed, StringComparison.Ordinal);
+            Assert.Contains("response-file writer.", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
         private static List<string> DocLines(string printed) => printed
             .Split('\n')
             .Select(line => line.Trim())
