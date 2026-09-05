@@ -20,6 +20,10 @@ public class SdkLayoutTests
     private static readonly XNamespace MsbuildNs =
         "http://schemas.microsoft.com/developer/msbuild/2003";
 
+    private static string SdkProjectPath =>
+        RepoRoot.ResolveSourcePath(
+            Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.csproj"));
+
     [Fact]
     public void Sdk_Props_Imports_MicrosoftNetSdk_And_Gsharp_Build_Props()
     {
@@ -338,13 +342,18 @@ public class SdkLayoutTests
             "@(_GsharpAgentOwnedWatch)",
             (string)filterTarget.Descendants(MsbuildNs + "Watch").Single().Attribute("Remove"));
 
-        var agentPath = Path.GetFullPath(Path.Combine(
+        var agentPath = RepoRoot.ResolveSourcePath(Path.GetFullPath(Path.Combine(
             RepoRoot.SdkSourceDir,
             "..",
             "Gsharp.HotReload.Runtime",
-            "HotReloadAgent.cs"));
+            "HotReloadAgent.cs")));
         var agentText = File.ReadAllText(agentPath);
-        Assert.Contains("SemaphoreSlim updateGate", agentText, System.StringComparison.Ordinal);
+
+        // Declaration order differs between the C# and G# spellings of this
+        // file (`SemaphoreSlim updateGate` vs `updateGate SemaphoreSlim`), so
+        // assert on the two tokens rather than on one language's word order.
+        Assert.Contains("SemaphoreSlim", agentText, System.StringComparison.Ordinal);
+        Assert.Contains("updateGate", agentText, System.StringComparison.Ordinal);
         Assert.DoesNotContain("-p:IntermediateOutputPath=", agentText, System.StringComparison.Ordinal);
         Assert.DoesNotContain("-p:OutputPath=", agentText, System.StringComparison.Ordinal);
         Assert.DoesNotContain("-p:DotNetWatchBuild=true", agentText, System.StringComparison.Ordinal);
@@ -371,7 +380,7 @@ public class SdkLayoutTests
     [Fact]
     public void Sdk_Csproj_Packs_As_MSBuildSdk()
     {
-        var csproj = Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.csproj");
+        var csproj = SdkProjectPath;
         Assert.True(File.Exists(csproj), csproj);
 
         var text = File.ReadAllText(csproj);
@@ -392,13 +401,10 @@ public class SdkLayoutTests
     {
         // ADR-0174 D1: mirrors the hot-reload runtime wiring — build-only
         // ProjectReference for ordering, a pack target under tools/channels/.
-        var path = Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.csproj");
+        var path = SdkProjectPath;
         var doc = XDocument.Load(path);
         var runtimeReference = doc.Descendants("ProjectReference")
-            .Single(reference =>
-                ((string)reference.Attribute("Include") ?? string.Empty).EndsWith(
-                    @"Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj",
-                    System.StringComparison.Ordinal));
+            .Single(reference => ReferencesProject(reference, "Gsharp.Runtime.Channels"));
 
         Assert.Equal("false", (string)runtimeReference.Attribute("Private"));
         Assert.Equal("false", (string)runtimeReference.Attribute("ReferenceOutputAssembly"));
@@ -436,13 +442,10 @@ public class SdkLayoutTests
     [Fact]
     public void Sdk_Csproj_Uses_BuildOnly_HotReload_Runtime_Reference_And_Packs_Runtime()
     {
-        var path = Path.Combine(RepoRoot.SdkSourceDir, "Gsharp.NET.Sdk.csproj");
+        var path = SdkProjectPath;
         var doc = XDocument.Load(path);
         var runtimeReference = doc.Descendants("ProjectReference")
-            .Single(reference =>
-                ((string)reference.Attribute("Include") ?? string.Empty).EndsWith(
-                    @"Gsharp.HotReload.Runtime\Gsharp.HotReload.Runtime.csproj",
-                    System.StringComparison.Ordinal));
+            .Single(reference => ReferencesProject(reference, "Gsharp.HotReload.Runtime"));
 
         Assert.Equal("false", (string)runtimeReference.Attribute("Private"));
         Assert.Equal("false", (string)runtimeReference.Attribute("ReferenceOutputAssembly"));
@@ -564,5 +567,24 @@ public class SdkLayoutTests
         Assert.Contains(
             doc.Descendants(MsbuildNs + "CompileDependsOn"),
             property => property.Value.Contains("AfterCompile", System.StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Matches a <c>ProjectReference</c> that points at
+    /// <c>&lt;projectName&gt;/&lt;projectName&gt;</c>, tolerating both path
+    /// separators and both project-file extensions. The cs2gs self-migration
+    /// corpus rewrites these references to <c>.gsproj</c> with forward slashes,
+    /// and the assertion is about the reference's target, not its spelling.
+    /// </summary>
+    /// <param name="reference">The <c>ProjectReference</c> element.</param>
+    /// <param name="projectName">The referenced project's directory and base file name.</param>
+    /// <returns><see langword="true"/> when the reference targets that project.</returns>
+    private static bool ReferencesProject(XElement reference, string projectName)
+    {
+        var include = ((string)reference.Attribute("Include") ?? string.Empty)
+            .Replace('\\', '/');
+        var stem = projectName + "/" + projectName + ".";
+        return include.EndsWith(stem + "csproj", System.StringComparison.Ordinal)
+            || include.EndsWith(stem + "gsproj", System.StringComparison.Ordinal);
     }
 }
