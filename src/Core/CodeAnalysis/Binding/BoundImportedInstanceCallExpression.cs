@@ -4,6 +4,7 @@
 
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using System;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
@@ -14,8 +15,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// Bound call expression for an instance method invoked on a value whose type
 /// originates from a CLR <see cref="System.Type"/>.
 /// </summary>
-public sealed class BoundImportedInstanceCallExpression : BoundExpression
+public sealed class BoundImportedInstanceCallExpression : BoundCallOperationExpression
 {
+    private ImportedFunctionSymbol? calledFunction;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundImportedInstanceCallExpression"/> class.
     /// </summary>
@@ -84,6 +87,18 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.ImportedInstanceCallExpression;
 
+    /// <summary>
+    /// Gets the called method as a symbol (ADR-0169, issue #3920). Built on
+    /// demand from <see cref="Method"/>: this node stores the reflected
+    /// method rather than a symbol, and only the analyzer surface needs one.
+    /// </summary>
+    public override Symbol CalledFunction
+        => calledFunction ??= new ImportedFunctionSymbol(
+            Method.Name,
+            new ImportedClassSymbol(Method.DeclaringType ?? typeof(object), declaration: null),
+            Method,
+            declaration: null);
+
     /// <inheritdoc/>
     public override TypeSymbol Type { get; }
 
@@ -100,7 +115,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundExpression
     /// <summary>
     /// Gets the bound arguments.
     /// </summary>
-    public ImmutableArray<BoundExpression> Arguments { get; }
+    public override ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>
     /// Gets the per-argument ref-kind annotations. May be default (all-None).

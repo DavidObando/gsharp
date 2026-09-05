@@ -89,7 +89,7 @@ public sealed class EnumSymbol : TypeSymbol
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol? containingType)
     {
-        ContainingType = containingType;
+        SetContainingTypeCore(containingType);
     }
 
     /// <summary>Sets the enum members after the owning enum symbol has been created.</summary>

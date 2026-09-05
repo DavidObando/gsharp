@@ -34,7 +34,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <c>EmitLiftedNullableClrBinary</c>) drive both the imported-CLR-type and
 /// same-compilation-struct cases uniformly.
 /// </remarks>
-public sealed class BoundClrBinaryOperatorExpression : BoundExpression
+public sealed class BoundClrBinaryOperatorExpression : BoundBinaryOperationExpression
 {
     public BoundClrBinaryOperatorExpression(SyntaxNode? syntax, SyntaxKind operatorKind, BoundExpression left, BoundExpression right, MethodInfo? method, TypeSymbol resultType)
         : this(syntax, operatorKind, left, right, method, null, null, resultType)
@@ -80,9 +80,9 @@ public sealed class BoundClrBinaryOperatorExpression : BoundExpression
 
     public SyntaxKind OperatorKind { get; }
 
-    public BoundExpression Left { get; }
+    public override BoundExpression Left { get; }
 
-    public BoundExpression Right { get; }
+    public override BoundExpression Right { get; }
 
     /// <summary>Gets the resolved imported-CLR-type operator method, or <see langword="null"/> when <see cref="Function"/> is used instead.</summary>
     public MethodInfo? Method { get; }
@@ -106,4 +106,7 @@ public sealed class BoundClrBinaryOperatorExpression : BoundExpression
     public override TypeSymbol Type { get; }
 
     public override BoundNodeKind Kind => BoundNodeKind.ClrBinaryOperatorExpression;
+
+    /// <inheritdoc/>
+    public override BoundBinaryOperatorKind BinaryOperatorKind => FromSyntaxKind(OperatorKind);
 }

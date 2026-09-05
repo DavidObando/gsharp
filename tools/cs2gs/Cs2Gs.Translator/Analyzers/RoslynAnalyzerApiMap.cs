@@ -166,8 +166,24 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Binding",
             "BoundExpression",
             "IOperation maps to BoundExpression (Type/ConstantValue live on expressions in G#); statement-level operation analyzers need review."),
-        ["Microsoft.CodeAnalysis.Operations.IBinaryOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundBinaryExpression"),
-        ["Microsoft.CodeAnalysis.Operations.IInvocationOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundCallExpression"),
+
+        // Issue #3920: NOT BoundBinaryExpression / BoundCallExpression. G#
+        // splits each of these Roslyn operations across several bound nodes by
+        // where the operator or callee comes from — `a == b` over imported
+        // operands binds to BoundClrBinaryOperatorExpression, and a call into
+        // metadata to BoundImported{,Instance}CallExpression. Naming one
+        // concrete node made a migrated handler cast-fail (or never run at
+        // all) on exactly the imported code the rules exist to police, so the
+        // map names the shared analyzer-facing base instead and
+        // OperationKindDispatch registers every kind that reaches it.
+        ["Microsoft.CodeAnalysis.Operations.IBinaryOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundBinaryOperationExpression",
+            "G# has one bound node per operator provenance; the analyzer-facing base spans them, and Op/OperatorKind reads become BinaryOperatorKind."),
+        ["Microsoft.CodeAnalysis.Operations.IInvocationOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundCallOperationExpression",
+            "G# has one bound node per callee provenance; the analyzer-facing base spans them, and TargetMethod becomes the Symbol-typed CalledFunction."),
         ["Microsoft.CodeAnalysis.Operations.IArgumentOperation"] = new(
             "GSharp.Core.CodeAnalysis.Binding",
             "BoundExpression",
@@ -212,6 +228,30 @@ internal static class RoslynAnalyzerApiMap
     };
 
     /// <summary>
+    /// Issue #3920: which G# bound-node kinds a Roslyn
+    /// <c>OperationKind</c> must REGISTER for. Roslyn has one operation kind
+    /// where G# has several bound nodes — a binary operator is a different
+    /// node depending on whether it is built in or resolves to an operator
+    /// method, and a call is a different node depending on whether the callee
+    /// is same-compilation, imported static, or imported instance. Registering
+    /// only the first meant a migrated rule was dispatched zero times over
+    /// imported code, which is exactly the code GSA0002 exists to police.
+    ///
+    /// <para>
+    /// This is the DISPATCH set, deliberately separate from
+    /// <see cref="EnumMemberMap"/>: a bare <c>OperationKind</c> read (e.g.
+    /// <c>node.Kind == OperationKind.TypeOf</c>) still translates to the one
+    /// kind it names, because a read tests a single node's identity while a
+    /// registration must cover every node that can arrive.
+    /// </para>
+    /// </summary>
+    private static readonly Dictionary<string, string[]> OperationKindDispatch = new(StringComparer.Ordinal)
+    {
+        ["BinaryOperator"] = new[] { "BinaryExpression", "ClrBinaryOperatorExpression" },
+        ["Invocation"] = new[] { "CallExpression", "ImportedCallExpression", "ImportedInstanceCallExpression" },
+    };
+
+    /// <summary>
     /// Instance member renames, keyed by the declaring Roslyn type's
     /// metadata name. A null G# name marks a member with NO G#
     /// counterpart: the access is replaced per the note (comparison sites
@@ -241,7 +281,10 @@ internal static class RoslynAnalyzerApiMap
             "Operation actions become bound-node actions; BoundNode member shapes are stable at the kind level only."),
         [("Microsoft.CodeAnalysis.Operations.IBinaryOperation", "LeftOperand")] = new(null, "Left"),
         [("Microsoft.CodeAnalysis.Operations.IBinaryOperation", "RightOperand")] = new(null, "Right"),
-        [("Microsoft.CodeAnalysis.Operations.IInvocationOperation", "TargetMethod")] = new(null, "Function"),
+        [("Microsoft.CodeAnalysis.Operations.IInvocationOperation", "TargetMethod")] = new(
+            null,
+            "CalledFunction",
+            "BoundCallOperationExpression.CalledFunction is Symbol-typed: an imported callee is an ImportedFunctionSymbol, not a FunctionSymbol (#3920)."),
         [("Microsoft.CodeAnalysis.IMethodSymbol", "OverriddenMethod")] = new(null, "OverriddenMethod"),
         [("Microsoft.CodeAnalysis.IMethodSymbol", "ReturnType")] = new(null, "Type"),
         [("Microsoft.CodeAnalysis.IParameterSymbol", "IsOptional")] = new(null, "HasExplicitDefaultValue"),
@@ -309,6 +352,16 @@ internal static class RoslynAnalyzerApiMap
         => type is INamedTypeSymbol named
         && named.Name == "INamespaceSymbol"
         && named.ContainingNamespace?.ToDisplayString() == "Microsoft.CodeAnalysis";
+
+    /// <summary>
+    /// The G# bound-node kinds a <c>RegisterOperationAction</c> for
+    /// <paramref name="operationKindMember"/> must register (issue #3920).
+    /// </summary>
+    /// <param name="operationKindMember">The <c>OperationKind</c> member name.</param>
+    /// <param name="boundNodeKinds">The G# <c>BoundNodeKind</c> member names.</param>
+    /// <returns>True when the kind fans out to more than the one it names.</returns>
+    public static bool TryMapOperationKindDispatch(string operationKindMember, out string[] boundNodeKinds)
+        => OperationKindDispatch.TryGetValue(operationKindMember, out boundNodeKinds);
 
     /// <summary>Maps a Roslyn enum member to its G# spelling.</summary>
     /// <param name="enumMetadataName">The declaring enum's metadata name.</param>

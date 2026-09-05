@@ -15,6 +15,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 public abstract class Symbol
 {
     private DocumentationComment? authoredDocumentation;
+    private TypeSymbol? anchoredContainingType;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="Symbol"/> class.
@@ -94,11 +95,13 @@ public abstract class Symbol
     /// <summary>
     /// Gets the type that declares this member, or <see langword="null"/> for
     /// top-level symbols — the Roslyn <c>ContainingType</c> analogue
-    /// (ADR-0169). Populated fill-once when symbols surface through the
-    /// analyzer driver or a <see cref="SemanticModel"/>; symbols observed
-    /// outside those surfaces may report null.
+    /// (ADR-0169). Anchored fill-once when symbols surface through the
+    /// analyzer driver or a <see cref="SemanticModel"/>; a symbol that can
+    /// name its own declaring type says so through
+    /// <see cref="DefaultContainingType"/> instead of depending on having been
+    /// anchored (issue #3920), and only a symbol with neither reports null.
     /// </summary>
-    public TypeSymbol? ContainingType { get; private protected set; }
+    public TypeSymbol? ContainingType => anchoredContainingType ??= DefaultContainingType();
 
     /// <summary>
     /// Gets the display name of the package (namespace) this symbol lives in,
@@ -183,9 +186,23 @@ public abstract class Symbol
     /// <param name="containingType">The declaring type.</param>
     internal void AnchorContainingType(TypeSymbol containingType)
     {
-        if (ContainingType is null)
-        {
-            ContainingType = containingType;
-        }
+        anchoredContainingType ??= containingType;
     }
+
+    /// <summary>
+    /// Assigns the declaring type outright, replacing whatever was there. The
+    /// binder's <c>SetContainingType</c> entry points use this; analyzer-side
+    /// anchoring uses <see cref="AnchorContainingType"/>, which is fill-once.
+    /// </summary>
+    /// <param name="containingType">The declaring type, or null.</param>
+    private protected void SetContainingTypeCore(TypeSymbol? containingType)
+        => anchoredContainingType = containingType;
+
+    /// <summary>
+    /// The declaring type this symbol can determine on its own, consulted when
+    /// nothing has anchored one (issue #3920). Null by default: most symbols
+    /// learn their container only from the declaration that holds them.
+    /// </summary>
+    /// <returns>The declaring type, or null.</returns>
+    private protected virtual TypeSymbol? DefaultContainingType() => null;
 }

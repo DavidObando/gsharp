@@ -139,10 +139,16 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "OperatorKind" } operatorKind
                 && RoslynTypeMetadataName(operatorKind.ContainingType) == "Microsoft.CodeAnalysis.Operations.IBinaryOperation")
             {
-                // IBinaryOperation.OperatorKind -> BoundBinaryExpression.Op.Kind.
+                // IBinaryOperation.OperatorKind ->
+                // BoundBinaryOperationExpression.BinaryOperatorKind. NOT
+                // `.Op.Kind` (issue #3920): `Op` exists only on
+                // BoundBinaryExpression, and the operand shapes these rules
+                // care about bind to BoundClrBinaryOperatorExpression, which
+                // carries the operator TOKEN instead. The shared base
+                // normalizes both to the language operator vocabulary.
                 result = new MemberAccessExpression(
-                    new MemberAccessExpression(this.TranslateExpression(member.Expression), "Op", isArrow: false),
-                    "Kind",
+                    this.TranslateExpression(member.Expression),
+                    "BinaryOperatorKind",
                     isArrow: false);
                 return true;
             }
@@ -531,6 +537,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (method.Name == "RegisterOperationAction"
+                && invocation.Expression is MemberAccessExpressionSyntax registrationReceiver
+                && this.TryExpandOperationKindRegistration(invocation, registrationReceiver, out result))
+            {
+                return true;
+            }
+
             if (method.Name == "GetLocation"
                 && method.Parameters.Length == 0
                 && invocation.Expression is MemberAccessExpressionSyntax locationReceiver)
@@ -594,6 +607,80 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Expands <c>RegisterOperationAction(handler, OperationKind.X, …)</c>
+        /// into a <c>RegisterBoundNodeAction</c> naming EVERY G# bound-node
+        /// kind that operation reaches (issue #3920).
+        /// </summary>
+        /// <remarks>
+        /// Roslyn has one operation kind where G# has several bound nodes:
+        /// <c>a == b</c> binds to <c>BoundBinaryExpression</c> for a built-in
+        /// operator and to <c>BoundClrBinaryOperatorExpression</c> when it
+        /// resolves to an operator method, and a call binds to one of three
+        /// nodes by callee provenance. Registering only the kind the
+        /// <see cref="RoslynAnalyzerApiMap"/> enum rename names dispatched the
+        /// migrated GSA0002 zero times over reflection <c>Type</c>
+        /// comparisons — whose operands are imported by construction — so the
+        /// rule reported nothing at all rather than reporting wrongly.
+        /// </remarks>
+        /// <param name="invocation">The registration call.</param>
+        /// <param name="receiver">Its member-access callee.</param>
+        /// <param name="result">The expanded registration.</param>
+        /// <returns>True when at least one argument kind fanned out.</returns>
+        private bool TryExpandOperationKindRegistration(
+            InvocationExpressionSyntax invocation,
+            MemberAccessExpressionSyntax receiver,
+            out GExpression result)
+        {
+            result = null;
+            var arguments = new List<GExpression>();
+            var expanded = false;
+            foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
+            {
+                if (argument.Expression is MemberAccessExpressionSyntax kindAccess
+                    && this.context.GetSymbolInfo(kindAccess).Symbol is IFieldSymbol kindField
+                    && RoslynTypeMetadataName(kindField.ContainingType) == "Microsoft.CodeAnalysis.OperationKind"
+                    && RoslynAnalyzerApiMap.TryMapOperationKindDispatch(kindField.Name, out string[] boundNodeKinds))
+                {
+                    expanded = true;
+                    foreach (string boundNodeKind in boundNodeKinds)
+                    {
+                        arguments.Add(new MemberAccessExpression(
+                            new IdentifierExpression("BoundNodeKind"), boundNodeKind, isArrow: false));
+                    }
+
+                    continue;
+                }
+
+                arguments.Add(this.TranslateExpression(argument.Expression));
+            }
+
+            if (!expanded)
+            {
+                return false;
+            }
+
+            const string ShapeNote =
+                "'RegisterOperationAction' expanded to every G# bound-node kind the operation reaches: "
+                + "G# binds one Roslyn operation kind to several nodes by operator/callee provenance.";
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                ShapeNote,
+                invocation.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+
+            result = new InvocationExpression(
+                new MemberAccessExpression(
+                    this.TranslateExpression(receiver.Expression),
+                    "RegisterBoundNodeAction",
+                    isArrow: false),
+                arguments);
+            return true;
         }
 
         private bool TryTranslateAnalyzerTypeNameSwitch(SwitchExpressionSyntax node, out GExpression result)

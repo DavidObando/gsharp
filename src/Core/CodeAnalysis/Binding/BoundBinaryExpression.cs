@@ -10,7 +10,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Bound binary expression.
 /// </summary>
-public sealed class BoundBinaryExpression : BoundExpression
+public sealed class BoundBinaryExpression : BoundBinaryOperationExpression
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundBinaryExpression"/> class.
@@ -41,10 +41,13 @@ public sealed class BoundBinaryExpression : BoundExpression
     /// <inheritdoc/>
     public override TypeSymbol Type => Op.Type;
 
+    /// <inheritdoc/>
+    public override BoundBinaryOperatorKind BinaryOperatorKind => Op.Kind;
+
     /// <summary>
     /// Gets the left bound expression.
     /// </summary>
-    public BoundExpression Left { get; }
+    public override BoundExpression Left { get; }
 
     /// <summary>
     /// Gets the bound binary operator.
@@ -54,7 +57,7 @@ public sealed class BoundBinaryExpression : BoundExpression
     /// <summary>
     /// Gets the rught bound expression.
     /// </summary>
-    public BoundExpression Right { get; }
+    public override BoundExpression Right { get; }
 
     /// <summary>
     /// Gets a value indicating whether this operator runs in a checked /

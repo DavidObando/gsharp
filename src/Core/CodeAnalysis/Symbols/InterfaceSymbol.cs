@@ -235,7 +235,7 @@ public sealed class InterfaceSymbol : TypeSymbol
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol containingType)
     {
-        ContainingType = containingType;
+        SetContainingTypeCore(containingType);
     }
 
     /// <summary>Sets <see cref="Methods"/>. Intended to be called once by the binder.</summary>

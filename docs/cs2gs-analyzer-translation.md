@@ -101,7 +101,10 @@ Project-level detection, symbol-gated application:
     idiom-rewriter delegate for multi-node idioms;
   - `SyntaxKindMap`: C# `SyntaxKind` → 0..n G# `SyntaxKind`s;
   - `OperationKindMap` / `SymbolKindMap`: `OperationKind` → `BoundNodeKind`,
-    Roslyn `SymbolKind` → G# `SymbolKind`.
+    Roslyn `SymbolKind` → G# `SymbolKind`. `OperationKindDispatch` is the
+    one-to-many half of the first (#3920): a REGISTRATION must name every G#
+    bound-node kind the operation reaches, while a bare kind READ still maps
+    to the single kind it names.
 - Composition with `CSharpTypeMapper` is a single probe: if a symbol's
   containing assembly is a `Microsoft.CodeAnalysis` assembly, consult the map;
   on a miss, report a gap instead of falling into CLR-import passthrough.
@@ -448,16 +451,54 @@ Order: GSA0001 → GSA0003 → GSA0004 → GSA0002 → GSA0005; harness and pari
   test-parity **3 failing / 15 passing → 1 failing / 17 passing of 18**
   (translate, compile and ILVerify stay PASS on both sides).
 
-  **The one that remains is #3920**, and clearing #3797 is what exposed it: with
-  the third marker finally placed, `ReflectionTypeComparisonAnalyzerTests.
-  ReportsTypeofReferenceComparisonsInCompilerMetadataNamespaces` gets past the
-  marker/id count check and GSA0002 then reports **nothing**. `OperationKindMap`
-  maps each Roslyn operation kind to ONE G# bound-node kind, but a `==` over
-  IMPORTED operands binds to `BoundClrBinaryOperatorExpression` and a call to an
-  imported method to `BoundImportedCallExpression` — so the registrations the
-  translation emits (`BinaryExpression`, `CallExpression`) are dispatched zero
-  times for exactly the reflection-`Type` code the rule exists to police. The map
-  has to become one-to-many, and the handler shape has to accept both nodes.
+  **The last one (2026-09-05, issue #3920).** Clearing #3797 is what exposed it:
+  with the third marker finally placed,
+  `ReflectionTypeComparisonAnalyzerTests.ReportsTypeofReferenceComparisonsInCompilerMetadataNamespaces`
+  got past the marker/id count check and GSA0002 then reported **nothing**.
+
+  One Roslyn operation kind is SEVERAL G# bound nodes. `a == b` binds to
+  `BoundBinaryExpression` for a built-in operator and to
+  `BoundClrBinaryOperatorExpression` when it resolves to an `op_Equality`
+  method; a call binds to `BoundCallExpression`,
+  `BoundImportedCallExpression`, or `BoundImportedInstanceCallExpression` by
+  callee provenance. The split is a codegen distinction, not a
+  program-meaning one — Roslyn models each pair/triple as one operation — but
+  naming a single node in the map meant the migrated GSA0002 was dispatched
+  **zero times** over reflection-`Type` comparisons, which are imported by
+  construction. The rule existed only for code it could not see.
+
+  Fixed on both sides of the boundary:
+
+  1. **Framework (`src/Core`).** Two analyzer-facing abstract bases,
+     `BoundBinaryOperationExpression` (`Left`, `Right`, `BinaryOperatorKind`)
+     and `BoundCallOperationExpression` (`CalledFunction`, `Arguments`), now
+     span the provenance-split nodes. `BoundNodeKind` values, lowering and
+     emit are untouched — the bases add a shared *shape*, not a new node.
+     `Symbol.ContainingType` also stopped depending on having been anchored:
+     a method that knows its own declaring type (a `FunctionSymbol`'s
+     receiver/owner, an `ImportedFunctionSymbol`'s metadata declaring type)
+     now says so, because nothing anchors imported symbols and
+     `TargetMethod.ContainingType` read null for every call into metadata.
+  2. **Translation (`cs2gs`).** `RegisterOperationAction` expands to a
+     `RegisterBoundNodeAction` naming EVERY bound-node kind the operation
+     reaches (`RoslynAnalyzerApiMap.OperationKindDispatch`), the two
+     `IOperation` map entries name the shared bases, `TargetMethod` maps to
+     the `Symbol`-typed `CalledFunction`, and `IBinaryOperation.OperatorKind`
+     lowers to `BinaryOperatorKind` rather than `Op.Kind` — `Op` exists only
+     on the built-in node.
+
+     The dispatch set is deliberately separate from the enum-member rename: a
+     bare `OperationKind` READ (`node.Kind == OperationKind.TypeOf`) still
+     translates to the one kind it names, because a read tests one node's
+     identity while a registration must cover every node that can arrive.
+
+  `Issue3920Gsa0002ImportedOperandDispatchTests` puts the GSA0002 positive and
+  both negatives on one executing path — real analyzer, real G# compiler, real
+  verifier — so a rule that stops reporting fails the positive instead of
+  passing the negatives.
+
+  Whole-repository gate on the same tree: `test/InternalAnalyzers.Tests`
+  test-parity **1 failing / 17 passing → 0 failing / 18 passing of 18**.
 - **M6 Parity + self-migration** — `AnalyzerParityStage`; extend the
   Issue3347-style self-migration ratchet to translate
   `InternalAnalyzers.csproj` live. Exit criterion: all five translated

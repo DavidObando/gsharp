@@ -101,6 +101,19 @@ public sealed class ImportedFunctionSymbol : Symbol
         return AssemblyDocumentationProvider.Resolve(Method) ?? base.GetDocumentation();
     }
 
+    /// <summary>
+    /// An imported method knows its declaring type from metadata (issue
+    /// #3920), so it never depends on having been anchored — nothing anchors
+    /// imported symbols, and a migrated analyzer reading
+    /// <c>TargetMethod.ContainingType</c> saw null for every call into
+    /// metadata.
+    /// </summary>
+    /// <returns>The declaring type, or null for a global method.</returns>
+    private protected override TypeSymbol? DefaultContainingType()
+        => Method.DeclaringType is { } declaringType
+            ? ImportedTypeSymbol.Get(declaringType)
+            : null;
+
     private TypeSymbol GetMethodType(MethodInfo method)
     {
         var returnType = ClrNullability.GetReturnTypeSymbol(method);
