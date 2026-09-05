@@ -2508,9 +2508,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var parameters = method.GetParameters();
-            return (
-                parameters.Skip(parameterOffset).Select(parameter => parameter.ParameterType).ToArray(),
-                method.ReturnType);
+            var signatureParameters = new Type[delegateArity];
+            for (var i = 0; i < signatureParameters.Length; i++)
+            {
+                signatureParameters[i] = parameters[i + parameterOffset].ParameterType;
+            }
+
+            return (signatureParameters, method.ReturnType);
         }
 
         if (argument is not BoundMethodGroupExpression userGroup)
