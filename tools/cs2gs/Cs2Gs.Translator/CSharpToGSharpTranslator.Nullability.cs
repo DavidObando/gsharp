@@ -628,11 +628,38 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            ISymbol source = this.context.GetSymbolInfo(expression).Symbol;
+            IReadOnlyList<CSharpCompilation> compilations =
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations;
+
+            // Issue #3848: promotion and forgiveness stay symmetric. A value
+            // promoted along a pure forwarding edge is `T?` in the emitted G#
+            // exactly as a directly-promoted generated declaration is, so it
+            // needs the same `!!` when it lands in a sink that KEPT its
+            // non-null contract — a hand-authored, nullable-enabled property
+            // the C# compiler really did check. Without this the promotion
+            // would read as "forwarded nulls are nobody's problem".
             return ObliviousNullabilityAnalyzer.IsGeneratedDeclarationAssignedNull(
-                this.context.Compilation,
-                this.context.GetSymbolInfo(expression).Symbol,
-                this.context.RepositoryCompilations ?? this.context.SiblingCompilations);
+                    this.context.Compilation, source, compilations)
+                || ObliviousNullabilityAnalyzer.IsPromotedByPureForwarding(
+                    this.context.Compilation, source, compilations);
         }
+
+        // Issue #3848: whether the contextual target of a value position is a
+        // declaration this change — and only this change — newly promotes to
+        // `T?`. `TranslateValueWithNullForgiveness` asserts unconditionally when
+        // `ReceiverNeedsNullForgiveness` fires, BEFORE it ever looks at the
+        // target; that ordering was harmless while no promotion could make a
+        // return position nullable, and it is why `func Peek(…) Uri? ->
+        // Uri.From(fallback)!!` came out asserting a value its own declared
+        // return type now accepts. Scoped to the pure-forwarding promotion so
+        // every other value position keeps its existing bytes.
+        private bool IsPureForwardingPromotedTarget(ISymbol targetSymbol) =>
+            targetSymbol != null
+            && ObliviousNullabilityAnalyzer.IsPromotedByPureForwarding(
+                this.context.Compilation,
+                targetSymbol,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations);
 
         private bool IsCallableValueExpression(ExpressionSyntax expression)
         {
@@ -1154,6 +1181,30 @@ public sealed partial class CSharpToGSharpTranslator
             // compiler never had to justify, and gsc — which has no such
             // suppression — rejects the `nil` (GS0155).
             if (ObliviousNullabilityAnalyzer.IsGeneratedDeclarationAssignedNull(
+                    this.context.Compilation,
+                    symbol,
+                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations))
+            {
+                return true;
+            }
+
+            // Issue #3848: the promotion above stops at the generated
+            // declaration itself, and a hand-authored method that does nothing
+            // but hand that declaration's value back — `GetDocumentUri`, whose
+            // every `return` is `DocumentUri.From(fallback)` /
+            // `DocumentUri.FromFileSystemPath(…)`, both generated and both
+            // promoted — loses it again, so the forgiveness pass bridges the
+            // gap with a `!!` that THROWS on the null the C# happily returned.
+            // `IsPromotedByPureForwarding` carries the promotion along that
+            // edge, and along the write of the forwarded value into a
+            // GENERATED sink (`Location.Uri`) so the `!!` does not simply move
+            // one frame up. Its doc comment states the edge exactly; the
+            // clauses are narrow because everything they exclude — a local, a
+            // conditional arm, a `??` — is a place the value could have been
+            // changed, and a hand-authored non-generated sink keeps its
+            // annotation and its `!!` because the C# compiler actually checked
+            // that write.
+            if (ObliviousNullabilityAnalyzer.IsPromotedByPureForwarding(
                     this.context.Compilation,
                     symbol,
                     this.context.RepositoryCompilations ?? this.context.SiblingCompilations))

@@ -61,6 +61,14 @@ internal static class ObliviousNullabilityAnalyzer
     // and answers identically in every compilation a migration run loads.
     private const string AllowNullAttributeName = "AllowNullAttribute";
 
+    // Issue #3848: how far a promotion may travel along pure forwarding edges.
+    // Four hops covers the real shapes — an overload chain forwarder → forwarder
+    // → real method, plus the generated sink the last one flows into — while
+    // keeping the relation a BOUNDED closure rather than the whole-graph
+    // fixpoint #3676 rejected for nullable-enabled compilations. Raising it is a
+    // deliberate widening, not a tuning knob.
+    private const int MaxForwardingHops = 4;
+
     // Keyed by Compilation identity so an edited/new compilation naturally gets
     // a fresh entry and stale ones are collectible — same pattern as the
     // subclassed-base-types / partial-type-parts caches in the translator.
@@ -76,6 +84,10 @@ internal static class ObliviousNullabilityAnalyzer
     // Issue #3676: per-compilation set of members some source directly writes
     // `null` into, keyed like `Cache` above so it is computed at most once.
     private static readonly ConditionalWeakTable<Compilation, HashSet<string>> NullTargets = new();
+
+    // Issue #3848: per-compilation set of declarations a PURE FORWARDING chain
+    // from a promoted generated declaration reaches. Cached like `NullTargets`.
+    private static readonly ConditionalWeakTable<Compilation, HashSet<string>> ForwardedTargets = new();
 
     // Which source expressions a transitive return/forwarding edge follows.
     private enum SourceScope
@@ -230,6 +242,118 @@ internal static class ObliviousNullabilityAnalyzer
             foreach (CSharpCompilation sibling in siblingCompilations)
             {
                 if (sibling != null && NullAssignmentTargets(sibling).Contains(id))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3848 (family A): whether <paramref name="symbol"/> is promoted to
+    /// <c>T?</c> because a promoted GENERATED declaration's nullability reaches
+    /// it along one or more <em>pure forwarding edges</em>.
+    ///
+    /// <para><b>The rule, stated exactly.</b> A method <c>F</c> is a PURE
+    /// FORWARDER of a promoted source when every one of the following holds.
+    /// Each clause is a restriction; drop any one and the rule admits a shape
+    /// whose value set is not the target's.
+    /// </para>
+    /// <list type="number">
+    /// <item><c>F</c> is a <c>MethodDeclarationSyntax</c> in source — not a
+    /// property getter (a property forwarding another property must keep its
+    /// declared type; see the <c>SourceScope</c> remarks and #1354/#2167), not
+    /// a lambda, not a local function.</item>
+    /// <item><c>F</c>'s return type is an unannotated reference type: there is
+    /// something to promote and it is not already <c>T?</c>.</item>
+    /// <item><c>F</c> OWNS its signature — not an override, not an explicit or
+    /// implicit interface implementation. Repainting an inherited return type
+    /// desynchronises the two G# signatures (gsc GS0185/GS0386/GS0387), the
+    /// same guard <see cref="IsEvidenceDecidedGeneratedDeclaration"/> applies.</item>
+    /// <item><c>F</c> is not <c>async</c>, does not return by <c>ref</c>, and
+    /// contains no <c>yield</c>: in each of those the declared type is not the
+    /// type of the forwarded value.</item>
+    /// <item><c>F</c> has AT LEAST ONE exit — an arrow body, or <c>return</c>
+    /// statements of its own (those inside a nested lambda or local function
+    /// belong to that nested body, not to <c>F</c>). Without this clause a
+    /// <c>=&gt; throw new …</c> method would satisfy "every exit forwards"
+    /// vacuously.</item>
+    /// <item>EVERY exit expression is, after stripping parentheses, DIRECTLY a
+    /// call of, or a field/property read of, a symbol that is already promoted
+    /// — a generated declaration with direct null evidence
+    /// (<see cref="IsGeneratedDeclarationAssignedNull"/>) or a pure forwarder
+    /// found in an earlier hop. Nothing else qualifies. Not a local or
+    /// parameter read (a different slot, written who-knows-where), not a
+    /// conditional or switch expression (an arm may substitute a value), not
+    /// <c>??</c> (which REMOVES null and would promote a method that provably
+    /// never returns one), not an object creation, cast, or any other
+    /// operation. If the body does anything to the value other than hand it
+    /// straight back, the edge is not pure and promotion stops.</item>
+    /// </list>
+    ///
+    /// <para><b>Multiple targets are allowed.</b> Clause 6 is per-exit, so a
+    /// method with two <c>return</c>s forwarding two DIFFERENT promoted callees
+    /// qualifies — its value set is the union of two promoted value sets, which
+    /// is promoted. This is not a loosening: it is what the motivating site
+    /// needs. <c>CodeLensComputer.GetDocumentUri</c> returns
+    /// <c>DocumentUri.FromFileSystemPath(…)</c> on one path and
+    /// <c>DocumentUri.From(fallback)</c> on the other, both generated and both
+    /// promoted.</para>
+    ///
+    /// <para><b>The second half: a promoted forward is write evidence, but only
+    /// for GENERATED STORAGE sinks.</b> A pure-forward expression written into a
+    /// FIELD or PROPERTY that <see cref="IsEvidenceDecidedGeneratedDeclaration"/>
+    /// accepts promotes that declaration too — this is what carries
+    /// <c>GetDocumentUri</c>'s nullability into the generated
+    /// <c>Location.Uri</c> slot instead of parking a <c>!!</c> one frame up.
+    /// The generated restriction is the whole safety boundary: in generated
+    /// code the C# compiler suppressed its nullable diagnostics, so the
+    /// annotation was never checked against this write and the write is the
+    /// better evidence. In hand-authored, nullable-ENABLED code the compiler
+    /// DID check, so the annotation stands and the ordinary use-site
+    /// forgiveness pass still emits its <c>!!</c> there.</para>
+    ///
+    /// <para><b>Bounded, and seeded only from generated code.</b> The closure
+    /// iterates at most <see cref="MaxForwardingHops"/> times, so an overload
+    /// chain forwarder→forwarder→real method propagates, and an arbitrarily
+    /// long one does not. Every chain must terminate at a generated
+    /// declaration with direct null evidence; nothing in a fully hand-authored
+    /// graph can seed it. That is what keeps this from being #2113's
+    /// whole-program taint fixpoint, which #3676 rejected for nullable-enabled
+    /// compilations after it over-promoted the <c>LspJson.Options</c> chain
+    /// across ordinary argument edges.</para>
+    /// </summary>
+    /// <param name="compilation">The compilation being translated.</param>
+    /// <param name="symbol">The declaration symbol to test.</param>
+    /// <param name="siblingCompilations">Other projects loaded in the same run, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when forwarded generated-null evidence promotes the symbol.</returns>
+    public static bool IsPromotedByPureForwarding(
+        CSharpCompilation compilation,
+        ISymbol symbol,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        if (compilation == null
+            || symbol == null
+            || symbol.OriginalDefinition.GetDocumentationCommentId() is not { } id)
+        {
+            return false;
+        }
+
+        // Same existential union as `IsGeneratedDeclarationAssignedNull`: a
+        // declaration must translate identically whichever project is being
+        // emitted, so the answer is the OR over every compilation in the run.
+        if (ForwardingPromotions(compilation).Contains(id))
+        {
+            return true;
+        }
+
+        if (siblingCompilations != null)
+        {
+            foreach (CSharpCompilation sibling in siblingCompilations)
+            {
+                if (sibling != null && ForwardingPromotions(sibling).Contains(id))
                 {
                     return true;
                 }
@@ -971,6 +1095,238 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         return targets;
+    }
+
+    // Issue #3848: the pure-forwarding closure for one compilation, keyed like
+    // `NullTargets` above so it is computed at most once per compilation.
+    private static HashSet<string> ForwardingPromotions(CSharpCompilation compilation) =>
+        ForwardedTargets.GetValue(compilation, ComputeForwardingPromotions);
+
+    // Issue #3848: the closure described on `IsPromotedByPureForwarding`.
+    //
+    // Two node populations are collected once, then relaxed to a fixed point
+    // bounded by `MaxForwardingHops`:
+    //   * candidate FORWARDERS — methods that satisfy clauses 1-5 of the rule,
+    //     paired with their own exit expressions;
+    //   * candidate generated SINKS — writes into a declaration that
+    //     `IsEvidenceDecidedGeneratedDeclaration` accepts, paired with the
+    //     written expression.
+    // Each round admits a forwarder whose every exit is now a pure forward, and
+    // a generated sink whose written value is now a pure forward. The seed is
+    // never computed here: it is `IsGeneratedDeclarationAssignedNull`, so every
+    // member of the closure traces back to generated code the C# compiler
+    // stopped checking.
+    private static HashSet<string> ComputeForwardingPromotions(Compilation compilation)
+    {
+        var promoted = new HashSet<string>(System.StringComparer.Ordinal);
+        if (compilation is not CSharpCompilation csharp)
+        {
+            return promoted;
+        }
+
+        var forwarders = new List<(SemanticModel Model, string Id, IReadOnlyList<ExpressionSyntax> Exits)>();
+        var sinks = new List<(SemanticModel Model, string Id, ExpressionSyntax Value)>();
+
+        foreach (SyntaxTree tree in csharp.SyntaxTrees)
+        {
+            SemanticModel model = null;
+            foreach (SyntaxNode node in tree.GetRoot().DescendantNodes())
+            {
+                if (node is MethodDeclarationSyntax method)
+                {
+                    CollectForwarderCandidate(Model(), method, forwarders);
+                    continue;
+                }
+
+                // A generated STORAGE sink: an assignment (which is also the
+                // object-initializer member shape, `Location { Uri = … }`) or a
+                // field/property initializer.
+                //
+                // Deliberately fields and properties ONLY. A method's return
+                // position is already covered, and covered more strictly, by
+                // the forwarder path above — which requires EVERY exit to
+                // forward and requires the method to own its signature. Letting
+                // a `return`/arrow body in here as well would promote members
+                // whose G# signature this translator does not actually repaint,
+                // and the analysis and the emitted code would disagree: the
+                // generated `public static implicit operator DocumentUri(string
+                // value) => From(value)` is exactly that — a
+                // ConversionOperatorDeclaration, whose G# `func operator
+                // implicit(value string) DocumentUri` keeps its conversion
+                // contract. Calling it promoted dropped the `!!` its return
+                // still needed and produced GS0155 in migrated
+                // `Protocol/Models.gs`.
+                ISymbol target = node switch
+                {
+                    AssignmentExpressionSyntax assignment
+                        when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression) =>
+                        Model().GetSymbolInfo(assignment.Left).Symbol,
+                    EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax or PropertyDeclarationSyntax } initializer =>
+                        Model().GetDeclaredSymbol(initializer.Parent),
+                    _ => null,
+                };
+
+                if (target is IFieldSymbol or IPropertySymbol
+                    && IsEvidenceDecidedGeneratedDeclaration(target)
+                    && target.OriginalDefinition.GetDocumentationCommentId() is { } sinkId)
+                {
+                    ExpressionSyntax value = node switch
+                    {
+                        AssignmentExpressionSyntax assignment => assignment.Right,
+                        EqualsValueClauseSyntax initializer => initializer.Value,
+                        _ => null,
+                    };
+
+                    if (value != null)
+                    {
+                        sinks.Add((Model(), sinkId, value));
+                    }
+                }
+
+                SemanticModel Model() => model ??= csharp.GetSemanticModel(tree);
+            }
+        }
+
+        for (int hop = 0; hop < MaxForwardingHops; hop++)
+        {
+            // Each round is evaluated against a SNAPSHOT of the previous round's
+            // result, never against the set being built. Without that, a chain
+            // whose links happen to be visited in order collapses into a single
+            // round and the hop bound measures nothing — and worse, the answer
+            // would depend on syntax-tree and declaration ORDER, which a
+            // translation that must be identical in every project cannot afford.
+            var settled = new HashSet<string>(promoted, System.StringComparer.Ordinal);
+            bool changed = false;
+
+            foreach ((SemanticModel model, string id, IReadOnlyList<ExpressionSyntax> exits) in forwarders)
+            {
+                if (!settled.Contains(id)
+                    && exits.All(exit => IsPureForwardOfPromoted(csharp, model, exit, settled)))
+                {
+                    changed |= promoted.Add(id);
+                }
+            }
+
+            foreach ((SemanticModel model, string id, ExpressionSyntax value) in sinks)
+            {
+                if (!settled.Contains(id)
+                    && IsPureForwardOfPromoted(csharp, model, value, settled))
+                {
+                    changed |= promoted.Add(id);
+                }
+            }
+
+            if (!changed)
+            {
+                break;
+            }
+        }
+
+        return promoted;
+    }
+
+    // Clauses 1-5 of the rule: whether `method` is even eligible to be a pure
+    // forwarder, and if so what its own exit expressions are. Clause 6 (are
+    // those exits actually forwards?) is re-evaluated every hop and lives in
+    // `IsPureForwardOfPromoted`.
+    private static void CollectForwarderCandidate(
+        SemanticModel model,
+        MethodDeclarationSyntax method,
+        List<(SemanticModel Model, string Id, IReadOnlyList<ExpressionSyntax> Exits)> forwarders)
+    {
+        if (model.GetDeclaredSymbol(method) is not IMethodSymbol symbol
+            || symbol.ReturnsVoid
+            || symbol.ReturnsByRef
+            || symbol.ReturnsByRefReadonly
+            || symbol.IsAsync
+            || symbol.ReturnType is not { IsReferenceType: true }
+            || symbol.ReturnType.NullableAnnotation == NullableAnnotation.Annotated
+            || IsSignatureFixedByAnotherDeclaration(symbol)
+            || symbol.OriginalDefinition.GetDocumentationCommentId() is not { } id)
+        {
+            return;
+        }
+
+        var exits = new List<ExpressionSyntax>();
+        if (method.ExpressionBody is { Expression: { } arrow })
+        {
+            exits.Add(arrow);
+        }
+        else if (method.Body is { } body)
+        {
+            foreach (SyntaxNode node in body.DescendantNodes())
+            {
+                // A `yield` makes the declared type an enumerable of the
+                // yielded values, not the type of anything forwarded.
+                if (node is YieldStatementSyntax)
+                {
+                    return;
+                }
+
+                if (node is ReturnStatementSyntax { Expression: { } returned }
+                    && !IsInsideNestedBody(returned, body))
+                {
+                    exits.Add(returned);
+                }
+            }
+        }
+
+        if (exits.Count > 0)
+        {
+            forwarders.Add((model, id, exits));
+        }
+    }
+
+    // Whether `node` sits inside a lambda / anonymous method / local function
+    // nested in `body`: such a `return` belongs to that nested body, not to the
+    // method being tested.
+    private static bool IsInsideNestedBody(SyntaxNode node, SyntaxNode body)
+    {
+        for (SyntaxNode current = node.Parent; current != null && current != body; current = current.Parent)
+        {
+            if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Clause 6: `expression` hands an already-promoted value straight on. Only
+    // a direct call or a direct field/property read qualifies — deliberately
+    // NOT a local or parameter read (a different slot), a conditional or switch
+    // (an arm may substitute a value), `??` (which REMOVES the null), or any
+    // other operation.
+    private static bool IsPureForwardOfPromoted(
+        CSharpCompilation compilation,
+        SemanticModel model,
+        ExpressionSyntax expression,
+        HashSet<string> promoted)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        if (expression is not (InvocationExpressionSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax))
+        {
+            return false;
+        }
+
+        ISymbol source = model.GetSymbolInfo(expression).Symbol;
+        if (source is not (IMethodSymbol or IPropertySymbol or IFieldSymbol)
+            || source.OriginalDefinition.GetDocumentationCommentId() is not { } id)
+        {
+            return false;
+        }
+
+        // The seed — direct generated null evidence — or a promotion an earlier
+        // hop already established. Siblings are deliberately not consulted
+        // here: this closure is per-compilation and the run unions the results
+        // in `IsPromotedByPureForwarding`.
+        return promoted.Contains(id)
+            || IsGeneratedDeclarationAssignedNull(compilation, source, null);
     }
 
     // Issue #3851: the write evidence, widened from "the source spells `null`"

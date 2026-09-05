@@ -1327,13 +1327,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return translated;
             }
 
-            if (!this.IsActivePatternBinding(value)
+            (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
+
+            // Issue #3848: the unconditional branch below predates any promotion
+            // that could make a RETURN position nullable, so it asserts without
+            // consulting the target at all. A pure-forwarding-promoted target
+            // accepts the null by construction — that is the whole point of the
+            // promotion — so asserting there would reintroduce the throw this
+            // change removes, one frame down. Narrowly scoped to that one new
+            // promotion; every other value position keeps its existing bytes.
+            if (!this.IsPureForwardingPromotedTarget(targetSymbol)
+                && !this.IsActivePatternBinding(value)
                 && this.ReceiverNeedsNullForgiveness(value))
             {
                 return EnsureNonNullAssertion(translated);
             }
 
-            (ITypeSymbol targetType, ISymbol targetSymbol) = this.FindContextualValueTarget(value);
             return this.ForgiveNullableReferenceValue(value, translated, targetType, targetSymbol);
         }
 
