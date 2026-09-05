@@ -36,6 +36,16 @@ internal static class XmlDocMarkdownConverter
     private const int MaxDocLineWidth = 100;
 
     /// <summary>
+    /// ADR-0057 block tags: the only <c>@name</c> heads gsc accepts at the
+    /// start of a doc-comment line. Anything else there is GS0231.
+    /// </summary>
+    private static readonly string[] BlockTags =
+    {
+        "@param", "@typeparam", "@returns", "@remarks",
+        "@value", "@exception", "@seealso",
+    };
+
+    /// <summary>
     /// Converts one raw documentation-comment trivia string (the `///`-prefixed
     /// lines) into ADR-0057 Markdown doc-comment lines, each already carrying
     /// the <c>///</c> marker.
@@ -164,7 +174,7 @@ internal static class XmlDocMarkdownConverter
         // (```…```) is untouched.
         var wrapped = new List<string>(output.Count);
         bool inFence = false;
-        foreach (string line in output)
+        foreach (string line in JoinStrayTagStarts(output))
         {
             if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
             {
@@ -206,7 +216,13 @@ internal static class XmlDocMarkdownConverter
         var current = new StringBuilder();
         foreach (string atom in SplitIntoAtoms(line))
         {
-            if (current.Length > 0 && current.Length + 1 + atom.Length > MaxDocLineWidth)
+            // Never START a line with something gsc would read as a block tag
+            // but does not recognise: a continuation line beginning `@rsp` is
+            // GS0231, not prose. Overflowing the width beats emitting a doc
+            // comment the compiler rejects.
+            if (current.Length > 0
+                && current.Length + 1 + atom.Length > MaxDocLineWidth
+                && !IsStrayTagStart(atom))
             {
                 yield return current.ToString();
                 current.Clear();
@@ -224,6 +240,66 @@ internal static class XmlDocMarkdownConverter
         {
             yield return current.ToString();
         }
+    }
+
+    /// <summary>
+    /// Issue #3501: joins any prose line that begins with an <c>@word</c> gsc
+    /// does not recognise as a block tag onto the line before it.
+    /// </summary>
+    /// <remarks>
+    /// ADR-0179 phase 9a preserves the author's own <c>///</c> line structure,
+    /// which is how <c>&lt;c&gt;dotnet &lt;tool&gt;.dll\n/// @rsp&lt;/c&gt;</c>
+    /// — a C# inline code span the author happened to wrap mid-span — reached
+    /// the emitted G# as a line starting <c>@rsp</c>. gsc reads a line-leading
+    /// <c>@word</c> as a block tag and fails the whole project with GS0231
+    /// "Unknown documentation tag". The author's line break inside the span
+    /// carries no meaning in Markdown, so healing it here is lossless.
+    /// </remarks>
+    private static List<string> JoinStrayTagStarts(List<string> lines)
+    {
+        var joined = new List<string>(lines.Count);
+        bool inFence = false;
+        foreach (string line in lines)
+        {
+            if (line.TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                inFence = !inFence;
+                joined.Add(line);
+                continue;
+            }
+
+            if (!inFence
+                && IsStrayTagStart(line)
+                && joined.Count > 0
+                && !string.IsNullOrWhiteSpace(joined[^1])
+                && !joined[^1].TrimStart().StartsWith("```", StringComparison.Ordinal))
+            {
+                joined[^1] = joined[^1].TrimEnd() + " " + line.TrimStart();
+                continue;
+            }
+
+            joined.Add(line);
+        }
+
+        return joined;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="text"/> starts with an <c>@word</c> that is not
+    /// one of ADR-0057's block tags — i.e. text that must not be allowed to
+    /// begin an emitted doc line.
+    /// </summary>
+    private static bool IsStrayTagStart(string text)
+    {
+        string trimmed = text.TrimStart();
+        if (!trimmed.StartsWith("@", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        int end = trimmed.IndexOf(' ');
+        string head = end < 0 ? trimmed : trimmed.Substring(0, end);
+        return !BlockTags.Contains(head, StringComparer.Ordinal);
     }
 
     /// <summary>
