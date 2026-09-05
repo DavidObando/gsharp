@@ -138,6 +138,28 @@ describe('gsharp.tmLanguage.json', () => {
     expect(missing).toEqual([]);
   });
 
+  describe('canonical delegate declarations', () => {
+    const declarationPatterns: {
+      match?: string;
+      captures?: Record<string, {name?: string}>;
+    }[] = grammar.repository.declarations.patterns;
+
+    const cases: [string, string][] = [
+      ['delegate Greeter(name string) string', 'Greeter'],
+      ['delegate Mapper[T any](value T) T', 'Mapper'],
+    ];
+
+    it.each(cases)('captures the type name in `%s`', (source, name) => {
+      const pattern = declarationPatterns.find(
+        (p) => p.match && new RegExp(p.match).test(source),
+      );
+      expect(pattern).toBeDefined();
+      const match = new RegExp(pattern!.match!).exec(source)!;
+      expect(match[2]).toBe(name);
+      expect(pattern!.captures?.['2']?.name).toBe('entity.name.type.gsharp');
+    });
+  });
+
   it('keeps ternary colons in interpolation expressions', () => {
     const patterns = grammar.repository['interpolation-braced'].patterns.map(
       (p: {include?: string}) => p.include,

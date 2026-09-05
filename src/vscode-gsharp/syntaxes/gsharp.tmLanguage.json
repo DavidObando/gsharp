@@ -262,10 +262,18 @@
           }
         },
         {
-          "comment": "Delegate type alias per ADR-0078: `type Name = delegate ...`",
+          "comment": "Named delegate type declaration (canonical form, issue #3510): `delegate Name(params) R;`",
+          "match": "\\b(delegate)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.modifier.contextual.gsharp" },
+            "2": { "name": "entity.name.type.gsharp" }
+          }
+        },
+        {
+          "comment": "Retired delegate type alias spelling (issue #3510, superseded by `delegate Name(...) R;`); `type` is no longer a reserved keyword and only parses here as an error-recovery form: `type Name = delegate ...`",
           "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
-            "1": { "name": "keyword.declaration.gsharp" },
+            "1": { "name": "keyword.modifier.contextual.gsharp" },
             "2": { "name": "entity.name.type.gsharp" }
           }
         },
@@ -295,7 +303,7 @@
         },
         {
           "name": "keyword.declaration.gsharp",
-          "match": "\\b(func|class|struct|enum|interface|type|operator|sequence)\\b"
+          "match": "\\b(func|class|struct|enum|interface|operator|sequence)\\b"
         },
         {
           "name": "keyword.modifier.gsharp",
@@ -303,7 +311,7 @@
         },
         {
           "name": "keyword.modifier.contextual.gsharp",
-          "match": "\\b(and|checked|convenience|data|deinit|delegate|event|explicit|extension|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|shared|sizeof|stackalloc|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
+          "match": "\\b(and|checked|convenience|data|deinit|delegate|event|explicit|extension|fixed|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|shared|sizeof|stackalloc|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\\b"
         },
         {
           "name": "keyword.other.accessor.gsharp",
