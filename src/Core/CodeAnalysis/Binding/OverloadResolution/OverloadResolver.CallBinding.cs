@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Documentation;
@@ -65,15 +66,12 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
-    /// Issue #3760: the user-generic counterpart of
+    /// Issues #3760/#3766: the user-generic counterpart of
     /// <c>ClrOverloadResolution.TryInferMethodGroupArgument</c>. A method group
     /// argument carries no type, so a type parameter reachable only through
-    /// the target delegate's RETURN position never receives a bound from the
-    /// positional pass. Close the delegate's input types from the bounds
-    /// gathered so far, resolve the group against that closed input list, and
-    /// unify the selected candidate's return type back into
-    /// <paramref name="substitution"/>. A group that stays ambiguous under the
-    /// closed inputs contributes nothing, leaving the established GS0151.
+    /// the target delegate never receives a bound from the positional pass.
+    /// Closed inputs drive normal overload resolution; otherwise a single
+    /// arity-matching candidate can supply parameter and return bounds.
     /// </summary>
     private void InferFromUserMethodGroupArgument(
         TypeSymbol parameterType,
@@ -82,11 +80,13 @@ internal sealed partial class OverloadResolver
     {
         if (argument is not BoundMethodGroupExpression and not BoundClrMethodGroupExpression
             || !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(parameterType, out var target)
-            || !TypeSymbol.ContainsTypeParameter(target.ReturnType))
+            || (!TypeSymbol.ContainsTypeParameter(target.ReturnType)
+                && !target.ParameterTypes.Any(TypeSymbol.ContainsTypeParameter)))
         {
             return;
         }
 
+        var hasUnboundInput = false;
         var closedInputs = new TypeSymbol[target.ParameterTypes.Length];
         for (var i = 0; i < closedInputs.Length; i++)
         {
@@ -95,22 +95,159 @@ internal sealed partial class OverloadResolver
                 || closedInput == TypeSymbol.Error
                 || TypeSymbol.ContainsTypeParameter(closedInput))
             {
-                // An input the first pass could not close gives the group no
-                // signature to resolve against.
-                return;
+                hasUnboundInput = true;
+                break;
             }
 
             closedInputs[i] = closedInput;
         }
 
-        var selectedReturn = argument is BoundClrMethodGroupExpression clrGroup
-            ? ResolveClrMethodGroupReturn(clrGroup, closedInputs)
-            : ResolveUserMethodGroupReturn((BoundMethodGroupExpression)argument, closedInputs);
-
-        if (selectedReturn != null)
+        if (!hasUnboundInput)
         {
-            inferTypeArguments(target.ReturnType, selectedReturn, substitution);
+            var selectedReturn = argument is BoundClrMethodGroupExpression clrGroup
+                ? ResolveClrMethodGroupReturn(clrGroup, closedInputs)
+                : ResolveUserMethodGroupReturn((BoundMethodGroupExpression)argument, closedInputs);
+            if (selectedReturn != null)
+            {
+                inferTypeArguments(target.ReturnType, selectedReturn, substitution);
+            }
+
+            return;
         }
+
+        if (!TryGetSingleMethodGroupSignature(
+                argument,
+                target.ParameterTypes.Length,
+                out var candidateParameters,
+                out var candidateReturn))
+        {
+            return;
+        }
+
+        for (var i = 0; i < target.ParameterTypes.Length; i++)
+        {
+            inferTypeArguments(target.ParameterTypes[i], candidateParameters[i], substitution);
+        }
+
+        inferTypeArguments(target.ReturnType, candidateReturn, substitution);
+    }
+
+    private bool TryGetSingleMethodGroupSignature(
+        BoundExpression argument,
+        int delegateArity,
+        [NotNullWhen(true)] out TypeSymbol[]? parameters,
+        [NotNullWhen(true)] out TypeSymbol? returnType)
+    {
+        parameters = null;
+        returnType = null;
+
+        if (argument is BoundClrMethodGroupExpression clrGroup)
+        {
+            MethodInfo? method = null;
+            var parameterOffset = 0;
+            foreach (var possibleMethod in clrGroup.Candidates)
+            {
+                var candidateOffset = clrGroup.Receiver != null && possibleMethod.IsStatic ? 1 : 0;
+                if (possibleMethod.GetParameters().Length - candidateOffset != delegateArity)
+                {
+                    continue;
+                }
+
+                if (method != null)
+                {
+                    return false;
+                }
+
+                method = possibleMethod;
+                parameterOffset = candidateOffset;
+            }
+
+            if (method == null || method.ContainsGenericParameters)
+            {
+                return false;
+            }
+
+            var methodParameters = method.GetParameters();
+            parameters = new TypeSymbol[delegateArity];
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                parameters[i] = TypeSymbol.FromClrType(
+                    binderCtx.References.MapClrTypeToReferences(
+                        methodParameters[i + parameterOffset].ParameterType));
+            }
+
+            returnType = method.ReturnType.IsSameAs(typeof(void))
+                ? TypeSymbol.Void
+                : TypeSymbol.FromClrType(binderCtx.References.MapClrTypeToReferences(method.ReturnType));
+            return true;
+        }
+
+        if (argument is not BoundMethodGroupExpression userGroup)
+        {
+            return false;
+        }
+
+        if (userGroup.Candidates.Length == 1
+            && userGroup.FunctionType is { } naturalType
+            && naturalType.ParameterTypes.Length == delegateArity)
+        {
+            parameters = naturalType.ParameterTypes.ToArray();
+            returnType = naturalType.ReturnType;
+            return true;
+        }
+
+        FunctionSymbol? candidate = null;
+        var parameterOffsetForUser = 0;
+        foreach (var possibleCandidate in userGroup.Candidates)
+        {
+            var candidateOffset = possibleCandidate.IsExtension && userGroup.Receiver != null ? 1 : 0;
+            if (possibleCandidate.Parameters.Length - candidateOffset != delegateArity)
+            {
+                continue;
+            }
+
+            if (candidate != null)
+            {
+                return false;
+            }
+
+            candidate = possibleCandidate;
+            parameterOffsetForUser = candidateOffset;
+        }
+
+        if (candidate == null || candidate.IsGeneric)
+        {
+            return false;
+        }
+
+        var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
+            ? TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
+            : null;
+        if (candidateOwner == null
+            && !candidate.IsExtension
+            && userGroup.Receiver?.Type is StructSymbol receiverStruct
+            && candidate.ReceiverType is StructSymbol declaredReceiver)
+        {
+            candidateOwner = TypeMemberModel.ResolveStaticMemberOwner(receiverStruct, declaredReceiver);
+        }
+
+        parameters = new TypeSymbol[delegateArity];
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            parameters[i] = candidateOwner?.SubstituteMemberType(candidate.Parameters[i + parameterOffsetForUser].Type)
+                ?? candidate.Parameters[i + parameterOffsetForUser].Type;
+        }
+
+        var observableReturn = candidate.Type ?? TypeSymbol.Void;
+        if (candidate.IsAsyncOrSuspending
+            && !candidate.IsAsyncVoid
+            && !isAsyncIteratorReturnType(observableReturn))
+        {
+            observableReturn = wrapAsTask(observableReturn, candidate.AsyncReturnsValueTask);
+        }
+
+        returnType = candidateOwner?.SubstituteMemberType(observableReturn) ?? observableReturn;
+        return true;
     }
 
     /// <summary>

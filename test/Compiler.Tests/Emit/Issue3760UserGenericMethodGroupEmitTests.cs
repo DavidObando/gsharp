@@ -62,10 +62,52 @@ public class Issue3760UserGenericMethodGroupEmitTests
             func Map[TOut](value int32, f Func[int32, TOut]) TOut { return f(value) }
         }
 
+        class Holder[T] {
+            func Accept(value T) { }
+            func Accept(value T, extra int32) { }
+        }
+
+        async func AsyncText(value int32) string { return value.ToString() }
         func Map[TOut](value int32, f Func[int32, TOut]) TOut { return f(value) }
         func RunG[TIn](value TIn, a Action[TIn]) { a(value) }
+        func RunOnly[TIn](a Action[TIn]) { }
+        func Accept[TIn, TOut](f Func[TIn, TOut]) { }
 
         """;
+
+    /// <summary>
+    /// Issue #3766: a type parameter reachable only through a single-candidate
+    /// method group's parameter positions is inferred from that candidate.
+    /// </summary>
+    [Fact]
+    public void FreeGenericFunction_InfersTIn_FromSingleCandidateMethodGroup()
+    {
+        string output = CompileAndRun(Preamble + """
+            RunOnly(Helper.Emit)
+            """);
+
+        Assert.Equal(string.Empty, output);
+    }
+
+    [Fact]
+    public void FreeGenericFunction_UsesObservableAsyncMethodGroupReturn()
+    {
+        string output = CompileAndRun(Preamble + """
+            Accept(AsyncText)
+            """);
+
+        Assert.Equal(string.Empty, output);
+    }
+
+    [Fact]
+    public void FreeGenericFunction_SubstitutesConstructedMethodGroupReceiver()
+    {
+        string output = CompileAndRun(Preamble + """
+            RunOnly(Holder[int32]().Accept)
+            """);
+
+        Assert.Equal(string.Empty, output);
+    }
 
     /// <summary>
     /// The issue's headline repro (free function, inferred type argument).
@@ -241,9 +283,9 @@ public class Issue3760UserGenericMethodGroupEmitTests
     /// <summary>
     /// The new inference step is a RETRY on the failure path only, and it must
     /// stay a diagnostic — never a crash — when the group genuinely cannot be
-    /// resolved. Here the delegate's INPUT type is itself an un-inferable type
-    /// parameter, so there is no closed signature to resolve the group
-    /// against: GS0151 stands, and no GS9998 follows it.
+    /// resolved. Here both overloads have the target arity and the delegate's
+    /// INPUT type is itself unbound, so choosing either candidate would be
+    /// unsound: GS0151 stands, and no GS9998 follows it.
     /// <para>
     /// ANTI-VACUITY GUARD RAIL — this also passed on origin/main; it pins that
     /// the retry did not turn an honest diagnostic into a crash or a wrong
@@ -256,7 +298,7 @@ public class Issue3760UserGenericMethodGroupEmitTests
         (int exitCode, string output) = Compile(Preamble + """
             func Both[TIn, TOut](f Func[TIn, TOut]) TOut { return f(default) }
 
-            Console.WriteLine(Both(Helper.ToText))
+            Console.WriteLine(Both(Helper.Show))
             """);
 
         Assert.True(exitCode != 0, "expected the un-inferable call to be rejected:\n" + output);
