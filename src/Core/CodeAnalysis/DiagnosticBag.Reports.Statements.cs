@@ -300,6 +300,22 @@ public sealed partial class DiagnosticBag
     public void ReportSuspendingCallBlocks(TextLocation location, string calleeName)
     => Report(location, DiagnosticDescriptors.SuspendingCallBlocks, calleeName);
 
+    /// <summary>ADR-0174 D4: GS0574 — an <c>await</c> sits in a function whose signature inference may not change.</summary>
+    /// <param name="location">The <c>await</c>'s location.</param>
+    /// <param name="containerName">The enclosing function's name.</param>
+    public void ReportAwaitAtSuspensionBoundary(TextLocation location, string containerName)
+    => Report(location, DiagnosticDescriptors.AwaitAtSuspensionBoundary, containerName);
+
+    /// <summary>ADR-0174 D4: GS0575 — an <c>await</c> sits in a <c>lock</c> body, whose monitor is thread-affine.</summary>
+    /// <param name="location">The <c>await</c>'s location.</param>
+    public void ReportAwaitInsideLockBody(TextLocation location)
+    => Report(location, DiagnosticDescriptors.AwaitInsideLockBody);
+
+    /// <summary>ADR-0174 D5: GS0576 — an <c>await</c> is nested in a <c>go</c> operand's arguments.</summary>
+    /// <param name="location">The <c>await</c>'s location.</param>
+    public void ReportAwaitInsideGoOperand(TextLocation location)
+    => Report(location, DiagnosticDescriptors.AwaitInsideGoOperand);
+
     /// <summary>ADR-0174 D3: GS0555 — a <c>while let</c> initializer is a channel handle rather than a receive from one.</summary>
     /// <param name="location">The location of the initializer.</param>
     /// <param name="bindingName">The binding's identifier.</param>

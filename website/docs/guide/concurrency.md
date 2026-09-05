@@ -107,9 +107,18 @@ var onReady (string) -> Task = (msg string) -> Task.CompletedTask
 var publish async (string) -> void = (msg string) -> Console.WriteLine(msg)
 ```
 
-`await` is a prefix expression and is only valid inside `async`
-contexts; using it elsewhere or on a non-awaitable operand is
-diagnosed.
+`await` is a prefix expression. It is **not** restricted to an `async
+func`: awaiting is itself a suspension point, so a plain `func` may await
+and the compiler colours it suspending, exactly as a channel operation
+would (ADR-0174 D4). Where a signature is fixed and inference may not
+change it — an `open`/`override` method, an interface member, an accessor,
+a constructor, an operator, an iterator, a function literal — `GS0574` asks
+you to move the awaited work into a `suspend func` or an `async func` and
+call that instead. Two positions reject `await` outright because there is
+nowhere to suspend: a `lock` body, whose monitor is thread-affine
+(`GS0575`, the rule C# spells CS1996), and nested inside a `go` operand's
+arguments (`GS0576` — bind the value to a local first). Awaiting a
+non-awaitable operand is diagnosed as before.
 
 ## `suspend func` — suspension without a task
 
@@ -272,6 +281,11 @@ handle:
   never wait, so a borrowed stack view is safe.
 - `ReceiveBatch(buffer, atLeast)` and `SendBatch(items)` take a `Memory[T]`.
   They can park, and a destination that survives a park cannot be a `Span`.
+  They return a `ValueTask[int32]` you `await` — `let n = await
+  ch.ReceiveBatch(buffer, 1)` — like any other awaitable, and `.AsTask()`
+  on one names the task exactly as it does in C#. The compiler awaits for
+  you only where the *syntax* is a channel operation (`ch <- v`, `<-ch`,
+  `select`, channel `for..in`), never because a method returns a task.
 
 `atLeast = 1` is Go's `range` shape, take what is there. `atLeast =
 buffer.Length` is a full-fill barrier. Both are legitimate, which is why there

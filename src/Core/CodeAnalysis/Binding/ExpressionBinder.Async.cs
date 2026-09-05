@@ -807,7 +807,7 @@ internal sealed partial class ExpressionBinder
 
         var operand = BindExpression(syntax.Expression);
 
-        if (function == null || (!function.IsAsyncOrSuspending && !isAsyncIteratorReturnType(function.Type)))
+        if (function == null)
         {
             Diagnostics.ReportAwaitOutsideAsyncFunction(syntax.AwaitKeyword.Location);
             return new BoundErrorExpression(null);
@@ -838,7 +838,18 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        return new BoundAwaitExpression(null, operand, element, TryGetAwaiterTypeSymbol(operand.Type));
+        // ADR-0174 D4, the `await g()` row: awaiting makes the AWAITING
+        // function suspending. Inside an `async func` (or an async iterator)
+        // that is C#'s ordinary await over an observable task, and nothing
+        // changes. In a plain `func` the await is a suspension point like a
+        // channel operation: the binder leaves it in place and
+        // `SuspensionPointCollector` reports it, so the inference pass colours
+        // this function and the state-machine rewriter takes the await from
+        // there. A function whose signature inference may not change — D4's
+        // boundaries — is where that stops, and `SuspendingCallRewriter`
+        // reports the await that survives — which is why this node carries its
+        // syntax: that report needs the `await` keyword's own location.
+        return new BoundAwaitExpression(syntax, operand, element, TryGetAwaiterTypeSymbol(operand.Type));
     }
 
     // The implicit await produced by CompleteSuspendingCall yields the logical
