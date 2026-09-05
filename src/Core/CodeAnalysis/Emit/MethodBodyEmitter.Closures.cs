@@ -126,6 +126,29 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #3931: the "conversion" is an IDENTITY when the source
+        // function type's natural CLR delegate already IS the target delegate
+        // type — `(int32) -> void` and `Action[int32]` are two spellings of
+        // `System.Action<int>`, and `async (CancellationToken) -> void` and
+        // `Func[CancellationToken, Task]` are two spellings of
+        // `System.Func<CancellationToken, Task>`. Re-wrapping the value in a
+        // fresh delegate over its own `Invoke` was observably wrong three
+        // ways: it allocated for nothing, it broke reference identity (so
+        // `-=` / `ReferenceEquals` against the original stopped matching),
+        // and — the reason this surfaced — `newobj Delegate::.ctor` throws
+        // `ArgumentException("Delegate to an instance method cannot have
+        // null 'this'")` when the source delegate is null, turning a
+        // perfectly legal null delegate field into a runtime crash. Emit the
+        // value unchanged. The symbolic paths are excluded because their
+        // reflection types are erased and cannot be compared.
+        if (!sourceNeedsSymbolic
+            && !symbolicTargetCtorRef.HasValue
+            && this.outer.signatures.ResolveDelegateClrType(sourceFn).Equals(targetDelegateType))
+        {
+            this.EmitExpression(source);
+            return;
+        }
+
         // Delegate-to-delegate adaptation: wrap the existing delegate's
         // Invoke method in a new delegate of the target type. Issue #1502:
         // when the source shape needs symbolic encoding, take the reified

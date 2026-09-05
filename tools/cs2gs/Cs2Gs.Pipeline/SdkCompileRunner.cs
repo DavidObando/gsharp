@@ -27,6 +27,13 @@ namespace Cs2Gs.Pipeline;
 /// </summary>
 public sealed class SdkCompileRunner
 {
+    /// <summary>
+    /// Issue #3931: the wall-clock budget for a mirrored <c>dotnet test</c> run.
+    /// Named (rather than inline) so the parity stage can report the exact
+    /// budget a killed run exceeded instead of describing a nameless timeout.
+    /// </summary>
+    internal static readonly TimeSpan MirroredTestRunTimeout = TimeSpan.FromMinutes(10);
+
     private const string SdkPackageId = "Gsharp.NET.Sdk";
 
     // Matches a generic MSBuild/NuGet/CS error line, e.g.
@@ -138,7 +145,7 @@ public sealed class SdkCompileRunner
                 "dotnet",
                 args,
                 projectDirectory,
-                TimeSpan.FromMinutes(10),
+                MirroredTestRunTimeout,
                 IsolatedNugetEnvironment(artifactDirectory));
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty);
 

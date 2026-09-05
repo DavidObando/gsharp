@@ -613,6 +613,68 @@ public sealed class TriageBuilder
     }
 
     /// <summary>
+    /// Issue #3931: builds a triage artifact for a mirrored test project whose
+    /// <c>dotnet test</c> was KILLED on the runner's wall-clock budget. A
+    /// killed run produces no <c>Passed!/Failed! … Total: N</c> summary, only
+    /// a partial <c>[FAIL]</c> list — so any count taken from it is a
+    /// truncation artifact, not a result. Reporting it as
+    /// <c>LIBRARY-BUILD-FAILED</c> (what the absent summary line otherwise
+    /// classifies it as) makes a timeout indistinguishable from a genuine
+    /// build break, and lets a truncated <c>[FAIL]</c> list be read as a
+    /// parity number. The dedicated id is <c>LIBRARY-TESTS-TIMED-OUT</c>.
+    /// </summary>
+    /// <param name="budget">The wall-clock budget the run exceeded.</param>
+    /// <param name="output">The captured (partial) <c>dotnet test</c> output.</param>
+    /// <param name="gsFile">The emitted G# library file (relative path), or null.</param>
+    /// <returns>The populated triage artifact.</returns>
+    public TriageArtifact TestParityLibraryTestRunTimedOut(
+        TimeSpan budget, string output, string gsFile = null)
+    {
+        string message =
+            $"the migrated test run exceeded its {budget} budget and was killed; " +
+            "the output below is TRUNCATED and carries no run summary, so its " +
+            "[FAIL] list is not a parity count.";
+        if (!string.IsNullOrWhiteSpace(output))
+        {
+            message += "\n" + output.Trim();
+        }
+
+        var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
+        artifact.Diagnostic = new TriageDiagnostic
+        {
+            Id = "LIBRARY-TESTS-TIMED-OUT",
+            Message = message,
+            Severity = "error",
+        };
+        artifact.SourceLocation = new TriageSourceLocation
+        {
+            GsFile = gsFile,
+            GsLine = null,
+            GsColumn = null,
+            CsFile = null,
+            CsLine = null,
+            CsColumn = null,
+        };
+        artifact.OffendingCSharpConstruct = new TriageOffendingConstruct
+        {
+            Kind = "LibraryTestRunTimeout",
+
+            // The elapsed budget is deliberately excluded from the snippet:
+            // it is configuration, not shape, so two runs under different
+            // budgets must still dedupe to one fingerprint.
+            Snippet = "dotnet test killed on the mirrored-test-run budget",
+        };
+        artifact.Fingerprint = Fingerprint.Compute(
+            artifact.Category,
+            artifact.Stage,
+            artifact.Diagnostic.Id,
+            artifact.OffendingCSharpConstruct.Kind,
+            artifact.OffendingCSharpConstruct.Snippet);
+        artifact.SuggestedIssue = this.TestParityIssue(artifact);
+        return artifact;
+    }
+
+    /// <summary>
     /// Builds a triage artifact for an unhandled exception thrown by a stage
     /// itself, rather than a diagnostic the stage reported normally (issue
     /// #1750). The offending construct <c>kind</c> is the exception's runtime
