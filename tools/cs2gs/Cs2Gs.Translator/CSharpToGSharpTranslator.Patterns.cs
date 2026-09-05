@@ -2072,7 +2072,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // `new T[]{a, b}` / `new T[0]` (with an explicit, possibly empty,
                 // initializer) → the slice literal `[]T{a, b}`.
                 GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
-                    elementType, elementTypeSymbol, creation.Initializer.Expressions);
+                    elementType, elementTypeSymbol, creation.Initializer.Expressions, creation);
                 bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
                 return new ArrayLiteralExpression(
                     literalElementType,
@@ -2321,7 +2321,7 @@ public sealed partial class CSharpToGSharpTranslator
                     dims,
                     leaves);
                 GTypeReference leafElementType = this.PromoteElementTypeForNullElements(
-                    elementType, elementTypeSymbol, leaves);
+                    elementType, elementTypeSymbol, leaves, creation);
                 bool leafPromoted = !ReferenceEquals(leafElementType, elementType);
                 return new ArrayAllocationExpression(
                     leafElementType,
@@ -2333,7 +2333,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
-                elementType, elementTypeSymbol, creation.Initializer.Expressions);
+                elementType, elementTypeSymbol, creation.Initializer.Expressions, creation);
             bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
             return new ArrayLiteralExpression(
                 literalElementType,
@@ -2610,10 +2610,15 @@ public sealed partial class CSharpToGSharpTranslator
             //
             // Issue #3682: `[null, null, "d"]` writes a `nil` into the slice's
             // element type, which the C# target left non-nullable.
+            //
+            // Issue #3848 (family B): and the same widening when the generated
+            // DECLARATION this literal is written into had its element slot
+            // promoted, so the literal and the slot agree (gsc GS0155).
             GTypeReference sliceElementType = this.PromoteElementTypeForNullElements(
                 elementType,
                 elementTypeSymbol,
-                collection.Elements.OfType<ExpressionElementSyntax>().Select(e => e.Expression));
+                collection.Elements.OfType<ExpressionElementSyntax>().Select(e => e.Expression),
+                collection);
             bool slicePromoted = !ReferenceEquals(sliceElementType, elementType);
 
             var elements = new List<GExpression>();

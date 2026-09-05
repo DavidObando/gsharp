@@ -817,10 +817,22 @@ public sealed partial class CSharpToGSharpTranslator
         // Restricted to reference elements whose annotation is not already
         // `Annotated` (those already render `T?`); value-typed elements never
         // receive a `nil` in the first place.
+        //
+        // Issue #3848 (family B) adds a THIRD source of evidence, and it is the
+        // one that is not local to the literal: the DECLARATION this literal is
+        // written into may itself have had its element slot promoted (see
+        // `PromoteArrayElementIfGeneratedNullElement`). When it has, the literal
+        // must widen WITH it whether or not this particular literal contains a
+        // maybe-null element — a `[]object` literal does not convert to a
+        // `[]object?` slot (gsc GS0155), so promoting the declaration and
+        // leaving a second write's literal narrow would stop the project
+        // compiling. Symmetry, not extra permissiveness: the decision is the
+        // declaration's, taken once, and every write of it follows.
         private GTypeReference PromoteElementTypeForNullElements(
             GTypeReference elementType,
             ITypeSymbol elementTypeSymbol,
-            IEnumerable<ExpressionSyntax> elements)
+            IEnumerable<ExpressionSyntax> elements,
+            ExpressionSyntax literal = null)
         {
             if (elementType == null
                 || elementType.IsNullable
@@ -828,6 +840,12 @@ public sealed partial class CSharpToGSharpTranslator
                 || elementTypeSymbol.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return elementType;
+            }
+
+            if (literal != null
+                && this.IsGeneratedArrayElementPromotedSink(this.ResolveValueSink(literal)))
+            {
+                return MakeNullable(elementType);
             }
 
             foreach (ExpressionSyntax element in elements)
@@ -841,6 +859,48 @@ public sealed partial class CSharpToGSharpTranslator
 
             return elementType;
         }
+
+        // Issue #3848 (family B): the DECLARATION half. A generated
+        // `object[] Arguments` written `[uri, range.Start]` with a maybe-null
+        // `uri` renders `[]object?` — the ELEMENT is widened, never the array
+        // (ADR-0132: `[]?T` is the nullable array, `[]T?` the element-nullable
+        // one, and it is a value in the array that is null here, not the array).
+        //
+        // Stated in full on
+        // `ObliviousNullabilityAnalyzer.IsGeneratedArrayElementAssignedNull`.
+        // This is #3676/#3851's rule — "in generated code the compiler
+        // suppressed its nullable diagnostics, so believe the write rather than
+        // the annotation it never checked" — read at element granularity. It is
+        // NOT #3930's forwarding rule: no promotion propagates along any edge
+        // here, and the value written is an ordinary compiler-CHECKED `string?`
+        // parameter that `IsPromotedByPureForwarding` rejects outright.
+        //
+        // The generated restriction is the whole safety boundary, exactly as it
+        // is for #3676: a hand-authored `object[]` sink keeps its non-null
+        // element type and its element keeps the `!!`, because there the
+        // compiler really did check the write (CS8601).
+        private GTypeReference PromoteArrayElementIfGeneratedNullElement(
+            GTypeReference type,
+            ISymbol symbol)
+        {
+            if (type is not ArrayTypeReference { ElementType: { IsNullable: false } element } array
+                || !this.IsGeneratedArrayElementPromotedSink(symbol))
+            {
+                return type;
+            }
+
+            return new ArrayTypeReference(MakeNullable(element), array.Rank)
+            {
+                IsNullable = array.IsNullable,
+            };
+        }
+
+        private bool IsGeneratedArrayElementPromotedSink(ISymbol symbol) =>
+            symbol != null
+            && ObliviousNullabilityAnalyzer.IsGeneratedArrayElementAssignedNull(
+                this.context.Compilation,
+                symbol,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations);
 
         // Issue #3726: #3682's rule stated for a value that is KNOWN nil rather
         // than the literal `nil`. A theory parameter a data row supplies `null`
