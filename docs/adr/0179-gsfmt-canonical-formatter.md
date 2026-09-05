@@ -435,9 +435,11 @@ no consumer and cannot regress anything.
 | 8 | Repo adoption | `gsfmt -w` over hand-written `.gs`; CI `gsfmt --check`. | `gsfmt --check` in CI |
 | 9 | The other 62 | 9a: cs2gs preserves doc-comment line structure (−32). 9b: backtick-safe raw strings — split a literal containing a backtick into concatenation, as Go does (−30, not −61: see the correction above). **DONE, #3950**, measured 631 → 565 locally. | — |
 
-**Implementation note (September 5, 2026):** phases 1–8 were implemented
-together when the ADR was accepted, including the formatter library and CLI,
-language-server/SDK/cs2gs adoption, repository rewrite, and CI gate.
+**Implementation note (September 5, 2026):** phases 1–6, 7a, and 8 were
+implemented when the ADR was accepted. The formatter library, CLI,
+language-server/SDK integration, repository rewrite, and CI gate are active;
+the cs2gs post-pass remains behind `--format` until phase 7b's corpus
+round-trip gaps are measured and cleared.
 
 **Sequencing note:** Phase 9 was listed last but had the best ratio in the plan — one
 small, self-contained cs2gs PR removing ~62 long lines that no formatter work can

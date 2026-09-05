@@ -105,7 +105,7 @@ public sealed class PipelineOptions
     /// the ADR-0179 canonical formatter. Enabled by default; formatter
     /// failures preserve the printer output and produce a triage artifact.
     /// </summary>
-    public bool FormatOutput { get; set; } = true;
+    public bool FormatOutput { get; set; }
 
     /// <summary>
     /// Gets or sets the test-parity failure allow-list (issue #3885): the
