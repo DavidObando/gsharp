@@ -143,24 +143,35 @@ internal sealed partial class MethodBodyEmitter
                     }
                 }
 
-                // Issue #1433: a `shared` (static) method called on a
-                // constructed generic INTERFACE (`IBox[int32].Make()`) must be
+                // The OWNER token: which entity the call names. Three shapes —
+                // a `shared` method on a constructed generic INTERFACE
+                // (`IBox[int32].Make()`, issue #1433) or on a constructed
+                // generic user TYPE (`Box[int32].Make()`, issue #1209) must be
                 // referenced through a MemberRef parented at the construction's
-                // TypeSpec. The substituted method is not in the handle cache,
-                // so resolve it before the generic-struct/cache lookups below.
+                // TypeSpec; everything else is the bare MethodDef.
+                EntityHandle callTokenToEmit;
                 if (call.StaticGenericInterfaceOwnerType != null
                     && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(call.StaticGenericInterfaceOwnerType))
                 {
-                    this.il.OpCode(ILOpCode.Call);
-                    this.il.Token(this.outer.userTokens.ResolveUserInterfaceStaticMethodToken(call.StaticGenericInterfaceOwnerType, call.Function));
-                    break;
+                    // The substituted method is not in the handle cache, so this
+                    // resolves without the generic-struct/cache lookups below.
+                    callTokenToEmit = this.outer.userTokens.ResolveUserInterfaceStaticMethodToken(
+                        call.StaticGenericInterfaceOwnerType,
+                        call.Function);
                 }
-
-                if (!this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle)
-                    && !this.outer.cache.MethodHandles.TryGetValue(call.Function, out fnHandle))
+                else
                 {
-                    throw new InvalidOperationException(
-                        $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
+                    if (!this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle)
+                        && !this.outer.cache.MethodHandles.TryGetValue(call.Function, out fnHandle))
+                    {
+                        throw new InvalidOperationException(
+                            $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
+                    }
+
+                    callTokenToEmit = call.StaticGenericOwnerType != null
+                        && ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StaticGenericOwnerType)
+                        ? this.outer.userTokens.ResolveUserStaticMethodToken(call.StaticGenericOwnerType, call.Function)
+                        : fnHandle;
                 }
 
                 // ADR-0087 §3 R3+R4: when the target is a generic function,
@@ -168,25 +179,32 @@ internal sealed partial class MethodBodyEmitter
                 // the substituted type arguments — bare MethodDef tokens
                 // would carry MVAR slots and fail ilverify against the
                 // concrete argument types.
-                EntityHandle callTokenToEmit = fnHandle;
-                if (call.StaticGenericOwnerType != null
-                    && ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StaticGenericOwnerType))
-                {
-                    // Issue #1209: a `shared` (static) method called on a
-                    // constructed generic user type (`Box[int32].Make()`) must
-                    // be referenced through a MemberRef parented at the
-                    // construction's TypeSpec; a bare MethodDef token is invalid
-                    // for a method of a generic type.
-                    callTokenToEmit = this.outer.userTokens.ResolveUserStaticMethodToken(call.StaticGenericOwnerType, call.Function);
-                }
-                else if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
+                //
+                // Issue #3939: this MUST be applied on TOP of whatever owner
+                // token was selected above, not INSTEAD of it. The two are
+                // independent axes — the owner token says which type the method
+                // belongs to, the MethodSpec says how the METHOD is
+                // instantiated — and a `shared func Make[U]()` on a generic
+                // `Box[T]` / `IBox[T]` needs both. Selecting one or the other
+                // (which is what an `else if` did here through #1209 and #1433)
+                // emitted `call Box`1<int32>::Make(!!0)` naming the OPEN generic
+                // method: `[found ref 'string'][expected ref '!!0']` from
+                // ILVerify and `InvalidOperationException: Could not execute the
+                // method because either the method itself or the containing type
+                // is not fully instantiated` at the first call. The INSTANCE
+                // sibling (`EmitUserInstanceCall` in MethodBodyEmitter.Calls.cs)
+                // has always done both, sequentially: it resolves a
+                // TypeSpec-parented MemberRef for a generic receiver and THEN
+                // wraps it in a MethodSpec whenever `call.Method.IsGeneric`.
+                // This is the static path catching up.
+                if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
                 {
                     // Issue #3226: a lifted call instantiates the MethodSpec at
                     // Nullable<X> so the erased `!!T` slots really carry the
                     // nullable representation the T? contract promises.
                     callTokenToEmit = nullableLift != null
-                        ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(fnHandle, nullableLift.TypeArguments)
-                        : this.outer.userTokens.BuildMethodSpecForGenericCall(fnHandle, call);
+                        ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(callTokenToEmit, nullableLift.TypeArguments)
+                        : this.outer.userTokens.BuildMethodSpecForGenericCall(callTokenToEmit, call);
                 }
 
                 this.il.OpCode(ILOpCode.Call);

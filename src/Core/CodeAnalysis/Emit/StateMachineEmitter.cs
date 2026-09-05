@@ -476,6 +476,59 @@ internal sealed class StateMachineEmitter
         public AsyncMethodSteppingInfo? AsyncStepping { get; }
     }
 
+    /// <summary>
+    /// Issue #3939: the single place that decides which type parameters are in
+    /// scope at an ASYNC kickoff method — the owning type's, then the kickoff's
+    /// own, in Roslyn order. Two emit paths depend on this list agreeing
+    /// exactly: <c>ReflectionMetadataEmitter.RegisterStateMachineEnclosingGenerics</c>
+    /// reifies the state-machine struct at this ARITY, and
+    /// <see cref="EmitAsyncKickoffBody"/> self-instantiates the struct with
+    /// this INSTANTIATION. They used to compute it independently, and the
+    /// second read only <c>ReceiverType</c> — so a <c>shared async func
+    /// Fetch[U]()</c> on a generic <c>Holder[T]</c> was reified at arity 2 and
+    /// then referenced as <c>&lt;Fetch&gt;d__0`2&lt;!!0&gt;</c>, which the
+    /// runtime rejects with <c>TypeLoadException</c> ("used with the wrong
+    /// number of generic arguments"). This is the same <c>StaticOwnerType</c>
+    /// gap #3932 root C closed on the reification side, still open on the
+    /// kickoff side; both now route through here, so they cannot drift again.
+    /// The ITERATOR sibling has always had this property — its kickoff
+    /// constructs over the very <c>scopeTPs</c> the class was reified from.
+    /// </summary>
+    /// <param name="kickoff">The async kickoff method, or <see langword="null"/>.</param>
+    /// <returns>The owning type's definition, its type parameters, and the kickoff's own.</returns>
+    internal static (StructSymbol? OwnerDefinition, ImmutableArray<TypeParameterSymbol> ClassTypeParameters, ImmutableArray<TypeParameterSymbol> MethodTypeParameters)
+        GetAsyncKickoffGenericScope(FunctionSymbol? kickoff)
+    {
+        // `StaticOwnerType` is the static counterpart of `ReceiverType`: a
+        // `shared` method has no receiver but still lives on the owning type.
+        var owner = (kickoff?.ReceiverType as StructSymbol) ?? (kickoff?.StaticOwnerType as StructSymbol);
+        var ownerDefinition = owner is null ? null : owner.Definition ?? owner;
+        var classTPs = ownerDefinition?.TypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
+        if (classTPs.IsDefault)
+        {
+            classTPs = ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var methodTPs = kickoff is null || kickoff.TypeParameters.IsDefaultOrEmpty
+            ? ImmutableArray<TypeParameterSymbol>.Empty
+            : kickoff.TypeParameters;
+
+        return (ownerDefinition, classTPs, methodTPs);
+    }
+
+    /// <summary>
+    /// Issue #3939: the flattened form of <see cref="GetAsyncKickoffGenericScope"/>
+    /// — the state machine's slot order, class parameters before method
+    /// parameters.
+    /// </summary>
+    /// <param name="kickoff">The async kickoff method, or <see langword="null"/>.</param>
+    /// <returns>The in-scope type parameters in state-machine slot order.</returns>
+    internal static ImmutableArray<TypeParameterSymbol> GetAsyncKickoffTypeParametersInScope(FunctionSymbol? kickoff)
+    {
+        var (_, classTPs, methodTPs) = GetAsyncKickoffGenericScope(kickoff);
+        return classTPs.AddRange(methodTPs);
+    }
+
     private static ImmutableArray<TypeParameterSymbol> GetIteratorTypeParametersInScope(FunctionSymbol function)
     {
         var builder = ImmutableArray.CreateBuilder<TypeParameterSymbol>();
@@ -1746,18 +1799,17 @@ internal sealed class StateMachineEmitter
         // `kickoffSmType` pattern elsewhere in this file — otherwise the
         // emitted `!0` self-instantiation is meaningless outside the SM
         // struct (BadImageFormatException at load).
-        var kickoffClassTPs = function.ReceiverType is StructSymbol kickoffRecv
-            ? (kickoffRecv.Definition ?? kickoffRecv).TypeParameters
-            : ImmutableArray<TypeParameterSymbol>.Empty;
-        if (kickoffClassTPs.IsDefault)
-        {
-            kickoffClassTPs = ImmutableArray<TypeParameterSymbol>.Empty;
-        }
-
-        var kickoffMethodTPs = function.TypeParameters.IsDefaultOrEmpty
-            ? ImmutableArray<TypeParameterSymbol>.Empty
-            : function.TypeParameters;
-        var kickoffScopeTPs = kickoffClassTPs.AddRange(kickoffMethodTPs);
+        //
+        // Issue #3939: this instantiation must be exactly the list the struct
+        // was REIFIED from, so it comes from the shared
+        // GetAsyncKickoffTypeParametersInScope primitive rather than being
+        // recomputed here. Recomputing it is how the two drifted: this site
+        // read only `ReceiverType`, so a `shared async func Fetch[U]()` on a
+        // generic `Holder[T]` produced a 1-argument instantiation of a
+        // 2-parameter state machine (`TypeLoadException`, "used with the wrong
+        // number of generic arguments"), while the instance form on the same
+        // type and the `shared` form of a NON-generic method were both fine.
+        var kickoffScopeTPs = GetAsyncKickoffTypeParametersInScope(function);
         var kickoffSmStruct = kickoffScopeTPs.IsDefaultOrEmpty
             ? smStruct
             : StructSymbol.Construct(smStruct, kickoffScopeTPs.CastArray<TypeSymbol>());
