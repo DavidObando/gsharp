@@ -89,6 +89,46 @@ public class Issue3880VariadicPassThroughOverloadEmitTests
         Assert.Equal($"carrier{Environment.NewLine}carrier{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void GenericCarrierPassThrough_ClosesTheCarrierBeforeRanking()
+    {
+        // Review finding on PR #3964, confirmed against csc: a GENERIC variadic
+        // candidate declares its carrier open (`[]T`). Ranking `[]string`
+        // against `[]T` classifies an identity as a reference conversion, and
+        // the call is handed to a fixed sibling. C# picks the generic carrier
+        // in both shapes below (verified with csc on net10.0); gsc picked
+        // "sequence" and "two-param" — a SILENT wrong-overload selection that
+        // bound clean, verified clean and returned the wrong answer at
+        // runtime, which is why this test executes rather than asserting a
+        // successful bind. The carrier is now closed through the candidate's
+        // inferred substitution, exactly as the non-tail slots already were.
+        var output = CompileAndRun("""
+            package P
+            import System
+            import System.Collections.Generic
+
+            class Pick {
+                shared {
+                    func Take[T](values ...T) string { return "generic-carrier" }
+                    func Take(values IEnumerable[string]) string { return "sequence" }
+
+                    func Two[T](values ...T) string { return "generic-carrier" }
+                    func Two(refs IReadOnlyList[string], values ...string) string { return "two-param" }
+                }
+            }
+
+            func run() {
+                let arr = []string{"a"}
+                Console.WriteLine(Pick.Take(arr))
+                Console.WriteLine(Pick.Two(arr))
+            }
+
+            run()
+            """);
+
+        Assert.Equal($"generic-carrier{Environment.NewLine}generic-carrier{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3880_overload_").FullName;
