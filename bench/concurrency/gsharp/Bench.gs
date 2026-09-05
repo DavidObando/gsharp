@@ -329,10 +329,7 @@ func chunkedArrays(size int32, count int32) TimeSpan {
     return sw.Elapsed
 }
 
-// `chan[[]int32]` rather than `out chan[[]int32]`: the directional view
-// conversion does not apply when the element type is an array, so the `out`
-// form does not bind (issue #3924). Bidirectional is only a workaround here.
-func produceArrays(ch chan[[]int32], count int32, size int32) {
+func produceArrays(ch out chan[[]int32], count int32, size int32) {
     var sent = 0
     while sent < count {
         var chunk = [size]int32{}

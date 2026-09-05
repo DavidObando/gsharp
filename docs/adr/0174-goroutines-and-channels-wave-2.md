@@ -2665,6 +2665,38 @@ implementation had to refine it.
     reader does not spend the effort on channels that the number appears to
     demand.
 
+37. **The direction lattice compares elements by runtime type, not by symbol
+    shape (issue #3924).** D2 says a `chan[T]` narrows to `in chan[T]` /
+    `out chan[T]`. It did not when `T` was a *structural* G# type — `[]int32`,
+    `map[string,int32]`, `[][]int32` — while the same narrowing over `int32`,
+    `string` or a same-compilation `struct` bound fine. The cause is errata 3:
+    the value a `chan[T](n)` expression produces is the runtime class, so the
+    conversion's source element is whatever `TypeSymbol.FromClrType` mints for
+    the *reflected* type argument, and a structural shape has no CLR
+    counterpart symbol — `[]int32` comes back as an imported `int32[]`, never
+    the `SliceTypeSymbol` the type clause bound. The lattice compared those two
+    symbols and saw two different types. It now falls back to comparing the
+    elements' effective CLR types, which is the only question `Channel<T>`'s
+    invariance actually asks. This is not merely a fix for what `chan[T](n)`
+    builds: a foreign `Channel<int32[]>` from C# failed identically, and its
+    element exists only as reflected metadata, so no amount of preserving G#
+    symbols at construction would have reached it. With it, the D11
+    array-transport rows (`chunk64-arrays`, `chunk1k-arrays`) declare their
+    producer `out chan[[]int32]`, as errata 28's `merge` discussion intends.
+    The fallback applies only when one side IS that metadata-recovered form.
+    A CLR type is coarser than the G# symbol above it — `[3]int32` and
+    `[4]int32` are both `int32[]` — so where both sides still carry their
+    symbols the finer comparison stands: `chan[[3]int32]` still does not
+    narrow to `out chan[[4]int32]`. Past a construction the distinction is
+    already gone and was before this change: `chan[[3]int32](1)` and
+    `chan[[4]int32](1)` build one `Chan<int32[]>`, which a bidirectional
+    `chan[[4]int32]` parameter has always accepted.
+
+    The `Chan[int32[]]` spelling in the pre-fix diagnostic is a separate
+    display gap, filed as issue #3959: the CLR fallback renderer spells a
+    rank-1 array in C# suffix form while rank ≥ 2 already uses G#'s prefix
+    form.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives
