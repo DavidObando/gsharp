@@ -11,7 +11,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Bound call expression.
 /// </summary>
-public sealed class BoundImportedCallExpression : BoundExpression
+public sealed class BoundImportedCallExpression : BoundCallOperationExpression
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundImportedCallExpression"/> class.
@@ -53,6 +53,9 @@ public sealed class BoundImportedCallExpression : BoundExpression
     public override BoundNodeKind Kind => BoundNodeKind.ImportedCallExpression;
 
     /// <inheritdoc/>
+    public override Symbol CalledFunction => Function;
+
+    /// <inheritdoc/>
     public override TypeSymbol Type { get; }
 
     /// <summary>
@@ -63,7 +66,7 @@ public sealed class BoundImportedCallExpression : BoundExpression
     /// <summary>
     /// Gets the provided arguments.
     /// </summary>
-    public ImmutableArray<BoundExpression> Arguments { get; }
+    public override ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>
     /// Gets the per-argument ref-kind annotations. May be default (all-None).

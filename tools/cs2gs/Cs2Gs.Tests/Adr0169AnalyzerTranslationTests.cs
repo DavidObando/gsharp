@@ -241,10 +241,20 @@ public sealed class BinaryComparisonAnalyzer : DiagnosticAnalyzer
 ");
 
         Assert.Contains("RegisterBoundNodeAction", printed, StringComparison.Ordinal);
+
+        // Issue #3920: the registration names EVERY bound-node kind the Roslyn
+        // operation reaches, and the handler casts to the shared base — an
+        // `==` over imported operands is a ClrBinaryOperatorExpression, so
+        // naming BinaryExpression alone dispatched the rule zero times over
+        // exactly the code it exists for.
         Assert.Contains("BoundNodeKind.BinaryExpression", printed, StringComparison.Ordinal);
-        Assert.Contains("BoundBinaryExpression", printed, StringComparison.Ordinal);
-        Assert.Contains(".Op.Kind", printed, StringComparison.Ordinal);
-        Assert.Contains("BoundBinaryOperatorKind.Equals", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundNodeKind.ClrBinaryOperatorExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("cast[BoundBinaryOperationExpression]", printed, StringComparison.Ordinal);
+
+        // `Op` lives only on BoundBinaryExpression; the base normalizes both
+        // provenances onto BinaryOperatorKind.
+        Assert.DoesNotContain(".Op.Kind", printed, StringComparison.Ordinal);
+        Assert.Contains(".BinaryOperatorKind != BoundBinaryOperatorKind.Equals", printed, StringComparison.Ordinal);
         Assert.Contains("BoundNodeKind.TypeOfExpression", printed, StringComparison.Ordinal);
         Assert.Contains("BoundConversionExpression", printed, StringComparison.Ordinal);
         Assert.Contains("conversion.Expression", printed, StringComparison.Ordinal);

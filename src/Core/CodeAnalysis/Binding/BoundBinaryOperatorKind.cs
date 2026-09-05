@@ -118,4 +118,13 @@ public enum BoundBinaryOperatorKind
     /// if non-nil, returns it; otherwise evaluates and returns the right.
     /// </summary>
     NullCoalesce,
+
+    /// <summary>
+    /// Not a language-level binary operator. Appended LAST so every existing
+    /// member keeps its ordinal. Reported by
+    /// <see cref="BoundBinaryOperationExpression.BinaryOperatorKind"/> for a
+    /// node whose operator token names no operator in this vocabulary; no
+    /// bound operator ever carries it.
+    /// </summary>
+    Undefined,
 }

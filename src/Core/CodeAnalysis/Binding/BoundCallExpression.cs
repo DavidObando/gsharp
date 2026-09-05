@@ -11,7 +11,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Bound call expression.
 /// </summary>
-public sealed class BoundCallExpression : BoundExpression
+public sealed class BoundCallExpression : BoundCallOperationExpression
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundCallExpression"/> class.
@@ -60,6 +60,9 @@ public sealed class BoundCallExpression : BoundExpression
     public override BoundNodeKind Kind => BoundNodeKind.CallExpression;
 
     /// <inheritdoc/>
+    public override Symbol CalledFunction => Function;
+
+    /// <inheritdoc/>
     public override TypeSymbol Type => ReturnType ?? Function.Type;
 
     /// <summary>
@@ -91,7 +94,7 @@ public sealed class BoundCallExpression : BoundExpression
     /// <summary>
     /// Gets the provided arguments.
     /// </summary>
-    public ImmutableArray<BoundExpression> Arguments { get; }
+    public override ImmutableArray<BoundExpression> Arguments { get; }
 
     /// <summary>Gets the call-site (post-substitution) return type for generic-function calls, or <c>null</c> for non-generic calls. Phase 4.1 / ADR-0020.</summary>
     public TypeSymbol? ReturnType { get; }

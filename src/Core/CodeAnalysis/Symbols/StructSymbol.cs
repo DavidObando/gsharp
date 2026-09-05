@@ -667,7 +667,7 @@ public sealed class StructSymbol : TypeSymbol
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol containingType)
     {
-        ContainingType = containingType;
+        SetContainingTypeCore(containingType);
     }
 
     /// <inheritdoc/>
@@ -1979,7 +1979,7 @@ public sealed class StructSymbol : TypeSymbol
             constructed.SetTypeParameters(definition.TypeParameters);
         }
 
-        constructed.ContainingType = definition.ContainingType;
+        constructed.SetContainingTypeCore(definition.ContainingType);
         return constructed;
     }
 
@@ -2024,7 +2024,7 @@ public sealed class StructSymbol : TypeSymbol
         // own-argument half keeps pairing each original own parameter with its
         // argument no matter when it is first computed.
         constructed.nestedOwnTypeParameters = definition.TypeParameters;
-        constructed.ContainingType = definition.ContainingType;
+        constructed.SetContainingTypeCore(definition.ContainingType);
         return constructed;
     }
 

@@ -79,6 +79,21 @@ member-level** — `BoundNodeKind` values are stable once shipped, but bound-nod
 member shapes may evolve with the language, the same posture Roslyn took with
 early `IOperation`.
 
+**One Roslyn operation is several G# bound nodes (issue #3920).** G# splits a
+construct by PROVENANCE where Roslyn does not: `a == b` binds to
+`BoundBinaryExpression` for a built-in operator and to
+`BoundClrBinaryOperatorExpression` when it resolves to an `op_Equality` method,
+and a call binds to `BoundCallExpression`, `BoundImportedCallExpression`, or
+`BoundImportedInstanceCallExpression` by where the callee lives. The split is a
+codegen distinction, so an analyzer must not have to know it: the nodes in each
+family derive from a shared analyzer-facing base —
+`BoundBinaryOperationExpression` (`Left`, `Right`, `BinaryOperatorKind`) and
+`BoundCallOperationExpression` (`CalledFunction`, `Arguments`) — and a rule
+registers every `BoundNodeKind` in the family. Registering one is a rule that
+silently sees a fraction of the program; it is how the migrated GSA0002
+observed none of the reflection-`Type` code it exists to police, since imported
+operands are exactly the ones it cares about.
+
 ### Supporting infrastructure promoted into Core
 
 - `DiagnosticDescriptor` becomes public and Roslyn-shaped

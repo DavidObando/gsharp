@@ -628,4 +628,13 @@ public sealed class FunctionSymbol : Symbol
     {
         Declaration = declaration;
     }
+
+    /// <summary>
+    /// A method knows its own declaring type without being anchored (issue
+    /// #3920): the receiver for an instance method, the owner for a static
+    /// one. A free function has neither and stays null.
+    /// </summary>
+    /// <returns>The declaring type, or null for a free function.</returns>
+    private protected override TypeSymbol? DefaultContainingType()
+        => ReceiverType ?? StaticOwnerType;
 }
