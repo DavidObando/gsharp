@@ -53,7 +53,7 @@ public sealed class BoundImportedCallExpression : BoundCallOperationExpression
     public override BoundNodeKind Kind => BoundNodeKind.ImportedCallExpression;
 
     /// <inheritdoc/>
-    public override Symbol CalledFunction => Function;
+    public override CallableSymbol CalledFunction => Function;
 
     /// <inheritdoc/>
     public override TypeSymbol Type { get; }

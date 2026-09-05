@@ -42,12 +42,14 @@ public abstract class BoundCallOperationExpression : BoundExpression
     /// <summary>
     /// Gets the symbol of the called method — the Roslyn
     /// <c>IInvocationOperation.TargetMethod</c> analogue. Typed as
-    /// <see cref="Symbol"/> because an imported callee is an
-    /// <see cref="ImportedFunctionSymbol"/>, which is not a
-    /// <see cref="FunctionSymbol"/>; <see cref="Symbol.Name"/> and
-    /// <see cref="Symbol.ContainingType"/> are meaningful on both.
+    /// <see cref="CallableSymbol"/>, not bare <see cref="Symbol"/>: an
+    /// imported callee is an <see cref="ImportedFunctionSymbol"/> and a
+    /// same-compilation one a <see cref="FunctionSymbol"/>, and the shared
+    /// base carries the members the Roslyn call-site surface maps onto
+    /// (<c>Type</c> for <c>ReturnType</c>, <c>OverriddenMethod</c>) so
+    /// widening the node side does not narrow the symbol side.
     /// </summary>
-    public abstract Symbol CalledFunction { get; }
+    public abstract CallableSymbol CalledFunction { get; }
 
     /// <summary>Gets the arguments, in source order.</summary>
     public abstract ImmutableArray<BoundExpression> Arguments { get; }

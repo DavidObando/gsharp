@@ -92,7 +92,7 @@ public sealed class BoundImportedInstanceCallExpression : BoundCallOperationExpr
     /// demand from <see cref="Method"/>: this node stores the reflected
     /// method rather than a symbol, and only the analyzer surface needs one.
     /// </summary>
-    public override Symbol CalledFunction
+    public override CallableSymbol CalledFunction
         => calledFunction ??= new ImportedFunctionSymbol(
             Method.Name,
             new ImportedClassSymbol(Method.DeclaringType ?? typeof(object), declaration: null),

@@ -637,6 +637,8 @@ public sealed partial class CSharpToGSharpTranslator
             result = null;
             var arguments = new List<GExpression>();
             var expanded = false;
+            var unexpandable = false;
+            var first = true;
             foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
             {
                 if (argument.Expression is MemberAccessExpressionSyntax kindAccess
@@ -645,6 +647,7 @@ public sealed partial class CSharpToGSharpTranslator
                     && RoslynAnalyzerApiMap.TryMapOperationKindDispatch(kindField.Name, out string[] boundNodeKinds))
                 {
                     expanded = true;
+                    first = false;
                     foreach (string boundNodeKind in boundNodeKinds)
                     {
                         arguments.Add(new MemberAccessExpression(
@@ -654,7 +657,46 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                // Every argument after the handler names operation kinds. One
+                // that names them INDIRECTLY — a local, a field, an array or
+                // ImmutableArray creation — cannot be fanned out here, and
+                // letting it fall through to the one-to-one enum rename would
+                // emit a registration that binds, runs, and is dispatched zero
+                // times over imported code. That is precisely the silent
+                // failure #3920 exists to remove, so it is reported as an
+                // unsupported translation instead.
+                //
+                // A DIRECT `OperationKind.X` whose kind simply has no fan-out
+                // row is not that case: the enum rename is the whole answer for
+                // it, and the round-trip binder is already the backstop if the
+                // renamed kind does not exist. Flagging those would trade a
+                // silent wrong answer for a loud wrong one.
+                if (!first
+                    && !IsDirectOperationKindAccess(argument.Expression, this.context)
+                    && NamesOperationKinds(argument.Expression, this.context))
+                {
+                    unexpandable = true;
+                }
+
+                first = false;
                 arguments.Add(this.TranslateExpression(argument.Expression));
+            }
+
+            if (unexpandable)
+            {
+                const string GapNote =
+                    "'RegisterOperationAction' names its operation kinds indirectly, so cs2gs cannot expand them to "
+                    + "the several G# bound-node kinds each Roslyn operation reaches (issue #3920). Spell the kinds "
+                    + "as direct 'OperationKind.X' arguments at the registration call.";
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    GapNote,
+                    invocation.GetLocation(),
+                    TranslationSeverity.Unsupported)
+                {
+                    DiagnosticId = "CS2GS-GAP",
+                });
+                return false;
             }
 
             if (!expanded)
@@ -681,6 +723,50 @@ public sealed partial class CSharpToGSharpTranslator
                     isArrow: false),
                 arguments);
             return true;
+        }
+
+        /// <summary>
+        /// Whether an argument spells one operation kind directly, as
+        /// <c>OperationKind.X</c>.
+        /// </summary>
+        /// <param name="expression">The argument expression.</param>
+        /// <param name="context">The translation context.</param>
+        /// <returns>True for a direct <c>OperationKind</c> member access.</returns>
+        private static bool IsDirectOperationKindAccess(
+            ExpressionSyntax expression, TranslationContext context)
+            => expression is MemberAccessExpressionSyntax
+                && context.GetSymbolInfo(expression).Symbol is IFieldSymbol field
+                && RoslynTypeMetadataName(field.ContainingType) == "Microsoft.CodeAnalysis.OperationKind";
+
+        /// <summary>
+        /// Whether an argument denotes operation kinds at all — one, or a
+        /// sequence of them. Anything else is not this rewrite's business.
+        /// </summary>
+        /// <param name="expression">The argument expression.</param>
+        /// <param name="context">The translation context.</param>
+        /// <returns>True when the argument's type is <c>OperationKind</c> or a sequence of it.</returns>
+        private static bool NamesOperationKinds(
+            ExpressionSyntax expression, TranslationContext context)
+        {
+            ITypeSymbol type = context.GetTypeInfo(expression).Type;
+            if (type is null)
+            {
+                return false;
+            }
+
+            if (RoslynTypeMetadataName(type as INamedTypeSymbol) == "Microsoft.CodeAnalysis.OperationKind")
+            {
+                return true;
+            }
+
+            ITypeSymbol element = type switch
+            {
+                IArrayTypeSymbol array => array.ElementType,
+                INamedTypeSymbol { TypeArguments.Length: 1 } named => named.TypeArguments[0],
+                _ => null,
+            };
+
+            return RoslynTypeMetadataName(element as INamedTypeSymbol) == "Microsoft.CodeAnalysis.OperationKind";
         }
 
         private bool TryTranslateAnalyzerTypeNameSwitch(SwitchExpressionSyntax node, out GExpression result)
