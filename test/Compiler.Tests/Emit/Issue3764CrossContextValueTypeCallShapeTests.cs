@@ -7,11 +7,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.Emit;
 using System.Reflection.Metadata;
-using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
+using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
@@ -44,9 +43,10 @@ namespace GSharp.Compiler.Tests.Emit;
 /// reported success; only ILVerify caught it.
 /// </para>
 /// <para>
-/// These tests pin the <em>emitted call shape</em> and execute the result.
-/// Asserting that the handler merely resolves — which is what #3754's own
-/// fixture asserted — passes on the bug.
+/// Issue #3769 subsequently removed this handler from the emit path entirely:
+/// the resolver fallback remains observable, while interpolation lowers to
+/// target-compatible composite formatting and executes without referencing the
+/// host core library.
 /// </para>
 /// </summary>
 public class Issue3764CrossContextValueTypeCallShapeTests
@@ -58,7 +58,7 @@ public class Issue3764CrossContextValueTypeCallShapeTests
 
         class Formatter {
             func Describe(name string, count int32) string {
-                return "name=${name} count=${count}!"
+                return "name=${name} count=${count,4:D2}!"
             }
         }
         """;
@@ -104,6 +104,8 @@ public class Issue3764CrossContextValueTypeCallShapeTests
         // one, this fixture no longer reproduces #3764 and must be re-aimed
         // rather than silently passing.
         Assert.Equal("System.Private.CoreLib", handler.Assembly.GetName().Name);
+        Assert.True(resolver.IsHostFallback(handler));
+        Assert.False(DefaultInterpolatedStringHandlerShape.TryResolve(resolver, out _, out _));
 
         // Only a value type can be by-ref-like. Both answers must agree.
         Assert.True(ClrTypeUtilities.IsByRefLike(handler));
@@ -111,31 +113,38 @@ public class Issue3764CrossContextValueTypeCallShapeTests
     }
 
     /// <summary>
-    /// The emitted shape. A struct's instance method takes <c>this</c> as a
-    /// managed pointer: the receiver must be loaded by address and the call
-    /// must be a non-virtual <c>call</c>. On the bug every one of these was a
-    /// <c>callvirt</c> over the handler value.
+    /// The resolver can see the host handler, but the emitted target must not.
+    /// The interpolation uses <c>String.Format</c> from the target closure.
     /// </summary>
     [Fact]
-    public void InterpolationAgainstANetStandardTarget_CallsTheHandlerByAddress()
+    public void InterpolationAgainstANetStandardTarget_DoesNotReferenceTheHostHandler()
     {
         using var workspace = new Workspace();
         var probe = workspace.CompileProbe();
 
-        var (calls, loadsAddress) = ReadHandlerCallShape(probe, "Formatter", "Describe");
+        using var stream = File.OpenRead(probe);
+        using var pe = new PEReader(stream);
+        var metadata = pe.GetMetadataReader();
 
-        // Anti-vacuity: the method really did lower onto the handler.
-        Assert.NotEmpty(calls);
-        Assert.All(calls, call => Assert.Equal(OpCodes.Call, call.OpCode));
-        Assert.DoesNotContain(calls, call => call.OpCode == OpCodes.Callvirt);
-        Assert.True(loadsAddress, "the handler local was never loaded by address (ldloca)");
+        Assert.DoesNotContain(
+            metadata.TypeReferences.Select(metadata.GetTypeReference),
+            type => metadata.GetString(type.Name) == HandlerTypeName);
+        var format = Assert.Single(
+            metadata.MemberReferences.Select(metadata.GetMemberReference),
+            member => metadata.GetString(member.Name) == "Format"
+                && member.Parent.Kind == HandleKind.TypeReference
+                && metadata.GetString(metadata.GetTypeReference((TypeReferenceHandle)member.Parent).Name) == "String");
+        var stringType = metadata.GetTypeReference((TypeReferenceHandle)format.Parent);
+        Assert.Equal(HandleKind.AssemblyReference, stringType.ResolutionScope.Kind);
+        Assert.NotEqual(
+            "System.Private.CoreLib",
+            metadata.GetString(metadata.GetAssemblyReference((AssemblyReferenceHandle)stringType.ResolutionScope).Name));
     }
 
     /// <summary>
-    /// Verification and execution, because "it compiled" is exactly the signal
-    /// that failed here. ILVerify rejects the bug's IL
-    /// (<c>CallVirtOnValueType</c>); running it proves the handler is actually
-    /// driven through a managed pointer rather than a reinterpreted value.
+    /// Verification and execution, because "it compiled" was not sufficient to
+    /// catch the original leak. Running proves the target-compatible fallback
+    /// preserves interpolation output.
     /// </summary>
     [Fact]
     public void InterpolationAgainstANetStandardTarget_VerifiesAndRuns()
@@ -155,98 +164,13 @@ public class Issue3764CrossContextValueTypeCallShapeTests
             Assert.NotNull(describe);
 
             Assert.Equal(
-                "name=widget count=7!",
+                "name=widget count=  07!",
                 describe.Invoke(instance, new object[] { "widget", 7 }));
         }
         finally
         {
             context.Unload();
         }
-    }
-
-    /// <summary>
-    /// Returns every call instruction in the named method that targets a
-    /// <c>DefaultInterpolatedStringHandler</c> member, plus whether the body
-    /// ever loads a local's address (the receiver form a struct's instance call
-    /// requires).
-    /// </summary>
-    /// <param name="assemblyPath">The emitted assembly.</param>
-    /// <param name="typeName">The declaring type's simple name.</param>
-    /// <param name="methodName">The method to decode.</param>
-    /// <returns>The handler-targeting call instructions and the address-load flag.</returns>
-    private static (IReadOnlyList<IlInstruction> Calls, bool LoadsAddress) ReadHandlerCallShape(
-        string assemblyPath,
-        string typeName,
-        string methodName)
-    {
-        using var stream = File.OpenRead(assemblyPath);
-        using var pe = new PEReader(stream);
-        var metadata = pe.GetMetadataReader();
-
-        var method = metadata.TypeDefinitions
-            .Select(metadata.GetTypeDefinition)
-            .Where(type => metadata.GetString(type.Name) == typeName)
-            .SelectMany(type => type.GetMethods())
-            .Select(metadata.GetMethodDefinition)
-            .Single(candidate => metadata.GetString(candidate.Name) == methodName);
-
-        var il = pe.GetMethodBody(method.RelativeVirtualAddress).GetILBytes();
-        Assert.NotNull(il);
-
-        var handlerTokens = HandlerMemberTokens(metadata);
-        var instructions = IlInstructionReader.Read(il);
-
-        var calls = instructions
-            .Where(instruction =>
-                (instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt)
-                && instruction.MetadataToken is { } token
-                && handlerTokens.Contains(token))
-            .ToList();
-
-        var loadsAddress = instructions.Any(instruction =>
-            instruction.OpCode == OpCodes.Ldloca || instruction.OpCode == OpCodes.Ldloca_S);
-
-        return (calls, loadsAddress);
-    }
-
-    /// <summary>
-    /// The metadata tokens of every member reference (and generic
-    /// instantiation of one) whose parent type is the interpolated-string
-    /// handler.
-    /// </summary>
-    /// <param name="metadata">The emitted assembly's metadata.</param>
-    /// <returns>The handler member tokens.</returns>
-    private static HashSet<int> HandlerMemberTokens(MetadataReader metadata)
-    {
-        var tokens = new HashSet<int>();
-
-        foreach (var handle in metadata.MemberReferences)
-        {
-            var member = metadata.GetMemberReference(handle);
-            if (member.Parent.Kind != HandleKind.TypeReference)
-            {
-                continue;
-            }
-
-            var parent = metadata.GetTypeReference((TypeReferenceHandle)member.Parent);
-            if (metadata.GetString(parent.Name) == HandlerTypeName)
-            {
-                tokens.Add(MetadataTokens.GetToken(handle));
-            }
-        }
-
-        var methodSpecCount = metadata.GetTableRowCount(TableIndex.MethodSpec);
-        for (var row = 1; row <= methodSpecCount; row++)
-        {
-            var handle = MetadataTokens.MethodSpecificationHandle(row);
-            var parent = metadata.GetMethodSpecification(handle).Method;
-            if (tokens.Contains(MetadataTokens.GetToken(parent)))
-            {
-                tokens.Add(MetadataTokens.GetToken(handle));
-            }
-        }
-
-        return tokens;
     }
 
     /// <summary>

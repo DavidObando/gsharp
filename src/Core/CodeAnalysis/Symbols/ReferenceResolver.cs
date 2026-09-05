@@ -65,6 +65,7 @@ public sealed class ReferenceResolver : IDisposable
     private readonly MetadataLoadContext? metadataContext;
     private readonly AssemblyLoadContext? runtimeContext;
     private readonly ImmutableArray<string> missingTransitiveReferences;
+    private readonly ImmutableHashSet<string> hostFallbackAssemblyNames;
 
     // Process-wide registry of original on-disk paths for assemblies loaded
     // via LoadFromByteArray (whose Assembly.Location is empty). Populated by
@@ -179,12 +180,15 @@ public sealed class ReferenceResolver : IDisposable
         MetadataLoadContext? metadataContext,
         ImmutableArray<string> missingTransitiveReferences,
         AssemblyLoadContext? runtimeContext = null,
-        Lazy<Dictionary<string, Type>>? typeNameIndex = null)
+        Lazy<Dictionary<string, Type>>? typeNameIndex = null,
+        ImmutableHashSet<string>? hostFallbackAssemblyNames = null)
     {
         this.assemblies = assemblies;
         this.metadataContext = metadataContext;
         this.runtimeContext = runtimeContext;
         this.missingTransitiveReferences = missingTransitiveReferences;
+        this.hostFallbackAssemblyNames = hostFallbackAssemblyNames
+            ?? ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
         this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies);
         this.emittedTypeNameIndex = new Lazy<Dictionary<string, string>>(
             () => BuildEmittedTypeNameIndex(
@@ -691,7 +695,14 @@ public sealed class ReferenceResolver : IDisposable
         var loaded = builder.ToImmutable();
         var missing = ComputeMissingTransitiveReferences(loaded, mlc, resolver);
 
-        return new ReferenceResolver(loaded, mlc, missing);
+        return new ReferenceResolver(
+            loaded,
+            mlc,
+            missing,
+            hostFallbackAssemblyNames: fallbackHostPaths
+                .Select(Path.GetFileNameWithoutExtension)
+                .OfType<string>()
+                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -815,6 +826,20 @@ public sealed class ReferenceResolver : IDisposable
 
         type = resolved;
         return true;
+    }
+
+    /// <summary>
+    /// Returns whether <paramref name="type"/> was resolved from the host
+    /// runtime assemblies that <see cref="WithReferences"/> appends as a
+    /// transitive-dependency fallback rather than from the supplied target
+    /// reference set.
+    /// </summary>
+    /// <param name="type">The resolved type to classify.</param>
+    /// <returns><see langword="true"/> when the type came from the host fallback.</returns>
+    public bool IsHostFallback(Type type)
+    {
+        var assemblyName = type.Assembly.GetName().Name;
+        return assemblyName != null && this.hostFallbackAssemblyNames.Contains(assemblyName);
     }
 
     /// <summary>

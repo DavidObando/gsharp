@@ -355,10 +355,9 @@ public class Compilation
             References ?? Symbols.ReferenceResolver.Default());
 
         // Issue #3730: the lowering above resolves the handler surface from the
-        // compilation's reference closure and reports GS0545 when the target
-        // framework does not provide it. That is a hard stop — continuing would
-        // emit calls the target's runtime cannot resolve — and the trailing
-        // result path filters errors out of `allWarnings`, so gate explicitly.
+        // compilation's reference closure. Keep its targeted GS0545 safety gate
+        // for an unusable resolved handler shape; a missing handler now takes
+        // #3769's target-compatible String.Format fallback.
         // Deliberately scoped to GS0545: GS0519's surfacing is long-established
         // and tested, and widening this to "any error" would change it.
         if (program.Diagnostics.Any(d => d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id))
@@ -505,10 +504,9 @@ public class Compilation
             References ?? Symbols.ReferenceResolver.Default());
 
         // Issue #3730: the lowering above resolves the handler surface from the
-        // compilation's reference closure and reports GS0545 when the target
-        // framework does not provide it. That is a hard stop — continuing would
-        // emit calls the target's runtime cannot resolve — and the trailing
-        // result path filters errors out of `allWarnings`, so gate explicitly.
+        // compilation's reference closure. Keep its targeted GS0545 safety gate
+        // for an unusable resolved handler shape; a missing handler now takes
+        // #3769's target-compatible String.Format fallback.
         // Deliberately scoped to GS0545: GS0519's surfacing is long-established
         // and tested, and widening this to "any error" would change it.
         if (program.Diagnostics.Any(d => d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id))
