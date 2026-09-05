@@ -461,6 +461,41 @@ internal sealed partial class OverloadResolver
                 && variadicElement != TypeSymbol.Error
                 ? variadicElement
                 : null;
+
+            // Issue #3880: a single trailing argument that already IS the
+            // variadic carrier (`F(existingArray)` against `F(xs ...string)`)
+            // binds the candidate in NORMAL form, not expanded form — the same
+            // pass-through the applicability filter recognises via
+            // IsVariadicCarrierPassThrough. Ranking used to classify it as an
+            // expanded tail slot against the ELEMENT type, which both mis-rates
+            // the conversion (`[]string -> string`) and leaves ParamTypes[i]
+            // null, so the Reference "better conversion target" tie-break could
+            // not run and two variadic siblings
+            // (`F(xs ...string)` / `F(refs IReadOnlyList[string]?, xs ...string)`)
+            // tied and reported a spurious GS0266 where C# picks the first.
+            // The carrier must be CLOSED before it is compared to the argument.
+            // A generic variadic candidate (`func Take[T](values ...T)`) whose
+            // inference already ran declares the carrier as the open `[]T`;
+            // ranking `[]string` against `[]T` classifies an identity as a
+            // reference conversion and hands the call to a fixed
+            // `IEnumerable[string]` sibling that C# does not choose. The
+            // non-tail slots below already substitute through candSubstitution
+            // for exactly this reason.
+            var variadicCarrierType = isVariadic
+                ? cand.Parameters[cand.Parameters.Length - 1].Type
+                : null;
+            if (variadicCarrierType != null && candSubstitution != null)
+            {
+                variadicCarrierType = Binder.SubstituteType(variadicCarrierType, candSubstitution);
+            }
+
+            var bindsCarrierInNormalForm = isVariadic
+                && !HasNamedArguments(argumentNames)
+                && argumentCount - paramCountForScore == 1
+                && paramCountForScore < boundArguments.Count
+                && boundArguments[paramCountForScore]?.Type is { } carrierPassThroughArgType
+                && variadicCarrierType != null
+                && IsVariadicCarrierPassThrough(carrierPassThroughArgType, variadicCarrierType);
             for (var i = 0; i < boundArguments.Count; i++)
             {
                 var slot = MapArgumentIndexToParameterSlot(cand, argumentNames, i, parameterOffset, paramLen);
@@ -486,8 +521,21 @@ internal sealed partial class OverloadResolver
                     // one purely because its tail was compared favourably.
                     // Between two variadic candidates (both expanded), the
                     // element-type kind still decides genuine betterness.
-                    isTailSlot[i] = true;
                     var tailArgType = boundArguments[i]?.Type;
+                    if (bindsCarrierInNormalForm)
+                    {
+                        // Normal form (issue #3880): rank against the carrier
+                        // itself, in a normal-form slot, so an exact `[]string`
+                        // beats a sibling's `IReadOnlyList[string]?` widening.
+                        var normalFormCarrier = Invariant.Required(
+                            variadicCarrierType,
+                            "a carrier pass-through candidate has a variadic carrier parameter");
+                        paramTypes[i] = normalFormCarrier;
+                        kinds[i] = ClassifyUserArgumentConversionKind(tailArgType, normalFormCarrier);
+                        continue;
+                    }
+
+                    isTailSlot[i] = true;
                     kinds[i] = elementType == null
                         ? ClrOverloadResolution.ImplicitConversionKind.Identity
                         : ClassifyUserArgumentConversionKind(tailArgType, elementType);
