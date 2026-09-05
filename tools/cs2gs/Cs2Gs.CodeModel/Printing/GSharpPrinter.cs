@@ -971,16 +971,27 @@ public static class GSharpPrinter
                 // its original line structure, instead of collapsing into an
                 // escaped one-liner — the source of most >300-char emitted
                 // lines. Backtick strings process no escapes and normalize
-                // CR at lexing, so values containing a backtick or CR keep
-                // the escaped form; trivially short values do too.
+                // CR at lexing, so values containing CR keep the escaped
+                // form; trivially short values do too.
                 if (literal.Value.IndexOf('\n') >= 0
-                    && literal.Value.IndexOf('`') < 0
                     && literal.Value.IndexOf('\r') < 0
                     && HasOnlyRawStringSafeCharacters(literal.Value)
                     && (literal.Value.Length > 120
                         || literal.Value.IndexOf('\n') != literal.Value.LastIndexOf('\n')))
                 {
-                    return $"`{literal.Value}`";
+                    if (literal.Value.IndexOf('`') < 0)
+                    {
+                        return $"`{literal.Value}`";
+                    }
+
+                    // ADR-0179 phase 9b: a backtick raw string has no escape,
+                    // so a value that CONTAINS one is unspellable as a single
+                    // raw string. Go's answer is concatenation, and so is
+                    // this one.
+                    if (RenderBacktickBearingRawString(literal.Value) is { } spliced)
+                    {
+                        return spliced;
+                    }
                 }
 
                 return $"\"{RenderStringLiteralBody(literal.Value)}\"";
@@ -991,6 +1002,89 @@ public static class GSharpPrinter
             default:
                 return literal.Value;
         }
+    }
+
+    /// <summary>
+    /// ADR-0179 phase 9b: spells a multi-line value that contains a backtick
+    /// as a parenthesized concatenation of raw-string runs and quoted
+    /// backtick runs — <c>(`a` + "`" + `b`)</c> — the shape Go uses for the
+    /// same hole in its own raw strings.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The value is split into maximal runs of backtick and non-backtick
+    /// characters. Every non-backtick run is raw-safe by construction (the
+    /// caller has already excluded CR and control characters), so it keeps
+    /// its line structure inside backticks; every backtick run goes into an
+    /// ordinary double-quoted string, where a backtick is not special. The
+    /// concatenation is therefore character-for-character the original value
+    /// — no escape sequence is introduced or removed on either side.
+    /// </para>
+    /// <para>
+    /// The parentheses are load-bearing: a bare <c>a + b</c> substituted where
+    /// a literal was expected would re-associate under a surrounding operator
+    /// and would bind <c>.Length</c> to the last fragment instead of the whole
+    /// string.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="null"/> when the splice does not actually help.
+    /// A value that is mostly backticks fragments into many short pieces whose
+    /// longest line beats nothing, and the escaped one-liner is then both
+    /// shorter and simpler; the decision is made by measuring, not assumed.
+    /// </para>
+    /// </remarks>
+    private static string RenderBacktickBearingRawString(string value)
+    {
+        var parts = new List<string>();
+        int index = 0;
+        while (index < value.Length)
+        {
+            bool isBacktickRun = value[index] == '`';
+            int end = index;
+            while (end < value.Length && (value[end] == '`') == isBacktickRun)
+            {
+                end++;
+            }
+
+            string run = value.Substring(index, end - index);
+            parts.Add(isBacktickRun
+                ? $"\"{RenderStringLiteralBody(run)}\""
+                : $"`{run}`");
+            index = end;
+        }
+
+        string spliced = $"({string.Join(" + ", parts)})";
+        int escapedWidth = RenderStringLiteralBody(value).Length + 2;
+
+        // Two conditions, and the second is the one that matters. Reducing the
+        // longest line is the point; but a value that is MOSTLY backticks
+        // shreds into hundreds of two-character fragments whose lines are all
+        // short and whose total text is many times the escaped form. That
+        // trades one long line for a wall of `+` and is not an improvement, so
+        // the splice also has to stay within twice the escaped width.
+        return LongestLineLength(spliced) < escapedWidth && spliced.Length <= (2 * escapedWidth)
+            ? spliced
+            : null;
+    }
+
+    private static int LongestLineLength(string text)
+    {
+        int longest = 0;
+        int start = 0;
+        while (start <= text.Length)
+        {
+            int newline = text.IndexOf('\n', start);
+            int end = newline < 0 ? text.Length : newline;
+            longest = Math.Max(longest, end - start);
+            if (newline < 0)
+            {
+                break;
+            }
+
+            start = newline + 1;
+        }
+
+        return longest;
     }
 
     // Raw backtick strings carry their characters verbatim, so a control
