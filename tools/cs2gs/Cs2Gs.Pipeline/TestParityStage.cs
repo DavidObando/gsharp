@@ -309,6 +309,23 @@ public sealed class TestParityStage : IMigrationStage
         // after the emitter when the real signal is a runtime failure, and
         // discards the per-test outcomes.
         string output = result.Output ?? "dotnet test failed without output.";
+
+        // Issue #3931: a run KILLED on the wall-clock budget is a third
+        // outcome, and it looked exactly like the first — no summary line, so
+        // `CompletedTestRun` is false and it was filed as a build failure.
+        // That made a hang indistinguishable from a translator regression, and
+        // (worse) let the truncated `[FAIL]` list be read as a parity count
+        // when it is only "the failures that happened before the kill". Name
+        // the timeout for what it is, ahead of both other classifications.
+        if (result.TimedOut)
+        {
+            return StageOutcome.Failed(new[]
+            {
+                context.Triage.TestParityLibraryTestRunTimedOut(
+                    SdkCompileRunner.MirroredTestRunTimeout, output, EmittedGsRelative(context)),
+            });
+        }
+
         if (!CompletedTestRun(output))
         {
             return StageOutcome.Failed(new[]
