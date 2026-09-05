@@ -2737,10 +2737,28 @@ internal sealed partial class ExpressionBinder
         // Issue #311: resolve an explicit `[T1, T2]` type-argument list (e.g.
         // `Array.Empty[string]()`) into mapped CLR types up front so every
         // generic-method dispatch path below can close the candidate.
+        var typeArgMark = Diagnostics.Count;
         if (!TryResolveExplicitMethodTypeArgs(ce.TypeArgumentList, out var explicitTypeArgs, out var typeArgSymbols))
         {
-            Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
-            return new BoundErrorExpression(null);
+            // Issue #3880: `receiver.Member[i](args)` is committed to a generic
+            // call site by ADR-0020's follow-set rule, so `i` is resolved here
+            // as a TYPE and the call dies with "type 'i' doesn't exist" before
+            // the indexer-then-invoke reading is ever considered. Recover only
+            // where that reading is actually available — the bracket holds a
+            // bare identifier and the receiver really has a VALUE member of
+            // this name — so a genuine unresolvable type argument on a generic
+            // method still reports its own diagnostic.
+            if (!IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList)
+                || receiver?.Type is not { } receiverType
+                || !HasCallableIndexableValueMember(receiverType, methodName))
+            {
+                Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
+                return new BoundErrorExpression(null);
+            }
+
+            Diagnostics.TruncateTo(typeArgMark);
+            explicitTypeArgs = null;
+            typeArgSymbols = default;
         }
 
         var boundArguments = ImmutableArray.CreateBuilder<BoundExpression>();

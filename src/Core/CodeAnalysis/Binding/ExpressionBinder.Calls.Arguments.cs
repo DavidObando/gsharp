@@ -672,6 +672,23 @@ internal sealed partial class ExpressionBinder
 
         if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType))
         {
+            // Issue #3880: ADR-0020 commits `X.Member[i](args)` to a GENERIC
+            // call site — a single bracketed simple name scans as a type clause
+            // and `(` is in the follow-set — and indexer-then-invoke was never
+            // reconsidered afterwards. A dictionary of factories
+            // (`GNodeSamples.All[type]()`) therefore reported GS0158 on the
+            // member, while the identical `let f = GNodeSamples.All[type]`
+            // followed by `f()` bound fine: the `.` follow-set already got this
+            // treatment for the single-argument shape in issue #942, the `(`
+            // follow-set did not. The parser cannot decide this — `Map[int](xs)`
+            // is a real generic instantiation with the same token shape — so
+            // the binder decides it, and only where the generic reading has
+            // already failed: the member is not itself callable.
+            if (TryBindIndexedCallableMemberInvocation(ce, memberLoad, arguments, out result))
+            {
+                return true;
+            }
+
             return false;
         }
 
@@ -769,6 +786,136 @@ internal sealed partial class ExpressionBinder
             memberLoad,
             callableType,
             functionType,
+            convertedArgs.MoveToImmutable());
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3880: whether a bracketed list is the one shape where the
+    /// ADR-0020 generic-call-site commitment is genuinely ambiguous with an
+    /// indexer — a single bare identifier. Everything a type clause can spell
+    /// that an index expression cannot (<c>T?</c>, <c>[]T</c>, <c>List[T]</c>,
+    /// a qualified name, a tuple, a function type) stays unambiguously a type
+    /// argument.
+    /// </summary>
+    /// <param name="typeArgumentList">The bracketed list from the call site.</param>
+    /// <returns><see langword="true"/> when the bracket could equally be an index.</returns>
+    private static bool IsAmbiguousSingleIdentifierTypeArgument(TypeArgumentListSyntax? typeArgumentList)
+    {
+        if (typeArgumentList is not { } bracketed || bracketed.Arguments.Count != 1)
+        {
+            return false;
+        }
+
+        var item = bracketed.Arguments[0];
+        return item.Identifier != null
+            && !item.HasQualifier
+            && !item.IsArray
+            && !item.IsNullable
+            && !item.IsTuple
+            && item.FuncKeyword == null
+            && item.TypeArguments is not { Count: > 0 };
+    }
+
+    /// <summary>
+    /// Issue #3880: whether <paramref name="receiverType"/> has a readable
+    /// VALUE member (field or property) named <paramref name="memberName"/> —
+    /// the precondition for reading <c>receiver.Member[i](args)</c> as
+    /// indexer-then-invoke rather than as a generic method call.
+    /// </summary>
+    /// <param name="receiverType">The receiver's type.</param>
+    /// <param name="memberName">The member name at the call site.</param>
+    /// <returns><see langword="true"/> when such a member exists.</returns>
+    private static bool HasCallableIndexableValueMember(TypeSymbol receiverType, string memberName)
+    {
+        if (receiverType is StructSymbol structSymbol)
+        {
+            for (StructSymbol? current = structSymbol; current != null; current = current.BaseClass)
+            {
+                if (current.TryGetField(memberName, out _))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return TypeMemberModel.TryGetPropertyWithOwner(receiverType, memberName, out var property, out _)
+            && property is { HasGetter: true };
+    }
+
+    /// <summary>
+    /// Issue #3880: the indexer-then-invoke reading of <c>X.Member[i](args)</c>,
+    /// attempted only after the generic-method reading the parser committed to
+    /// has already failed and the member itself turned out not to be callable.
+    /// <para>
+    /// Deliberately narrow. The bracketed item must be a bare identifier — the
+    /// only shape that is genuinely ambiguous, because anything a type clause
+    /// can spell but an index expression cannot (<c>T?</c>, <c>[]T</c>,
+    /// <c>List[T]</c>, a qualified name) is unambiguously a type argument, and
+    /// anything an index expression can spell but a type clause cannot
+    /// (<c>All[0]()</c>, <c>All["k"]()</c>) never reached the generic reading
+    /// in the first place. The index bind is speculative: its diagnostics are
+    /// rolled back on failure so a genuine "no such generic method" still
+    /// reports the generic-reading diagnostic the caller would have produced.
+    /// </para>
+    /// </summary>
+    private bool TryBindIndexedCallableMemberInvocation(
+        CallExpressionSyntax ce,
+        BoundExpression memberLoad,
+        ImmutableArray<BoundExpression> arguments,
+        [NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+
+        if (ce.NullableQuestionToken != null
+            || !IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList)
+            || Invariant.Required(ce.TypeArgumentList, "an ambiguous bracket has a type-argument list").Arguments[0].Identifier
+                is not { } indexIdentifier)
+        {
+            return false;
+        }
+
+        var mark = Diagnostics.Count;
+        var indexed = BindIndexAgainstTarget(
+            memberLoad,
+            new NameExpressionSyntax(ce.SyntaxTree, indexIdentifier),
+            ce.Identifier.Location);
+
+        if (indexed is BoundErrorExpression
+            || Diagnostics.Count != mark
+            || indexed.Type == null
+            || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexed.Type, out var indexedFunctionType)
+            || indexedFunctionType.ParameterTypes.Length != arguments.Length)
+        {
+            Diagnostics.TruncateTo(mark);
+            return false;
+        }
+
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+            var argument = arguments[i];
+            if (argument is BoundErrorExpression { Syntax: LambdaExpressionSyntax lambda }
+                && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(indexedFunctionType.ParameterTypes[i], out var lambdaTarget))
+            {
+                argument = lambdas.BindLambdaExpression(lambda, lambdaTarget);
+            }
+
+            convertedArgs.Add(conversions.BindConversion(argLoc, argument, indexedFunctionType.ParameterTypes[i]));
+        }
+
+        if (Diagnostics.Count != mark)
+        {
+            Diagnostics.TruncateTo(mark);
+            return false;
+        }
+
+        result = BuildDelegateMemberInvocation(
+            ce,
+            indexed,
+            indexed.Type,
+            indexedFunctionType,
             convertedArgs.MoveToImmutable());
         return true;
     }
