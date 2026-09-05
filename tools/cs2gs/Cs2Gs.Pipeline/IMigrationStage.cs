@@ -163,6 +163,11 @@ public sealed class StageExecutionContext
     public bool IsAnalyzerProject { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the analyzer detector classified the app as a test project.
+    /// </summary>
+    public bool IsAnalyzerTestProject { get; set; }
+
+    /// <summary>
     /// Gets the source project's declared build/dev-only <c>PackageReference</c>s
     /// (issue #2267) — e.g. a version-bumped <c>Nerdbank.GitVersioning</c> — that
     /// must be re-declared into the isolated <c>--via-sdk</c> gsproj because they

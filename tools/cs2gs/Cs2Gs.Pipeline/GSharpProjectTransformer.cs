@@ -41,12 +41,16 @@ internal static class GSharpProjectTransformer
     /// <param name="generatedProjectPaths">
     /// Canonical source-project paths mapped to their generated project paths.
     /// </param>
+    /// <param name="isAnalyzerTestProject">
+    /// The translate-stage detector's analyzer-test-project verdict.
+    /// </param>
     /// <returns>The transformed project document.</returns>
     internal static XDocument Transform(
         string sourceProjectPath,
         string destinationProjectDirectory,
         string gsharpSdk,
-        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        bool isAnalyzerTestProject = false)
     {
         if (sourceProjectPath is null)
         {
@@ -77,11 +81,6 @@ internal static class GSharpProjectTransformer
         string sourceProjectDirectory = Path.GetDirectoryName(Path.GetFullPath(sourceProjectPath));
         string fullDestinationDirectory = Path.GetFullPath(destinationProjectDirectory);
 
-        // ADR-0169 M5 / issue #3686: read while the ProjectReference includes
-        // still point at the SOURCE .csproj files — RewriteProjectReferences
-        // below repoints them at the generated .gsproj paths.
-        bool referencesAnalyzerProject = ReferencesAnAnalyzerProject(document, sourceProjectDirectory);
-
         RewriteProjectReferences(
             document,
             sourceProjectDirectory,
@@ -96,7 +95,7 @@ internal static class GSharpProjectTransformer
         RewriteOutputType(document);
         RewriteCompileItems(document);
         RewriteCSharpMetadata(document);
-        RewriteAnalyzerProject(document, referencesAnalyzerProject);
+        RewriteAnalyzerProject(document, isAnalyzerTestProject);
         RewriteAnalyzerConsumerReferences(document);
 
         return document;
@@ -480,18 +479,15 @@ internal static class GSharpProjectTransformer
     // netstandard2.0 does not exist for G#), drops the Roslyn compiler
     // packages and Roslyn-analyzer-authoring properties, and references the
     // G# analyzer API assembly loaded by the compiler host.
-    private static void RewriteAnalyzerProject(XDocument document, bool referencesAnalyzerProject)
+    private static void RewriteAnalyzerProject(XDocument document, bool isAnalyzerTestProject)
     {
         bool isAnalyzerProject = IsAnalyzerProjectXml(document);
 
         // ADR-0169 M5 / issue #3686: the analyzer's TEST project gets the same
         // treatment — it too translates in analyzer-API mode, so its Roslyn
         // packages are gone and it binds the G# analyzer API plus the verifier.
-        // It is recognized structurally: it project-references an analyzer
-        // project. (The translator's own detector is semantic; the transformer
-        // has no compilation, which is why the two live apart — see
-        // docs/cs2gs-analyzer-translation.md §Detection.)
-        bool isAnalyzerTestProject = !isAnalyzerProject && referencesAnalyzerProject;
+        // Issue #3791: consume the semantic detector's verdict rather than
+        // re-deriving test-project status from a ProjectReference.
         if (!isAnalyzerProject && !isAnalyzerTestProject)
         {
             return;
@@ -576,56 +572,6 @@ internal static class GSharpProjectTransformer
                     AttributeNamed(reference, "PrivateAssets")?.Value?.Trim(),
                     "all",
                     StringComparison.OrdinalIgnoreCase));
-
-    // MSBuild item metadata may be written as an attribute or a child element;
-    // read either.
-    private static string Metadata(XElement item, string name)
-        => AttributeNamed(item, name)?.Value?.Trim()
-            ?? item.Elements().FirstOrDefault(child =>
-                string.Equals(child.Name.LocalName, name, StringComparison.OrdinalIgnoreCase))?.Value?.Trim();
-
-    private static bool ReferencesAnAnalyzerProject(XDocument document, string sourceProjectDirectory)
-    {
-        if (string.IsNullOrEmpty(sourceProjectDirectory))
-        {
-            return false;
-        }
-
-        foreach (XElement reference in ElementsNamed(document, "ProjectReference"))
-        {
-            string include = AttributeNamed(reference, "Include")?.Value;
-            if (string.IsNullOrWhiteSpace(include))
-            {
-                continue;
-            }
-
-            // An analyzer's CONSUMER (src/Core: OutputItemType="Analyzer",
-            // ReferenceOutputAssembly="false") references the analyzer to RUN
-            // it, not to compile against it — it is ordinary C# and must keep
-            // its own Roslyn packages. Only a reference that pulls the
-            // analyzer's assembly in as a library marks a test project.
-            if (string.Equals(Metadata(reference, "OutputItemType"), "Analyzer", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(Metadata(reference, "ReferenceOutputAssembly"), "false", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            string referencedPath = Path.GetFullPath(Path.Combine(
-                sourceProjectDirectory,
-                include.Trim().Replace('\\', Path.DirectorySeparatorChar)));
-            if (!File.Exists(referencedPath))
-            {
-                continue;
-            }
-
-            if (IsAnalyzerProjectXml(XDocument.Parse(File.ReadAllText(referencedPath))))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     // ADR-0169: retain analyzer project references while changing Roslyn's
     // analyzer item type to the G# SDK item type.

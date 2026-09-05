@@ -131,6 +131,9 @@ public sealed class PipelineOptions
     /// <summary>Gets or sets source projects loaded once for repository-wide analysis.</summary>
     internal IReadOnlyDictionary<string, LoadedCSharpProject> RepositoryLoadedProjects { get; set; }
 
+    /// <summary>Gets or sets the pinned SDK moniker used by repository project transforms.</summary>
+    internal string RepositorySdkMoniker { get; set; }
+
     /// <summary>Gets or sets extra G# files required when one C# file declares multiple namespaces.</summary>
     internal ISet<string> RepositoryAdditionalFiles { get; set; }
 

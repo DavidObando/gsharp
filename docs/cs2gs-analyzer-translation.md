@@ -206,12 +206,10 @@ Detection is per project on both halves: `AnalyzerProjectDetector` gained
 `IsAnalyzerTestProject` — a project that **declares an analyzer test harness**
 (`IsAnalyzerTestHarnessEntry`: a static method taking a `DiagnosticAnalyzer` and
 a source `string`) **and** instantiates an analyzer declared in a referenced,
-non-Roslyn assembly — and `GSharpProjectTransformer` recognizes the
-structural counterpart (a `ProjectReference` to an analyzer project that is not
-an `OutputItemType="Analyzer"` consumer reference) to inject the two assemblies
-the migrated tests bind — `GSharp.Core` and the verifier — both copied to the
-test output, because a test assembly is loaded by the test host rather than by
-gsc.
+non-Roslyn assembly. The pipeline passes that verdict to
+`GSharpProjectTransformer`, which uses it to inject the two assemblies the
+migrated tests bind — `GSharp.Core` and the verifier — both copied to the test
+output, because a test assembly is loaded by the test host rather than by gsc.
 
 Why the harness, and not instantiation alone (issue #3789): analyzer mode maps
 a project's **whole** `Microsoft.CodeAnalysis` surface, so it may only claim a

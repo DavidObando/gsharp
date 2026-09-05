@@ -57,19 +57,26 @@ public sealed class ValidationManifest
     [JsonPropertyOrder(3)]
     public bool IsAnalyzerProject { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether the analyzer detector classified the app as a test project.
+    /// </summary>
+    [JsonPropertyName("isAnalyzerTestProject")]
+    [JsonPropertyOrder(4)]
+    public bool IsAnalyzerTestProject { get; set; }
+
     /// <summary>Gets or sets the source project's root namespace.</summary>
     [JsonPropertyName("rootNamespace")]
-    [JsonPropertyOrder(4)]
+    [JsonPropertyOrder(5)]
     public string RootNamespace { get; set; }
 
     /// <summary>Gets or sets the source project's assembly name.</summary>
     [JsonPropertyName("assemblyName")]
-    [JsonPropertyOrder(5)]
+    [JsonPropertyOrder(6)]
     public string AssemblyName { get; set; }
 
     /// <summary>Gets or sets the friend assemblies contributed by generated sources.</summary>
     [JsonPropertyName("generatedFriendAssemblies")]
-    [JsonPropertyOrder(6)]
+    [JsonPropertyOrder(7)]
     public List<string> GeneratedFriendAssemblies { get; set; } = new List<string>();
 
     /// <summary>
@@ -80,12 +87,12 @@ public sealed class ValidationManifest
     /// that a shard cannot see is additive, never load-bearing.
     /// </summary>
     [JsonPropertyName("externalReferences")]
-    [JsonPropertyOrder(7)]
+    [JsonPropertyOrder(8)]
     public List<string> ExternalReferences { get; set; } = new List<string>();
 
     /// <summary>Gets or sets the emitted G# files, relative to the migrated tree root.</summary>
     [JsonPropertyName("emittedFiles")]
-    [JsonPropertyOrder(8)]
+    [JsonPropertyOrder(9)]
     public List<ValidationManifestFile> EmittedFiles { get; set; } = new List<ValidationManifestFile>();
 
     /// <summary>
@@ -112,6 +119,7 @@ public sealed class ValidationManifest
             Translated = translated,
             IsTestProject = context.IsTestProject,
             IsAnalyzerProject = context.IsAnalyzerProject,
+            IsAnalyzerTestProject = context.IsAnalyzerTestProject,
             RootNamespace = context.RootNamespace,
             AssemblyName = context.AssemblyName,
         };
@@ -210,6 +218,7 @@ public sealed class ValidationManifest
         string root = Path.GetFullPath(migratedRoot ?? throw new ArgumentNullException(nameof(migratedRoot)));
         context.IsTestProject = this.IsTestProject;
         context.IsAnalyzerProject = this.IsAnalyzerProject;
+        context.IsAnalyzerTestProject = this.IsAnalyzerTestProject;
         context.RootNamespace = this.RootNamespace;
         context.AssemblyName = this.AssemblyName;
 

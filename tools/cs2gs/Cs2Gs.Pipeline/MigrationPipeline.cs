@@ -204,6 +204,8 @@ public sealed class MigrationPipeline
                     "Could not resolve a local Gsharp.NET.Sdk package for the mirrored projects.");
             }
 
+            this.options.RepositorySdkMoniker = sdkMoniker;
+
             foreach (CorpusApp app in apps)
             {
                 string generatedProjectPath =

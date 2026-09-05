@@ -331,13 +331,31 @@ public sealed class TranslateStage : IMigrationStage
             // pair must translate against the SAME analyzer API — otherwise
             // the migrated tests hand a GSharpDiagnosticAnalyzer to a
             // parameter still typed Microsoft's DiagnosticAnalyzer (GS0154).
-            bool analyzerApiMode = Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
-                .IsAnalyzerProject(currentProject.Compilation)
-                || Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
+            bool isAnalyzerProject = Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
+                .IsAnalyzerProject(currentProject.Compilation);
+            bool isAnalyzerTestProject = !isAnalyzerProject
+                && Cs2Gs.Translator.Analyzers.AnalyzerProjectDetector
                     .IsAnalyzerTestProject(currentProject.Compilation);
+            bool analyzerApiMode = isAnalyzerProject || isAnalyzerTestProject;
             if (!isReferencedProject)
             {
                 context.IsAnalyzerProject = analyzerApiMode;
+                context.IsAnalyzerTestProject = isAnalyzerTestProject;
+                if (context.Options.OutputLayout == MigrationOutputLayout.Repository
+                    && !string.IsNullOrEmpty(context.Options.RepositorySdkMoniker)
+                    && context.Options.GeneratedProjectPaths?.TryGetValue(
+                        Path.GetFullPath(context.App.ProjectPath),
+                        out string generatedProjectPath) == true)
+                {
+                    GSharpProjectTransformer.Transform(
+                        context.App.ProjectPath,
+                        Path.GetDirectoryName(generatedProjectPath),
+                        context.Options.RepositorySdkMoniker,
+                        context.Options.GeneratedProjectPaths,
+                        isAnalyzerTestProject).Save(
+                            generatedProjectPath,
+                            System.Xml.Linq.SaveOptions.DisableFormatting);
+                }
             }
 
             // Issue #3645: an executable another app compiles against keeps its

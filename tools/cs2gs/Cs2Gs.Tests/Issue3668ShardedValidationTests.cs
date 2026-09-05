@@ -66,6 +66,7 @@ public class Issue3668ShardedValidationTests
             new TriageBuilder("run", "ts", "gsc", app.Id));
         context.IsTestProject = true;
         context.IsAnalyzerProject = true;
+        context.IsAnalyzerTestProject = true;
         context.RootNamespace = "Lib";
         context.AssemblyName = "Lib";
         context.GeneratedFriendAssemblies.Add("Lib.Tests");
@@ -96,6 +97,7 @@ public class Issue3668ShardedValidationTests
 
         Assert.True(rehydrated.IsTestProject);
         Assert.True(rehydrated.IsAnalyzerProject);
+        Assert.True(rehydrated.IsAnalyzerTestProject);
         Assert.Equal("Lib", rehydrated.RootNamespace);
         Assert.Equal("Lib", rehydrated.AssemblyName);
         Assert.Equal(new[] { "Lib.Tests" }, rehydrated.GeneratedFriendAssemblies.ToArray());
