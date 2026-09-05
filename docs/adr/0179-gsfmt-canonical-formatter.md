@@ -74,8 +74,27 @@ backtick (for example
 `test/Core.Tests/.../Issue3705MemberKindNullabilityDifferentialTests.cs:99`) falls
 back to a 5,122-character escaped one-liner. Separately, cs2gs collapses an eight-line
 `<remarks>` block into a single 424-character `///` line. Both are cs2gs emission
-defects with cheap fixes (Phase 9). Fixing them moves the metric by ~93, and fixing
-them is *faster* than the formatter.
+defects with cheap fixes (Phase 9), and fixing them is *faster* than the formatter.
+
+> **Correction (Phase 9 implementation, #3950).** The 32 doc-comment lines and the
+> 61-line string category above both survive re-measurement, but the **~93 does not**:
+> those two numbers do not add up to a single fix budget. Only the multi-line *and*
+> backtick-bearing subset of the 61 is spellable as a raw string — **30 lines** on the
+> same artifact. The rest are interpolated strings (15) and single-line literals (12),
+> which no raw-string spelling can shorten; `${…}` holes are not `LiteralExpression`s
+> and never reach `RenderLiteral` at all. Phase 9 is therefore
+> worth **~62**, not ~93, and the residual irreducible floor is ~27 lines rather than
+> ~0. The measured result of implementing it, on a local `--translate-only` pass over
+> the same corpus, is **631 → 565 (−66)**; the local scale runs ~4 above the nightly's
+> because it skips stage 2's `!!` polish. Nothing else in this section moved: the
+> wrappable-code count re-measures at 538 against the stated 537.
+>
+> One scale note, because it bit this measurement. The counter is
+> `awk 'length($0)>300'`, and `length` counts **characters** under CI's UTF-8 locale
+> but **bytes** under macOS's `awk`. The same artifact reads 627 one way and 630 the
+> other — which is why this section says 630 while the gate that produced the artifact
+> reported 626. Any local before/after must be taken in the character scale to be
+> comparable to `longLineCeiling`.
 
 ### Is the syntax tree formattable at all?
 
@@ -414,11 +433,12 @@ no consumer and cannot regress anything.
 | 6 | Wrapping (2 PRs) | 6a: `Group`/`Nest` on argument lists and member chains (317 of 537). 6b: collection/object literals and `+` chains (173). Measured against the migrated tree each time. | line-width property test |
 | 7 | cs2gs adoption (2 PRs) | 7a: format-as-post-pass behind `--format`, off by default; run the corpus, publish the diff and the round-trip failure count. 7b: flip on; absorb golden churn; delete `RenderWrappable`/`RenderWrapped`. | migrated-tree round-trip count |
 | 8 | Repo adoption | `gsfmt -w` over hand-written `.gs`; CI `gsfmt --check`. | `gsfmt --check` in CI |
-| 9 | The other 93 (2 PRs) | 9a: cs2gs preserves doc-comment line structure (−32). 9b: backtick-safe raw strings — split a literal containing a backtick into concatenation, as Go does (−61). | — |
+| 9 | The other 62 | 9a: cs2gs preserves doc-comment line structure (−32). 9b: backtick-safe raw strings — split a literal containing a backtick into concatenation, as Go does (−30, not −61: see the correction above). **DONE, #3950**, measured 631 → 565 locally. | — |
 
-**Sequencing note:** Phase 9 is listed last but has the best ratio in the plan — two
-small, self-contained cs2gs PRs removing ~93 long lines that no formatter work can
-touch. If the goal is the metric rather than the deliverable, **do Phase 9 first**.
+**Sequencing note:** Phase 9 was listed last but had the best ratio in the plan — one
+small, self-contained cs2gs PR removing ~62 long lines that no formatter work can
+touch. It was **done first**, for exactly that reason — and it is what finally made
+`longLineCeiling` go **down** (640 → 580) after six consecutive raises.
 
 ### Golden churn, phase by phase
 
@@ -440,6 +460,8 @@ touch. If the goal is the metric rather than the deliverable, **do Phase 9 first
 
 ### `selfmig-baseline.json` transition
 
+0. Phase 9 landed first and did change migrated output: `longLineCeiling` 640 → 580
+   in #3950, measured 631 → 565 on a local `--translate-only` pass over the corpus.
 1. Phases 1–6 do not change migrated output; ceilings untouched.
 2. Phase 7b lands with a re-baseline in the same PR, per the file's stated discipline
    ("improve a metric, then tighten the corresponding number in the same PR").
@@ -451,7 +473,8 @@ touch. If the goal is the metric rather than the deliverable, **do Phase 9 first
    a gate teaches people to raise ceilings. This also fixes a live inconsistency:
    `cs2gs_counter_report` labels the long-line row "code" but computes it from
    `cs2gs_raw_lines`, so comments and string-bearing lines are counted while the `!!`
-   row excludes them.
+   row excludes them (filed as #3949, deliberately not fixed alongside the phase-9
+   improvement).
 4. `longLineCeiling` is **not** retired. Wrapping is a property of emitted code and
    can still regress.
 
@@ -469,8 +492,8 @@ touch. If the goal is the metric rather than the deliverable, **do Phase 9 first
 
 ## Open questions
 
-1. Should Phase 9 be pulled ahead of Phase 1? It has the best effort-to-metric ratio
-   and needs nothing from the formatter.
+1. ~~Should Phase 9 be pulled ahead of Phase 1?~~ **Resolved: yes.** Done in #3950
+   before any formatter work; `longLineCeiling` 640 → 580 in the same PR.
 2. G#'s backtick raw string has no escape hatch, so a multi-line string containing a
    backtick is unspellable except as an escaped one-liner or a concatenation. Go has
    the same hole and lives with it. Is a `` ``` ``-fenced or `#`-delimited raw string
