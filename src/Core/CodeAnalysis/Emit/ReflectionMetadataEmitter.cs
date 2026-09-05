@@ -449,7 +449,19 @@ internal sealed class ReflectionMetadataEmitter
     /// <param name="kickoff">The async kickoff method.</param>
     private void RegisterStateMachineEnclosingGenerics(StructSymbol smStruct, FunctionSymbol kickoff)
     {
-        var receiverDef = kickoff?.ReceiverType is StructSymbol receiver
+        // Issue #3932: a STATIC (`shared`) async method has no `ReceiverType`,
+        // so reading only that left `classTPs` empty and the state machine was
+        // reified at arity ZERO even though the owning type is generic — every
+        // hoisted field then carried a dangling `!0`
+        // (`Chan`1/ChanReader/'<ReadSlowAsync>d__0'` where csc emits
+        // `…/<ReadSlowAsync>d__0`1<T>`), which ILVerify reports as
+        // `[found …`1<T0>][expected …`1<!0>]`. `StaticOwnerType` is the static
+        // counterpart of `ReceiverType`, and the ITERATOR sibling
+        // (`StateMachineEmitter.GetIteratorTypeParametersInScope`) has always
+        // consulted both — this is the async path catching up. Instance methods
+        // were unaffected, which is why the failure needed a `shared async
+        // func` on a generic type to surface at all.
+        var receiverDef = (kickoff?.ReceiverType as StructSymbol ?? kickoff?.StaticOwnerType as StructSymbol) is { } receiver
             ? (receiver.Definition ?? receiver)
             : null;
         var classTPs = receiverDef?.TypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;

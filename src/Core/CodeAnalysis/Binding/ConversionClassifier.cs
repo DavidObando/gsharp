@@ -1351,6 +1351,23 @@ internal sealed class ConversionClassifier
             return true;
         }
 
+        // Issue #3932: an IMPORTED conversion operator whose declaring generic
+        // is closed over an OPEN type parameter — `[]T -> Memory[T]` — reaches
+        // neither branch here. The CLR branch above needs both sides to have a
+        // reflectible `ClrType` and an open `[]T` has none; the symbolic branch
+        // below only knows same-package operators. So the conversion was simply
+        // dropped and the emitter wrote the raw array into a `Memory[T]` slot.
+        // Resolve it off the target's OPEN definition instead, which is where
+        // `Memory`1::op_Implicit(!0[])` actually lives.
+        if (argument.Type != null
+            && expectedType != null
+            && argument.Type != TypeSymbol.Error
+            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var openConvMethod))
+        {
+            converted = new BoundClrConversionCallExpression(null, argument, openConvMethod, expectedType);
+            return true;
+        }
+
         // Issue #1017: same-package user-defined implicit conversion operators
         // are modelled as static op_Implicit FunctionSymbols and have no
         // reflectible ClrType during binding, so resolve them symbolically.
@@ -1538,6 +1555,242 @@ internal sealed class ConversionClassifier
                 || TypeSymbol.ContainsNamedTupleElements(mapped))
             ? mapped
             : null;
+    }
+
+    /// <summary>
+    /// Issue #3932: resolves an IMPORTED user-defined implicit conversion
+    /// operator whose declaring generic type is closed over a symbolic or open
+    /// type argument — the <c>[]T -&gt; System.Memory[T]</c> shape that
+    /// <see cref="ClrOperatorResolution"/> cannot see because an open
+    /// <c>[]T</c> has no reflectible <see cref="Type"/>.
+    /// <para>The operator is looked up on the target's OPEN definition
+    /// (<c>Memory`1::op_Implicit(!0[])</c>) and accepted only when BOTH its
+    /// parameter and its return type, mapped through the target's symbolic type
+    /// arguments, match the source and the target exactly. That two-sided match
+    /// is what keeps this from firing on an unrelated operator that merely
+    /// happens to be named <c>op_Implicit</c>.</para>
+    /// <para>The returned <see cref="MethodInfo"/> is the OPEN one, which the
+    /// emitter recognises (see <c>MethodBodyEmitter.EmitCallResolvedConversion</c>)
+    /// as its signal to parent the MemberRef at the symbolic TypeSpec rather
+    /// than at the erased <c>Memory&lt;object&gt;</c>.</para>
+    /// </summary>
+    /// <param name="source">The source type symbol.</param>
+    /// <param name="target">The conversion target type symbol.</param>
+    /// <param name="conversion">The resolved OPEN conversion operator.</param>
+    /// <returns>Whether a symbolic imported implicit conversion applies.</returns>
+    public static bool TryResolveSymbolicImportedConversion(
+        TypeSymbol? source,
+        TypeSymbol? target,
+        [NotNullWhen(true)] out MethodInfo? conversion)
+    {
+        conversion = null;
+        if (source == null
+            || target is not ImportedTypeSymbol { OpenDefinition: { } openDefinition } imported
+            || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        // Only the symbolic/open case is in scope: a fully CLR-backed target
+        // already resolves through ClrOperatorResolution, and re-resolving it
+        // here would change which operator a concrete call site picks.
+        var needsSymbolic = false;
+        foreach (var typeArgument in imported.TypeArguments)
+        {
+            if (TypeSymbol.ContainsTypeParameter(typeArgument)
+                || TypeSymbol.RequiresSymbolicProjection(typeArgument))
+            {
+                needsSymbolic = true;
+                break;
+            }
+        }
+
+        if (!needsSymbolic)
+        {
+            return false;
+        }
+
+        MethodInfo[] candidates;
+        try
+        {
+            candidates = openDefinition.GetMethods(BindingFlags.Public | BindingFlags.Static);
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (!string.Equals(candidate.Name, "op_Implicit", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var parameters = candidate.GetParameters();
+            if (parameters.Length != 1)
+            {
+                continue;
+            }
+
+            var mappedParameter = MemberLookup.MapOpenClrTypeToSymbolic(
+                parameters[0].ParameterType,
+                openDefinition,
+                imported.TypeArguments);
+            var mappedReturn = MemberLookup.MapOpenClrTypeToSymbolic(
+                candidate.ReturnType,
+                openDefinition,
+                imported.TypeArguments);
+
+            // The return must be the target's OWN generic, substituted with the
+            // target's own arguments — compared by open definition rather than
+            // by symbol identity, because the mapped projection is a fresh
+            // ImportedTypeSymbol instance that never reference-equals the
+            // target even when it is structurally the same `Memory[T]`.
+            if (mappedParameter == null
+                || mappedParameter == TypeSymbol.Error
+                || !mappedParameter.Equals(source)
+                || mappedReturn is not ImportedTypeSymbol { OpenDefinition: { } returnOpenDefinition }
+                || returnOpenDefinition != openDefinition)
+            {
+                continue;
+            }
+
+            conversion = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3932: the <c>newobj</c> analogue of
+    /// <see cref="TrySubstituteParameterTypeFromReceiver"/> and
+    /// <see cref="TryRecoverReceiverTypeParameterSlot"/>. A constructor has no
+    /// receiver, so neither of those helpers can fire and a CLR ctor parameter
+    /// declared as the declaring generic's own slot (<c>ValueTask&lt;T&gt;(!0)</c>)
+    /// stayed at the type-erased closed shape — <c>object</c> — for the whole
+    /// argument-conversion pass. The argument was then classified as a boxing
+    /// conversion, so gsc emitted <c>box !!T</c> in front of a <c>newobj</c>
+    /// whose parent TypeSpec is the correctly symbolic <c>ValueTask`1&lt;!!T&gt;</c>
+    /// — invalid IL that ILVerify reports as
+    /// <c>[found ref 'T'][expected value 'T']</c>. The equivalent method call
+    /// (<c>List[T].Add(v)</c>) has always emitted the raw <c>T</c>, so this is a
+    /// ctor-only hole in machinery gsc already had.
+    /// <para>Mapping the OPEN constructor's parameter type through the
+    /// construction's symbolic type arguments recovers the real slot. Bare type
+    /// parameters are accepted here (unlike the #765 receiver gate, which
+    /// deliberately skips them and leaves that case to #1540's helper) because
+    /// for a ctor there is no second pass to fall back to.</para>
+    /// </summary>
+    /// <param name="openGenericDefinition">The open generic definition being constructed, if any.</param>
+    /// <param name="symbolicTypeArgs">The construction's symbolic type arguments.</param>
+    /// <param name="closedConstructor">The resolved (closed, erased) CLR constructor.</param>
+    /// <param name="paramIndex">Zero-based index into the constructor's parameter list.</param>
+    /// <returns>The recovered symbolic parameter type, or <see langword="null"/>.</returns>
+    public static TypeSymbol? TrySubstituteCtorParameterTypeFromConstructedType(
+        Type? openGenericDefinition,
+        ImmutableArray<TypeSymbol> symbolicTypeArgs,
+        ConstructorInfo? closedConstructor,
+        int paramIndex)
+    {
+        if (openGenericDefinition == null
+            || closedConstructor == null
+            || symbolicTypeArgs.IsDefaultOrEmpty
+            || paramIndex < 0)
+        {
+            return null;
+        }
+
+        ConstructorInfo? openCtor = null;
+        try
+        {
+            foreach (var candidate in openGenericDefinition.GetConstructors(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (candidate.MetadataToken == closedConstructor.MetadataToken
+                    && candidate.Module == closedConstructor.Module)
+                {
+                    openCtor = candidate;
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return null;
+        }
+
+        if (openCtor == null)
+        {
+            return null;
+        }
+
+        var openParams = openCtor.GetParameters();
+        if (paramIndex >= openParams.Length)
+        {
+            return null;
+        }
+
+        var openParamType = openParams[paramIndex].ParameterType;
+        if (openParamType.IsByRef)
+        {
+            // A by-ref ctor slot is emitted as an address, never boxed, so it
+            // is already correct and rewriting it here would change RefKind
+            // handling downstream.
+            return null;
+        }
+
+        // Only a parameter that actually MENTIONS the declaring generic's own
+        // parameters can have been erased. A genuine `object` slot (e.g.
+        // `List[T](object)`) has no generic parameter in it and must keep
+        // boxing, so leaving it alone here is what preserves #1196.
+        if (!MentionsTypeGenericParameter(openParamType))
+        {
+            return null;
+        }
+
+        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+            openParamType,
+            openGenericDefinition,
+            symbolicTypeArgs,
+            openMethodDefinition: null,
+            methodTypeArguments: default);
+        return mapped != null && mapped != TypeSymbol.Error ? mapped : null;
+
+        // Whether an open CLR type mentions a TYPE-level generic parameter
+        // anywhere in its shape (directly, or nested through arrays, by-ref,
+        // pointers and constructed generics).
+        static bool MentionsTypeGenericParameter(Type? type)
+        {
+            if (type == null)
+            {
+                return false;
+            }
+
+            if (type.IsGenericParameter)
+            {
+                return type.DeclaringMethod == null;
+            }
+
+            if (type.HasElementType)
+            {
+                return MentionsTypeGenericParameter(type.GetElementType());
+            }
+
+            if (type.IsGenericType)
+            {
+                foreach (var argument in type.GetGenericArguments())
+                {
+                    if (MentionsTypeGenericParameter(argument))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
     }
 
     /// <summary>
