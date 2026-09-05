@@ -82,6 +82,11 @@ class Holder[T] {
     // Control: the INSTANCE form of the failing shape, which has always
     // resolved the TypeSpec parent and the MethodSpec sequentially.
     func PlainInst[U](v T, other U) string -> v.ToString() + ""/"" + other.ToString()
+
+    // The SELF-reference shape: the same call from INSIDE the generic type,
+    // where the owner instantiation is the OPEN `!0` rather than a concrete
+    // `int32`. Both axes still apply, and the TypeSpec is the self one.
+    func CallSelf[U](v T, other U) string -> Plain[U](v, other)
 }
 
 // Control: a generic shared method on a NON-generic type, which needs a bare
@@ -96,6 +101,7 @@ Console.WriteLine(""shared="" + Holder[int32].Plain[string](41, ""b""))
 Console.WriteLine(""shared-other-inst="" + Holder[string].Plain[int32](""q"", 3))
 Console.WriteLine(""shared-ng="" + Holder[int32].PlainNG(5))
 Console.WriteLine(""inst="" + Holder[int32]().PlainInst[string](7, ""c""))
+Console.WriteLine(""self="" + Holder[int32]().CallSelf[string](8, ""d""))
 Console.WriteLine(""flat="" + Flat.Plain[int32](9))
 Console.WriteLine(""done"")
 ";
@@ -109,6 +115,7 @@ Console.WriteLine(""done"")
         Assert.Contains("shared-other-inst=q|3", lines);
         Assert.Contains("shared-ng=ng:5", lines);
         Assert.Contains("inst=7/c", lines);
+        Assert.Contains("self=8|d", lines);
         Assert.Contains("flat=flat/9", lines);
         Assert.Equal("done", lines[^1]);
 
