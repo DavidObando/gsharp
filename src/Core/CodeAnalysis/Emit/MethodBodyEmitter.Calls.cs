@@ -101,10 +101,31 @@ internal sealed partial class MethodBodyEmitter
     private void EmitConstructorChaining(BoundConstructorChainingExpression call)
     {
         if (call.SelectedConstructor == null
-            || !this.outer.cache.ExplicitCtorHandles.TryGetValue(call.SelectedConstructor, out var ctorHandle))
+            || !this.outer.cache.ExplicitCtorHandles.TryGetValue(call.SelectedConstructor, out var ctorDefHandle))
         {
             throw new InvalidOperationException(
                 $"Constructor chaining target on '{call.SelectedConstructor?.DeclaringType?.Name}' has no emitted handle.");
+        }
+
+        EntityHandle ctorHandle = ctorDefHandle;
+
+        // ADR-0087 §3 R3+R4 / issue #3932: inside a GENERIC aggregate the
+        // sibling `.ctor` must be referenced through a MemberRef parented at
+        // the self TypeSpec (`Chan`1<!0>::.ctor`), exactly as
+        // `EmitConstructorCall`'s `newobj` does. The bare MethodDef names the
+        // OPEN definition, so the verifier sees `call Chan`1::.ctor` applied to
+        // a `Chan`1<!0>` receiver: `this` is never marked initialized
+        // (ILVerify `CallCtor` + `ThisUninitReturn`) and the argument slots
+        // stay at their uninstantiated `!0` shape (`StackUnexpected`). Every
+        // OTHER self-reference in a generic body — field access, instance
+        // calls, `newobj` — already routes through this TypeSpec; only the
+        // chained initializer did not.
+        var chainOwner = call.SelectedConstructor.DeclaringType;
+        if (chainOwner != null && ReflectionMetadataEmitter.IsUserGenericTypeReference(chainOwner))
+        {
+            ctorHandle = this.outer.userTokens.ResolveUserCtorTokenForExplicit(
+                chainOwner,
+                call.SelectedConstructor);
         }
 
         // Load `this` then evaluate each argument in order. Parameters of a

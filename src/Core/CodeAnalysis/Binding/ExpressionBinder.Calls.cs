@@ -2016,6 +2016,41 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #3932: a ctor has no receiver, so neither #765's
+        // TrySubstituteParameterTypeFromReceiver nor #1540's
+        // TryRecoverReceiverTypeParameterSlot — the two helpers that keep a
+        // `List[T].Add(v)` argument OFF the boxing path — can fire for a
+        // `newobj`. Recover the same symbolic slot from the construction's own
+        // type arguments instead, so `ValueTask[T](v)` converts `v` to `T` (the
+        // real `!0` slot) rather than to the erased `object`. Without this the
+        // binder inserts a boxing conversion and the emitter writes
+        // `box !!T; newobj ValueTask`1<!!T>::.ctor(!0)` — unverifiable IL.
+        // Runs AFTER the delegate targets above and never overwrites one: the
+        // #1638 delegate recovery is strictly more specific.
+        if (openGenericDefinition != null && !symbolicTypeArgs.IsDefaultOrEmpty)
+        {
+            for (var p = 0; p < ctorParameters.Length; p++)
+            {
+                if (ctorParameterTypeOverrides != null && ctorParameterTypeOverrides.ContainsKey(p))
+                {
+                    continue;
+                }
+
+                var recovered = ConversionClassifier.TrySubstituteCtorParameterTypeFromConstructedType(
+                    openGenericDefinition,
+                    symbolicTypeArgs,
+                    bestCtor,
+                    p);
+                if (recovered == null)
+                {
+                    continue;
+                }
+
+                ctorParameterTypeOverrides ??= new Dictionary<int, TypeSymbol>();
+                ctorParameterTypeOverrides[p] = recovered;
+            }
+        }
+
         // Issue #1638: route through the shared CLR call-argument-construction
         // pipeline (interpolation rebind → handler args → delegate rebind →
         // parameter conversions) so a Func/Action-literal argument to a CLR

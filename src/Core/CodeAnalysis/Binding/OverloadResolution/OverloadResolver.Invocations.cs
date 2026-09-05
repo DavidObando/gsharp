@@ -1339,6 +1339,36 @@ internal sealed partial class OverloadResolver
 
                 if (TypeSymbol.ContainsTypeParameter(expectedType))
                 {
+                    // Issue #3932: the skip below is right for a BARE open `T`
+                    // slot (erased to System.Object, emitter boxes), but it
+                    // fired for anything that merely CONTAINS a type parameter
+                    // — including `Memory[T]`, which emits as a REAL
+                    // constructed slot `Memory`1<!!0>`, not as `object`. A
+                    // `[]T` argument there needs `Memory`1::op_Implicit` and
+                    // got nothing, so the raw array reached the slot and
+                    // ILVerify reported `[found ref 'T0[]'][expected value
+                    // 'Memory`1<T0>']`. The identical call with a CONCRETE
+                    // element type has always emitted the operator — the
+                    // conversion was only ever lost when the element was open.
+                    // This is the same bare-vs-constructed distinction #3222
+                    // taught the plain-function argument path; the extension
+                    // path never learned it.
+                    //
+                    // Only APPLIES a conversion that resolves; when none does,
+                    // the historical unconverted pass-through is unchanged, so
+                    // the bare-`T` case this skip exists for is untouched.
+                    if (permutedArguments[i].Type is { } openArgumentType
+                        && openArgumentType != TypeSymbol.Error
+                        && openArgumentType != expectedType
+                        && conversions.TryApplyUserDefinedImplicitArgumentConversion(
+                            permutedArguments[i],
+                            expectedType,
+                            out var openTargetConverted))
+                    {
+                        convertedArgs.Add(openTargetConverted);
+                        continue;
+                    }
+
                     // A parameter typed as an open T is encoded as System.Object in
                     // the emitted signature; pass the argument unconverted so the
                     // emitter inserts box / unbox.any around the erased boundary.

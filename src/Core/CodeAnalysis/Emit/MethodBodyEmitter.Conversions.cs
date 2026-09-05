@@ -1418,7 +1418,22 @@ internal sealed partial class MethodBodyEmitter
             "a non-lifted imported conversion carries a CLR method");
         this.EmitExpression(conv.Source);
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(method));
+
+        // Issue #3932: `ConversionClassifier.TryResolveSymbolicImportedConversion`
+        // hands back the OPEN operator (`Memory`1::op_Implicit`) precisely
+        // because the target is symbolic (`Memory[T]` for an open `T`).
+        // Referencing it through the plain MemberRef path parents it at the
+        // OPEN `Memory`1`, which is the same open-vs-closed defect the chained
+        // `.ctor` had; route it through the #671 symbolic-container factory so
+        // the parent is the `Memory`1<!!T>` TypeSpec. An open declaring type is
+        // a shape ordinary CLR operator resolution never produces, so this
+        // cannot re-target an existing conversion.
+        this.il.Token(method.DeclaringType is { IsGenericTypeDefinition: true }
+            ? this.outer.memberRefs.GetMethodEntityHandle(
+                method,
+                default(ImmutableArray<TypeSymbol?>),
+                conv.Type)
+            : this.outer.memberRefs.GetMethodReference(method));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(method.ReturnType), conv.Type);
 
         // Issue #663: when the operator returns a non-nullable value type T but the
@@ -1538,10 +1553,20 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(Invariant.Required(
+        var conversionMethod = Invariant.Required(
             conversion.Method,
-            "an imported conversion carries a CLR method")));
+            "an imported conversion carries a CLR method");
+
+        // Issue #3932: as in EmitClrConversionCall — a symbolically resolved
+        // operator arrives as the OPEN method and must be parented at the
+        // constructed TypeSpec rather than at the open definition.
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(conversionMethod.DeclaringType is { IsGenericTypeDefinition: true }
+            ? this.outer.memberRefs.GetMethodEntityHandle(
+                conversionMethod,
+                default(ImmutableArray<TypeSymbol?>),
+                conversion.Type)
+            : this.outer.memberRefs.GetMethodReference(conversionMethod));
     }
 
     private static bool IsNullableValueType(Type t)
