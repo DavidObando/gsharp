@@ -166,6 +166,83 @@ public class Issue3880VariadicPassThroughOverloadEmitTests
         Assert.Equal($"generic-elem{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void ExpandedNumericTails_RankByBetterConversionTargetInsteadOfCrashing()
+    {
+        // Review finding on this PR, and it was right: closing the element type
+        // makes two tails classify identically where they previously did not,
+        // and CompareUserConversions' NumericWidening arm dereferences BOTH
+        // parameter types — which expanded tail slots never recorded. The
+        // generic case below COMPILED on main (picking the wrong overload) and
+        // CRASHED with GS9998 once the element type was closed.
+        //
+        // The non-generic case underneath is the same hole reached without any
+        // generic candidate at all: it crashes on plain `main`, where this
+        // change is a no-op because candSubstitution is null. So the null
+        // ParamTypes defect predates this PR; closing the element type only
+        // widened what reaches it.
+        //
+        // csc on net10.0 prints "generic" and "i64": for an int32 tail, int64
+        // is a better conversion target than float64.
+        var output = CompileAndRun("""
+            package P
+            import System
+
+            class C {
+                shared {
+                    func F[T](anchor T, values ...T) string { return "generic" }
+                    func F(anchor int64, values ...float64) string { return "float" }
+
+                    func G(anchor int64, values ...int64) string { return "i64" }
+                    func G(anchor int64, values ...float64) string { return "f64" }
+                }
+            }
+
+            func run() {
+                let a int64 = 1
+                let b int32 = 2
+                Console.WriteLine(C.F(a, b))
+                Console.WriteLine(C.G(a, b))
+            }
+
+            run()
+            """);
+
+        Assert.Equal($"generic{Environment.NewLine}i64{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void ExpandedReferenceTails_RankByBetterConversionTarget()
+    {
+        // The reference half of the same slot. Both tails classify as
+        // Reference, so CompareUserConversions reaches CompareReferenceTargets
+        // — which is guarded on both parameter types being non-null and so
+        // silently tied for expanded slots. main reports a spurious GS0266;
+        // csc picks the more derived element type.
+        var output = CompileAndRun("""
+            package P
+            import System
+
+            open class Animal { }
+            class Dog : Animal { }
+
+            class C {
+                shared {
+                    func H(values ...Animal) string { return "animal" }
+                    func H(values ...object) string { return "object" }
+                }
+            }
+
+            func run() {
+                Console.WriteLine(C.H(Dog(), Dog()))
+            }
+
+            run()
+            """);
+
+        Assert.Equal($"animal{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3880_overload_").FullName;
