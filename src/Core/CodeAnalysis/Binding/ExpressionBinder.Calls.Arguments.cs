@@ -672,7 +672,35 @@ internal sealed partial class ExpressionBinder
 
         if (!MemberLookup.TryGetDelegateFunctionTypeFromSymbol(callableType, out var functionType))
         {
-            return false;
+            // Issue #3880: ADR-0020 commits `X.Member[i](args)` to a GENERIC
+            // call site — a single bracketed simple name scans as a type clause
+            // and `(` is in the follow-set — and indexer-then-invoke was never
+            // reconsidered afterwards. A dictionary of factories
+            // (`GNodeSamples.All[type]()`) therefore reported GS0158 on the
+            // member, while the identical `let f = GNodeSamples.All[type]`
+            // followed by `f()` bound fine: the `.` follow-set already got this
+            // treatment for the single-argument shape in issue #942, the `(`
+            // follow-set did not. The parser cannot decide this — `Map[int](xs)`
+            // is a real generic instantiation with the same token shape — so
+            // the binder decides it, and only where the generic reading has
+            // already failed: the member is not itself callable.
+            //
+            // The indexed value REPLACES the callable and falls through, so
+            // everything below — named-delegate ref kinds, variadic packing,
+            // optional and named arguments — applies to it unchanged. An
+            // earlier revision converted the arguments here instead, which
+            // implemented only fixed-arity by-value shapes and rejected
+            // `b.Named[k](",", "a", "b", "c")` against a variadic named
+            // delegate.
+            if (!TryBindAmbiguousBracketAsIndex(ce, memberLoad, out var indexedValue)
+                || indexedValue.Type is not { } indexedType
+                || !MemberLookup.TryGetDelegateFunctionTypeFromSymbol(indexedType, out functionType))
+            {
+                return false;
+            }
+
+            memberLoad = indexedValue;
+            callableType = indexedType;
         }
 
         if (callableType is DelegateTypeSymbol namedDelegate)
@@ -770,6 +798,142 @@ internal sealed partial class ExpressionBinder
             callableType,
             functionType,
             convertedArgs.MoveToImmutable());
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3880: whether a bracketed list is the one shape where the
+    /// ADR-0020 generic-call-site commitment is genuinely ambiguous with an
+    /// indexer — a single bare identifier. Everything a type clause can spell
+    /// that an index expression cannot (<c>T?</c>, <c>[]T</c>, <c>List[T]</c>,
+    /// a qualified name, a tuple, a function type) stays unambiguously a type
+    /// argument.
+    /// </summary>
+    /// <param name="typeArgumentList">The bracketed list from the call site.</param>
+    /// <returns><see langword="true"/> when the bracket could equally be an index.</returns>
+    private static bool IsAmbiguousSingleIdentifierTypeArgument(TypeArgumentListSyntax? typeArgumentList)
+    {
+        if (typeArgumentList is not { } bracketed || bracketed.Arguments.Count != 1)
+        {
+            return false;
+        }
+
+        var item = bracketed.Arguments[0];
+        return item.Identifier != null
+            && !item.HasQualifier
+            && !item.IsArray
+            && !item.IsNullable
+            && !item.IsTuple
+            && item.FuncKeyword == null
+            && item.TypeArguments is not { Count: > 0 };
+    }
+
+    /// <summary>
+    /// Issue #3880: whether <paramref name="receiverType"/> has a readable
+    /// VALUE member (field or property) named <paramref name="memberName"/> —
+    /// the precondition for reading <c>receiver.Member[i](args)</c> as
+    /// indexer-then-invoke rather than as a generic method call.
+    /// </summary>
+    /// <param name="receiverType">The receiver's type.</param>
+    /// <param name="memberName">The member name at the call site.</param>
+    /// <returns><see langword="true"/> when such a member exists.</returns>
+    private static bool HasCallableIndexableValueMember(TypeSymbol receiverType, string memberName)
+    {
+        if (receiverType is StructSymbol structSymbol)
+        {
+            for (StructSymbol? current = structSymbol; current != null; current = current.BaseClass)
+            {
+                if (current.TryGetField(memberName, out _))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (TypeMemberModel.TryGetPropertyWithOwner(receiverType, memberName, out var property, out _)
+            && property is { HasGetter: true })
+        {
+            return true;
+        }
+
+        // Issue #3880: the parser ambiguity this recovery exists for is
+        // receiver-AGNOSTIC — `x.Callbacks[key]()` reads identically whether
+        // `Callbacks` is declared in this compilation or comes from a
+        // referenced assembly. Recognising only source members would make the
+        // feature work or not purely by where the receiver was declared, which
+        // is not something a user can reason about from the call site. So the
+        // imported CLR field/property shapes are recognised on the same terms
+        // TryBindClrDelegateMemberInvocation uses: a readable non-indexer
+        // property first, then a field.
+        if (receiverType.ClrType is { } receiverClrType)
+        {
+            var clrProperty = ClrTypeUtilities.SafeGetProperty(
+                receiverClrType,
+                memberName,
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
+            if (clrProperty is { CanRead: true } && clrProperty.GetIndexParameters().Length == 0)
+            {
+                return true;
+            }
+
+            if (ClrTypeUtilities.SafeGetField(
+                    receiverClrType,
+                    memberName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static) != null)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3880: the indexer-then-invoke reading of <c>X.Member[i](args)</c>,
+    /// attempted only after the generic-method reading the parser committed to
+    /// has already failed and the member itself turned out not to be callable.
+    /// <para>
+    /// Deliberately narrow. The bracketed item must be a bare identifier — the
+    /// only shape that is genuinely ambiguous, because anything a type clause
+    /// can spell but an index expression cannot (<c>T?</c>, <c>[]T</c>,
+    /// <c>List[T]</c>, a qualified name) is unambiguously a type argument, and
+    /// anything an index expression can spell but a type clause cannot
+    /// (<c>All[0]()</c>, <c>All["k"]()</c>) never reached the generic reading
+    /// in the first place. The index bind is speculative: its diagnostics are
+    /// rolled back on failure so a genuine "no such generic method" still
+    /// reports the generic-reading diagnostic the caller would have produced.
+    /// </para>
+    /// </summary>
+    private bool TryBindAmbiguousBracketAsIndex(
+        CallExpressionSyntax ce,
+        BoundExpression memberLoad,
+        [NotNullWhen(true)] out BoundExpression? indexed)
+    {
+        indexed = null;
+
+        if (ce.NullableQuestionToken != null
+            || !IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList)
+            || Invariant.Required(ce.TypeArgumentList, "an ambiguous bracket has a type-argument list").Arguments[0].Identifier
+                is not { } indexIdentifier)
+        {
+            return false;
+        }
+
+        var mark = Diagnostics.Count;
+        var bound = BindIndexAgainstTarget(
+            memberLoad,
+            new NameExpressionSyntax(ce.SyntaxTree, indexIdentifier),
+            ce.Identifier.Location);
+
+        if (bound is BoundErrorExpression
+            || Diagnostics.Count != mark
+            || bound.Type == null)
+        {
+            Diagnostics.TruncateTo(mark);
+            return false;
+        }
+
+        indexed = bound;
         return true;
     }
 
@@ -883,7 +1047,7 @@ internal sealed partial class ExpressionBinder
             System.Reflection.FieldInfo f => f.FieldType,
             _ => null,
         };
-        if (memberClrType == null || !ClrTypeUtilities.IsDelegateType(memberClrType))
+        if (memberClrType == null)
         {
             return false;
         }
@@ -897,6 +1061,29 @@ internal sealed partial class ExpressionBinder
 
         BoundExpression delegateLoad = ApplyMemberNarrowing(
             new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol));
+
+        if (!ClrTypeUtilities.IsDelegateType(memberClrType))
+        {
+            // Issue #3880, the imported twin of the source-receiver recovery in
+            // TryBindUserCallableMemberInvocation. `x.Callbacks[key]()` where
+            // `Callbacks` is a CLR field/property of a referenced assembly is
+            // the SAME parser ambiguity; binding it only for source-declared
+            // receivers would make the feature depend on which assembly the
+            // type happened to be compiled into. The indexed value replaces the
+            // delegate load and falls through to the same `Invoke` dispatch
+            // below, which already owns named arguments, ref/in/out and
+            // variadic packing.
+            if (!TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue)
+                || indexedValue.Type?.ClrType is not { } indexedClrType
+                || !ClrTypeUtilities.IsDelegateType(indexedClrType))
+            {
+                return false;
+            }
+
+            delegateLoad = indexedValue;
+            memberClrType = indexedClrType;
+        }
+
         var effectiveMemberType = delegateLoad.Type;
 
         if (ce.NullableQuestionToken == null
