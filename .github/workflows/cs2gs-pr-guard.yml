@@ -24,15 +24,14 @@ name: cs2gs-pr-guard
 #
 # WHAT IT IS NOT
 #
-# It is not the gate. It checks four projects, not fifty-three; it says
+# It is not the gate. It checks six projects, not fifty-three; it says
 # nothing about the readability ceilings or corpus-wide test parity. The job's
 # own output repeats that on every run, pass or fail, because a partial check
 # mistaken for a full one is worse than no check at all.
 #
-# It also does not currently cover src/Sdk/Gsharp.Runtime.Channels, so it
-# would NOT have caught #3905 as it stands. That project is red on main today
-# (#3907) and a guard that is red from day one gets disabled; the guarded set
-# is one line away from including it. See build/run-cs2gs-selfmig-pr-guard.sh.
+# The guarded set now includes src/Sdk/Gsharp.Runtime.Channels and
+# src/Formatting/GSharp.Formatting in addition to the original hot core. See
+# build/run-cs2gs-selfmig-pr-guard.sh for the closed ProjectReference set.
 #
 # THE paths FILTER
 #
@@ -55,6 +54,8 @@ on:
       # #3896 / #3905 hazard directly.
       - 'src/Core/**'
       - 'src/Analyzers/InternalAnalyzers/**'
+      - 'src/Formatting/GSharp.Formatting/**'
+      - 'src/Sdk/Gsharp.Runtime.Channels/**'
       # The translator: it decides what the guarded sources become.
       - 'tools/cs2gs/**'
       # The compiler and the SDK: they decide whether what it produces
