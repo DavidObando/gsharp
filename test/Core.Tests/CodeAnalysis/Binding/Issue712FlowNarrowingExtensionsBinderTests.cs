@@ -102,6 +102,22 @@ Run(Dog{Name: ""Rex""})
     }
 
     [Fact]
+    public void Or_RightOperand_OfNativeNotPattern_SeesNarrowedReceiver()
+    {
+        var result = Evaluate(AnimalHierarchy + @"
+func Run(a Animal) string {
+    if a is not Dog dog || a.Bark() == """" {
+        return """"
+    }
+    return a.Bark() + dog.Name
+}
+Run(Dog{Name: ""Rex""})
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void Or_GuardStyle_BangIsTest_WithEarlyExit_LiftsNarrowing()
     {
         // The De Morgan dual of the existing `if a !is T { return }` lift.
