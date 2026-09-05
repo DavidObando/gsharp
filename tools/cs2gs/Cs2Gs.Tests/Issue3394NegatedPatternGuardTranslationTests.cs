@@ -73,10 +73,10 @@ namespace Demo
         // `||` prefix guard still runs before `candidates[0]` is ever read and
         // `candidate` survives the exiting guard as a native pattern variable.
         int prefixGuard = rendered.IndexOf("if candidates.Length != 1 ||", StringComparison.Ordinal);
-        int patternTest = rendered.IndexOf("!(candidates[0] is { IsGeneric: false } candidate)", StringComparison.Ordinal);
+        int patternTest = rendered.IndexOf("candidates[0] is not { IsGeneric: false } candidate", StringComparison.Ordinal);
         Assert.True(prefixGuard >= 0 && patternTest > prefixGuard, rendered);
         Assert.Contains(
-            "if candidates.Length != 1 || !(candidates[0] is { IsGeneric: false } candidate) {",
+            "if candidates.Length != 1 || candidates[0] is not { IsGeneric: false } candidate {",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("value = candidate.Value", rendered, StringComparison.Ordinal);
@@ -229,9 +229,9 @@ namespace Demo
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
         // ADR-0166 / issue #3409: both `is not` binders stay in the condition
-        // (each `x is not T t` lowers to `!(x is T t)`); nothing is hoisted.
+        // as native `is not` tests; nothing is hoisted.
         Assert.Contains(
-            "if !(left is Left typedLeft) || !(right is Right typedRight) {",
+            "if left is not Left typedLeft || right is not Right typedRight {",
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("typedLeft.Value + typedRight.Value", rendered, StringComparison.Ordinal);
@@ -320,8 +320,8 @@ namespace Demo
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
         // ADR-0166 / issue #3409: the nullable value type unwraps through the
-        // native `!(value is int32 present)` guard; no `let present int32? = value`.
-        Assert.Contains("if !(value is int32 present) {", rendered, StringComparison.Ordinal);
+        // native `value is not int32 present` guard; no `let present int32? = value`.
+        Assert.Contains("if value is not int32 present {", rendered, StringComparison.Ordinal);
         Assert.Contains("return present", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let present", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("== nil", rendered, StringComparison.Ordinal);
@@ -362,8 +362,8 @@ namespace Demo
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
 
         // ADR-0166 / issue #3409: the boxed value unboxes through the native
-        // `!(value is bool present)` guard; no `let present bool? = value as bool?`.
-        Assert.Contains("if !(value is bool present) {", rendered, StringComparison.Ordinal);
+        // `value is not bool present` guard; no `let present bool? = value as bool?`.
+        Assert.Contains("if value is not bool present {", rendered, StringComparison.Ordinal);
         Assert.Contains("return present", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let present", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(" as bool", rendered, StringComparison.Ordinal);

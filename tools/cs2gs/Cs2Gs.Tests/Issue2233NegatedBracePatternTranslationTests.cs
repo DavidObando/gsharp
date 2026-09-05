@@ -73,7 +73,7 @@ namespace Demo
 
         // ADR-0166 / issue #3409: native `!(x is { } at)` guard; no hoisted
         // `let at DateTimeOffset? = promptShownAt` / `if at == nil`.
-        Assert.Contains("if !(promptShownAt is { } at) {", printed);
+        Assert.Contains("if promptShownAt is not { } at {", printed);
         Assert.Contains("clock() - at <= ExitWindow", printed);
         Assert.DoesNotContain("let at", printed);
         Assert.DoesNotContain("== nil", printed);
@@ -110,7 +110,7 @@ namespace Demo
 
         // ADR-0166 / issue #3409: native `!(maybe is { } value)` guard; no
         // hoisted `let value int32? = maybe` / `if value == nil`.
-        Assert.Contains("if !(maybe is { } value) {", printed);
+        Assert.Contains("if maybe is not { } value {", printed);
         Assert.Contains("value + 1", printed);
         Assert.DoesNotContain("let value", printed);
         Assert.DoesNotContain("== nil", printed);

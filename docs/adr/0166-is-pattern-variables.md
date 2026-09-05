@@ -122,7 +122,10 @@ C# CS0128 rule. A leaked variable that collides with a name already declared
 in the enclosing block also reports GS0102 at the designation.
 
 Pattern variables in `and` conjuncts follow the ADR-0162 narrowing rules;
-bindings under `or` and `not` stay rejected (GS0390).
+bindings under `or` and nested `not` stay rejected (GS0390). A direct
+designation under the top-level negation of an `is` expression is permitted:
+`value is not T name`. The variable is definitely assigned on the expression's
+false edge, so a terminating guard makes it available afterward.
 
 ### Implementation shape
 

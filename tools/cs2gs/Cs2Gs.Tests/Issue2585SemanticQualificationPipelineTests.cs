@@ -161,8 +161,8 @@ public sealed class Issue2585SemanticQualificationPipelineTests
         Assert.Contains("Icons.Success", tuiOutput, StringComparison.Ordinal);
         Assert.Contains("DateTime.UtcNow", tuiOutput, StringComparison.Ordinal);
         // ADR-0166 / issue #3409: the negated guard keeps its C# shape and name
-        // (`!(value is ViewModel vm)`), with the semantic root still simplified.
-        Assert.Contains("if !(value is ViewModel vm) || blocked {", tuiOutput, StringComparison.Ordinal);
+        // (`value is not ViewModel vm`), with the semantic root still simplified.
+        Assert.Contains("if value is not ViewModel vm || blocked {", tuiOutput, StringComparison.Ordinal);
         Assert.Contains("vm.Refresh()", tuiOutput, StringComparison.Ordinal);
         Assert.DoesNotContain("App.Core.CoreEnvironment", tuiOutput, StringComparison.Ordinal);
         Assert.DoesNotContain("Commands.TuiCommand", tuiOutput, StringComparison.Ordinal);

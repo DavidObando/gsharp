@@ -523,10 +523,20 @@ internal sealed partial class StatementBinder
         switch (condition)
         {
             case BoundIsExpression isExpr:
-                return (TryClassifyPatternNarrowing(
-                    isExpr.Expression,
-                    isExpr.Pattern,
-                    allowReadOnlyGlobals: false), null);
+                {
+                    if (isExpr.Pattern is BoundNotPattern notPattern)
+                    {
+                        return (null, TryClassifyPatternNarrowing(
+                            isExpr.Expression,
+                            notPattern.Pattern,
+                            allowReadOnlyGlobals: false));
+                    }
+
+                    return (TryClassifyPatternNarrowing(
+                        isExpr.Expression,
+                        isExpr.Pattern,
+                        allowReadOnlyGlobals: false), null);
+                }
 
             case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
                 {

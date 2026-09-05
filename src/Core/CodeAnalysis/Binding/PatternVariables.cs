@@ -27,9 +27,8 @@ internal static class PatternVariables
 
     /// <summary>
     /// Collects the source-visible variables a pattern assigns when it matches:
-    /// type-pattern designations, slice captures, and their conjunctive and
-    /// recursive descendants. <c>or</c> and <c>not</c> operands contribute
-    /// nothing (the binder already rejects bindings there).
+    /// type-pattern designations, slice captures, and their conjunctive,
+    /// recursive, and top-level-negated descendants.
     /// </summary>
     /// <param name="pattern">The bound pattern.</param>
     /// <returns>The variables in source order.</returns>
@@ -57,7 +56,7 @@ internal static class PatternVariables
         switch (condition)
         {
             case BoundIsExpression isExpression:
-                return (CollectBindings(isExpression.Pattern), ImmutableArray<LocalVariableSymbol>.Empty);
+                return ClassifyPattern(isExpression.Pattern);
 
             case BoundUnaryExpression unary when unary.Op.Kind == BoundUnaryOperatorKind.LogicalNegation:
                 {
@@ -151,6 +150,36 @@ internal static class PatternVariables
         }
     }
 
+    private static (ImmutableArray<LocalVariableSymbol> WhenTrue, ImmutableArray<LocalVariableSymbol> WhenFalse)
+        ClassifyPattern(BoundPattern pattern)
+    {
+        switch (pattern)
+        {
+            case BoundNotPattern notPattern:
+                {
+                    var (whenTrue, whenFalse) = ClassifyPattern(notPattern.Pattern);
+                    return (whenFalse, whenTrue);
+                }
+
+            case BoundBinaryPattern binary when binary.IsConjunction:
+                {
+                    var (leftTrue, leftFalse) = ClassifyPattern(binary.Left);
+                    var (rightTrue, rightFalse) = ClassifyPattern(binary.Right);
+                    return (Union(leftTrue, rightTrue), Intersect(leftFalse, rightFalse));
+                }
+
+            case BoundBinaryPattern binary:
+                {
+                    var (leftTrue, leftFalse) = ClassifyPattern(binary.Left);
+                    var (rightTrue, rightFalse) = ClassifyPattern(binary.Right);
+                    return (Intersect(leftTrue, rightTrue), Union(leftFalse, rightFalse));
+                }
+
+            default:
+                return (CollectBindings(pattern), ImmutableArray<LocalVariableSymbol>.Empty);
+        }
+    }
+
     private static void Collect(BoundPattern pattern, ImmutableArray<LocalVariableSymbol>.Builder into)
     {
         switch (pattern)
@@ -205,6 +234,10 @@ internal static class PatternVariables
             case BoundBinaryPattern binaryPattern when binaryPattern.IsConjunction:
                 Collect(binaryPattern.Left, into);
                 Collect(binaryPattern.Right, into);
+                break;
+
+            case BoundNotPattern notPattern:
+                Collect(notPattern.Pattern, into);
                 break;
 
             default:

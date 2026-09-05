@@ -39,11 +39,13 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             var binders = new List<ILocalSymbol>();
 
-            // C# allows designations under a top-level `not` (`x is not T t`)
-            // and assigns them when the whole test is FALSE; G# rejects bindings
-            // under `not` (GS0390) but scopes them identically through `!`, so
-            // the shape lowers to `!(x is T t)`.
-            PatternSyntax pattern = StripTopLevelNegation(isPattern.Pattern, out bool negated);
+            PatternSyntax pattern = isPattern.Pattern;
+            bool lowerNegation = HasUnsupportedBindingUnderTopLevelNot(pattern);
+            if (lowerNegation)
+            {
+                pattern = StripTopLevelNegation(pattern, out _);
+            }
+
             GPattern native = this.BuildNativePattern(pattern, binders);
             foreach (ILocalSymbol binder in binders)
             {
@@ -53,9 +55,35 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GExpression test = new PatternTestExpression(receiver, native);
-            return negated
+            return lowerNegation
                 ? new UnaryExpression("!", new ParenthesizedExpression(test))
                 : test;
+        }
+
+        private static bool HasUnsupportedBindingUnderTopLevelNot(PatternSyntax pattern)
+        {
+            while (pattern is ParenthesizedPatternSyntax parenthesized)
+            {
+                pattern = parenthesized.Pattern;
+            }
+
+            if (pattern is not UnaryPatternSyntax unary
+                || !unary.OperatorToken.IsKind(SyntaxKind.NotKeyword)
+                || !PatternIntroducesBinding(unary.Pattern))
+            {
+                return false;
+            }
+
+            return unary.Pattern switch
+            {
+                DeclarationPatternSyntax declaration =>
+                    declaration.Designation is not SingleVariableDesignationSyntax,
+                RecursivePatternSyntax recursive =>
+                    recursive.Designation is not SingleVariableDesignationSyntax
+                    || recursive.PropertyPatternClause?.Subpatterns
+                        .Any(subpattern => PatternIntroducesBinding(subpattern.Pattern)) == true,
+                _ => true,
+            };
         }
 
         /// <summary>
@@ -544,9 +572,8 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
 
                 case UnaryPatternSyntax unary when unary.OperatorToken.IsKind(SyntaxKind.NotKeyword):
-                    // A designation under `not` is only assignable when the whole
-                    // test is negated at the top (`x is not T t`), which
-                    // TryTranslateNativePatternVariables lowers to `!(x is T t)`.
+                    // ADR-0166: G# directly supports a designation under the
+                    // top-level `not` of an is-expression.
                     return topLevel
                         ? IsNativelyExpressiblePattern(unary.Pattern, topLevel: true)
                         : !PatternIntroducesBinding(unary.Pattern) && IsNativelyExpressiblePattern(unary.Pattern, topLevel: false);

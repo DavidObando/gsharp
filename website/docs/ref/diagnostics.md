@@ -1497,8 +1497,10 @@ Cause/fix:
 Switch patterns may be combined with the contextual keywords
 `and`, `or`, and `not` (precedence: `not` > `and` > `or`; parentheses override).
 A type pattern that introduces a binding variable (`<ident> is T`) is not allowed
-under an `or` or `not` combinator, because the variable would not be definitely
-assigned when the arm runs (mirrors C# CS8780).
+under `or`, nested `not`, or switch-pattern `not`, because the variable would
+not be definitely assigned when the arm runs (mirrors C# CS8780). The boolean
+is-expression form `value is not T name` is the exception: `name` is assigned
+on the false edge.
 
 | ID | Severity | Description |
 |----|----------|-------------|
@@ -1506,10 +1508,9 @@ assigned when the arm runs (mirrors C# CS8780).
 
 Cause/fix:
 
-- **GS0390** — a binding type pattern (`d is Dog`) appears under `or` or `not`.
-  Replace the binding identifier with the discard `_` (e.g. `_ is Dog or _ is Cat`)
-  or restructure the pattern so the binding sits under `and` (or at the top level),
-  where it is definitely assigned.
+- **GS0390** — a binding type pattern appears under `or`, nested `not`, or
+  switch-pattern `not`. Replace the binding identifier with `_` or restructure
+  the pattern so the binding is definitely assigned.
 
 
 ## Interface base-clause diagnostic (GS0391)

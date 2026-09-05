@@ -19,7 +19,7 @@ internal enum PatternBindingContext
     /// <summary>Bindings are permitted and declared in the current pattern scope.</summary>
     Allowed,
 
-    /// <summary>Bindings are rejected because an <c>or</c> or <c>not</c> cannot definitely assign them.</summary>
+    /// <summary>Bindings are rejected because an <c>or</c> or nested <c>not</c> cannot definitely assign them.</summary>
     OrOrNot,
 
     /// <summary>
@@ -31,6 +31,13 @@ internal enum PatternBindingContext
     /// binding spelling <c>name is T</c> stays rejected in this position.
     /// </summary>
     IsExpression,
+
+    /// <summary>
+    /// A direct designation under the top-level <c>not</c> of a boolean
+    /// <c>is</c> expression. It is assigned when the negated pattern is false.
+    /// Nested pattern designations remain forbidden.
+    /// </summary>
+    NegatedIsExpression,
 }
 
 /// <summary>
@@ -263,11 +270,13 @@ internal sealed class PatternBinder
             return new BoundDiscardPattern(syntax, discriminantType);
         }
 
+        var isExpressionBinding = bindingContext is PatternBindingContext.IsExpression
+            or PatternBindingContext.NegatedIsExpression;
         var variable = CreatePatternVariable(
             syntax.Designation.Text,
             discriminantType,
             syntax.Designation,
-            isExpressionBinding: bindingContext == PatternBindingContext.IsExpression);
+            isExpressionBinding);
         variable.HasDefinitelyNonNullValue = false;
 
         if (bindingContext == PatternBindingContext.Allowed)
@@ -353,8 +362,9 @@ internal sealed class PatternBinder
         }
     }
 
-    // Issue #992: `not` forbids bindings in its operand — a variable bound by a
-    // pattern that did NOT match cannot be definitely assigned.
+    // Issue #992 / ADR-0166: switch patterns and nested `not` patterns forbid
+    // bindings. A direct designation in `value is not T name` is assigned on
+    // the false edge of the is-expression and is therefore permitted.
     private BoundPattern BindNotPattern(
         NotPatternSyntax syntax,
         TypeSymbol discriminantType,
@@ -370,7 +380,10 @@ internal sealed class PatternBinder
             return new BoundDiscardPattern(syntax, discriminantType);
         }
 
-        var childBindingContext = PatternBindingContext.OrOrNot;
+        var childBindingContext = bindingContext == PatternBindingContext.IsExpression
+            && HasDirectDesignation(syntax.Pattern)
+                ? PatternBindingContext.NegatedIsExpression
+                : PatternBindingContext.OrOrNot;
         var operand = BindPattern(
             syntax.Pattern,
             discriminantType,
@@ -378,6 +391,10 @@ internal sealed class PatternBinder
             preferTypeNames);
         return new BoundNotPattern(syntax, discriminantType, operand);
     }
+
+    private static bool HasDirectDesignation(PatternSyntax pattern)
+        => pattern is TypePatternSyntax { Designation: not null }
+            or PropertyPatternSyntax { Designation: not null };
 
     private static bool IsNilPattern(PatternSyntax syntax)
     {
@@ -691,7 +708,8 @@ internal sealed class PatternBinder
         PatternBindingContext bindingContext,
         bool preferTypeNames)
     {
-        if (bindingContext == PatternBindingContext.IsExpression
+        if (bindingContext is PatternBindingContext.IsExpression
+                or PatternBindingContext.NegatedIsExpression
             && targetType is NullableTypeSymbol nullableTarget)
         {
             targetType = nullableTarget.UnderlyingType;
@@ -703,11 +721,14 @@ internal sealed class PatternBinder
             : null;
         var hasBinding = bindingIdentifier != null;
         var variableName = bindingIdentifier?.Text ?? "<type-pattern-value>";
+        var isExpressionBinding = hasBinding
+            && (bindingContext is PatternBindingContext.IsExpression
+                or PatternBindingContext.NegatedIsExpression);
         var variable = CreatePatternVariable(
             variableName,
             targetType,
             nameToken,
-            isExpressionBinding: hasBinding && bindingContext == PatternBindingContext.IsExpression);
+            isExpressionBinding);
 
         if (bindingIdentifier != null)
         {
@@ -729,7 +750,7 @@ internal sealed class PatternBinder
                     bindingIdentifier.Location,
                     bindingIdentifier.ValueText);
             }
-            else if (identifier != null)
+            else if (bindingContext == PatternBindingContext.IsExpression && identifier != null)
             {
                 // ADR-0166: only the designation spelling introduces a pattern
                 // variable in a boolean `is`; `value is text is string` keeps
@@ -743,12 +764,15 @@ internal sealed class PatternBinder
             // consumer of the condition (see PatternVariables), not here.
         }
 
+        var nestedBindingContext = bindingContext == PatternBindingContext.NegatedIsExpression
+            ? PatternBindingContext.OrOrNot
+            : bindingContext;
         var boundProperty = propertyPattern == null
             ? null
             : BindPropertyPattern(
                 propertyPattern,
                 targetType,
-                bindingContext,
+                nestedBindingContext,
                 preferTypeNames);
         return new BoundTypePattern(
             syntax,
