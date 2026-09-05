@@ -15,7 +15,7 @@ import type {Optional} from 'utility-types';
 function registerGSharp(Prism: typeof PrismNamespace): void {
   // Reserved keywords recognized by the lexer (SyntaxFacts.GetKeywordKind).
   const keywords =
-    /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|lock|map|open|operator|override|package|private|protected|public|range|return|scope|sealed|select|sequence|struct|switch|throw|try|type|using|var|while)\b/;
+    /\b(?:as|async|await|break|case|catch|chan|class|const|continue|default|defer|do|else|enum|fallthrough|finally|for|func|go|goto|guard|if|import|interface|internal|is|let|lock|map|open|operator|override|package|private|protected|public|range|rethrow|return|scope|sealed|select|sequence|struct|suspend|switch|throw|try|using|var|while)\b/;
 
   // Contextual keywords: ordinary identifiers that act as keywords in context.
   // Grounded in the parser's contextual recognitions (Text == "…" checks),
@@ -26,13 +26,19 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // (`and`/`or`/`not`), the `init()` constructor constraint (renamed from
   // `new()` by ADR-0097 / issue #997), the unsafe/low-level words
   // (`unsafe`/`fixed`/`stackalloc`/`unmanaged`/`sizeof`), partial declarations,
-  // and the overflow-context
+  // the overflow-context
   // markers `checked`/`unchecked` (issue #1881; `lock` is a reserved keyword,
-  // not contextual — see `keywords` above).
+  // not contextual — see `keywords` above), the explicit-extension-receiver
+  // marker `extension` (ADR-0165 / issue #3357), and the named-delegate
+  // declaration keyword `delegate` (issue #3510).
   // `record` was removed in v0.2; the lexer still recognises it so the parser
   // can emit the GS0307 migration diagnostic, so we keep it here for fidelity.
+  // `type` stopped being a reserved keyword in issue #3510: it now parses
+  // contextually, only at member position, as the retired
+  // `type Name = delegate func(...)` recovery spelling superseded by the
+  // canonical `delegate Name(...) R;` declaration.
   const contextualKeywords =
-    /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
+    /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|extension|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the
@@ -120,9 +126,11 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
     },
     'class-name': [
       {
-        // Type after declaration keywords.
+        // Type after declaration keywords. `delegate Name(...)` is the
+        // canonical named-delegate-type declaration (issue #3510); `type` is
+        // kept for the retired `type Name = delegate func(...)` recovery form.
         pattern:
-          /(\b(?:class|struct|enum|interface|type)\s+)[A-Za-z_]\w*/,
+          /(\b(?:class|struct|enum|interface|type|delegate)\s+)[A-Za-z_]\w*/,
         lookbehind: true,
       },
       {
