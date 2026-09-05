@@ -710,6 +710,33 @@ internal sealed partial class MethodBodyEmitter
             }
         }
 
+        // Issue #3956 / ADR-0172: the `from == to` fast path at the top of this
+        // method is symbol REFERENCE equality, but one CLR type is routinely
+        // minted as several non-reference-equal symbols — a nullability-
+        // annotated wrapper on one side, a `ValueTuple<…>` recovered from a CLR
+        // signature versus a `TupleTypeSymbol` carrying element NAMES on the
+        // other. Element names are metadata over the positional shape and never
+        // change the runtime type, so `KeyValuePair[string, (int32, int32,
+        // List[(int32, int32, int32)])]` and the same shape written with names
+        // are one type, and the binder duly classifies the conversion between
+        // them as IDENTITY — yet every structural arm above keys off a specific
+        // symbol shape and declines, leaving the crash below as the only
+        // outcome. Ask the classifier the SHAPE question the reference check
+        // cannot: when the two symbols denote the same type AND agree on their
+        // CLR backing, the conversion is representation-preserving and needs no
+        // IL at all, exactly like the `from == to` case. Both halves are
+        // load-bearing — a `NullableTypeSymbol` relays its UNDERLYING type's
+        // `ClrType` (#2051), so the CLR check alone would let a genuine
+        // `T -> Nullable<T>` lift through unwrapped, and the identity check
+        // alone would admit an alias whose backing legitimately differs.
+        if (from.ClrType != null
+            && to.ClrType != null
+            && ClrTypeUtilities.AreSame(from.ClrType, to.ClrType)
+            && Conversion.Classify(from, to).IsIdentity)
+        {
+            return;
+        }
+
         EmitDiagnosticException.Wrap(
             conv.Syntax,
             new NotSupportedException(
