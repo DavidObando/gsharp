@@ -295,7 +295,7 @@ func produceBatched(ch chan[int32], count int32, size int32) {
         var offset = 0
         while offset < i {
             let slice = ReadOnlyMemory[int32](chunk, offset, i - offset)
-            offset = offset + ch.SendBatch(slice)
+            offset = offset + await ch.SendBatch(slice)
         }
 
         sent = sent + i

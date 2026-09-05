@@ -268,6 +268,55 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     }
 
     /// <inheritdoc/>
+    protected override BoundExpression RewriteAwaitExpression(BoundAwaitExpression node)
+    {
+        var rewritten = base.RewriteAwaitExpression(node);
+
+        if (node.Syntax == null)
+        {
+            return rewritten;
+        }
+
+        // ADR-0174 D4 / errata 10: a `lock` body's monitor is thread-affine and
+        // reentrant, which is why a channel operation there compiles to the
+        // BLOCKING form rather than parking. An explicit await has no blocking
+        // form to fall back to — it would resume on another thread and exit a
+        // monitor it does not hold — so it is rejected wherever it appears,
+        // including in a body that is already `async` or suspending. C# spells
+        // the same rule CS1996.
+        if (lockDepth > 0)
+        {
+            diagnostics.ReportAwaitInsideLockBody(node.Syntax.Location);
+            return rewritten;
+        }
+
+        // ADR-0174 D5: `BindGoStatement` strips the operand's OWN await — the
+        // goroutine consumes that task — so an await still here is nested in
+        // the operand's arguments, and no function kind can lower it: the
+        // spiller does not hoist out of a `go`, so before this check the shape
+        // reached the emitter as GS9998 even from an `async func`.
+        if (goDepth > 0)
+        {
+            diagnostics.ReportAwaitInsideGoOperand(node.Syntax.Location);
+            return rewritten;
+        }
+
+        // ADR-0174 D4, the `await g()` row: the binder lets an await stand in a
+        // plain `func` and leaves the coloring to inference, which has now run.
+        // A container that still does not suspend is a boundary — inference may
+        // not change its signature — and an await there has nowhere to suspend,
+        // so the author must choose the coloring. This holds inside a `go`
+        // operand too: the operand's own await was stripped at bind time, so a
+        // surviving one is nested, and the spiller hoists it into THIS body.
+        if (!ContainerSuspends)
+        {
+            diagnostics.ReportAwaitAtSuspensionBoundary(node.Syntax.Location, container.Name);
+        }
+
+        return rewritten;
+    }
+
+    /// <inheritdoc/>
     protected override BoundExpression RewriteCallExpression(BoundCallExpression node)
     {
         var rewritten = base.RewriteCallExpression(node);

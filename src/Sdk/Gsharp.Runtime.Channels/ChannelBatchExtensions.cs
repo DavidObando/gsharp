@@ -93,7 +93,6 @@ public static class ChannelBatchExtensions
     /// far when cancellation arrives after at least one element moved — never
     /// a bare throw that hides the count and invites duplicates on retry.
     /// </returns>
-    [Suspending]
     public static ValueTask<int> ReceiveBatch<T>(this ChannelReader<T> reader, Memory<T> buffer, int atLeast, Context? context = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
@@ -109,7 +108,6 @@ public static class ChannelBatchExtensions
     /// <param name="items">The elements to send.</param>
     /// <param name="context">The ambient cancellation context.</param>
     /// <returns>The count transferred, which is the whole batch unless cancellation arrived mid-batch.</returns>
-    [Suspending]
     public static ValueTask<int> SendBatch<T>(this ChannelWriter<T> writer, ReadOnlyMemory<T> items, Context? context = null)
     {
         ArgumentNullException.ThrowIfNull(writer);
@@ -142,7 +140,6 @@ public static class ChannelBatchExtensions
     /// <param name="atLeast">The minimum count to wait for.</param>
     /// <param name="context">The ambient cancellation context.</param>
     /// <returns>The count transferred.</returns>
-    [Suspending]
     public static ValueTask<int> ReceiveBatch<T>(this Channel<T> channel, Memory<T> buffer, int atLeast, Context? context = null)
         => (channel ?? throw new ArgumentNullException(nameof(channel))).Reader.ReceiveBatch(buffer, atLeast, context);
 
@@ -152,7 +149,6 @@ public static class ChannelBatchExtensions
     /// <param name="items">The elements to send.</param>
     /// <param name="context">The ambient cancellation context.</param>
     /// <returns>The count transferred.</returns>
-    [Suspending]
     public static ValueTask<int> SendBatch<T>(this Channel<T> channel, ReadOnlyMemory<T> items, Context? context = null)
         => (channel ?? throw new ArgumentNullException(nameof(channel))).Writer.SendBatch(items, context);
 

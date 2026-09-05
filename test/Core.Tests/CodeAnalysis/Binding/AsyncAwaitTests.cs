@@ -48,8 +48,14 @@ async func main() int32 {
         Assert.Empty(result.Diagnostics);
     }
 
+    /// <summary>
+    /// ADR-0174 D4, the <c>await g()</c> row (issue #3954): awaiting makes the
+    /// AWAITING function suspending, so a plain <c>func</c> may await — the
+    /// inference pass colours it, exactly as a channel operation would. Before
+    /// this row was implemented the same source was GS0132.
+    /// </summary>
     [Fact]
-    public void Await_OutsideAsync_Diagnoses()
+    public void Await_InAPlainFunc_ColoursTheCaller()
     {
         var source = @"
 async func answer() int32 {
@@ -60,9 +66,37 @@ func main() int32 {
     let v = await answer()
     return v
 }
+
+main()
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Message.Contains("'await'"));
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(42, result.Value);
+    }
+
+    /// <summary>
+    /// ADR-0174 D4 "where inference stops": a boundary's signature is fixed, so
+    /// an <c>await</c> there has nowhere to suspend and GS0574 asks the author
+    /// to choose the coloring. This is the half of the rule that keeps the
+    /// previous diagnostic's job.
+    /// </summary>
+    [Fact]
+    public void Await_AtASuspensionBoundary_Diagnoses()
+    {
+        var source = @"
+async func answer() int32 {
+    return 42
+}
+
+open class Reader {
+    open func read() int32 {
+        return await answer()
+    }
+}
+";
+        var result = Evaluate(source);
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0574");
+        Assert.Contains("'read'", diagnostic.Message);
     }
 
     [Fact]

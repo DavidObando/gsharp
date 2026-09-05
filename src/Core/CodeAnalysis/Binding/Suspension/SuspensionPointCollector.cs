@@ -107,6 +107,32 @@ internal sealed class SuspensionPointCollector : BoundTreeWalker
     }
 
     /// <inheritdoc/>
+    protected override void VisitAwaitExpression(BoundAwaitExpression node)
+    {
+        // ADR-0174 D4, the `await g()` row: an await in a plain `func` is a
+        // suspension point, and colours this function exactly as a channel
+        // operation would. Reaching here at all means the body is not yet
+        // `async` or suspending — inference skips those — so every await the
+        // walk finds is one the binder left for it.
+        //
+        // A `go` operand and a `lock` body are both skipped, and in both cases
+        // because `SuspendingCallRewriter` rejects the await outright rather
+        // than letting it suspend here: a monitor is thread-affine (errata 10,
+        // the reason a channel operation in a `lock` compiles to the blocking
+        // form), and an await NESTED in a go operand —
+        // `go consume(await fetch())`, the operand's own await having been
+        // stripped by `BindGoStatement` — is a shape the emitter cannot lower
+        // in any function kind. Colouring this function on an await that is
+        // about to be rejected would be a signature change bought for nothing.
+        if (goDepth == 0 && lockDepth == 0)
+        {
+            facts.HasDirectPoint = true;
+        }
+
+        base.VisitAwaitExpression(node);
+    }
+
+    /// <inheritdoc/>
     protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
     {
         if (goDepth == 0 && lockDepth == 0 && (ChannelRuntimeBinder.IsScopeExit(node) || ChannelRuntimeBinder.IsSelectWait(node) || ChannelRuntimeBinder.IsAsyncLetCancelIfUnread(node)))

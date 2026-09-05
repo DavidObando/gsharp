@@ -47,7 +47,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor UndefinedBinaryOperator = new("GS0129", DiagnosticSeverity.Error, "Binary operator '{0}' is not defined for types '{1}' and '{2}'.");
     internal static readonly DiagnosticDescriptor UndefinedFunction = new("GS0130", DiagnosticSeverity.Error, "Function '{0}' doesn't exist.");
     internal static readonly DiagnosticDescriptor NotAFunction = new("GS0131", DiagnosticSeverity.Error, "'{0}' is not a function.");
-    internal static readonly DiagnosticDescriptor AwaitOutsideAsyncFunction = new("GS0132", DiagnosticSeverity.Error, "'await' can only be used inside an 'async func'.");
+    internal static readonly DiagnosticDescriptor AwaitOutsideAsyncFunction = new("GS0132", DiagnosticSeverity.Error, "'await' needs an enclosing function to make suspending, and there is none here (ADR-0174 D4).");
     internal static readonly DiagnosticDescriptor TypeIsNotAwaitable = new("GS0133", DiagnosticSeverity.Error, "Expression of type '{0}' cannot be awaited; expected a 'Task' or 'Task[T]'.");
     internal static readonly DiagnosticDescriptor TypeIsNotAsyncEnumerable = new("GS0134", DiagnosticSeverity.Error, "Expression of type '{0}' cannot be iterated with 'await for'; expected an 'IAsyncEnumerable[T]'.");
     internal static readonly DiagnosticDescriptor AsyncModifierInTypeClauseRequiresSequenceOrFunc = new("GS0135", DiagnosticSeverity.Error, "The 'async' modifier in a type clause is only valid before 'sequence[T]', '(T) -> R', or 'func(...)'; found '<{0}>'.");
@@ -464,6 +464,14 @@ internal static class DiagnosticDescriptors
     // handler, so unreachable-clause analysis follows C#'s CS0160.
     internal static readonly DiagnosticDescriptor AwaitInsideCatchFilter = new("GS0572", DiagnosticSeverity.Error, "Cannot 'await' inside a 'catch' filter: the filter runs in the CLR's first exception pass, which cannot suspend. Move the awaited work into the 'catch' body (ADR-0177).");
     internal static readonly DiagnosticDescriptor UnreachableCatchClause = new("GS0573", DiagnosticSeverity.Error, "This 'catch' clause is unreachable: an earlier clause catches '{0}', which already covers '{1}'. Reorder the clauses so the more specific one comes first, or give this one a 'when' filter (ADR-0177).");
+
+    // ADR-0174 D4 / issue #3954: `await` makes the awaiting function
+    // suspending, which changes its emitted signature — so it is only legal
+    // where inference is allowed to do that. At a boundary the author must say
+    // which coloring the fixed signature has.
+    internal static readonly DiagnosticDescriptor AwaitAtSuspensionBoundary = new("GS0574", DiagnosticSeverity.Error, "'await' makes '{0}' suspending, but its signature is fixed — inference stops at an entry point, an 'open'/'override'/interface member, an accessor, a constructor, an operator, an iterator, a function literal, and an 'unsafe' or 'fixed' body (ADR-0174 D4). Move the awaited work into a 'suspend func' (implicitly awaited, 'R') or an 'async func' (an observable 'Task[R]') and call that from here; where the form allows it, declaring this one that way works too.");
+    internal static readonly DiagnosticDescriptor AwaitInsideGoOperand = new("GS0576", DiagnosticSeverity.Error, "Cannot 'await' inside a 'go' operand: the spawn takes the call, and an await nested in its arguments has no place to suspend. Bind the awaited value to a local first, then 'go' the call that uses it (ADR-0174 D5).");
+    internal static readonly DiagnosticDescriptor AwaitInsideLockBody = new("GS0575", DiagnosticSeverity.Error, "Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (ADR-0174 D4; C# spells the same rule CS1996).");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

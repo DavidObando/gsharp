@@ -2696,6 +2696,59 @@ implementation had to refine it.
     display gap, filed as issue #3959: the CLR fallback renderer spells a
     rank-1 array in C# suffix form while rank ≥ 2 already uses G#'s prefix
     form.
+38. **D4's `await` row, implemented — and D10's batch surface stops being
+    `[Suspending]` (issue #3954).** D4's normative table has always said
+    `await g()` colours the CALLER suspending. The implementation did not: an
+    `await` outside an `async func` was GS0132, so the only way a plain `func`
+    could reach a suspending callee was the implicit await. That gap forced the
+    other half of this entry. `await` in a plain `func` is now a suspension
+    point like a channel operation — the binder leaves it in place,
+    `SuspensionPointCollector` reports it, and the fixed point colours the
+    function. Where inference may not go, it may not go for an `await` either:
+    a boundary keeps its declared shape and GS0574 asks the author for
+    `async func` (an observable `Task[R]`) or `suspend func` (implicitly
+    awaited, `R`).
+
+    With that in place, **the four `ChannelBatchExtensions` methods drop
+    `[Suspending]`**, and D10's `suspend func (ch in chan[T]) ReceiveBatch(…)`
+    spelling is superseded: the batch surface is an ordinary
+    `ValueTask[int32]`-returning API, and a G# caller writes the `await`. The
+    principle this restores is that an awaitable type means in G# what it means
+    in C#, and the compiler awaits for you only where the *syntax* is a channel
+    operation — `ch <- v`, `<-ch`, `select`, channel `for..in` — never because
+    a library method returns a task.
+
+    What made the hand-marking wrong is narrower than "auto-await is wrong".
+    `[Suspending]` is D4's cross-assembly record for a **G#-emitted** function:
+    it is how a `suspend func`, or one inference coloured, keeps its logical
+    `R` at a G# call site in another assembly, and it stays exactly as it was.
+    Applying it by hand to a **C#-authored** method repurposes it to make a C#
+    API colourless in G# — and then the API has two contradictory shapes:
+    `ValueTask<int>` to the C# that calls it (including its own tests) and
+    `int32` to G#. `X.AsTask()`, which the C# tests use to start a batch, cancel
+    it, and await the count with a timeout, had no G# form at all; seven of the
+    fifteen `test/Runtime.Channels.Tests` signatures in the #3501 gate were that
+    one shape.
+
+    Nothing was lost on the D7 side, because nothing was there: the ambient
+    context is supplied only to a trailing parameter named `<>ctx`
+    (`SupplyImportedContext`), and the batch methods take an ordinary
+    `Context? context = null` the caller passes explicitly.
+
+    **Two positions reject the await rather than colouring on it,** because
+    neither has anywhere to suspend and both would otherwise reach the emitter.
+    A `lock` body: the monitor is thread-affine and reentrant, which is exactly
+    why a channel operation there compiles to the blocking form (errata 10) —
+    an await has no blocking form to fall back to, and a continuation resuming
+    on another thread would exit a lock it does not hold, so GS0575 rejects it
+    in every function kind. That the same shape was already accepted inside an
+    `async func` was a pre-existing hole; it is closed here, and C# spells the
+    identical rule CS1996. And an await NESTED in a `go` operand's arguments —
+    `go consume(await fetch())`, the operand's own await having been stripped
+    at bind time because the goroutine consumes that task: the spiller does not
+    hoist out of a `go`, so this shape reached the emitter as GS9998 even from
+    an `async func`. GS0576 replaces that internal error and names the fix,
+    which is to bind the value to a local first.
 
 ## Addendum A — The ten patterns, three ways
 

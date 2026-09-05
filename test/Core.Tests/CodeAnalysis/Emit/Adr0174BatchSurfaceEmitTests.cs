@@ -17,19 +17,23 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 /// channel it is given cannot benefit (GS0562).
 /// </summary>
 /// <remarks>
-/// Discrimination witness (ADR-0154): the batch surface is an imported
-/// <c>[Suspending]</c> <em>extension</em>, a call shape the binder completes on
-/// a different path from a static or instance import. A mutant that drops that
-/// completion breaks <see cref="ABatchReceive_IsImplicitlyAwaited"/>: the
-/// caller is not coloured suspending, the call keeps its <c>ValueTask[int32]</c>
-/// type, and returning it from an <c>int32</c> function is GS0155. A mutant
-/// that reports GS0562 from the call's own type rather than the receiver's
-/// declaration breaks <see cref="ABufferedChannel_DoesNotWarn"/>.
+/// Issue #3954: the batch surface is an ordinary <c>ValueTask[int32]</c>-returning
+/// import, not a hand-marked <c>[Suspending]</c> one, so a G# caller writes the
+/// <c>await</c> and awaitables keep their C# meaning — <c>.AsTask()</c> on a
+/// batch call names the task the way it does in C#. Awaiting is what colours
+/// the caller (ADR-0174 D4's <c>await g()</c> row), so a plain <c>func</c> still
+/// uses the surface without becoming <c>async</c>.
+/// Discrimination witness (ADR-0154): a mutant that restores the implicit await
+/// breaks <see cref="ABatchCall_IsAnOrdinaryValueTask"/>, whose whole point is
+/// that the call has a nameable task. A mutant that stops <c>await</c> colouring
+/// a plain caller breaks <see cref="ABatchReceive_IsAwaitedByAPlainFunc"/> with
+/// GS0574. A mutant that reports GS0562 from the call's own type rather than the
+/// receiver's declaration breaks <see cref="ABufferedChannel_DoesNotWarn"/>.
 /// </remarks>
 public class Adr0174BatchSurfaceEmitTests
 {
     [Fact]
-    public void ABatchReceive_IsImplicitlyAwaited()
+    public void ABatchReceive_IsAwaitedByAPlainFunc()
     {
         var result = EmittedOracle.Evaluate("""
             package P0174BatchAwait
@@ -37,7 +41,7 @@ public class Adr0174BatchSurfaceEmitTests
 
             func drain(source chan[int32]) int32 {
                 let buffer = []int32{0, 0, 0, 0}
-                return source.ReceiveBatch(Memory[int32](buffer), 1)
+                return await source.ReceiveBatch(Memory[int32](buffer), 1)
             }
 
             func run() int32 {
@@ -72,9 +76,9 @@ public class Adr0174BatchSurfaceEmitTests
                 scope {
                     let ch = chan[int32](8)
                     let items = []int32{1, 2, 3, 4}
-                    let sent = ch.SendBatch(ReadOnlyMemory[int32](items))
+                    let sent = await ch.SendBatch(ReadOnlyMemory[int32](items))
                     let buffer = []int32{0, 0, 0, 0}
-                    let took = ch.ReceiveBatch(Memory[int32](buffer), 4)
+                    let took = await ch.ReceiveBatch(Memory[int32](buffer), 4)
                     total = sent + took
                 }
 
@@ -82,6 +86,38 @@ public class Adr0174BatchSurfaceEmitTests
             }
 
             run()
+            """);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(8, result.Value);
+    }
+
+    /// <summary>
+    /// Issue #3954: the batch call is an ordinary <c>ValueTask[int32]</c>, so a
+    /// caller can NAME it — start the operation, do something else, then await
+    /// it — which is the C# idiom (<c>.AsTask().WaitAsync(timeout)</c>) that had
+    /// no G# form while the surface auto-awaited. The value proves the task was
+    /// the real operation and not a completed placeholder: the second send only
+    /// fits after the receive drains the buffer.
+    /// </summary>
+    [Fact]
+    public void ABatchCall_IsAnOrdinaryValueTask()
+    {
+        var result = EmittedOracle.Evaluate("""
+            package P0174BatchTask
+            import System
+            import System.Threading.Tasks
+
+            async func run() int32 {
+                let ch = chan[int32](2)
+                let items = []int32{1, 2, 3, 4}
+                let pending = ch.SendBatch(ReadOnlyMemory[int32](items)).AsTask()
+                let buffer = []int32{0, 0, 0, 0}
+                let took = await ch.ReceiveBatch(Memory[int32](buffer), 4)
+                return await pending + took
+            }
+
+            await run()
             """);
 
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
@@ -98,7 +134,7 @@ public class Adr0174BatchSurfaceEmitTests
             let ch = chan[int32](0)
             scope {
                 let buffer = []int32{0, 0}
-                let took = ch.ReceiveBatch(Memory[int32](buffer), 1)
+                let took = await ch.ReceiveBatch(Memory[int32](buffer), 1)
             }
             """);
 
@@ -117,7 +153,7 @@ public class Adr0174BatchSurfaceEmitTests
             let ch = chan[int32](64)
             scope {
                 let buffer = []int32{0, 0}
-                let took = ch.ReceiveBatch(Memory[int32](buffer), 1)
+                let took = await ch.ReceiveBatch(Memory[int32](buffer), 1)
             }
             """);
 
