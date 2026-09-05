@@ -11,7 +11,6 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Analyzers;
 using Cs2Gs.Translator.Loading;
-using GSharp.InternalAnalyzers;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Xunit;
 
@@ -22,7 +21,7 @@ namespace Cs2Gs.Tests;
 /// covered GSA0001 only, so a translated rule that stopped firing altogether
 /// passed every negative test and was caught only by a full migration run —
 /// which is exactly how #3795 escaped. This class runs the REAL Roslyn
-/// <see cref="RewriterClonePreservationAnalyzer"/> over each snippet of
+/// <c>RewriterClonePreservationAnalyzer</c> over each snippet of
 /// <c>test/InternalAnalyzers.Tests</c>, translates BOTH the snippet and the
 /// analyzer with cs2gs, compiles the translated analyzer with the real G#
 /// compiler, runs it over the translated snippet through the same host gsc
@@ -227,8 +226,13 @@ class ViaBaseResult : BoundTreeRewriter
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", csharpSource) });
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+        // Issue #3880: see Adr0169TranslatedAnalyzerHarness.CompileRoslynAnalyzer —
+        // the control is compiled from the analyzer's own source so the Roslyn
+        // half of the parity check survives self-migration.
+        DiagnosticAnalyzer roslynAnalyzer = Adr0169TranslatedAnalyzerHarness.CompileRoslynAnalyzer(
+            "RewriterClonePreservationAnalyzer.cs", "RewriterClonePreservationAnalyzer");
         return project.Compilation
-            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(new RewriterClonePreservationAnalyzer()))
+            .WithAnalyzers(ImmutableArray.Create<DiagnosticAnalyzer>(roslynAnalyzer))
             .GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult()
             .Count(d => d.Id == "GSA0005");
     }
