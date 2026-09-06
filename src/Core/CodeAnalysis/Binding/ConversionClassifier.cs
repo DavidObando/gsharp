@@ -1227,6 +1227,35 @@ internal sealed class ConversionClassifier
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
 
+                    // Issue #4000: a TUPLE is the same erasure as the channel
+                    // arm above, one level in. A G# `(int32, T)` IS a
+                    // `System.ValueTuple<int32, T>` (ADR-0158 identity), but an
+                    // open element leaves the candidate's CLOSED parameter type
+                    // erased to `ValueTuple<int32, object>` — and the argument's
+                    // own top-level type is a `TupleTypeSymbol`, so none of the
+                    // arms above fire. Unlike the map sibling of the same call
+                    // — `Dictionary<K, V>` has no element-wise rebuild path, so
+                    // `Conversion` says None, the argument is left alone, and
+                    // the raw value it pushes happens to be right — a tuple DOES
+                    // have one: the conversion machinery faithfully rebuilt the
+                    // tuple at the erased target (`box !!T; newobj
+                    // ValueTuple<int32, object>`) and handed it to a MethodSpec
+                    // closed over the REAL `T`, which wants
+                    // `ValueTuple<int32, !!0>`. That is correct machinery aimed
+                    // at the wrong shape: ILVerify StackUnexpected, and the
+                    // program still prints the right answer, which is what made
+                    // it invisible. Recovering the real slot makes the argument
+                    // `(int32, T) -> (int32, T)` identity — no rebuild, no box —
+                    // exactly as it already is where nothing erased.
+                    if (substituted == null
+                        && argument.Type is TupleTypeSymbol tupleArgument
+                        && tupleArgument.ElementTypes.Any(static element =>
+                            TypeSymbol.ContainsTypeParameter(element)
+                            || TypeSymbol.ContainsSameCompilationUserType(element)))
+                    {
+                        substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
+                    }
+
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
 
