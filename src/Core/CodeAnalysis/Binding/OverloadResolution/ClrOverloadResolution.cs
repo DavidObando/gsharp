@@ -2474,7 +2474,32 @@ internal static class ClrOverloadResolution
                     // Issue #750 / ADR-0088: same constraint check as the
                     // inference path. Required because MetadataLoadContext's
                     // MakeGenericMethod does not validate constraints.
-                    if (!SatisfiesGenericConstraints(gmi, explicitTypeArgsArray, recoverTypeArgSymbols?.Invoke(closed, false) ?? default))
+                    //
+                    // Issue #4016 follow-up (code-exploder gate): constraints
+                    // are asked on the `object`-NORMALISED vector. #4016 closes
+                    // an explicit type argument over the same erasure the
+                    // ARGUMENTS present — a same-compilation class arrives as
+                    // its imported base — so applicability compares like with
+                    // like. A constraint is a different question, and one type
+                    // parameter's surrogate leaks into ANOTHER's constraint
+                    // when that constraint mentions it:
+                    // `AddScheme[TOptions, THandler]
+                    //  where THandler : AuthenticationHandler[TOptions]`
+                    // substituted `TOptions` to `AuthenticationSchemeOptions`,
+                    // so the constraint read
+                    // `AuthenticationHandler<AuthenticationSchemeOptions>`
+                    // while the handler's own base chain still erases to
+                    // `AuthenticationHandler<object>` — invariant, so the check
+                    // failed and the candidate was dropped with GS0159.
+                    // Normalising the erased positions back to `object` asks
+                    // exactly the question this check asked before #4016, and
+                    // leaves the projected vector to do its own job in
+                    // `closed`'s parameter types.
+                    var constraintTypeArgSymbols = recoverTypeArgSymbols?.Invoke(closed, false) ?? default;
+                    if (!SatisfiesGenericConstraints(
+                            gmi,
+                            NormaliseErasedTypeArgsForConstraintCheck(explicitTypeArgsArray, constraintTypeArgSymbols),
+                            constraintTypeArgSymbols))
                     {
                         return;
                     }
@@ -5019,6 +5044,84 @@ internal static class ClrOverloadResolution
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #4016 follow-up: the explicit type-argument vector with every
+    /// ERASED position put back to the reference-context <c>object</c>
+    /// placeholder, for the purpose of checking generic constraints.
+    /// </summary>
+    /// <remarks>
+    /// #4016 closes an explicit type argument over the same erasure the
+    /// arguments present, so a same-compilation class arrives as its imported
+    /// base and applicability compares like with like. Constraints must not see
+    /// that surrogate: it leaks into ANOTHER type parameter's constraint
+    /// whenever the constraint mentions this one, and the two sides then
+    /// disagree the way <c>AuthenticationHandler&lt;AuthenticationSchemeOptions&gt;</c>
+    /// disagrees with the <c>AuthenticationHandler&lt;object&gt;</c> that the
+    /// handler's own base chain erases to. A position is erased exactly when
+    /// its recovered symbol has no CLR type of its own — the same test
+    /// <c>RejectConstraintFailureOrThrowCompilerInvariant</c> uses. Returns the
+    /// original array when nothing needs normalising, so the common path
+    /// allocates nothing.
+    /// </remarks>
+    /// <param name="typeArgs">The closed type-argument vector.</param>
+    /// <param name="typeArgSymbols">The recovered symbolic type arguments.</param>
+    /// <returns>The vector to check constraints against.</returns>
+    private static Type[] NormaliseErasedTypeArgsForConstraintCheck(
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol?> typeArgSymbols)
+    {
+        if (typeArgs is null || typeArgSymbols.IsDefaultOrEmpty || typeArgSymbols.Length != typeArgs.Length)
+        {
+            return typeArgs ?? Array.Empty<Type>();
+        }
+
+        Type[]? normalised = null;
+        for (var i = 0; i < typeArgs.Length; i++)
+        {
+            if (typeArgSymbols[i] is not { ClrType: null })
+            {
+                continue;
+            }
+
+            var contextObject = ResolveObjectInSameContext(typeArgs[i]);
+            if (contextObject is null || typeArgs[i].IsSameAs(contextObject))
+            {
+                continue;
+            }
+
+            normalised ??= (Type[])typeArgs.Clone();
+            normalised[i] = contextObject;
+        }
+
+        return normalised ?? typeArgs;
+    }
+
+    /// <summary>
+    /// Issue #4016 follow-up: <c>System.Object</c> as loaded in the same
+    /// reflection context as <paramref name="sibling"/>, so the normalised
+    /// vector stays usable in that load context.
+    /// </summary>
+    /// <param name="sibling">A type already in the target context.</param>
+    /// <returns>That context's <c>System.Object</c>.</returns>
+    private static Type? ResolveObjectInSameContext(Type? sibling)
+    {
+        if (sibling is null)
+        {
+            return typeof(object);
+        }
+
+        try
+        {
+            return sibling.Assembly == typeof(object).Assembly
+                ? typeof(object)
+                : sibling.Assembly.GetType("System.Object", throwOnError: false) ?? typeof(object);
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return typeof(object);
+        }
     }
 
     private static bool UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(

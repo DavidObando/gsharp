@@ -458,6 +458,24 @@ public sealed partial class DiagnosticBag
     public void ReportUnableToFindFunction(TextLocation location, string text)
     => Report(location, DiagnosticDescriptors.UnableToFindFunction, $"Cannot find function {text}.");
 
+    /// <summary>
+    /// Issue #4013: reports a call to a member the receiver's type implements
+    /// only as an explicit interface implementation, so it is not part of that
+    /// type's own surface and is reachable only through an interface-typed
+    /// receiver.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="typeName">The receiver type as spelled in G#.</param>
+    /// <param name="memberName">The member name the call site used.</param>
+    /// <param name="interfaceName">The interface declaring the member.</param>
+    public void ReportExplicitInterfaceMemberNotOnTypeSurface(TextLocation location, string typeName, string memberName, string interfaceName)
+    => Report(
+        location,
+        DiagnosticDescriptors.ExplicitInterfaceMemberNotOnTypeSurface,
+        typeName,
+        memberName,
+        interfaceName);
+
     /// <summary>Reports a function call whose receiver lacks a valid non-null narrowing.</summary>
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="functionName">The called function.</param>

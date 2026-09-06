@@ -105,11 +105,56 @@ internal sealed partial class ExpressionBinder
                 // Issue #320: a user-defined type (or an in-scope type parameter)
                 // has no reference-context CLR type, so it cannot be handed to
                 // MakeGenericMethod directly. Close the open method with a
-                // reference-context System.Object placeholder so resolution and
-                // applicability still run; the real type-argument symbol is
-                // preserved in typeArgSymbols and re-emitted as its own TypeDef
-                // token in the generic method specification.
-                resolved[i] = scope.References.GetCoreType("System.Object");
+                // reference-context placeholder so resolution and applicability
+                // still run; the real type-argument symbol is preserved in
+                // typeArgSymbols and re-emitted as its own TypeDef token in the
+                // generic method specification.
+                //
+                // Issue #4013 is not this; issue #4016 is: the placeholder must
+                // be the SAME erasure the ARGUMENTS present, or the two sides
+                // describe the same G# type with two different CLR types and no
+                // candidate applies. `MemberLookup.TryProjectErasedClrType` —
+                // which every structural argument spelling goes through — erases
+                // a same-compilation class to its imported base when it has one
+                // (`class Derived : ImportedBase` -> `ImportedBase`) and to
+                // `object` only when it does not. So `map[string, Derived]`
+                // arrives as `Dictionary<string, ImportedBase>` while a flat
+                // `System.Object` placeholder closed the slot to
+                // `Dictionary<string, object>`: invariant, no conversion,
+                // GS0159 — even though the very same call binds when the type
+                // arguments are INFERRED (inference reads the argument's own
+                // shape) or when the class has no imported base (both erasures
+                // are then `object`). `[]Derived` and `[N]Derived` at a `T[]`
+                // slot failed identically. Project the type argument the same
+                // way the arguments are projected and the two sides agree
+                // again; `TryProjectErasedClrType` already answers `object` for
+                // a type parameter, an interface and a base-less class, so
+                // every case that used to reach the flat placeholder still does.
+                //
+                // This is the same correction #3087 made one site over in
+                // `ExpressionBinder.Calls.cs`, which stopped flattening a
+                // symbolic TUPLE type argument to `object` for exactly this
+                // reason.
+                // Review finding (#4031): a direct same-compilation ENUM keeps
+                // the established `System.Object` placeholder.
+                // `TryProjectErasedClrType` erases an `EnumSymbol` to `int`,
+                // which is a VALUE type, and
+                // `TryCloseOverUserValueTypePlaceholders` only substitutes for
+                // NON-value-type placeholders — so a candidate whose
+                // `MakeGenericMethod` rejects `int` (`Enum.TryParse[TEnum]`,
+                // whose `where TEnum : Enum` an `int` does not satisfy) would be
+                // dropped outright rather than retried. The enum's own erasure
+                // is not what #4016 is about: this fix exists to make a
+                // same-compilation CLASS agree with the imported-base surrogate
+                // its arguments already present, and every row of it is a
+                // class. Reported green either way (`Issue1599`/`Issue1601`
+                // pass with and without this guard, because an `EnumSymbol`
+                // carries a non-null `ClrType` and so takes the branch above),
+                // but the guard states the intent rather than relying on that.
+                resolved[i] = ta is not EnumSymbol
+                    && MemberLookup.TryProjectErasedClrType(ta, out var erasedTypeArg)
+                        ? scope.References.MapClrTypeToReferences(erasedTypeArg)
+                        : scope.References.GetCoreType("System.Object");
             }
         }
 
@@ -3579,11 +3624,48 @@ internal sealed partial class ExpressionBinder
         // into that attribute is how every migrated test app reaches the
         // internals of the project under test.
         var receiverGrantsInternals = scope.References.CanAccessInternalMembers(clrType.Assembly);
+
+        // Issue #4013: an author-written call no longer reaches an
+        // explicitly-implemented interface member; a synthesized
+        // collection-initializer `Add` still does, because ADR-0117 literals
+        // and the #3096 spread form fill a `Dictionary[K, V]` through the
+        // explicit `ICollection<KeyValuePair<K, V>>.Add` and lower the call
+        // through the interface.
+        var isSynthesizedCollectionAdd = IsSynthesizedCollectionAddCall(ce);
+
+        // Issue #4013: an explicitly-implemented interface member is offered
+        // only where the compiler still depends on it — never for an argument
+        // that has a CLR identity of its own and simply does not fit, which is
+        // the hole this issue closes.
+        //
+        // Two dependencies, both measured. (1) A synthesized
+        // collection-initializer `Add`: ADR-0117 literals and the #3096 spread
+        // form fill a `Dictionary[K, V]` through the explicit
+        // `ICollection<KeyValuePair<K, V>>.Add` and lower the call through the
+        // interface. (2) An argument carrying a SAME-COMPILATION type, where
+        // `IList.Add(object)` is an erasure escape hatch: in
+        // `List[System.Action[Mode]].Add((item Mode) -> ...)` for a
+        // same-compilation enum `Mode`
+        // (`Issue2918InlineLambdaErasedReceiverTests`) the receiver is built
+        // over the flat `System.Object` placeholder and presents as
+        // `List<Action<object>>`, while the lambda erases the enum to `int` and
+        // presents as `Action<int>` — so the type's own `Add(Action<object>)`
+        // is inapplicable and only `Add(object)` ever accepted it. That is
+        // #4016's defect at the generic-CONSTRUCTION placeholder rather than at
+        // the method-type-argument one, and repairing it there is deliberately
+        // out of scope here.
+        //
+        // The reported hole is closed because its argument is a genuine
+        // `string` at a genuine `int32`: `List[int32]().Add("x")` reports
+        // GS0159 and `map[string, int32]{}.Contains(k)` reports GS0577.
+        var anyArgumentIsErased = arguments.Any(
+            argument => argument.Type != null && TypeSymbol.ContainsSameCompilationUserType(argument.Type));
         var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
             MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
                 clrType,
                 methodName,
-                includeInternal: receiverGrantsInternals),
+                includeInternal: receiverGrantsInternals,
+                includeExplicitInterfaceMembers: isSynthesizedCollectionAdd || anyArgumentIsErased),
             instSymbolicArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             effectiveReceiverType).ToList();
@@ -3934,6 +4016,49 @@ internal sealed partial class ExpressionBinder
             && TryBindInterfaceObjectMemberCall(receiver!, methodName, arguments, ce, argumentNames, out var importedIfaceObjectCall))
         {
             return importedIfaceObjectCall;
+        }
+
+        // Issue #4013: before falling back to the generic "Cannot find
+        // function" text, say so when the member DOES exist but only as an
+        // explicit interface implementation. Since #4013 such a member is no
+        // longer a candidate for an ordinary call — it is not on the
+        // implementing type's own surface, exactly as in C# — and without this
+        // the author of `map[string, int32]{}.Contains(k)` gets the very same
+        // message a misspelled member produces. Only reached on the error path,
+        // and only when the receiver's own surface has no member of this name
+        // at all: an inapplicable overload on a type that DOES expose the name
+        // (`List[int32]().Add("x")`) stays GS0159, which is what an imported
+        // member with no interface sibling (`Stack[int32]().Push("x")`) already
+        // reported before this change.
+        // The excluded members are ranked against the bound arguments, so the
+        // diagnostic is chosen only when one of them could really have taken
+        // this call — `map[string, int32]{}.Contains(1, 2)` matches `Contains`
+        // by name but no unary `ICollection<KeyValuePair<K, V>>.Contains`
+        // accepts two arguments, and keeps GS0159 (review finding on #4031).
+        var explicitIfaceArgClrTypes = new System.Type?[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            explicitIfaceArgClrTypes[i] =
+                arguments[i].Type is { } explicitIfaceArgType
+                && MemberLookup.TryProjectErasedClrType(explicitIfaceArgType, out var explicitIfaceArgClr)
+                    ? explicitIfaceArgClr
+                    : null;
+        }
+
+        if (receiver?.Type is { } explicitIfaceRecvType
+            && MemberLookup.TryProjectErasedClrType(explicitIfaceRecvType, out var explicitIfaceRecvClr)
+            && MemberLookup.TryFindInterfaceOnlyInstanceMethod(
+                explicitIfaceRecvClr,
+                methodName,
+                explicitIfaceArgClrTypes,
+                out var declaringIface))
+        {
+            Diagnostics.ReportExplicitInterfaceMemberNotOnTypeSurface(
+                ce.Location,
+                explicitIfaceRecvType.Name,
+                methodName,
+                TypeSymbol.FromClrType(declaringIface).ToDisplayString(DisplayFormat.Minimal));
+            return new BoundErrorExpression(null);
         }
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);

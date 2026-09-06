@@ -26,6 +26,17 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
+    /// <summary>
+    /// Issue #4013: the synthesized collection-initializer <c>Add</c> call
+    /// nodes, which keep the pre-#4013 candidate view. Weak-keyed so the marks
+    /// die with the syntax nodes, and thread-safe like the other process-wide
+    /// binder caches.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<CallExpressionSyntax, object> SynthesizedCollectionAddCalls = new();
+
+    /// <summary>The value stored for every marked node; only the key matters.</summary>
+    private static readonly object MarkerValue = new();
+
     private BoundExpression BindWithExpression(WithExpressionSyntax syntax)
     {
         var receiver = BindExpression(syntax.Receiver);
@@ -673,9 +684,18 @@ internal sealed partial class ExpressionBinder
         }
 
         Type? clrElement = null;
+
+        // Issue #4013: the collection-literal view again (see HasCollectionAdd).
+        // Passing the narrowed ordinary-call view here would change which
+        // element type a literal infers — `List[T]` would stop seeing
+        // `IList.Add(object)` beside `Add(T)` and so stop being ambiguous —
+        // which is a behaviour change this issue is not about. Kept identical
+        // to the pre-#4013 candidate set on purpose.
         foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
             collectionType.ClrType,
-            "Add"))
+            "Add",
+            includeInternal: false,
+            includeExplicitInterfaceMembers: true))
         {
             var parameters = method.GetParameters();
             if (parameters.Length != 1)
@@ -864,8 +884,19 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
+        // Issue #4013: the collection-literal `Add` probe deliberately keeps
+        // seeing an explicitly-implemented interface `Add`, which the
+        // ordinary-call candidate view no longer offers. `Dictionary[K, V]`
+        // implements `ICollection<KeyValuePair<K, V>>.Add` explicitly, and the
+        // #3096 spread form fills a dictionary through exactly that member,
+        // emitting the call through the interface. Without the wider view
+        // `Dictionary[string, int32](){ ...pairs }` reports GS0369.
         return type.ClrType is { } clrType
-            && MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add").Count > 0;
+            && MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
+                clrType,
+                "Add",
+                includeInternal: false,
+                includeExplicitInterfaceMembers: true).Count > 0;
     }
 
     private static bool HasUnaryCollectionAdd(TypeSymbol type)
@@ -881,7 +912,14 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(clrType, "Add"))
+        // Issue #4013: same wider view as HasCollectionAdd above — the unary
+        // `Add` a spread needs on a `Dictionary[K, V]` is the explicit
+        // `ICollection<KeyValuePair<K, V>>.Add`.
+        foreach (var method in MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
+            clrType,
+            "Add",
+            includeInternal: false,
+            includeExplicitInterfaceMembers: true))
         {
             if (method.GetParameters().Length == 1)
             {
@@ -931,8 +969,35 @@ internal sealed partial class ExpressionBinder
         }
 
         var argumentList = new SeparatedSyntaxList<ExpressionSyntax>(nodesAndSeparators.ToImmutable());
-        return new CallExpressionSyntax(tree, identifier, openParen, argumentList, closeParen);
+        var call = new CallExpressionSyntax(tree, identifier, openParen, argumentList, closeParen);
+
+        // Issue #4013: mark a synthesized collection-initializer `Add` so the
+        // instance-call candidate lookup keeps offering an explicitly
+        // implemented interface `Add` for THIS node only. An ordinary
+        // author-written `xs.Add(…)` no longer reaches such a member — that is
+        // the fix — but ADR-0117's collection literals and the #3096 spread
+        // form legitimately fill a `Dictionary[K, V]` through the explicit
+        // `ICollection<KeyValuePair<K, V>>.Add`, lowering the call through the
+        // interface. Every synthesized `Add` in this binder is a collection
+        // initializer's; the mark is per-node, so the arguments bound inside it
+        // are unaffected.
+        if (string.Equals(methodName, "Add", StringComparison.Ordinal))
+        {
+            SynthesizedCollectionAddCalls.Add(call, MarkerValue);
+        }
+
+        return call;
     }
+
+    /// <summary>
+    /// Issue #4013: whether <paramref name="call"/> is a synthesized
+    /// collection-initializer <c>Add</c>, which may still bind to an
+    /// explicitly-implemented interface member.
+    /// </summary>
+    /// <param name="call">The call syntax being bound.</param>
+    /// <returns>True for a synthesized collection <c>Add</c>.</returns>
+    internal static bool IsSynthesizedCollectionAddCall(CallExpressionSyntax? call)
+        => call != null && SynthesizedCollectionAddCalls.TryGetValue(call, out _);
 
     private void BindCollectionElementsForDiagnostics(CollectionInitializerExpressionSyntax syntax)
     {
