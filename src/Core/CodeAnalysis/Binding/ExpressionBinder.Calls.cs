@@ -1551,9 +1551,15 @@ internal sealed partial class ExpressionBinder
             // ADR-0172: a named-tuple-bearing argument at ANY nesting depth
             // (`List[(a int32, b string)]`) shares its CLR backing with the
             // unnamed shape — only the symbolic argument preserves the names.
+            // Issue #3962: a fixed-length array `[N]T` shares its CLR backing
+            // (`T[]`) with `[]T` and with every other length, so only the
+            // symbolic argument preserves the length the author wrote —
+            // otherwise `List[[3]int32]()` and `List[[4]int32]()` both infer
+            // the one cached symbol for `List<System.Int32[]>`.
             if (TypeSymbol.RequiresSymbolicProjection(ta)
                 || ta is TupleTypeSymbol
-                || TypeSymbol.ContainsNamedTupleElements(ta))
+                || TypeSymbol.ContainsNamedTupleElements(ta)
+                || TypeSymbol.ContainsFixedLengthArray(ta))
             {
                 hasSymbolicArg = true;
             }

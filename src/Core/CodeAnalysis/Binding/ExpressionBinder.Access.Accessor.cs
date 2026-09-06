@@ -3132,8 +3132,16 @@ internal sealed partial class ExpressionBinder
             // ADR-0172: a named-tuple-bearing argument at any nesting depth
             // (`List[List[(a int32, b string)]]`) shares its CLR backing with
             // the unnamed shape — only the symbolic view preserves the names.
+            // Issue #3962: a fixed-length array `[N]T` shares its CLR backing
+            // (`T[]`) with `[]T` and with every other length, so without the
+            // symbolic view `EqualityComparer[[3]int32].Default` is exposed as
+            // a metadata-only `EqualityComparer<int32[]>` and flows into an
+            // `EqualityComparer[[4]int32]` slot through the metadata-recovery
+            // leniency — the same erasure this issue closes elsewhere.
             var symbolicReceiver = typeArgs.Any(static a =>
-                TypeSymbol.RequiresSymbolicProjection(a) || TypeSymbol.ContainsNamedTupleElements(a))
+                TypeSymbol.RequiresSymbolicProjection(a)
+                || TypeSymbol.ContainsNamedTupleElements(a)
+                || TypeSymbol.ContainsFixedLengthArray(a))
                 ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
                 : null;
             constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);

@@ -670,6 +670,16 @@ internal sealed partial class ExpressionBinder
                             continue;
                         }
 
+                        // Issue #3962: a fixed-length array `[N]T` HAS a CLR type
+                        // (`T[]`), but it is the same one `[]T` and every other
+                        // length carry, so the declared length survives only in
+                        // the symbol. Retain it, or `List[[3]int32]` and
+                        // `List[[4]int32]` resolve to one cached symbol here too.
+                        if (TypeSymbol.ContainsFixedLengthArray(ta))
+                        {
+                            hasSymbolicArg = true;
+                        }
+
                         // Type arguments resolve to gsc-host CLR types (e.g.
                         // primitives map to host typeof(...)), but openType may
                         // come from the resolver's isolated MetadataLoadContext.

@@ -186,8 +186,7 @@ public sealed class Conversion
         // conversion as identity rather than reporting a confusing "Cannot
         // convert type 'X' to 'X'"-looking error.
         if (IsImportedTypeIdentity(from) && IsImportedTypeIdentity(to)
-            && (!(from is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true }
-                    || to is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true })
+            && (!(RequiresSymbolicTypeArgumentIdentity(from) || RequiresSymbolicTypeArgumentIdentity(to))
                 || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to))
             && ClrTypeUtilities.AreSame(from.ClrType, to.ClrType))
         {
@@ -1481,7 +1480,16 @@ public sealed class Conversion
         // arguments failed the hierarchy/variance checks above. For example,
         // NullLogger<Other>'s probe type NullLogger<object> implements the
         // probe ILogger<object>, but it does not implement ILogger<Store>.
-        if (from is ImportedTypeSymbol { OpenDefinition: not null, HasSubstitutableTypeArgument: true }
+        //
+        // Issue #3962: the same leak exists for a type argument whose closed
+        // CLR type is real but NOT injective — a fixed-length array `[N]T`,
+        // whose length lives only in the symbol (see
+        // `RequiresSymbolicTypeArgumentIdentity`). `List[[3]int32]` and
+        // `List[[4]int32]` are both backed by `List<System.Int32[]>`, so
+        // without this the CLR assignability check below would readmit the
+        // very conversion the identity gate at the top of `ClassifyCore`
+        // just declined.
+        if (RequiresSymbolicTypeArgumentIdentity(from)
             && to is ImportedTypeSymbol mismatchedConstructedTarget
             && TryGetConstructedGenericShape(mismatchedConstructedTarget, out _, out _))
         {
@@ -2543,6 +2551,22 @@ public sealed class Conversion
                 continue;
             }
 
+            // Issue #3962: variance must not readmit a fixed-length mismatch
+            // that the identity comparison above just rejected. `[3]int32` and
+            // `[4]int32` are one CLR type, so the bare pair classifies as an
+            // implicit conversion (issue #3998) and a COVARIANT slot would
+            // accept it — `IEnumerable[[3]int32] -> IEnumerable[[4]int32]`.
+            // Variance exists to relate two DIFFERENT runtime types through a
+            // real reference conversion; here there is no reference conversion
+            // to lean on, only two spellings of one `int32[]` that the language
+            // says are different types. A contravariant slot is rejected for
+            // the same reason. A metadata-recovered array keeps the leniency,
+            // as everywhere else in this issue.
+            if (IsRejectedFixedArrayShapeMismatch(sourceArgument, targetArgument))
+            {
+                return false;
+            }
+
             // Variance eligibility is about CLR reference-ness, NOT the
             // `where T : class` constraint: a nullable-annotated reference
             // argument (`ISymbol?` in `IEqualityComparer[ISymbol?]`) is
@@ -2790,6 +2814,25 @@ public sealed class Conversion
             && nestedA.OpenDefinition != null && nestedB.OpenDefinition != null)
         {
             return AreConstructedGenericsIdentical(nestedA, nestedB);
+        }
+
+        // Issue #3962: a fixed-length array `[N]T` is backed by the plain
+        // SZ-array `T[]` — the SAME CLR type as `[]T` and as every other
+        // length — so the CLR comparison below cannot tell `[3]int32`,
+        // `[4]int32` and `[]int32` apart and would collapse three distinct G#
+        // types into one. Whenever BOTH sides still carry their G#-native
+        // array-shaped symbol (so the length, and array-vs-slice, is actually
+        // known on both sides), compare them symbolically instead.
+        //
+        // The "both sides" requirement is the #3924 metadata-recovery rule: an
+        // array that came back through reflection is an
+        // `ImportedTypeSymbol(T[])`, and its length is gone beyond recovery —
+        // no downstream comparison can reconstruct it, so such a pair keeps the
+        // lenient CLR comparison rather than being rejected on information
+        // neither side has.
+        if (IsFixedArrayShapeKnownOnBothSides(a, b))
+        {
+            return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b);
         }
 
         // Both arguments resolve to a real CLR type: compare those by name.
@@ -3111,6 +3154,69 @@ public sealed class Conversion
     // ALREADY-imported aggregate's non-null `ClrType` qualifies.
     private static bool IsImportedTypeIdentity(TypeSymbol type)
         => type is ImportedTypeSymbol || (type is StructSymbol && type.ClrType != null);
+
+    // Issue #3962: true when a fixed-length array is involved AND both sides
+    // still carry their G#-native array shape, so the length (and
+    // array-vs-slice) is actually known on both sides and may be compared.
+    //
+    // The "both sides" requirement is the #3924 metadata-recovery rule: an
+    // array that came back through reflection is an `ImportedTypeSymbol(T[])`
+    // whose length is gone beyond recovery, so such a pair keeps the lenient
+    // CLR comparison rather than being rejected on information neither side
+    // has.
+    private static bool IsFixedArrayShapeKnownOnBothSides(TypeSymbol? a, TypeSymbol? b)
+        => (TypeSymbol.ContainsFixedLengthArray(a) || TypeSymbol.ContainsFixedLengthArray(b))
+            && !TypeSymbol.ContainsMetadataRecoveredArray(a)
+            && !TypeSymbol.ContainsMetadataRecoveredArray(b);
+
+    // Issue #3962: true when both sides know their array shape and those shapes
+    // DISAGREE — the pair is two different G# types however the CLR sees them.
+    // Used to stop generic variance readmitting a mismatch the identity
+    // comparison already rejected.
+    private static bool IsRejectedFixedArrayShapeMismatch(TypeSymbol? a, TypeSymbol? b)
+        => a != null
+            && b != null
+            && IsFixedArrayShapeKnownOnBothSides(a, b)
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(a, b);
+
+    // Issue #3962: the escalation gate for the #2290 identity rule. A
+    // constructed generic's CLR shape is only a faithful stand-in for its
+    // symbolic type arguments when every argument round-trips through its own
+    // `ClrType`. When one does not, the two symbols must be compared
+    // SYMBOLICALLY (`AreRuntimeEquivalentIgnoringReferenceNullability`) rather
+    // than by the erased closed CLR type, or two genuinely different
+    // instantiations collapse into one.
+    //
+    // `HasSubstitutableTypeArgument` already covers the arguments whose CLR
+    // type is absent or a projection (a same-compilation user type, an
+    // in-scope type parameter, a nested constructed generic, a named tuple).
+    // It deliberately does NOT cover an argument that HAS a real, closed CLR
+    // type which is simply not injective — see
+    // <see cref="TypeSymbol.ContainsFixedLengthArray"/>.
+    private static bool RequiresSymbolicTypeArgumentIdentity(TypeSymbol? type)
+    {
+        if (type is not ImportedTypeSymbol { OpenDefinition: not null } imported)
+        {
+            return false;
+        }
+
+        if (imported.HasSubstitutableTypeArgument)
+        {
+            return true;
+        }
+
+        foreach (var argument in imported.TypeArguments.IsDefaultOrEmpty
+            ? ImmutableArray<TypeSymbol>.Empty
+            : imported.TypeArguments)
+        {
+            if (TypeSymbol.ContainsFixedLengthArray(argument))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     // Issue #2299: for a matching pair of structural wrapper symbols (see the
     // call site above), extracts and compares the wrapped element type(s).

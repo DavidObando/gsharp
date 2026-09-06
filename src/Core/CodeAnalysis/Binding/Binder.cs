@@ -5217,10 +5217,21 @@ public sealed class Binder
         // (`List[(a int32, b string)]`, `[](a int32, b string)`) shares its
         // CLR backing with the unnamed shape — only the symbolic argument
         // preserves the names on projected members.
+        // Issue #3962: a fixed-length array `[N]T` is backed by the plain
+        // SZ-array `T[]` — the same CLR type as `[]T` and as an array of every
+        // other length — so its declared length survives ONLY in the symbol.
+        // Without keeping the symbolic argument, `List[[3]int32]` and
+        // `List[[4]int32]` both resolve to the ONE cached ImportedTypeSymbol
+        // for `List<System.Int32[]>` and become literally the same type, and no
+        // downstream conversion check can tell them apart again. Same reason
+        // named tuples are listed above, and the same erased CLR argument is
+        // still projected below, so the closed shape (and the emitted
+        // signature) is unchanged.
         if (TypeSymbol.RequiresSymbolicProjection(type)
             || type.ClrType == null
             || type is TupleTypeSymbol
-            || TypeSymbol.ContainsNamedTupleElements(type))
+            || TypeSymbol.ContainsNamedTupleElements(type)
+            || TypeSymbol.ContainsFixedLengthArray(type))
         {
             hasSymbolicArgument = true;
 
