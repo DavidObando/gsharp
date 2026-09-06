@@ -177,10 +177,17 @@ for value in merge(left, right) {
 ```
 
 `after(d)` fires once; `tick(d)` fires every `d` until you dispose it, so hold
-it in a `using let` when you select on it in a loop. `merge` drains every input
-concurrently and closes its result once the last input closes; the result is
-receive-only, because only `merge` writes to it. Declaring your own `after` or
-`merge` shadows these.
+it in a `using let` when you select on it in a loop. Both are backed by
+`System.Threading.Timer`, whose resolution is one whole millisecond, so a delay
+or period is rounded **up** to the next millisecond: the interval a timer is
+armed at is never shorter than the one you asked for, `tick(0.5ms)` ticks every
+1 ms rather than silently stopping after one tick, and `tick(1.5ms)` ticks every
+2 ms rather than every 1 ms. `tick` still rejects a period of zero or less.
+`after(0)` is still immediate.
+
+`merge` drains every input concurrently and closes its result once the last
+input closes; the result is receive-only, because only `merge` writes to it.
+Declaring your own `after` or `merge` shadows these.
 
 ### Choosing among more than channels
 
