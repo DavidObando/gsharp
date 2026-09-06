@@ -78,7 +78,15 @@ namespace GSharp.Compiler.Tests;
 /// IDictionary[K, V] = m</c> reports GS0155 with no <c>?</c> anywhere) — issue
 /// #3982's erasure family, not a nullability one, and the gate correctly
 /// declines to blame nullability where dropping the <c>?</c> could not
-/// help.</para>
+/// help. Third, <c>await for v in s</c> over a parameter declared
+/// <c>async sequence[T]</c> with an OPEN element reports GS0134 ("expected an
+/// <c>IAsyncEnumerable[T]</c>") on both sides of this change, while the closed
+/// <c>async sequence[int32]</c> spelling iterates — a loop-binding defect this
+/// change neither causes nor fixes (issue #4020), and the reason the async row
+/// below consumes through an explicit <c>IAsyncEnumerable[T]</c>
+/// parameter. The SYNCHRONOUS sibling is unaffected: <c>for v in s</c> over an
+/// open <c>sequence[T]</c> parameter is what two of the accepted rows below
+/// do.</para>
 /// <para><b>Discrimination (ADR-0154).</b> Nine rejection rows compiled with no
 /// diagnostic at all on the parent commit and two more are labelled
 /// <c>control-…</c> because they were already rejected there — those two are
@@ -87,7 +95,8 @@ namespace GSharp.Compiler.Tests;
 /// accepted row also compiled, ran and IL-verified on the parent: they are
 /// carried to prove the fix took nothing away, above all LINQ flowing into a
 /// <c>sequence[int32]</c> parameter, which is what the second half of this fix
-/// touches in real code.</para>
+/// touches in real code, and the async-sequence row that walks every path this
+/// change newly routes that kind through.</para>
 /// </remarks>
 public class Issue3997NullableMapAndSequenceAtNonNullableParameterTests
 {
@@ -746,6 +755,102 @@ public class Issue3997NullableMapAndSequenceAtNonNullableParameterTests
             Console.WriteLine(seqCount[int32]([]int32{1, 2, 3}))
             """,
             new[] { "1", "3" },
+        };
+
+        // Review finding (Copilot on PR #4017): `AsyncSequenceTypeSymbol` is
+        // the symbol kind the issue did not name and this PR added on its own
+        // judgement, so nothing outside this file covers it — and it is now
+        // routed through EVERY `IsReferenceLikeTarget` consumer, not only the
+        // overload gate. Rejection rows alone prove the gate fires without
+        // proving the accepted paths still emit correctly. This row walks the
+        // newly routed ones over an OPEN async sequence and asserts the
+        // program's own output at each: the `T -> T?` reference wrap
+        // (`var s (async sequence[T])? = nil`), assignment narrowing (`s =
+        // src`), condition narrowing (`if s != nil`), `!!`, the lifted
+        // `T? -> U?` arm (an `(async sequence[T])?` at an
+        // `IAsyncEnumerable[T]?` parameter), and the emitter's nil-comparison
+        // path on a nullable open slot. Every value is produced by actually
+        // enumerating the async iterator, so a wrong representation prints the
+        // wrong number rather than merely compiling — and, like every other
+        // accepted row here, it compiled, ran and IL-verified on the parent
+        // too: its job is to keep those paths from regressing, not to turn red.
+        yield return new object[]
+        {
+            "an-open-async-sequence-through-every-newly-routed-path",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            async func numbers() async sequence[int32] {
+                yield 1
+                yield 2
+                yield 3
+            }
+
+            async func count[T](s IAsyncEnumerable[T]) int32 {
+                var n = 0
+                await for v in s {
+                    n = n + 1
+                }
+
+                return n
+            }
+
+            async func countNullable[T](s IAsyncEnumerable[T]?) int32 {
+                if s == nil {
+                    return -1
+                }
+
+                var n = 0
+                await for v in s {
+                    n = n + 1
+                }
+
+                return n
+            }
+
+            async func narrowed[T](src (async sequence[T])?) int32 {
+                var s = src
+                if s != nil {
+                    return await count[T](s)
+                }
+
+                return -1
+            }
+
+            async func wrapped[T](src async sequence[T]) int32 {
+                var s (async sequence[T])? = nil
+                s = src
+                return await count[T](s)
+            }
+
+            async func forgiven[T](src (async sequence[T])?) int32 {
+                return await count[T](src!!)
+            }
+
+            async func lifted[T](src (async sequence[T])?) int32 {
+                return await countNullable[T](src)
+            }
+
+            func isNil[T](s (async sequence[T])?) bool {
+                return s == nil
+            }
+
+            async func run() {
+                Console.WriteLine(await narrowed[int32](numbers()))
+                Console.WriteLine(await narrowed[int32](nil))
+                Console.WriteLine(await wrapped[int32](numbers()))
+                Console.WriteLine(await forgiven[int32](numbers()))
+                Console.WriteLine(await lifted[int32](numbers()))
+                Console.WriteLine(await lifted[int32](nil))
+                Console.WriteLine(isNil[int32](nil))
+                Console.WriteLine(isNil[int32](numbers()))
+            }
+
+            run().Wait()
+            """,
+            new[] { "3", "-1", "3", "3", "3", "-1", "True", "False" },
         };
 
         // The issue asked for each behaviour at an open AND a closed
