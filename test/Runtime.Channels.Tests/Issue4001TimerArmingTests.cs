@@ -106,8 +106,13 @@ public class Issue4001TimerArmingTests
     [Fact]
     public void Tick_SubTickPeriod_ConstructedConcurrently_DoesNotFault()
     {
-        // The shortest period the constructor accepts, so the first tick is due
-        // immediately and races the constructor exactly as `after(0)` does.
+        // The shortest period the constructor accepts. Issue #4008 now quantizes
+        // it up to the 1 ms `System.Threading.Timer` can actually deliver — so
+        // the first tick is no longer due *immediately*, and this case races the
+        // constructor less tightly than it did. It is kept as the pin it always
+        // was rather than as a race: the mutant it does NOT kill is documented
+        // in this class's remarks, and `Issue4008TickResolutionTests` now covers
+        // what the period itself must do.
         Race(() => Timers.Tick(TimeSpan.FromTicks(1)).Dispose());
     }
 

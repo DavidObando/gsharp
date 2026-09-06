@@ -1522,6 +1522,8 @@ DeferStmt = "defer" Expression .
 
 The `go`, `chan[T]`, `<-` (send and receive), and `select` forms are part of the language and need no import (ADR-0174 D13 retired the ADR-0082 gate, GS0316). A send through an `in chan[T]` is `GS0549`; a receive through an `out chan[T]` is `GS0550`. Channel operations lower onto the `Gsharp.Runtime.Channels` runtime (`Gsharp.Concurrency.ChannelOps`), which the SDK references implicitly.
 
+A `select` arm may also select on a **timer selectable** rather than a channel: `after(d)` (ADR-0174 D8) becomes ready once, `d` after it is created, and `tick(d)` (D9) becomes ready every `d` until it is disposed, holding at most one pending tick. These are library functions in the implicitly imported `Gsharp.Concurrency` namespace, not language forms, and either may be shadowed by a declaration of the same name. Both are backed by `System.Threading.Timer`, whose resolution is one whole millisecond, so a delay or period is quantized **upwards**: the interval actually armed is never shorter than the one requested, and 1 ms is the shortest period `tick` can deliver. `tick` requires a strictly positive period.
+
 ```ebnf
 GoStmt     = "go" ( Expression | Block ) .   (* ADR-0174 D14: `go { … }` spawns the block as a zero-parameter goroutine *)
 ScopeStmt  = "scope" Block .
