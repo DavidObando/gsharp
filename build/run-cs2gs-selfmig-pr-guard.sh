@@ -39,6 +39,31 @@
 # all three of the incidents above rather than two — see the note under
 # guard_apps.
 #
+# IF THIS GUARD IS RED
+#
+# It blocks the PR. It is never advisory: it is the only check that asks the
+# self-hosting question, and it runs in minutes precisely so the answer is not
+# paid for overnight.
+#
+# FIX THE DEFECT IN cs2gs OR gsc, AND PROCEED WITHOUT ASKING. A red guard is a
+# found bug, and finding bugs is a goal of #3501 in its own right -- the C#
+# compiler is being used as a fuzzer, and a defect surfaced this way affects
+# every G# user, not just the migration. Translate into the SIMPLEST G# that
+# expresses the C# input; if the natural translation is ugly, that is a defect
+# report about cs2gs, not a reason to accept the ugliness.
+#
+# Do NOT:
+#   - exclude the file or app to get green. That turns a visible failure into
+#     an invisible one. --exclude means "not a migration target", never "dodge
+#     a defect".
+#   - raise a ratchet ceiling or lower a floor to absorb it.
+#
+# ASK FIRST only for: (a) syntax design changes, and (b) breaking changes to
+# the semantics of already-supported constructs. Adding G# language surface
+# purely to accommodate the translator is case (a) and wants an ADR.
+#
+# See docs/self-migration-policy.md.
+#
 # Usage: run-cs2gs-selfmig-pr-guard.sh
 # Environment:
 #   SELFMIG_PR_GUARD_ROOT  work root (default ${TMPDIR:-/tmp}/gsharp-cs2gs-pr-guard)
