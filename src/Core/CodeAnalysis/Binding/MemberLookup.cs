@@ -786,6 +786,26 @@ internal sealed class MemberLookup
     {
         elementType = null;
 
+        // Issue #4020: `async sequence[T]` IS `IAsyncEnumerable[T]` (ADR-0041),
+        // and its element type is written right on the symbol — but the CLR
+        // walk below can only find it through `ClrType`, which
+        // `AsyncSequenceTypeSymbol.MakeClrType` leaves null the moment the
+        // element has no CLR backing (an in-scope type parameter, a
+        // same-compilation class). So `await for v in s` over an OPEN
+        // `async sequence[T]` parameter reported GS0134 "cannot be iterated
+        // with 'await for'" while the CLOSED `async sequence[int32]` spelling
+        // of the same parameter iterated, and while the synchronous `for v in
+        // s` over an equally open `sequence[T]` iterated too — the shape was
+        // recognised by its ClrType when closed and by nothing at all when
+        // open, the #3982 / #3987 / #4011 family. Answer from the symbol
+        // itself, which is authoritative for both spellings; the closed one
+        // reaches the identical answer one branch later.
+        if (type is AsyncSequenceTypeSymbol asyncSequence)
+        {
+            elementType = asyncSequence.ElementType;
+            return true;
+        }
+
         // Issue #1002 (parallel to #939 / #990 for sync `for-in`): an
         // `IAsyncEnumerable[Shape]` whose `Shape` is a same-compilation
         // user `class` / `data struct` is modelled as an

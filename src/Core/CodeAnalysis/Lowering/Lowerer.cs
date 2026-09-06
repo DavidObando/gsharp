@@ -641,6 +641,38 @@ public sealed class Lowerer : BoundTreeRewriter
     private BoundStatement LowerAwaitForRange(VariableSymbol valueVariable, BoundExpression stream, BoundStatement body, BoundLabel breakLabel, BoundLabel continueLabel)
     {
         var streamClr = stream.Type?.ClrType;
+
+        // Issue #4020: an `async sequence[T]` IS `IAsyncEnumerable[T]`
+        // (ADR-0041), but its `ClrType` cannot be trusted to answer reflection
+        // for it, in EITHER of the two ways
+        // `AsyncSequenceTypeSymbol.MakeClrType` can fail. It is null when the
+        // element has no CLR backing at all (an in-scope type parameter, a
+        // same-compilation class), which left `await for v in s` over an OPEN
+        // `async sequence[T]` parameter dead-ending while the closed
+        // `async sequence[int32]` spelling iterated. And — the trap #4023
+        // documents, and the reason this is NOT a `ClrType == null` test — it
+        // is NON-null but useless when the element is merely IMPORTED
+        // (`async sequence[DateTime]`, `async sequence[List[int32]]`,
+        // `async sequence[ImportedBase]`): closing the host
+        // `IAsyncEnumerable<>` over a MetadataLoadContext argument answers a
+        // `TypeBuilderInstantiation` whose `GetMethod("GetAsyncEnumerator")`
+        // throws `NotSupportedException`, which surfaced as GS9998.
+        //
+        // So every `AsyncSequenceTypeSymbol` takes the symbolic path, exactly
+        // as every `SequenceTypeSymbol` already does in
+        // `TryBuildSymbolicOpenGetEnumeratorCall` — whose own comment gives
+        // this same reason, and which is why the SYNCHRONOUS
+        // `for v in sequence[DateTime]` never had either half of this bug. The
+        // type-ERASED `IAsyncEnumerable<object>` drives reflection while the
+        // element stays symbolic, which is the #1002 shape the arms below
+        // already handle.
+        TypeSymbol? asyncSequenceElement = null;
+        if (stream.Type is AsyncSequenceTypeSymbol asyncSequenceStream)
+        {
+            asyncSequenceElement = asyncSequenceStream.ElementType;
+            streamClr = typeof(System.Collections.Generic.IAsyncEnumerable<object>);
+        }
+
         if (streamClr == null)
         {
             return new BoundExpressionStatement(null, new BoundErrorExpression(null));
@@ -780,7 +812,19 @@ public sealed class Lowerer : BoundTreeRewriter
         // Current shapes through the stream's symbolic arguments.
         TypeSymbol enumeratorType;
         TypeSymbol currentType;
-        if (stream.Type is ImportedTypeSymbol streamImp
+        if (asyncSequenceElement != null)
+        {
+            // Issue #4020: the `async sequence[T]` case set up above.
+            // `enumeratorClr` is the erased `IAsyncEnumerator<object>`; carry
+            // the real element alongside it so `Current` types the loop
+            // variable as the element rather than `object`.
+            enumeratorType = ImportedTypeSymbol.GetConstructed(
+                enumeratorClr,
+                typeof(System.Collections.Generic.IAsyncEnumerator<>),
+                ImmutableArray.Create(asyncSequenceElement));
+            currentType = asyncSequenceElement;
+        }
+        else if (stream.Type is ImportedTypeSymbol streamImp
             && streamImp.HasSubstitutableTypeArgument
             && streamImp.OpenDefinition != null
             && streamImp.OpenDefinition.FullName == "System.Collections.Generic.IAsyncEnumerable`1"
