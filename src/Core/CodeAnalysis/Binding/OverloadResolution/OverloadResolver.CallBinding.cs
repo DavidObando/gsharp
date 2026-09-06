@@ -2513,6 +2513,36 @@ internal sealed partial class OverloadResolver
                     : syntax.Identifier.Location;
                 boundArguments[i] = conversions.BindConversion(argLoc, argument, Invariant.Required(expectedType, "a nullable-lifted argument has a target type"));
             }
+            else if (argument.Type == TypeSymbol.Null && expectedType is TypeParameterSymbol)
+            {
+                // Issue #4027: a `nil` LITERAL at a BARE open type-parameter
+                // slot must be materialised, and the #3222 branch below
+                // deliberately skips exactly this shape (a bare erased slot
+                // whose substituted target is still open), so the raw literal
+                // reached the emitter and came out as `ldnull` against a `!!T`
+                // slot — which ILVerify rejects
+                // (`[found Nullobjref] [expected value 'T']`), constraint or
+                // no constraint. This does NOT reopen the skip: the skip's
+                // purpose is to avoid re-materialising an open-to-open pair
+                // whose conversion has no closed answer, and `nil` needs no
+                // closed answer. `nil` only REACHES here at all when the first
+                // branch above classified it implicit, which per
+                // `Conversion.IsNilAssignableWithoutNullableWrapper` means the
+                // parameter is reference-CONSTRAINED — an unconstrained `T`
+                // was already refused with GS0154 by #4010. `BindConversion`
+                // lowers it to `BoundDefaultExpression(T)`, which emits the
+                // `ldloca; initobj !!T; ldloc` shape `csc` emits for the same
+                // C# program and which verifies. The value is unchanged: for a
+                // `[T class]` slot `default(T)` IS the null reference, so the
+                // `nil` still arrives.
+                var nilArgLoc = i < parameterSyntax.Length
+                    ? Invariant.Required(parameterSyntax[i], "a nil argument has source syntax").Location
+                    : syntax.Identifier.Location;
+                boundArguments[i] = conversions.BindConversion(
+                    nilArgLoc,
+                    argument,
+                    Invariant.Required(expectedType, "a nil argument has a target type"));
+            }
             else if (argument.Type != expectedType
                 && !(substitution != null
                     && parameter.Type is TypeParameterSymbol

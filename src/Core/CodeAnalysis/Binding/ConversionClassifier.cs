@@ -935,10 +935,29 @@ internal sealed class ConversionClassifier
         // even with a `class` constraint, since `ldnull → !!T` is rejected
         // by ECMA-335 stack typing). Routing both constraint kinds through
         // BoundDefaultExpression produces uniformly verifiable IL.
+        //
+        // Issue #4027: the BARE (unwrapped) open type parameter needs exactly
+        // the same lowering, and #814 reached only the `T?` spelling. A
+        // reference-constrained `[T class]` slot accepts `nil` — that is
+        // deliberate (#2354), and `Conversion.IsNilAssignableWithoutNullableWrapper`
+        // is the predicate that admits it — but the ARGUMENT was still emitted
+        // as a bare `ldnull`, whose stack type is `Nullobjref` where the slot's
+        // signature type is `!!T`. ECMA-335 III.1.8.1.3 has no rule that lets a
+        // null reference match a generic-parameter slot, constraint or no
+        // constraint, so ILVerify reported
+        // `[StackUnexpected] [found Nullobjref] [expected value 'T']` for every
+        // sink (argument, local initialiser, assignment, return, and the `!T`
+        // form on a generic class's own member). Measured: `csc` emits
+        // `ldloca.s N; initobj !!T; ldloc.N` for C#'s `Takes<T>(null)` under
+        // `where T : class`, and that output verifies — so this mirrors the
+        // reference implementation rather than inventing a shape. `default(T)`
+        // is also the right MEANING: for a `[T class]` slot it is the null
+        // reference in every instantiation, so the `nil` still arrives.
         if (expression.Type == TypeSymbol.Null
-            && type is NullableTypeSymbol nilTargetNullable
-            && (NullableLifting.IsAnyValueTypeNullable(nilTargetNullable)
-                || nilTargetNullable.UnderlyingType is TypeParameterSymbol))
+            && (type is TypeParameterSymbol
+                || (type is NullableTypeSymbol nilTargetNullable
+                    && (NullableLifting.IsAnyValueTypeNullable(nilTargetNullable)
+                        || nilTargetNullable.UnderlyingType is TypeParameterSymbol))))
         {
             return new BoundDefaultExpression(null, type);
         }
