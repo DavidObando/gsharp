@@ -2833,7 +2833,7 @@ implementation had to refine it.
     parameter's nullability at a call site — a `string?` reaches a
     non-nullable `string` parameter — and the symbolic pair reaches no rule
     that says so. `!!` is the portable spelling; the asymmetry is issue
-    #3985.
+    #3985, resolved in errata 42.
 
     The imported **instance-method** probe had the same hole (GS0159 on the
     same argument) and is fixed by the same arm. Two consequences for D10:
@@ -2896,7 +2896,151 @@ implementation had to refine it.
     generic extension, in receiver and argument position alike and even with an
     explicit type argument, because the element erases before overload
     resolution sees it. That is the same family as errata 32's `chunks`
-    paragraph and issue #3876, and is filed separately.
+    paragraph and issue #3876, and is filed separately. Resolved as issue
+    #3982 in errata 43.
+
+42. **A nullable channel is a nullable reference, whatever its element (issue
+    #3985).** A `chan[T]?` with an OPEN element was refused at a non-nullable
+    imported `Channel[T]` parameter with GS0155, where the closed `chan[int32]?`
+    was accepted and so was a `string?` at a non-nullable `string` parameter.
+    So the rejection was never G# enforcing nullability at a CLR call boundary —
+    it does not, in either control — it was a symbolic pair reaching no rule
+    at all.
+
+    `TryClassifyChannelConversion` declines a nullable operand deliberately
+    (errata 39) and leaves the pair to the general reference rules. Those
+    rescue the closed form through the #1627 arm — a checked reference
+    conversion that drops the annotation — but that arm is guarded by
+    `Conversion.IsReferenceLikeTarget`, and `ChannelTypeSymbol.MakeClrType`
+    returns null the moment the element has no CLR backing, so `chan[T]` was
+    reported as not reference-like and the pair fell through every arm to
+    `Conversion.None`. `IsReferenceLikeTarget` already names every other
+    structural shape that is a reference type while a same-compilation element
+    leaves its `ClrType` unavailable — slices, fixed and rectangular arrays,
+    named delegates, function types — and simply omitted the channel. A
+    channel is a CLR class in every direction, so the omission was never
+    defensible, and a closed-element channel answered `true` through the
+    `ClrType` fallback all along, which is exactly why only the open spelling
+    broke.
+
+    `IsNominalReferenceShape` — the sibling predicate gating the #3843 WIDENING
+    arm, which is what carries a nullable source across the D2 view to a
+    `ChannelReader[T]`/`ChannelWriter[T]` parameter — had the identical hole
+    for the identical reason: it bottoms out on `IsClassLikeReferenceType`,
+    which reads `ClrType`. Its exclusion list is G#'s STRUCTURAL shapes, and a
+    channel is not one of those; it is a nominal class a `castclass` can name.
+    So the two spellings disagreed at a directional parameter exactly as they
+    did at a bidirectional one, and both predicates are repaired here.
+
+    The issue allowed either answer — accept the open form like the closed one,
+    or enforce nullability at CLR parameters generally — and required only that
+    the two spellings agree. **The lenient answer is taken**, because it is what
+    the language is measured to do at the comparable CLR boundaries — a
+    `string?` at a non-nullable `string` parameter, and a `chan[int32]?` at a
+    non-nullable `Channel[int32]` one, both of which this errata's suite
+    asserts — because the alternative is a breaking change to every existing
+    call site, and because the leniency stays confined to CLR boundaries: a
+    G#-DECLARED parameter still reports GS0154 for a `chan[int32]?` argument,
+    untouched. It is not a universal CLR-boundary rule and is not claimed as
+    one: a nullable channel still does not reach a NON-generic
+    `ChannelWriter[T]` parameter, which is issue #3992. Direction and element
+    are untouched too — an `out chan[T]?` still cannot reach a
+    `ChannelReader[T]` parameter.
+
+    One neighbouring asymmetry is measured and left alone, because it is not
+    channel-specific: `OverloadResolver`'s own `IsReferenceLikeType`, which its
+    comment describes as mirroring `Conversion.IsReferenceLikeTarget`, lists
+    neither channels nor slices nor delegates, so at a **G#-declared**
+    parameter the open `chan[T]?` is silently accepted where `chan[int32]?`
+    reports GS0154. That is the same drift one layer over, it predates this fix
+    and is unchanged by it, and it is filed as issue #3988.
+
+43. **A channel element declared in the current compilation (issue #3982).** A
+    C#-authored `CountSoFar[T](this ChannelReader[T])` bound on a `chan[int32]`
+    receiver after errata 41 but not on a `chan[Pair]` for a G# `struct Pair`,
+    in receiver position, in argument position, and even with an explicit type
+    argument. This closes errata 41's last paragraph.
+
+    Applicability ranks imported candidates on CLR shapes, and a
+    same-compilation element has none: `MemberLookup.TryProjectErasedClrType`
+    presents `Pair` as `object`, so the candidate closes to
+    `CountSoFar<object>(ChannelReader<object>)`. Every other structural shape
+    survives that erasure because the CLR relation still holds at the erased
+    level — `[]Pair` presents as `object[]`, which really does convert to the
+    `IEnumerable<object>` formal LINQ's `Count[TSource]` closes to, which is why
+    the report's own `[]Pair{…}.Count()` control passed. A channel's only
+    implicit non-identity relation is the D2 direction lattice, which lives in
+    `Conversion` and demands element IDENTITY, so the probe compared the real
+    `chan[Pair]` against the erased `ChannelReader[object]` and dropped the
+    candidate. A DECLARED `in chan[Pair]` already bound, because it erases to
+    exactly the `ChannelReader[object]` the formal closed to and the CLR probe
+    answered by identity — only a receiver that must cross the lattice to be
+    VIEWED ever failed.
+
+    Three probes had to learn the same thing, which is why the failure survived
+    both errata 40 and 41:
+
+    - **Applicability.** `ChannelViewAppliesAtErasedGenericSlot` asks the same
+      lattice about the two ERASED shapes rather than about one erased and one
+      real, so the comparison is like-for-like. It lives in
+      `ClrOverloadResolution` beside the candidate rather than in a binder
+      callback, which is what lets every probe — extension, static, instance,
+      constructor, `: base(…)` — share one answer, and which supplies the
+      **slot gate** below.
+    - **Symbolic inference.** `MemberLookup.UnifyForMethodTypeArgs`'s D2 arm
+      demanded that the actual be a `ChannelTypeSymbol` — a type CLAUSE — and
+      that its direction name the formal's open definition EXACTLY. Errata 3
+      gives `chan[T](n)` the static type of the runtime class `Chan[T]`, which
+      is neither. It now recognises every channel shape through
+      `TryGetChannelShape` and stays direction-blind, word for word like its CLR
+      twin in `ClrOverloadResolution.UnifyForInference`. This is the same
+      spelling-dependence errata 39 removed from the lattice itself.
+    - **Argument conversion.** With `T` recovered as `Pair` the emitted
+      MethodSpec wants a `ChannelReader<Pair>`, but
+      `BindClrParameterConversions` still converted against the erased
+      `ChannelReader[object]`; the lattice refused it, no conversion node was
+      produced, and the raw `Chan<Pair>` was pushed with no `get_Reader` in
+      sight. The #1819 erased-slot recovery now fires for a channel whose
+      element is the same-compilation type that erased the slot.
+
+    **The slot gate, and why it is load-bearing.** At the erased level an
+    element with no CLR identity is indistinguishable from a genuine `object`.
+    Answered unconditionally, the comparison above therefore also made a
+    non-generic `M(ChannelReader[object])` applicable to a `chan[Pair]`; where
+    a library declares that overload BESIDE a valid `M[T](ChannelReader[T])`,
+    betterness prefers the concrete one, and merely ADDING an `object` overload
+    would have turned the repaired call back into a diagnostic. Only a slot
+    whose OPEN declaration mentions a generic parameter can have acquired its
+    `object` by erasure, so only such a slot is answered; anything else keeps
+    the answer `Conversion` gives on the real types, which is "no". A genuine
+    `ChannelReader[object]` parameter is therefore refused exactly as it was
+    before this fix, by the same GS0159. The gate is slot-precise for a generic
+    METHOD and deliberately slot-blind for a generic CLASS, whose open
+    constructor is not addressable across reflection contexts; the channel test
+    is what narrows that, and `BindClrParameterConversions` refuses a channel
+    pair the lattice declined BY NAME rather than emitting it, so the residual
+    imprecision costs a diagnostic and never invalid IL.
+
+    The general form of that ambiguity is untouched and is not
+    channel-specific: a `List[Pair]` reaches a genuine `List<object>` parameter
+    on `main` today and emits IL that ilverify rejects. That is issue #3989.
+
+    The erased-shape probe deliberately declines a NULLABLE source, because
+    `TryGetChannelShape` and the erased projection both see straight through a
+    `NullableTypeSymbol` and answering there would drop the annotation during
+    candidate ranking — in a place that is not a conversion and cannot report
+    one. Errata 39 leaves a nullable operand to the lifted rules and errata 42
+    is how they reach a channel with no CLR identity; keeping the probe out of
+    it is what makes `chan[T]?` and `chan[int32]?` agree at every target. One
+    asymmetry along that other axis is narrowed but not closed, and predates
+    both fixes: with both predicates repaired a nullable channel now reaches a
+    directional parameter wherever the slot is one applicability can rank — any
+    generic method or generic class, which is the shape libraries actually
+    publish — but a NON-generic `ChannelWriter[T]` parameter still refuses it,
+    because the annotation-dropping conversion is EXPLICIT and the
+    applicability probe asks for an implicit one. Both element spellings agree
+    on that, so it is not errata 42's question; it is issue #3992, whose repro
+    is corrected to the non-generic form.
 
 ## Addendum A — The ten patterns, three ways
 

@@ -2764,6 +2764,10 @@ internal static class ClrOverloadResolution
                     {
                         conv = ImplicitConversionKind.StructuralProjection;
                     }
+                    else if (ChannelViewAppliesAtErasedGenericSlot(rawCandidate, paramIndex, paramTypes[i], argTypes[i]))
+                    {
+                        conv = ImplicitConversionKind.StructuralProjection;
+                    }
                     else if (functionLiteralArgumentCheck?.Invoke(i) == true
                         && argTypes[i] != null
                         && IsLambdaBodyConvertibleToDelegate(paramTypes[i], argTypes[i]!, supplementaryInterfaceCheck))
@@ -5424,6 +5428,101 @@ internal static class ClrOverloadResolution
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #3982 / ADR-0174 D2: true when a channel argument reaches a
+    /// channel formal through the direction lattice once BOTH sides are read
+    /// at the erasure the candidate was closed over.
+    /// </summary>
+    /// <remarks>
+    /// <para>Applicability ranks imported candidates on CLR shapes, and an
+    /// element declared in the current compilation has none —
+    /// <c>MemberLookup.TryProjectErasedClrType</c> presents <c>Pair</c> as
+    /// <c>object</c>, so <c>CountSoFar[T](this ChannelReader[T])</c> closes to
+    /// <c>ChannelReader&lt;object&gt;</c>. Every other structural shape
+    /// survives that because the CLR relation still holds at the erased level
+    /// (<c>[]Pair</c> is <c>object[]</c>, which really does convert to
+    /// <c>IEnumerable&lt;object&gt;</c>). A channel's only implicit
+    /// non-identity relation is the D2 lattice, which demands element
+    /// IDENTITY, so the real <c>chan[Pair]</c> compared against the erased
+    /// <c>ChannelReader[object]</c> was refused and the candidate dropped.</para>
+    /// <para>The lattice is not restated here: <c>Conversion</c> is still the
+    /// one asked, on the two ERASED shapes rather than on one erased and one
+    /// real, so direction and element remain its decisions.
+    /// <paramref name="argumentType"/> is already the erased source — it is
+    /// what <c>GetEffectiveArgumentClrTypeForOverloadResolution</c> produced —
+    /// so this compares like with like rather than widening anything.</para>
+    /// <para><b>Why the slot gate.</b> At the erased level an element with no
+    /// CLR identity is indistinguishable from a GENUINE <c>object</c>. Without
+    /// the gate a non-generic <c>M(ChannelReader&lt;object&gt;)</c> declared
+    /// beside a valid <c>M[T](ChannelReader[T])</c> also became applicable,
+    /// and betterness prefers the concrete overload — so merely ADDING an
+    /// <c>object</c> overload to a library turned the repaired call back into
+    /// a diagnostic. Only a slot whose OPEN declaration mentions a generic
+    /// parameter can have acquired its <c>object</c> by erasure, so only such
+    /// a slot may be answered here; a non-generic member on a non-generic type
+    /// keeps the answer <c>Conversion</c> gives on the real types, which is
+    /// "no".</para>
+    /// <para>The declaring-type case is deliberately slot-BLIND: a constructor
+    /// on a generic class closed over the erased placeholder admits every
+    /// slot, because the corresponding open member is not addressable from a
+    /// <see cref="ConstructorInfo"/> across reflection contexts. That costs
+    /// nothing in practice — the channel test below is what narrows it, and a
+    /// genuine <c>ChannelReader[object]</c> parameter on a generic class is
+    /// refused a few steps later by <c>BindClrParameterConversions</c>, by
+    /// name, rather than emitted.</para>
+    /// </remarks>
+    /// <param name="rawCandidate">The candidate as declared, before generic closing.</param>
+    /// <param name="parameterIndex">The parameter position this argument fills.</param>
+    /// <param name="parameterType">The closed parameter type.</param>
+    /// <param name="argumentType">The erased argument type.</param>
+    /// <returns>True when the erased pair is an implicit channel view.</returns>
+    private static bool ChannelViewAppliesAtErasedGenericSlot(
+        MethodBase? rawCandidate,
+        int parameterIndex,
+        Type? parameterType,
+        Type? argumentType)
+    {
+        if (rawCandidate == null
+            || parameterType == null
+            || argumentType == null
+            || parameterType.IsByRef
+            || !IsErasedGenericParameterSlot(rawCandidate, parameterIndex))
+        {
+            return false;
+        }
+
+        var argumentSymbol = TypeSymbol.FromClrType(argumentType);
+        var parameterSymbol = TypeSymbol.FromClrType(parameterType);
+        return argumentSymbol != null
+            && parameterSymbol != null
+            && ChannelTypeSymbol.TryGetChannelShape(argumentSymbol, out _, out _, out _)
+            && ChannelTypeSymbol.TryGetChannelShape(parameterSymbol, out _, out _, out _)
+            && Conversion.ClassifyNonStructural(argumentSymbol, parameterSymbol).IsImplicit;
+    }
+
+    /// <summary>
+    /// Issue #3982: whether the candidate's parameter at
+    /// <paramref name="parameterIndex"/> could have acquired an <c>object</c>
+    /// by type-argument erasure rather than by being declared that way.
+    /// </summary>
+    /// <param name="rawCandidate">The candidate as declared, before generic closing.</param>
+    /// <param name="parameterIndex">The parameter position.</param>
+    /// <returns>True when the slot is generic in the declaration.</returns>
+    private static bool IsErasedGenericParameterSlot(MethodBase rawCandidate, int parameterIndex)
+    {
+        if (rawCandidate is MethodInfo { IsGenericMethodDefinition: true } openMethod)
+        {
+            var openParameters = openMethod.GetParameters();
+            if ((uint)parameterIndex < (uint)openParameters.Length
+                && openParameters[parameterIndex].ParameterType.ContainsGenericParameters)
+            {
+                return true;
+            }
+        }
+
+        return rawCandidate.DeclaringType is { IsGenericType: true, IsGenericTypeDefinition: false };
     }
 
     /// <summary>

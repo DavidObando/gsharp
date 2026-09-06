@@ -1758,6 +1758,32 @@ public sealed class Conversion
             return true;
         }
 
+        // Issue #3985 / ADR-0174 D2: a channel is a CLR class in every
+        // direction — `Chan<T>`/`Channel<T>` and the `ChannelReader<T>` /
+        // `ChannelWriter<T>` views are all reference types — but
+        // `ChannelTypeSymbol.MakeClrType` returns null the moment the element
+        // has no CLR backing (a type parameter, or a same-compilation user
+        // type), so the `ClrType` fallback below reported `chan[T]` as NOT
+        // reference-like. That is the identical hole this arm's slice/array
+        // neighbour closes for `[]T`, and the delegate/function arm below
+        // closes for a named delegate. The consequence was an asymmetry with
+        // no defensible reading: a `chan[int32]?` argument reached a
+        // non-nullable imported `Channel[int32]` parameter as an
+        // explicit reference conversion that drops the annotation (the #1627
+        // arm, via `HasCheckedReferenceConversion`), exactly as a `string?`
+        // reaches a `string` parameter, while the SAME call with an open
+        // element fell through every arm to `Conversion.None` and reported
+        // GS0155 — so `chan[T]?` and `chan[int32]?` disagreed purely on
+        // whether the element happened to be CLR-backed. Recognising the
+        // channel here restores one answer for both spellings; the Kotlin-model
+        // null-safety rules are untouched, because the #1627 arm still
+        // requires an EXPLICIT conversion and a G#-declared parameter still
+        // reports GS0154.
+        if (type is ChannelTypeSymbol)
+        {
+            return true;
+        }
+
         // Issue #2841: a user-declared named delegate (ADR-0059 / issue #255) is
         // emitted as a sealed class deriving from `System.MulticastDelegate`, so
         // it is unconditionally a reference type. Like `StructSymbol`/
@@ -2153,16 +2179,30 @@ public sealed class Conversion
     /// <returns><see langword="true"/> for a nominal class/interface shape.</returns>
     private static bool IsNominalReferenceShape(TypeSymbol? type)
         => type is not null
-            && type is not FunctionTypeSymbol
-            && type is not FunctionPointerTypeSymbol
-            && type is not SliceTypeSymbol
-            && type is not ArrayTypeSymbol
-            && type is not RectangularArrayTypeSymbol
-            && type is not TupleTypeSymbol
-            && type is not SequenceTypeSymbol
-            && type is not AsyncSequenceTypeSymbol
-            && type is not TypeParameterSymbol
-            && (IsClassLikeReferenceType(type) || IsInterfaceLikeType(type));
+
+            // Issue #3985, the same hole as the `IsReferenceLikeTarget` arm
+            // above and for the same reason: a channel IS a nominal CLR class
+            // in every direction (`Chan<T>`/`Channel<T>` and the
+            // `ChannelReader<T>`/`ChannelWriter<T>` views), and it is none of
+            // the STRUCTURAL shapes this predicate excludes — it lands outside
+            // only because `IsClassLikeReferenceType` bottoms out on `ClrType`,
+            // which `ChannelTypeSymbol.MakeClrType` leaves null the moment the
+            // element has no CLR backing. Without this arm the #3843 widening
+            // admitted `chan[int32]?` at a `ChannelWriter[int32]` parameter
+            // (its `ClrType` is a real class) and refused `chan[T]?` /
+            // `chan[Pair]?` at the very same one — precisely the disagreement
+            // between the two spellings that this issue forbids.
+            && (type is ChannelTypeSymbol
+                || (type is not FunctionTypeSymbol
+                    && type is not FunctionPointerTypeSymbol
+                    && type is not SliceTypeSymbol
+                    && type is not ArrayTypeSymbol
+                    && type is not RectangularArrayTypeSymbol
+                    && type is not TupleTypeSymbol
+                    && type is not SequenceTypeSymbol
+                    && type is not AsyncSequenceTypeSymbol
+                    && type is not TypeParameterSymbol
+                    && (IsClassLikeReferenceType(type) || IsInterfaceLikeType(type))));
 
     private static TypeSymbol? UnwrapReferenceNullable(TypeSymbol? type)
     {
