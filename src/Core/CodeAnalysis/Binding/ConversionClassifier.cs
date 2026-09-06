@@ -1333,11 +1333,39 @@ internal sealed class ConversionClassifier
                             ? call.Arguments[sourceIndex].Location
                             : call?.Location ?? default;
                         var parameterConversion = Conversion.Classify(argument.Type, targetType);
+
+                        // Issue #4012: `allowExplicit: true` is this path's
+                        // standing leniency — a CLR argument slot accepts a
+                        // conversion the author did not write, because
+                        // applicability already ranked the candidate on shapes
+                        // and refusing here would only produce a worse
+                        // diagnostic. A G#-native `[N]T` target is the one slot
+                        // where that leniency erases the very fact #3998 made
+                        // part of the type: `[4]Foo -> [3]Foo` is EXPLICIT by
+                        // design (the `cast[[3]Foo](…)` reinterprets and does
+                        // not resize), so applying it silently accepts an
+                        // argument of the wrong length at
+                        // `List[[3]Foo]().Add(…)` and hands the receiver a
+                        // four-element array. The pair with a CLR-backed
+                        // element (`[4]int32` at `[3]int32`) never reached this
+                        // arm at all — `NeedsBindClrParameterConversion` sees
+                        // one `int32[]` on both sides and says "nothing to do",
+                        // so it fell to the #2391 arm below and reported
+                        // GS0156. Withdrawing the leniency for a fixed-array
+                        // target makes the two spellings agree on GS0156, and
+                        // the cast the diagnostic names is still available.
+                        // Only a `[N]T` target is affected; a target recovered
+                        // from reflection is never an `ArrayTypeSymbol`
+                        // (metadata records no length — #3962's
+                        // `ContainsMetadataRecoveredArray` line), so this
+                        // cannot fire on an interop slot.
+                        var allowExplicitArgument = !parameterConversion.IsStructuralProjection
+                            && targetType is not ArrayTypeSymbol;
                         rebound = BindConversion(
                             location,
                             argument,
                             targetType,
-                            allowExplicit: !parameterConversion.IsStructuralProjection);
+                            allowExplicit: allowExplicitArgument);
                     }
                     else if (argument.Type != targetType
                         && TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var udcArg))
@@ -1569,11 +1597,31 @@ internal sealed class ConversionClassifier
         // non-null reference. Issue #3560 also retains fully CLR-backed tuple
         // arguments because their element-wise conversion semantics cannot be
         // recovered from the nominal ValueTuple reflection type alone.
+        // Issue #4012: a FIXED-LENGTH array type argument is retained on the
+        // receiver (#3962 keeps `[3]int32` in `List[[3]int32]`'s symbolic
+        // `TypeArguments`) but satisfied NEITHER of the two tests above:
+        // `[3]int32` has a real `int32[]` `ClrType`, so
+        // `RequiresSymbolicProjection` says no, and it is not a tuple. So this
+        // helper bailed before ever mapping the slot, `Add`'s parameter stayed
+        // the `int32[]` reflection reports off the erased `List<System.Int32[]>`,
+        // and `xs.Add([4]int32{…})` was accepted at a `List[[3]int32]` — the
+        // declared length #3998 made part of the type was simply not in the
+        // picture. `ContainsFixedLengthArray` is the #3962 predicate for
+        // exactly this shape and recurses the same way, so a nested
+        // `List[[][3]int32]` is covered too.
+        //
+        // This is NOT `ImportedTypeSymbol.HasSubstitutableTypeArgument`
+        // (ImportedTypeSymbol.cs:91). #4002's hand-off predicted that widening
+        // THAT property would close this row; #3998 applied the widening,
+        // measured it, and it changed nothing — the ordinary imported
+        // instance-call path never consults it for parameter types. The gate
+        // that actually decides is this inline one.
         if (method == null
             || receiverType is not ImportedTypeSymbol imported
             || imported.TypeArguments.IsDefaultOrEmpty
             || !imported.TypeArguments.Any(
                 static argument => TypeSymbol.RequiresSymbolicProjection(argument)
+                    || TypeSymbol.ContainsFixedLengthArray(argument)
                     || argument is TupleTypeSymbol))
         {
             return null;
@@ -1664,10 +1712,16 @@ internal sealed class ConversionClassifier
             openMethod,
             effectiveMethodTypeArgs);
         mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
+
+        // Issue #4012: the exit filter is the entry gate's twin and needed the
+        // same widening. Without it the mapped `[3]int32` — recovered
+        // correctly, right here — was discarded as "nothing symbolic to keep"
+        // and the caller fell back to the erased `int32[]` anyway.
         return mapped != null
             && mapped != TypeSymbol.Error
             && (TypeSymbol.RequiresSymbolicProjection(mapped)
                 || mapped is TupleTypeSymbol
+                || TypeSymbol.ContainsFixedLengthArray(mapped)
                 || TypeSymbol.ContainsNamedTupleElements(mapped))
             ? mapped
             : null;

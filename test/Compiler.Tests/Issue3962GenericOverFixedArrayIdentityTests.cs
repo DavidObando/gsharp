@@ -59,10 +59,19 @@ namespace GSharp.Compiler.Tests;
 /// file pinned that #3998 flipped are kept, flipped, in
 /// <see cref="FlippedByIssue3998Cases"/>. What #3998 left is narrower than
 /// what it found: the SLICE-argument erasure above, and a member-projection
-/// gap where a generic's member slot (<c>List[[3]int32]</c>'s <c>Add</c>) is
+/// gap where a generic's member slot (<c>List[[3]int32]</c>'s <c>Add</c>) was
 /// still read off the erased <c>List&lt;int32[]&gt;</c> rather than projected
-/// through the retained <c>[3]int32</c>. Both stay pinned in
-/// <see cref="UnchangedBareCases"/>.</para>
+/// through the retained <c>[3]int32</c>.</para>
+/// <para><b>Since then (#4012).</b> The member-projection gap is fixed too:
+/// the slot is now projected through the retained <c>[3]int32</c>, so the row
+/// this file pinned for it moved to
+/// <see cref="FlippedByIssue4012Cases"/>. What is left of the original residue
+/// is the SLICE-argument erasure alone, still pinned in
+/// <see cref="UnchangedBareCases"/> — <c>Binder.ProjectGenericArgument</c>
+/// erases a <c>[]T</c> type argument before any comparison can see it, and
+/// retaining it symbolically would change the representation of every
+/// <c>List[[]T]</c> in the corpus and bypass the #1354 nullable-flags path.
+/// Tracked as #4024.</para>
 /// </remarks>
 public class Issue3962GenericOverFixedArrayIdentityTests
 {
@@ -760,38 +769,15 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             new[] { "3" },
         };
 
-        // Review finding 1, revisited by #3998. This case used to pin the
-        // `take3` and `xs.Add` lines TOGETHER, on the reasoning that both were
-        // the one bare rule seen at two levels and no fix should split them
-        // silently. #3998 split them LOUDLY: `take3([4]int32{…})` is now an
-        // error (see `member-argument-length-follows-the-bare-conversion-rule`
-        // below), while `xs.Add([4]int32{…})` is still accepted — because
-        // `Add`'s parameter is read off the erased `List<int32[]>` rather than
-        // projected through the `[3]int32` this receiver still carries. So the
-        // original reasoning was half right: the two lines are NOT the same
-        // rule, and the `Add` line really is a member-projection gap.
-        // Measured, not assumed: #4002's hand-off predicted that widening
-        // `ImportedTypeSymbol.HasSubstitutableTypeArgument` to include
-        // `ContainsFixedLengthArray` would close it; #3998 measured that
-        // widening and it changed nothing here.
-        yield return new object[]
-        {
-            "member-argument-still-follows-the-erased-member-slot",
-            """
-            package P
-            import System
-            import System.Collections.Generic
-
-            func main2() {
-                var xs = List[[3]int32]()
-                xs.Add([4]int32{5, 6, 7, 8})
-                Console.WriteLine(xs.Count.ToString())
-            }
-
-            main2()
-            """,
-            new[] { "1" },
-        };
+        // FLIPPED BY #4012, and moved to `FlippedByIssue4012Cases` below —
+        // `member-argument-still-follows-the-erased-member-slot` lived here.
+        // The history is worth keeping: review finding 1 pinned the `take3`
+        // and `xs.Add` lines TOGETHER, on the reasoning that both were the one
+        // bare rule seen at two levels. #3998 split them, fixing `take3` and
+        // leaving `xs.Add` accepted; #4012 has now closed the second half, so
+        // the original reasoning turns out to have been right about the
+        // OUTCOME and wrong about the mechanism — they are two different
+        // gates, and it took two PRs to shut both.
 
         // Unchanged by #3998 as well, and for its own reason: a SLICE type
         // argument is erased to `T[]` by `Binder.ProjectGenericArgument`
@@ -863,6 +849,47 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             main2()
             """,
             "requires a value of type '[3]int32' but was given a value of type '[4]int32'",
+        };
+    }
+
+    /// <summary>
+    /// The row this file pinned as ACCEPTED behaviour and #4012 turned into an
+    /// error. Kept here, flipped rather than deleted, for the same reason
+    /// <see cref="FlippedByIssue3998Cases"/> exists.
+    /// </summary>
+    /// <remarks>
+    /// #4012 closed the member-projection gap this row measured: the entry and
+    /// exit gates of
+    /// <c>ConversionClassifier.TrySubstituteParameterTypeFromReceiver</c> now
+    /// admit a <c>TypeSymbol.ContainsFixedLengthArray</c> type argument, so
+    /// <c>Add</c>'s parameter is the <c>[3]int32</c> this receiver retained
+    /// rather than the <c>int32[]</c> reflection reports off the erased
+    /// <c>List&lt;int32[]&gt;</c>. Note what it was NOT: #4002's hand-off
+    /// predicted <c>ImportedTypeSymbol.HasSubstitutableTypeArgument</c>, #3998
+    /// measured that widening and it changed nothing, and the note that
+    /// recorded the negative result was correct — the gate that decides is the
+    /// inline one, in a different file.
+    /// </remarks>
+    /// <returns>Name, G# source, a substring the diagnostics must name.</returns>
+    public static IEnumerable<object[]> FlippedByIssue4012Cases()
+    {
+        yield return new object[]
+        {
+            "member-argument-follows-the-projected-member-slot",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func main2() {
+                var xs = List[[3]int32]()
+                xs.Add([4]int32{5, 6, 7, 8})
+                Console.WriteLine(xs.Count.ToString())
+            }
+
+            main2()
+            """,
+            "Cannot convert type '[4]int32' to '[3]int32'",
         };
     }
 
@@ -939,6 +966,7 @@ public class Issue3962GenericOverFixedArrayIdentityTests
     [Theory]
     [MemberData(nameof(RejectedCases))]
     [MemberData(nameof(FlippedByIssue3998Cases))]
+    [MemberData(nameof(FlippedByIssue4012Cases))]
     public void ADifferentFixedLength_IsADifferentType(string name, string source, string expectedMention)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3962_neg_").FullName;

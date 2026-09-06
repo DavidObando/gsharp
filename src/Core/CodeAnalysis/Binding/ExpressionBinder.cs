@@ -2198,6 +2198,35 @@ internal sealed partial class ExpressionBinder
             return erasedChannel;
         }
 
+        // Issue #4012: the FIXED-LENGTH array `[N]T` is the one G#-native array
+        // shape this method never had an arm for. The `[]T` arm above (#2182)
+        // and the `[N,M]T` arm below both ride their element through to its
+        // erasure; `[N]T` did not, so a `[3]Foo` argument over a
+        // same-compilation `Foo` (or an open `T`) produced NO effective CLR
+        // type at all, the caller bailed with `return false` BEFORE overload
+        // resolution ran, and `List[[3]Foo]().Add([3]Foo{…})` dead-ended with
+        // GS0159 "Cannot find function Add" — while the very same call with a
+        // `[]Foo` argument, or with a `[3]int32` whose `ClrType` is a real
+        // `int32[]`, bound fine. That is the "needs BOTH a symbolic element
+        // and the fixed-array shape" signature the issue reports, and this is
+        // the whole of it: the length is not consulted here at all.
+        //
+        // `[N]T` and `[]T` share ONE runtime backing (the SZ-array `T[]`, see
+        // #3962), so the erased ride-through is byte-identical to the slice
+        // arm's. The declared length survives only in the symbol, and it is
+        // still enforced downstream where the target slot is a G#-native
+        // `[N]T` — at applicability by `Conversion`, and at a projected
+        // generic member slot by
+        // `ConversionClassifier.TrySubstituteParameterTypeFromReceiver`.
+        if (typeSymbol is ArrayTypeSymbol fixedLengthArray)
+        {
+            var elementClr = GetEffectiveArgumentClrTypeForOverloadResolution(fixedLengthArray.ElementType);
+            if (elementClr != null && !elementClr.IsByRef && !elementClr.IsPointer)
+            {
+                return elementClr.MakeArrayType();
+            }
+        }
+
         if (typeSymbol is RectangularArrayTypeSymbol rectangular)
         {
             var elementClr = GetEffectiveArgumentClrTypeForOverloadResolution(rectangular.ElementType);
