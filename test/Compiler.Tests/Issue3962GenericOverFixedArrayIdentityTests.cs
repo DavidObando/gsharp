@@ -78,6 +78,13 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             // all, so the comparison against `List[[3]int32]` must stay
             // lenient rather than reject on information nobody has.
             public static List<int[]> MakeArrays() => new List<int[]> { new[] { 10, 20, 30 } };
+
+            // The NESTED shape: a plain CLR-backed constructed generic whose
+            // symbolic type-argument vector is empty at every level.
+            public static int CountNested(List<List<int[]>> items) => items.Count;
+
+            public static List<List<int[]>> MakeNested() =>
+                new List<List<int[]>> { new List<int[]> { new[] { 10, 20, 30 } } };
         }
         """;
 
@@ -211,6 +218,30 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             new[] { "2" },
         };
 
+        // A STATIC generic receiver over a matching length: the third
+        // retention site (`TryCloseImportedGenericTypeReceiver`) has to build
+        // the symbolic view and still produce verifiable IL parented at the
+        // constructed TypeSpec.
+        yield return new object[]
+        {
+            "static-generic-receiver-over-a-matching-length-runs",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func main2() {
+                var c EqualityComparer[[3]int32] = EqualityComparer[[3]int32].Default
+                var a = [3]int32{1, 2, 3}
+                Console.WriteLine(c.Equals(a, a).ToString())
+                Console.WriteLine(EqualityComparer[[3]int32].Default.Equals(a, a).ToString())
+            }
+
+            main2()
+            """,
+            new[] { "True", "True" },
+        };
+
         // A nullable REFERENCE element inside the fixed array. Retaining the
         // symbolic argument bypasses the #1354 branch that attaches the DFS
         // nullable-flags array (it only runs when NO symbolic argument is
@@ -308,6 +339,33 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             main2()
             """,
             new[] { "1", "20" },
+        };
+
+        // Review finding 4 predicted this would break: a NESTED
+        // metadata-recovered array (`List<List<int[]>>`) reached through a
+        // plain CLR-backed constructed generic, whose symbolic type-argument
+        // vector is empty. Measured green before and after — pinned so the
+        // carve-out's reach is covered rather than argued about.
+        yield return new object[]
+        {
+            "interop-nested-metadata-arrays-convert-both-ways",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import Interop
+
+            func main2() {
+                var nested = List[List[[3]int32]]()
+                Console.WriteLine(ArrayProbes.CountNested(nested).ToString())
+
+                var back List[List[[3]int32]] = ArrayProbes.MakeNested()
+                Console.WriteLine(back[0][0][1].ToString())
+            }
+
+            main2()
+            """,
+            new[] { "0", "20" },
         };
     }
 
@@ -439,6 +497,65 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             "'System.Collections.Generic.List[[3]int32]' to 'System.Collections.Generic.List[[4]int32]'",
         };
 
+        // Review finding 2. Generic VARIANCE must not readmit a mismatch the
+        // identity comparison rejected: `IEnumerable[T]` is covariant, and the
+        // bare `[3]int32` -> `[4]int32` conversion is implicit (#3998), so the
+        // covariant slot accepted the pair until the shape mismatch was
+        // rejected before variance was applied.
+        yield return new object[]
+        {
+            "covariance-does-not-readmit-a-length-mismatch",
+            """
+            package P
+            import System.Collections.Generic
+
+            var l3 = List[[3]int32]()
+            var e3 IEnumerable[[3]int32] = l3
+            var e4 IEnumerable[[4]int32] = e3
+            """,
+            "'System.Collections.Generic.IEnumerable[[3]int32]' to 'System.Collections.Generic.IEnumerable[[4]int32]'",
+        };
+
+        // The contravariant half of the same rule (`IComparer[in T]`), in the
+        // direction contravariance would otherwise allow.
+        yield return new object[]
+        {
+            "contravariance-does-not-readmit-a-length-mismatch",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func wants3(c IComparer[[3]int32]) int32 {
+                return 0
+            }
+
+            func pass4(c IComparer[[4]int32]) int32 {
+                return wants3(c)
+            }
+
+            Console.WriteLine(pass4(Comparer[[4]int32].Default).ToString())
+            """,
+            "requires a value of type 'System.Collections.Generic.IComparer[[3]int32]'",
+        };
+
+        // Review finding 3. The STATIC generic receiver is resolved by a
+        // fourth code path of its own; without the retention there,
+        // `EqualityComparer[[3]int32].Default` is exposed as a metadata-only
+        // `EqualityComparer<int32[]>` and flows into the `[4]` slot through the
+        // metadata-recovery leniency.
+        yield return new object[]
+        {
+            "static-generic-receiver-discriminates-lengths",
+            """
+            package P
+            import System.Collections.Generic
+
+            var c4 EqualityComparer[[4]int32] = EqualityComparer[[3]int32].Default
+            """,
+            "'System.Collections.Generic.EqualityComparer[[3]int32]' to 'System.Collections.Generic.EqualityComparer[[4]int32]'",
+        };
+
         // #3924's own control, restated here: a same-compilation element must
         // still discriminate, and this PR must not have traded one erasure for
         // another.
@@ -522,6 +639,38 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             main2()
             """,
             new[] { "3", "1", "3" },
+        };
+
+        // Review finding 1: `xs.Add([4]int32{...})` on a `List[[3]int32]` is
+        // still accepted. That is NOT member-projection erasure — it is the
+        // #3998 bare rule, and the `take3` line proves it: a G#-declared
+        // `[3]int32` parameter, which owes nothing to reflection, accepts a
+        // `[4]int32` argument too. A fully substituted `Add([3]int32)` would
+        // therefore accept the same call. Pinned so that fixing #3998 has to
+        // revisit both lines together.
+        yield return new object[]
+        {
+            "member-argument-length-follows-the-bare-conversion-rule",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func take3(a [3]int32) int32 {
+                return a[0]
+            }
+
+            func main2() {
+                Console.WriteLine(take3([4]int32{1, 2, 3, 4}).ToString())
+
+                var xs = List[[3]int32]()
+                xs.Add([4]int32{5, 6, 7, 8})
+                Console.WriteLine(xs.Count.ToString())
+            }
+
+            main2()
+            """,
+            new[] { "1", "1" },
         };
 
         yield return new object[]
