@@ -197,6 +197,34 @@ public static class ClrTypeUtilities
     public static bool AreSame(Type? a, Type? b) => IsSameAs(a, b);
 
     /// <summary>
+    /// Issue #4023: whether <paramref name="type"/> was produced by the live
+    /// runtime's own loader — a <c>System.RuntimeType</c> — and is therefore
+    /// safe to close open host generics over and to reflect members on.
+    /// </summary>
+    /// <remarks>
+    /// <para><c>RuntimeType.MakeGenericType</c> answers a real
+    /// <c>RuntimeType</c> only when EVERY type argument is itself a
+    /// <c>RuntimeType</c>. Hand it one that is not — a
+    /// <see cref="System.Reflection.MetadataLoadContext"/> <c>RoType</c>, or an
+    /// in-flight <see cref="System.Reflection.Emit.TypeBuilder"/> — and it
+    /// silently answers a <c>System.Reflection.Emit.TypeBuilderInstantiation</c>
+    /// instead, a structural placeholder whose <c>GetMethod</c>,
+    /// <c>GetProperty</c> and <c>GetConstructor</c> all throw
+    /// <see cref="NotSupportedException"/>. Such a type is non-null and looks
+    /// usable, so a plain <c>ClrType != null</c> gate lets it through and the
+    /// failure surfaces much later as a missing member or an internal
+    /// compiler error.</para>
+    /// <para>The same predicate is spelled inline in the emitter
+    /// (<c>MethodBodyEmitter.IsRuntimeProvidedType</c>, ADR-0174 D12's
+    /// <c>ChannelElementNeedsSymbolicType</c>); this is the binder-side
+    /// spelling of it.</para>
+    /// </remarks>
+    /// <param name="type">The candidate type. May be <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when the type is a host <c>System.RuntimeType</c>.</returns>
+    public static bool IsRuntimeProvidedType(this Type? type)
+        => type != null && type.GetType() == typeof(object).GetType();
+
+    /// <summary>
     /// Extension-method companion to <see cref="AreSame(Type, Type)"/>. Reads more
     /// naturally at call sites that historically used
     /// <c>clrType == typeof(SomeType)</c> reference-identity comparisons —

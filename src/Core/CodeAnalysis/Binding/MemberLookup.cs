@@ -2354,6 +2354,44 @@ internal sealed class MemberLookup
                 {
                     try
                     {
+                        // Issue #4023: the erasure exists to be REFLECTED on,
+                        // and the host `typeof(Dictionary<,>)` cannot produce a
+                        // reflectable one when an argument came from the
+                        // compilation's MetadataLoadContext — which the arm
+                        // above produces for a same-compilation
+                        // `class Derived : ImportedBase`, erased to its
+                        // imported base. Mixing contexts yields a
+                        // `TypeBuilderInstantiation`, whose members all throw,
+                        // and the map lost its whole BCL surface. Build it
+                        // inside the argument's OWN context first, the same way
+                        // `ResolveErasedObjectInContext` keeps `object` in the
+                        // open definition's context two arms up.
+                        //
+                        // The host construction stays as the FALLBACK, for when
+                        // no projector is registered for the argument's
+                        // assembly or the projection is refused. It is not dead:
+                        // #4016's `map[Derived, string]` passed on 565b9a04
+                        // with exactly that host `TypeBuilderInstantiation`,
+                        // because overload gating needs only the erasure's
+                        // SHAPE. Measured, #4016 now takes the upgraded path
+                        // (its `ImportedBase` carrier IS a registered reference
+                        // assembly) and passes there too — but an earlier draft
+                        // that collapsed a non-host argument to `object`
+                        // instead of re-contexting it destroyed that shape and
+                        // turned both of #4016's derived-class rows into
+                        // GS0159. Upgrade the erasure; never flatten it.
+                        if (!mapKeyErased.IsRuntimeProvidedType() || !mapValueErased.IsRuntimeProvidedType())
+                        {
+                            var inContext = MapTypeSymbol.TryMakeErasedClrTypeInReferenceContext(
+                                mapKeyErased,
+                                mapValueErased);
+                            if (inContext != null)
+                            {
+                                erased = inContext;
+                                return true;
+                            }
+                        }
+
                         erased = typeof(System.Collections.Generic.Dictionary<,>)
                             .MakeGenericType(mapKeyErased, mapValueErased);
                         return true;
