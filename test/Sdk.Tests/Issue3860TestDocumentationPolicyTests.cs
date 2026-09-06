@@ -90,7 +90,18 @@ public sealed class Issue3860TestDocumentationPolicyTests : IDisposable
             ?? throw new InvalidOperationException("Could not start dotnet build.");
         Task<string> standardOutput = process.StandardOutput.ReadToEndAsync();
         Task<string> standardError = process.StandardError.ReadToEndAsync();
-        Assert.True(process.WaitForExit(120_000), "dotnet build timed out.");
+        if (!process.WaitForExit(120_000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            Task.WaitAll(standardOutput, standardError);
+            throw new TimeoutException(
+                "dotnet build timed out."
+                + Environment.NewLine
+                + standardOutput.Result
+                + standardError.Result);
+        }
+
         Task.WaitAll(standardOutput, standardError);
         return (process.ExitCode, standardOutput.Result + standardError.Result);
     }
