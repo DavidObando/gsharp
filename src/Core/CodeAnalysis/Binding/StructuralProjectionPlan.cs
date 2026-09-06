@@ -190,6 +190,13 @@ internal static class StructuralProjectionPlanner
         }
 
         var sourceMembers = CollectSourceMembers(source);
+        if (IsDistinctConstructionOfTheSameClrGeneric(source, target)
+            && !MemberSurfaceCarriesTheDifference(sourceMembers, target))
+        {
+            failure = $"Type '{target}' is another construction of the same generic type as '{source}', and the two expose an identical public member surface, so a projection between them would silently discard the state the type argument names.";
+            return false;
+        }
+
         if (sourceMembers.Count == 0)
         {
             if (source is StructSymbol sourceStruct
@@ -693,6 +700,205 @@ internal static class StructuralProjectionPlanner
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #4014: true when <paramref name="source"/> and <paramref
+    /// name="target"/> are two DIFFERENT closed constructions of the SAME CLR
+    /// generic definition — e.g. <c>List[int32]</c> and <c>List[string]</c>.
+    /// <para>
+    /// The planner's question is "can the target be constructed from the
+    /// source's public member surface?", and for two constructions of one
+    /// generic that question answers yes for a reason that has nothing to do
+    /// with the values involved: the two share a member surface BY
+    /// CONSTRUCTION, and the members whose types actually differ (the ones
+    /// mentioning the type argument) are exactly the ones a projection cannot
+    /// carry. For <c>List</c> the incidental overlap is a parameterless
+    /// constructor plus a settable <c>Capacity</c>, so the plan built a NEW,
+    /// EMPTY <c>List&lt;string&gt;</c> and copied a capacity — measured on the
+    /// parent, <c>let zs List[string] = xs</c> for an <c>xs List[int32]</c>
+    /// holding one element compiled, IL-verified, and printed <c>0</c>.
+    /// </para>
+    /// <para>
+    /// The verdict lives HERE rather than in <see cref="Conversion"/>'s
+    /// projection arm because THREE callers ask the planner directly — <see
+    /// cref="Conversion"/>, applicability's structural-projection argument
+    /// check (#4006), and <c>ClrOverloadResolution</c>'s argument check — and
+    /// closing only the conversion arm leaves the other two open, which is
+    /// literally the #4006 shape.
+    /// </para>
+    /// <para>
+    /// Deliberately scoped to pairs whose CLOSED CLR types are BOTH GENUINE and
+    /// DIFFER, and — see <see cref="MemberSurfaceCarriesTheDifference"/>, which
+    /// the caller ands with this — whose member surfaces do NOT expose the
+    /// difference. Two exclusions are load-bearing here, and both were measured
+    /// rather than assumed:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><b>Identical closed types are not touched</b> — that is identity,
+    /// not a projection.</item>
+    /// <item><b>An ADR-0004 ERASURE SURROGATE is not a closed type.</b> A
+    /// constructed generic over a same-compilation element has no CLR identity
+    /// while binding, so its <c>ClrType</c> is a surrogate: #2889's
+    /// <c>List[Mode]</c> over a same-compilation enum presents as
+    /// <c>List&lt;object&gt;</c> while the <c>Action[List[Mode]]</c> slot it
+    /// must reach presents as <c>List&lt;int&gt;</c>. Those two closed types
+    /// differ for a reason that has nothing to do with the values — the
+    /// SYMBOLIC arguments are the same type. Comparing closed types alone
+    /// refused that pair (measured: <c>GS0131</c>, the whole
+    /// <c>Issue2889LambdaThunkNestedGenericTests</c> row went red), so the rule
+    /// additionally requires that NEITHER side carries a type argument the CLR
+    /// type does not: an argument whose own <c>ClrType</c> is null is exactly
+    /// the erasure this cannot see through. Note this is a SHAPE test on the
+    /// symbols — it does not call <c>Conversion.Classify</c>, because #4006
+    /// measured that narrowing a projection callback that way breaks the same
+    /// #2889 row for a second, independent reason.</item>
+    /// <item><b>A same-compilation G# generic is untouched</b> — its own
+    /// <c>ClrType</c> is null. Measured: a user <c>class Box[T]</c> projects
+    /// <c>Box[int32]</c> to <c>Box[int64]</c> and CARRIES the value, because a
+    /// G# class's public fields ARE its state. Refusing that would break a
+    /// faithful conversion for no soundness reason.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="source">The projection source type.</param>
+    /// <param name="target">The projection target type.</param>
+    /// <returns><see langword="true"/> when the pair must not project.</returns>
+    private static bool IsDistinctConstructionOfTheSameClrGeneric(TypeSymbol source, TypeSymbol target)
+    {
+        var sourceClr = source.ClrType;
+        var targetClr = target.ClrType;
+        if (sourceClr == null || targetClr == null
+            || !sourceClr.IsGenericType || !targetClr.IsGenericType
+            || sourceClr.IsGenericTypeDefinition || targetClr.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        // Guard test #835: reference identity is forbidden for CLR types that
+        // may have come from a MetadataLoadContext.
+        if (sourceClr.IsSameAs(targetClr))
+        {
+            return false;
+        }
+
+        if (HasErasedTypeArgument(source) || HasErasedTypeArgument(target))
+        {
+            return false;
+        }
+
+        return ClrTypeUtilities.IsSameAs(
+            SafeGetGenericTypeDefinition(sourceClr),
+            SafeGetGenericTypeDefinition(targetClr));
+    }
+
+    /// <summary>
+    /// Issue #4014: true when <paramref name="type"/> is a constructed generic
+    /// carrying a SYMBOLIC type argument that its <see cref="TypeSymbol.ClrType"/>
+    /// cannot represent — an argument with no CLR identity of its own while
+    /// binding (a same-compilation class, struct or enum). The container's
+    /// <c>ClrType</c> is then an ADR-0004 erasure surrogate rather than the
+    /// type the source actually denotes, so comparing closed CLR types across
+    /// such a pair compares surrogates. Recursive, so a nested
+    /// <c>List[List[Mode]]</c> is caught too.
+    /// </summary>
+    /// <param name="type">The candidate constructed generic.</param>
+    /// <returns><see langword="true"/> when an erased argument is present.</returns>
+    private static bool HasErasedTypeArgument(TypeSymbol type)
+    {
+        if (type is not ImportedTypeSymbol imported || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var argument in imported.TypeArguments)
+        {
+            if (argument.ClrType == null || HasErasedTypeArgument(argument))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4014, Copilot review on PR #4029: true when the two
+    /// constructions' public member surfaces THEMSELVES differ — i.e. at least
+    /// one same-named member has a different type on the two sides, because it
+    /// mentions the generic definition's type parameter.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the discriminator between the two situations the
+    /// same-definition test alone cannot tell apart, and both were measured on
+    /// the parent:</para>
+    /// <list type="bullet">
+    /// <item>An imported <c>Box&lt;T&gt;</c> with a settable <c>T Value</c>
+    /// EXPOSES the difference: <c>Box[int32]</c> has <c>Value int32</c> where
+    /// <c>Box[string]</c> has <c>Value string</c>. The author can therefore see
+    /// the incompatible member and SUPPLY it, which is exactly what ADR-0148 §B
+    /// explicit object spread is for — <c>Box[string]{ ...boxOfInt, Value:
+    /// "replacement" }</c> compiled on the parent and printed
+    /// <c>replacement</c>. Refusing that outright was a regression. The
+    /// ordinary member rules already decide this pair correctly in BOTH
+    /// directions: without the override, the parent reports (and this branch
+    /// still reports) <c>GS0490: Source member 'Value' of type 'int32' is not
+    /// implicitly convertible to 'string'</c>, at the spread and at an implicit
+    /// assignment alike.</item>
+    /// <item><c>List&lt;T&gt;</c> does NOT expose the difference: its
+    /// projectable surface is <c>Capacity</c>/<c>Count</c>, identically
+    /// <c>int32</c> on both sides, and the elements live in private state. The
+    /// author cannot supply what they cannot name, so every spelling loses
+    /// them — measured on the parent, the implicit assignment, the argument
+    /// position, <c>List[string]{ ...xs }</c> and <c>List[string]{ ...xs,
+    /// Capacity: 4 }</c> all compiled and all printed <c>0</c>. That is the
+    /// case this refuses.</item>
+    /// </list>
+    /// <para>Deliberately NOT expressed as "only refuse strict/implicit
+    /// projection", which is what the review proposed. Both spread spellings
+    /// above reach the planner with <c>strict: false</c>
+    /// (<c>ExpressionBinder.Literals.BindStructuralSpreadLiteral</c>), so
+    /// gating on that flag would have fixed the reported regression while
+    /// reopening a measured element loss. The surface test does both.</para>
+    /// </remarks>
+    /// <param name="sourceMembers">The source's collected public readable members.</param>
+    /// <param name="target">The projection target, a sibling construction.</param>
+    /// <returns><see langword="true"/> when the difference is visible in the surface.</returns>
+    private static bool MemberSurfaceCarriesTheDifference(
+        Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
+        TypeSymbol target)
+    {
+        var targetMembers = CollectSourceMembers(target);
+        foreach (var (name, sourceMember) in sourceMembers)
+        {
+            if (!targetMembers.TryGetValue(name, out var targetMember))
+            {
+                continue;
+            }
+
+            if (sourceMember.Type != targetMember.Type
+                && !ClrTypeUtilities.IsSameAs(sourceMember.Type.ClrType, targetMember.Type.ClrType))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static Type? SafeGetGenericTypeDefinition(Type type)
+    {
+        try
+        {
+            return type.GetGenericTypeDefinition();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static bool IsProjectionObjectType(TypeSymbol type)
