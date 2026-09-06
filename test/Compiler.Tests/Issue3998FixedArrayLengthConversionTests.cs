@@ -62,19 +62,31 @@ namespace GSharp.Compiler.Tests;
 /// on either side. That is the same line #3924's
 /// <c>IsMetadataRecoveredElement</c> and #3962's <c>interop-*</c> cases draw,
 /// and the <c>interop-*</c> cases here draw it again.</para>
-/// <para><b>Known residue, deliberately out of scope (tracked separately).</b>
-/// The MEMBER surface of a generic over a fixed array still reflects the
+/// <para><b>Known residue at the time, since narrowed (#4012).</b> This PR
+/// left the MEMBER surface of a generic over a fixed array reflecting the
 /// length-free CLR shape: <c>List[[3]int32]</c> keeps <c>[3]int32</c> in its
 /// symbolic <c>TypeArguments</c> (#3962 retained it), but <c>Add</c>'s
-/// parameter is read off the closed <c>List&lt;int32[]&gt;</c> rather than
-/// projected through that argument, so <c>xs.Add([4]int32{…})</c> is still
-/// accepted. Measured, not assumed: widening
+/// parameter was read off the closed <c>List&lt;int32[]&gt;</c> rather than
+/// projected through that argument, so <c>xs.Add([4]int32{…})</c> was
+/// accepted. #4012 has closed that — by widening the inline gates of
+/// <c>ConversionClassifier.TrySubstituteParameterTypeFromReceiver</c>, and by
+/// giving <c>[N]T</c> the erased-argument ride-through <c>[]T</c> already had
+/// — and the two rows that pinned it are kept, flipped, in
+/// <see cref="FlippedByIssue4012Cases"/>. The measurement recorded here still
+/// stands and is worth keeping: widening
 /// <c>ImportedTypeSymbol.HasSubstitutableTypeArgument</c> to include
 /// <c>ContainsFixedLengthArray</c> — the mechanism #4002's hand-off predicted
-/// — changes NEITHER this row NOR the <c>List[[N]UserType].Add</c>
-/// unreachability, so that widening is not part of this PR. The
-/// <c>residue-*</c> cases pin today's behaviour so the follow-up has to change
-/// this file on purpose.</para>
+/// — changed NEITHER row, because the imported instance-call path does not
+/// consult that property for parameter types.</para>
+/// <para><b>What is still residue.</b> A SLICE type argument is erased to
+/// <c>T[]</c> by <c>Binder.ProjectGenericArgument</c> before any comparison
+/// can see it, so <c>List[[]int32]</c> still converts to
+/// <c>List[[3]int32]</c>. Retaining it symbolically changes the
+/// representation of every <c>List[[]T]</c> in the corpus and bypasses the
+/// #1354 nullable-flags path, which is why both #3962 and #4012 declined it.
+/// Tracked as #4024.
+/// The remaining <c>residue-*</c> case pins today's behaviour so the follow-up
+/// has to change this file on purpose.</para>
 /// </remarks>
 public class Issue3998FixedArrayLengthConversionTests
 {
@@ -728,71 +740,27 @@ public class Issue3998FixedArrayLengthConversionTests
 
     /// <summary>
     /// Behaviour this PR deliberately does NOT change, pinned so the boundary
-    /// is visible and a later fix has to update this file on purpose. Every
-    /// one of these is a MEMBER slot whose type came back from reflection off
-    /// the erased <c>List&lt;int32[]&gt;</c>/<c>Stack&lt;int32[]&gt;</c>
-    /// rather than being projected through the receiver's retained
-    /// <c>[3]int32</c>.
+    /// is visible and a later fix has to update this file on purpose.
     /// </summary>
+    /// <remarks>
+    /// Two of the three rows this method carried were the MEMBER slot read off
+    /// the erased <c>List&lt;int32[]&gt;</c>/<c>Stack&lt;int32[]&gt;</c> rather
+    /// than projected through the receiver's retained <c>[3]int32</c>. #4012
+    /// closed that gap and they moved, flipped, to
+    /// <see cref="FlippedByIssue4012Cases"/>. What is left here is the SLICE
+    /// type-argument erasure, which is a different mechanism and is still open.
+    /// </remarks>
     /// <returns>Name, G# source, expected stdout lines.</returns>
     public static IEnumerable<object[]> ResidueCases()
     {
-        // The `Add` half of #3962's `member-argument-length-follows-the-bare-
-        // conversion-rule` pin. #4002 pinned it together with the `take3`
-        // line so a fix here could not split them silently; this PR splits
-        // them LOUDLY — `take3` is now a rejection row above, and this stays
-        // accepted because `Add`'s parameter is `int32[]` from reflection,
-        // not the `[3]int32` the receiver still carries.
-        yield return new object[]
-        {
-            "residue-a-generic-members-parameter-still-reflects-the-erased-array",
-            """
-            package P
-            import System
-            import System.Collections.Generic
-
-            func main2() {
-                var xs = List[[3]int32]()
-                xs.Add([4]int32{5, 6, 7, 8})
-                Console.WriteLine(xs.Count.ToString())
-                Console.WriteLine(xs[0].Length.ToString())
-            }
-
-            main2()
-            """,
-            new[] { "1", "4" },
-        };
-
-        // `List[T]` also exposes the non-generic `IList.Add(object)`, which
-        // would accept anything at all, so the row above is not proof on its
-        // own. `Stack[T].Push(T)` has no such sibling: this is the member
-        // projection gap by itself.
-        yield return new object[]
-        {
-            "residue-a-member-with-no-object-overload-still-accepts-another-length",
-            """
-            package P
-            import System
-            import System.Collections.Generic
-
-            func main2() {
-                var st = Stack[[3]int32]()
-                st.Push([4]int32{1, 2, 3, 4})
-                Console.WriteLine(st.Count.ToString())
-                Console.WriteLine(st.Peek().Length.ToString())
-            }
-
-            main2()
-            """,
-            new[] { "1", "4" },
-        };
-
         // #3962's `slice-argument-still-reaches-a-fixed-array-generic`,
         // unchanged. A SLICE type argument is erased to `T[]` by
         // `Binder.ProjectGenericArgument` before any comparison can see it —
-        // a different mechanism from the member gap above, and the one #3962
-        // declined because retaining it symbolically changes the
-        // representation of every `List[[]T]` in the corpus.
+        // a different mechanism from the member gap #4012 closed, and the one
+        // #3962 declined because retaining it symbolically changes the
+        // representation of every `List[[]T]` in the corpus and bypasses the
+        // #1354 nullable-flags path (which runs only when no symbolic argument
+        // is kept). #4012 scoped it out for the same reason and filed #4024.
         yield return new object[]
         {
             "residue-a-slice-type-argument-still-reaches-a-fixed-array-generic",
@@ -811,6 +779,70 @@ public class Issue3998FixedArrayLengthConversionTests
             main2()
             """,
             new[] { "1" },
+        };
+    }
+
+    /// <summary>
+    /// The rows this file pinned as ACCEPTED residue and #4012 turned into
+    /// errors. Kept here, flipped rather than deleted, so the change reads as
+    /// deliberate.
+    /// </summary>
+    /// <remarks>
+    /// #4012 widened the entry and exit gates of
+    /// <c>ConversionClassifier.TrySubstituteParameterTypeFromReceiver</c> to
+    /// admit a <c>TypeSymbol.ContainsFixedLengthArray</c> type argument, so a
+    /// generic's member slot is now projected through the <c>[3]int32</c> the
+    /// receiver retained rather than read off the erased
+    /// <c>List&lt;int32[]&gt;</c>. Note what did NOT close it: widening
+    /// <c>ImportedTypeSymbol.HasSubstitutableTypeArgument</c>, which #3998
+    /// measured and recorded here as changing nothing. That record was
+    /// correct; the deciding gate is a different one.
+    /// </remarks>
+    /// <returns>Name, G# source, a substring the diagnostics must name.</returns>
+    public static IEnumerable<object[]> FlippedByIssue4012Cases()
+    {
+        yield return new object[]
+        {
+            "a-generic-members-parameter-follows-the-projected-array",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func main2() {
+                var xs = List[[3]int32]()
+                xs.Add([4]int32{5, 6, 7, 8})
+                Console.WriteLine(xs.Count.ToString())
+                Console.WriteLine(xs[0].Length.ToString())
+            }
+
+            main2()
+            """,
+            "Cannot convert type '[4]int32' to '[3]int32'",
+        };
+
+        // `List[T]` also exposes the non-generic `IList.Add(object)`, which
+        // would accept anything at all, so the row above is not proof on its
+        // own. `Stack[T].Push(T)` has no such sibling: this is the member
+        // projection by itself.
+        yield return new object[]
+        {
+            "a-member-with-no-object-overload-rejects-another-length",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func main2() {
+                var st = Stack[[3]int32]()
+                st.Push([4]int32{1, 2, 3, 4})
+                Console.WriteLine(st.Count.ToString())
+                Console.WriteLine(st.Peek().Length.ToString())
+            }
+
+            main2()
+            """,
+            "Cannot convert type '[4]int32' to '[3]int32'",
         };
     }
 
@@ -868,6 +900,7 @@ public class Issue3998FixedArrayLengthConversionTests
     /// <param name="expectedMention">A substring the diagnostics must name.</param>
     [Theory]
     [MemberData(nameof(RejectedCases))]
+    [MemberData(nameof(FlippedByIssue4012Cases))]
     public void ADifferentArrayShape_DoesNotConvertImplicitly(string name, string source, string expectedMention)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3998_neg_").FullName;
