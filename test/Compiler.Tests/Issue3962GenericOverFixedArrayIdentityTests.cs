@@ -85,6 +85,21 @@ public class Issue3962GenericOverFixedArrayIdentityTests
 
             public static List<List<int[]>> MakeNested() =>
                 new List<List<int[]>> { new List<int[]> { new[] { 10, 20, 30 } } };
+
+            // A VARIANT interface over a metadata array: the carve-out has to
+            // reach the variance guard too, or this stops converting.
+            public static IEnumerable<int[]> MakeSequence() => new[] { new[] { 10, 20, 30 } };
+
+            public static int CountSequence(IEnumerable<int[]> items)
+            {
+                var n = 0;
+                foreach (var _ in items)
+                {
+                    n++;
+                }
+
+                return n;
+            }
         }
         """;
 
@@ -366,6 +381,33 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             main2()
             """,
             new[] { "0", "20" },
+        };
+
+        // The metadata carve-out must survive the new variance guard: a
+        // C# `IEnumerable<int[]>` records no length, so it still flows into an
+        // `IEnumerable[[3]int32]` slot and back out, even though two SYMBOLIC
+        // instantiations differing in length no longer do.
+        yield return new object[]
+        {
+            "interop-metadata-array-still-crosses-a-variant-interface",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import Interop
+
+            func main2() {
+                var seq IEnumerable[[3]int32] = ArrayProbes.MakeSequence()
+                Console.WriteLine(ArrayProbes.CountSequence(seq).ToString())
+
+                var l3 = List[[3]int32]()
+                l3.Add([3]int32{1, 2, 3})
+                Console.WriteLine(ArrayProbes.CountSequence(l3).ToString())
+            }
+
+            main2()
+            """,
+            new[] { "1", "1" },
         };
     }
 
