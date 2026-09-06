@@ -3091,7 +3091,8 @@ internal sealed partial class ExpressionBinder
                     staticFn.Method,
                     typeArgSymbols,
                     refinedStaticSymbolicArgs,
-                    staticIsExpanded);
+                    staticIsExpanded,
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticExpandedArgs = staticIsExpanded
@@ -3657,18 +3658,37 @@ internal sealed partial class ExpressionBinder
         //
         // The reported hole is closed because its argument is a genuine
         // `string` at a genuine `int32`: `List[int32]().Add("x")` reports
-        // GS0159 and `map[string, int32]{}.Contains(k)` reports GS0577.
+        // GS0159 and `map[string, int32]{}.Contains(k)` reports GS0577. What
+        // these two exemptions still let through — the literal and
+        // same-compilation-argument forms — is #4028, closed at APPLICABILITY
+        // just below rather than by narrowing the exemptions here.
         var anyArgumentIsErased = arguments.Any(
             argument => argument.Type != null && TypeSymbol.ContainsSameCompilationUserType(argument.Type));
-        var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
-            MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
-                clrType,
-                methodName,
-                includeInternal: receiverGrantsInternals,
-                includeExplicitInterfaceMembers: isSynthesizedCollectionAdd || anyArgumentIsErased),
-            instSymbolicArgs,
-            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
-            effectiveReceiverType).ToList();
+
+        // Issue #4028: both exemptions above are collection-time and cannot see
+        // the arguments, so they also re-admitted the widening
+        // `IList.Add(object)` / `IDictionary.Add(object, object)` for a call
+        // that has no erasure to repair — `List[int32]{"x"}` and
+        // `map[string, int32]{"a": "x"}` compiled and threw. The discrimination
+        // is made here instead, on the collected list, where the receiver's and
+        // the arguments' real symbolic types are both in hand; see
+        // `MemberLookup.ExcludeUnreachableNonGenericInterfaceCandidates` for
+        // what keeps the member and why. The memoized collection above is
+        // untouched, and a call that admitted no such member pays one loop over
+        // its own candidates.
+        var candidates = MemberLookup.ExcludeUnreachableNonGenericInterfaceCandidates(
+            MemberLookup.ExcludeErasureOnlyEnumCandidates(
+                MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
+                    clrType,
+                    methodName,
+                    includeInternal: receiverGrantsInternals,
+                    includeExplicitInterfaceMembers: isSynthesizedCollectionAdd || anyArgumentIsErased),
+                instSymbolicArgs,
+                argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+                effectiveReceiverType).ToList(),
+            clrType,
+            effectiveReceiverType,
+            arguments.Select(argument => argument.Type).ToList()).ToList();
 
         if (candidates.Count > 0)
         {
@@ -3757,7 +3777,8 @@ internal sealed partial class ExpressionBinder
                         closed,
                         typeArgSymbols,
                         preResolutionSymbolicArgs,
-                        isExpanded);
+                        isExpanded,
+                        argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                 var resolution = ClrOverloadResolution.Resolve(
                     candidates,
                     argTypes,
@@ -3772,7 +3793,9 @@ internal sealed partial class ExpressionBinder
                     erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                     delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                     methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-                    methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+                    methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+                    explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+                    explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
 
                 // Issue #3745: a user-declared class argument erases to
                 // `System.Object`, which gives an imported generic method no
@@ -3806,7 +3829,9 @@ internal sealed partial class ExpressionBinder
                             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-                            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+                            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+                            explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+                            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
                         if (projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
                         {
                             resolution = projectedResolution;
@@ -3886,7 +3911,8 @@ internal sealed partial class ExpressionBinder
                             method,
                             typeArgSymbols,
                             refinedInstSymbolicArgs,
-                            resolution.IsExpanded);
+                            resolution.IsExpanded,
+                            argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                         var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                         var returnType = ResolveImportedGenericReturnType(method, typeArgSymbols)
                             ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(method, instSymbolicTypeArgs, effectiveReceiverType)

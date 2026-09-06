@@ -717,7 +717,15 @@ public static class SymbolDisplay
             case SliceTypeSymbol slice:
                 return $"[]{FormatType(slice.ElementType)}";
             case AsyncSequenceTypeSymbol asyncSequence:
-                return $"sequence[{FormatType(asyncSequence.ElementType)}]";
+                // Issue #4020: an async sequence used to display as
+                // `sequence[T]` — byte-identical to the SYNCHRONOUS
+                // `SequenceTypeSymbol` below — so a diagnostic naming the type
+                // could not be used to tell which of the two symbols the binder
+                // actually held, and #4020's own GS0134 sent its first reader
+                // to the wrong one. `async sequence[T]` is the spelling the
+                // author writes for this type (ADR-0041), so it is both
+                // unambiguous and round-trippable.
+                return $"async sequence[{FormatType(asyncSequence.ElementType)}]";
             case SequenceTypeSymbol sequence:
                 return $"sequence[{FormatType(sequence.ElementType)}]";
             case MapTypeSymbol map:
