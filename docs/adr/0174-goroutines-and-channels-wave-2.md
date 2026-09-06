@@ -3106,6 +3106,65 @@ implementation had to refine it.
     needed. That fix is not channel-specific and lives outside this ADR; only
     the shared predicate is recorded here.
 
+46. **`after` and `tick` quantize UP to the platform's 1 ms timer resolution,
+    and a sub-millisecond `tick` no longer stops after one tick (issue
+    #4008).** D9 calls `tick(d)` "a repeating timer selectable". For
+    `0 < d < 1ms` it was not repeating. `System.Threading.Timer` TRUNCATES a
+    `TimeSpan` to whole milliseconds, so such a period was armed as **zero** —
+    and per the `Timer.Change` contract a period of zero DISABLES periodic
+    signalling. `TickTimer`'s guard rejected only `period <= TimeSpan.Zero`, so
+    the author got one tick, no error, no diagnostic, and silence for ever
+    after. Measured on `a09f4e1b`, ticks observed in a busy-polled 500 ms
+    window: periods of 0.1, 0.5 and 0.9 ms each produced **1**, and asked to
+    count to 20 with a 10 s deadline all three timed out at 10 000 ms; 1.0 ms
+    produced 426.
+
+    **The contract is now one rule: an armed interval is never shorter than the
+    one asked for.** `Timers.Quantize` rounds a strictly positive interval up to
+    the next whole millisecond, and both `AfterTimer` and `TickTimer` arm the
+    quantized value. `TimeSpan.Zero` and negative values pass through untouched,
+    so `after(0)` stays immediate and `Timeout.InfiniteTimeSpan` still means
+    disarmed. `tick`'s `period <= TimeSpan.Zero` guard is unchanged.
+
+    **Why not reject a sub-millisecond period.** That was the issue's own option
+    1, and it is the wrong one for the model D9 states. `tick` is `time.Tick`,
+    and Go's ticker is TOTAL on positive periods: it panics on a non-positive
+    one and otherwise promises to keep ticking, at whatever resolution the
+    platform gives — never that the period is exact. Rejecting would make `tick`
+    partial on inputs Go accepts, and would deliver that verdict as a runtime
+    `ArgumentOutOfRangeException` inside a program that had been running.
+    Rounding up keeps every positive period working and costs the author at most
+    1 ms of interval. Nothing here wants a compile-time diagnostic either: the
+    period is a runtime `TimeSpan`, so the constructor is the only place the
+    question can be asked at all.
+
+    **The same rule fixes a second, quieter truncation above the cliff.**
+    `tick(1.5ms)` and `tick(1ms)` both ticked at 1 ms — 426 each in a 500 ms
+    window — so a 1.5 ms request ran 50% FAST, and 2.5 ms ran at 2 ms. That is
+    the wrong direction for anything pacing work: a ticker firing faster than
+    asked is a correctness problem for a rate limiter in a way that one firing
+    slower is not. 1.5 ms is now armed at 2 ms (249 in the same window) and
+    2.5 ms at 3 ms (166). This is the visible behaviour change for existing
+    programs, and it is deliberate.
+
+    **`after` moves too, and the move is measurable.** `after` had no failure
+    mode — a one-shot armed at 0 still fires — but a sub-millisecond delay was
+    truncated to an immediate fire, against Go's "at least `d`" contract for
+    `time.After`. Mean latency over 200 samples before the change: delays of
+    0.1, 0.5 and 0.9 ms all ~0.007 ms, against 1.0 and 1.5 ms at ~1.19 ms. After
+    it the sub-millisecond rows join the 1 ms row. The MEAN is the
+    discriminator, not the minimum: the .NET timer queue coalesces, and a single
+    1 ms timer was measured firing in 8 µs, so no assertion about one arm's
+    latency would hold.
+
+    Nothing else about D8/D9 moves. `tick` still holds at most one pending tick
+    and drops the rest, is still stopped by `Dispose`, and is still not a
+    channel; `after` is still ready exactly once. The #4001 arming order is
+    untouched, and `Issue4001TimerArmingTests` stays green across the change —
+    its `Tick(TimeSpan.FromTicks(1))` row now races the constructor less
+    tightly, which that file already documents as a pin rather than a mutant
+    killer.
+
 47. **A nullable channel at an OPEN G#-declared parameter was silently
     accepted, and it was not the predicate errata 42 pointed at (issue
     #3988).** Errata 42 closed by naming one neighbouring asymmetry and leaving

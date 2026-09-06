@@ -1131,30 +1131,47 @@ internal sealed partial class MethodBodyEmitter
         // `Dictionary<…, !0>` field — mirrors the symbolic tuple-literal path.
         if (dictType == null)
         {
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(this.outer.memberRefs.GetMapCtorReference(literal.MapType));
-
-            if (literal.Entries.Length == 0)
-            {
-                return;
-            }
-
-            var symbolicSetItemRef = this.outer.memberRefs.GetMapSetItemReference(literal.MapType);
-            foreach (var entry in literal.Entries)
-            {
-                this.il.OpCode(ILOpCode.Dup);
-                this.EmitExpression(entry.Key);
-                this.EmitExpression(entry.Value);
-                this.il.OpCode(ILOpCode.Callvirt);
-                this.il.Token(symbolicSetItemRef);
-            }
-
+            this.EmitMapLiteralSymbolic(literal);
             return;
         }
 
-        var ctor = dictType.GetConstructor(Type.EmptyTypes)
-            ?? throw new InvalidOperationException(
+        // Issue #4015: `MapTypeSymbol.MakeClrType` builds this type as
+        // `typeof(Dictionary<,>).MakeGenericType(key.ClrType, value.ClrType)`,
+        // and `RuntimeType.MakeGenericType` hands back a
+        // `System.Reflection.Emit.TypeBuilderInstantiation` the moment ANY type
+        // argument is not itself a `RuntimeType` — which is every CLR type the
+        // compiler resolved through its reference load context, i.e. everything
+        // except the handful of G# primitives bound to a host `typeof(...)`.
+        // `TypeBuilderInstantiation.GetConstructor` and `.GetMethod` both throw
+        // `NotSupportedException` ("…does not support resolving members"), which
+        // the compiler surfaced as the internal-error GS9998 for map literals as
+        // ordinary as `map[string, DateTime]{}`.
+        //
+        // The symbolic MemberRefs #1481 built for the `ClrType == null` case are
+        // exactly the right answer here — parented at the reified TypeSpec, with
+        // `!0`/`!1` parameter signatures — so fall through to them rather than
+        // teaching this site a second reflection technique. The precedent is
+        // #1449's `GetDelegateCtorReference`, which catches the same exception
+        // from the same cause.
+        ConstructorInfo? ctor;
+        MethodInfo? setItem;
+        try
+        {
+            ctor = dictType.GetConstructor(Type.EmptyTypes);
+            setItem = literal.Entries.Length == 0 ? null : dictType.GetMethod("set_Item");
+        }
+        catch (NotSupportedException)
+        {
+            this.EmitMapLiteralSymbolic(literal);
+            return;
+        }
+
+        if (ctor == null)
+        {
+            throw new InvalidOperationException(
                 $"Dictionary type '{dictType.FullName}' has no parameterless constructor.");
+        }
+
         this.il.OpCode(ILOpCode.Newobj);
         this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
 
@@ -1163,9 +1180,12 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        var setItem = dictType.GetMethod("set_Item")
-            ?? throw new InvalidOperationException(
+        if (setItem == null)
+        {
+            throw new InvalidOperationException(
                 $"Dictionary type '{dictType.FullName}' has no set_Item method.");
+        }
+
         var setItemRef = this.outer.memberRefs.GetMethodReference(setItem);
 
         foreach (var entry in literal.Entries)
@@ -1175,6 +1195,35 @@ internal sealed partial class MethodBodyEmitter
             this.EmitExpression(entry.Value);
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(setItemRef);
+        }
+    }
+
+    /// <summary>
+    /// Emits a <c>map[K, V]{…}</c> literal through the reified TypeSpec-parented
+    /// MemberRefs (issue #1481), for the two cases where the closed CLR
+    /// <c>Dictionary&lt;K, V&gt;</c> cannot answer a member query: it does not
+    /// exist at all (an open key or value type, #1481), or it exists as a
+    /// <c>TypeBuilderInstantiation</c> that refuses to resolve members (#4015).
+    /// </summary>
+    /// <param name="literal">The map literal.</param>
+    private void EmitMapLiteralSymbolic(BoundMapLiteralExpression literal)
+    {
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.memberRefs.GetMapCtorReference(literal.MapType));
+
+        if (literal.Entries.Length == 0)
+        {
+            return;
+        }
+
+        var symbolicSetItemRef = this.outer.memberRefs.GetMapSetItemReference(literal.MapType);
+        foreach (var entry in literal.Entries)
+        {
+            this.il.OpCode(ILOpCode.Dup);
+            this.EmitExpression(entry.Key);
+            this.EmitExpression(entry.Value);
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(symbolicSetItemRef);
         }
     }
 
