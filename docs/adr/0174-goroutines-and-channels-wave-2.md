@@ -3042,7 +3042,8 @@ implementation had to refine it.
     because the annotation-dropping conversion is EXPLICIT and the
     applicability probe asks for an implicit one. Both element spellings agree
     on that, so it is not errata 42's question; it is issue #3992, whose repro
-    is corrected to the non-generic form.
+    is corrected to the non-generic form. **Closed by errata 48**, which admits
+    the explicit form in the symbolic applicability fallback only.
 
 44. **A `chan[T]` in a `: base(...)` initializer was a different probe, and
     errata 40's claim about it is corrected (issue #3984).** Errata 40 lists
@@ -3157,6 +3158,49 @@ implementation had to refine it.
     Adding them changes conversion and emission for every `map` and `sequence`
     in the language, not only this gate, so it needs its own witness and is
     issue #3997.
+
+48. **The annotation was dropped only where a CLR relation already linked the
+    two shapes (issue #3992).** Errata 42 closed by stating its own limit: a
+    nullable channel still did not reach a NON-generic `ChannelWriter[T]` /
+    `ChannelReader[T]` parameter. This closes that.
+
+    Applicability ALREADY ignores a reference annotation on the CLR path.
+    `NullableTypeSymbol.ClrType` relays its underlying, so a `chan[int32]?`
+    argument is presented to `ClrOverloadResolution` as `Chan<int>` and reaches
+    a `Channel[int32]` parameter by ordinary CLR assignability, exactly as a
+    `string?` reaches a `string` parameter — the annotation is invisible there
+    and always was. Only ADR-0148's SYMBOLIC fallback,
+    `MakeStructuralProjectionArgumentCheck`, which exists because CLR
+    surrogates cannot see a G# argument's structural shape, re-asked the
+    question on the still-ANNOTATED symbol, and so re-introduced an annotation
+    the rest of the boundary had already dropped.
+
+    That mattered only where no CLR relation links the two shapes, which is
+    precisely the D2 view: no base class or interface links `Chan<T>` to
+    `ChannelWriter<T>`, so a non-generic `Plain.W(ChannelWriter[int32])` was
+    ranked only by that callback. The annotation-dropping conversion the
+    boundary then performs is classified EXPLICIT on purpose — that is what
+    keeps a G#-declared `chan[int32]` parameter reporting GS0154 — and the
+    callback asked for an IMPLICIT one, so the candidate was dropped before the
+    conversion was ever reached. The generic half of the same asymmetry
+    disappeared with errata 43's `ChannelViewAppliesAtErasedGenericSlot`, which
+    never sees the annotation because it works on erased CLR shapes; that is
+    why #3992 was narrowed rather than closed.
+
+    The fix — `IsApplicableIgnoringReferenceNullability` — lets the symbolic
+    fallback also answer yes when the argument's NON-NULLABLE form is
+    applicable. Nothing becomes applicable whose non-nullable form was not;
+    only a REFERENCE nullable is peeled, so a value-type `Nullable<T>` keeps
+    its own lifted rules; and `StructuralProjectionPlanner.CanProject` is not
+    re-asked. The leniency stays confined to CLR boundaries, because
+    `BindClrParameterConversions` is the only call path that passes
+    `allowExplicit: true`. Direction and element still decide, and a
+    G#-declared parameter still reports GS0154 — five rejection rows hold all
+    three.
+
+    Errata 42's note that "this is not a universal CLR-boundary rule" now has
+    one fewer exception, but remains true in the same sense: what is lenient is
+    the CLR argument-conversion path specifically, not the language.
 
 ## Addendum A — The ten patterns, three ways
 
