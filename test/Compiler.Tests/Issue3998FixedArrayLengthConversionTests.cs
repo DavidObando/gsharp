@@ -78,15 +78,22 @@ namespace GSharp.Compiler.Tests;
 /// <c>ContainsFixedLengthArray</c> — the mechanism #4002's hand-off predicted
 /// — changed NEITHER row, because the imported instance-call path does not
 /// consult that property for parameter types.</para>
-/// <para><b>What is still residue.</b> A SLICE type argument is erased to
-/// <c>T[]</c> by <c>Binder.ProjectGenericArgument</c> before any comparison
-/// can see it, so <c>List[[]int32]</c> still converts to
-/// <c>List[[3]int32]</c>. Retaining it symbolically changes the
-/// representation of every <c>List[[]T]</c> in the corpus and bypasses the
-/// #1354 nullable-flags path, which is why both #3962 and #4012 declined it.
-/// Tracked as #4024.
-/// The remaining <c>residue-*</c> case pins today's behaviour so the follow-up
-/// has to change this file on purpose.</para>
+/// <para><b>The last residue, since closed (#4024).</b> A SLICE type argument
+/// was erased to <c>T[]</c> by <c>Binder.ProjectGenericArgument</c> before any
+/// comparison could see it, so <c>List[[]int32]</c> converted to
+/// <c>List[[3]int32]</c>. #3962 and #4012 both declined it because retaining a
+/// slice symbolically changes the representation of every <c>List[[]T]</c> in
+/// the corpus and bypasses the #1354 nullable-flags path. #4024 did it anyway,
+/// having measured both: the corpus diagnostic output is byte-identical (a
+/// retained <c>[]T</c> still fails every arm of
+/// <c>ImportedTypeSymbol.HasSubstitutableTypeArgument</c>, so no member
+/// projection moves), and the nullable-flags concern is empty, because an
+/// ANNOTATED slice (<c>[]string?</c>) was already retained through
+/// <c>RequiresSymbolicProjection</c> and never reached that branch — so the
+/// arguments newly diverted off it are precisely the ones with no annotation
+/// to lose. The
+/// row that pinned this is kept, flipped, in
+/// <see cref="FlippedByIssue4024Cases"/>, and the residue is now empty.</para>
 /// </remarks>
 public class Issue3998FixedArrayLengthConversionTests
 {
@@ -739,31 +746,37 @@ public class Issue3998FixedArrayLengthConversionTests
     }
 
     /// <summary>
-    /// Behaviour this PR deliberately does NOT change, pinned so the boundary
-    /// is visible and a later fix has to update this file on purpose.
+    /// The last row this file pinned as ACCEPTED residue, which #4024 turned
+    /// into an error. Kept here, flipped rather than deleted, so the change
+    /// reads as deliberate.
     /// </summary>
     /// <remarks>
-    /// Two of the three rows this method carried were the MEMBER slot read off
-    /// the erased <c>List&lt;int32[]&gt;</c>/<c>Stack&lt;int32[]&gt;</c> rather
-    /// than projected through the receiver's retained <c>[3]int32</c>. #4012
-    /// closed that gap and they moved, flipped, to
-    /// <see cref="FlippedByIssue4012Cases"/>. What is left here is the SLICE
-    /// type-argument erasure, which is a different mechanism and is still open.
+    /// <para>This method used to be <c>ResidueCases</c> — "behaviour this PR
+    /// deliberately does NOT change". Two of its three rows were the MEMBER
+    /// slot read off the erased
+    /// <c>List&lt;int32[]&gt;</c>/<c>Stack&lt;int32[]&gt;</c> rather than
+    /// projected through the receiver's retained <c>[3]int32</c>; #4012 closed
+    /// that gap and they moved, flipped, to
+    /// <see cref="FlippedByIssue4012Cases"/>. The third was the SLICE
+    /// type-argument erasure, a different mechanism, which #4024 has now
+    /// closed — so the residue is empty and the method is a flipped block like
+    /// its sibling.</para>
+    /// <para>#4024's fix: <c>TypeSymbol.ContainsSourceArrayShape</c> retains
+    /// BOTH G# array spellings at the four #3962 retention gates, so a
+    /// source-spelled <c>List[[]int32]</c> is finally distinguishable from a
+    /// metadata-recovered <c>List&lt;int[]&gt;</c> and therefore comparable
+    /// against a retained <c>List[[3]int32]</c> at all. The #2735 guard in
+    /// <c>Conversion.ClassifyCore</c> also had to stop reading <c>from</c>
+    /// alone — with slices retained the pair can be asymmetric, and the
+    /// reported direction had nothing length-bearing on the <c>from</c>
+    /// side.</para>
     /// </remarks>
-    /// <returns>Name, G# source, expected stdout lines.</returns>
-    public static IEnumerable<object[]> ResidueCases()
+    /// <returns>Name, G# source, a substring the diagnostics must name.</returns>
+    public static IEnumerable<object[]> FlippedByIssue4024Cases()
     {
-        // #3962's `slice-argument-still-reaches-a-fixed-array-generic`,
-        // unchanged. A SLICE type argument is erased to `T[]` by
-        // `Binder.ProjectGenericArgument` before any comparison can see it —
-        // a different mechanism from the member gap #4012 closed, and the one
-        // #3962 declined because retaining it symbolically changes the
-        // representation of every `List[[]T]` in the corpus and bypasses the
-        // #1354 nullable-flags path (which runs only when no symbolic argument
-        // is kept). #4012 scoped it out for the same reason and filed #4024.
         yield return new object[]
         {
-            "residue-a-slice-type-argument-still-reaches-a-fixed-array-generic",
+            "a-slice-type-argument-no-longer-reaches-a-fixed-array-generic",
             """
             package P
             import System
@@ -778,7 +791,7 @@ public class Issue3998FixedArrayLengthConversionTests
 
             main2()
             """,
-            new[] { "1" },
+            "Cannot convert type 'System.Collections.Generic.List[[]int32]' to 'System.Collections.Generic.List[[3]int32]'",
         };
     }
 
@@ -901,6 +914,7 @@ public class Issue3998FixedArrayLengthConversionTests
     [Theory]
     [MemberData(nameof(RejectedCases))]
     [MemberData(nameof(FlippedByIssue4012Cases))]
+    [MemberData(nameof(FlippedByIssue4024Cases))]
     public void ADifferentArrayShape_DoesNotConvertImplicitly(string name, string source, string expectedMention)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3998_neg_").FullName;
@@ -928,7 +942,6 @@ public class Issue3998FixedArrayLengthConversionTests
     /// <param name="expectedLines">The expected stdout lines, in order.</param>
     [Theory]
     [MemberData(nameof(AcceptedCases))]
-    [MemberData(nameof(ResidueCases))]
     public void ALegitimateArrayConversion_CompilesVerifiesAndRuns(string name, string source, string[] expectedLines)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3998_").FullName;

@@ -675,7 +675,12 @@ internal sealed partial class ExpressionBinder
                         // length carry, so the declared length survives only in
                         // the symbol. Retain it, or `List[[3]int32]` and
                         // `List[[4]int32]` resolve to one cached symbol here too.
-                        if (TypeSymbol.ContainsFixedLengthArray(ta))
+                        // Issue #4024: the SLICE spelling `[]T` shares that
+                        // backing and is retained by the same gate, so a
+                        // fully-qualified
+                        // `System.Collections.Generic.List[[]int32]()` is
+                        // distinguishable from a metadata `List<int[]>`.
+                        if (TypeSymbol.ContainsSourceArrayShape(ta))
                         {
                             hasSymbolicArg = true;
                         }

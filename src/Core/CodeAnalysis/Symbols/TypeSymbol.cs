@@ -663,6 +663,68 @@ public class TypeSymbol : Symbol
     }
 
     /// <summary>
+    /// Issue #4024: returns <see langword="true"/> when <paramref name="type"/>
+    /// structurally contains EITHER G#-native array spelling — a fixed-length
+    /// <c>[N]T</c> or a slice <c>[]T</c>.
+    ///
+    /// <para>This is the RETENTION predicate, and it is deliberately wider than
+    /// <see cref="ContainsFixedLengthArray"/>, which stays the COMPARISON
+    /// predicate. The one SZ-array CLR type <c>T[]</c> backs <c>[]T</c> and
+    /// <c>[N]T</c> at every length alike, so a generic type argument written in
+    /// either spelling projects onto the same closed CLR shape. #3962 retained
+    /// only <c>[N]T</c>, which made <c>List[[3]int32]</c> and
+    /// <c>List[[4]int32]</c> distinct but left <c>List[[]int32]</c> carrying no
+    /// symbolic argument at all — and a constructed generic with an EMPTY
+    /// symbolic argument vector is exactly what a metadata-recovered
+    /// <c>List&lt;int[]&gt;</c> looks like, so
+    /// <see cref="ContainsMetadataRecoveredArray"/> correctly declared the
+    /// shape unknowable and kept the lenient CLR comparison. Retaining the
+    /// slice is therefore not an optimisation: it is the only thing that makes
+    /// a source-spelled <c>[]T</c> argument DISTINGUISHABLE from a reflected
+    /// one, and so comparable against a retained <c>[N]T</c> at all.</para>
+    ///
+    /// <para>Retention alone is a representation change, not a rule change. A
+    /// <see cref="SliceTypeSymbol"/> has a real, non-null
+    /// <see cref="TypeSymbol.ClrType"/> and satisfies neither
+    /// <see cref="RequiresSymbolicProjection"/> nor the nested-generic or
+    /// named-tuple arms of
+    /// <c>ImportedTypeSymbol.HasSubstitutableTypeArgument</c>, so that property
+    /// stays <see langword="false"/> for <c>List[[]T]</c>, so the member
+    /// projection sites that CONSULT it — parameters, indexers, iteration —
+    /// are untouched, exactly as they were for <c>List[[N]T]</c> after #3962.
+    /// A method RETURN is the exception, and is the one place retention is
+    /// observable beyond type identity: <c>GetClrMethodReturnTypeSymbol</c>
+    /// projects on a nonempty symbolic vector without consulting that
+    /// property, so <c>Stack[[]T]().Pop()</c> surfaces the retained
+    /// <c>[]T</c>. Deliberate and pinned; see
+    /// <c>Issue4024SliceTypeArgumentRetentionTests</c>.</para>
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when a slice or fixed-length array appears at any depth.</returns>
+    public static bool ContainsSourceArrayShape(TypeSymbol? type)
+    {
+        if (type is ArrayTypeSymbol or SliceTypeSymbol)
+        {
+            return true;
+        }
+
+        if (type == null)
+        {
+            return false;
+        }
+
+        foreach (var inner in GetWrappedTypes(type))
+        {
+            if (ContainsSourceArrayShape(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #3962: returns <see langword="true"/> when <paramref name="type"/>
     /// structurally contains an array that came back through REFLECTION —
     /// an <see cref="ImportedTypeSymbol"/> whose <see cref="TypeSymbol.ClrType"/>
