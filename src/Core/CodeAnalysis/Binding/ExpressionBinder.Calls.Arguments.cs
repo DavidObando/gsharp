@@ -1526,7 +1526,8 @@ internal sealed partial class ExpressionBinder
                 // from outside its declaring/derived type, instead of
                 // silently binding it.
                 if (!allowProtectedInherited && !nonVirtualBaseCall
-                    && !best.IsPublic && (best.IsFamily || best.IsFamilyOrAssembly))
+                    && !best.IsPublic
+                    && (best.IsFamily || best.IsFamilyOrAssembly || best.IsFamilyAndAssembly))
                 {
                     Diagnostics.ReportProtectedMemberInaccessible(ce.Identifier.Location, methodName, ClrTypeDisplayName(best.DeclaringType ?? importedBaseClr));
                     result = new BoundErrorExpression(null);
@@ -3153,7 +3154,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="clrBase">The CLR base type to search (its base chain is walked by reflection).</param>
     /// <param name="methodName">The invoked method name.</param>
     /// <returns>The deduplicated candidate methods (most-derived signature wins).</returns>
-    private static IReadOnlyList<MethodInfo> CollectBaseClrMethodCandidates(System.Type? clrBase, string methodName)
+    private IReadOnlyList<MethodInfo> CollectBaseClrMethodCandidates(System.Type? clrBase, string methodName)
     {
         var result = new List<MethodInfo>();
         if (clrBase == null)
@@ -3168,10 +3169,9 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            // Accessible to a derived type via `base`: public, protected
-            // (Family), or protected-internal (FamilyOrAssembly). Exclude
-            // private and (cross-assembly) internal members.
-            if (!(m.IsPublic || m.IsFamily || m.IsFamilyOrAssembly))
+            if (!ClrMemberVisibility.IsVisibleFromDerived(
+                    m,
+                    CanAccessInternalsOf(m.DeclaringType)))
             {
                 continue;
             }
@@ -3507,13 +3507,16 @@ internal sealed partial class ExpressionBinder
         }
 
         var memberName = member.IdentifierToken.ValueText;
-        var clrProp = ClrTypeUtilities.SafeGetProperty(clrBase, memberName, BindingFlags.Public | BindingFlags.Instance);
-        if (clrProp == null || clrProp.GetIndexParameters().Length != 0 || !clrProp.CanRead)
+        var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+            clrBase,
+            memberName,
+            CanAccessInternalsOf);
+        if (clrProp == null)
         {
             return false;
         }
 
-        var getter = GetVisibleGetter(clrProp);
+        var getter = GetVisibleGetter(clrProp, fromDerivedType: true);
         if (getter == null)
         {
             return false;
@@ -3532,11 +3535,12 @@ internal sealed partial class ExpressionBinder
         }
 
         var receiver = new BoundVariableExpression(null, thisParameter);
+        var propertyType = GetInheritedClrMemberType(thisParameter.Type, clrProp);
         result = new BoundImportedInstanceCallExpression(
             member,
             receiver,
             getter,
-            TypeSymbol.FromClrType(clrProp.PropertyType),
+            propertyType,
             ImmutableArray<BoundExpression>.Empty,
             isNonVirtualBaseCall: true);
         return true;
@@ -3572,8 +3576,11 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var clrProp = ClrTypeUtilities.SafeGetProperty(clrBase, memberName, BindingFlags.Public | BindingFlags.Instance);
-        if (clrProp == null || clrProp.GetIndexParameters().Length != 0)
+        var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+            clrBase,
+            memberName,
+            CanAccessInternalsOf);
+        if (clrProp == null)
         {
             return false;
         }
@@ -3585,7 +3592,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        var setter = GetVisibleSetter(clrProp);
+        var setter = GetVisibleSetter(clrProp, fromDerivedType: true);
         if (setter == null)
         {
             Diagnostics.ReportCannotAssign(equalsLocation, memberName);
@@ -3600,12 +3607,13 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        var converted = conversions.BindConversion(valueLocation, value, TypeSymbol.FromClrType(clrProp.PropertyType));
         if (function?.ThisParameter is not { } thisParameter)
         {
             return false;
         }
 
+        var propertyType = GetInheritedClrMemberType(thisParameter.Type, clrProp);
+        var converted = conversions.BindConversion(valueLocation, value, propertyType);
         var receiver = new BoundVariableExpression(null, thisParameter);
         result = new BoundImportedInstanceCallExpression(
             value.Syntax,

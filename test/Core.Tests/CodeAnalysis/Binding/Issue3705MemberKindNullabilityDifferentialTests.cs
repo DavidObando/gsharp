@@ -32,9 +32,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// So rather than one test per site, this fixture asserts the INVARIANT: for a
 /// reference-typed signature position on an imported member, whether the bound
 /// type is nullable depends only on the DECLARATION's annotation state, and
-/// never on the member kind through which the position was reached. The member
-/// kind never appears on the right-hand side of either expectation; the table
-/// IS the invariant.
+/// never on the member kind or receiver shape through which the position was
+/// reached. Neither appears on the right-hand side of either expectation; the
+/// table IS the invariant.
 /// </para>
 /// <para>
 /// There are FOUR annotation states, not three, and the fourth is the one the
@@ -161,6 +161,16 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             public string this[int index] => "V";
 
             public string? this[long index] => null;
+        }
+
+        public interface INonNullInherited
+        {
+            string Value { get; }
+        }
+
+        public interface INullableInherited
+        {
+            string? Value { get; }
         }
 
         // ObliviousZero: a `[NullableContext(1)]` type whose `#nullable disable`
@@ -321,9 +331,9 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         """;
 
     /// <summary>
-    /// Gets the signature-position kinds under test. Each names a distinct
-    /// reader inside the compiler; the invariant is that they all give the
-    /// same answer for the same declaration.
+    /// Gets the signature-position kinds and receiver shapes under test. Each
+    /// names a distinct reader inside the compiler; the invariant is that they
+    /// all give the same answer for the same declaration.
     /// </summary>
     private static string[] Kinds => new[]
     {
@@ -335,6 +345,11 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         "ConstrainedProperty",
         "ConstrainedIndexer",
         "DeconstructOut",
+        "InheritedField",
+        "InheritedProperty",
+        "BareInheritedField",
+        "BareInheritedProperty",
+        "BaseProperty",
     };
 
     /// <summary>
@@ -351,7 +366,7 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
     };
 
     /// <summary>
-    /// Gets the differential matrix: signature-position kind × annotation
+    /// Gets the differential matrix: signature-position path × annotation
     /// state. Both expectations — "does this bind as non-null?" and "what does
     /// the emitted program print?" — are computed from the annotation state
     /// ALONE. The kind never appears on the right-hand side.
@@ -371,19 +386,16 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
     /// <summary>
     /// The family-2 invariant, over all four annotation states.
     /// <para>
-    /// Rows that pass on <c>origin/main</c> and are here as guard rails: every
-    /// <c>NonNull</c> and <c>Nullable</c> row (#3741 landed those), and the
-    /// <c>Oblivious*</c> rows for <c>Property</c>, <c>MethodReturn</c> and
-    /// <c>IndexerElement</c>, which already took the plain
-    /// <c>ClrNullability</c> readers.
+    /// Existing rows pass on the current <c>origin/main</c> and remain as guard
+    /// rails. The inherited-class and explicit-<c>base</c> rows added for the
+    /// remaining #3705 base-member group fail there for every nullable state:
+    /// those paths used bare <c>TypeSymbol.FromClrType</c> instead of the same
+    /// nullability-aware readers as direct imported member access.
     /// </para>
     /// <para>
-    /// Rows that FAIL on <c>origin/main</c>: the <c>Oblivious*</c> rows for
-    /// <c>Field</c>, <c>ConstrainedMethodReturn</c> and <c>DeconstructOut</c>,
-    /// the three kinds that route through
-    /// <c>NullableFlagsBuilder.MergeDeclarationNullability</c>. On main they
-    /// bind an unannotated imported reference position as non-null, which is
-    /// the pre-#1354 answer.
+    /// The <c>NonNull</c> rows are the negative controls: routing these paths
+    /// through <c>ClrNullability</c> must not widen an explicitly non-null
+    /// declaration.
     /// </para>
     /// </summary>
     /// <param name="kind">The signature-position kind.</param>
@@ -436,6 +448,123 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             Assert.Equal(
                 expectedMarker,
                 RunGSharp(lenient, libraryPath, $"{kind}-{state}").Trim());
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// The write-side sibling of the inherited/base property reads in
+    /// <see cref="SignaturePositions_Agree_On_DeclarationNullability"/>.
+    /// </summary>
+    /// <param name="state">The declaration's annotation state.</param>
+    /// <param name="acceptsNil">Whether assigning <c>nil</c> must compile.</param>
+    [Theory]
+    [InlineData("NonNull", false)]
+    [InlineData("Nullable", true)]
+    [InlineData("ObliviousAbsent", true)]
+    [InlineData("ObliviousZero", true)]
+    public void BasePropertyWrite_Uses_DeclarationNullability(string state, bool acceptsNil)
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, LibraryAssemblyName, CSharpLibrarySource);
+            var baseType = state.StartsWith("Oblivious", StringComparison.Ordinal)
+                ? state + "Surface"
+                : "Surface";
+            var compiled = CompileGSharp(
+                $$"""
+                package {{ConsumerAssemblyName}}
+                import Issue3705.NullabilityLibrary
+
+                class Derived : {{baseType}} {
+                    func Clear() {
+                        base.{{state}}Property = nil
+                    }
+                }
+
+                func Main() {
+                    Derived().Clear()
+                }
+                """,
+                libraryPath);
+
+            Assert.True(
+                compiled.Success == acceptsNil,
+                $"{state}: expected acceptsNil={acceptsNil}: {Describe(compiled)}");
+            if (!acceptsNil)
+            {
+                Assert.Contains(compiled.Diagnostics, diagnostic => diagnostic.Id == "GS0155");
+            }
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// A user interface that extends an imported interface must read the
+    /// inherited property's declaration nullability, just like a user class
+    /// that extends an imported base class.
+    /// </summary>
+    /// <param name="nullable">Whether the imported property is nullable.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedBaseInterfaceProperty_Uses_DeclarationNullability(bool nullable)
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, LibraryAssemblyName, CSharpLibrarySource);
+            var suffix = nullable ? "Nullable" : "NonNull";
+            var propertyType = nullable ? "string?" : "string";
+            var value = nullable ? "nil" : "\"V\"";
+            string BuildSource(string target)
+            {
+                var report = target == "string?"
+                ? """
+                      if probe == nil {
+                          Console.WriteLine("nil")
+                      } else {
+                          Console.WriteLine("value")
+                      }
+                  """
+                : "    Console.WriteLine(probe)";
+
+                return $$"""
+                    package {{ConsumerAssemblyName}}
+                    import Issue3705.NullabilityLibrary
+
+                    interface Local : I{{suffix}}Inherited {}
+
+                    class Impl : Local {
+                        prop Value {{propertyType}} {
+                            get { return {{value}} }
+                        }
+                    }
+
+                    func Read(receiver Local) {{target}} {
+                        return receiver.Value
+                    }
+
+                    func Main() {
+                        let probe {{target}} = Read(Impl())
+                    {{report}}
+                    }
+                    """;
+            }
+
+            var strict = CompileGSharp(BuildSource("string"), libraryPath);
+            var lenient = CompileGSharp(BuildSource("string?"), libraryPath);
+
+            Assert.Equal(!nullable, strict.Success);
+            Assert.True(lenient.Success, Describe(lenient));
+            Assert.Equal(nullable ? "nil" : "value", RunGSharp(lenient, libraryPath, suffix).Trim());
         }
         finally
         {
@@ -651,6 +780,7 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         var indexArgument = state == "Nullable" ? "1L" : "1";
         var constrainedInterface = isOblivious ? "I" + state + "Constrained" : "IConstrained";
         var constrainedImpl = isOblivious ? state + "Constrained" : "Constrained";
+        var inheritedBase = isOblivious ? state + "Surface" : "Surface";
         var deconstructReceiver = state switch
         {
             "NonNull" => "Surface",
@@ -683,6 +813,9 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             "DeconstructOut" => $"    let receiver = {deconstructReceiver}()\n"
                 + "    let (first, second) = receiver\n"
                 + $"    let probe {target} = first",
+            "InheritedField" or "InheritedProperty" or "BareInheritedField"
+                or "BareInheritedProperty" or "BaseProperty"
+                => $"    let probe {target} = Derived().Read()",
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
 
@@ -720,6 +853,27 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
                     return {{constrainedRead}}
                 }
                 """;
+
+        var inheritedRead = kind switch
+        {
+            "InheritedField" => $"this.{memberPrefix}Field",
+            "InheritedProperty" => $"this.{memberPrefix}Property",
+            "BareInheritedField" => $"{memberPrefix}Field",
+            "BareInheritedProperty" => $"{memberPrefix}Property",
+            "BaseProperty" => $"base.{memberPrefix}Property",
+            _ => null,
+        };
+        if (inheritedRead != null)
+        {
+            helper = $$"""
+
+                class Derived : {{inheritedBase}} {
+                    func Read() {{target}} {
+                        return {{inheritedRead}}
+                    }
+                }
+                """;
+        }
 
         return $$"""
             package {{ConsumerAssemblyName}}

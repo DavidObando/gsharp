@@ -58,7 +58,7 @@ import System.Security.Cryptography
 open class A : HashAlgorithm {
     func Initialize() { }
     protected func HashCore(a []uint8, s int32, c int32) { }
-    protected func HashFinal() []uint8 { return HashValue }
+    protected func HashFinal() []uint8 { return HashValue ?? []uint8{} }
 }
 ";
         AssertNoErrors(source, withReferences);
@@ -78,7 +78,7 @@ open class A : HashAlgorithm {
     protected func HashCore(a []uint8, s int32, c int32) { }
     protected func HashFinal() []uint8 {
         this.HashValue = []uint8{}
-        return this.HashValue
+        return this.HashValue ?? []uint8{}
     }
 }
 ";

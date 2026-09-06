@@ -583,8 +583,14 @@ internal sealed partial class ExpressionBinder
             // protected members.
             if (GetInheritedClrBaseType(structSymbol) is Type inheritedBaseClr)
             {
-                MemberInfo? inhMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, propertyName);
-                inhMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, propertyName);
+                MemberInfo? inhMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+                    inheritedBaseClr,
+                    propertyName,
+                    CanAccessInternalsOf);
+                inhMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(
+                    inheritedBaseClr,
+                    propertyName,
+                    CanAccessInternalsOf);
                 if (inhMember != null)
                 {
                     // Issue #3815: project the inherited member through the
@@ -1093,8 +1099,14 @@ internal sealed partial class ExpressionBinder
             if (GetInheritedClrBaseType(structSymbol) is System.Type inheritedBaseClr)
             {
                 var memberName = syntax.FieldIdentifier.ValueText;
-                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
-                clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
+                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+                    inheritedBaseClr,
+                    memberName,
+                    CanAccessInternalsOf);
+                clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(
+                    inheritedBaseClr,
+                    memberName,
+                    CanAccessInternalsOf);
                 if (clrMember != null)
                 {
                     // Issue #3815: project the inherited member through the
@@ -1966,8 +1978,14 @@ internal sealed partial class ExpressionBinder
         {
             // Issue #1582: the receiver is a derived G# type reaching into its
             // metadata base — surface inherited protected/public members.
-            instanceMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrReceiverType, memberName);
-            instanceMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrReceiverType, memberName);
+            instanceMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+                clrReceiverType,
+                memberName,
+                CanAccessInternalsOf);
+            instanceMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(
+                clrReceiverType,
+                memberName,
+                CanAccessInternalsOf);
         }
         else
         {
@@ -2828,8 +2846,14 @@ internal sealed partial class ExpressionBinder
             // base chain and include inherited protected members).
             if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
             {
-                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, fieldName);
-                clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, fieldName);
+                MemberInfo? clrMember = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+                    inheritedBaseClr,
+                    fieldName,
+                    CanAccessInternalsOf);
+                clrMember ??= ClrTypeUtilities.SafeGetInheritedInstanceField(
+                    inheritedBaseClr,
+                    fieldName,
+                    CanAccessInternalsOf);
                 if (clrMember != null)
                 {
                     // Issue #3815: project the inherited member through the
