@@ -1200,6 +1200,33 @@ internal sealed class ConversionClassifier
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
 
+                    // Issue #3982 / ADR-0174 D2: the #1819 arm above recovers
+                    // the erased slot when the ARGUMENT ITSELF is the
+                    // same-compilation type that erased it. A channel is the
+                    // same erasure one level in: `chan[Pair]` presents as
+                    // `Chan<object>`, so the generic slot of a
+                    // `CountSoFar[T](this ChannelReader[T])` closed to
+                    // `ChannelReader<object>` — and unlike #1819's case the
+                    // argument's own top-level type is an imported
+                    // `Chan[Pair]`, so none of the arms above fire. Left
+                    // unrecovered the target stays `ChannelReader[object]`,
+                    // the D2 lattice correctly refuses it on the element, no
+                    // conversion node is produced, and the raw `Chan<Pair>` is
+                    // pushed at a call whose MethodSpec — closed over the REAL
+                    // `Pair` recovered by `InferSymbolicMethodTypeArguments` —
+                    // wants a `ChannelReader<Pair>`: ilverify StackUnexpected
+                    // at the call site, with no `get_Reader` in sight. Recover
+                    // the real slot so the argument converts against
+                    // `ChannelReader[Pair]` and the view is emitted, exactly as
+                    // it already is for a `chan[int32]` where nothing erased.
+                    if (substituted == null
+                        && ChannelTypeSymbol.TryGetChannelShape(argument.Type, out var channelArgumentElement, out _, out _)
+                        && (TypeSymbol.ContainsTypeParameter(channelArgumentElement)
+                            || TypeSymbol.ContainsSameCompilationUserType(channelArgumentElement)))
+                    {
+                        substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
+                    }
+
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
 
@@ -1294,6 +1321,40 @@ internal sealed class ConversionClassifier
                             ? call.Arguments[sourceIndex].Location
                             : call?.Location ?? default;
                         rebound = BindConversion(location, argument, targetType);
+                    }
+                    else if (argument.Type != targetType
+                        && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted)
+                        && ChannelTypeSymbol.TryGetChannelShape(argument.Type, out _, out _, out _)
+                        && ChannelTypeSymbol.TryGetChannelShape(targetType, out _, out _, out _))
+                    {
+                        // Issue #3982: the arms above all end in "leave the
+                        // argument alone", which is how G# stays lenient about a
+                        // CLR parameter's declared nullability (a `string?`
+                        // reaches a `string` parameter because nothing here
+                        // classifies and nothing here complains). For a channel
+                        // pair that silence is not leniency, it is invalid IL:
+                        // the ADR-0174 D2 lattice is the ONLY thing that turns a
+                        // `Chan<T>` into the `ChannelReader<T>`/`ChannelWriter<T>`
+                        // the parameter wants, so if it declined there is no
+                        // `get_Reader` to emit and the raw channel is pushed at a
+                        // slot that cannot accept it (ilverify StackUnexpected,
+                        // and a hard crash at run time). Applicability now ranks
+                        // a channel candidate on ERASED shapes, where an element
+                        // with no CLR identity is indistinguishable from a
+                        // genuine `object` — so a `chan[Pair]` can reach a
+                        // genuinely non-generic `ChannelReader[object]`
+                        // parameter. Diagnose that pair by name here instead of
+                        // emitting it. `NeedsBindClrParameterConversion` keeps a
+                        // pair that is already CLR-identical (a `chan[int32]`
+                        // argument at a `Chan[int32]` parameter) on the silent
+                        // path it has always taken.
+                        var channelSourceIndex = i - receiverArgCount;
+                        var channelLocation = call != null
+                            && channelSourceIndex >= 0
+                            && channelSourceIndex < call.Arguments.Count
+                            ? call.Arguments[channelSourceIndex].Location
+                            : call?.Location ?? default;
+                        rebound = BindConversion(channelLocation, argument, targetType);
                     }
                 }
             }

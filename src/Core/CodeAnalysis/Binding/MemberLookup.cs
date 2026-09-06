@@ -5992,11 +5992,27 @@ internal sealed class MemberLookup
             // `ch.Close()` on a `chan[Pair]` (same-compilation element, no CLR
             // type) recover T=Pair for the `ChannelExtensions.Close<T>` MethodSpec
             // instead of erasing it to object.
-            if (actual is ChannelTypeSymbol channelActual
-                && openArgs.Length == 1
-                && ClrTypeUtilities.AreSame(ChannelTypeSymbol.OpenClrDefinition(channelActual.Direction), openDef))
+            //
+            // Issue #3982: this arm used to demand that the actual be a
+            // `ChannelTypeSymbol` — a channel type CLAUSE written in this
+            // compilation — AND that its direction name the formal's open
+            // definition EXACTLY. Both halves are the spelling-dependence
+            // #3976 removed from the conversion lattice and #3877 removed from
+            // `ClrOverloadResolution.UnifyForInference`, whose channel arm this
+            // one is the symbolic twin of: errata 3 gives `let ch = chan[T](n)`
+            // the static type of the runtime class `Chan[T]`, which is not a
+            // `ChannelTypeSymbol` at all, and a `chan[T]` receiver reaching a
+            // `ChannelReader[T]` formal is the ordinary D2 view rather than a
+            // direction mismatch. Recognising every channel-shaped actual
+            // through `TryGetChannelShape` and staying direction-BLIND matches
+            // its CLR twin word for word: inference produces a bound,
+            // `Conversion` owns the lattice and still refuses an `out chan[T]`
+            // source against a `ChannelReader[T]` formal at applicability.
+            if (openArgs.Length == 1
+                && ChannelTypeSymbol.IsChannelClrDefinitionName(openDef.FullName)
+                && ChannelTypeSymbol.TryGetChannelShape(actual, out var channelActualElement, out _, out _))
             {
-                UnifyForMethodTypeArgs(openArgs[0], channelActual.ElementType, openMethod, result);
+                UnifyForMethodTypeArgs(openArgs[0], channelActualElement, openMethod, result);
                 return;
             }
 
