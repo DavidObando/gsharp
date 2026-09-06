@@ -64,6 +64,30 @@ namespace GSharp.Compiler.Tests;
 /// (<c>ProjectSymbolicArgToErasedClr</c>) has no user-class arm and answers
 /// <c>object</c> — which is what the flat placeholder produced, so those two
 /// already agreed. That accident is the whole of the reported asymmetry.</para>
+/// <para><b>The projection is an applicability aid, not a claim about
+/// CONSTRAINTS.</b> The `cs2gs-code-exploder` gate caught this: closing a type
+/// argument over the imported-base surrogate leaks that surrogate into ANOTHER
+/// type parameter's constraint whenever the constraint mentions this one.
+/// <c>AuthenticationBuilder.AddScheme[TOptions, THandler]</c>, declared
+/// <c>where THandler : AuthenticationHandler[TOptions]</c>, substituted
+/// <c>TOptions</c> to <c>AuthenticationSchemeOptions</c>, so the constraint
+/// read <c>AuthenticationHandler&lt;AuthenticationSchemeOptions&gt;</c> while
+/// the handler's own base chain still erases to
+/// <c>AuthenticationHandler&lt;object&gt;</c> — invariant, so the constraint
+/// check failed and the candidate was dropped with <c>GS0159</c>. It is the
+/// same "two erasers disagree" disease this issue is about, one layer down.
+/// <c>ClrOverloadResolution</c> therefore asks constraints on the
+/// <c>object</c>-NORMALISED vector
+/// (<c>NormaliseErasedTypeArgsForConstraintCheck</c>), which is exactly the
+/// question it asked before this issue, and leaves the projected vector to do
+/// its own job in the closed method's parameter types.</para>
+/// <para><b>Where that row lives.</b> The regression test for it is the
+/// `cs2gs-code-exploder` gate itself (17/17 apps), not a row here: every
+/// attempt to reduce the shape to a fixture runs first into #4032 — a G# class
+/// deriving from a CONSTRAINED imported generic base reports
+/// <c>GS0149 Type 'Handler' is not generic</c>, on `main` and on this branch
+/// alike — so the synthetic form of `SharedGateAuthenticationHandler :
+/// AuthenticationHandler[SharedGateOptions]` cannot be written yet.</para>
 /// <para><b>What the fix does NOT loosen.</b> #4006's rejections are
 /// unchanged: an erased class surrogate still does not satisfy a GENUINE
 /// (non-erased) slot, whether spelled <c>map</c> or <c>List</c>. Those are the
