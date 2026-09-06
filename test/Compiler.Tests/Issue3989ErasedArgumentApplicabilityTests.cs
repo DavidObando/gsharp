@@ -143,6 +143,24 @@ public class Issue3989ErasedArgumentApplicabilityTests
             public string TakeObjList(List<object> items) => "take-object:" + items.Count;
 
             public string TakeOpen(List<T> items) => "take-open:" + items.Count;
+
+            // Review finding 2: an open position and a GENUINE nested one in
+            // the same parameter. A parameter-wide exemption covered both.
+            public string TakeMixed(Dictionary<T, List<object>> entries)
+                => "take-mixed:" + entries.Count;
+
+            // Every nested position open: must stay applicable.
+            public string TakeAllOpen(Dictionary<T, List<T>> entries)
+                => "take-allopen:" + entries.Count;
+        }
+
+        // Review finding 1: `object` is not the only erasure surrogate — a
+        // same-compilation enum erases to `int`.
+        public static class SurrogateProbes
+        {
+            public static string CountIntList(List<int> items) => "intlist:" + items.Count;
+
+            public static string TakeInt(int n) => "int:" + n;
         }
 
         public static class ListExtensions
@@ -313,6 +331,69 @@ public class Issue3989ErasedArgumentApplicabilityTests
             "GS0267",
         };
 
+        // Review finding 2: a GENUINE nested position (`List<object>`) sitting
+        // beside an open one (`T`) in the same parameter. The parameter-wide
+        // exemption this gate uses does cover the genuine position too, so the
+        // gate declines — but the call is still refused, by
+        // `BindClrParameterConversions` a few steps later, on `main` and here
+        // alike. Measured both ways; no unverifiable IL is emitted either way,
+        // which is why this row pins the diagnostic rather than claiming a fix.
+        //
+        // Moving the refusal up to applicability was attempted (a per-POSITION
+        // test on the candidate's open declaration) and REVERTED: the open
+        // parameter of `Task.ContinueWith[TResult](Func[Task, TResult])` has
+        // the identical shape — one concrete nested position beside one open
+        // one — so the position-aware test rejected every lambda passed to it.
+        // See the `a-lambda-at-a-partly-concrete-generic-slot-still-binds` row
+        // below, and Issue1512GenericClosureInferenceEmitTests.
+        yield return new object[]
+        {
+            "a-genuine-nested-slot-beside-an-open-one-is-still-refused-by-conversion",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import Interop
+
+            struct Pair {
+                var a int32
+                var b int32
+            }
+
+            let inner = List[Pair]()
+            inner.Add(Pair{a: 1, b: 2})
+            let m = map[Pair, List[Pair]]{}
+            m[Pair{a: 1, b: 2}] = inner
+            let holder = SlotHolder[Pair](4)
+            Console.WriteLine(holder.TakeMixed(m))
+            """,
+            "GS0155",
+        };
+
+        // Review finding 1: a same-compilation ENUM erases to `int`, not to
+        // `object`. Measured refused on `main` too — the surrogate has no hole
+        // here — so this row pins the behaviour rather than claiming a fix.
+        yield return new object[]
+        {
+            "a-same-compilation-enum-element-does-not-reach-an-int-list",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import Interop
+
+            enum MyEnum {
+                A,
+                B
+            }
+
+            let enums = List[MyEnum]()
+            enums.Add(MyEnum.B)
+            Console.WriteLine(SurrogateProbes.CountIntList(enums))
+            """,
+            "GS0159",
+        };
+
         yield return new object[]
         {
             "a-genuine-object-slot-on-a-generic-class-method-is-refused",
@@ -455,6 +536,65 @@ public class Issue3989ErasedArgumentApplicabilityTests
             Console.WriteLine(holder.TakeOpen(items))
             """,
             new[] { "ctor-int:4", "take-open:1" },
+        };
+
+        // Review finding 2's counterexample, kept as a regression row. The open
+        // parameter of `Task.ContinueWith[TResult](Func[Task, TResult])` holds
+        // a CONCRETE nested position (`Task`) beside an open one (`TResult`) —
+        // the same shape as `Dictionary[T, List[object]]`. Nothing structural
+        // separates them, so a gate that treats "a concrete nested position" as
+        // suspicion rejects this lambda too. Lifted from
+        // Issue1512GenericClosureInferenceEmitTests, which is where the attempt
+        // to make the #3989 gate position-aware was measured and abandoned.
+        yield return new object[]
+        {
+            "a-lambda-at-a-partly-concrete-generic-slot-still-binds",
+            """
+            package P
+            import System
+            import System.Threading.Tasks
+
+            class CwOp[T] {
+                var cont Task[T]?
+                init() { }
+                func SetIt(readerTask Task, v T) Task[T] {
+                    let r = readerTask.ContinueWith((t Task) -> v)
+                    cont = r
+                    return r
+                }
+            }
+
+            let op = CwOp[int32]()
+            let task = op.SetIt(Task.CompletedTask, 42)
+            Console.WriteLine(task.Result)
+            """,
+            new[] { "42" },
+        };
+
+        // Review finding 2's control: when EVERY nested position of the open
+        // parameter is generic, nothing is suspect and the call still binds.
+        yield return new object[]
+        {
+            "a-parameter-whose-nested-positions-are-all-open-still-binds",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import Interop
+
+            struct Pair {
+                var a int32
+                var b int32
+            }
+
+            let inner = List[Pair]()
+            inner.Add(Pair{a: 1, b: 2})
+            let m = map[Pair, List[Pair]]{}
+            m[Pair{a: 1, b: 2}] = inner
+            let holder = SlotHolder[Pair](4)
+            Console.WriteLine(holder.TakeAllOpen(m))
+            """,
+            new[] { "take-allopen:1" },
         };
 
         // Only a NESTED `object` is suspect. A parameter with no `object`

@@ -5518,14 +5518,21 @@ internal static class ClrOverloadResolution
     /// a slot may be answered here; a non-generic member on a non-generic type
     /// keeps the answer <c>Conversion</c> gives on the real types, which is
     /// "no".</para>
-    /// <para>The declaring-type case is deliberately slot-BLIND: a constructor
-    /// on a generic class closed over the erased placeholder admits every
-    /// slot, because the corresponding open member is not addressable from a
-    /// <see cref="ConstructorInfo"/> across reflection contexts. That costs
-    /// nothing in practice — the channel test below is what narrows it, and a
-    /// genuine <c>ChannelReader[object]</c> parameter on a generic class is
-    /// refused a few steps later by <c>BindClrParameterConversions</c>, by
-    /// name, rather than emitted.</para>
+    /// <para><b>Issue #3989 (review finding 3) corrects what this paragraph
+    /// used to say.</b> The declaring-type case was described here as
+    /// deliberately slot-BLIND — a constructor on a generic class closed over
+    /// the erased placeholder admitting every slot, "because the corresponding
+    /// open member is not addressable from a <see cref="ConstructorInfo"/>
+    /// across reflection contexts". It IS addressable: #3984's
+    /// base-initializer projection locates it by metadata token on the open
+    /// definition, and <see cref="TryGetOpenParameterType"/> now does the same
+    /// for any <see cref="MethodBase"/>. So a slot on a generic class is
+    /// answered as precisely as one on a generic method, and a genuine
+    /// <c>ChannelReader[object]</c> parameter on a generic class is refused at
+    /// applicability rather than a few steps later by
+    /// <c>BindClrParameterConversions</c>. Recorded as ADR-0174 errata 45. Only
+    /// a slot the open declaration cannot be found for keeps the old
+    /// slot-blind answer.</para>
     /// </remarks>
     /// <param name="rawCandidate">The candidate as declared, before generic closing.</param>
     /// <param name="parameterIndex">The parameter position this argument fills.</param>
@@ -5558,54 +5565,67 @@ internal static class ClrOverloadResolution
 
     /// <summary>
     /// Issue #3982 / #3989: whether the candidate's parameter at
-    /// <paramref name="parameterIndex"/> could have acquired an <c>object</c>
+    /// <paramref name="parameterIndex"/> could have acquired its closed shape
     /// by type-argument erasure rather than by being declared that way.
     /// </summary>
     /// <remarks>
     /// One question, asked by two gates of opposite polarity:
     /// <c>ChannelViewAppliesAtErasedGenericSlot</c> ADDS applicability where the
     /// answer is yes, and the #3989 erased-argument check REMOVES it where the
-    /// answer is no.
+    /// answer is no. Both read the candidate's OPEN declaration through
+    /// <see cref="TryGetOpenParameterType"/>; a slot whose open declaration
+    /// cannot be located stays "possibly erased", which is the permissive
+    /// direction for the channel gate and the safe one for #3989's.
     /// </remarks>
     /// <param name="rawCandidate">The candidate as declared, before generic closing.</param>
     /// <param name="parameterIndex">The parameter position.</param>
     /// <returns>True when the slot is generic in the declaration.</returns>
     private static bool IsErasedGenericParameterSlot(MethodBase rawCandidate, int parameterIndex)
     {
-        if (rawCandidate is MethodInfo { IsGenericMethodDefinition: true } openMethod)
+        var openParameterType = TryGetOpenParameterType(rawCandidate, parameterIndex);
+        return openParameterType == null || openParameterType.ContainsGenericParameters;
+    }
+
+    /// <summary>
+    /// Issue #3989: the candidate's parameter type as its DECLARATION spells it,
+    /// with the declaring type's and the method's own generic parameters still
+    /// present.
+    /// </summary>
+    /// <remarks>
+    /// A member on a CONSTRUCTED generic type always goes through the open
+    /// declaring type, even when it is itself a generic method definition: on
+    /// the constructed type the class-level parameters have already been closed
+    /// over the erased placeholder, so <c>M[U](List[T], List[U])</c> would read
+    /// back as <c>M[U](List&lt;object&gt;, List&lt;!!U&gt;)</c> and its first
+    /// slot would look concrete when it is not.
+    /// </remarks>
+    /// <param name="rawCandidate">The candidate as declared, before generic closing.</param>
+    /// <param name="parameterIndex">The parameter position.</param>
+    /// <returns>The open parameter type, or <see langword="null"/> when it cannot be located.</returns>
+    private static Type? TryGetOpenParameterType(MethodBase rawCandidate, int parameterIndex)
+    {
+        ParameterInfo[]? parameters;
+        if (rawCandidate.DeclaringType is { IsGenericType: true, IsGenericTypeDefinition: false } constructedDeclaringType)
         {
-            var openParameters = openMethod.GetParameters();
-            if ((uint)parameterIndex < (uint)openParameters.Length
-                && openParameters[parameterIndex].ParameterType.ContainsGenericParameters)
-            {
-                return true;
-            }
+            // Issue #3989: #3982 answered "possibly erased" for EVERY slot on a
+            // constructed generic class, on the belief that the corresponding
+            // OPEN member is not addressable from a `ConstructorInfo` across
+            // reflection contexts. It is — #3984's base-initializer projection
+            // locates it by metadata token on the open definition.
+            parameters = TryGetOpenDeclaringTypeMemberParameters(rawCandidate, constructedDeclaringType);
+        }
+        else if (rawCandidate is MethodInfo { IsGenericMethodDefinition: true } openMethod)
+        {
+            parameters = openMethod.GetParameters();
+        }
+        else
+        {
+            parameters = rawCandidate.GetParameters();
         }
 
-        if (rawCandidate.DeclaringType is not { IsGenericType: true, IsGenericTypeDefinition: false } constructedDeclaringType)
-        {
-            return false;
-        }
-
-        // Issue #3989: #3982 answered "yes" for EVERY slot on a constructed
-        // generic class, on the belief that the corresponding OPEN member is
-        // not addressable from a `ConstructorInfo` across reflection contexts.
-        // It is — #3984's base-initializer projection locates it by metadata
-        // token on the open definition — so the same question a generic METHOD
-        // can be asked precisely can be asked precisely here too. Without this,
-        // a `Holder[T]` declaring BOTH `Holder(List[T])` and a genuine
-        // `Holder(List<object>)` reported that the second one could have been
-        // erased, and a `List[Pair]` reached it and emitted unverifiable IL.
-        var openDeclaringParameters = TryGetOpenDeclaringTypeMemberParameters(rawCandidate, constructedDeclaringType);
-
-        // When the open member cannot be located, keep #3982's slot-BLIND
-        // answer rather than regressing it: an unanswerable slot stays
-        // "possibly erased", which is the permissive direction for the channel
-        // gate and the safe direction for the #3989 gate (it declines to
-        // reject rather than rejecting on a guess).
-        return openDeclaringParameters == null
-            || ((uint)parameterIndex < (uint)openDeclaringParameters.Length
-                && openDeclaringParameters[parameterIndex].ParameterType.ContainsGenericParameters);
+        return parameters != null && (uint)parameterIndex < (uint)parameters.Length
+            ? parameters[parameterIndex].ParameterType
+            : null;
     }
 
     /// <summary>

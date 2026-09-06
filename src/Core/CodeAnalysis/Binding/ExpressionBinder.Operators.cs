@@ -3352,6 +3352,32 @@ internal sealed partial class ExpressionBinder
         // an `IDictionary` and a user `enum` really is an `int`, whatever their
         // elements are. Only the nested position is suspect, which is exactly
         // the invariant-generic-over-an-erased-element shape the issue reports.
+        //
+        // Two limits of this test, both measured, neither costing a program:
+        //
+        // `object` is not the only erasure surrogate — `TryProjectErasedClrType`
+        // maps a same-compilation ENUM to `int` and a same-compilation CLASS to
+        // its imported base. The enum case is refused anyway (a `List[MyEnum]`
+        // is not applicable to a `List<int>` slot to begin with). The class case
+        // is a real hole, tracked as #4006, and widening the surrogate list here
+        // would not close it: with this gate instrumented,
+        // `ClassifyImplicit(List<ImportedBase>, List<object>)` came back `None`,
+        // so that candidate was never applicable in `EvaluateCandidate` and this
+        // check was never consulted for it. The bind is completed by some other
+        // path — #4006 carries the trace. The projections have to be reconciled
+        // before any test here can help.
+        //
+        // The test is per PARAMETER where the precise unit is per POSITION: a
+        // parameter declared `Dictionary[T, List[object]]` is exempted whole,
+        // though its nested `List<object>` is genuine. Reading the candidate's
+        // OPEN declaration position by position was implemented and REVERTED —
+        // `Task.ContinueWith[TResult](Func[Task, TResult])` has the identical
+        // shape, one concrete nested position beside one open one, so it
+        // rejected every lambda passed to such a slot. Suspicion can be made per
+        // position; the VERDICT below cannot, because `Conversion.Classify`
+        // answers on the whole parameter. The exempted case is refused a few
+        // steps later by `BindClrParameterConversions` (`GS0155`) and emits
+        // nothing, so the imprecision is diagnostic quality, not soundness.
         if (!ContainsNestedObject(clrParameterType))
         {
             return false;
