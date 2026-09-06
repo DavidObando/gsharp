@@ -233,6 +233,43 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             new[] { "2" },
         };
 
+        // A SAME-COMPILATION generic over a fixed array. This is the shape
+        // that reaches the new metadata traversal during EMIT, when the
+        // argument's CLR type is still a `TypeBuilder` — the reflection guard
+        // in `ContainsMetadataRecoveredArray` must not change the answer or
+        // throw. Round-trips the value through a field and a method so the
+        // emitted signatures are exercised, not just the classification.
+        yield return new object[]
+        {
+            "same-compilation-generic-over-a-fixed-array-round-trips",
+            """
+            package P
+            import System
+
+            class Box[T] {
+                var v T
+
+                init(value T) {
+                    v = value
+                }
+
+                func Get() T {
+                    return v
+                }
+            }
+
+            func main2() {
+                var b = Box[[3]int32]([3]int32{1, 2, 3})
+                var alias Box[[3]int32] = b
+                Console.WriteLine(alias.Get()[1].ToString())
+                Console.WriteLine(b.v[2].ToString())
+            }
+
+            main2()
+            """,
+            new[] { "2", "3" },
+        };
+
         // A STATIC generic receiver over a matching length: the third
         // retention site (`TryCloseImportedGenericTypeReceiver`) has to build
         // the symbolic view and still produce verifiable IL parented at the
@@ -596,6 +633,37 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             var c4 EqualityComparer[[4]int32] = EqualityComparer[[3]int32].Default
             """,
             "'System.Collections.Generic.EqualityComparer[[3]int32]' to 'System.Collections.Generic.EqualityComparer[[4]int32]'",
+        };
+
+        // The same-compilation counterpart of the headline row. Green on
+        // `main` too — a same-compilation generic's arguments were already
+        // compared symbolically — so it is a CONTROL that the new metadata
+        // traversal did not loosen that path while widening leniency for
+        // genuinely reflected shapes.
+        yield return new object[]
+        {
+            "same-compilation-generic-still-discriminates-lengths",
+            """
+            package P
+            import System
+
+            class Box[T] {
+                var v T
+
+                init(value T) {
+                    v = value
+                }
+            }
+
+            func main2() {
+                var b = Box[[3]int32]([3]int32{1, 2, 3})
+                var bad Box[[4]int32] = b
+                Console.WriteLine(bad.v[0].ToString())
+            }
+
+            main2()
+            """,
+            "'Box[[3]int32]' to 'Box[[4]int32]'",
         };
 
         // #3924's own control, restated here: a same-compilation element must
