@@ -3,8 +3,10 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using Cs2Gs.Pipeline;
 using Xunit;
 
@@ -80,6 +82,113 @@ public sealed class RepositoryMirrorTests
         string copied = File.ReadAllText(Path.Combine(destination, "Directory.Packages.props"));
         Assert.Contains("Version=\"3.11.13-beta\"", copied);
         Assert.DoesNotContain("3.7.115", copied);
+    }
+
+    [Fact]
+    public void Prepare_RetargetsGsharpPropsProjectHandlesInMigrationSet()
+    {
+        using var scratch = new ScratchDirectory();
+        string source = Path.Combine(scratch.Path, "source");
+        string destination = Path.Combine(scratch.Path, "destination");
+        string props = Path.Combine(source, "build", "gsharp.props");
+        Directory.CreateDirectory(Path.GetDirectoryName(props));
+        File.WriteAllText(
+            props,
+            """
+            <Project>
+              <ItemGroup>
+                <GsharpCore Include="$(GsharpRepoRoot)\src\Core\Core.csproj" />
+                <GsharpCompiler Include="$(GsharpRepoRoot)\src\Compiler\Compiler.csproj" />
+                <GsharpFormatting Include="$(GsharpRepoRoot)\src\Formatting\Formatting.csproj" />
+                <GsharpFormatterCli Include="$(GsharpRepoRoot)\src\Formatting\FormatterCli.csproj" />
+                <GsharpRepl Include="$(GsharpRepoRoot)\src\Repl\Repl.csproj" />
+                <GsharpLanguageServer Include="$(GsharpRepoRoot)\src\LanguageServer\LanguageServer.csproj" />
+                <GsharpAll Include="@(GsharpCore)" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        var generated = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string project in new[] { "Core", "Compiler", "Repl", "LanguageServer" })
+        {
+            generated[Path.Combine(source, "src", project, project + ".csproj")] =
+                Path.Combine(destination, "src", project, project + ".gsproj");
+        }
+
+        RepositoryMirror.Prepare(source, destination, generated);
+
+        XDocument mirrored = XDocument.Load(Path.Combine(destination, "build", "gsharp.props"));
+        Assert.Equal(
+            new[]
+            {
+                "$(GsharpRepoRoot)/src/Core/Core.gsproj",
+                "$(GsharpRepoRoot)/src/Compiler/Compiler.gsproj",
+                "$(GsharpRepoRoot)/src/Repl/Repl.gsproj",
+                "$(GsharpRepoRoot)/src/LanguageServer/LanguageServer.gsproj",
+            },
+            new[] { "GsharpCore", "GsharpCompiler", "GsharpRepl", "GsharpLanguageServer" }
+                .Select(name => mirrored.Descendants(name).Single().Attribute("Include")?.Value)
+                .ToArray());
+        Assert.Equal(
+            "$(GsharpRepoRoot)\\src\\Formatting\\Formatting.csproj",
+            mirrored.Descendants("GsharpFormatting").Single().Attribute("Include")?.Value);
+        Assert.Equal(
+            "$(GsharpRepoRoot)\\src\\Formatting\\FormatterCli.csproj",
+            mirrored.Descendants("GsharpFormatterCli").Single().Attribute("Include")?.Value);
+        Assert.Equal("@(GsharpCore)", mirrored.Descendants("GsharpAll").Single().Attribute("Include")?.Value);
+    }
+
+    [Theory]
+    [InlineData(".props")]
+    [InlineData(".targets")]
+    public void Prepare_RetargetsOnlyMigratedProjectItemPaths(string extension)
+    {
+        using var scratch = new ScratchDirectory();
+        string source = Path.Combine(scratch.Path, "source");
+        string destination = Path.Combine(scratch.Path, "destination");
+        string buildDirectory = Path.Combine(source, "build");
+        string sharedBuildFile = Path.Combine(buildDirectory, "shared" + extension);
+        string sourceProject = Path.Combine(source, "src", "Core", "Core.csproj");
+        string generatedProject = Path.Combine(destination, "src", "Core", "Core.gsproj");
+        Directory.CreateDirectory(buildDirectory);
+        File.WriteAllText(
+            sharedBuildFile,
+            """
+            <Project>
+              <ItemGroup>
+                <LiteralProject Include="../src/Core/Core.csproj" />
+                <PropertyProject Include="$(RepoRoot)\src\Core\Core.csproj" />
+                <ComputedProject Include="$(RepoRoot)\src\$(ProjectName)\Core.csproj" />
+                <ExternalProject Include="../external/External.csproj" />
+                <Compile Include="../src/Core/Core.cs" />
+              </ItemGroup>
+              <Target Name="Report">
+                <Message Text="src/Core/Core.csproj" />
+              </Target>
+            </Project>
+            """);
+
+        RepositoryMirror.Prepare(
+            source,
+            destination,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [sourceProject] = generatedProject,
+            });
+
+        XDocument mirrored = XDocument.Load(Path.Combine(destination, "build", "shared" + extension));
+        Assert.Equal("../src/Core/Core.gsproj", mirrored.Descendants("LiteralProject").Single().Attribute("Include")?.Value);
+        Assert.Equal(
+            "$(RepoRoot)/src/Core/Core.gsproj",
+            mirrored.Descendants("PropertyProject").Single().Attribute("Include")?.Value);
+        Assert.Equal(
+            "$(RepoRoot)\\src\\$(ProjectName)\\Core.csproj",
+            mirrored.Descendants("ComputedProject").Single().Attribute("Include")?.Value);
+        Assert.Equal(
+            "../external/External.csproj",
+            mirrored.Descendants("ExternalProject").Single().Attribute("Include")?.Value);
+        Assert.Equal("../src/Core/Core.cs", mirrored.Descendants("Compile").Single().Attribute("Include")?.Value);
+        Assert.Equal("src/Core/Core.csproj", mirrored.Descendants("Message").Single().Attribute("Text")?.Value);
     }
 
     [Fact]
