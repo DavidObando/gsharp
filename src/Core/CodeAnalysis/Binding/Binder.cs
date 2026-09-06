@@ -6650,7 +6650,7 @@ public sealed class Binder
             return true;
         }
 
-        if (type == TypeSymbol.String)
+        if (type == TypeSymbol.String || type == TypeSymbol.Object)
         {
             return true;
         }
