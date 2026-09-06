@@ -3042,6 +3042,35 @@ implementation had to refine it.
     on that, so it is not errata 42's question; it is issue #3992, whose repro
     is corrected to the non-generic form.
 
+44. **A `chan[T]` in a `: base(...)` initializer was a different probe, and
+    errata 40's claim about it is corrected (issue #3984).** Errata 40 lists
+    "the `: base(...)` probe GS0214" among the sites the missing channel arm
+    broke, and the code comment on that arm says the same. Both are wrong. The
+    base-initializer probe never called the projection that arm lives in: it was
+    handed `GetEffectiveArgumentClrType` — honest CLR identity, null for a type
+    with no CLR backing — rather than the overload-resolution variant every
+    `ExpressionBinder` probe uses. Measured with #3876's arm already in the
+    tree, `class Relay[T] : OpenRelay[T] { init(source chan[T]) : base(source,
+    4) }` was still ``GS0214: Class 'OpenRelay`1' has no accessible constructor
+    that takes 2 argument(s).`` So the hole is one the channel arm cannot reach,
+    and it is not a channel hole: `[]T`, `map[K, V]` and a symbolic tuple fail
+    there identically. Nothing in D2 changes; what changes is that a directional
+    or bidirectional channel can now be forwarded to an imported generic base's
+    constructor, which is the shape a library subclassing a channel-carrying
+    base needs.
+
+    Two things about the repair are worth recording here because they are wider
+    than this ADR. First, ranking the argument was only half of it: the
+    per-parameter conversion that follows targeted the base's **erased**
+    parameter (`Channel<object>`, `IEnumerable<object>`) while the emitter
+    parents the base-constructor MemberRef at the **symbolic** TypeSpec, whose
+    signature reads `Channel<!T0>` / `IEnumerable<!T0>`. That mismatch was
+    already emitting unverifiable IL for arguments that *did* have a CLR type
+    (`[]string`, `(int32, object)`), which ILVerify confirms and which now
+    become bind-time errors. Second, the `chan[T]?` asymmetry errata 40 records
+    — refused where the closed `chan[int32]?` is accepted, filed as #3985 — is
+    visible in this position too and is not addressed here.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

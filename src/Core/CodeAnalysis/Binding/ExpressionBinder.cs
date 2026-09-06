@@ -2174,8 +2174,11 @@ internal sealed partial class ExpressionBinder
         // that ranks candidates on CLR shapes abandoned resolution before
         // examining a single one: the imported-constructor probe reported
         // GS0267 with no overload having been looked at, the imported
-        // instance-method probe GS0159, the `: base(...)` probe GS0214. The
-        // erasure itself is not restated here — `TryProjectErasedClrType` is
+        // instance-method probe GS0159, the `: base(...)` probe GS0214.
+        // Issue #3984 / ADR-0174 errata 44: this arm does NOT in fact reach the
+        // `: base(...)` probe — that probe was handed the OTHER projection
+        // entirely, so it never called this method. Fixed separately.
+        // The erasure itself is not restated here — `TryProjectErasedClrType` is
         // the one place that knows a channel erases to
         // `Channel<…>`/`ChannelReader<…>`/`ChannelWriter<…>`, which is exactly
         // why the ONE probe that already consulted it (the imported

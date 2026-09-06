@@ -81,7 +81,7 @@ internal sealed partial class DeclarationBinder
     private readonly BindInterpolatedStringAsFormattableDelegate? bindInterpolatedStringAsFormattable;
     private readonly Func<SyntaxToken?, Accessibility> resolveAccessibility;
     private readonly Func<string, TypeSymbol?> lookupType;
-    private readonly Func<TypeSymbol, Type?> getEffectiveArgumentClrType;
+    private readonly Func<TypeSymbol, Type?> getEffectiveArgumentClrTypeForOverloadResolution;
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<TypeSymbol, bool> isAsyncSequenceReturnType;
     private readonly Func<string, bool> isPrimitiveTypeName;
@@ -147,7 +147,7 @@ internal sealed partial class DeclarationBinder
         BindArrayCreationExpressionDelegate bindArrayCreationExpression,
         Func<SyntaxToken?, Accessibility> resolveAccessibility,
         Func<string, TypeSymbol?> lookupType,
-        Func<TypeSymbol, Type?> getEffectiveArgumentClrType,
+        Func<TypeSymbol, Type?> getEffectiveArgumentClrTypeForOverloadResolution,
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<TypeSymbol, bool> isAsyncSequenceReturnType,
         Func<string, bool> isPrimitiveTypeName,
@@ -180,7 +180,9 @@ internal sealed partial class DeclarationBinder
         this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable;
         this.resolveAccessibility = resolveAccessibility ?? throw new ArgumentNullException(nameof(resolveAccessibility));
         this.lookupType = lookupType ?? throw new ArgumentNullException(nameof(lookupType));
-        this.getEffectiveArgumentClrType = getEffectiveArgumentClrType ?? throw new ArgumentNullException(nameof(getEffectiveArgumentClrType));
+        this.getEffectiveArgumentClrTypeForOverloadResolution =
+            getEffectiveArgumentClrTypeForOverloadResolution
+            ?? throw new ArgumentNullException(nameof(getEffectiveArgumentClrTypeForOverloadResolution));
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ?? throw new ArgumentNullException(nameof(isAsyncIteratorReturnType));
         this.isAsyncSequenceReturnType = isAsyncSequenceReturnType ?? throw new ArgumentNullException(nameof(isAsyncSequenceReturnType));
         this.isPrimitiveTypeName = isPrimitiveTypeName ?? throw new ArgumentNullException(nameof(isPrimitiveTypeName));
