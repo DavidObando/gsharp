@@ -1466,6 +1466,17 @@ internal sealed class MemberLookup
                 // depth — `List[(a int32, b string)]` as the argument of an
                 // outer generic) shares its CLR backing with the unnamed
                 // shape, so collapsing to FromClrType would erase the names.
+                // Issue #4024 (review finding 2): an ARRAY-shaped argument is
+                // the third member of that family and was missing. `[]T` and
+                // `[N]T` at every length share the one SZ-array `T[]`, so
+                // collapsing to `FromClrType` here erases which spelling the
+                // author wrote — and this is the branch a generic METHOD's
+                // constructed return goes through, so
+                // `Factory.Make[[]int32]()` came back as a metadata-only
+                // `List<int[]>` (whose shape is genuinely unknowable) and
+                // filled a `List[[3]int32]` slot. Measured accepted on `main`
+                // and on this branch until this line was added; the named-tuple
+                // sibling one line up already proved the path was live.
                 if (TypeSymbol.RequiresSymbolicProjection(mapped)
                     || TypeSymbol.ContainsNamedTupleElements(mapped)
                     || (a.ContainsGenericParameters
@@ -1707,8 +1718,27 @@ internal sealed class MemberLookup
         // ADR-0172: a named-tuple-bearing return shares its CLR backing with
         // the unnamed shape, so the CLR fallback would erase the names — keep
         // the symbolic projection for it too.
+        // Issue #4024 (review finding 2): an ARRAY-shaped return needs the same
+        // treatment, and for the same reason — `[]T` and `[N]T` at every length
+        // share the one SZ-array `T[]`, so the CLR fallback erases which
+        // spelling the author wrote. Without this the call fell back to the
+        // metadata-only `List<int[]>`, whose shape is genuinely unknowable, and
+        // `var x List[[3]int32] = Factory.Make[[]int32]()` was accepted — this
+        // issue's own hole, reached through a generic factory RETURN rather
+        // than a construction, and measured accepted both on `main` and on this
+        // branch before the review.
+        //
+        // Two lines close it, and only two: this one and the
+        // `BuildSymbolicMethodTypeArgs` gate that decides whether a symbolic
+        // vector reaches this method at all. Ablated individually, each alone
+        // leaves the program accepted. Two further candidate sites
+        // (`MapOpenClrTypeToSymbolic`'s inner retention test, and a new arm in
+        // `ResolveImportedGenericReturnType` for a constructed-generic return)
+        // were written, measured to change nothing once these two were in
+        // place, and dropped.
         return TypeSymbol.RequiresSymbolicProjection(mapped)
             || TypeSymbol.ContainsNamedTupleElements(mapped)
+            || TypeSymbol.ContainsSourceArrayShape(mapped)
             ? mapped
             : null;
     }
@@ -1819,9 +1849,20 @@ internal sealed class MemberLookup
             // ADR-0172: a named-tuple-bearing inferred argument also needs
             // the symbolic vector — the closed CLR method's shapes share the
             // unnamed backing, so the CLR fallback would erase the names.
+            // Issue #4024 (review finding 2): an ARRAY-shaped argument needs it
+            // for the same reason. This is the OUTERMOST of the three gates a
+            // generic method's constructed return passes through, and the one
+            // that actually decided: with the vector dropped here,
+            // `ResolveCallReturnTypeFromSymbolicTypeArgs` bails on its
+            // `IsDefaultOrEmpty` guard and the call falls back to the closed
+            // CLR return `List<int[]>` — indistinguishable from metadata, so
+            // `var x List[[3]int32] = Factory.Make[[]int32]()` was accepted.
+            // The named-tuple clause above is why the tuple spelling of the
+            // same program already worked, which is how the gate was located.
             if (inferred[i] is { } inferredType
                 && (TypeSymbol.RequiresSymbolicProjection(inferredType)
-                    || TypeSymbol.ContainsNamedTupleElements(inferredType)))
+                    || TypeSymbol.ContainsNamedTupleElements(inferredType)
+                    || TypeSymbol.ContainsSourceArrayShape(inferredType)))
             {
                 anySymbolic = true;
                 break;

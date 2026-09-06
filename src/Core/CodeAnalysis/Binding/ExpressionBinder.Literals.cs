@@ -1770,13 +1770,38 @@ internal sealed partial class ExpressionBinder
                         return BindImportedTypeLiteralExpression(syntax, importedCandidate.ClassType);
                     }
                 }
+
+                // Issue #4024 (review finding 4): `hasSymbolicArgument` is not a
+                // rejection, it is "the closed CLR type below may not describe
+                // the argument". That is true for an argument with NO faithful
+                // CLR type — an in-scope type parameter or a same-compilation
+                // user type, both of which close over the `object` surrogate,
+                // so members bound off the closed type would all read `object`.
+                // It is NOT true for the LOSSY-BUT-REAL family: a `[]T`, a
+                // `[N]T` and a named tuple each have a real, closed CLR type
+                // that `MakeGenericType` closes correctly — the symbolic vector
+                // carries extra identity beside it, not instead of it.
+                //
+                // Lumping those in with the surrogate cases made
+                // `Box[[]int32]{ Value: []int32{1} }` — valid before this PR —
+                // fall through to GS0157 "Cannot find type Box". Measured on
+                // `main`, the same gap already swallowed `Box[[3]int32]{…}`
+                // (since #3962 retained `[N]T`) and
+                // `Box[(a int32, b string)]{…}` (since ADR-0172 retained named
+                // tuples); both report GS0157 there too. So this restores the
+                // slice literal and closes the two pre-existing siblings with
+                // the same predicate.
                 else if (syntax.TypeArgumentList != null
                     && hasImportedCandidate
                     && importedCandidate != null
                     && importedCandidate.ClassType.IsGenericTypeDefinition
                     && TryResolveClrConstructionTypeArgs(
-                        syntax.TypeArgumentList, out var clrTypeArguments, out var literalSymbolicArgs, out var hasSymbolicArgument)
-                    && !hasSymbolicArgument)
+                        syntax.TypeArgumentList,
+                        out var clrTypeArguments,
+                        out var literalSymbolicArguments,
+                        out var hasSymbolicArgument)
+                    && (!hasSymbolicArgument
+                        || HasOnlyClrFaithfulSymbolicArguments(literalSymbolicArguments)))
                 {
                     // Issue #4032 (review finding 1): the literal spelling
                     // `Handler[string]{Tag: "z"}` closes the imported generic here
@@ -1786,7 +1811,7 @@ internal sealed partial class ExpressionBinder
                             Diagnostics,
                             importedCandidate.ClassType,
                             clrTypeArguments,
-                            literalSymbolicArgs,
+                            literalSymbolicArguments,
                             syntax.TypeIdentifier.Location))
                     {
                         return new BoundErrorExpression(null);
@@ -2315,6 +2340,43 @@ internal sealed partial class ExpressionBinder
         => clrType.IsValueType
             ? BindImportedValueTypeLiteralExpression(syntax, clrType)
             : BindImportedClassLiteralExpression(syntax, clrType);
+
+    /// <summary>
+    /// Issue #4024 (review finding 4): returns <see langword="true"/> when every
+    /// retained symbolic type argument nonetheless has a FAITHFUL closed CLR
+    /// type, so <c>MakeGenericType</c> over the projected arguments yields the
+    /// real constructed type and members bound off it are correct.
+    ///
+    /// <para>Retention has two quite different causes, and only one of them
+    /// invalidates the closed CLR shape. An argument with no CLR type of its own
+    /// — an in-scope type parameter, or a same-compilation user type still being
+    /// built — is projected onto the <c>object</c> SURROGATE, so a literal bound
+    /// off <c>Box&lt;object&gt;</c> would read every member as <c>object</c>;
+    /// those must still bail. An argument that is merely NON-INJECTIVE — a slice
+    /// or fixed array (both backed by the one SZ-array <c>T[]</c>, #3962/#4024)
+    /// or a named tuple (backed by the unnamed <c>ValueTuple</c>, ADR-0172) —
+    /// has a real closed CLR type; the symbolic vector records identity the CLR
+    /// cannot express, beside a shape that is perfectly usable.</para>
+    /// </summary>
+    /// <param name="symbolicArguments">The retained symbolic type arguments.</param>
+    /// <returns><c>true</c> when every argument has a faithful closed CLR type.</returns>
+    private static bool HasOnlyClrFaithfulSymbolicArguments(ImmutableArray<TypeSymbol> symbolicArguments)
+    {
+        if (symbolicArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var argument in symbolicArguments)
+        {
+            if (argument.ClrType == null || TypeSymbol.RequiresSymbolicProjection(argument))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Issue #1199: binds a composite literal <c>T{Member: value, ...}</c> on an

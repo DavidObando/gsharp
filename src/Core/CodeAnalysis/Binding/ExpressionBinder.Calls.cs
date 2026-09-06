@@ -1637,10 +1637,15 @@ internal sealed partial class ExpressionBinder
             // symbolic argument preserves the length the author wrote —
             // otherwise `List[[3]int32]()` and `List[[4]int32]()` both infer
             // the one cached symbol for `List<System.Int32[]>`.
+            // Issue #4024: the SLICE spelling `[]T` shares the same SZ-array
+            // backing and is retained by the same gate — without it
+            // `List[[]int32]()` carries no symbolic argument, reads as a
+            // metadata-recovered `List<int[]>`, and rides the metadata
+            // leniency into a `List[[3]int32]` slot.
             if (TypeSymbol.RequiresSymbolicProjection(ta)
                 || ta is TupleTypeSymbol
                 || TypeSymbol.ContainsNamedTupleElements(ta)
-                || TypeSymbol.ContainsFixedLengthArray(ta))
+                || TypeSymbol.ContainsSourceArrayShape(ta))
             {
                 hasSymbolicArg = true;
             }

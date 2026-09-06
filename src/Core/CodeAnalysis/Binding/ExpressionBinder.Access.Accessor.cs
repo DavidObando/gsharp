@@ -42,6 +42,13 @@ internal sealed partial class ExpressionBinder
             return BindNullConditionalAccessExpression(syntax);
         }
 
+        SyntaxToken? missingQualifiedType = null;
+        SyntaxToken? invalidQualifiedGenericType = null;
+        ExpressionSyntax? invalidQualifiedTypeArgument = null;
+        string? resolvedPrefix = null;
+        var resolvedPrefixIsPackage = false;
+        var qualifiedClrFailureHandled = false;
+
         // Issue #293: a fully-qualified imported-type constructor
         // (`System.Text.StringBuilder()`, `System.Collections.Generic.List[int]()`)
         // parses as an accessor chain whose terminal segment is the call, so it
@@ -72,7 +79,15 @@ internal sealed partial class ExpressionBinder
         {
             ExpressionSyntax qualifiedClrMember = syntax.RightPart;
             if (TryBindFullyQualifiedClrStaticAccess(
-                qualifiedClrRoot, ref qualifiedClrMember, out var qualifiedClrType))
+                qualifiedClrRoot,
+                ref qualifiedClrMember,
+                out var qualifiedClrType,
+                out missingQualifiedType,
+                out resolvedPrefix,
+                out resolvedPrefixIsPackage,
+                out qualifiedClrFailureHandled,
+                out invalidQualifiedGenericType,
+                out invalidQualifiedTypeArgument))
             {
                 return BindAccessorStep(null, qualifiedClrType, qualifiedClrMember);
             }
@@ -634,6 +649,40 @@ internal sealed partial class ExpressionBinder
             }
             else
             {
+                if (qualifiedClrFailureHandled)
+                {
+                    return new BoundErrorExpression(syntax);
+                }
+
+                if (invalidQualifiedTypeArgument != null)
+                {
+                    var invalidArgumentLocation = invalidQualifiedTypeArgument.Location;
+                    Diagnostics.ReportUnableToFindType(
+                        invalidArgumentLocation,
+                        invalidArgumentLocation.Text?.ToString(invalidArgumentLocation.Span) ?? string.Empty);
+                    return new BoundErrorExpression(syntax);
+                }
+
+                if (invalidQualifiedGenericType != null)
+                {
+                    Diagnostics.ReportTypeNotGeneric(
+                        invalidQualifiedGenericType.Location,
+                        invalidQualifiedGenericType.ValueText);
+                    return new BoundErrorExpression(syntax);
+                }
+
+                if (missingQualifiedType != null && resolvedPrefix != null)
+                {
+                    // Issue #3842: report the deepest verified namespace/package
+                    // boundary after every existing receiver path has failed.
+                    Diagnostics.ReportUnableToFindQualifiedType(
+                        missingQualifiedType.Location,
+                        missingQualifiedType.ValueText,
+                        resolvedPrefix,
+                        resolvedPrefixIsPackage);
+                    return new BoundErrorExpression(syntax);
+                }
+
                 Diagnostics.ReportUnableToFindType(leftName.Location, name);
                 return new BoundErrorExpression(null);
             }
@@ -1652,6 +1701,27 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
         => TryWalkQualifiedClrTypePath(leftName.IdentifierToken.ValueText, ref rightPart, out importedClass);
 
+    private bool TryBindFullyQualifiedClrStaticAccess(
+        NameExpressionSyntax leftName,
+        ref ExpressionSyntax rightPart,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass,
+        out SyntaxToken? missingType,
+        out string? resolvedPrefix,
+        out bool resolvedPrefixIsPackage,
+        out bool failureHandled,
+        out SyntaxToken? invalidGenericType,
+        out ExpressionSyntax? invalidTypeArgument)
+        => TryWalkQualifiedClrTypePath(
+            leftName.IdentifierToken.ValueText,
+            ref rightPart,
+            out importedClass,
+            out missingType,
+            out resolvedPrefix,
+            out resolvedPrefixIsPackage,
+            out failureHandled,
+            out invalidGenericType,
+            out invalidTypeArgument);
+
     /// <summary>
     /// Walks a dotted accessor chain, extending a namespace prefix segment by
     /// segment until a prefix resolves to a referenced CLR type. On success the
@@ -1659,15 +1729,42 @@ internal sealed partial class ExpressionBinder
     /// <paramref name="rightPart"/> is advanced to the remaining (post-type)
     /// member-access chain. Shared by <see cref="TryBindImportAccessor"/> (which
     /// starts from a registered import target) and
-    /// <see cref="TryBindFullyQualifiedClrStaticAccess"/> (which starts from a
+    /// <c>TryBindFullyQualifiedClrStaticAccess</c> (which starts from a
     /// bare leading namespace name).
     /// </summary>
     private bool TryWalkQualifiedClrTypePath(
         string startPath,
         ref ExpressionSyntax rightPart,
         [NotNullWhen(true)] out ImportedClassSymbol? importedClass)
+        => TryWalkQualifiedClrTypePath(
+            startPath,
+            ref rightPart,
+            out importedClass,
+            out _,
+            out _,
+            out _,
+            out _,
+            out _,
+            out _);
+
+    private bool TryWalkQualifiedClrTypePath(
+        string startPath,
+        ref ExpressionSyntax rightPart,
+        [NotNullWhen(true)] out ImportedClassSymbol? importedClass,
+        out SyntaxToken? missingType,
+        out string? resolvedPrefix,
+        out bool resolvedPrefixIsPackage,
+        out bool failureHandled,
+        out SyntaxToken? invalidGenericType,
+        out ExpressionSyntax? invalidTypeArgument)
     {
         importedClass = null;
+        missingType = null;
+        resolvedPrefix = null;
+        resolvedPrefixIsPackage = false;
+        failureHandled = false;
+        invalidGenericType = null;
+        invalidTypeArgument = null;
 
         var currentPath = startPath;
         var currentRight = rightPart;
@@ -1686,21 +1783,71 @@ internal sealed partial class ExpressionBinder
             // (mirroring the non-generic branch just below) and hand the
             // remaining chain back as the static-member access on the closed type.
             if (currentRight is AccessorExpressionSyntax genericSegment
-                && TryGetGenericSegmentNameAndArity(genericSegment.LeftPart, out var genericSegmentName, out var genericArity))
+                && TryGetGenericSegmentNameAndArity(genericSegment.LeftPart, out var genericIdentifier, out var genericArity))
             {
-                var mangledName = currentPath + "." + genericSegmentName + "`" + genericArity;
-                if (scope.References.TryResolveType(mangledName, out var openGenericType)
-                    && TryBindGenericImportSegmentTypeArguments(genericSegment.LeftPart, genericArity, out var segmentTypeArgs)
-                    && TryCloseImportedGenericTypeReceiver(openGenericType, segmentTypeArgs, genericSegment.LeftPart, out var closedGenericImported))
+                var mangledName = currentPath + "." + genericIdentifier.ValueText + "`" + genericArity;
+                if (scope.References.TryResolveType(mangledName, out var openGenericType))
                 {
-                    importedClass = closedGenericImported;
-                    rightPart = genericSegment.RightPart;
-                    return true;
+                    var diagnosticCount = Diagnostics.Count;
+                    if (!TryBindGenericImportSegmentTypeArguments(genericSegment.LeftPart, genericArity, out var segmentTypeArgs))
+                    {
+                        if (Diagnostics.Count > diagnosticCount)
+                        {
+                            failureHandled = true;
+                        }
+                        else
+                        {
+                            invalidTypeArgument = genericSegment.LeftPart is IndexExpressionSyntax index
+                                ? index.Indices.FirstOrDefault(
+                                    argument => !TryBuildTypeClauseFromExpression(argument, out _))
+                                : genericSegment.LeftPart;
+                            invalidTypeArgument ??= genericSegment.LeftPart;
+                        }
+
+                        return false;
+                    }
+
+                    if (TryCloseImportedGenericTypeReceiver(openGenericType, segmentTypeArgs, genericSegment.LeftPart, out var closedGenericImported))
+                    {
+                        importedClass = closedGenericImported;
+                        rightPart = genericSegment.RightPart;
+                        return true;
+                    }
+
+                    if (!scope.TryLookupSourceTypeInPackage(
+                            currentPath,
+                            genericIdentifier.ValueText,
+                            genericArity,
+                            out _))
+                    {
+                        invalidGenericType = genericIdentifier;
+                    }
+
+                    return false;
+                }
+
+                if (scope.References.TryResolveType(
+                        currentPath + "." + genericIdentifier.ValueText,
+                        out _)
+                    || scope.TryLookupSourceTypeInPackage(
+                        currentPath,
+                        genericIdentifier.ValueText,
+                        preferredArity: 0,
+                        out _))
+                {
+                    invalidGenericType = genericIdentifier;
+                    return false;
                 }
 
                 // A generic instantiation can never be a further namespace
                 // level, so a failed resolution here ends the walk instead of
                 // falling through to the plain-segment cases below.
+                if (TryClassifyQualifiedNamespaceOrPackage(currentPath, out resolvedPrefixIsPackage))
+                {
+                    missingType = genericIdentifier;
+                    resolvedPrefix = currentPath;
+                }
+
                 return false;
             }
 
@@ -1727,6 +1874,15 @@ internal sealed partial class ExpressionBinder
                     hasMoreChain = false;
                     break;
 
+                case CallExpressionSyntax call when !call.Identifier.IsMissing:
+                    if (TryClassifyQualifiedNamespaceOrPackage(currentPath, out resolvedPrefixIsPackage))
+                    {
+                        missingType = call.Identifier;
+                        resolvedPrefix = currentPath;
+                    }
+
+                    return false;
+
                 default:
                     return false;
             }
@@ -1743,12 +1899,50 @@ internal sealed partial class ExpressionBinder
             // as another namespace level and keep walking. Otherwise, give up.
             if (!hasMoreChain)
             {
+                if (TryClassifyQualifiedNamespaceOrPackage(currentPath, out resolvedPrefixIsPackage))
+                {
+                    missingType = typeNameSyntax.IdentifierToken;
+                    resolvedPrefix = currentPath;
+                }
+
+                return false;
+            }
+
+            if (TryClassifyQualifiedNamespaceOrPackage(fullTypeName, out _))
+            {
+                currentPath = fullTypeName;
+                currentRight = remainder;
+                continue;
+            }
+
+            if (TryClassifyQualifiedNamespaceOrPackage(currentPath, out resolvedPrefixIsPackage))
+            {
+                missingType = typeNameSyntax.IdentifierToken;
+                resolvedPrefix = currentPath;
                 return false;
             }
 
             currentPath = fullTypeName;
             currentRight = remainder;
         }
+    }
+
+    private bool TryClassifyQualifiedNamespaceOrPackage(string prefix, out bool isPackage)
+    {
+        if (scope.TryMatchSourcePackagePrefix(prefix, out var exactPackage))
+        {
+            isPackage = exactPackage;
+            return true;
+        }
+
+        if (scope.References.ContainsNamespace(prefix))
+        {
+            isPackage = false;
+            return true;
+        }
+
+        isPackage = false;
+        return false;
     }
 
     /// <summary>
@@ -1762,7 +1956,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private static bool TryGetGenericSegmentNameAndArity(
         ExpressionSyntax segment,
-        [NotNullWhen(true)] out string? name,
+        [NotNullWhen(true)] out SyntaxToken? identifier,
         out int arity)
     {
         switch (segment)
@@ -1770,22 +1964,22 @@ internal sealed partial class ExpressionBinder
             case IndexExpressionSyntax index:
                 if (index.IsNullConditional || index.Target is not NameExpressionSyntax indexName)
                 {
-                    name = string.Empty;
+                    identifier = null;
                     arity = 0;
                     return false;
                 }
 
-                name = indexName.IdentifierToken.ValueText;
+                identifier = indexName.IdentifierToken;
                 arity = index.Indices.Count;
                 return true;
 
             case GenericNameExpressionSyntax generic:
-                name = generic.Identifier.ValueText;
+                identifier = generic.Identifier;
                 arity = generic.TypeArgumentList.Arguments.Count;
                 return true;
 
             default:
-                name = null;
+                identifier = null;
                 arity = 0;
                 return false;
         }
@@ -3154,10 +3348,13 @@ internal sealed partial class ExpressionBinder
             // a metadata-only `EqualityComparer<int32[]>` and flows into an
             // `EqualityComparer[[4]int32]` slot through the metadata-recovery
             // leniency — the same erasure this issue closes elsewhere.
+            // Issue #4024: the SLICE spelling `[]T` shares that backing and is
+            // retained by the same gate, so `EqualityComparer[[]int32].Default`
+            // no longer reads as a metadata-only `EqualityComparer<int32[]>`.
             var symbolicReceiver = typeArgs.Any(static a =>
                 TypeSymbol.RequiresSymbolicProjection(a)
                 || TypeSymbol.ContainsNamedTupleElements(a)
-                || TypeSymbol.ContainsFixedLengthArray(a))
+                || TypeSymbol.ContainsSourceArrayShape(a))
                 ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
                 : null;
             constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);

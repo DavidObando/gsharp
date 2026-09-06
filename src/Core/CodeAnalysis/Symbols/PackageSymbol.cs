@@ -20,6 +20,7 @@ public sealed class PackageSymbol : Symbol
         : base(name)
     {
         Declaration = declaration;
+        IsExplicitlyDeclared = declaration != null;
     }
 
     /// <inheritdoc/>
@@ -29,4 +30,15 @@ public sealed class PackageSymbol : Symbol
     /// Gets the declaration of the package, or <see langword="null"/> for synthesized package symbols.
     /// </summary>
     public PackageSyntax? Declaration { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether any syntax tree explicitly declared this
+    /// package name.
+    /// </summary>
+    internal bool IsExplicitlyDeclared { get; private set; }
+
+    /// <summary>
+    /// Records that a later syntax tree explicitly declared this package.
+    /// </summary>
+    internal void MarkExplicitlyDeclared() => IsExplicitlyDeclared = true;
 }
