@@ -387,9 +387,27 @@ public sealed class Binder
             },
             resolveAccessibility: ResolveAccessibility,
             lookupType: LookupType,
-            getEffectiveArgumentClrType: t =>
+            getEffectiveArgumentClrTypeForOverloadResolution: t =>
             {
-                return Expressions.GetEffectiveArgumentClrType(t);
+                // Issue #3984: the two DeclarationBinder consumers of this
+                // delegate are BOTH applicability probes — they build a
+                // `System.Type?[]` for `ClrOverloadResolution` and use it for
+                // nothing else — so they need the same erasure ride-throughs
+                // every ExpressionBinder probe already gets. The plain
+                // `GetEffectiveArgumentClrType` is honest CLR identity and
+                // returns null for a type with no CLR backing of its own
+                // (`[]T`, `map[K, V]`, `chan[T]`, a symbolic tuple, a
+                // same-compilation user type); a `: base(...)` argument of such
+                // a type therefore set `argsAllTyped = false` and resolution
+                // never ran at all, so GS0214 reported an arity that was in
+                // fact present. Ranking on the erased shape is safe because
+                // the selected constructor's parameters are re-bound through
+                // `Conversion` against the SYMBOLIC parameter type afterwards
+                // (see the per-parameter loop in ResolveClrBaseConstructor),
+                // exactly as the ExpressionBinder probes re-project their
+                // arguments after ranking: the erasure decides what may be
+                // examined, never what is accepted.
+                return Expressions.GetEffectiveArgumentClrTypeForOverloadResolution(t);
             },
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             isAsyncSequenceReturnType: IsAsyncSequenceReturnType,
