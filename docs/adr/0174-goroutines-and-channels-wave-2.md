@@ -2750,6 +2750,51 @@ implementation had to refine it.
     an `async func`. GS0576 replaces that internal error and names the fix,
     which is to bind the value to a local first.
 
+39. **The direction lattice is a fact about the types, not about the spelling
+    (issue #3976).** Errata 3 says the class name `Chan[T]` "surfaces only in
+    hovers over inferred locals". That was false wherever the target came from
+    another assembly, because the lattice used to require at least one operand
+    to be a channel type *clause written in the current compilation*. Neither
+    operand is, once a channel has been through metadata or through inference:
+    a channel in an imported signature is the BCL type its clause binds to
+    (`chan[T]` → `Channel<T>`, `out chan[T]` → `ChannelWriter<T>`,
+    `in chan[T]` → `ChannelReader<T>`), and errata 3 makes `let ch = chan[T](n)`
+    a `Chan[T]`. So `in chan[T]` and `out chan[T]` were unusable across an
+    assembly boundary in both languages, and D2's promise that a library can
+    publish a channel in its surface — pattern 9's producer returning
+    `in chan[T]` — did not hold outside a single compilation.
+
+    Only the **directional** half broke, which is why it survived Phase 2's
+    matrix coverage: `Chan[T]` derives from `Channel[T]`, so an ordinary
+    implicit reference conversion carried every bidirectional row without the
+    lattice being consulted at all. `ChannelReader[T]` and `ChannelWriter[T]`
+    are base classes of nothing, and nothing else rescued them. The
+    cross-assembly tests declared `Take(ch in chan[int32])` and
+    `Fill(ch out chan[int32], n)` and consumed them only from C#, which has the
+    conversion natively — `Channel<TWrite, TRead>` declares implicit operators
+    to `ChannelWriter<TWrite>` and `ChannelReader<TRead>`, so the C# consumer
+    passes a `Chan<int>` to `Fill` with no `.Writer` and compiles.
+
+    The spelling test is removed: being channel-shaped on both sides is the
+    whole precondition, which is ADR-0158 identity applied consistently —
+    `chan[T]` **is** `Channel<T>`, so which of the two names appears in the
+    source is not a fact any rule may branch on. The lattice above is unchanged:
+    an element mismatch, `in` ↔ `out`, directional → bidirectional, and
+    anything targeting the constructed class all still decline.
+
+    **One consequence reaches beyond the bug, and it is a convergence, not a
+    divergence.** Written in CLR names, the `chan[T]` → `out chan[T]` row reads:
+    a `Channel<T>` converts implicitly to a `ChannelWriter<T>` or a
+    `ChannelReader<T>`, whoever authored it. That is C#'s own rule —
+    `Channel<TWrite, TRead>` declares exactly those two implicit operators — and
+    G# was the language that did not have it, because the operators live on an
+    imported base class the conversion classifier never consulted and the
+    lattice was refusing to look at an imported operand. So a G# program can now
+    hand a plain BCL `Channel<T>` to a C# API taking a `ChannelWriter<T>`,
+    matching what C# has always allowed; the matrix's rows govern what that
+    handle can then do. The lattice, not the operator, is the mechanism — G#
+    reaches the same pairs by the rule it already had.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

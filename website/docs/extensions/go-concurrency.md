@@ -149,7 +149,13 @@ Console.WriteLine(d)
 `ChannelReader<T>`, `out chan[T]` is `ChannelWriter<T>`), so any channel
 coming from C# or a NuGet package flows into a `chan[T]` parameter with no
 adapter — and a `chan[T]` can be handed to any C# API that wants a
-`Channel<T>`. What `chan[T](…)` constructs is the runtime's
+`Channel<T>`, a `ChannelWriter<T>`, or a `ChannelReader<T>`: the narrowing to
+a directional handle is the same implicit conversion whether the target was
+written `out chan[T]` in G# or `ChannelWriter<T>` in C#, and it holds across
+assemblies, so a library can publish a channel in its public surface. C#
+allows the same narrowing — `Channel<TWrite, TRead>` declares implicit
+operators to `ChannelWriter<TWrite>` and `ChannelReader<TRead>` — so neither
+language needs an explicit `.Writer` or `.Reader` at the call. What `chan[T](…)` constructs is the runtime's
 `Gsharp.Concurrency.Chan<T>` subclass, which is where `Length()` (a racy
 snapshot, hence a method) and `Capacity` (fixed for the channel's life,
 hence a property) live. Foreign channels are supported through the public

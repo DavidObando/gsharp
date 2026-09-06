@@ -3134,11 +3134,25 @@ public sealed class Conversion
     private static bool TryClassifyChannelConversion(TypeSymbol? from, TypeSymbol? to, out Conversion conversion)
     {
         conversion = Conversion.None;
-        if (from is not ChannelTypeSymbol && to is not ChannelTypeSymbol)
-        {
-            return false;
-        }
 
+        // Issue #3976: the lattice is a fact about the TYPES, not about how the
+        // author spelled them. It used to require at least one side to be a
+        // `ChannelTypeSymbol` — a channel type clause written in this
+        // compilation — which quietly made every channel assembly-local.
+        // Neither side is a type clause once a channel has been through
+        // metadata or through inference: errata 3 gives `let ch = chan[T](n)`
+        // the static type of the runtime class `Chan[T]`, and a channel in an
+        // imported signature comes back as the BCL type it binds to
+        // (`chan[T]` -> `Channel<T>`, `out chan[T]` -> `ChannelWriter<T>`,
+        // `in chan[T]` -> `ChannelReader<T>`). So an inferred channel local
+        // could not be passed to any imported channel parameter, and errata 3's
+        // promise that the class name "surfaces only in hovers" was false
+        // wherever the target came from another assembly. Being channel-shaped
+        // on both sides is the whole precondition; ADR-0158 identity says
+        // `chan[T]` IS `Channel<T>`, so asking which name was used is the
+        // inconsistency, not the safeguard. The lattice below is untouched: an
+        // element mismatch, `in` <-> `out`, directional -> bidirectional, and
+        // anything targeting the constructed class still decline.
         if (!ChannelTypeSymbol.TryGetChannelShape(from, out var fromElement, out var fromDirection, out _)
             || !ChannelTypeSymbol.TryGetChannelShape(to, out var toElement, out var toDirection, out var toIsConstructed))
         {

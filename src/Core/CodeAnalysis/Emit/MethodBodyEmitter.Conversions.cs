@@ -77,30 +77,32 @@ internal sealed partial class MethodBodyEmitter
         // IS an `in chan[T]`). Narrowing a bidirectional handle to a
         // directional one fetches the reader/writer view.
         //
-        // Issue #3958: the target's nullable wrapper is looked through first.
-        // Every channel shape is a class, so `out chan[T]?` has the identical
-        // CLR representation as `out chan[T]` — the wrapper is a binder-level
-        // annotation, which is why `TryClassifyChannelConversion` declines a
-        // nullable operand and leaves the pair to the lifted rules. Those rules
-        // classify it fine; it was only this arm that missed it, and the
-        // conversion then fell through to the unsupported-conversion throw. The
-        // source needs no unwrapping here: `TryGetChannelShape` already looks
-        // through one, which is what makes a nil channel's blocked-forever
-        // `select` arm work.
-        if (UnwrapReferenceNullable(conv.Type) is ChannelTypeSymbol targetChannel
+        // Both operands go through the one recognizer. Issue #3958: it looks
+        // through a nullable wrapper, so an `out chan[T]?` target lands here —
+        // every channel shape is a class, so the wrapper is a binder-level
+        // annotation over an identical CLR representation, which is why
+        // `TryClassifyChannelConversion` declines a nullable operand and leaves
+        // the pair to the lifted rules. Issue #3976: it also recognizes the
+        // IMPORTED spellings, so a target that came back from metadata as
+        // `ChannelWriter<T>`/`ChannelReader<T>`/`Channel<T>` — which is every
+        // channel in another assembly's signature — reaches the view emission
+        // instead of the unsupported-conversion throw below. Testing the target
+        // for `is ChannelTypeSymbol` asked which NAME the author wrote; the
+        // classifier no longer asks that, and neither does this.
+        if (ChannelTypeSymbol.TryGetChannelShape(conv.Type, out var targetElement, out var targetDirection, out _)
             && ChannelTypeSymbol.TryGetChannelShape(conv.Expression.Type, out _, out var sourceDirection, out _))
         {
             this.EmitExpression(conv.Expression);
-            if (sourceDirection == targetChannel.Direction)
+            if (sourceDirection == targetDirection)
             {
                 return;
             }
 
-            var elementClr = ResolveChannelElementClrType(targetChannel.ElementType);
+            var elementClr = ResolveChannelElementClrType(targetElement);
             var channelClr = typeof(System.Threading.Channels.Channel<>).MakeGenericType(elementClr);
-            var view = BclMember.Getter(channelClr, targetChannel.Direction == ChannelDirection.In ? "Reader" : "Writer");
+            var view = BclMember.Getter(channelClr, targetDirection == ChannelDirection.In ? "Reader" : "Writer");
             this.il.OpCode(ILOpCode.Callvirt);
-            this.il.Token(this.GetChannelMethodEntityHandle(view, targetChannel.ElementType));
+            this.il.Token(this.GetChannelMethodEntityHandle(view, targetElement));
             return;
         }
 
@@ -755,13 +757,15 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Issue #2840 / #2841: strips reference-nullable wrappers so the arms of
-    /// <see cref="EmitConversion"/> that classify on a representation see the
-    /// bare shape. A <see cref="NullableTypeSymbol"/> over a reference type is a
-    /// binder-level annotation that erases to the underlying type's CLR
-    /// representation, so a <c>D?</c> or <c>((P…) -&gt; R)?</c> slot
-    /// materialises byte-identically to its bare form — and so, issue #3958,
-    /// does an <c>out chan[T]?</c>, every channel shape being a class. Genuine
+    /// Issue #2840 / #2841: strips reference-nullable wrappers so the
+    /// delegate-materialisation arms of <see cref="EmitConversion"/> see the
+    /// bare function / delegate shape. (The channel arm above needs no help:
+    /// <see cref="ChannelTypeSymbol.TryGetChannelShape"/> looks through both
+    /// wrapper kinds itself.) A <see cref="NullableTypeSymbol"/> over a
+    /// reference type is a binder-level annotation that erases to the
+    /// underlying type's CLR representation, so a <c>D?</c> or
+    /// <c>((P…) -&gt; R)?</c> slot
+    /// materialises byte-identically to its bare form. Genuine
     /// <c>Nullable&lt;T&gt;</c> value shapes are left wrapped so they keep
     /// reaching the value-type arms.
     /// </summary>
