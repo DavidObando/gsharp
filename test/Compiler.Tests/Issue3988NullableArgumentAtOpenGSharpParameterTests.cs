@@ -87,14 +87,24 @@ public class Issue3988NullableArgumentAtOpenGSharpParameterTests
     private const int RunTimeout = 60_000;
 
     /// <summary>
-    /// The rows that must be REJECTED. The seven behavioural ones compiled with
-    /// NO diagnostic at all on the parent commit, while their closed siblings
-    /// reported GS0154 — that asymmetry is the issue. The two named
-    /// <c>control-…</c> were rejected on the parent too, and are carried
-    /// precisely to record what this fix did NOT turn red: a closed pair never
-    /// reaches the bypass, so a named delegate was always handled by
-    /// <c>Conversion.Classify</c>, whose predicate always named delegates.
+    /// The rows that must be REJECTED. The behavioural ones compiled with NO
+    /// diagnostic at all on the parent commit, while their closed siblings
+    /// reported GS0154 — that asymmetry is the issue. The rows named
+    /// <c>control-…</c> were rejected on the parent too, and are carried to
+    /// record what this fix did NOT turn red.
     /// </summary>
+    /// <remarks>
+    /// Review finding (Copilot on PR #3999): an earlier version of this comment
+    /// said named delegates and structural function types "were never affected",
+    /// which was too broad and is corrected here. Only the CLOSED pair was
+    /// already rejected — a <c>D?</c> at a <c>D</c> parameter mentions no type
+    /// parameter, so it never reaches the bypass and
+    /// <c>Conversion.Classify</c> answered it all along. An OPEN generic
+    /// delegate <c>D[T]? -> D[T]</c> and an open structural function
+    /// <c>((T) -> T)? -> (T) -> T</c> DO leave the substituted parameter open,
+    /// so they take the bypass and it is this fix that rejects them. Both are
+    /// now behavioural rows, measured red on the parent.
+    /// </remarks>
     /// <returns>Name, source, and the diagnostic the case must report.</returns>
     public static IEnumerable<object[]> RejectedCases()
     {
@@ -240,6 +250,55 @@ public class Issue3988NullableArgumentAtOpenGSharpParameterTests
             """,
             "GS0154",
             "chan[T]?",
+        };
+
+        // An OPEN generic named delegate. `D[T]` still mentions a type
+        // parameter, so the substituted parameter takes the bypass this fix
+        // changes — this is the delegate arm of the unified predicate reached
+        // where the `ClrType` fallback cannot answer.
+        yield return new object[]
+        {
+            "an-open-generic-delegate-is-rejected",
+            """
+            package P
+            import System
+
+            delegate D[T](x T) T;
+
+            func takesD[T](d D[T]) int32 {
+                return 1
+            }
+
+            func fD[T](d D[T]?) int32 {
+                return takesD[T](d)
+            }
+
+            Console.WriteLine("x")
+            """,
+            "GS0154",
+            "D[T]?",
+        };
+
+        // An OPEN structural function type, likewise.
+        yield return new object[]
+        {
+            "an-open-structural-function-type-is-rejected",
+            """
+            package P
+            import System
+
+            func takesFn[T](f (T) -> T) int32 {
+                return 1
+            }
+
+            func fFn[T](f ((T) -> T)?) int32 {
+                return takesFn[T](f)
+            }
+
+            Console.WriteLine("x")
+            """,
+            "GS0154",
+            "((T) -> T)?",
         };
 
         // A named DELEGATE was ALREADY rejected on the parent — a `D?` at a
@@ -598,6 +657,153 @@ public class Issue3988NullableArgumentAtOpenGSharpParameterTests
                     + "run-time `ChannelClosedException: close of nil channel`. Log:\n"
                     + appLog);
             Assert.Contains("GS0154", appLog, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Review finding (Copilot on PR #3999): the null-safety gate is a SHAPE
+    /// test, and shape alone does not establish that dropping the <c>?</c>
+    /// would make the call work. Where it would not, GS0154 named a parameter
+    /// the argument could never satisfy and prescribed <c>!!</c>, which cannot
+    /// help.
+    /// </summary>
+    /// <remarks>
+    /// <para>Two things are asserted. The call must NOT report GS0154, because
+    /// nullability is not why it failed; and it must NOT report GS0266 either,
+    /// because there is no ambiguity to disambiguate — the first attempt at
+    /// this fix declined the gate and fell through to exactly that false
+    /// ambiguity, which is why the truthful GS0267 is asserted by id.</para>
+    /// <para>The defect is OLDER than the predicate unification that exposed
+    /// it: the `string?` row misattributed identically on the parent commit,
+    /// through the <c>ClrType</c> fallback that has answered for <c>string</c>
+    /// since #1552. Both are repaired.</para>
+    /// </remarks>
+    /// <param name="name">The case name.</param>
+    /// <param name="source">The G# source.</param>
+    [Theory]
+    [InlineData(
+        "an-open-nullable-channel-against-unrelated-overloads",
+        """
+        package P
+        import System
+
+        func f(ch chan[string]) int32 {
+            return 1
+        }
+
+        func f(xs []string) int32 {
+            return 2
+        }
+
+        func caller[T](c chan[T]?) int32 {
+            return f(c)
+        }
+
+        Console.WriteLine("x")
+        """)]
+    [InlineData(
+        "a-closed-nullable-channel-against-unrelated-overloads",
+        """
+        package P
+        import System
+
+        func f(ch chan[string]) int32 {
+            return 1
+        }
+
+        func f(xs []string) int32 {
+            return 2
+        }
+
+        func caller(c chan[int32]?) int32 {
+            return f(c)
+        }
+
+        Console.WriteLine("x")
+        """)]
+    [InlineData(
+        "a-nullable-string-against-unrelated-overloads-the-pre-existing-case",
+        """
+        package P
+        import System
+
+        func g(a chan[string]) int32 {
+            return 1
+        }
+
+        func g(b []int32) int32 {
+            return 2
+        }
+
+        func caller(s string?) int32 {
+            return g(s)
+        }
+
+        Console.WriteLine("x")
+        """)]
+    public void WhenDroppingTheAnnotationCannotHelp_TheDiagnosticDoesNotBlameNullability(
+        string name,
+        string source)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_3988_attr_").FullName;
+        try
+        {
+            var appPath = Path.Combine(tempDir, name + ".dll");
+            var appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe");
+
+            Assert.False(File.Exists(appPath), $"'{name}' must not compile. Log:\n{appLog}");
+
+            Assert.DoesNotContain("GS0154", appLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS0266", appLog, StringComparison.Ordinal);
+            Assert.Contains("GS0267", appLog, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The other half of the same rule: when dropping the annotation WOULD make
+    /// the call work, GS0154 must still be exactly what is reported, naming the
+    /// parameter and both types. The narrowing above must not have made the
+    /// gate timid.
+    /// </summary>
+    [Fact]
+    public void WhenDroppingTheAnnotationWouldHelp_Gs0154IsStillReported()
+    {
+        const string Source = """
+            package P
+            import System
+
+            func f(ch chan[string]) int32 {
+                return 1
+            }
+
+            func f(xs []string) int32 {
+                return 2
+            }
+
+            func caller(c chan[string]?) int32 {
+                return f(c)
+            }
+
+            Console.WriteLine("x")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_3988_attr_ok_").FullName;
+        try
+        {
+            var appPath = Path.Combine(tempDir, "GateStillFires.dll");
+            var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
+
+            Assert.False(File.Exists(appPath), $"the call must not compile. Log:\n{appLog}");
+            Assert.Contains("GS0154", appLog, StringComparison.Ordinal);
+            Assert.Contains("chan[string]?", appLog, StringComparison.Ordinal);
         }
         finally
         {

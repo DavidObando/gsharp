@@ -3106,8 +3106,33 @@ implementation had to refine it.
     discriminator was never open-vs-closed ELEMENT, as the issue assumed: a
     `chan[Pair]?` over a same-compilation `Pair` reported GS0154 all along, and
     so did a `chan[T]?` at a non-generic method of a generic class, which takes
-    a different path. It was open-vs-closed PARAMETER, and `([]T)?` at `[]T`
-    and a reference-constrained `T?` at `T` had the identical hole.
+    a different path. It was open-vs-closed PARAMETER, and `([]T)?` at `[]T`,
+    `([4]T)?` at `[4]T`, an open generic delegate `D[T]?` at `D[T]`, an open
+    structural function `((T) -> T)?` at `(T) -> T`, and a
+    reference-constrained `T?` at `T` all had the identical hole. Only the
+    CLOSED forms of the delegate and function shapes were already rejected —
+    those mention no type parameter, never reach the bypass, and
+    `Conversion.Classify` answered them all along (review finding, PR #3999).
+
+    One further correction the review forced, and it is not confined to this
+    fix. The gate is a SHAPE test on both sides, and shape alone does not
+    establish that dropping the `?` would make the call work. Where it would
+    not, GS0154 named a parameter the argument could never satisfy and
+    prescribed `!!`, which cannot help: `func f(ch chan[string])` beside
+    `func f(xs []string)`, called with a `chan[T]?`, reported
+    `GS0154 … requires 'chan[string]' … was given 'chan[T]?'`. That defect is
+    OLDER than this unification — a `string?` against the same overload set
+    misattributed identically on the parent, through the `ClrType` fallback
+    that has answered for `string` since #1552 — so the delegation widened
+    which shapes reach it rather than creating it. The gate now requires the
+    argument's NON-nullable form to actually reach the parameter. Declining
+    alone was measured to be worse, not better: the untouched arity set then
+    ties in the betterness ranking and the call is reported GS0266,
+    "ambiguous … disambiguate with explicit types", which is false and is the
+    very outcome #1552's gate was introduced to prevent. So a narrow companion
+    routes an argument that reaches no candidate in EITHER form to the truthful
+    GS0267 the caller already emits for an empty set, while the general
+    wholly-unsatisfiable set keeps GS0266 exactly as before.
 
     **Both halves are load-bearing, in the opposite order from the one filed.**
     The bypass now makes an exception for `IsNullableReferenceGateRejected`,
