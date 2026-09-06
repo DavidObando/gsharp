@@ -196,6 +196,41 @@ public sealed class ReferenceResolver : IDisposable
                     ? (IEnumerable<string>)warm.Keys
                     : this.typeNameIndex.Value.Keys),
             LazyThreadSafetyMode.ExecutionAndPublication);
+
+        // Issue #4023: a `map[K, V]` whose key or value is an IMPORTED type
+        // must build its backing `Dictionary<K, V>` inside THIS resolver's
+        // reflection context — a host `typeof(Dictionary<,>)` closed over a
+        // MetadataLoadContext argument answers an unusable
+        // `TypeBuilderInstantiation` and the map loses its whole member
+        // surface. `MapTypeSymbol` is a process-wide interned symbol with no
+        // resolver of its own, so publish the projection here, keyed weakly by
+        // each assembly this resolver can name; the map then looks it up by
+        // the assembly its imported key or value came from.
+        //
+        // ONLY a MetadataLoadContext resolver registers. Review feedback on
+        // #4034: this constructor also serves `WithRuntimeReferences`, whose
+        // `assemblies` include process-lifetime HOST assemblies. A
+        // `ConditionalWeakTable` keeps its VALUE alive for as long as its key
+        // is, so registering a bound `this.MapClrTypeToReferences` under a key
+        // that never dies would root this resolver — and, through it, the
+        // collectible `DriverReferenceLoadContext` it holds — forever, so the
+        // context could never unload. There is nothing to gain either way: a
+        // runtime-loaded type IS a host `RuntimeType`, so `MakeClrType` takes
+        // its host fast path and never consults a projector. `metadataContext`
+        // is the exact discriminator: `Default()` and `WithRuntimeReferences`
+        // both pass it null, and only `WithReferences` supplies one. Every
+        // assembly an MLC resolver holds was loaded THROUGH that context —
+        // including the BCL host-fallback paths, which `WithReferences` routes
+        // through `LoadFromPath(mlc, host)` rather than the host loader — so
+        // each key here dies with the context, and the projector value dies
+        // with it.
+        if (metadataContext != null)
+        {
+            foreach (var assembly in assemblies)
+            {
+                MapTypeSymbol.RegisterReferenceProjector(assembly, this.MapClrTypeToReferences);
+            }
+        }
     }
 
     private sealed class NotFoundSentinel

@@ -402,18 +402,36 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
+            // Issue #4023: take the overload's parameter types from the
+            // dictionary's OWN generic arguments rather than from the map
+            // symbol's key/value ClrTypes. Now that a map over an imported
+            // key or value carries a context-correct closed
+            // `Dictionary<K, V>` (MapTypeSymbol.TryMakeClrTypeInReferenceContext),
+            // the two can disagree about reflection context — a
+            // MetadataLoadContext `Dictionary<string, ImportedBase>` asked for
+            // an overload described by the HOST `typeof(string)` answers
+            // `ArgumentException: Type must be a type provided by the
+            // MetadataLoadContext`, which surfaced as GS9998 on a plain
+            // `m[k]`. The carrier's own arguments are in the carrier's context
+            // by construction. The catch keeps both cross-context shapes on
+            // the symbolic MemberRef rather than crashing.
             MethodInfo? tryGet;
             try
             {
+                var dictionaryArguments = dictType.IsGenericType && !dictType.IsGenericTypeDefinition
+                    ? dictType.GetGenericArguments()
+                    : null;
+                var keyParameter = dictionaryArguments is { Length: 2 }
+                    ? dictionaryArguments[0]
+                    : Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation");
+                var valueParameter = dictionaryArguments is { Length: 2 }
+                    ? dictionaryArguments[1]
+                    : Invariant.Required(mapType.ValueType.ClrType, "a map value has a CLR representation");
                 tryGet = dictType.GetMethod(
                     "TryGetValue",
-                    new[]
-                    {
-                        Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation"),
-                        Invariant.Required(mapType.ValueType.ClrType, "a map value has a CLR representation").MakeByRefType(),
-                    });
+                    new[] { keyParameter, valueParameter.MakeByRefType() });
             }
-            catch (NotSupportedException)
+            catch (Exception e) when (e is NotSupportedException or ArgumentException)
             {
                 tryGet = null;
             }
