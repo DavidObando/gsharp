@@ -206,6 +206,35 @@ public class Issue4000SymbolicTupleAtImportedGenericMethodTests
             new[] { "objpair:5:o", "objpair:6:p" },
         };
 
+        // INFERENCE. Review feedback on #4019 widened the recovery to every
+        // tuple-shaped argument, so this is the row that proves the widening
+        // did not swallow the ordinary case: with no explicit type arguments
+        // the method type argument is inferred from the tuple itself, the
+        // recovered parameter is the CLOSED `(int32, string)`, and
+        // `TrySubstituteParameterTypeFromMethodTypeArgs` returns null for it
+        // (it demands a parameter that still `ContainsTypeParameter` or
+        // `ContainsSameCompilationUserType`). The argument therefore falls
+        // through to `GetClrParameterTargetType` exactly as before.
+        yield return new object[]
+        {
+            "an-inferred-type-argument-still-binds",
+            """
+            package P
+            import System
+            import Interop
+
+            Console.WriteLine(Probes.FirstOf((9, "z")))
+            Console.WriteLine(Probes.SecondOf(("q", 7)))
+            Console.WriteLine(Probes.NestedOf((1, (2, "n"))))
+
+            let p = (5, "v")
+            Console.WriteLine(Probes.FirstOf(p))
+
+            Console.WriteLine(Probes.FirstOf((3, 4)))
+            """,
+            new[] { "9:z", "7:q", "1:2:n", "5:v", "3:4" },
+        };
+
         // Fully concrete: nothing erased, nothing to recover, unchanged.
         yield return new object[]
         {
@@ -220,6 +249,110 @@ public class Issue4000SymbolicTupleAtImportedGenericMethodTests
             """,
             new[] { "9:z", "7:q" },
         };
+    }
+
+    /// <summary>
+    /// The MIRROR of the reported defect, found in review on #4019: a CONCRETE
+    /// tuple at a SYMBOLIC method slot. These used to compile and emit IL
+    /// ILVerify rejects; they are now refused.
+    /// </summary>
+    /// <returns>Case name, G# source, expected diagnostic id.</returns>
+    public static IEnumerable<object[]> RejectedCases()
+    {
+        // The reviewer's shape, measured on this branch before the widening:
+        // compiled, ran, printed `9:z`, and ilverify reported
+        // [found ValueTuple`2<int32,object>] [expected ValueTuple`2<int32,T0>]
+        // at `bad`'s offset 0x01 — the argument was pushed with NO conversion
+        // at all (its own type IS the erased target), straight at a MethodSpec
+        // closed over the real `T`. The source-side guard the first fix used —
+        // "recover only when the ARGUMENT's elements are symbolic" — cannot see
+        // this: the question that decides both directions is what the SLOT is.
+        yield return new object[]
+        {
+            "a-concrete-tuple-does-not-reach-a-symbolic-slot",
+            """
+            package P
+            import System
+            import Interop
+
+            func bad[T](pair (int32, object)) string {
+                return Probes.FirstOf[T](pair)
+            }
+
+            Console.WriteLine(bad[string]((9, "z")))
+            """,
+            "GS0155",
+        };
+
+        // The same mirror with the open element FIRST, so the refusal is not
+        // an artefact of one position.
+        yield return new object[]
+        {
+            "a-concrete-tuple-does-not-reach-a-symbolic-slot-in-the-first-position",
+            """
+            package P
+            import System
+            import Interop
+
+            func bad[T](pair (object, int32)) string {
+                return Probes.SecondOf[T](pair)
+            }
+
+            Console.WriteLine(bad[string](("q", 7)))
+            """,
+            "GS0155",
+        };
+
+        // A tuple LITERAL whose element is a real type, at a slot still open:
+        // `(int32, string)` is not a `(int32, T)` for an unresolved `T`.
+        // `ValueTuple<...>` is INVARIANT, so element-wise identity is the only
+        // relation there is — the same rule #3987 and #3984 already apply in
+        // the constructor and `: base(...)` positions.
+        yield return new object[]
+        {
+            "a-concrete-element-does-not-reach-an-open-slot",
+            """
+            package P
+            import System
+            import Interop
+
+            func bad[T](value T) string {
+                return Probes.FirstOf[T]((9, "z"))
+            }
+
+            Console.WriteLine(bad[int32](1))
+            """,
+            "GS0155",
+        };
+    }
+
+    /// <summary>
+    /// The mirror of the reported defect is refused rather than emitting IL
+    /// that does not verify.
+    /// </summary>
+    /// <param name="name">The case name.</param>
+    /// <param name="source">The G# source.</param>
+    /// <param name="expectedId">The diagnostic id the log must carry.</param>
+    [Theory]
+    [MemberData(nameof(RejectedCases))]
+    public void AConcreteTupleAtASymbolicSlot_IsRefused(string name, string source, string expectedId)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4000_neg_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+
+            var appPath = Path.Combine(tempDir, name + ".dll");
+            var appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
+
+            Assert.False(File.Exists(appPath), $"'{name}' must not compile. Log:\n{appLog}");
+            Assert.Contains(expectedId, appLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     /// <summary>

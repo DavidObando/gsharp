@@ -361,8 +361,12 @@ public class Issue4006ErasedClassSurrogateApplicabilityTests
 
         // ADR-0148 projection at an ASSIGNMENT, onto an imported CLR target
         // built through its public member surface. This is the arm of
-        // `Conversion.Classify` that reports `StructuralProjection`, whose
-        // `Exists` is what the narrowed callback now consults.
+        // `Conversion.Classify` that reports `StructuralProjection` — the
+        // conversion layer performing the projection the row above only asks
+        // applicability about, and the reason the erased-argument gate takes
+        // `Conversion.Classify(...).Exists` as its verdict rather than
+        // second-guessing the planner: a real projection EXISTS, so the gate
+        // lets it through.
         yield return new object[]
         {
             "a-genuine-projection-onto-an-imported-clr-target-still-lowers",
