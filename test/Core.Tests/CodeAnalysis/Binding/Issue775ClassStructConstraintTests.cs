@@ -36,6 +36,19 @@ First[string](""hi"")
     }
 
     [Fact]
+    public void ClassConstraint_ObjectArgument_Accepted()
+    {
+        var source = @"
+func Required[T class](x T?) T -> x!!
+let value object? = ""ok""
+Required(value).ToString()
+";
+        var result = Evaluate(source);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("ok", result.Value);
+    }
+
+    [Fact]
     public void ClassConstraint_ValueTypeArgument_Diagnoses()
     {
         var source = @"
