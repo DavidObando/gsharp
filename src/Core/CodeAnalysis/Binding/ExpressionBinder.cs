@@ -1375,8 +1375,13 @@ internal sealed partial class ExpressionBinder
     private MethodInfo? GetVisibleGetter(PropertyInfo property)
         => ClrMemberVisibility.GetVisibleGetter(property, CanAccessInternalsOf(property.DeclaringType));
 
+    private MethodInfo? GetVisibleGetter(PropertyInfo property, bool fromDerivedType)
+        => fromDerivedType
+            ? ClrMemberVisibility.GetDerivedVisibleGetter(property, CanAccessInternalsOf(property.DeclaringType))
+            : ClrMemberVisibility.GetVisibleGetter(property, CanAccessInternalsOf(property.DeclaringType));
+
     /// <summary>
-    /// Issue #3705: the setter sibling of <see cref="GetVisibleGetter"/>.
+    /// Issue #3705: the setter sibling of <see cref="GetVisibleGetter(PropertyInfo)"/>.
     /// </summary>
     /// <param name="property">The imported CLR property.</param>
     /// <returns>The callable setter, or <see langword="null"/>.</returns>
@@ -2790,19 +2795,19 @@ internal sealed partial class ExpressionBinder
 
         switch (member)
         {
-            case PropertyInfo clrProp when clrProp.CanRead:
+            case PropertyInfo clrProp when GetVisibleGetter(clrProp, fromDerivedType: true) != null:
                 bound = new BoundClrPropertyAccessExpression(
                     null,
                     receiver,
                     clrProp,
-                    GetInheritedClrMemberType(receiver.Type, clrProp, clrProp.PropertyType));
+                    GetInheritedClrMemberType(receiver.Type, clrProp));
                 return true;
             case FieldInfo clrFld:
                 bound = new BoundClrPropertyAccessExpression(
                     null,
                     receiver,
                     clrFld,
-                    GetInheritedClrMemberType(receiver.Type, clrFld, clrFld.FieldType));
+                    GetInheritedClrMemberType(receiver.Type, clrFld));
                 return true;
             default:
                 return false;
@@ -2879,52 +2884,24 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
+    /// <summary>
+    /// Resolves an inherited imported property or field through the same
+    /// receiver-substitution and declaration-nullability readers as direct CLR
+    /// member access. This is the shared read-side sibling of
+    /// <see cref="TryGetWritableClrMember(MemberInfo?, TypeSymbol?, out Type?, out TypeSymbol?, out bool, bool)"/>.
+    /// </summary>
     private static TypeSymbol GetInheritedClrMemberType(
         TypeSymbol receiverType,
-        MemberInfo member,
-        Type reflectedMemberType)
-    {
-        if (receiverType is StructSymbol receiverStruct)
+        MemberInfo member)
+        => member switch
         {
-            for (StructSymbol? current = receiverStruct; current != null; current = current.BaseClass)
-            {
-                if (current.ImportedBaseType is not ImportedTypeSymbol importedBase
-                    || importedBase.OpenDefinition is not { } openDefinition
-                    || importedBase.TypeArguments.IsDefaultOrEmpty
-                    || member.DeclaringType == null
-                    || !member.DeclaringType.IsConstructedGenericType
-                    || member.DeclaringType.GetGenericTypeDefinition() != openDefinition)
-                {
-                    continue;
-                }
-
-                MemberInfo? openMember = openDefinition
-                    .GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-                    .FirstOrDefault(candidate =>
-                        candidate.MetadataToken == member.MetadataToken
-                        && candidate.Module == member.Module);
-                Type? openMemberType = openMember switch
-                {
-                    PropertyInfo property => property.PropertyType,
-                    FieldInfo field => field.FieldType,
-                    _ => null,
-                };
-                if (openMemberType != null)
-                {
-                    var symbolic = MemberLookup.MapOpenClrTypeToSymbolic(
-                        openMemberType,
-                        openDefinition,
-                        importedBase.TypeArguments);
-                    if (symbolic != TypeSymbol.Error)
-                    {
-                        return symbolic;
-                    }
-                }
-            }
-        }
-
-        return TypeSymbol.FromClrType(reflectedMemberType);
-    }
+            PropertyInfo property => MemberLookup.GetClrPropertyTypeSymbol(
+                receiverType,
+                property,
+                projectOnlyWhenSymbolicallyRequired: true),
+            FieldInfo field => MemberLookup.GetClrFieldTypeSymbol(receiverType, field),
+            _ => TypeSymbol.Error,
+        };
 
     /// <summary>
     /// Issue #1584: resolves a bare (unqualified) identifier inside an instance
@@ -2957,8 +2934,8 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        member = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name);
-        member ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name);
+        member = ClrTypeUtilities.SafeGetInheritedInstanceProperty(clrBase, name, CanAccessInternalsOf);
+        member ??= ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, name, CanAccessInternalsOf);
         if (member == null)
         {
             return false;

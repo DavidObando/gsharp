@@ -168,7 +168,7 @@ open class A : HashAlgorithm {
     protected func HashCore(a []uint8, s int32, c int32) { }
     protected func HashFinal() []uint8 {
         this.HashValue = []uint8{}
-        return this.HashValue
+        return this.HashValue ?? []uint8{}
     }
 }
 ";

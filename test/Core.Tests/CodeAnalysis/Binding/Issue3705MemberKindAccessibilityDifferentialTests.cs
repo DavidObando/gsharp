@@ -39,9 +39,10 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// while passing for the method and property/field-read rows.
 /// </para>
 /// <para>
-/// The guard rails are half the point: <c>private</c> and <c>protected</c>
-/// must stay invisible to a friend, and a non-friend must see neither those
-/// nor <c>internal</c>.
+/// The guard rails are half the point: outside a derived type,
+/// <c>private</c> and <c>protected</c> stay invisible to a friend, and a
+/// non-friend sees neither those nor <c>internal</c>. Derived-type probes below
+/// separately assert the CLR family-access rules.
 /// </para>
 /// </summary>
 public sealed class Issue3705MemberKindAccessibilityDifferentialTests
@@ -69,6 +70,8 @@ public sealed class Issue3705MemberKindAccessibilityDifferentialTests
             internal int InternalField;
             private int PrivateField;
             protected int ProtectedField;
+            protected internal int ProtectedInternalField;
+            private protected int PrivateProtectedField;
 
             public event Action PublicEvent;
             internal event Action InternalEvent;
@@ -79,11 +82,16 @@ public sealed class Issue3705MemberKindAccessibilityDifferentialTests
             internal int InternalProperty { get; set; }
             private int PrivateProperty { get; set; }
             protected int ProtectedProperty { get; set; }
+            protected internal int ProtectedInternalProperty { get; set; }
+            private protected int PrivateProtectedProperty { get; set; }
+            public int PublicSetterPrivateGetter { private get; set; }
 
             public int PublicMethod() => 1;
             internal int InternalMethod() => 1;
             private int PrivateMethod() => 1;
             protected int ProtectedMethod() => 1;
+            protected internal int ProtectedInternalMethod() => 1;
+            private protected int PrivateProtectedMethod() => 1;
 
             public int this[int index] { get => 0; set { } }
             internal int this[string index] { get => 0; set { } }
@@ -165,6 +173,186 @@ public sealed class Issue3705MemberKindAccessibilityDifferentialTests
         }
     }
 
+    /// <summary>
+    /// Inherited-property lookup must test the accessor used by the operation,
+    /// not whichever accessor reflection happens to return first.
+    /// </summary>
+    /// <returns>The derived-member probe cases.</returns>
+    public static IEnumerable<object[]> DerivedMemberCases()
+    {
+        yield return new object[] { "this-protected-read", "let value = this.ProtectedProperty", StrangerAssemblyName, true };
+        yield return new object[] { "bare-protected-read", "let value = ProtectedProperty", StrangerAssemblyName, true };
+        yield return new object[] { "base-protected-read", "let value = base.ProtectedProperty", StrangerAssemblyName, true };
+        yield return new object[] { "this-protected-write", "this.ProtectedProperty = 7", StrangerAssemblyName, true };
+        yield return new object[] { "bare-protected-write", "ProtectedProperty = 7", StrangerAssemblyName, true };
+        yield return new object[] { "base-protected-write", "base.ProtectedProperty = 7", StrangerAssemblyName, true };
+        yield return new object[] { "this-protected-method", "let value = this.ProtectedMethod()", StrangerAssemblyName, true };
+        yield return new object[] { "bare-protected-method", "let value = ProtectedMethod()", StrangerAssemblyName, true };
+        yield return new object[] { "base-protected-method", "let value = base.ProtectedMethod()", StrangerAssemblyName, true };
+        yield return new object[] { "protected-internal-property", "let value = this.ProtectedInternalProperty", StrangerAssemblyName, true };
+        yield return new object[] { "protected-internal-field", "let value = this.ProtectedInternalField", StrangerAssemblyName, true };
+        yield return new object[] { "protected-internal-method", "let value = this.ProtectedInternalMethod()", StrangerAssemblyName, true };
+        yield return new object[] { "this-private-getter-read", "let value = this.PublicSetterPrivateGetter", StrangerAssemblyName, false };
+        yield return new object[] { "bare-private-getter-read", "let value = PublicSetterPrivateGetter", StrangerAssemblyName, false };
+        yield return new object[] { "base-private-getter-read", "let value = base.PublicSetterPrivateGetter", StrangerAssemblyName, false };
+        yield return new object[] { "this-public-setter-write", "this.PublicSetterPrivateGetter = 7", StrangerAssemblyName, true };
+        yield return new object[] { "bare-public-setter-write", "PublicSetterPrivateGetter = 7", StrangerAssemblyName, true };
+        yield return new object[] { "base-public-setter-write", "base.PublicSetterPrivateGetter = 7", StrangerAssemblyName, true };
+
+        yield return new object[] { "this-friend-internal-property-read", "let value = this.InternalProperty", FriendAssemblyName, true };
+        yield return new object[] { "bare-friend-internal-property-read", "let value = InternalProperty", FriendAssemblyName, true };
+        yield return new object[] { "base-friend-internal-property-read", "let value = base.InternalProperty", FriendAssemblyName, true };
+        yield return new object[] { "this-friend-internal-property-write", "this.InternalProperty = 7", FriendAssemblyName, true };
+        yield return new object[] { "bare-friend-internal-property-write", "InternalProperty = 7", FriendAssemblyName, true };
+        yield return new object[] { "base-friend-internal-property-write", "base.InternalProperty = 7", FriendAssemblyName, true };
+        yield return new object[] { "this-friend-internal-field-read", "let value = this.InternalField", FriendAssemblyName, true };
+        yield return new object[] { "bare-friend-internal-field-read", "let value = InternalField", FriendAssemblyName, true };
+        yield return new object[] { "this-friend-internal-field-write", "this.InternalField = 7", FriendAssemblyName, true };
+        yield return new object[] { "bare-friend-internal-field-write", "InternalField = 7", FriendAssemblyName, true };
+        yield return new object[] { "this-friend-internal-method", "let value = this.InternalMethod()", FriendAssemblyName, true };
+        yield return new object[] { "bare-friend-internal-method", "let value = InternalMethod()", FriendAssemblyName, true };
+        yield return new object[] { "base-friend-internal-method", "let value = base.InternalMethod()", FriendAssemblyName, true };
+        yield return new object[] { "friend-private-protected-property", "let value = this.PrivateProtectedProperty", FriendAssemblyName, false };
+        yield return new object[] { "friend-private-protected-field", "let value = this.PrivateProtectedField", FriendAssemblyName, false };
+        yield return new object[] { "friend-private-protected-method", "let value = this.PrivateProtectedMethod()", FriendAssemblyName, false };
+
+        yield return new object[] { "nonfriend-internal-property-read", "let value = this.InternalProperty", StrangerAssemblyName, false };
+        yield return new object[] { "nonfriend-internal-property-write", "this.InternalProperty = 7", StrangerAssemblyName, false };
+        yield return new object[] { "nonfriend-internal-field-read", "let value = this.InternalField", StrangerAssemblyName, false };
+        yield return new object[] { "nonfriend-internal-field-write", "this.InternalField = 7", StrangerAssemblyName, false };
+        yield return new object[] { "nonfriend-internal-method", "let value = this.InternalMethod()", StrangerAssemblyName, false };
+        yield return new object[] { "nonfriend-private-protected-property", "let value = this.PrivateProtectedProperty", StrangerAssemblyName, false };
+        yield return new object[] { "nonfriend-private-protected-field", "let value = this.PrivateProtectedField", StrangerAssemblyName, false };
+        yield return new object[] { "nonfriend-private-protected-method", "let value = this.PrivateProtectedMethod()", StrangerAssemblyName, false };
+        yield return new object[] { "private-method", "let value = this.PrivateMethod()", StrangerAssemblyName, false };
+    }
+
+    /// <param name="name">The probe name.</param>
+    /// <param name="body">The derived method body.</param>
+    /// <param name="consumer">The consuming assembly name.</param>
+    /// <param name="expectedVisible">Whether the selected member operation is visible.</param>
+    [Theory]
+    [MemberData(nameof(DerivedMemberCases))]
+    public void InheritedMember_Uses_OperationSpecific_Visibility(
+        string name,
+        string body,
+        string consumer,
+        bool expectedVisible)
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, LibraryAssemblyName, CSharpLibrarySource);
+            var result = CompileGSharp(
+                $$"""
+                package {{consumer}}
+                import Issue3705.Library
+
+                class Derived : Surface {
+                    func Probe() {
+                        {{body}}
+                    }
+                }
+                """,
+                consumer,
+                libraryPath);
+
+            Assert.True(
+                result.Success == expectedVisible,
+                $"{name}: expected visible={expectedVisible}: {Describe(result)}");
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// Friendship belongs to the member's declaring assembly, not the
+    /// immediate imported base through which reflection found it.
+    /// </summary>
+    [Fact]
+    public void InheritedInternalVisibility_Uses_The_DeclaringAssembly()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var friendAncestor = EmitCSharpLibrary(
+                directory,
+                "Issue3705.FriendAncestor",
+                """
+                using System.Runtime.CompilerServices;
+                [assembly: InternalsVisibleTo("Issue3705.Friend")]
+                namespace Issue3705.FriendAncestor;
+                public class Ancestor
+                {
+                    internal int ValueField = 1;
+                    internal int ValueProperty => 2;
+                }
+                """);
+            var neutralMiddle = EmitCSharpLibrary(
+                directory,
+                "Issue3705.NeutralMiddle",
+                """
+                namespace Issue3705.NeutralMiddle;
+                public class Middle : Issue3705.FriendAncestor.Ancestor { }
+                """,
+                friendAncestor);
+
+            var visible = CompileGSharp(
+                """
+                package Issue3705.Friend
+                import Issue3705.NeutralMiddle
+                class Derived : Middle {
+                    func Read() int32 -> this.ValueField + this.ValueProperty
+                }
+                """,
+                FriendAssemblyName,
+                friendAncestor,
+                neutralMiddle);
+            Assert.True(visible.Success, Describe(visible));
+
+            var noFriendAncestor = EmitCSharpLibrary(
+                directory,
+                "Issue3705.NoFriendAncestor",
+                """
+                namespace Issue3705.NoFriendAncestor;
+                public class Ancestor
+                {
+                    internal int ValueField = 1;
+                    internal int ValueProperty => 2;
+                }
+                """);
+            var friendlyMiddle = EmitCSharpLibrary(
+                directory,
+                "Issue3705.FriendlyMiddle",
+                """
+                using System.Runtime.CompilerServices;
+                [assembly: InternalsVisibleTo("Issue3705.Friend")]
+                namespace Issue3705.FriendlyMiddle;
+                public class Middle : Issue3705.NoFriendAncestor.Ancestor { }
+                """,
+                noFriendAncestor);
+
+            var hidden = CompileGSharp(
+                """
+                package Issue3705.Friend
+                import Issue3705.FriendlyMiddle
+                class Derived : Middle {
+                    func Read() int32 -> this.ValueField + this.ValueProperty
+                }
+                """,
+                FriendAssemblyName,
+                noFriendAncestor,
+                friendlyMiddle);
+            Assert.False(hidden.Success);
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
     private static string BuildSource(string kind, string accessibility, string consumer)
     {
         // The index argument selects the overload whose accessibility is under
@@ -230,12 +418,18 @@ public sealed class Issue3705MemberKindAccessibilityDifferentialTests
             emit.Diagnostics.Select(d => new DiagnosticInfo(d.Id, d.Message)).ToArray());
     }
 
-    private static string EmitCSharpLibrary(string directory, string assemblyName, string source)
+    private static string EmitCSharpLibrary(
+        string directory,
+        string assemblyName,
+        string source,
+        params string[] additionalReferences)
     {
         var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
                 ?.Split(Path.PathSeparator)
                 ?? Array.Empty<string>())
             .Where(File.Exists)
+            .Concat(additionalReferences)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path));
         var compilation = CSharpCompilation.Create(
             assemblyName,

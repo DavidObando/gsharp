@@ -23,11 +23,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// for the declaring assembly.
 /// </para>
 /// <para>
-/// Only metadata <c>assembly</c> accessibility is ever admitted:
-/// <c>private</c>, <c>protected</c>, <c>protected internal</c> and
-/// <c>private protected</c> members stay invisible however the friendship is
-/// declared, and a consumer that was not named in an
-/// <c>InternalsVisibleTo</c> sees none of them.
+/// General member lookup admits only <c>public</c> and friend-visible
+/// <c>assembly</c> members. The explicitly derived-type helpers additionally
+/// admit the CLR family accessibilities available from a subclass; private
+/// members remain invisible.
 /// </para>
 /// </summary>
 public static class ClrMemberVisibility
@@ -52,12 +51,34 @@ public static class ClrMemberVisibility
     public static bool IsVisible(MethodBase? method, bool includeInternal)
         => method != null && (method.IsPublic || (includeInternal && method.IsAssembly));
 
+    /// <summary>Whether a method or accessor is visible from a derived type.</summary>
+    /// <param name="method">The candidate method, or <see langword="null"/>.</param>
+    /// <param name="includeInternal">Whether friend internals are visible.</param>
+    /// <returns><see langword="true"/> when the method may be called from the derived type.</returns>
+    public static bool IsVisibleFromDerived(MethodBase? method, bool includeInternal)
+        => method != null
+            && (method.IsPublic
+                || method.IsFamily
+                || method.IsFamilyOrAssembly
+                || (includeInternal && method.IsAssembly));
+
     /// <summary>Whether a field is visible to the consuming compilation.</summary>
     /// <param name="field">The candidate field, or <see langword="null"/>.</param>
     /// <param name="includeInternal">Whether friend internals are visible.</param>
     /// <returns><see langword="true"/> when the field may be bound here.</returns>
     public static bool IsVisible(FieldInfo? field, bool includeInternal)
         => field != null && (field.IsPublic || (includeInternal && field.IsAssembly));
+
+    /// <summary>Whether a field is visible from a derived type.</summary>
+    /// <param name="field">The candidate field, or <see langword="null"/>.</param>
+    /// <param name="includeInternal">Whether friend internals are visible.</param>
+    /// <returns><see langword="true"/> when the field may be accessed from the derived type.</returns>
+    public static bool IsVisibleFromDerived(FieldInfo? field, bool includeInternal)
+        => field != null
+            && (field.IsPublic
+                || field.IsFamily
+                || field.IsFamilyOrAssembly
+                || (includeInternal && field.IsAssembly));
 
     /// <summary>
     /// Whether a property is visible — i.e. at least one of its accessors is.
@@ -94,6 +115,13 @@ public static class ClrMemberVisibility
     public static MethodInfo? GetVisibleSetter(PropertyInfo property, bool includeInternal)
         => Visible(property.GetSetMethod(nonPublic: true), includeInternal);
 
+    /// <summary>Returns the property's getter when callable from a derived type.</summary>
+    /// <param name="property">The imported CLR property.</param>
+    /// <param name="includeInternal">Whether friend internals are visible.</param>
+    /// <returns>The callable getter, or <see langword="null"/>.</returns>
+    public static MethodInfo? GetDerivedVisibleGetter(PropertyInfo property, bool includeInternal)
+        => VisibleFromDerived(property.GetGetMethod(nonPublic: true), includeInternal);
+
     /// <summary>
     /// Issue #3813: the setter as seen from <b>inside a type that derives from
     /// the property's declaring type</b>, where CLR <c>family</c> accessibility
@@ -114,21 +142,7 @@ public static class ClrMemberVisibility
     /// <param name="includeInternal">Whether friend internals are visible.</param>
     /// <returns>The setter callable from a derived type, or <see langword="null"/>.</returns>
     public static MethodInfo? GetDerivedVisibleSetter(PropertyInfo property, bool includeInternal)
-    {
-        var setter = property.GetSetMethod(nonPublic: true);
-        if (setter == null)
-        {
-            return null;
-        }
-
-        // `family` (protected) and `famorassem` (protected internal) are always
-        // reachable from a derived type; `famandassem` (private protected) only
-        // adds the same-assembly/friend requirement on top.
-        var reachable = setter.IsFamily
-            || setter.IsFamilyOrAssembly
-            || (includeInternal && setter.IsFamilyAndAssembly);
-        return reachable ? setter : Visible(setter, includeInternal);
-    }
+        => VisibleFromDerived(property.GetSetMethod(nonPublic: true), includeInternal);
 
     /// <summary>Returns the event's <c>add</c> accessor when it is visible here.</summary>
     /// <param name="eventInfo">The event to inspect.</param>
@@ -146,4 +160,7 @@ public static class ClrMemberVisibility
 
     private static MethodInfo? Visible(MethodInfo? accessor, bool includeInternal)
         => IsVisible(accessor, includeInternal) ? accessor : null;
+
+    private static MethodInfo? VisibleFromDerived(MethodInfo? accessor, bool includeInternal)
+        => IsVisibleFromDerived(accessor, includeInternal) ? accessor : null;
 }
