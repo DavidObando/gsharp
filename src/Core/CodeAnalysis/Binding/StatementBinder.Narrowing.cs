@@ -1203,41 +1203,35 @@ internal sealed partial class StatementBinder
             or BoundNodeKind.IndirectAssignmentExpression;
 
     /// <summary>
-    /// Issue #1123: whether <paramref name="type"/> is a reference-like type —
-    /// an interface, a user class, or a CLR-backed class/interface. User value
-    /// structs (null <c>ClrType</c> during binding, <c>IsClass == false</c>)
-    /// and CLR value types / pointers / by-refs are excluded. Mirrors the
-    /// reference-likeness rule the conversion classifier uses for nullable
-    /// reference targets.
+    /// Issue #1123: whether <paramref name="type"/> is a reference-like type,
+    /// which is what scopes assignment narrowing to shapes whose narrowed read
+    /// needs no special emit — reference nullability being purely an
+    /// annotation. User value structs (null <c>ClrType</c> during binding,
+    /// <c>IsClass == false</c>) and CLR value types / pointers / by-refs stay
+    /// excluded, because the narrowed-read emit path does not unwrap
+    /// <c>Nullable&lt;T&gt;</c>.
     /// </summary>
+    /// <remarks>
+    /// Issue #3988: this was the FOURTH hand-copy of
+    /// <see cref="Conversion.IsReferenceLikeTarget"/> — its own comment said it
+    /// mirrored "the reference-likeness rule the conversion classifier uses" —
+    /// and it had drifted the same way the overload resolver's copy had. It
+    /// named interfaces, user classes and reference-constrained type parameters
+    /// but no STRUCTURAL shape, so a slice, array, named delegate, function
+    /// type or channel whose element leaves its <c>ClrType</c> null did not
+    /// narrow. That became load-bearing the moment #3988 made a nullable
+    /// argument at an open non-nullable parameter an ERROR: the diagnostic
+    /// names narrowing as one of its remedies, and for exactly those shapes
+    /// `s = source` did not lift while `if s != nil` did — measured, `var s
+    /// chan[T]? = nil; s = source; takesOpen[T](s)` reported GS0154 with no way
+    /// to satisfy it. Every shape this adds is a genuine CLR reference, so the
+    /// narrowed read stays the metadata-only no-op the #2159 arm below already
+    /// relied on. The copy is gone; this DELEGATES.
+    /// </remarks>
+    /// <param name="type">The candidate type.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is reference-like.</returns>
     private static bool IsReferenceLikeType(TypeSymbol type)
-    {
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        if (type is StructSymbol structSymbol)
-        {
-            return structSymbol.IsClass;
-        }
-
-        // Issue #2159: a type parameter constrained to a reference type
-        // (`class`) or a reference base class is a reference type at the CLR
-        // level, so `T?` → `T` is a metadata-only narrowing that emits a
-        // verifiable read — matching the reference-nullable case above.
-        if (type is TypeParameterSymbol typeParameter)
-        {
-            return typeParameter.HasReferenceTypeConstraint || typeParameter.ClassConstraint != null;
-        }
-
-        if (type?.ClrType is { } clrBacking)
-        {
-            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
-        }
-
-        return false;
-    }
+        => type != null && Conversion.IsReferenceLikeTarget(type);
 
     /// <summary>
     /// ADR-0069 / issue #700: structurally determine whether the given

@@ -1743,37 +1743,28 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
-    /// Issue #1552: the reference-like notion used by the null-safety gate,
-    /// mirroring <c>Conversion.IsReferenceLikeTarget</c>. A type is reference-
-    /// like when it is a user interface, a user <c>class</c> (StructSymbol with
-    /// IsClass), the built-in <c>string</c>, or an imported/CLR-backed type
-    /// whose backing is a class/interface. User classes/interfaces carry a null
-    /// ClrType during binding and are matched by their symbol kind.
+    /// Issue #1552: the reference-like notion used by the null-safety gate.
+    /// Issue #3988: this WAS a hand-copied mirror of
+    /// <see cref="Conversion.IsReferenceLikeTarget"/> — its own doc comment
+    /// said so — and it had drifted. It listed only interfaces, user
+    /// <c>class</c>es, <c>string</c> and the <c>ClrType</c> fallback, while
+    /// the original had grown arms for every structural shape that IS a
+    /// reference type while a type-parameter element leaves its
+    /// <c>ClrType</c> null: slices, fixed and rectangular arrays, named
+    /// delegates, structural function types, reference-constrained type
+    /// parameters and (since #3985) channels. A copy whose comment claims to
+    /// mirror another is the #3705 shape, so the copy is gone: this now
+    /// DELEGATES, and the two answers cannot disagree again.
     /// </summary>
+    /// <remarks>
+    /// The dropped <c>TypeSymbol.String</c> arm was already redundant —
+    /// <c>string</c>'s <c>ClrType</c> is <c>System.String</c>, a class, so the
+    /// delegate's own <c>ClrType</c> fallback answers it identically.
+    /// </remarks>
+    /// <param name="type">The candidate type.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is reference-like.</returns>
     private static bool IsReferenceLikeType(TypeSymbol type)
-    {
-        if (type is InterfaceSymbol)
-        {
-            return true;
-        }
-
-        if (type is StructSymbol { IsClass: true })
-        {
-            return true;
-        }
-
-        if (type == TypeSymbol.String)
-        {
-            return true;
-        }
-
-        if (type?.ClrType is { } clrBacking)
-        {
-            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
-        }
-
-        return false;
-    }
+        => type != null && Conversion.IsReferenceLikeTarget(type);
 
     /// <summary>
     /// Issue #1552: when every arity-applicable candidate was filtered out by

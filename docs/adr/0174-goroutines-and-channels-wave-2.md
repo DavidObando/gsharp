@@ -2953,7 +2953,9 @@ implementation had to refine it.
     neither channels nor slices nor delegates, so at a **G#-declared**
     parameter the open `chan[T]?` is silently accepted where `chan[int32]?`
     reports GS0154. That is the same drift one layer over, it predates this fix
-    and is unchanged by it, and it is filed as issue #3988.
+    and is unchanged by it, and it is filed as issue #3988. **Closed by errata
+    47** — which also corrects the cause: the mirror was the oracle, not the
+    gate, and unifying it alone was measured to change nothing.
 
 43. **A channel element declared in the current compilation (issue #3982).** A
     C#-authored `CountSoFar[T](this ChannelReader[T])` bound on a `chan[int32]`
@@ -3070,6 +3072,91 @@ implementation had to refine it.
     become bind-time errors. Second, the `chan[T]?` asymmetry errata 40 records
     — refused where the closed `chan[int32]?` is accepted, filed as #3985 — is
     visible in this position too and is not addressed here.
+
+47. **A nullable channel at an OPEN G#-declared parameter was silently
+    accepted, and it was not the predicate errata 42 pointed at (issue
+    #3988).** Errata 42 closed by naming one neighbouring asymmetry and leaving
+    it alone: `OverloadResolver`'s own `IsReferenceLikeType`, whose comment
+    claims to mirror `Conversion.IsReferenceLikeTarget`, lists neither channels
+    nor slices nor delegates, so a `chan[T]?` argument reached a non-nullable
+    G#-declared `chan[T]` parameter with no diagnostic while the closed
+    `chan[int32]?` correctly reported GS0154. That description of the SYMPTOM
+    is exactly right and is confirmed here. Its description of the CAUSE is
+    not, and this errata corrects it.
+
+    **The mirror is not the gate.** The #1552 null-safety gate that consulted
+    that predicate during applicability was REMOVED by issue #1627 — the
+    comment sitting where it used to be says so — because `Conversion.Classify`
+    now rejects an `S?` argument at a non-null-tolerant `S` parameter at the
+    classification source, consistently in every `BindConversion` position.
+    What the predicate still feeds is the empty-candidate-set diagnostic
+    ATTRIBUTION fallback, not applicability. Measured: unifying the mirror
+    alone, rebuilt, changed nothing whatsoever — the repro compiled silently
+    exactly as before, and the probe's eight GS0154s stayed eight.
+
+    **What the cause actually is.** `OverloadResolver.CallBinding`'s
+    argument-conversion loop skips `Conversion.Classify` outright when the
+    substituted parameter type still mentions a type parameter. That bypass is
+    defensible for the general lattice — an open pair has no closed answer to
+    give — but it also swallowed the one rule that needs no closed answer.
+    Kotlin-model null safety is a pure SHAPE question, and both halves are
+    decidable on an open type: `chan[T]` is a reference in every
+    instantiation, and a `[T class]` parameter is one by constraint. So the
+    discriminator was never open-vs-closed ELEMENT, as the issue assumed: a
+    `chan[Pair]?` over a same-compilation `Pair` reported GS0154 all along, and
+    so did a `chan[T]?` at a non-generic method of a generic class, which takes
+    a different path. It was open-vs-closed PARAMETER, and `([]T)?` at `[]T`
+    and a reference-constrained `T?` at `T` had the identical hole.
+
+    **Both halves are load-bearing, in the opposite order from the one filed.**
+    The bypass now makes an exception for `IsNullableReferenceGateRejected`,
+    and that gate bottoms out on `IsReferenceLikeType` — so left as a stale
+    copy it would have fired for none of the kinds that reach it. The mirror is
+    not the cause, but it is the oracle, and it is now a delegation to
+    `Conversion.IsReferenceLikeTarget` rather than a restatement of it. Its
+    dropped `TypeSymbol.String` arm was already redundant: `string`'s `ClrType`
+    is `System.String`, which the fallback answers identically.
+
+    **This was a soundness hole, not a missing message.** Measured on the
+    parent commit, `fOpen[int32](nil)` compiled with no diagnostic, IL-VERIFIED,
+    and threw `ChannelClosedException: close of nil channel` at run time.
+
+    **It is a breaking change**, and deliberately so — it is what makes the two
+    spellings agree, which is all errata 42 and issue #3985 ever asked for. The
+    remedies the diagnostic points at are `!!`, a nullable-typed parameter, and
+    ordinary `!= nil` smart-cast narrowing; all three are asserted. An
+    UNCONSTRAINED `T?` is deliberately NOT gated, because
+    `IsReferenceLikeTarget` answers false for it: its `T?` erases to
+    `Nullable<T>` and it keeps the value-type rules.
+
+    **`IsNominalReferenceShape` is deliberately NOT merged into this family.**
+    It is a sibling, not a copy: it exists to EXCLUDE G#'s structural shapes
+    from the #3843 widening arm because a `castclass` cannot name them, where
+    `IsReferenceLikeTarget` exists to INCLUDE them. Merging the two would
+    silently re-admit the issue #2850 structural-function materialisation that
+    predicate's own comment records as load-bearing.
+
+    **A fourth copy turned up, and it had to be unified too.**
+    `StatementBinder.Narrowing.IsReferenceLikeType` also says it mirrors the
+    conversion classifier's rule, and had drifted the same way — interfaces,
+    user classes and reference-constrained type parameters, but no structural
+    shape. That became load-bearing the moment the diagnostic above started
+    firing, because the diagnostic names narrowing as one of its remedies.
+    Measured with only the overload-resolution half applied, `var s chan[T]? =
+    nil; s = source; takesOpen[T](s)` reported GS0154 **with no way to satisfy
+    it**: ASSIGNMENT narrowing did not lift a structural shape, though
+    CONDITION narrowing (`if s != nil`) did. Every shape the delegation adds is
+    a genuine CLR reference, so the narrowed read stays the metadata-only no-op
+    the predicate's own #2159 arm already relied on, and the row that pins it
+    executes and IL-verifies.
+
+    **Two shapes the fix deliberately does not reach.** `map[K, V]?` at
+    `map[K, V]` and `(sequence[T])?` at `sequence[T]` are still accepted,
+    because `IsReferenceLikeTarget` ITSELF omits those two symbol kinds — the
+    same drift one layer deeper, now in the original rather than in a copy.
+    Adding them changes conversion and emission for every `map` and `sequence`
+    in the language, not only this gate, so it needs its own witness and is
+    issue #3997.
 
 ## Addendum A — The ten patterns, three ways
 
