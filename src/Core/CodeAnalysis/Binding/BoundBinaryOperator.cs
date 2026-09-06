@@ -45,7 +45,8 @@ public sealed record BoundBinaryOperator
         TypeSymbol leftType,
         TypeSymbol rightType,
         TypeSymbol resultType,
-        bool isReferenceEquality = false)
+        bool isReferenceEquality = false,
+        bool isDelegateCombination = false)
     {
         SyntaxKind = syntaxKind;
         Kind = kind;
@@ -53,6 +54,7 @@ public sealed record BoundBinaryOperator
         RightType = rightType;
         Type = resultType;
         IsReferenceEquality = isReferenceEquality;
+        IsDelegateCombination = isDelegateCombination;
     }
 
     /// <summary>
@@ -82,6 +84,9 @@ public sealed record BoundBinaryOperator
 
     /// <summary>Gets a value indicating whether equality compares reference identity.</summary>
     internal bool IsReferenceEquality { get; }
+
+    /// <summary>Gets a value indicating whether this operator combines or removes delegates.</summary>
+    internal bool IsDelegateCombination { get; }
 
     /// <summary>
     /// Binds a syntax kind and a type symbol to the corresponding bound binary operator, or
@@ -396,6 +401,30 @@ public sealed record BoundBinaryOperator
             ? BoundBinaryOperatorKind.Equals
             : BoundBinaryOperatorKind.NotEquals;
         return new BoundBinaryOperator(syntaxKind, kind, leftType, rightType, TypeSymbol.Bool, isReferenceEquality: true);
+    }
+
+    /// <summary>Creates the built-in delegate <c>+</c> or <c>-</c> operator.</summary>
+    /// <param name="syntaxKind">The <c>+</c> or <c>-</c> token.</param>
+    /// <param name="leftType">The left operand type.</param>
+    /// <param name="rightType">The right operand type.</param>
+    /// <param name="resultType">The concrete, optionally nullable delegate result type.</param>
+    /// <returns>The delegate-combination operator.</returns>
+    internal static BoundBinaryOperator MakeDelegateCombination(
+        SyntaxKind syntaxKind,
+        TypeSymbol leftType,
+        TypeSymbol rightType,
+        TypeSymbol resultType)
+    {
+        var kind = syntaxKind == SyntaxKind.PlusToken
+            ? BoundBinaryOperatorKind.Sum
+            : BoundBinaryOperatorKind.Difference;
+        return new BoundBinaryOperator(
+            syntaxKind,
+            kind,
+            leftType,
+            rightType,
+            resultType,
+            isDelegateCombination: true);
     }
 
     /// <summary>

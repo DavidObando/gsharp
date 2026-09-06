@@ -489,16 +489,30 @@ internal sealed partial class ExpressionBinder
                     if (GetInheritedClrBaseType(structSym) is System.Type inheritedBaseClr)
                     {
                         var memberName = ne.IdentifierToken.ValueText;
-                        var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(inheritedBaseClr, memberName);
-                        if (clrProp != null && clrProp.CanRead)
+                        var clrProp = ClrTypeUtilities.SafeGetInheritedInstanceProperty(
+                            inheritedBaseClr,
+                            memberName,
+                            CanAccessInternalsOf);
+                        if (clrProp != null && GetVisibleGetter(clrProp, fromDerivedType: true) != null)
                         {
-                            return new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+                            return new BoundClrPropertyAccessExpression(
+                                null,
+                                receiver,
+                                clrProp,
+                                GetInheritedClrMemberType(receiver.Type, clrProp));
                         }
 
-                        var clrFld = ClrTypeUtilities.SafeGetInheritedInstanceField(inheritedBaseClr, memberName);
+                        var clrFld = ClrTypeUtilities.SafeGetInheritedInstanceField(
+                            inheritedBaseClr,
+                            memberName,
+                            CanAccessInternalsOf);
                         if (clrFld != null)
                         {
-                            return new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
+                            return new BoundClrPropertyAccessExpression(
+                                null,
+                                receiver,
+                                clrFld,
+                                GetInheritedClrMemberType(receiver.Type, clrFld));
                         }
                     }
 
@@ -624,13 +638,21 @@ internal sealed partial class ExpressionBinder
                         var clrProp = ClrTypeUtilities.SafeGetProperty(clrBaseIface, ifaceMemberName, BindingFlags.Public | BindingFlags.Instance);
                         if (clrProp != null && clrProp.GetIndexParameters().Length == 0 && clrProp.CanRead)
                         {
-                            return new BoundClrPropertyAccessExpression(null, receiver, clrProp, TypeSymbol.FromClrType(clrProp.PropertyType));
+                            return new BoundClrPropertyAccessExpression(
+                                null,
+                                receiver,
+                                clrProp,
+                                GetInheritedClrMemberType(receiver.Type, clrProp));
                         }
 
                         var clrFld = ClrTypeUtilities.SafeGetField(clrBaseIface, ifaceMemberName, BindingFlags.Public | BindingFlags.Instance);
                         if (clrFld != null)
                         {
-                            return new BoundClrPropertyAccessExpression(null, receiver, clrFld, TypeSymbol.FromClrType(clrFld.FieldType));
+                            return new BoundClrPropertyAccessExpression(
+                                null,
+                                receiver,
+                                clrFld,
+                                GetInheritedClrMemberType(receiver.Type, clrFld));
                         }
                     }
 

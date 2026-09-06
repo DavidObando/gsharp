@@ -182,7 +182,11 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundBinaryExpression binary:
-                if (binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
+                if (binary.Op.IsDelegateCombination)
+                {
+                    diagnostics.ReportExpressionTreeUnsupported(LocationOf(binary.Syntax), "a delegate combination operator");
+                }
+                else if (binary.Op.Kind == BoundBinaryOperatorKind.NullCoalesce
                     && binary.Left is BoundLiteralExpression { Value: null } or BoundDefaultExpression)
                 {
                     diagnostics.ReportExpressionTreeUnsupported(LocationOf(binary.Syntax), "a coalescing operator with a null/default left operand");

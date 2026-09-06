@@ -252,6 +252,21 @@ let expr Expression[Func[int32?, int32]] = (value int32?) -> value!!
         Assert.Contains(diagnostics, d => d.Id == "GS0473");
     }
 
+    [Fact]
+    public void DelegateCombination_IsRejectedInsideExpressionTree()
+    {
+        var diagnostics = GetDiagnostics(@"
+import System
+import System.Linq.Expressions
+
+let expr Expression[Func[Action, Action, Action]] = (left Action, right Action) -> left + right
+");
+
+        Assert.Contains(
+            diagnostics,
+            d => d.Id == "GS0473" && d.Message.Contains("delegate combination operator"));
+    }
+
     private static System.Collections.Immutable.ImmutableArray<Diagnostic> GetDiagnostics(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

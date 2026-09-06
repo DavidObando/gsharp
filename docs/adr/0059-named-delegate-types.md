@@ -82,6 +82,21 @@ For `public delegate ClickHandler(sender Object, e EventArgs) `:;
 2. Two *distinct* named delegates do **not** silently convert into each other, even when their shapes match. This mirrors CLR rules: `Action` and `ThreadStart` are unrelated even though both are `void()`. Going from one named delegate to another requires extracting the underlying function value (`var f func() = a; var b OtherDelegate = f`).
 3. Any named-delegate value widens implicitly to `System.Delegate` and `System.MulticastDelegate`, identical to the existing rule for `Action`/`Func` (`Conversion.cs:IsSystemDelegateBaseType`).
 
+### Delegate combination
+
+Issue #3792 adds the CLR/C# delegate `+`, `-`, `+=`, and `-=` operators outside
+event-subscription sites. Two operands of the same concrete delegate type
+(including structural function types and user-declared or imported named
+delegates) lower to `System.Delegate.Combine` / `System.Delegate.Remove`, then
+`castclass` back to that concrete delegate type. A compatible method group or
+structural function value is target-typed to the concrete delegate first.
+
+Both operands are nil-tolerant, matching the CLR helpers. Addition is nullable
+only when both operands may be nil; removal is always nullable because removing
+the last matching invocation yields nil. `System.Delegate` and
+`System.MulticastDelegate` themselves do not gain these operators, nor do
+different named delegate types merely because their signatures match.
+
 ### Why a separate `delegate` keyword
 
 `type Name = func(…) R` could in principle re-mean "emit a CLR delegate." It does not, because the existing `type Name = SomeOtherName` alias surface is *erased* at bind time (ADR-0058's words: "Aliases are not emitted into CIL"). Adding emit semantics to plain `type Name = func(…)` would silently change the meaning of existing code and conflict with users who rely on alias erasure to give a domain-specific name to a function shape without paying for a TypeDef. The `delegate` keyword keeps the two cases visually and semantically distinct:

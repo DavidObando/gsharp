@@ -747,17 +747,26 @@ public static class ClrTypeUtilities
     /// walking the CLR base chain and including non-public members whose
     /// accessibility is visible to a derived type — <c>public</c>,
     /// <c>protected</c> (Family), or <c>protected internal</c>
-    /// (FamilyOrAssembly). Private and (cross-assembly) internal fields are
-    /// excluded, mirroring the accessibility rule used for inherited CLR
-    /// methods in <c>CollectBaseClrMethodCandidates</c>. Reflection's
+    /// (FamilyOrAssembly), plus friend-visible <c>internal</c> and
+    /// <c>internal</c> when requested. Private and <c>private protected</c>
+    /// fields are excluded,
+    /// mirroring the accessibility rule used for inherited CLR methods in
+    /// <c>CollectBaseClrMethodCandidates</c>. Reflection's
     /// <see cref="Type.GetField(string, BindingFlags)"/> already surfaces
     /// inherited (non-<c>DeclaredOnly</c>) members, so a single tolerant probe
     /// covers the whole chain.
     /// </summary>
     /// <param name="type">The CLR base type to search (its base chain is walked by reflection).</param>
     /// <param name="name">The field name.</param>
+    /// <param name="canAccessInternalsOf">
+    /// Optional predicate that decides friend-internal access for the returned
+    /// field's declaring type.
+    /// </param>
     /// <returns>The matching visible inherited field, or <c>null</c> when none is found.</returns>
-    public static FieldInfo? SafeGetInheritedInstanceField(Type type, string name)
+    public static FieldInfo? SafeGetInheritedInstanceField(
+        Type type,
+        string name,
+        Func<Type?, bool>? canAccessInternalsOf = null)
     {
         if (type is null)
         {
@@ -765,7 +774,8 @@ public static class ClrTypeUtilities
         }
 
         var field = SafeGetField(type, name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-        if (field != null && (field.IsPublic || field.IsFamily || field.IsFamilyOrAssembly))
+        var includeInternal = canAccessInternalsOf?.Invoke(field?.DeclaringType) == true;
+        if (ClrMemberVisibility.IsVisibleFromDerived(field, includeInternal))
         {
             return field;
         }
@@ -777,15 +787,24 @@ public static class ClrTypeUtilities
     /// Issue #1582: looks up a non-indexer instance PROPERTY named
     /// <paramref name="name"/> inherited from <paramref name="type"/> (a
     /// CLR/metadata base class), walking the CLR base chain and including
-    /// members with a non-public accessor whose accessibility is visible to a
+    /// members with at least one accessor whose accessibility is visible to a
     /// derived type (<c>public</c>, <c>protected</c>, or
-    /// <c>protected internal</c>). See
+    /// <c>protected internal</c>), plus friend-visible <c>internal</c> and
+    /// <c>internal</c> when requested. Private and <c>private protected</c>
+    /// accessors are excluded. See
     /// <see cref="SafeGetInheritedInstanceField"/> for the accessibility rule.
     /// </summary>
     /// <param name="type">The CLR base type to search (its base chain is walked by reflection).</param>
     /// <param name="name">The property name.</param>
+    /// <param name="canAccessInternalsOf">
+    /// Optional predicate that decides friend-internal access for the returned
+    /// property's declaring type.
+    /// </param>
     /// <returns>The matching visible inherited property, or <c>null</c> when none is found.</returns>
-    public static PropertyInfo? SafeGetInheritedInstanceProperty(Type type, string name)
+    public static PropertyInfo? SafeGetInheritedInstanceProperty(
+        Type type,
+        string name,
+        Func<Type?, bool>? canAccessInternalsOf = null)
     {
         if (type is null)
         {
@@ -798,8 +817,9 @@ public static class ClrTypeUtilities
             return null;
         }
 
-        var accessor = property.GetGetMethod(nonPublic: true) ?? property.GetSetMethod(nonPublic: true);
-        if (accessor != null && (accessor.IsPublic || accessor.IsFamily || accessor.IsFamilyOrAssembly))
+        var includeInternal = canAccessInternalsOf?.Invoke(property.DeclaringType) == true;
+        if (ClrMemberVisibility.GetDerivedVisibleGetter(property, includeInternal) != null
+            || ClrMemberVisibility.GetDerivedVisibleSetter(property, includeInternal) != null)
         {
             return property;
         }
