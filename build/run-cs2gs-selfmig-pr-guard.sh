@@ -17,6 +17,12 @@
 #          16 apps red, gate 44 -> 28.
 #   #3905  #3882's src/Sdk/Gsharp.Runtime.Channels crashed gsc with a stack
 #          overflow, blinding 11 apps behind "no parseable diagnostics".
+#   #3978  #3972's new `out var` inside a `?.` call in
+#          tools/cs2gs/Cs2Gs.Pipeline did not translate; 3 banked apps red,
+#          and the `!!` ceiling breached as a knock-on because an app that
+#          fails to compile never reaches CompileStage's polish pass. THIS
+#          GUARD RAN AND PASSED on that PR — Pipeline was not in the guarded
+#          set. See the note above guard_apps.
 #
 # All three are the same shape: a *hot-core* project — one that most of the
 # corpus transitively references — stopped surviving its own migration, and
@@ -70,6 +76,10 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 #   src/Sdk/Gsharp.Runtime.Channels  #3905's root, and a ProjectReference
 #                                 leaf, so it costs this job only a couple of
 #                                 minutes. ADDED BY #3933, see below.
+#   tools/cs2gs/Cs2Gs.Pipeline    the OTHER cs2gs hub: Cli, Report and Tests
+#                                 all reference it. ADDED BY #3978, see below.
+#   tools/cs2gs/Cs2Gs.ProjectLoading  Pipeline's ProjectReference; here to keep
+#                                 the set closed, not because it is hot.
 #
 # ADDED BY #3933. Channels was deliberately absent through five PRs because
 # this guard runs translate -> compile -> ilverify -> test-parity and the app
@@ -83,16 +93,39 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # hazard has now fired four times (#3831, #3896, #3905, and #3915's rewrite
 # adding four unseen artifacts between #3916's base and its merge).
 #
+# ADDED BY #3978, and this one is a COVERAGE HOLE the guard had rather than a
+# deliberate omission. PR #3972 added an inline `out var` inside a `?.` call to
+# tools/cs2gs/Cs2Gs.Pipeline/TranslateStage.cs. This guard ran on that PR and
+# reported 6/6 PASSED — correctly, because every app it guards still migrated.
+# The modified project simply was not one of them, and the nightly gate then
+# went red with migrated Cs2Gs.Pipeline failing GS0125, taking Cs2Gs.Cli,
+# Cs2Gs.Report and Cs2Gs.Tests down as dependents (three banked greenApps) and
+# breaching the `!!` ceiling as a second-order effect, because
+# NullAssertionPolishPass lives in CompileStage and never runs for an app that
+# fails to compile.
+#
+# The lesson generalises past this one project: the set was closed DOWNWARD
+# from Cs2Gs.Translator (its reference closure) when the hazard is really "a
+# project many corpus apps reference". Pipeline is the second cs2gs hub —
+# Cs2Gs.Cli, Cs2Gs.Report and Cs2Gs.Tests all reference it — and it was
+# translate/compile/ilverify/test-parity green in gate run 33943018295, so it
+# is not a red-from-day-one addition. Cs2Gs.ProjectLoading comes with it only
+# to keep the set closed under ProjectReference (verify_closure below would
+# otherwise fail the run). The two add roughly one more app's worth of
+# translate + compile to a ~30-minute job.
+#
 # STILL DELIBERATELY ABSENT: tools/cs2gs/Cs2Gs.Tests, which #3836 names as the
 # natural next step. It has ~9 known migration failures and would be red by
 # construction until those clear — the same reasoning that kept Channels out
-# until today.
+# until #3933.
 guard_apps=(
   src/Analyzers/InternalAnalyzers/InternalAnalyzers.csproj
   src/Core/Core.csproj
   src/Formatting/GSharp.Formatting/GSharp.Formatting.csproj
   src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.csproj
   tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.csproj
+  tools/cs2gs/Cs2Gs.Pipeline/Cs2Gs.Pipeline.csproj
+  tools/cs2gs/Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.csproj
   tools/cs2gs/Cs2Gs.Translator/Cs2Gs.Translator.csproj
 )
 
