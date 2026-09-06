@@ -1671,7 +1671,37 @@ public sealed class Conversion
         // without this the CLR assignability check below would readmit the
         // very conversion the identity gate at the top of `ClassifyCore`
         // just declined.
-        if (RequiresSymbolicTypeArgumentIdentity(from)
+        //
+        // Issue #4024: that guard reads `from` ALONE, which sufficed while only
+        // `[N]T` was retained — every pair it had to stop carried a fixed array
+        // on BOTH sides. Once `[]T` is retained too the pair can be
+        // ASYMMETRIC: `List[[]int32]` -> `List[[3]int32]` has nothing
+        // length-bearing on the `from` side, so
+        // `RequiresSymbolicTypeArgumentIdentity` said no and the CLR
+        // assignability check below readmitted the exact conversion this issue
+        // is about (the mirror direction was already rejected, which is how the
+        // one-sidedness showed up). `IsRejectedFixedArrayShapeMismatch` is the
+        // already-established TWO-sided predicate — "both sides know their
+        // array shape and those shapes disagree" — and is shared with the
+        // #3962 variance guard, so the two cannot drift apart.
+        //
+        // Review finding 1: that predicate is written for the VARIANCE call
+        // site, where the two operands are already known to be corresponding
+        // type arguments. Read literally it is satisfied by any pair whose
+        // TARGET alone bears a fixed array — `object` against
+        // `List[[3]int32]`, say — because "known on both sides" only excludes
+        // metadata-recovered arrays; it does not require the other side to
+        // have an array shape at all. No program was found that reaches this
+        // line that way (an `object` source is classified by an earlier arm,
+        // and `cast[List[[3]int32]](o)` still compiles and runs — measured),
+        // so this is hardening rather than a fix. But the disjunct only ever
+        // needs to fire when BOTH sides carry a G#-native array spelling, so
+        // it says so, and cannot start swallowing a checked reference
+        // conversion if an earlier arm is ever reordered.
+        if ((RequiresSymbolicTypeArgumentIdentity(from)
+                || (TypeSymbol.ContainsSourceArrayShape(from)
+                    && TypeSymbol.ContainsSourceArrayShape(to)
+                    && IsRejectedFixedArrayShapeMismatch(from, to)))
             && to is ImportedTypeSymbol mismatchedConstructedTarget
             && TryGetConstructedGenericShape(mismatchedConstructedTarget, out _, out _))
         {

@@ -79,15 +79,20 @@ namespace GSharp.Compiler.Tests;
 /// silently accepted, because <c>[N]T -&gt; [M]T</c> is EXPLICIT by design
 /// (#3998's cast reinterprets, it does not resize). The leniency is now
 /// withdrawn for a <c>[N]T</c> target only, so both spellings agree.</para>
-/// <para><b>Deliberately still out of scope: the SLICE half.</b>
-/// <c>List[[]int32]</c> still converts to <c>List[[3]int32]</c>, because a
-/// SLICE type argument is erased to <c>T[]</c> by
-/// <c>Binder.ProjectGenericArgument</c> before any comparison can see it —
-/// sub-case 3 of the issue, a different mechanism from either half here, and
-/// the one #3962 declined because retaining it symbolically changes the
-/// representation of every <c>List[[]T]</c> in the corpus and bypasses the
-/// #1354 nullable-flags path. Filed as #4024, and pinned below and in the two
-/// sibling files.</para>
+/// <para><b>Sub-case 3, the SLICE half — out of scope here, closed by
+/// #4024.</b> <c>List[[]int32]</c> converted to <c>List[[3]int32]</c> because a
+/// SLICE type argument was erased to <c>T[]</c> by
+/// <c>Binder.ProjectGenericArgument</c> before any comparison could see it — a
+/// different mechanism from either half here, and the one #3962 declined
+/// because retaining it symbolically changes the representation of every
+/// <c>List[[]T]</c> in the corpus and bypasses the #1354 nullable-flags path.
+/// #4024 measured both concerns and did it: <c>ContainsSourceArrayShape</c>
+/// retains both G# array spellings at the four RETENTION gates, and the #2735
+/// guard, which read <c>from</c> alone, was widened to the two-sided
+/// predicate. THIS file's gates were not touched, and did not need to be:
+/// <c>[]T</c> to <c>T[]</c> is a faithful projection, so a slice never needed
+/// the symbolic rescue a <c>[N]T</c> did at a member slot. The row that pinned
+/// sub-case 3 is kept, flipped, in <see cref="FlippedByIssue4024Cases"/>.</para>
 /// </remarks>
 public class Issue4012GenericMemberSlotOverFixedArrayTests
 {
@@ -416,33 +421,22 @@ public class Issue4012GenericMemberSlotOverFixedArrayTests
             new[] { "1", "3" },
         };
 
-        // Sub-case 3, DELIBERATELY unchanged: a SLICE type argument is erased
-        // to `T[]` by `Binder.ProjectGenericArgument` before any comparison
-        // can see it, so `List[[]int32]` still reaches `List[[3]int32]`. The
-        // matching pins live in `Issue3998FixedArrayLengthConversionTests`
-        // (`residue-a-slice-type-argument-still-reaches-a-fixed-array-generic`)
-        // and `Issue3962GenericOverFixedArrayIdentityTests`
-        // (`slice-argument-still-reaches-a-fixed-array-generic`), and the gap
-        // itself is filed as #4024.
-        yield return new object[]
-        {
-            "residue-a-slice-type-argument-still-reaches-a-fixed-array-generic",
-            """
-            package P
-            import System
-            import System.Collections.Generic
-
-            func main2() {
-                var slice = List[[]int32]()
-                slice.Add([]int32{1, 2, 3})
-                var fixed3 List[[3]int32] = slice
-                Console.WriteLine(fixed3.Count.ToString())
-            }
-
-            main2()
-            """,
-            new[] { "1" },
-        };
+        // FLIPPED BY #4024, and moved to `FlippedByIssue4024Cases` below —
+        // `residue-a-slice-type-argument-still-reaches-a-fixed-array-generic`
+        // lived here, pinning sub-case 3 as deliberately unchanged. #4024
+        // retained the SLICE spelling at this PR's sibling gates — the four
+        // RETENTION gates in the binder, not the member-slot gates this file
+        // widened — so `List[[]int32]` and `List[[3]int32]` are now two types.
+        // Note what did NOT have to change with it: the entry gate and exit
+        // filter of `ConversionClassifier.TrySubstituteParameterTypeFromReceiver`
+        // still read `ContainsFixedLengthArray`, because `[]T` to `T[]` is a
+        // FAITHFUL projection and needs no symbolic rescue at a member slot.
+        // The row directly above — `List[[]int32]().Add([3]int32{…})` — is the
+        // proof, and is still green.
+        //
+        // The matching pins that flipped with it are
+        // `Issue3998FixedArrayLengthConversionTests.FlippedByIssue4024Cases`
+        // and `Issue3962GenericOverFixedArrayIdentityTests.FlippedByIssue4024Cases`.
 
         // A tuple type argument on the same receiver still projects the way
         // #3560/#4000 left it — the widened gate is additive, not a rewrite.
@@ -548,6 +542,50 @@ public class Issue4012GenericMemberSlotOverFixedArrayTests
     }
 
     /// <summary>
+    /// The row this file pinned as ACCEPTED residue — sub-case 3 — and #4024
+    /// turned into an error. Kept here, flipped rather than deleted, so the
+    /// change reads as deliberate.
+    /// </summary>
+    /// <remarks>
+    /// #4024 retained the SLICE spelling <c>[]T</c> as a symbolic generic type
+    /// argument, via <c>TypeSymbol.ContainsSourceArrayShape</c> at #3962's four
+    /// RETENTION gates in the binder. That is a different place from the two
+    /// gates this file widened: a source-spelled <c>List[[]int32]</c> used to
+    /// carry an EMPTY symbolic vector, which is exactly what a
+    /// metadata-recovered <c>List&lt;int[]&gt;</c> carries, so
+    /// <c>ContainsMetadataRecoveredArray</c> correctly kept the lenient CLR
+    /// comparison and there was nothing to compare. #4024 also widened the
+    /// #2735 guard in <c>Conversion.ClassifyCore</c>, which read <c>from</c>
+    /// alone — sufficient only while every pair it stopped carried a fixed
+    /// array on both sides. This file's own member-slot gates are UNCHANGED,
+    /// and <c>a-fixed-array-still-widens-to-a-slice-type-argument</c> in
+    /// <see cref="UnchangedCases"/> is the running proof.
+    /// </remarks>
+    /// <returns>Name, G# source, a substring the diagnostics must name.</returns>
+    public static IEnumerable<object[]> FlippedByIssue4024Cases()
+    {
+        yield return new object[]
+        {
+            "a-slice-type-argument-no-longer-reaches-a-fixed-array-generic",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func main2() {
+                var slice = List[[]int32]()
+                slice.Add([]int32{1, 2, 3})
+                var fixed3 List[[3]int32] = slice
+                Console.WriteLine(fixed3.Count.ToString())
+            }
+
+            main2()
+            """,
+            "Cannot convert type 'System.Collections.Generic.List[[]int32]' to 'System.Collections.Generic.List[[3]int32]'",
+        };
+    }
+
+    /// <summary>
     /// A projected fixed-array slot rejects a different shape, and says so.
     /// </summary>
     /// <param name="name">The case name.</param>
@@ -555,6 +593,7 @@ public class Issue4012GenericMemberSlotOverFixedArrayTests
     /// <param name="expectedMention">A substring the diagnostics must name.</param>
     [Theory]
     [MemberData(nameof(RejectedCases))]
+    [MemberData(nameof(FlippedByIssue4024Cases))]
     public void AProjectedFixedArraySlot_RejectsAnotherShape(string name, string source, string expectedMention)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_4012_neg_").FullName;

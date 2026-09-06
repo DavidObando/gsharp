@@ -65,13 +65,29 @@ namespace GSharp.Compiler.Tests;
 /// <para><b>Since then (#4012).</b> The member-projection gap is fixed too:
 /// the slot is now projected through the retained <c>[3]int32</c>, so the row
 /// this file pinned for it moved to
-/// <see cref="FlippedByIssue4012Cases"/>. What is left of the original residue
-/// is the SLICE-argument erasure alone, still pinned in
-/// <see cref="UnchangedBareCases"/> — <c>Binder.ProjectGenericArgument</c>
-/// erases a <c>[]T</c> type argument before any comparison can see it, and
-/// retaining it symbolically would change the representation of every
-/// <c>List[[]T]</c> in the corpus and bypass the #1354 nullable-flags path.
-/// Tracked as #4024.</para>
+/// <see cref="FlippedByIssue4012Cases"/>. What was left of the original
+/// residue was the SLICE-argument erasure alone.</para>
+/// <para><b>Since then (#4024).</b> That is now closed too, so the last
+/// residue row this file carried moved to
+/// <see cref="FlippedByIssue4024Cases"/>. This file declined it on the
+/// reasoning that retaining a slice type argument "changes the representation
+/// of every <c>List[[]T]</c> in the corpus" and bypasses the #1354
+/// nullable-flags path. Both halves were true and neither turned out to bite:
+/// #4024 measured every <c>.gs</c> under <c>samples/</c>, <c>src/Sdk/</c>,
+/// <c>bench/</c>, <c>e2etests/</c> and <c>test-assets/</c> and found the
+/// diagnostic output byte-identical, because a retained <c>[]T</c> fails every
+/// arm of <c>ImportedTypeSymbol.HasSubstitutableTypeArgument</c> just as a
+/// retained <c>[N]T</c> does, so no member projection moves; and the
+/// nullable-flags concern turned out to be empty, because a slice carrying an
+/// annotation (<c>[]string?</c>) was ALREADY retained through
+/// <c>RequiresSymbolicProjection</c>'s
+/// <c>ContainsReferenceNullableAnnotation</c> arm, so the arguments #4024
+/// newly diverts off that branch are exactly the ones with no annotation to
+/// lose (measured on the emitted <c>NullableAttribute</c> byte arrays, before
+/// and after). What #4024 DID have to add is
+/// the thing #3962 could not have seen: the #2735 guard reads <c>from</c>
+/// alone, which sufficed only while every pair it stopped carried a fixed
+/// array on both sides.</para>
 /// </remarks>
 public class Issue3962GenericOverFixedArrayIdentityTests
 {
@@ -779,29 +795,19 @@ public class Issue3962GenericOverFixedArrayIdentityTests
         // OUTCOME and wrong about the mechanism — they are two different
         // gates, and it took two PRs to shut both.
 
-        // Unchanged by #3998 as well, and for its own reason: a SLICE type
-        // argument is erased to `T[]` by `Binder.ProjectGenericArgument`
-        // before any comparison can see it, which is a different mechanism
-        // from the member gap above.
-        yield return new object[]
-        {
-            "slice-argument-still-reaches-a-fixed-array-generic",
-            """
-            package P
-            import System
-            import System.Collections.Generic
-
-            func main2() {
-                var slice = List[[]int32]()
-                slice.Add([]int32{1, 2, 3})
-                var fixed3 List[[3]int32] = slice
-                Console.WriteLine(fixed3.Count.ToString())
-            }
-
-            main2()
-            """,
-            new[] { "1" },
-        };
+        // FLIPPED BY #4024, and moved to `FlippedByIssue4024Cases` below —
+        // `slice-argument-still-reaches-a-fixed-array-generic` lived here.
+        // This file declined the SLICE half on the reasoning that retaining a
+        // slice type argument "changes the representation of every `List[[]T]`
+        // in the corpus". The representation claim was right; the risk it
+        // implied was not. #4024 measured the corpus — every `.gs` under
+        // `samples/`, `src/Sdk/`, `bench/`, `e2etests/` and `test-assets/` —
+        // and the diagnostic output is byte-identical before and after,
+        // because a retained `[]T` still fails every arm of
+        // `ImportedTypeSymbol.HasSubstitutableTypeArgument` and so no member
+        // projection moves. What retention buys is the ONE thing that was
+        // missing: a source-spelled `[]T` argument distinguishable from a
+        // reflected `T[]`.
     }
 
     /// <summary>
@@ -894,6 +900,48 @@ public class Issue3962GenericOverFixedArrayIdentityTests
     }
 
     /// <summary>
+    /// The row this file pinned as ACCEPTED behaviour and #4024 turned into an
+    /// error. Kept here, flipped rather than deleted, for the same reason
+    /// <see cref="FlippedByIssue3998Cases"/> exists.
+    /// </summary>
+    /// <remarks>
+    /// #4024 closed the SLICE half. This file retained <c>[N]T</c> as a
+    /// symbolic type argument but not <c>[]T</c>, which left
+    /// <c>List[[]int32]</c> with an EMPTY symbolic vector — indistinguishable
+    /// from a metadata-recovered <c>List&lt;int[]&gt;</c>, whose shape really
+    /// is unknowable — so <c>ContainsMetadataRecoveredArray</c> kept the
+    /// lenient CLR comparison and the two spellings converted freely.
+    /// <c>TypeSymbol.ContainsSourceArrayShape</c> now covers both spellings at
+    /// this file's four RETENTION gates; the comparison predicates below still
+    /// read <c>ContainsFixedLengthArray</c>, unchanged. #4024 also had to widen
+    /// the #2735 guard, which read <c>from</c> ALONE — sufficient only while
+    /// every pair it stopped carried a fixed array on both sides.
+    /// </remarks>
+    /// <returns>Name, G# source, a substring the diagnostics must name.</returns>
+    public static IEnumerable<object[]> FlippedByIssue4024Cases()
+    {
+        yield return new object[]
+        {
+            "slice-argument-no-longer-reaches-a-fixed-array-generic",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            func main2() {
+                var slice = List[[]int32]()
+                slice.Add([]int32{1, 2, 3})
+                var fixed3 List[[3]int32] = slice
+                Console.WriteLine(fixed3.Count.ToString())
+            }
+
+            main2()
+            """,
+            "Cannot convert type 'System.Collections.Generic.List[[]int32]' to 'System.Collections.Generic.List[[3]int32]'",
+        };
+    }
+
+    /// <summary>
     /// Every accepting case compiles, IL-verifies, runs, and prints what it
     /// claims.
     /// </summary>
@@ -967,6 +1015,7 @@ public class Issue3962GenericOverFixedArrayIdentityTests
     [MemberData(nameof(RejectedCases))]
     [MemberData(nameof(FlippedByIssue3998Cases))]
     [MemberData(nameof(FlippedByIssue4012Cases))]
+    [MemberData(nameof(FlippedByIssue4024Cases))]
     public void ADifferentFixedLength_IsADifferentType(string name, string source, string expectedMention)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3962_neg_").FullName;

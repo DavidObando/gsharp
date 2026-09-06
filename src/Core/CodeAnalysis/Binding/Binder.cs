@@ -5227,11 +5227,21 @@ public sealed class Binder
         // named tuples are listed above, and the same erased CLR argument is
         // still projected below, so the closed shape (and the emitted
         // signature) is unchanged.
+        // Issue #4024: the SLICE spelling `[]T` shares that one SZ-array
+        // backing, so it needs retaining for the same reason and by the same
+        // gate. #3962 retained only `[N]T`, which left `List[[]int32]` with an
+        // EMPTY symbolic argument vector — indistinguishable from a
+        // metadata-recovered `List<int[]>`, whose shape genuinely IS
+        // unknowable — so `ContainsMetadataRecoveredArray` kept the lenient CLR
+        // comparison and `List[[]int32]` still converted to `List[[3]int32]`.
+        // `ContainsSourceArrayShape` is `ContainsFixedLengthArray` widened to
+        // both spellings; see its remarks for why this is a representation
+        // change and not a rule change.
         if (TypeSymbol.RequiresSymbolicProjection(type)
             || type.ClrType == null
             || type is TupleTypeSymbol
             || TypeSymbol.ContainsNamedTupleElements(type)
-            || TypeSymbol.ContainsFixedLengthArray(type))
+            || TypeSymbol.ContainsSourceArrayShape(type))
         {
             hasSymbolicArgument = true;
 

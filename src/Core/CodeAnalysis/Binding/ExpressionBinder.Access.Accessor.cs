@@ -3138,10 +3138,13 @@ internal sealed partial class ExpressionBinder
             // a metadata-only `EqualityComparer<int32[]>` and flows into an
             // `EqualityComparer[[4]int32]` slot through the metadata-recovery
             // leniency — the same erasure this issue closes elsewhere.
+            // Issue #4024: the SLICE spelling `[]T` shares that backing and is
+            // retained by the same gate, so `EqualityComparer[[]int32].Default`
+            // no longer reads as a metadata-only `EqualityComparer<int32[]>`.
             var symbolicReceiver = typeArgs.Any(static a =>
                 TypeSymbol.RequiresSymbolicProjection(a)
                 || TypeSymbol.ContainsNamedTupleElements(a)
-                || TypeSymbol.ContainsFixedLengthArray(a))
+                || TypeSymbol.ContainsSourceArrayShape(a))
                 ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
                 : null;
             constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);
