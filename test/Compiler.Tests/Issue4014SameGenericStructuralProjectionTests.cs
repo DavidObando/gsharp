@@ -40,29 +40,44 @@ namespace GSharp.Compiler.Tests;
 /// materialised the plan.</para>
 /// <para><b>Where the verdict lives, and why.</b> In
 /// <c>StructuralProjectionPlanner.TryCreate</c> — not in <c>Conversion</c>'s
-/// projection arm. TWO callers ask the planner directly: <c>Conversion</c>, and
+/// projection arm. THREE callers ask the planner directly: <c>Conversion</c>,
 /// applicability's ADR-0148 <c>structuralProjectionArgumentCheck</c> (the
-/// second half of #4006). Closing only the conversion arm would leave the
-/// argument position open, which is literally the #4006 shape. The rule is a
-/// pure SHAPE test on the two CLR types — it does NOT call
-/// <c>Conversion.Classify</c>, because #4006 measured that narrowing a
-/// projection callback with <c>Conversion.Classify(...).Exists</c> breaks
-/// <c>Issue2889</c>.</para>
-/// <para><b>The two exclusions are load-bearing, and both are green rows
-/// here.</b></para>
+/// second half of #4006), and <c>ClrOverloadResolution</c>'s argument check.
+/// Closing only the conversion arm would leave the other two open, which is
+/// literally the #4006 shape. The rule is a pure SHAPE test on the two CLR
+/// types — it does NOT call <c>Conversion.Classify</c>, because #4006 measured
+/// that narrowing a projection callback with
+/// <c>Conversion.Classify(...).Exists</c> breaks <c>Issue2889</c>.</para>
+/// <para><b>Three exclusions are load-bearing, and each has its own row.</b>
+/// The first two came from measurement while writing the fix; the third came
+/// from the Copilot review on PR #4029, which caught a real regression.</para>
 /// <list type="number">
-/// <item><b>Identical closed types are untouched.</b> #2889's
-/// <c>enumAction(List[Mode]{…})</c> at a <c>System.Action[List[Mode]]</c> whose
-/// <c>Invoke</c> erases to <c>List&lt;int&gt;</c> is the same GENERIC
-/// DEFINITION on both sides; comparing symbolic type ARGUMENTS would refuse it.
-/// Comparing the CLOSED CLR types does not, because there they are the same
-/// type.</item>
-/// <item><b>A same-compilation G# generic is untouched</b> — it carries a null
-/// <c>ClrType</c> while binding. Measured on the parent AND here: a user
-/// <c>class Box[T]</c> projects <c>Box[int32]</c> to <c>Box[int64]</c> and
-/// CARRIES the value (prints <c>7</c>), because a G# class's public fields ARE
-/// its state. That is a faithful conversion with no soundness defect, so
-/// refusing it would be a regression bought for nothing.</item>
+/// <item><b>Identical closed types are untouched.</b> That is identity, not a
+/// projection.</item>
+/// <item><b>An ADR-0004 ERASURE SURROGATE is not a closed type.</b> #2889's
+/// <c>List[Mode]</c> over a same-compilation enum presents as
+/// <c>List&lt;object&gt;</c> while the <c>Action[List[Mode]]</c> slot it must
+/// reach presents as <c>List&lt;int&gt;</c> — two closed types that differ for
+/// a reason having nothing to do with the values, since the SYMBOLIC arguments
+/// are the same type. Comparing closed types alone turned that row red
+/// (<c>GS0131: 'enumAction' is not a function</c>), so the rule also requires
+/// that neither side carry a type argument whose own <c>ClrType</c> is null.
+/// A same-compilation G# generic is covered by the same clause: measured on the
+/// parent AND here, a user <c>class Box[T]</c> projects <c>Box[int32]</c> to
+/// <c>Box[int64]</c> and CARRIES the value, because a G# class's public fields
+/// ARE its state.</item>
+/// <item><b>A pair whose MEMBER SURFACE carries the difference is untouched.</b>
+/// An imported <c>Box&lt;T&gt;</c> with a settable <c>T Value</c> shows the
+/// author the incompatible member, so ADR-0148 §B explicit object spread can
+/// supply it — <c>Box[string]{ ...boxOfInt, Value: "replacement" }</c> compiled
+/// on the parent and an earlier revision of this PR broke it. The refusal is
+/// therefore reserved for a pair whose surfaces are type-identical, where the
+/// difference lives in state the author cannot name. That is exactly
+/// <c>List&lt;T&gt;</c>, and it keeps both spread spellings of the element loss
+/// closed — measured on the parent, <c>List[string]{ ...xs }</c> and
+/// <c>List[string]{ ...xs, Capacity: 4 }</c> both compiled and both printed
+/// <c>0</c>, which is why gating on the <c>strict</c> flag (the review's
+/// proposed remedy) was not taken.</item>
 /// </list>
 /// <para><b>The green rows are the point.</b> A fix that only stops accepting
 /// things is not a fix. The ADR-0148 arm this change guards still lowers a
@@ -120,17 +135,20 @@ public class Issue4014SameGenericStructuralProjectionTests
             "GS0154",
         };
 
-        // A two-parameter definition, differing only in the SECOND argument:
-        // the rule covers a definition of any arity, at any position.
+        // A two-parameter definition, differing only in the SECOND argument.
+        // NOT a soundness row, and UNCHANGED by this PR: measured on the parent
+        // AND here, this pair reports `GS0155: Cannot convert type
+        // 'Dictionary[string, int32]' to 'Dictionary[string, int64]'`.
         //
-        // NOT a soundness row, and the difference is instructive. This pair was
-        // ALREADY refused on the parent — with `GS0155: Cannot convert type
-        // 'Dictionary[string, int32]' to 'Dictionary[string, int64]'` — because
-        // `Dictionary` happens to expose no settable member a plan could be
-        // built from, where `List` exposes `Capacity`. The soundness of the
-        // pre-fix compiler therefore rested on an accident of the BCL's
-        // property surface. The row records the resulting DIAGNOSTIC-ID CHANGE:
-        // `GS0155` becomes `GS0490`, which carries the explanation.
+        // It is kept because it is instructive about the two guards. The
+        // same-definition test fires, but `MemberSurfaceCarriesTheDifference`
+        // declines — `Dictionary`'s readable surface includes `Keys` and
+        // `Values`, whose `KeyCollection[string, int32]` and
+        // `KeyCollection[string, int64]` DO differ — so the ordinary member
+        // rules answer, exactly as they did before. The pre-fix compiler's
+        // soundness for `Dictionary` rested on the accident that it exposes no
+        // settable member a plan could be built from, where `List` exposes
+        // `Capacity`; that accident is no longer what is load-bearing.
         yield return new object[]
         {
             "a-dictionary-differing-only-in-its-value-type-is-rejected",
@@ -143,6 +161,50 @@ public class Issue4014SameGenericStructuralProjectionTests
             d["k"] = 7
             let e Dictionary[string, int64] = d
             Console.WriteLine(e.Count.ToString())
+            """,
+            "GS0155",
+        };
+
+        // Review finding 1 (Copilot on PR #4029), the soundness half. An
+        // explicit ADR-0148 §B object SPREAD reaches the planner with
+        // `strict: false`, and on the parent both of these compiled and printed
+        // `0` — the same element loss as the implicit assignment, written out.
+        // The review's proposed remedy (gate the guard on `strict`) would have
+        // reopened exactly these two, which is why the guard is gated on the
+        // MEMBER SURFACE instead: `List`'s surface is `Capacity`/`Count`,
+        // identically `int32` on both sides, so the author cannot supply what
+        // they cannot name.
+        yield return new object[]
+        {
+            "an-explicit-spread-of-the-same-pair-is-rejected",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            let xs = List[int32]()
+            xs.Add(7)
+            let zs = List[string]{ ...xs }
+            Console.WriteLine(zs.Count.ToString())
+            """,
+            "GS0490",
+        };
+
+        // The same spread WITH an explicit member that is not the one carrying
+        // the difference. On the parent this compiled and printed `0` then `4`:
+        // a capacity the author asked for, and every element gone.
+        yield return new object[]
+        {
+            "an-explicit-spread-supplying-an-unrelated-member-is-still-rejected",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            let xs = List[int32]()
+            xs.Add(7)
+            let zs = List[string]{ ...xs, Capacity: 4 }
+            Console.WriteLine(zs.Count.ToString())
             """,
             "GS0490",
         };
@@ -370,6 +432,139 @@ public class Issue4014SameGenericStructuralProjectionTests
     }
 
     /// <summary>
+    /// Review finding 1 (Copilot on PR #4029). ADR-0148 §B EXPLICIT object
+    /// spread between two constructions of one imported generic, where the
+    /// author supplies the very member that carries the difference. This is
+    /// valid, it compiled and printed <c>replacement</c>/<c>3</c> on the
+    /// parent, and an earlier revision of this PR broke it.
+    /// </summary>
+    /// <remarks>
+    /// The guard now yields whenever the two constructions' member surfaces
+    /// themselves differ — <c>Box[int32].Value</c> is <c>int32</c> where
+    /// <c>Box[string].Value</c> is <c>string</c> — because then the author CAN
+    /// see the incompatible member and supply it, and the ordinary member rules
+    /// already decide the pair in both directions. The refusal is reserved for
+    /// the case where the difference is invisible, which is what
+    /// <c>List&lt;T&gt;</c> is.
+    /// </remarks>
+    [Fact]
+    public void AnExplicitSpreadThatSuppliesTheDifferingMember_StillProjects()
+    {
+        const string Source = """
+            package P
+            import System
+            import Interop
+
+            let src = Box[int32]{ Value: 7, Tag: 3 }
+            let dst = Box[string]{ ...src, Value: "replacement" }
+            Console.WriteLine(dst.Value)
+            Console.WriteLine(dst.Tag.ToString())
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4014_spread_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, "ExplicitSpread.dll");
+            var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe", "/reference:" + libPath);
+
+            Assert.True(File.Exists(appPath), $"an explicit spread supplying the member must compile. Log:\n{appLog}");
+            IlVerifier.Verify(appPath, new[] { libPath });
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"the case must run to completion. Exit {exit}:\n{output}");
+
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "replacement", "3" }, lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The other side of the boundary review finding 1 draws: the same spread
+    /// WITHOUT an override for the differing member. Rejected on the parent and
+    /// here, with the same precise message — the guard does not displace it.
+    /// </summary>
+    [Fact]
+    public void AnExplicitSpreadThatDoesNotSupplyTheDifferingMember_IsRejected()
+    {
+        const string Source = """
+            package P
+            import System
+            import Interop
+
+            let src = Box[int32]{ Value: 7, Tag: 3 }
+            let dst = Box[string]{ ...src, Tag: 9 }
+            Console.WriteLine(dst.Tag.ToString())
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4014_spreadneg_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, "ExplicitSpreadNoOverride.dll");
+            var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe", "/reference:" + libPath);
+
+            Assert.False(File.Exists(appPath), $"a spread that drops the differing member must not compile. Log:\n{appLog}");
+            Assert.Contains("GS0490", appLog, StringComparison.Ordinal);
+            Assert.Contains(
+                "Source member 'Value' of type 'int32' is not implicitly convertible to 'string'",
+                appLog,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The IMPLICIT spelling of the same pair. Also unchanged: the surface
+    /// carries the difference, so the ordinary member rules answer and the
+    /// author still gets the message naming the member, not the new one naming
+    /// the definition.
+    /// </summary>
+    [Fact]
+    public void AnImplicitProjectionBetweenConstructionsWithADifferingSurface_KeepsItsOwnMessage()
+    {
+        const string Source = """
+            package P
+            import System
+            import Interop
+
+            let src = Box[int32]{ Value: 7, Tag: 3 }
+            let dst Box[string] = src
+            Console.WriteLine(dst.Tag.ToString())
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4014_boximpl_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, "ImplicitBox.dll");
+            var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe", "/reference:" + libPath);
+
+            Assert.False(File.Exists(appPath), $"the implicit spelling must not compile. Log:\n{appLog}");
+            Assert.Contains("GS0490", appLog, StringComparison.Ordinal);
+            Assert.Contains(
+                "Source member 'Value' of type 'int32' is not implicitly convertible to 'string'",
+                appLog,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// The legitimate neighbour of the row above: a genuine
     /// <c>List[string]</c> still reaches the same imported parameter, so the
     /// candidate was not simply removed from the overload set.
@@ -481,6 +676,13 @@ public class Issue4014SameGenericStructuralProjectionTests
             public static class Probes
             {
                 public static string TakeStringList(List<string> items) => "stringlist:" + items.Count;
+            }
+
+            public class Box<T>
+            {
+                public T? Value { get; set; }
+
+                public int Tag { get; set; }
             }
             """;
 

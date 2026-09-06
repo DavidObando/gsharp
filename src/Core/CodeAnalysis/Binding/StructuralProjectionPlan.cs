@@ -189,13 +189,14 @@ internal static class StructuralProjectionPlanner
             return false;
         }
 
-        if (IsDistinctConstructionOfTheSameClrGeneric(source, target))
+        var sourceMembers = CollectSourceMembers(source);
+        if (IsDistinctConstructionOfTheSameClrGeneric(source, target)
+            && !MemberSurfaceCarriesTheDifference(sourceMembers, target))
         {
-            failure = $"Type '{target}' is another construction of the same generic type as '{source}'; a structural projection between two constructions cannot carry the source's element state.";
+            failure = $"Type '{target}' is another construction of the same generic type as '{source}', and the two expose an identical public member surface, so a projection between them would silently discard the state the type argument names.";
             return false;
         }
 
-        var sourceMembers = CollectSourceMembers(source);
         if (sourceMembers.Count == 0)
         {
             if (source is StructSymbol sourceStruct
@@ -728,8 +729,10 @@ internal static class StructuralProjectionPlanner
     /// </para>
     /// <para>
     /// Deliberately scoped to pairs whose CLOSED CLR types are BOTH GENUINE and
-    /// DIFFER. Two exclusions are load-bearing, and both were measured rather
-    /// than assumed:
+    /// DIFFER, and — see <see cref="MemberSurfaceCarriesTheDifference"/>, which
+    /// the caller ands with this — whose member surfaces do NOT expose the
+    /// difference. Two exclusions are load-bearing here, and both were measured
+    /// rather than assumed:
     /// </para>
     /// <list type="bullet">
     /// <item><b>Identical closed types are not touched</b> — that is identity,
@@ -810,6 +813,70 @@ internal static class StructuralProjectionPlanner
         foreach (var argument in imported.TypeArguments)
         {
             if (argument.ClrType == null || HasErasedTypeArgument(argument))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4014, Copilot review on PR #4029: true when the two
+    /// constructions' public member surfaces THEMSELVES differ — i.e. at least
+    /// one same-named member has a different type on the two sides, because it
+    /// mentions the generic definition's type parameter.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the discriminator between the two situations the
+    /// same-definition test alone cannot tell apart, and both were measured on
+    /// the parent:</para>
+    /// <list type="bullet">
+    /// <item>An imported <c>Box&lt;T&gt;</c> with a settable <c>T Value</c>
+    /// EXPOSES the difference: <c>Box[int32]</c> has <c>Value int32</c> where
+    /// <c>Box[string]</c> has <c>Value string</c>. The author can therefore see
+    /// the incompatible member and SUPPLY it, which is exactly what ADR-0148 §B
+    /// explicit object spread is for — <c>Box[string]{ ...boxOfInt, Value:
+    /// "replacement" }</c> compiled on the parent and printed
+    /// <c>replacement</c>. Refusing that outright was a regression. The
+    /// ordinary member rules already decide this pair correctly in BOTH
+    /// directions: without the override, the parent reports (and this branch
+    /// still reports) <c>GS0490: Source member 'Value' of type 'int32' is not
+    /// implicitly convertible to 'string'</c>, at the spread and at an implicit
+    /// assignment alike.</item>
+    /// <item><c>List&lt;T&gt;</c> does NOT expose the difference: its
+    /// projectable surface is <c>Capacity</c>/<c>Count</c>, identically
+    /// <c>int32</c> on both sides, and the elements live in private state. The
+    /// author cannot supply what they cannot name, so every spelling loses
+    /// them — measured on the parent, the implicit assignment, the argument
+    /// position, <c>List[string]{ ...xs }</c> and <c>List[string]{ ...xs,
+    /// Capacity: 4 }</c> all compiled and all printed <c>0</c>. That is the
+    /// case this refuses.</item>
+    /// </list>
+    /// <para>Deliberately NOT expressed as "only refuse strict/implicit
+    /// projection", which is what the review proposed. Both spread spellings
+    /// above reach the planner with <c>strict: false</c>
+    /// (<c>ExpressionBinder.Literals.BindStructuralSpreadLiteral</c>), so
+    /// gating on that flag would have fixed the reported regression while
+    /// reopening a measured element loss. The surface test does both.</para>
+    /// </remarks>
+    /// <param name="sourceMembers">The source's collected public readable members.</param>
+    /// <param name="target">The projection target, a sibling construction.</param>
+    /// <returns><see langword="true"/> when the difference is visible in the surface.</returns>
+    private static bool MemberSurfaceCarriesTheDifference(
+        Dictionary<string, StructuralProjectionSourceMember> sourceMembers,
+        TypeSymbol target)
+    {
+        var targetMembers = CollectSourceMembers(target);
+        foreach (var (name, sourceMember) in sourceMembers)
+        {
+            if (!targetMembers.TryGetValue(name, out var targetMember))
+            {
+                continue;
+            }
+
+            if (sourceMember.Type != targetMember.Type
+                && !ClrTypeUtilities.IsSameAs(sourceMember.Type.ClrType, targetMember.Type.ClrType))
             {
                 return true;
             }
