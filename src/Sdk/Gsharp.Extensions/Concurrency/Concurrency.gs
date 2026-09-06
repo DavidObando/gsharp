@@ -116,5 +116,5 @@ func forwardInto[T](input in chan[T], merged out chan[T]) {
 /// @param size The maximum number of elements per batch.
 /// @returns A receive-only channel of batches.
 public func chunks[T](source chan[T], size int32) in chan[ReadOnlyMemory[T]] {
-    return Chunks.Of[T](source, size)
+    return ChunkReader[T](source, size)
 }

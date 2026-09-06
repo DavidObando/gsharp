@@ -30,10 +30,10 @@ public sealed class ChunkReader<T> : ChannelReader<ReadOnlyMemory<T>>
     /// <summary>
     /// Initializes a new instance of the <see cref="ChunkReader{T}"/> class
     /// over a whole channel. This is the overload <c>chunks</c> binds: a
-    /// <c>chan[T]</c> argument is a <see cref="Channel{T}"/> by identity,
-    /// where a <c>ChannelReader[T]</c> parameter would need the
-    /// <c>get_Reader</c> view conversion that applicability does not run for
-    /// an open element (ADR-0174 errata).
+    /// <c>chan[T]</c> argument is a <see cref="Channel{T}"/> by identity, and
+    /// since issue #3876 that holds for an open element type too, so
+    /// <c>chunks</c> reaches this constructor directly instead of through
+    /// <c>Chunks.Of[T]</c>.
     /// </summary>
     /// <param name="source">The channel to chunk.</param>
     /// <param name="size">The maximum chunk length; at least one.</param>

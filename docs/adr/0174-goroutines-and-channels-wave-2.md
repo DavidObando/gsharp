@@ -2797,6 +2797,57 @@ implementation had to refine it.
     handle can then do. The lattice, not the operator, is the mechanism — G#
     reaches the same pairs by the rule it already had.
 
+40. **An open channel element had no CLR shape, so applicability never ran
+    (issue #3876) — and errata 32's account of why is wrong.** Errata 32 says a
+    `chan[T]` argument whose element is open "is not applicable to a
+    `ChannelReader[T]` — or a `Channel[T]` — parameter", and reads that as a
+    missing conversion, the same family as errata 28's variadic case. It is not.
+    An `in chan[T]` argument against a `ChannelReader[T]` parameter is
+    **identity** — no conversion is involved at all — and it failed exactly as
+    the bidirectional case did. Nothing was ever ranked: the argument reached
+    overload resolution with *no CLR type*, and every probe that ranks
+    candidates on CLR shapes abandons the whole candidate set when one argument
+    has none. That is why the diagnostic named no constructor — none had been
+    examined — and why `ChunkReader[T](source, 64)` and
+    `ChunkReader[T](reader, 64)` failed together.
+
+    The mechanism is one missing arm. A channel type's CLR type is null the
+    moment its element's is (`ChannelTypeSymbol.MakeClrType`), which is the
+    normal state for a type parameter or another same-compilation type; the
+    binder's argument projection for overload resolution carries an arm for
+    exactly this situation for `[]T` (#2182), `map[K, V]` (#3303), `[N]T` and a
+    symbolic tuple (#3087), and had none for a channel. The one probe that did
+    bind — the imported extension/static path, which is why `Chunks.Of[T]` was
+    reachable when the constructor beside it was not — falls back to the shared
+    erasure helper (`MemberLookup.TryProjectErasedClrType`), whose channel arm
+    D2 added and which erases `chan[T]` / `in chan[T]` / `out chan[T]` to
+    `Channel<…>` / `ChannelReader<…>` / `ChannelWriter<…>`. The fix adds the
+    channel arm to the projection and implements it by asking that same helper,
+    so the two cannot disagree again. Direction rides through, so each spelling
+    stays applicable to its own BCL type and to nothing else; the lattice's
+    decisions are still made downstream by `Conversion`, which is where a
+    wrong pair is now refused by name instead of by a blanket GS0267 that had
+    examined nothing. One asymmetry becomes visible in the process and is
+    older than this fix: a bare `chan[T]?` argument is refused (GS0155) where
+    the closed `chan[int32]?` is accepted, because G# is lenient about a CLR
+    parameter's nullability at a call site — a `string?` reaches a
+    non-nullable `string` parameter — and the symbolic pair reaches no rule
+    that says so. `!!` is the portable spelling; the asymmetry is issue
+    #3985.
+
+    The imported **instance-method** probe had the same hole (GS0159 on the
+    same argument) and is fixed by the same arm. Two consequences for D10:
+    `chunks` now calls `ChunkReader[T](source, size)` directly, and
+    `Gsharp.Concurrency.Chunks.Of[T]` — which errata 32 introduced only to
+    route around this — stays as published surface with nothing depending on
+    it. Errata 28's `merge` is unrelated: a G#-declared variadic is resolved
+    against G# symbols, not CLR shapes, and `...in chan[T]` binds and runs
+    today; whether `merge`'s signature should change is a separate call about
+    published API. One sibling remains open as issue #3984: a
+    `: base(…)` initializer argument is projected by the *non*-overload
+    resolution variant, so **every** erased shape — `[]T` as much as
+    `chan[T]` — fails there with GS0214.
+
 41. **The receiver's contribution to CLR type inference, and errata 32's
     workaround retired (issue #3877).** Errata 32 records the batch surface as
     eight methods where D10 specifies four: `TryReceiveBatch` / `TrySendBatch` /
