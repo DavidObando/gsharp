@@ -385,6 +385,16 @@ internal sealed partial class MethodBodyEmitter
         // symbol-only value types), so the reflection lookup below would
         // NRE. Route the call through the reified TypeSpec-parented
         // MemberRef instead, mirroring the #1481 symbolic map-literal path.
+        //
+        // Issue #4015: the closed `Dictionary<K, V>` can also EXIST and still
+        // refuse to answer. `MapTypeSymbol.MakeClrType` builds it with
+        // `typeof(Dictionary<,>).MakeGenericType(…)`, which hands back a
+        // `TypeBuilderInstantiation` whenever a type argument is not itself a
+        // host `RuntimeType` — true of every CLR type resolved through the
+        // reference load context, so `map[string, DateTime]` as much as
+        // `map[string, ImportedBase]`. Its `GetMethod` throws
+        // `NotSupportedException`, which surfaced as the internal-error GS9998.
+        // The symbolic MemberRef is the right answer in that case too.
         MemberReferenceHandle tryGetRef;
         if (dictType == null)
         {
@@ -392,16 +402,25 @@ internal sealed partial class MethodBodyEmitter
         }
         else
         {
-            var tryGet = dictType.GetMethod(
-                "TryGetValue",
-                new[]
-                {
-                    Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation"),
-                    Invariant.Required(mapType.ValueType.ClrType, "a map value has a CLR representation").MakeByRefType(),
-                })
-                ?? throw new InvalidOperationException(
-                    $"Dictionary type '{dictType.FullName}' has no TryGetValue(K, out V) method.");
-            tryGetRef = this.outer.memberRefs.GetMethodReference(tryGet);
+            MethodInfo? tryGet;
+            try
+            {
+                tryGet = dictType.GetMethod(
+                    "TryGetValue",
+                    new[]
+                    {
+                        Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation"),
+                        Invariant.Required(mapType.ValueType.ClrType, "a map value has a CLR representation").MakeByRefType(),
+                    });
+            }
+            catch (NotSupportedException)
+            {
+                tryGet = null;
+            }
+
+            tryGetRef = tryGet == null
+                ? this.outer.memberRefs.GetMapTryGetValueReference(mapType)
+                : this.outer.memberRefs.GetMethodReference(tryGet);
         }
 
         var slot = this.mapIndexSlots[idx];
@@ -449,12 +468,25 @@ internal sealed partial class MethodBodyEmitter
 
         // Issue #3301: same-compilation user-struct key/value — no erased
         // CLR Dictionary<,> to reflect on; use the #1481 symbolic MemberRef.
-        var setItemRef = dictType == null
+        // Issue #4015: and the same when the closed type EXISTS but is a
+        // `TypeBuilderInstantiation` that refuses to resolve members — see
+        // `EmitMapIndexRead`.
+        MethodInfo? setItem = null;
+        if (dictType != null)
+        {
+            try
+            {
+                setItem = dictType.GetMethod("set_Item");
+            }
+            catch (NotSupportedException)
+            {
+                // `setItem` stays null: fall through to the symbolic MemberRef.
+            }
+        }
+
+        var setItemRef = setItem == null
             ? this.outer.memberRefs.GetMapSetItemReference(mapType)
-            : this.outer.memberRefs.GetMethodReference(
-                dictType.GetMethod("set_Item")
-                ?? throw new InvalidOperationException(
-                    $"Dictionary type '{dictType.FullName}' has no set_Item method."));
+            : this.outer.memberRefs.GetMethodReference(setItem);
 
         var tmp = this.indexAssignmentValueSlots[ixa];
         if (ixa.TargetExpression != null)
