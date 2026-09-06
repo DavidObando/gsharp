@@ -2448,7 +2448,7 @@ internal static class ClrOverloadResolution
                             }
                         }
                     }
-                    catch (ArgumentException)
+                    catch (ArgumentException ex)
                     {
                         var recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi, false) ?? default;
 
@@ -2462,7 +2462,11 @@ internal static class ClrOverloadResolution
                         }
                         else if (!TryCloseOverUserReferenceTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                         {
-                            // Generic constraints not satisfied — drop this candidate.
+                            RejectConstraintFailureOrThrowCompilerInvariant(
+                                gmi,
+                                explicitTypeArgsArray,
+                                recoveredSymbols,
+                                ex);
                             return;
                         }
                     }
@@ -2632,7 +2636,7 @@ internal static class ClrOverloadResolution
                 {
                     closed = mi.MakeGenericMethod(typeArgs);
                 }
-                catch (ArgumentException)
+                catch (ArgumentException ex)
                 {
                     var recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi, false) ?? default;
 
@@ -2646,7 +2650,11 @@ internal static class ClrOverloadResolution
                     }
                     else if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                     {
-                        // Generic constraints not satisfied — drop this candidate.
+                        RejectConstraintFailureOrThrowCompilerInvariant(
+                            mi,
+                            typeArgs,
+                            recoveredSymbols,
+                            ex);
                         return;
                     }
                 }
@@ -2899,7 +2907,7 @@ internal static class ClrOverloadResolution
                 {
                     closed = gmi.MakeGenericMethod(explicitTypeArgs.ToArray());
                 }
-                catch (ArgumentException)
+                catch (ArgumentException ex)
                 {
                     recoveredSymbols = recoverTypeArgSymbols?.Invoke(gmi, true) ?? default;
                     var explicitTypeArgsArray = explicitTypeArgs.ToArray();
@@ -2909,6 +2917,11 @@ internal static class ClrOverloadResolution
                     }
                     else if (!TryCloseOverUserReferenceTypePlaceholders(gmi, explicitTypeArgsArray, recoveredSymbols, out closed))
                     {
+                        RejectConstraintFailureOrThrowCompilerInvariant(
+                            gmi,
+                            explicitTypeArgsArray,
+                            recoveredSymbols,
+                            ex);
                         return;
                     }
                 }
@@ -2961,7 +2974,7 @@ internal static class ClrOverloadResolution
             {
                 closed = mi.MakeGenericMethod(typeArgs);
             }
-            catch (ArgumentException)
+            catch (ArgumentException ex)
             {
                 recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi, true) ?? default;
                 if (TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
@@ -2970,6 +2983,11 @@ internal static class ClrOverloadResolution
                 }
                 else if (!TryCloseOverUserReferenceTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                 {
+                    RejectConstraintFailureOrThrowCompilerInvariant(
+                        mi,
+                        typeArgs,
+                        recoveredSymbols,
+                        ex);
                     return;
                 }
             }
@@ -4500,7 +4518,30 @@ internal static class ClrOverloadResolution
             for (var c = 0; c < typeConstraints.Length; c++)
             {
                 var constraint = typeConstraints[c];
-                if (constraint is null || constraint.IsGenericParameter || constraint.ContainsGenericParameters)
+                if (constraint is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    for (var p = 0; p < typeParams.Length; p++)
+                    {
+                        constraint = SubstituteClrType(constraint, typeParams[p], typeArgs[p]);
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    // A cross-context type argument can make the substitution
+                    // itself fail. It did not disprove the language constraint;
+                    // the MakeGenericMethod failure is classified below.
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    continue;
+                }
+
+                if (constraint.IsGenericParameter || constraint.ContainsGenericParameters)
                 {
                     continue;
                 }
@@ -4583,6 +4624,31 @@ internal static class ClrOverloadResolution
         }
 
         return true;
+    }
+
+    private static void RejectConstraintFailureOrThrowCompilerInvariant(
+        MethodInfo openMethod,
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol?> typeArgSymbols,
+        ArgumentException failure)
+    {
+        if (!SatisfiesGenericConstraints(openMethod, typeArgs, typeArgSymbols)
+            || (!typeArgSymbols.IsDefaultOrEmpty
+                && typeArgSymbols.Any(static symbol => symbol is not null && symbol.ClrType is null)))
+        {
+            return;
+        }
+
+        var methodName = $"{openMethod.DeclaringType?.FullName ?? "<unknown>"}.{openMethod.Name}";
+        var arguments = string.Join(
+            ", ",
+            typeArgs.Select(type => $"{type.FullName ?? type.Name} [{type.Assembly.GetName().Name}]"));
+
+        throw new InvalidOperationException(
+            $"Generic method closure invariant violated for '{methodName}': MakeGenericMethod rejected " +
+            "compiler-supplied type arguments after their generic constraints were satisfied. The method " +
+            "and type arguments have incompatible reflection/load contexts or inconsistent CLR identities. " +
+            $"Type arguments: {arguments}. Reflection reported: {failure.Message}");
     }
 
     private static bool ErasedSymbolSatisfiesInterfaceConstraint(TypeSymbol symbol, Type constraint)
