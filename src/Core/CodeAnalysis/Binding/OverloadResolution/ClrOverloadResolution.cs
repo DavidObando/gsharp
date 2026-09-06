@@ -2803,6 +2803,38 @@ internal static class ClrOverloadResolution
                     else if (structuralProjectionArgumentCheck != null
                         && structuralProjectionArgumentCheck(i, paramTypes[i]))
                     {
+                        // Issue #4006: the same question the #3989 gate above
+                        // asks, asked again here because this arm can admit a
+                        // candidate the CLR comparison had already declined.
+                        // The ADR-0148 callback reaches
+                        // `StructuralProjectionPlanner.CanProject` DIRECTLY,
+                        // behind `Conversion`'s back, and the planner only asks
+                        // whether the target can be built from the source's
+                        // public member surface — which two constructed
+                        // generics over the same definition trivially satisfy
+                        // (`List[Derived]` and `List[ImportedBase]` both have a
+                        // public parameterless constructor and a settable
+                        // `Capacity`). So a `List[Derived]` was admitted with
+                        // `StructuralProjection` while
+                        // `ConversionClassifier.BindConversion` — whose verdict
+                        // is `Conversion.Classify`, which refuses that pair at
+                        // the #2735/#3962 identity gate — produced no node at
+                        // all, and the raw `List<Derived>` was pushed at an
+                        // INVARIANT slot: ILVerify StackUnexpected.
+                        // Asking here rather than inside the callback is what
+                        // keeps `IsErasedGenericParameterSlot` in the loop: a
+                        // `List[Mode]` at a `System.Action[List[Mode]]`'s
+                        // `Invoke`, whose parameter erases to `List<int>`, is a
+                        // slot that DID come from erasure and must keep
+                        // binding.
+                        if (erasedArgumentMismatchCheck != null
+                            && erasedArgumentMismatchCheck(i, paramTypes[i])
+                            && !IsErasedGenericParameterSlot(rawCandidate, paramIndex))
+                        {
+                            ok = false;
+                            break;
+                        }
+
                         conv = ImplicitConversionKind.StructuralProjection;
                     }
                     else if (ChannelViewAppliesAtErasedGenericSlot(rawCandidate, paramIndex, paramTypes[i], argTypes[i]))
@@ -3080,6 +3112,19 @@ internal static class ClrOverloadResolution
                 if (structuralProjectionArgumentCheck != null
                     && structuralProjectionArgumentCheck(i, target))
                 {
+                    // Issue #4006: the same second opinion the normal-form
+                    // loop now takes on this arm. The ADR-0148 callback asks
+                    // the projection planner directly, which says yes for two
+                    // constructed generics over one definition even where
+                    // `Conversion` refuses the pair outright and would emit
+                    // nothing.
+                    if (erasedArgumentMismatchCheck != null
+                        && erasedArgumentMismatchCheck(i, target)
+                        && !IsErasedGenericParameterSlot(rawCandidate, slot))
+                    {
+                        return;
+                    }
+
                     conv = ImplicitConversionKind.StructuralProjection;
                 }
                 else
