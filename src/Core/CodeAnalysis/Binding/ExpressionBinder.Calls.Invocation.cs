@@ -105,11 +105,39 @@ internal sealed partial class ExpressionBinder
                 // Issue #320: a user-defined type (or an in-scope type parameter)
                 // has no reference-context CLR type, so it cannot be handed to
                 // MakeGenericMethod directly. Close the open method with a
-                // reference-context System.Object placeholder so resolution and
-                // applicability still run; the real type-argument symbol is
-                // preserved in typeArgSymbols and re-emitted as its own TypeDef
-                // token in the generic method specification.
-                resolved[i] = scope.References.GetCoreType("System.Object");
+                // reference-context placeholder so resolution and applicability
+                // still run; the real type-argument symbol is preserved in
+                // typeArgSymbols and re-emitted as its own TypeDef token in the
+                // generic method specification.
+                //
+                // Issue #4013 is not this; issue #4016 is: the placeholder must
+                // be the SAME erasure the ARGUMENTS present, or the two sides
+                // describe the same G# type with two different CLR types and no
+                // candidate applies. `MemberLookup.TryProjectErasedClrType` —
+                // which every structural argument spelling goes through — erases
+                // a same-compilation class to its imported base when it has one
+                // (`class Derived : ImportedBase` -> `ImportedBase`) and to
+                // `object` only when it does not. So `map[string, Derived]`
+                // arrives as `Dictionary<string, ImportedBase>` while a flat
+                // `System.Object` placeholder closed the slot to
+                // `Dictionary<string, object>`: invariant, no conversion,
+                // GS0159 — even though the very same call binds when the type
+                // arguments are INFERRED (inference reads the argument's own
+                // shape) or when the class has no imported base (both erasures
+                // are then `object`). `[]Derived` and `[N]Derived` at a `T[]`
+                // slot failed identically. Project the type argument the same
+                // way the arguments are projected and the two sides agree
+                // again; `TryProjectErasedClrType` already answers `object` for
+                // a type parameter, an interface and a base-less class, so
+                // every case that used to reach the flat placeholder still does.
+                //
+                // This is the same correction #3087 made one site over in
+                // `ExpressionBinder.Calls.cs`, which stopped flattening a
+                // symbolic TUPLE type argument to `object` for exactly this
+                // reason.
+                resolved[i] = MemberLookup.TryProjectErasedClrType(ta, out var erasedTypeArg)
+                    ? scope.References.MapClrTypeToReferences(erasedTypeArg)
+                    : scope.References.GetCoreType("System.Object");
             }
         }
 

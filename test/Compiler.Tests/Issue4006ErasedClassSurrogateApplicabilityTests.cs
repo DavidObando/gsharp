@@ -296,8 +296,13 @@ public class Issue4006ErasedClassSurrogateApplicabilityTests
         // is the same.
         //
         // The inferred-slot neighbour is carried by the `List` spelling in the
-        // row above (`CountAny[Derived]`); the `map` spelling of it does not
-        // bind on `main` either, for a reason of its own — #4016.
+        // row above (`CountAny[Derived]`). The `map` spelling of it did not
+        // bind when this fixture was written, for a reason of its own — #4016,
+        // the explicit type-argument placeholder disagreeing with the argument
+        // erasure — which is now fixed. That row, and the slice and array
+        // spellings that failed with it, live in
+        // `Issue4016ExplicitTypeArgumentErasureTests` rather than being
+        // duplicated here; the rejections below are what THIS issue pins.
         yield return new object[]
         {
             "a-genuine-imported-base-dictionary-still-binds",
