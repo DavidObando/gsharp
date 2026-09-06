@@ -430,12 +430,15 @@ public sealed class ImportedClassSymbol : Symbol
                     closed,
                     typeArgSymbols,
                     refineSymbolicMethodGroupArgs?.Invoke(closed, symbolicArgVector) ?? symbolicArgVector,
-                    isExpanded);
+                    isExpanded,
+                    argumentNames);
             },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(arguments),
             erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(arguments),
+            explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+            explicitTypeArgumentMismatchCheck: ExpressionBinder.MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
             delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(
                 arguments,

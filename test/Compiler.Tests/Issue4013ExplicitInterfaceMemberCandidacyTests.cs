@@ -82,11 +82,15 @@ namespace GSharp.Compiler.Tests;
 /// <para>Both exemptions turn on something the CALL SITE has, not on the
 /// member: a synthesized node, or an argument with no CLR identity. The
 /// reported hole is closed because its argument is a genuine <c>string</c> at a
-/// genuine <c>int32</c> and so qualifies for neither. What remains open is
+/// genuine <c>int32</c> and so qualifies for neither. What remained open was
 /// <c>List[int32]{"x"}</c> (the literal form, exemption 1) and an ordinary call
-/// passing a same-compilation argument (exemption 2); both are filed as #4028
-/// and need the erased-argument work of #3989/#4006 rather than this
-/// candidate-collection rule.</para>
+/// passing a same-compilation argument (exemption 2); both were filed as #4028
+/// and are now closed there — not by narrowing this candidate-collection rule
+/// further, but by asking at APPLICABILITY, where the receiver's and the
+/// arguments' real types are in hand, whether a NON-GENERIC interface's
+/// widening member has an erasure to repair at all. See
+/// <c>Issue4028CollectionLiteralExplicitInterfaceTests</c>. The exemptions
+/// themselves are unchanged, and so is every row here.</para>
 /// <para><b>Blast radius, measured.</b> An instrumented compiler logged every
 /// drop this rule makes while compiling the whole <c>samples/</c> +
 /// <c>e2etests/</c> <c>.gs</c> corpus: 27 drops, all of
