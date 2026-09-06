@@ -52,6 +52,14 @@ internal sealed class MemberLookup
     /// </summary>
     private const string InternalCandidatesCacheKeySuffix = "\0internal";
 
+    /// <summary>
+    /// Issue #4013: cache-key suffix for the candidate set that still includes
+    /// abstract interface members on a CLASS receiver — the collection-literal
+    /// <c>Add</c> probe's view, kept distinct from the ordinary-call view so
+    /// the two never overwrite one another.
+    /// </summary>
+    private const string ExplicitInterfaceCandidatesCacheKeySuffix = "\0explicitiface";
+
     private static readonly ConditionalWeakTable<MethodInfo, MethodInfo> OpenMethodsByMappedMethod = new();
     private readonly BinderContext binderCtx;
 
@@ -297,6 +305,53 @@ internal sealed class MemberLookup
         Type clrType,
         string name,
         bool includeInternal)
+        => SafeGetMethodsIncludingSelfAndInterfaces(clrType, name, includeInternal, includeExplicitInterfaceMembers: false);
+
+    /// <summary>
+    /// Issue #4013: the <paramref name="includeExplicitInterfaceMembers"/>
+    /// variant, which keeps offering an ABSTRACT interface member on a CLASS
+    /// receiver — i.e. one the class can only have implemented explicitly.
+    /// </summary>
+    /// <remarks>
+    /// The ordinary-call view (every other caller) must not, because an
+    /// explicitly-implemented member is not on the implementing type's own
+    /// surface in C# and offering it turned <c>List[int32]().Add("x")</c> into
+    /// a run-time <c>ArgumentException</c>. The COLLECTION-LITERAL <c>Add</c>
+    /// probe is a different question and passes <see langword="true"/>: G#'s
+    /// spread form (issue #3096) fills a <c>Dictionary[K, V]</c> from
+    /// <c>KeyValuePair</c> elements through
+    /// <c>ICollection&lt;KeyValuePair&lt;K, V&gt;&gt;.Add</c>, which
+    /// <c>Dictionary</c> implements explicitly, and lowering emits that call
+    /// through the interface — so the member really is reachable there and the
+    /// literal must keep seeing it. Narrowing this probe as well made
+    /// <c>Dictionary[string, int32](){ ...pairs }</c> report <c>GS0369</c>
+    /// ("no accessible 'Add' method or settable indexer").
+    /// <para>
+    /// Restricting the re-admission to GENERIC interfaces was tried, since the
+    /// hazard the issue names is specifically a NON-GENERIC sibling
+    /// (<c>IList.Add(object)</c>) — and it broke
+    /// <c>Issue3096CollectionSpreadEmitTests.UserDefinedSpreadConversions_ArrayAndCollection_RunAndVerify</c>:
+    /// spreading a <c>[]Celsius</c> into a <c>List[float64]</c> relies on
+    /// <c>IList.Add(object)</c>, because a same-compilation struct has no CLR
+    /// type while binding and so cannot match <c>Add(double)</c> through its
+    /// user-defined conversion. The literal path therefore keeps the FULL
+    /// pre-#4013 view, and <c>List[int32]{"x"}</c> still binds
+    /// <c>IList.Add(object)</c> and throws at run time — the same hole as this
+    /// issue's, reached through a collection literal rather than an
+    /// author-written call. Closing it needs the erased-argument work that
+    /// belongs with #4006/#3989 rather than here; tracked separately.
+    /// </para>
+    /// </remarks>
+    /// <param name="clrType">The CLR type (concrete class or interface) to probe.</param>
+    /// <param name="name">The method name to match.</param>
+    /// <param name="includeInternal">Whether to also return <c>internal</c> instance methods.</param>
+    /// <param name="includeExplicitInterfaceMembers">Whether a class receiver keeps abstract interface members.</param>
+    /// <returns>The candidate list with self-slot methods first.</returns>
+    public static IReadOnlyList<MethodInfo> SafeGetMethodsIncludingSelfAndInterfaces(
+        Type clrType,
+        string name,
+        bool includeInternal,
+        bool includeExplicitInterfaceMembers)
     {
         static Type? GetBaseTypeSafe(Type type)
         {
@@ -327,7 +382,10 @@ internal sealed class MemberLookup
         // ClrTypeUtilities.ClearCache() clearing the caches it reads from.
         return methodsIncludingSelfAndInterfacesCache
             .GetValue(clrType, static _ => new System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>(StringComparer.Ordinal))
-            .GetOrAdd(includeInternal ? name + InternalCandidatesCacheKeySuffix : name, _ =>
+            .GetOrAdd(
+                (includeInternal ? name + InternalCandidatesCacheKeySuffix : name)
+                    + (includeExplicitInterfaceMembers ? ExplicitInterfaceCandidatesCacheKeySuffix : string.Empty),
+                _ =>
         {
             // The cache key may carry the internal-inclusive suffix; the probe
             // itself always matches on the bare method name.
@@ -408,6 +466,7 @@ internal sealed class MemberLookup
             }
 
             // Walk transitive interfaces for DIMs not surfaced by the concrete type.
+            var receiverIsInterface = clrType.IsInterface;
             foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
             {
                 foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
@@ -417,15 +476,103 @@ internal sealed class MemberLookup
                         continue;
                     }
 
-                    if (!IsMethodHiddenByExisting(result, m))
+                    // Issue #4013: on a CLASS receiver an ABSTRACT interface
+                    // member is not part of the type's own surface. The class
+                    // must implement it, and how it did so decides whether the
+                    // member is reachable here:
+                    //
+                    //  - implemented IMPLICITLY — the class's own public method
+                    //    is already in `result` from the self/base walk above,
+                    //    so admitting the interface's copy adds nothing;
+                    //  - implemented EXPLICITLY — C# says the member is NOT on
+                    //    the implementing type's surface and is reachable only
+                    //    through an interface-typed receiver.
+                    //
+                    // Admitting it anyway is unsound, not merely permissive:
+                    // `List[int32]().Add("x")` fell through the generic
+                    // `Add(T)` to `IList.Add(object)` (which accepts anything)
+                    // and turned a static type error into a run-time
+                    // ArgumentException. Only a genuine DEFAULT interface
+                    // method — a non-abstract interface instance method, which
+                    // the class need not implement at all — is what this walk
+                    // exists to surface, so only that is admitted. An interface
+                    // receiver keeps the full walk: a base interface's abstract
+                    // members really are members of the derived interface.
+                    if (receiverIsInterface || includeExplicitInterfaceMembers || !m.IsAbstract)
                     {
-                        result.Add(m);
+                        if (!IsMethodHiddenByExisting(result, m))
+                        {
+                            result.Add(m);
+                        }
                     }
                 }
             }
 
             return result;
         });
+    }
+
+    /// <summary>
+    /// Issue #4013: the interfaces that declare an abstract instance member
+    /// named <paramref name="name"/> which <paramref name="clrType"/> — a class
+    /// — implements EXPLICITLY, in the case where the class exposes no member of
+    /// that name on its own surface at all.
+    /// </summary>
+    /// <remarks>
+    /// The diagnostic companion to the interface-walk rule in
+    /// <see cref="SafeGetMethodsIncludingSelfAndInterfaces(Type, string, bool)"/>.
+    /// That rule stops offering such a member as a candidate for an ordinary
+    /// call; without this helper the resulting failure reads
+    /// <c>GS0159 Cannot find function Contains</c>, which is what a genuinely
+    /// misspelled member reports too and does not tell the author that the
+    /// member exists and how to reach it.
+    /// <para>
+    /// Deliberately UNCACHED and called only from the terminal
+    /// member-not-found error path, so the memoized candidate lookup on the hot
+    /// path is untouched. Only reports when the class surface is empty for this
+    /// name: when the class does expose a same-named member, the call is an
+    /// ordinary inapplicable-overload failure and keeps GS0159, exactly as an
+    /// imported member with no interface sibling already does.
+    /// </para>
+    /// </remarks>
+    /// <param name="clrType">The class receiver's CLR type.</param>
+    /// <param name="name">The member name the call site used.</param>
+    /// <param name="declaringInterfaces">The interfaces declaring the member, in metadata order.</param>
+    /// <returns>True when the member is reachable only through an interface-typed receiver.</returns>
+    public static bool TryFindInterfaceOnlyInstanceMethod(
+        Type clrType,
+        string name,
+        out IReadOnlyList<Type> declaringInterfaces)
+    {
+        declaringInterfaces = Array.Empty<Type>();
+        if (clrType == null || clrType.IsInterface || string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+
+        // The class surface, as the candidate lookup now sees it. Non-empty
+        // means the call is an ordinary overload failure, not this.
+        if (SafeGetMethodsIncludingSelfAndInterfaces(clrType, name).Count != 0)
+        {
+            return false;
+        }
+
+        var found = new List<Type>();
+        foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
+        {
+            foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (m.IsAbstract
+                    && ClrTypeUtilities.EmittedMemberNameMatches(m, name)
+                    && !found.Contains(iface))
+                {
+                    found.Add(iface);
+                }
+            }
+        }
+
+        declaringInterfaces = found;
+        return found.Count != 0;
     }
 
     /// <summary>

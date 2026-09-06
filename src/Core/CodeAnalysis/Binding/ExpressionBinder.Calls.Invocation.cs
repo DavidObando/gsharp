@@ -3579,11 +3579,48 @@ internal sealed partial class ExpressionBinder
         // into that attribute is how every migrated test app reaches the
         // internals of the project under test.
         var receiverGrantsInternals = scope.References.CanAccessInternalMembers(clrType.Assembly);
+
+        // Issue #4013: an author-written call no longer reaches an
+        // explicitly-implemented interface member; a synthesized
+        // collection-initializer `Add` still does, because ADR-0117 literals
+        // and the #3096 spread form fill a `Dictionary[K, V]` through the
+        // explicit `ICollection<KeyValuePair<K, V>>.Add` and lower the call
+        // through the interface.
+        var isSynthesizedCollectionAdd = IsSynthesizedCollectionAddCall(ce);
+
+        // Issue #4013: an explicitly-implemented interface member is offered
+        // only where the compiler still depends on it — never for an argument
+        // that has a CLR identity of its own and simply does not fit, which is
+        // the hole this issue closes.
+        //
+        // Two dependencies, both measured. (1) A synthesized
+        // collection-initializer `Add`: ADR-0117 literals and the #3096 spread
+        // form fill a `Dictionary[K, V]` through the explicit
+        // `ICollection<KeyValuePair<K, V>>.Add` and lower the call through the
+        // interface. (2) An argument carrying a SAME-COMPILATION type, where
+        // `IList.Add(object)` is an erasure escape hatch: in
+        // `List[System.Action[Mode]].Add((item Mode) -> ...)` for a
+        // same-compilation enum `Mode`
+        // (`Issue2918InlineLambdaErasedReceiverTests`) the receiver is built
+        // over the flat `System.Object` placeholder and presents as
+        // `List<Action<object>>`, while the lambda erases the enum to `int` and
+        // presents as `Action<int>` — so the type's own `Add(Action<object>)`
+        // is inapplicable and only `Add(object)` ever accepted it. That is
+        // #4016's defect at the generic-CONSTRUCTION placeholder rather than at
+        // the method-type-argument one, and repairing it there is deliberately
+        // out of scope here.
+        //
+        // The reported hole is closed because its argument is a genuine
+        // `string` at a genuine `int32`: `List[int32]().Add("x")` reports
+        // GS0159 and `map[string, int32]{}.Contains(k)` reports GS0577.
+        var anyArgumentIsErased = arguments.Any(
+            argument => argument.Type != null && TypeSymbol.ContainsSameCompilationUserType(argument.Type));
         var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
             MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
                 clrType,
                 methodName,
-                includeInternal: receiverGrantsInternals),
+                includeInternal: receiverGrantsInternals,
+                includeExplicitInterfaceMembers: isSynthesizedCollectionAdd || anyArgumentIsErased),
             instSymbolicArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             effectiveReceiverType).ToList();
@@ -3934,6 +3971,30 @@ internal sealed partial class ExpressionBinder
             && TryBindInterfaceObjectMemberCall(receiver!, methodName, arguments, ce, argumentNames, out var importedIfaceObjectCall))
         {
             return importedIfaceObjectCall;
+        }
+
+        // Issue #4013: before falling back to the generic "Cannot find
+        // function" text, say so when the member DOES exist but only as an
+        // explicit interface implementation. Since #4013 such a member is no
+        // longer a candidate for an ordinary call — it is not on the
+        // implementing type's own surface, exactly as in C# — and without this
+        // the author of `map[string, int32]{}.Contains(k)` gets the very same
+        // message a misspelled member produces. Only reached on the error path,
+        // and only when the receiver's own surface has no member of this name
+        // at all: an inapplicable overload on a type that DOES expose the name
+        // (`List[int32]().Add("x")`) stays GS0159, which is what an imported
+        // member with no interface sibling (`Stack[int32]().Push("x")`) already
+        // reported before this change.
+        if (receiver?.Type is { } explicitIfaceRecvType
+            && MemberLookup.TryProjectErasedClrType(explicitIfaceRecvType, out var explicitIfaceRecvClr)
+            && MemberLookup.TryFindInterfaceOnlyInstanceMethod(explicitIfaceRecvClr, methodName, out var declaringIfaces))
+        {
+            Diagnostics.ReportExplicitInterfaceMemberNotOnTypeSurface(
+                ce.Location,
+                explicitIfaceRecvType.Name,
+                methodName,
+                TypeSymbol.FromClrType(declaringIfaces[0]).ToDisplayString(DisplayFormat.Minimal));
+            return new BoundErrorExpression(null);
         }
 
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
