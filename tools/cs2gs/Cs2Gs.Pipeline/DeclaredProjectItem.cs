@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 using Cs2Gs.Translator.Loading;
 
@@ -75,8 +77,7 @@ internal static class DeclaredProjectItems
                 {
                     string include = item.Attribute("Include")?.Value;
                     if (!string.IsNullOrEmpty(include)
-                        && !include.Contains("$(", StringComparison.Ordinal)
-                        && !include.Contains("@(", StringComparison.Ordinal))
+                        && !IsMsbuildExpression(include))
                     {
                         string normalizedInclude = include
                             .Replace('\\', Path.DirectorySeparatorChar)
@@ -92,11 +93,37 @@ internal static class DeclaredProjectItems
         return items;
     }
 
-    internal static IReadOnlyList<string> ProjectReferencePaths(string projectPath) =>
-        Read(projectPath, "ProjectReference")
+    internal static IReadOnlyList<string> ProjectReferencePaths(
+        string projectPath,
+        IReadOnlyList<string> evaluatedProjectReferencePaths = null)
+    {
+        IReadOnlyList<DeclaredProjectItem> items = Read(projectPath, "ProjectReference");
+        return items
             .Select(item => item.SourceInclude)
             .Where(path => !string.IsNullOrEmpty(path))
+            .Concat(RequireEvaluatedProjectReferencePaths(
+                projectPath,
+                items,
+                evaluatedProjectReferencePaths))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    internal static async Task<IReadOnlyList<string>> EvaluateCompileProjectReferencePathsAsync(
+        string projectPath,
+        CancellationToken cancellationToken = default)
+    {
+        IReadOnlyList<LoadedCSharpProject> loaded =
+            await CSharpProjectLoader.LoadProjectWithReferencesAsync(projectPath, cancellationToken)
+                .ConfigureAwait(false);
+        return loaded
+            .Skip(1)
+            .Select(project => project.ProjectPath)
+            .Where(path => !string.IsNullOrEmpty(path))
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
 
     /// <summary>
     /// Collects the absolute project paths that any of the given projects
@@ -106,14 +133,20 @@ internal static class DeclaredProjectItems
     /// target's types), so it is excluded.
     /// </summary>
     /// <param name="projectPaths">The referencing projects' <c>.csproj</c> paths.</param>
+    /// <param name="evaluatedProjectReferences">
+    /// Evaluated compile-reference paths keyed by referencing project. Required
+    /// for projects declaring an MSBuild expression include.
+    /// </param>
     /// <returns>The referenced projects' absolute paths (case-insensitive set).</returns>
     internal static IReadOnlyCollection<string> CollectCompileReferencedProjectPaths(
-        IEnumerable<string> projectPaths)
+        IEnumerable<string> projectPaths,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> evaluatedProjectReferences = null)
     {
         var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string projectPath in projectPaths ?? Array.Empty<string>())
         {
-            foreach (DeclaredProjectItem item in Read(projectPath, "ProjectReference"))
+            IReadOnlyList<DeclaredProjectItem> items = Read(projectPath, "ProjectReference");
+            foreach (DeclaredProjectItem item in items)
             {
                 if (string.IsNullOrEmpty(item.SourceInclude))
                 {
@@ -133,6 +166,15 @@ internal static class DeclaredProjectItems
 
                 referenced.Add(item.SourceInclude);
             }
+
+            IReadOnlyList<string> evaluatedPaths = null;
+            evaluatedProjectReferences?.TryGetValue(
+                Path.GetFullPath(projectPath),
+                out evaluatedPaths);
+            referenced.UnionWith(RequireEvaluatedProjectReferencePaths(
+                projectPath,
+                items,
+                evaluatedPaths));
         }
 
         return referenced;
@@ -242,6 +284,33 @@ internal static class DeclaredProjectItems
     internal static bool HasMsbuildExpressionInclude(DeclaredProjectItem item) =>
         item is not null
         && IsMsbuildExpression(item.Element.Attribute("Include")?.Value);
+
+    private static IReadOnlyList<string> RequireEvaluatedProjectReferencePaths(
+        string projectPath,
+        IReadOnlyList<DeclaredProjectItem> items,
+        IReadOnlyList<string> evaluatedProjectReferencePaths)
+    {
+        string[] expressions = items
+            .Where(HasMsbuildExpressionInclude)
+            .Select(item => item.Element.Attribute("Include")?.Value)
+            .Where(include => !string.IsNullOrEmpty(include))
+            .OrderBy(include => include, StringComparer.Ordinal)
+            .ToArray();
+        if (expressions.Length == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        if (evaluatedProjectReferencePaths is not null)
+        {
+            return evaluatedProjectReferencePaths;
+        }
+
+        throw new InvalidOperationException(
+            $"Project '{Path.GetFullPath(projectPath)}' declares ProjectReference Include " +
+            $"expressions that require MSBuild evaluation: {string.Join(", ", expressions.Select(
+                expression => $"'{expression}'"))}.");
+    }
 
     private static bool IsMsbuildExpression(string value) =>
         !string.IsNullOrEmpty(value)

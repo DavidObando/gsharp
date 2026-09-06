@@ -68,8 +68,7 @@ internal sealed class RepositoryExcludedScope
             {
                 string include = item.Element.Attribute("Include")?.Value;
                 if (string.IsNullOrEmpty(include)
-                    || include.Contains("$(", StringComparison.Ordinal)
-                    || include.Contains("@(", StringComparison.Ordinal)
+                    || DeclaredProjectItems.HasMsbuildExpressionInclude(item)
                     || include.Contains('*', StringComparison.Ordinal))
                 {
                     continue;

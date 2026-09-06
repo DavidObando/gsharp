@@ -171,13 +171,20 @@ public sealed class MigrationPipeline
         }
 
         Directory.CreateDirectory(runDir);
+        IReadOnlyDictionary<string, IReadOnlyList<string>> evaluatedProjectReferences =
+            await this.LoadEvaluatedProjectReferencesAsync(
+                apps,
+                includeBuildOrdering: true,
+                cancellationToken)
+                .ConfigureAwait(false);
 
         // Issue #3645: an executable app that another app in this run compiles
         // against must keep its entry-point class as a real G# class (see
         // PipelineOptions.ProjectsReferencedByOtherApps).
         this.options.ProjectsReferencedByOtherApps =
             DeclaredProjectItems.CollectCompileReferencedProjectPaths(
-                apps.Select(app => app.ProjectPath));
+                apps.Select(app => app.ProjectPath),
+                evaluatedProjectReferences);
 
         this.options.GeneratedProjectPaths = apps.ToDictionary(
             app => Path.GetFullPath(app.ProjectPath),
@@ -278,9 +285,8 @@ public sealed class MigrationPipeline
         };
 
         var appResults = new Dictionary<string, AppResult>(StringComparer.OrdinalIgnoreCase);
-        IReadOnlyList<CorpusApp> orderedApps = repositoryLayout
-            ? await this.OrderForSdkBuildAsync(apps, cancellationToken).ConfigureAwait(false)
-            : this.OrderForSdkBuild(apps);
+        IReadOnlyList<CorpusApp> orderedApps =
+            this.OrderForSdkBuild(apps, evaluatedProjectReferences);
         foreach (CorpusApp app in orderedApps)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -450,9 +456,16 @@ public sealed class MigrationPipeline
                     app.RelativeProjectPath ?? Path.GetRelativePath(this.options.SourceRoot, app.ProjectPath),
                     ".gsproj")),
             StringComparer.OrdinalIgnoreCase);
+        IReadOnlyDictionary<string, IReadOnlyList<string>> evaluatedProjectReferences =
+            await this.LoadEvaluatedProjectReferencesAsync(
+                allApps,
+                includeBuildOrdering: false,
+                cancellationToken)
+                .ConfigureAwait(false);
         this.options.ProjectsReferencedByOtherApps =
             DeclaredProjectItems.CollectCompileReferencedProjectPaths(
-                allApps.Select(app => app.ProjectPath));
+                allApps.Select(app => app.ProjectPath),
+                evaluatedProjectReferences);
 
         IReadOnlyDictionary<string, List<TriageRetryEntry>> priorHistory =
             LoadPriorRetryEntries(outputRoot, runId);
@@ -519,7 +532,9 @@ public sealed class MigrationPipeline
         return runResult;
     }
 
-    private IReadOnlyList<CorpusApp> OrderForSdkBuild(IReadOnlyList<CorpusApp> apps)
+    internal IReadOnlyList<CorpusApp> OrderForSdkBuild(
+        IReadOnlyList<CorpusApp> apps,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> evaluatedProjectReferences)
     {
         if (!this.options.CompileViaSdk || apps.Count <= 1)
         {
@@ -546,7 +561,14 @@ public sealed class MigrationPipeline
                 return;
             }
 
-            foreach (string referencePath in DeclaredProjectItems.ProjectReferencePaths(path))
+            IReadOnlyList<string> evaluatedPaths = null;
+            evaluatedProjectReferences?.TryGetValue(path, out evaluatedPaths);
+
+            // Evaluated paths cover expression-based compile references; the
+            // declared paths retain analyzer-only ordering edges (#3617).
+            foreach (string referencePath in DeclaredProjectItems.ProjectReferencePaths(
+                path,
+                evaluatedPaths))
             {
                 if (byPath.TryGetValue(referencePath, out CorpusApp dependency))
                 {
@@ -566,72 +588,30 @@ public sealed class MigrationPipeline
         return ordered;
     }
 
-    private async Task<IReadOnlyList<CorpusApp>> OrderForSdkBuildAsync(
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> LoadEvaluatedProjectReferencesAsync(
         IReadOnlyList<CorpusApp> apps,
+        bool includeBuildOrdering,
         CancellationToken cancellationToken)
     {
-        if (!this.options.CompileViaSdk || apps.Count <= 1)
-        {
-            return apps;
-        }
-
-        var byPath = apps.ToDictionary(
-            app => Path.GetFullPath(app.ProjectPath),
-            StringComparer.OrdinalIgnoreCase);
         var references = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        bool loadAllForBuildOrdering =
+            includeBuildOrdering && this.options.CompileViaSdk && apps.Count > 1;
         foreach (CorpusApp app in apps)
-        {
-            IReadOnlyList<Cs2Gs.Translator.Loading.LoadedCSharpProject> loaded =
-                await Cs2Gs.Translator.Loading.CSharpProjectLoader
-                    .LoadProjectWithReferencesAsync(app.ProjectPath, cancellationToken)
-                    .ConfigureAwait(false);
-
-            // Issue #3617: the Roslyn loader follows compile references only,
-            // so an analyzer-shaped reference (`OutputItemType="Analyzer"
-            // ReferenceOutputAssembly="false"`, e.g. Core → InternalAnalyzers)
-            // never becomes an ordering edge. Union in the XML-declared
-            // ProjectReference paths so a dependent app cannot build before
-            // its analyzer dependency has translated its sources — building
-            // the dependency from a source-less mirror directory produces a
-            // two-file husk assembly that later fails analyzer discovery
-            // (GS9301).
-            references[Path.GetFullPath(app.ProjectPath)] = loaded
-                .Skip(1)
-                .Select(project => project.ProjectPath)
-                .Where(path => !string.IsNullOrEmpty(path))
-                .Select(Path.GetFullPath)
-                .Concat(DeclaredProjectItems.ProjectReferencePaths(app.ProjectPath))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        var ordered = new List<CorpusApp>(apps.Count);
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        void Visit(CorpusApp app)
         {
             string path = Path.GetFullPath(app.ProjectPath);
-            if (!visited.Add(path))
+            bool hasExpression = DeclaredProjectItems.Read(path, "ProjectReference")
+                .Any(DeclaredProjectItems.HasMsbuildExpressionInclude);
+            if (!loadAllForBuildOrdering && !hasExpression)
             {
-                return;
+                continue;
             }
 
-            foreach (string reference in references[path])
-            {
-                if (byPath.TryGetValue(reference, out CorpusApp dependency))
-                {
-                    Visit(dependency);
-                }
-            }
-
-            ordered.Add(app);
+            references[path] = await DeclaredProjectItems
+                .EvaluateCompileProjectReferencePathsAsync(path, cancellationToken)
+                .ConfigureAwait(false);
         }
 
-        foreach (CorpusApp app in apps)
-        {
-            Visit(app);
-        }
-
-        return ordered;
+        return references;
     }
 
     private static string NewRunId(DateTime utc)
