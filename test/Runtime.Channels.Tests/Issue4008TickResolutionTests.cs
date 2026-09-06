@@ -249,6 +249,24 @@ public class Issue4008TickResolutionTests
             TimeSpan.FromTicks(expectedTicks),
             Timers.Quantize(TimeSpan.FromTicks(inputTicks)));
 
+    /// <summary>
+    /// Mean time from constructing an <c>after(due)</c> to its firing, over
+    /// <paramref name="samples"/> arms.
+    /// </summary>
+    /// <remarks>
+    /// The wait is bounded by <see cref="RepeatDeadline"/> and the fire is
+    /// ASSERTED rather than assumed. An unbounded spin here would turn the one
+    /// defect this suite's sibling <c>Issue4001TimerArmingTests</c> exists to
+    /// catch — a timer that is constructed but never armed — into a CI timeout
+    /// with no signal instead of a red test, which is strictly worse than
+    /// having no test at all. Verified by mutation: with
+    /// <c>AfterTimer</c>'s <c>timer.Change(...)</c> removed, this reports
+    /// <c>after(0.9 ms) did not fire within 10 s (sample 1 of 200); the timer
+    /// was never armed.</c> in 10 s rather than hanging.
+    /// </remarks>
+    /// <param name="due">The delay to arm each sample at.</param>
+    /// <param name="samples">How many arms to average.</param>
+    /// <returns>The mean observed latency.</returns>
     private static TimeSpan MeanAfterLatency(TimeSpan due, int samples)
     {
         var total = TimeSpan.Zero;
@@ -256,12 +274,17 @@ public class Issue4008TickResolutionTests
         {
             var clock = Stopwatch.StartNew();
             using var timer = Timers.After(due);
-            while (!timer.HasFired)
+            while (!timer.HasFired && clock.Elapsed < RepeatDeadline)
             {
                 Thread.SpinWait(20);
             }
 
-            total += clock.Elapsed;
+            var elapsed = clock.Elapsed;
+            Assert.True(
+                timer.HasFired,
+                $"after({due.TotalMilliseconds} ms) did not fire within {RepeatDeadline.TotalSeconds:F0} s "
+                    + $"(sample {i + 1} of {samples}); the timer was never armed.");
+            total += elapsed;
         }
 
         return total / samples;
