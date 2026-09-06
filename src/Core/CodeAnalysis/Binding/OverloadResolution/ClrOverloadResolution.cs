@@ -4404,6 +4404,15 @@ internal static class ClrOverloadResolution
                 continue;
             }
 
+            // G# does not admit by-ref-like values as generic arguments
+            // (issue #367). Live reflection rejects them even on an otherwise
+            // unconstrained parameter, so this is ordinary inapplicability,
+            // not a compiler identity/context failure.
+            if (ClrTypeUtilities.IsByRefLike(arg))
+            {
+                return false;
+            }
+
             GenericParameterAttributes attrs;
             try
             {
@@ -4498,13 +4507,10 @@ internal static class ClrOverloadResolution
                 }
             }
 
-            // Type-bound constraints — `where T : SomeBase` or
-            // `where T : ISomething`. Constraints that reference another
-            // method type parameter (e.g. `where TResult : T`) are skipped:
-            // resolving them requires substitution and is rare on the
-            // surfaces that motivated this work (ADR-0084). The dominant
-            // class/struct cases above already disambiguate the
-            // Optional/Sequences overload sets.
+            // Type-bound constraints — `where T : SomeBase`,
+            // `where T : ISomething`, or a dependent bound such as
+            // `where TResult : T`. Substitute the complete type-argument
+            // vector before testing the constraint.
             Type[] typeConstraints;
             try
             {
@@ -4632,10 +4638,20 @@ internal static class ClrOverloadResolution
         ImmutableArray<TypeSymbol?> typeArgSymbols,
         ArgumentException failure)
     {
-        if (!SatisfiesGenericConstraints(openMethod, typeArgs, typeArgSymbols)
-            || (!typeArgSymbols.IsDefaultOrEmpty
-                && typeArgSymbols.Any(static symbol => symbol is not null && symbol.ClrType is null)))
+        if (!SatisfiesGenericConstraints(openMethod, typeArgs, typeArgSymbols))
         {
+            return;
+        }
+
+        var hasErasedSymbol = !typeArgSymbols.IsDefaultOrEmpty
+            && typeArgSymbols.Any(static symbol => symbol is not null && symbol.ClrType is null);
+        if (hasErasedSymbol
+            && !HasConcreteReflectionContextMismatch(openMethod, typeArgs, typeArgSymbols))
+        {
+            // Placeholder closure is deliberately best-effort for
+            // same-compilation symbols with no CLR Type. Preserve their
+            // established silent rejection, but do not let one erased slot
+            // hide a mismatch in another concrete slot.
             return;
         }
 
@@ -4649,6 +4665,146 @@ internal static class ClrOverloadResolution
             "compiler-supplied type arguments after their generic constraints were satisfied. The method " +
             "and type arguments have incompatible reflection/load contexts or inconsistent CLR identities. " +
             $"Type arguments: {arguments}. Reflection reported: {failure.Message}");
+    }
+
+    private static bool HasConcreteReflectionContextMismatch(
+        MethodInfo openMethod,
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol?> typeArgSymbols)
+    {
+        Type[] typeParameters;
+        try
+        {
+            typeParameters = openMethod.GetGenericArguments();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < typeParameters.Length && i < typeArgs.Length; i++)
+        {
+            if (!typeArgSymbols.IsDefaultOrEmpty
+                && i < typeArgSymbols.Length
+                && typeArgSymbols[i] is { ClrType: null })
+            {
+                continue;
+            }
+
+            var argument = typeArgs[i];
+            if (!CanConstructGenericContextProbe(typeParameters[i], argument))
+            {
+                return true;
+            }
+
+            Type[] constraints;
+            try
+            {
+                constraints = typeParameters[i].GetGenericParameterConstraints();
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                continue;
+            }
+
+            foreach (var originalConstraint in constraints)
+            {
+                if (DependsOnErasedTypeParameter(
+                    originalConstraint,
+                    typeParameters,
+                    typeArgSymbols))
+                {
+                    continue;
+                }
+
+                var constraint = originalConstraint;
+                try
+                {
+                    for (var p = 0; p < typeParameters.Length; p++)
+                    {
+                        constraint = SubstituteClrType(constraint, typeParameters[p], typeArgs[p]);
+                    }
+
+                    if (!constraint.ContainsGenericParameters
+                        && ClrTypeUtilities.IsAssignableByName(constraint, argument)
+                        && !constraint.IsAssignableFrom(argument))
+                    {
+                        return true;
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    return true;
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    continue;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool DependsOnErasedTypeParameter(
+        Type type,
+        Type[] typeParameters,
+        ImmutableArray<TypeSymbol?> typeArgSymbols)
+    {
+        if (type.IsGenericParameter)
+        {
+            for (var i = 0; i < typeParameters.Length && i < typeArgSymbols.Length; i++)
+            {
+                if (ReferenceEquals(type, typeParameters[i])
+                    && typeArgSymbols[i] is { ClrType: null })
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (type.HasElementType && type.GetElementType() is { } element)
+        {
+            return DependsOnErasedTypeParameter(element, typeParameters, typeArgSymbols);
+        }
+
+        return type.IsGenericType
+            && type.GetGenericArguments().Any(
+                argument => DependsOnErasedTypeParameter(
+                    argument,
+                    typeParameters,
+                    typeArgSymbols));
+    }
+
+    private static bool CanConstructGenericContextProbe(Type genericParameter, Type argument)
+    {
+        try
+        {
+            Type? root = genericParameter.BaseType;
+            while (root?.BaseType is { } baseType)
+            {
+                root = baseType;
+            }
+
+            Type? listDefinition = root?.Assembly.GetType("System.Collections.Generic.List`1");
+            if (listDefinition is null)
+            {
+                return true;
+            }
+
+            _ = listDefinition.MakeGenericType(argument);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return true;
+        }
     }
 
     private static bool ErasedSymbolSatisfiesInterfaceConstraint(TypeSymbol symbol, Type constraint)

@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -34,6 +35,20 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
             new[] { open },
             Array.Empty<Type>(),
             explicitTypeArgs: new[] { typeof(string), typeof(object) });
+
+        Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
+    }
+
+    [Fact]
+    public void RuntimeByRefLikeArgument_RemainsOrdinaryCandidateRejection()
+    {
+        MethodInfo open = typeof(ConstraintFixture).GetMethod(
+            nameof(ConstraintFixture.Identity),
+            BindingFlags.Public | BindingFlags.Static);
+
+        var result = ClrOverloadResolution.Resolve(
+            new[] { open },
+            new[] { typeof(Span<int>) });
 
         Assert.Equal(ClrOverloadResolution.ResolutionOutcome.NoneApplicable, result.Outcome);
     }
@@ -110,6 +125,47 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
         AssertInternalDiagnostic(exception, nameof(Enumerable.Repeat));
     }
 
+    [Fact]
+    public void ErasedSymbol_DoesNotHideCrossContextConcreteArgument()
+    {
+        byte[] image = File.ReadAllBytes(typeof(Issue3834GenericMethodClosureDiagnosticsTests).Assembly.Location);
+        var firstContext = new IsolatedLoadContext("issue3834-mixed-first");
+        var secondContext = new IsolatedLoadContext("issue3834-mixed-second");
+
+        try
+        {
+            Assembly firstAssembly = Load(firstContext, image);
+            Assembly secondAssembly = Load(secondContext, image);
+            Type firstFixture = GetRequiredType(firstAssembly, typeof(ConstraintFixture).FullName);
+            Type secondDerived = GetRequiredType(secondAssembly, typeof(CrossContextDerived).FullName);
+            MethodInfo open = firstFixture.GetMethod(
+                nameof(ConstraintFixture.Mixed),
+                BindingFlags.Public | BindingFlags.Static);
+            var erased = new TypeParameterSymbol(
+                "TErased",
+                0,
+                TypeParameterConstraint.Any,
+                TypeParameterVariance.None);
+            ImmutableArray<TypeSymbol> recovered = ImmutableArray.Create<TypeSymbol>(
+                erased,
+                TypeSymbol.FromClrType(secondDerived));
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => ClrOverloadResolution.Resolve(
+                    new[] { open },
+                    Array.Empty<Type>(),
+                    explicitTypeArgs: new[] { typeof(object), secondDerived },
+                    recoverTypeArgSymbols: (_, _) => recovered));
+
+            AssertInternalDiagnostic(exception, nameof(ConstraintFixture.Mixed));
+        }
+        finally
+        {
+            firstContext.Unload();
+            secondContext.Unload();
+        }
+    }
+
     private static void AssertInternalDiagnostic(
         InvalidOperationException exception,
         string methodName)
@@ -155,5 +211,20 @@ public class Issue3834GenericMethodClosureDiagnosticsTests
             where TDerived : TBase
         {
         }
+
+        public static T Identity<T>(T value) => value;
+
+        public static void Mixed<TErased, TConcrete>()
+            where TConcrete : CrossContextBase
+        {
+        }
+    }
+
+    public class CrossContextBase
+    {
+    }
+
+    public sealed class CrossContextDerived : CrossContextBase
+    {
     }
 }
