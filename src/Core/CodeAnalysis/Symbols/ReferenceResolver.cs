@@ -129,6 +129,7 @@ public sealed class ReferenceResolver : IDisposable
     // and the binder already constructs (e.g. "Ns.Type`1").
     private readonly Lazy<Dictionary<string, Type>> typeNameIndex;
     private readonly Lazy<Dictionary<string, string>> emittedTypeNameIndex;
+    private readonly Lazy<ImmutableHashSet<string>> namespaceIndex;
 
     // ADR-0107 (cold-start cache): an optional, externally-supplied
     // full-name -> declaring-assembly-index map that stands in for the eager
@@ -190,6 +191,9 @@ public sealed class ReferenceResolver : IDisposable
         this.hostFallbackAssemblyNames = hostFallbackAssemblyNames
             ?? ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
         this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies);
+        this.namespaceIndex = new Lazy<ImmutableHashSet<string>>(
+            BuildNamespaceIndex,
+            LazyThreadSafetyMode.ExecutionAndPublication);
         this.emittedTypeNameIndex = new Lazy<Dictionary<string, string>>(
             () => BuildEmittedTypeNameIndex(
                 this.warmNameIndex is { } warm
@@ -1213,6 +1217,15 @@ public sealed class ReferenceResolver : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Returns whether the reference set contains at least one type below the
+    /// specified CLR namespace.
+    /// </summary>
+    /// <param name="namespaceName">The fully-qualified namespace name.</param>
+    /// <returns>Whether the namespace is present in the reference set.</returns>
+    internal bool ContainsNamespace(string namespaceName)
+        => !string.IsNullOrEmpty(namespaceName) && namespaceIndex.Value.Contains(namespaceName);
+
     internal static string? FindBundledExtensionPath(string baseDirectory)
     {
         // Compiler cannot ProjectReference Gsharp.Extensions because its bootstrap
@@ -1228,6 +1241,33 @@ public sealed class ReferenceResolver : IDisposable
         // layout has it under out/bin/<Config>/Gsharp.Runtime.Channels/, and
         // the SDK NuGet under tools/channels/.
         return FindBundledRuntimePath(baseDirectory, "Gsharp.Runtime.Channels.dll", "Gsharp.Runtime.Channels", "channels");
+    }
+
+    private ImmutableHashSet<string> BuildNamespaceIndex()
+    {
+        var builder = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
+        IEnumerable<string> indexedNames = warmNameIndex != null
+            ? warmNameIndex.Keys
+            : typeNameIndex.Value.Keys;
+        var names = indexedNames.ToArray();
+        var scopes = BuildTypeNameScopes(names);
+
+        foreach (var name in names)
+        {
+            AddNamespacePrefixes(name);
+            AddNamespacePrefixes(CanonicalTypeName(name, scopes));
+        }
+
+        return builder.ToImmutable();
+
+        void AddNamespacePrefixes(string typeName)
+        {
+            var topLevelName = typeName.Split('+')[0];
+            for (var separator = topLevelName.LastIndexOf('.'); separator > 0; separator = topLevelName.LastIndexOf('.', separator - 1))
+            {
+                builder.Add(topLevelName.Substring(0, separator));
+            }
+        }
     }
 
     private static void AppendBundledPath(List<string> paths, string? bundledPath)

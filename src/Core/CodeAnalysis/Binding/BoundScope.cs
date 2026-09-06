@@ -24,6 +24,7 @@ public sealed class BoundScope
     private ImmutableArray<string>.Builder? functionKeys;
     private ImmutableArray<ImportSymbol>.Builder? imports;
     private ImmutableDictionary<string, TypeSymbol>.Builder? typeAliases;
+    private ImmutableDictionary<string, bool>.Builder? sourcePackagePrefixes;
 
     // ADR-0156 Phase 2: registered on the root scope of an interactive
     // submission's scope chain; exposed via SubmissionImports.
@@ -1717,6 +1718,57 @@ public sealed class BoundScope
     /// </summary>
     /// <param name="imports">The submission import set; may be <see langword="null"/>.</param>
     internal void SetSubmissionImports(SubmissionImports? imports) => submissionImports = imports;
+
+    /// <summary>
+    /// Records a package declared by the source compilation.
+    /// </summary>
+    /// <param name="packageName">The package's dotted name.</param>
+    internal void RegisterSourcePackage(string packageName)
+    {
+        sourcePackagePrefixes ??= ImmutableDictionary.CreateBuilder<string, bool>(StringComparer.Ordinal);
+        for (var end = packageName.Length; end > 0; end = packageName.LastIndexOf('.', end - 1))
+        {
+            var prefix = packageName.Substring(0, end);
+            var exact = end == packageName.Length;
+            if (!sourcePackagePrefixes.TryGetValue(prefix, out var existingExact) || (exact && !existingExact))
+            {
+                sourcePackagePrefixes[prefix] = exact;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns whether a source package exactly matches, or descends from, the
+    /// specified dotted prefix.
+    /// </summary>
+    /// <param name="packagePrefix">The package prefix to probe.</param>
+    /// <param name="exactMatch">Whether an exact package match was found.</param>
+    /// <returns>Whether the prefix belongs to the source package hierarchy.</returns>
+    internal bool TryMatchSourcePackagePrefix(string packagePrefix, out bool exactMatch)
+    {
+        exactMatch = false;
+        if (string.IsNullOrEmpty(packagePrefix))
+        {
+            return false;
+        }
+
+        var matched = false;
+        for (var current = this; current != null; current = current.Parent)
+        {
+            if (current.sourcePackagePrefixes?.TryGetValue(packagePrefix, out var isExact) == true)
+            {
+                if (isExact)
+                {
+                    exactMatch = true;
+                    return true;
+                }
+
+                matched = true;
+            }
+        }
+
+        return matched;
+    }
 
     /// <summary>
     /// Gets the per-compile-pass anonymous-class-literal type cache (issue

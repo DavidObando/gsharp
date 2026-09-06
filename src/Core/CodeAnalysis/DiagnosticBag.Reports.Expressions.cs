@@ -425,6 +425,23 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.UnableToFindType, text);
 
     /// <summary>
+    /// Reports that a qualified namespace/package path resolved, but its next
+    /// segment did not name a type.
+    /// </summary>
+    /// <param name="location">The missing type segment's location.</param>
+    /// <param name="typeName">The missing simple type name.</param>
+    /// <param name="prefix">The longest resolvable namespace/package prefix.</param>
+    /// <param name="isPackage">Whether <paramref name="prefix"/> is a source package.</param>
+    public void ReportUnableToFindQualifiedType(
+        TextLocation location,
+        string typeName,
+        string prefix,
+        bool isPackage)
+    => ReportUnableToFindType(
+        location,
+        $"'{typeName}' in {(isPackage ? "package" : "namespace")} '{prefix}'");
+
+    /// <summary>
     /// Reports that we couldn't find the specified member.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
