@@ -2165,6 +2165,31 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #3876: ADR-0174 D2's `chan[T]` / `in chan[T]` / `out chan[T]`
+        // over an element with no CLR backing — a type parameter, or another
+        // same-compilation user type — is the same hole the slice arm above
+        // closes for `[]T`. `ChannelTypeSymbol.MakeClrType` returns null the
+        // moment the element's `ClrType` is null, so a channel argument inside
+        // a generic function produced NO effective CLR type, and every probe
+        // that ranks candidates on CLR shapes abandoned resolution before
+        // examining a single one: the imported-constructor probe reported
+        // GS0267 with no overload having been looked at, the imported
+        // instance-method probe GS0159, the `: base(...)` probe GS0214. The
+        // erasure itself is not restated here — `TryProjectErasedClrType` is
+        // the one place that knows a channel erases to
+        // `Channel<…>`/`ChannelReader<…>`/`ChannelWriter<…>`, which is exactly
+        // why the ONE probe that already consulted it (the imported
+        // extension/static path, since issue #833) bound `Chunks.Of[T](ch, n)`
+        // while the `ChunkReader[T](ch, n)` constructor beside it did not.
+        // Direction is carried through, so each spelling stays applicable to
+        // its own BCL type and to nothing else: the lattice's decisions are
+        // made downstream by `Conversion`, not widened here.
+        if (typeSymbol is ChannelTypeSymbol or NullableTypeSymbol { UnderlyingType: ChannelTypeSymbol }
+            && MemberLookup.TryProjectErasedClrType(typeSymbol, out var erasedChannel))
+        {
+            return erasedChannel;
+        }
+
         if (typeSymbol is RectangularArrayTypeSymbol rectangular)
         {
             var elementClr = GetEffectiveArgumentClrTypeForOverloadResolution(rectangular.ElementType);

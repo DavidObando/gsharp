@@ -7,10 +7,17 @@ using System.Threading.Channels;
 namespace Gsharp.Concurrency;
 
 /// <summary>
-/// The non-generic entry point behind the language's <c>chunks(ch, n)</c>
-/// (ADR-0174 D10). A static generic method is what a G# caller with an open
-/// element type can reach — the same shape <c>Chan.Unbounded[T]()</c> takes.
+/// A static-factory spelling of <see cref="ChunkReader{T}"/>'s constructor
+/// (ADR-0174 D10), kept as published surface.
 /// </summary>
+/// <remarks>
+/// It was introduced as a workaround: a G# caller with an OPEN element type
+/// could not reach the constructor at all (issue #3876 — a <c>chan[T]</c>
+/// argument projected to no CLR shape, so constructor applicability abandoned
+/// resolution), and a static generic method was the shape that did bind.
+/// <c>chunks</c> now calls the constructor directly; this entry point stays
+/// because it is public API, not because anything needs it.
+/// </remarks>
 public static class Chunks
 {
     /// <summary>Opens a chunked, receive-only view of <paramref name="source"/>.</summary>
