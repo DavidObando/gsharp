@@ -462,6 +462,23 @@ internal sealed partial class OverloadResolver
                 ? variadicElement
                 : null;
 
+            // Issue #3880: the EXPANDED-form element type needs closing for the
+            // same reason #3964 closed the carrier one line further down.
+            // Ranking `Elem[T](values ...T)` against `Elem(values ...object)`
+            // for `Elem("a", "b")` compared `string` to the OPEN `T` (which
+            // erases to object) and to `object`, landed both candidates on the
+            // same conversion kind, and let the later non-generic-over-generic
+            // tie-break hand the call to the `object` overload — where C#
+            // infers `T = string`, sees an identity, and picks the generic one.
+            // Closing the element type is enough on its own: the per-argument
+            // kind comparison in CompareUserConversions runs before ParamTypes
+            // is ever consulted, so an expanded tail slot can misrank without
+            // the reference "better conversion target" tie-break participating.
+            if (elementType != null && candSubstitution != null)
+            {
+                elementType = Binder.SubstituteType(elementType, candSubstitution);
+            }
+
             // Issue #3880: a single trailing argument that already IS the
             // variadic carrier (`F(existingArray)` against `F(xs ...string)`)
             // binds the candidate in NORMAL form, not expanded form — the same
@@ -536,9 +553,31 @@ internal sealed partial class OverloadResolver
                     }
 
                     isTailSlot[i] = true;
-                    kinds[i] = elementType == null
-                        ? ClrOverloadResolution.ImplicitConversionKind.Identity
-                        : ClassifyUserArgumentConversionKind(tailArgType, elementType);
+
+                    // Record the (closed) element type as this slot's ranking
+                    // target. It was left null, which made CompareUserConversions
+                    // unreachable-by-assumption for expanded slots: its
+                    // NumericWidening arm dereferences BOTH parameter types, and
+                    // its Reference / UserDefinedImplicit arms silently tie when
+                    // either is null. Two variadic candidates whose tails
+                    // classify identically therefore either crashed (numeric) or
+                    // lost their "better conversion target" tie-break (reference).
+                    // `G(anchor int64, values ...int64)` vs
+                    // `G(anchor int64, values ...float64)` called with an int32
+                    // tail crashed with GS9998 on this path before this line
+                    // existed — closing the element type above widens the set of
+                    // pairs that reach it, so it has to be populated here.
+                    if (elementType == null)
+                    {
+                        // No element type to rank against: stay Identity and
+                        // leave the slot's target unset. Identity never reaches
+                        // an arm of CompareUserConversions that reads it.
+                        kinds[i] = ClrOverloadResolution.ImplicitConversionKind.Identity;
+                        continue;
+                    }
+
+                    paramTypes[i] = elementType;
+                    kinds[i] = ClassifyUserArgumentConversionKind(tailArgType, elementType);
                     continue;
                 }
 
@@ -865,10 +904,23 @@ internal sealed partial class OverloadResolver
 
         if (ka == ClrOverloadResolution.ImplicitConversionKind.NumericWidening)
         {
-            return ClrOverloadResolution.CompareNumericTargets(
-                Invariant.Required(paramA?.ClrType, "a numeric conversion target has a CLR type"),
-                Invariant.Required(paramB?.ClrType, "a numeric conversion target has a CLR type"),
-                Invariant.Required(source?.ClrType, "a numeric conversion source has a CLR type"));
+            // The three Invariant.Required calls below asserted something this
+            // function cannot actually guarantee: it is handed whatever the
+            // ranking loop recorded, and expanded tail slots recorded no
+            // parameter type at all. Two variadic numeric tails that classified
+            // identically therefore crashed the compiler with GS9998 on source
+            // that C# compiles. The ranking loop now records the element type,
+            // which is the real fix; this stays a tie rather than a throw so a
+            // ranking heuristic can never again take the whole compile down. A
+            // tie is the honest answer when there is nothing to compare.
+            if (paramA?.ClrType is not { } numericTargetA
+                || paramB?.ClrType is not { } numericTargetB
+                || source?.ClrType is not { } numericSource)
+            {
+                return 0;
+            }
+
+            return ClrOverloadResolution.CompareNumericTargets(numericTargetA, numericTargetB, numericSource);
         }
 
         // Issue #2146: reference "better conversion target" tie-break
