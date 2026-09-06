@@ -73,4 +73,20 @@ public class SymbolDisplayImportedTypeTests
 
         Assert.Equal("(local variable) v int32", Render(type));
     }
+
+    [Fact]
+    public void LocalVariable_OfRank1ClrArray_RendersGSharpPrefixSyntax()
+    {
+        var type = ImportedTypeSymbol.Get(typeof(int[]));
+
+        Assert.Equal("(local variable) v []int32", Render(type));
+    }
+
+    [Fact]
+    public void LocalVariable_OfRank2ClrArray_RendersGSharpPrefixSyntax()
+    {
+        var type = ImportedTypeSymbol.Get(typeof(int[,]));
+
+        Assert.Equal("(local variable) v [,]int32", Render(type));
+    }
 }

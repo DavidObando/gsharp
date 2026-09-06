@@ -703,7 +703,7 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
         Assert.True(
             Regex.Matches(result.Diagnostics, @"\berror GS0155:").Count == 4,
             result.Diagnostics);
-        Assert.Contains("Cannot convert type 'nil' to 'string[]'.", result.Diagnostics, StringComparison.Ordinal);
+        Assert.Contains("Cannot convert type 'nil' to '[]string'.", result.Diagnostics, StringComparison.Ordinal);
         Assert.Contains("Cannot convert type 'nil' to 'string'.", result.Diagnostics, StringComparison.Ordinal);
     }
 
