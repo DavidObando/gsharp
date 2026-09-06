@@ -435,6 +435,7 @@ public sealed class ImportedClassSymbol : Symbol
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(arguments),
+            erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: ExpressionBinder.MakeMethodGroupInference(
                 arguments,

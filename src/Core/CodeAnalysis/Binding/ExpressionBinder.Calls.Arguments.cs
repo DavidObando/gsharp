@@ -1492,6 +1492,7 @@ internal sealed partial class ExpressionBinder
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
@@ -1913,6 +1914,14 @@ internal sealed partial class ExpressionBinder
                     || Conversion.ClassifyNonStructural(receiver.Type, TypeSymbol.FromClrType(target)).IsImplicit
                 : argumentStructuralProjectionCheck?.Invoke(index, target) == true;
 
+        // Issue #3989: the same offset-by-one shape for the subtractive check.
+        // Slot 0 is the `this` receiver, whose real type is `receiver.Type`.
+        var argumentErasedMismatchCheck = MakeErasedArgumentMismatchCheck(arguments, argumentOffset: 1);
+        bool ExtensionErasedMismatchCheck(int index, Type target) =>
+            index == 0
+                ? IsErasedArgumentApplicabilityMismatch(receiver.Type, target)
+                : argumentErasedMismatchCheck?.Invoke(index, target) == true;
+
         // Issue #1311: imported extension calls dispatch as
         // `Class.Method(this receiver, args…)`, so argTypes slot 0 is the
         // receiver and user argument `i` lives at slot `i + 1`.
@@ -1944,6 +1953,7 @@ internal sealed partial class ExpressionBinder
                 supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments, argumentOffset: 1),
                 structuralProjectionArgumentCheck: ExtensionStructuralProjectionCheck,
+                erasedArgumentMismatchCheck: ExtensionErasedMismatchCheck,
                 delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments, argumentOffset: 1),
                 methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
                 methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1),
@@ -3722,6 +3732,7 @@ internal sealed partial class ExpressionBinder
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+            erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));

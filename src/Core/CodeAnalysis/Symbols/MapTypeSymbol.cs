@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -22,6 +23,9 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </remarks>
 public sealed class MapTypeSymbol : TypeSymbol
 {
+    /// <summary>The full name of the CLR type a <c>map[K, V]</c> IS (ADR-0104).</summary>
+    private const string DictionaryFullName = "System.Collections.Generic.Dictionary`2";
+
     private static readonly ConcurrentDictionary<(TypeSymbol, TypeSymbol), MapTypeSymbol> Cache = new();
 
     private MapTypeSymbol(TypeSymbol keyType, TypeSymbol valueType)
@@ -59,6 +63,88 @@ public sealed class MapTypeSymbol : TypeSymbol
         }
 
         return Cache.GetOrAdd((keyType, valueType), k => new MapTypeSymbol(k.Item1, k.Item2));
+    }
+
+    /// <summary>
+    /// Issue #3987: recognizes a map-shaped type by SHAPE rather than by
+    /// spelling — G#'s own <see cref="MapTypeSymbol"/>, or the
+    /// <c>System.Collections.Generic.Dictionary&lt;K, V&gt;</c> it IS
+    /// (ADR-0104 identity) arriving from metadata as an
+    /// <see cref="ImportedTypeSymbol"/>.
+    /// </summary>
+    /// <remarks>
+    /// The direct analogue of <see cref="ChannelTypeSymbol.TryGetChannelShape"/>
+    /// and <see cref="SequenceTypeSymbol.TryGetEnumerableInterfaceShape"/>, and
+    /// it exists for the same reason: with CLOSED key/value types the two
+    /// spellings are already identity because <c>Conversion</c> compares their
+    /// <see cref="TypeSymbol.ClrType"/>s, but the moment one of them is open
+    /// those <c>ClrType</c>s stop identifying the types — this side's is null,
+    /// and the imported side's is the ADR-0004 type-ERASED
+    /// <c>Dictionary&lt;object, object&gt;</c> — so the comparison has nothing
+    /// left it can trust. Which name the author (or the metadata) happened to
+    /// use is not a fact about the type.
+    /// </remarks>
+    /// <param name="type">The candidate type.</param>
+    /// <param name="keyType">The recovered key type.</param>
+    /// <param name="valueType">The recovered value type.</param>
+    /// <returns>True when <paramref name="type"/> is map-shaped.</returns>
+    public static bool TryGetMapShape(
+        TypeSymbol? type,
+        [NotNullWhen(true)] out TypeSymbol? keyType,
+        [NotNullWhen(true)] out TypeSymbol? valueType)
+    {
+        keyType = null;
+        valueType = null;
+
+        switch (type)
+        {
+            case null:
+                return false;
+            case NullabilityAnnotatedTypeSymbol annotated:
+                return TryGetMapShape(annotated.BaseType, out keyType, out valueType);
+            case MapTypeSymbol map:
+                keyType = map.KeyType;
+                valueType = map.ValueType;
+                return true;
+            case ImportedTypeSymbol imported:
+            {
+                var open = imported.OpenDefinition;
+                if (open == null && imported.ClrType is { IsGenericType: true } closed)
+                {
+                    open = closed.GetGenericTypeDefinition();
+                }
+
+                if (open?.FullName != DictionaryFullName)
+                {
+                    return false;
+                }
+
+                if (imported.TypeArguments.Length == 2)
+                {
+                    keyType = imported.TypeArguments[0];
+                    valueType = imported.TypeArguments[1];
+                    return true;
+                }
+
+                if (imported.ClrType is { IsGenericType: true } closedShape)
+                {
+                    var arguments = closedShape.GetGenericArguments();
+                    if (arguments.Length != 2)
+                    {
+                        return false;
+                    }
+
+                    keyType = FromClrType(arguments[0]);
+                    valueType = FromClrType(arguments[1]);
+                    return keyType != null && valueType != null;
+                }
+
+                return false;
+            }
+
+            default:
+                return false;
+        }
     }
 
     /// <summary>

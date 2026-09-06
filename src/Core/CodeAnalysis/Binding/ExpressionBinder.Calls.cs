@@ -1855,6 +1855,7 @@ internal sealed partial class ExpressionBinder
                 supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                 constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(boundArguments),
                 structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(boundArguments),
+                erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(boundArguments),
                 delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
