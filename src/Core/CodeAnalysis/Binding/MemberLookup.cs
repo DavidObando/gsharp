@@ -1699,12 +1699,14 @@ internal sealed class MemberLookup
     /// <param name="explicitTypeArgSymbols">The explicit symbols, or default when none were supplied.</param>
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver first when applicable).</param>
     /// <param name="isExpanded">Whether params-array inference should unify trailing scalar arguments with the array element type.</param>
+    /// <param name="argumentNames">Issue #4026: the call's per-source-index argument names, so a named call's symbolic vector is reordered into parameter order exactly as the CLR one already is; null entries are positional, and a null list means nothing to reorder.</param>
     /// <returns>The per-MVar vector (length == open arity), or default when nothing recoverable.</returns>
     public static ImmutableArray<TypeSymbol?> BuildSymbolicMethodTypeArgs(
         MethodInfo? closed,
         ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
         ImmutableArray<TypeSymbol> symbolicArgTypes,
-        bool isExpanded = false)
+        bool isExpanded = false,
+        IReadOnlyList<string?>? argumentNames = null)
     {
         if (closed == null || !closed.IsGenericMethod)
         {
@@ -1727,9 +1729,38 @@ internal sealed class MemberLookup
                 nullableSymbolicArgTypes.Add(symbolicArgType);
             }
 
+            var orderedSymbolicArgTypes = nullableSymbolicArgTypes.MoveToImmutable();
+
+            // Issue #4026 (review finding): unification below zips the open
+            // parameters with these arguments POSITIONALLY, so a call that
+            // names its arguments out of order pairs each one with the wrong
+            // parameter — `Marked[T](int marker, Dictionary[string, T] entries)`
+            // called as `Marked(entries: entries, marker: 0)` unified the map
+            // against `int` and recovered no `T` at all, leaving the MethodSpec
+            // closed over the argument's erasure and the assembly failing
+            // ILVerify with `StackUnexpected`. CLR inference has reordered here
+            // since #343 (`TryBuildOrderedArgTypesForInference`); this is the
+            // symbolic side of the same correction, reusing the resolver's own
+            // mapping so the two can never disagree about it. Nothing moves
+            // unless the call actually named an argument.
+            if (ClrOverloadResolution.TryBuildNamedArgumentReordering(
+                    openMethod,
+                    orderedSymbolicArgTypes.Length,
+                    argumentNames,
+                    out var sourceToParameter))
+            {
+                var byParameter = new TypeSymbol?[openMethod.GetParameters().Length];
+                for (var source = 0; source < orderedSymbolicArgTypes.Length && source < sourceToParameter.Length; source++)
+                {
+                    byParameter[sourceToParameter[source]] = orderedSymbolicArgTypes[source];
+                }
+
+                orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+            }
+
             inferred = InferSymbolicMethodTypeArguments(
                 openMethod,
-                nullableSymbolicArgTypes.MoveToImmutable(),
+                orderedSymbolicArgTypes,
                 isExpanded);
         }
         else
@@ -6184,6 +6215,31 @@ internal sealed class MemberLookup
             {
                 UnifyForMethodTypeArgs(openArgs[0], channelActualElement, openMethod, result);
                 return;
+            }
+
+            // Issue #4026: a `map[K, V]` is its own symbol kind, so none of the
+            // patterns below ever matched a `Dictionary[K, V]` formal and K/V
+            // were never recovered symbolically. The MethodSpec then closed over
+            // whatever the ERASURE presented — `ImportedBase` for a
+            // same-compilation class with an imported base, `object` for one
+            // without — while the value pushed was the real
+            // `Dictionary<string, Derived>`: ILVerify `StackUnexpected`, on the
+            // INFERRED path, with no unusual source at all
+            // (`Probes.CountAnyMap(entries)`). Restate the actual as the
+            // constructed `Dictionary[K, V]` it IS (ADR-0104) and let Pattern A
+            // and Pattern C do the rest, so `IDictionary[K, V]`,
+            // `IReadOnlyDictionary[K, V]` and `IEnumerable[KeyValuePair[K, V]]`
+            // formals are covered by the same restatement rather than by an arm
+            // each. This is why the `List` spelling never had the bug: it is an
+            // `ImportedTypeSymbol` already and reached Pattern A on its own.
+            if (actual is MapTypeSymbol mapActual
+                && TryProjectErasedClrType(mapActual, out var erasedMapClr)
+                && erasedMapClr.IsGenericType)
+            {
+                actual = ImportedTypeSymbol.GetConstructed(
+                    erasedMapClr,
+                    erasedMapClr.GetGenericTypeDefinition(),
+                    ImmutableArray.Create(mapActual.KeyType, mapActual.ValueType));
             }
 
             if (actual is ImportedTypeSymbol imp

@@ -3454,6 +3454,128 @@ internal sealed partial class ExpressionBinder
         };
     }
 
+    // Issue #4026 (review finding): the PRECISE form of the erased-slot
+    // question, for a call that supplied explicit type arguments.
+    //
+    // The genuineness flags answer it per SLOT — "did this call pin every
+    // method type parameter this parameter mentions with a type that has a CLR
+    // identity of its own?" — and that is exact only when the answer is all-or-
+    // nothing. `TakeMap[ImportedBase, Derived](map[Derived, Derived]{})` pins
+    // `K` genuinely and `V` not, so the slot stays "possibly erased" and the
+    // GENUINE invariant `K` mismatch is waived along with it: the MethodSpec is
+    // emitted over `Dictionary<ImportedBase, Derived>` while a
+    // `Dictionary<Derived, Derived>` is pushed, ILVerify `StackUnexpected`. No
+    // CLR-level correlation can see this — the argument's erased key is
+    // `ImportedBase`, which is exactly what the pin says — so the question has
+    // to be asked on the REAL symbols.
+    //
+    // This callback asks it: substitute the call's own type-argument SYMBOLS
+    // into the candidate's OPEN parameter, giving the parameter type the
+    // emitted MethodSpec will actually have, and report whether the argument's
+    // REAL type has no conversion to it. Asked at the slot, never inside
+    // another callback, so the #3989 exemption still governs which slots it is
+    // asked about at all.
+    //
+    // It declines to answer wherever it cannot see the whole picture, because a
+    // wrong "no conversion" removes a candidate that binds today:
+    //   - a lambda / arrow argument, whose delegate conversion is decided by
+    //     machinery this classifier does not model — and which is the
+    //     `Task.ContinueWith[TResult](Func[Task, TResult])` shape that broke a
+    //     per-position rewrite of the erasure gate twice already (#4004, #4019);
+    //   - a member of a CONSTRUCTED generic type, whose parameter also mentions
+    //     type-LEVEL parameters this vector says nothing about;
+    //   - a params-expanded or by-ref slot, and any substitution that leaves a
+    //     type parameter behind.
+    internal static Func<int, System.Reflection.MethodBase, bool>? MakeExplicitTypeArgumentMismatchCheck(
+        IReadOnlyList<BoundExpression>? boundArguments,
+        ImmutableArray<TypeSymbol> typeArgSymbols,
+        int argumentOffset = 0)
+    {
+        if (boundArguments == null || typeArgSymbols.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        // Only the MIXED list has anything for this check to say. When every
+        // type argument is genuine the per-slot flags already answer exactly
+        // (the slot is not erased, and the established #3989/#4006 verdict on
+        // the CLR shapes governs); when NONE is, the call is the ordinary
+        // erasure the flags exempt and this check must stay silent — asking
+        // `Conversion` there refuses calls that bind today, because a symbolic
+        // comparison does not model G# function types meeting imported delegate
+        // shapes inside a constructed generic
+        // (`Base.Make[Derived](List[((Derived) -> void)])`,
+        // `Issue2857ExplicitGenericLambdaProjectReferenceEmitTests`, measured).
+        // So this fires only where one position is genuinely pinned beside one
+        // that is not, which is precisely the gap the per-slot flag leaves.
+        var anyGenuine = false;
+        var anySurrogate = false;
+        foreach (var typeArgument in typeArgSymbols)
+        {
+            if (typeArgument != null
+                && !TypeSymbol.ContainsSameCompilationUserType(typeArgument)
+                && !TypeSymbol.ContainsTypeParameter(typeArgument))
+            {
+                anyGenuine = true;
+            }
+            else
+            {
+                anySurrogate = true;
+            }
+        }
+
+        if (!anyGenuine || !anySurrogate)
+        {
+            return null;
+        }
+
+        var nullableTypeArgSymbols = ImmutableArray.CreateRange(typeArgSymbols, symbol => (TypeSymbol?)symbol);
+
+        return (index, rawCandidate) =>
+        {
+            var argIndex = index - argumentOffset;
+            if (argIndex < 0
+                || argIndex >= boundArguments.Count
+                || boundArguments[argIndex].Type is not { } argumentType
+                || argumentType is FunctionTypeSymbol
+                || rawCandidate is not System.Reflection.MethodInfo candidate
+                || candidate.DeclaringType is { IsGenericType: true })
+            {
+                return false;
+            }
+
+            var openMethod = candidate.IsGenericMethodDefinition
+                ? candidate
+                : candidate.IsGenericMethod ? candidate.GetGenericMethodDefinition() : null;
+            if (openMethod == null
+                || openMethod.GetGenericArguments().Length != nullableTypeArgSymbols.Length)
+            {
+                return false;
+            }
+
+            var parameters = openMethod.GetParameters();
+            if (index >= parameters.Length || parameters[index].ParameterType.IsByRef)
+            {
+                return false;
+            }
+
+            var realParameter = MemberLookup.MapOpenClrParameterTypeToSymbolic(
+                parameters[index].ParameterType,
+                openDefinition: null,
+                typeArguments: ImmutableArray<TypeSymbol>.Empty,
+                openMethodDefinition: openMethod,
+                methodTypeArguments: nullableTypeArgSymbols);
+            if (realParameter == null
+                || ReferenceEquals(realParameter, TypeSymbol.Error)
+                || TypeSymbol.ContainsTypeParameter(realParameter))
+            {
+                return false;
+            }
+
+            return !Conversion.Classify(argumentType, realParameter).Exists;
+        };
+    }
+
     /// <summary>
     /// Issue #3989: whether <paramref name="sourceType"/> reached
     /// <paramref name="clrParameterType"/> only because its own CLR projection

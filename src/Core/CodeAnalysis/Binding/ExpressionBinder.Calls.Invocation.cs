@@ -3091,7 +3091,8 @@ internal sealed partial class ExpressionBinder
                     staticFn.Method,
                     typeArgSymbols,
                     refinedStaticSymbolicArgs,
-                    staticIsExpanded);
+                    staticIsExpanded,
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticExpandedArgs = staticIsExpanded
@@ -3660,6 +3661,7 @@ internal sealed partial class ExpressionBinder
         // GS0159 and `map[string, int32]{}.Contains(k)` reports GS0577.
         var anyArgumentIsErased = arguments.Any(
             argument => argument.Type != null && TypeSymbol.ContainsSameCompilationUserType(argument.Type));
+
         var candidates = MemberLookup.ExcludeErasureOnlyEnumCandidates(
             MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
                 clrType,
@@ -3757,7 +3759,8 @@ internal sealed partial class ExpressionBinder
                         closed,
                         typeArgSymbols,
                         preResolutionSymbolicArgs,
-                        isExpanded);
+                        isExpanded,
+                        argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                 var resolution = ClrOverloadResolution.Resolve(
                     candidates,
                     argTypes,
@@ -3772,7 +3775,9 @@ internal sealed partial class ExpressionBinder
                     erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                     delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                     methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-                    methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+                    methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+                    explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+                    explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
 
                 // Issue #3745: a user-declared class argument erases to
                 // `System.Object`, which gives an imported generic method no
@@ -3806,7 +3811,9 @@ internal sealed partial class ExpressionBinder
                             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-                            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+                            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+                            explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+                            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
                         if (projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
                         {
                             resolution = projectedResolution;
@@ -3886,7 +3893,8 @@ internal sealed partial class ExpressionBinder
                             method,
                             typeArgSymbols,
                             refinedInstSymbolicArgs,
-                            resolution.IsExpanded);
+                            resolution.IsExpanded,
+                            argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                         var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                         var returnType = ResolveImportedGenericReturnType(method, typeArgSymbols)
                             ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(method, instSymbolicTypeArgs, effectiveReceiverType)
