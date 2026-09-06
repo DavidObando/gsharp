@@ -616,6 +616,92 @@ public class TypeSymbol : Symbol
     };
 
     /// <summary>
+    /// Issue #3962: returns <see langword="true"/> when <paramref name="type"/>
+    /// structurally contains a fixed-length array <c>[N]T</c>.
+    ///
+    /// <para><c>[N]T</c> is the one G# type whose CLR projection is LOSSY. An
+    /// <see cref="ArrayTypeSymbol"/> is backed by the plain SZ-array
+    /// <c>T[]</c> — the very same <see cref="Type"/> as the slice <c>[]T</c>
+    /// and as an array of every other length — so the declared length lives
+    /// ONLY in the symbol. Every other structural wrapper's CLR type is
+    /// injective: a channel's direction selects a different BCL type, a
+    /// rectangular array's rank is part of its <see cref="Type"/>, and
+    /// <c>seq[T]</c> / <c>map[K,V]</c> / <c>T?</c> / <c>T&amp;</c> / <c>T*</c>
+    /// each map to a distinct shape.</para>
+    ///
+    /// <para>Gates that decide between "keep the symbolic projection" and
+    /// "fall back to the CLR shape" must therefore treat a fixed array like
+    /// symbolically-required content — exactly as
+    /// <see cref="ContainsNamedTupleElements"/> does for a named tuple, and
+    /// for the same reason. Without that, <c>List[[3]int32]</c> and
+    /// <c>List[[4]int32]</c> both bind to the one cached symbol for
+    /// <c>List&lt;System.Int32[]&gt;</c> and become the same type.</para>
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when a fixed-length array appears at any depth.</returns>
+    public static bool ContainsFixedLengthArray(TypeSymbol? type)
+    {
+        if (type is ArrayTypeSymbol)
+        {
+            return true;
+        }
+
+        if (type == null)
+        {
+            return false;
+        }
+
+        foreach (var inner in GetWrappedTypes(type))
+        {
+            if (ContainsFixedLengthArray(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #3962: returns <see langword="true"/> when <paramref name="type"/>
+    /// structurally contains an array that came back through REFLECTION —
+    /// an <see cref="ImportedTypeSymbol"/> whose <see cref="TypeSymbol.ClrType"/>
+    /// is an array — rather than as a G#-native <c>[N]T</c>/<c>[]T</c> symbol.
+    ///
+    /// <para>Such an array's length is not merely unread but GONE: metadata
+    /// records only <c>T[]</c>, so no downstream comparison can reconstruct
+    /// whether the author wrote <c>[3]T</c>, <c>[4]T</c> or <c>[]T</c>. A
+    /// comparison with such a side must therefore stay LENIENT rather than
+    /// reject on information neither side has — the same line
+    /// <c>Conversion.AreSameRuntimeChannelElement</c> draws for a
+    /// metadata-recovered channel element.</para>
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><c>true</c> when a reflection-recovered array appears at any depth.</returns>
+    public static bool ContainsMetadataRecoveredArray(TypeSymbol? type)
+    {
+        if (type is ImportedTypeSymbol { ClrType: { IsArray: true } })
+        {
+            return true;
+        }
+
+        if (type == null)
+        {
+            return false;
+        }
+
+        foreach (var inner in GetWrappedTypes(type))
+        {
+            if (ContainsMetadataRecoveredArray(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #810 / #1481: returns <see langword="true"/> when
     /// <paramref name="type"/> structurally references any of the supplied
     /// <paramref name="outerMethodTypeParameters"/>. Used by the iterator
