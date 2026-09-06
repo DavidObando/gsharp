@@ -109,6 +109,57 @@ Run()
             new[] { "clr-added", "clr-removed", "literal-nil" },
         };
 
+        // cs2gs maps a C# named delegate declaration/reference to a structural
+        // arrow type. The nullable arrow must receive the same nil-tolerant
+        // event-site conversion as a nullable named delegate.
+        yield return new object[]
+        {
+            "clr-event-nilable-arrow-handler",
+            @"
+package P
+import System
+import System.Diagnostics
+
+func Run() {
+    let p = Process()
+    let h ((object, DataReceivedEventArgs) -> void)? = nil
+    p.OutputDataReceived += h
+    Console.WriteLine(""arrow-added"")
+    p.OutputDataReceived -= h
+    Console.WriteLine(""arrow-removed"")
+}
+
+Run()
+",
+            new[] { "arrow-added", "arrow-removed" },
+        };
+
+        yield return new object[]
+        {
+            "clr-event-nilable-arrow-member",
+            @"
+package P
+import System
+import System.Diagnostics
+
+class Holder {
+    var Handler ((object, DataReceivedEventArgs) -> void)? = nil
+}
+
+func Run() {
+    let p = Process()
+    let holder = Holder()
+    p.OutputDataReceived += holder.Handler
+    Console.WriteLine(""member-added"")
+    p.OutputDataReceived -= holder.Handler
+    Console.WriteLine(""member-removed"")
+}
+
+Run()
+",
+            new[] { "member-added", "member-removed" },
+        };
+
         // ANTI-VACUITY: accepting the nil subscription must not disturb the
         // real one. A nil `+=` before and after a genuine handler leaves
         // exactly one subscriber; the nil `-=` removes nothing; the real `-=`
