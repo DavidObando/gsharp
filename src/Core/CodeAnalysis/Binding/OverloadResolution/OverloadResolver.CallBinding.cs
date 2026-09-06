@@ -2418,8 +2418,27 @@ internal sealed partial class OverloadResolver
             // itself — see #3988's other half) deliberately answers false for
             // it: its `T?` erases to `Nullable<T>` and it keeps the value-type
             // rules.
+            // Issue #4010: the same bypass swallows the OTHER half of the same
+            // rule. #3988 taught it to look at a `NullableTypeSymbol` argument,
+            // but a bare `nil` LITERAL has type `TypeSymbol.Null` — not a
+            // nullable annotation — so the gate above never sees it and the
+            // argument again flowed through unchecked. `nil` at a non-nullable
+            // slot is a pure SHAPE question too, and `Conversion.Classify`
+            // already decides it for EVERY target without needing the pair
+            // closed: `Classify(nil, X)` consults
+            // `Conversion.IsNilAssignableWithoutNullableWrapper`, which answers
+            // from `X`'s symbol kind alone (a G#-declared class, an interface,
+            // a reference-CONSTRAINED type parameter, or any nullable target
+            // accepts `nil`; a `chan[T]`, `[]T`, `map[K,V]`, `sequence[T]`,
+            // `[4]T`, `(T) -> T` or an unconstrained `T` does not). Asking it
+            // is therefore not a closed-world judgement — it makes the OPEN
+            // spelling answer exactly what the CLOSED spelling already
+            // answered. Measured on the parent: `takesMap[K, V](nil)` forwarded
+            // out of a generic compiled with no diagnostic, IL-verified, and
+            // threw `NullReferenceException` when the callee read `m.Count`.
             if (argument.Type != expectedType
                 && (!TypeSymbol.ContainsTypeParameter(Invariant.Required(expectedType, "an argument conversion has a target type"))
+                    || argument.Type == TypeSymbol.Null
                     || IsNullableReferenceGateRejected(argument.Type, Invariant.Required(expectedType, "an argument conversion has a target type")))
                 && !Conversion.Classify(argument.Type, Invariant.Required(expectedType, "an argument conversion has a target type")).IsImplicit)
             {
