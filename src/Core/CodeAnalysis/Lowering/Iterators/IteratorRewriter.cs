@@ -190,6 +190,16 @@ public static class IteratorRewriter
     {
         public List<VariableSymbol> Locals { get; } = [];
 
+        protected override void VisitTypePattern(BoundTypePattern node)
+        {
+            if (node.HasBinding)
+            {
+                Add(node.Variable);
+            }
+
+            base.VisitTypePattern(node);
+        }
+
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
             // Skip ref-struct (ByRef-like) locals — e.g. the synthesized
@@ -201,16 +211,7 @@ public static class IteratorRewriter
             // for a cross-context TypeBuilderInstantiation (e.g. a delegate
             // local closed over a MetadataLoadContext type under gsc's
             // `/reference:` mode).
-            if (TypeSymbol.IsByRefLike(node.Variable.Type))
-            {
-                base.VisitVariableDeclaration(node);
-                return;
-            }
-
-            if (!Locals.Contains(node.Variable))
-            {
-                Locals.Add(node.Variable);
-            }
+            Add(node.Variable);
 
             base.VisitVariableDeclaration(node);
         }
@@ -219,13 +220,20 @@ public static class IteratorRewriter
         {
             if (node.Operand is BoundVariableExpression variable
                 && variable.Variable is not ParameterSymbol
-                && !TypeSymbol.IsByRefLike(variable.Variable.Type)
-                && !Locals.Contains(variable.Variable))
+                && !TypeSymbol.IsByRefLike(variable.Variable.Type))
             {
-                Locals.Add(variable.Variable);
+                Add(variable.Variable);
             }
 
             base.VisitAddressOfExpression(node);
+        }
+
+        private void Add(VariableSymbol variable)
+        {
+            if (!TypeSymbol.IsByRefLike(variable.Type) && !Locals.Contains(variable))
+            {
+                Locals.Add(variable);
+            }
         }
     }
 }
