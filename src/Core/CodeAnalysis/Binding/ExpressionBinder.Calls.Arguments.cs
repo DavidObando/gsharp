@@ -1480,7 +1480,8 @@ internal sealed partial class ExpressionBinder
                 closed,
                 typeArgSymbols,
                 inheritedSymbolicArgs,
-                isExpanded);
+                isExpanded,
+                argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -1495,7 +1496,9 @@ internal sealed partial class ExpressionBinder
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
 
         switch (resolution.Outcome)
         {
@@ -1553,7 +1556,8 @@ internal sealed partial class ExpressionBinder
                     best,
                     typeArgSymbols,
                     refinedInheritedSymbolicArgs,
-                    resolution.IsExpanded);
+                    resolution.IsExpanded,
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                 var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault
                     ? inheritedSymbolicTypeArgs
                     : typeArgSymbols.IsDefault
@@ -1936,7 +1940,8 @@ internal sealed partial class ExpressionBinder
                 closed,
                 typeArgSymbols,
                 extensionSymbolicArgs,
-                isExpanded);
+                isExpanded,
+                extensionArgumentNames);
         Func<int, bool> functionLiteralArgumentCheck = argumentIndex =>
             argumentIndex > 0
             && argumentIndex - 1 < arguments.Length
@@ -1958,7 +1963,9 @@ internal sealed partial class ExpressionBinder
                 methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution, argumentOffset: 1),
                 methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments, argumentOffset: 1),
                 deferredInferenceArgs: deferredInferenceArgs,
-                functionLiteralArgumentCheck: functionLiteralArgumentCheck);
+                functionLiteralArgumentCheck: functionLiteralArgumentCheck,
+                explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
+                explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1));
 
         var resolution = ResolveExtensionCandidates();
 
@@ -2038,7 +2045,8 @@ internal sealed partial class ExpressionBinder
             best,
             typeArgSymbols,
             refinedExtensionSymbolicArgs,
-            resolution.IsExpanded);
+            resolution.IsExpanded,
+            extensionArgumentNames);
         var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault
             ? extensionSymbolicTypeArgs
             : typeArgSymbols.IsDefault

@@ -335,11 +335,19 @@ internal sealed class MemberLookup
     /// <c>IList.Add(object)</c>, because a same-compilation struct has no CLR
     /// type while binding and so cannot match <c>Add(double)</c> through its
     /// user-defined conversion. The literal path therefore keeps the FULL
-    /// pre-#4013 view, and <c>List[int32]{"x"}</c> still binds
-    /// <c>IList.Add(object)</c> and throws at run time — the same hole as this
+    /// pre-#4013 view here, and for a while <c>List[int32]{"x"}</c> still bound
+    /// <c>IList.Add(object)</c> and threw at run time — the same hole as this
     /// issue's, reached through a collection literal rather than an
-    /// author-written call. Closing it needs the erased-argument work that
-    /// belongs with #4006/#3989 rather than here; tracked separately.
+    /// author-written call.
+    /// </para>
+    /// <para>
+    /// Issue #4028 closed that without touching this probe: a lookup memoized
+    /// on <c>(Type, name)</c> cannot see arguments, so the discrimination is
+    /// made at APPLICABILITY instead, by
+    /// <see cref="ExcludeUnreachableNonGenericInterfaceCandidates"/>, which
+    /// drops a NON-GENERIC interface's widening member from the collected list
+    /// unless the call really has an erasure to repair. Both views above are
+    /// therefore still exactly as #4013 left them.
     /// </para>
     /// </remarks>
     /// <param name="clrType">The CLR type (concrete class or interface) to probe.</param>
@@ -1719,12 +1727,14 @@ internal sealed class MemberLookup
     /// <param name="explicitTypeArgSymbols">The explicit symbols, or default when none were supplied.</param>
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver first when applicable).</param>
     /// <param name="isExpanded">Whether params-array inference should unify trailing scalar arguments with the array element type.</param>
+    /// <param name="argumentNames">Issue #4026: the call's per-source-index argument names, so a named call's symbolic vector is reordered into parameter order exactly as the CLR one already is; null entries are positional, and a null list means nothing to reorder.</param>
     /// <returns>The per-MVar vector (length == open arity), or default when nothing recoverable.</returns>
     public static ImmutableArray<TypeSymbol?> BuildSymbolicMethodTypeArgs(
         MethodInfo? closed,
         ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
         ImmutableArray<TypeSymbol> symbolicArgTypes,
-        bool isExpanded = false)
+        bool isExpanded = false,
+        IReadOnlyList<string?>? argumentNames = null)
     {
         if (closed == null || !closed.IsGenericMethod)
         {
@@ -1747,9 +1757,38 @@ internal sealed class MemberLookup
                 nullableSymbolicArgTypes.Add(symbolicArgType);
             }
 
+            var orderedSymbolicArgTypes = nullableSymbolicArgTypes.MoveToImmutable();
+
+            // Issue #4026 (review finding): unification below zips the open
+            // parameters with these arguments POSITIONALLY, so a call that
+            // names its arguments out of order pairs each one with the wrong
+            // parameter — `Marked[T](int marker, Dictionary[string, T] entries)`
+            // called as `Marked(entries: entries, marker: 0)` unified the map
+            // against `int` and recovered no `T` at all, leaving the MethodSpec
+            // closed over the argument's erasure and the assembly failing
+            // ILVerify with `StackUnexpected`. CLR inference has reordered here
+            // since #343 (`TryBuildOrderedArgTypesForInference`); this is the
+            // symbolic side of the same correction, reusing the resolver's own
+            // mapping so the two can never disagree about it. Nothing moves
+            // unless the call actually named an argument.
+            if (ClrOverloadResolution.TryBuildNamedArgumentReordering(
+                    openMethod,
+                    orderedSymbolicArgTypes.Length,
+                    argumentNames,
+                    out var sourceToParameter))
+            {
+                var byParameter = new TypeSymbol?[openMethod.GetParameters().Length];
+                for (var source = 0; source < orderedSymbolicArgTypes.Length && source < sourceToParameter.Length; source++)
+                {
+                    byParameter[sourceToParameter[source]] = orderedSymbolicArgTypes[source];
+                }
+
+                orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+            }
+
             inferred = InferSymbolicMethodTypeArguments(
                 openMethod,
-                nullableSymbolicArgTypes.MoveToImmutable(),
+                orderedSymbolicArgTypes,
                 isExpanded);
         }
         else
@@ -1917,6 +1956,161 @@ internal sealed class MemberLookup
 
             return true;
         }
+    }
+
+    /// <summary>
+    /// Issue #4028: removes an explicitly-implemented member of a NON-GENERIC
+    /// interface — the <c>object</c>-widening kind, <c>IList.Add(object)</c> and
+    /// <c>IDictionary.Add(object, object)</c> — from a class receiver's
+    /// candidate set unless it is genuinely there to REPAIR an erasure.
+    /// </summary>
+    /// <remarks>
+    /// <para>#4013 took every abstract interface member off a class's own
+    /// surface but kept two exemptions at candidate COLLECTION, because the
+    /// compiler still depended on them: a synthesized collection-initializer
+    /// <c>Add</c>, and a call whose argument carries a same-compilation type.
+    /// Those exemptions are what left <c>List[int32]{"x"}</c> compiling and
+    /// throwing <c>ArgumentException</c>, and
+    /// <c>Dictionary[string, int32]{"a": "x"}</c> with it. The collection lookup
+    /// is memoized on <c>(Type, name)</c> and cannot see arguments, so the
+    /// discrimination happens here, at applicability, on the candidate list the
+    /// call already has — exactly where the issue says it has to.</para>
+    /// <para>Two things keep the member, and both are about the CALL rather than
+    /// the member:</para>
+    /// <list type="number">
+    /// <item>The RECEIVER carries a same-compilation type, so its own members'
+    /// parameter types are erasure surrogates and cannot be trusted to judge
+    /// anything. <c>List[System.Action[Mode]]</c> is built over the flat
+    /// <c>System.Object</c> placeholder of the generic-CONSTRUCTION path and
+    /// presents as <c>List&lt;Action&lt;object&gt;&gt;</c>, while the lambda
+    /// erases the enum and presents as <c>Action&lt;int&gt;</c>; the type's own
+    /// <c>Add</c> is inapplicable for a reason that has nothing to do with the
+    /// author's code (<c>Issue2918InlineLambdaErasedReceiverTests</c>). That is
+    /// #4016's defect one site over, and until it is repaired there the escape
+    /// hatch has to stay open here.</item>
+    /// <item>The receiver's own surface WOULD have taken this call on the
+    /// arguments' REAL types. A same-compilation struct has no CLR type while
+    /// binding, so a <c>[]Celsius</c> spread into a <c>List[float64]</c> erases
+    /// to <c>object</c> and cannot match <c>Add(double)</c> through its
+    /// user-defined conversion — but the conversion exists, and asking
+    /// the conversion classifier on the symbolic types finds it
+    /// (<c>Issue3096CollectionSpreadEmitTests.UserDefinedSpreadConversions…</c>).
+    /// The receiver has no erasure of its own in this branch, so its members'
+    /// CLOSED parameter types ARE their real types and no symbolic
+    /// re-derivation is needed.</item>
+    /// </list>
+    /// <para>What is left over is the reported hole and only it: a genuine
+    /// <c>string</c> at a genuine <c>int32</c>, or a <c>Celsius</c> at an
+    /// <c>int32</c> it does not convert to. Neither is an erasure to repair, so
+    /// the widening member goes and the call reports <c>GS0159</c> — the same
+    /// diagnostic the author-written <c>List[int32]().Add("x")</c> already
+    /// reports since #4013. A GENERIC interface's member is never a target here:
+    /// on a constructed class receiver it is closed over the receiver's own type
+    /// arguments and cannot widen, which is why
+    /// <c>Dictionary[K, V](){ ...pairs }</c> goes on reaching
+    /// <c>ICollection&lt;KeyValuePair&lt;K, V&gt;&gt;.Add</c>.</para>
+    /// <para>An argument with no bound type at all (an un-inferred lambda, a
+    /// method group) makes the whole judgement unavailable, so the candidates
+    /// are returned untouched: this filter never removes on ignorance.</para>
+    /// </remarks>
+    /// <param name="candidates">The collected candidates, in candidate order.</param>
+    /// <param name="clrType">The receiver's CLR type; an interface receiver is exempt.</param>
+    /// <param name="receiverType">The receiver's symbolic type.</param>
+    /// <param name="argumentTypes">The bound arguments' symbolic types, in source order.</param>
+    /// <returns>The candidates, less any unreachable widening member.</returns>
+    public static IReadOnlyList<MethodInfo> ExcludeUnreachableNonGenericInterfaceCandidates(
+        IReadOnlyList<MethodInfo> candidates,
+        Type? clrType,
+        TypeSymbol? receiverType,
+        IReadOnlyList<TypeSymbol?> argumentTypes)
+    {
+        // An abstract member of a NON-GENERIC interface: the kind a class can
+        // only have implemented explicitly, and whose parameters are therefore
+        // not closed over the receiver's type arguments — so it is the only kind
+        // that can widen a slot the type's own member would have narrowed.
+        static bool IsWidening(MethodInfo candidate)
+            => candidate is { IsAbstract: true, DeclaringType: { IsInterface: true, IsGenericType: false } };
+
+        if (candidates == null || candidates.Count == 0 || clrType == null || clrType.IsInterface)
+        {
+            return candidates ?? (IReadOnlyList<MethodInfo>)Array.Empty<MethodInfo>();
+        }
+
+        var hasWideningInterfaceCandidate = false;
+        foreach (var candidate in candidates)
+        {
+            if (IsWidening(candidate))
+            {
+                hasWideningInterfaceCandidate = true;
+                break;
+            }
+        }
+
+        if (!hasWideningInterfaceCandidate)
+        {
+            return candidates;
+        }
+
+        // (1) An erased receiver's own members are surrogates; judge nothing.
+        if (receiverType != null && TypeSymbol.ContainsSameCompilationUserType(receiverType))
+        {
+            return candidates;
+        }
+
+        foreach (var argumentType in argumentTypes)
+        {
+            if (argumentType == null)
+            {
+                return candidates;
+            }
+        }
+
+        // (2) Would the receiver's own surface have taken this call for real?
+        var name = candidates[0].Name;
+        foreach (var own in SafeGetMethodsIncludingSelfAndInterfaces(clrType, name))
+        {
+            if (IsWidening(own))
+            {
+                continue;
+            }
+
+            var parameters = own.GetParameters();
+            if (parameters.Length != argumentTypes.Count)
+            {
+                continue;
+            }
+
+            var accepts = true;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var argumentType = argumentTypes[i];
+                var parameterSymbol = TypeSymbol.FromClrType(parameters[i].ParameterType);
+                if (argumentType == null
+                    || parameterSymbol == null
+                    || !(Conversion.Classify(argumentType, parameterSymbol).Exists
+                        || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(argumentType, parameterSymbol)))
+                {
+                    accepts = false;
+                    break;
+                }
+            }
+
+            if (accepts)
+            {
+                return candidates;
+            }
+        }
+
+        var kept = new List<MethodInfo>(candidates.Count);
+        foreach (var candidate in candidates)
+        {
+            if (!IsWidening(candidate))
+            {
+                kept.Add(candidate);
+            }
+        }
+
+        return kept;
     }
 
     /// <summary>
@@ -6242,6 +6436,31 @@ internal sealed class MemberLookup
             {
                 UnifyForMethodTypeArgs(openArgs[0], channelActualElement, openMethod, result);
                 return;
+            }
+
+            // Issue #4026: a `map[K, V]` is its own symbol kind, so none of the
+            // patterns below ever matched a `Dictionary[K, V]` formal and K/V
+            // were never recovered symbolically. The MethodSpec then closed over
+            // whatever the ERASURE presented — `ImportedBase` for a
+            // same-compilation class with an imported base, `object` for one
+            // without — while the value pushed was the real
+            // `Dictionary<string, Derived>`: ILVerify `StackUnexpected`, on the
+            // INFERRED path, with no unusual source at all
+            // (`Probes.CountAnyMap(entries)`). Restate the actual as the
+            // constructed `Dictionary[K, V]` it IS (ADR-0104) and let Pattern A
+            // and Pattern C do the rest, so `IDictionary[K, V]`,
+            // `IReadOnlyDictionary[K, V]` and `IEnumerable[KeyValuePair[K, V]]`
+            // formals are covered by the same restatement rather than by an arm
+            // each. This is why the `List` spelling never had the bug: it is an
+            // `ImportedTypeSymbol` already and reached Pattern A on its own.
+            if (actual is MapTypeSymbol mapActual
+                && TryProjectErasedClrType(mapActual, out var erasedMapClr)
+                && erasedMapClr.IsGenericType)
+            {
+                actual = ImportedTypeSymbol.GetConstructed(
+                    erasedMapClr,
+                    erasedMapClr.GetGenericTypeDefinition(),
+                    ImmutableArray.Create(mapActual.KeyType, mapActual.ValueType));
             }
 
             if (actual is ImportedTypeSymbol imp

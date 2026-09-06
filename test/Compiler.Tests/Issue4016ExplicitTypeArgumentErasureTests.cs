@@ -100,15 +100,19 @@ namespace GSharp.Compiler.Tests;
 /// found where <c>List&lt;ImportedBase&gt;</c> is expected). That is a
 /// pre-existing #4006-shaped hole in the explicit-type-argument path, measured
 /// identical before and after this change, and is NOT what this fix addresses;
-/// it is filed as #4026. The same hole reaches the INFERENCE path: the issue's
+/// it was filed as #4026. The same hole reached the INFERENCE path: the issue's
 /// own control `Probes.CountAnyMap(entries)` on a `map[string, Derived]`
-/// compiles and runs but does not IL-verify either, before or after, because
-/// inference reads `V` off the argument's surrogate and emits
+/// compiled and ran but did not IL-verify either, before or after this change,
+/// because inference read `V` off the argument's surrogate and emitted
 /// `CountAnyMap&lt;string, ImportedBase&gt;` while pushing a
-/// `Dictionary&lt;string, Derived&gt;`. Note which way round the result lands:
-/// after this change the EXPLICIT spelling verifies (it emits over the real
-/// `Derived`, recovered from `typeArgSymbols`) while the inferred one still
-/// does not. Every row in THIS fixture IL-verifies.</para>
+/// `Dictionary&lt;string, Derived&gt;`. Note which way round the result landed:
+/// after this change the EXPLICIT spelling verified (it emits over the real
+/// `Derived`, recovered from `typeArgSymbols`) while the inferred one did not.
+/// **Both are fixed by #4026**, whose rows live in
+/// `Issue4026ExplicitTypeArgumentSoundnessTests`: the explicit BASE spelling is
+/// now refused, and the inferred `map` spelling emits over the real element
+/// because `MemberLookup.UnifyForMethodTypeArgs` gained the `map` arm it never
+/// had. Every row in THIS fixture IL-verifies, before and after that.</para>
 /// </remarks>
 public class Issue4016ExplicitTypeArgumentErasureTests
 {
@@ -263,12 +267,13 @@ public class Issue4016ExplicitTypeArgumentErasureTests
         // IL-verify, on `main` and after this change alike: inference reads
         // `V` off the argument's surrogate and emits
         // `CountAnyMap<string, ImportedBase>` while pushing the real
-        // `Dictionary<string, Derived>` (`StackUnexpected`). That is the #4026
-        // hole on the inference path, and this fix does not touch it — the
-        // inferred path never reaches the explicit type-argument placeholder.
-        // Note the direction of the result: after this change the EXPLICIT map
-        // spelling verifies (it emits over the real `Derived`, recovered from
-        // `typeArgSymbols`) while the inferred one still does not.
+        // `Dictionary<string, Derived>` (`StackUnexpected`). That was the
+        // #4026 hole on the inference path, which this fix does not touch — the
+        // inferred path never reaches the explicit type-argument placeholder —
+        // and which #4026 has since closed by giving
+        // `MemberLookup.UnifyForMethodTypeArgs` the `map` arm it never had. Its
+        // row lives in `Issue4026ExplicitTypeArgumentSoundnessTests`; the slice
+        // spelling stays here because it is the one THIS issue is about.
         yield return new object[]
         {
             "inferred-type-arguments-bound-before-and-still-do",
