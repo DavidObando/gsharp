@@ -2397,8 +2397,30 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
+            // Issue #3988: the `ContainsTypeParameter` clause below is a
+            // deliberate bypass — when the substituted parameter type still
+            // mentions a type parameter, `Conversion.Classify` is not asked at
+            // all and the argument flows through unchecked. That is right for
+            // the general lattice (an open pair has no closed answer to give),
+            // but it also swallowed the ONE rule that needs no closed answer:
+            // Kotlin-model null safety. `IsNullableReferenceGateRejected` is a
+            // pure SHAPE question — "is the argument a nullable REFERENCE and
+            // the parameter a non-null-tolerant reference?" — and both halves
+            // are decidable on an open type (`chan[T]` is a reference in every
+            // instantiation; a `[T class]` parameter is one by constraint).
+            // Without this the `chan[T]?` spelling was silently accepted where
+            // the closed `chan[int32]?` correctly reported GS0154, and a `nil`
+            // reached the non-nullable slot with no diagnostic — measured, it
+            // throws `close of nil channel` at run time. `[]T?`, `D?` over an
+            // open element and a reference-constrained `T?` had the identical
+            // hole. An UNCONSTRAINED `T?` stays ungated, because the gate's
+            // reference-likeness test (now `Conversion.IsReferenceLikeTarget`
+            // itself — see #3988's other half) deliberately answers false for
+            // it: its `T?` erases to `Nullable<T>` and it keeps the value-type
+            // rules.
             if (argument.Type != expectedType
-                && !TypeSymbol.ContainsTypeParameter(Invariant.Required(expectedType, "an argument conversion has a target type"))
+                && (!TypeSymbol.ContainsTypeParameter(Invariant.Required(expectedType, "an argument conversion has a target type"))
+                    || IsNullableReferenceGateRejected(argument.Type, Invariant.Required(expectedType, "an argument conversion has a target type")))
                 && !Conversion.Classify(argument.Type, Invariant.Required(expectedType, "an argument conversion has a target type")).IsImplicit)
             {
                 // Issue #889: arrow/func literal → void-returning delegate.
