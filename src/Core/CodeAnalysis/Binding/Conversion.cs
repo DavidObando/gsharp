@@ -215,6 +215,35 @@ public sealed class Conversion
             return Conversion.Identity;
         }
 
+        // Issue #3987: the arm above is guarded by `from.GetType() ==
+        // to.GetType()` — the SAME wrapper kind on both sides. A `map[K, V]`
+        // IS a `Dictionary<K, V>` and a G# tuple IS a `System.ValueTuple<…>`
+        // (ADR-0104 / ADR-0158 identity), so the two spellings of one type are
+        // routinely a `MapTypeSymbol`/`ImportedTypeSymbol` (or
+        // `TupleTypeSymbol`/`ImportedTypeSymbol`) pair, which that guard
+        // rejects. With CLOSED elements nothing noticed, because the
+        // `ClrType` comparison at the top of this method answered first; once
+        // an element is open both `ClrType`s are null and there was no rule
+        // left, so `makeMap[K, V](entries map[K, V])` could not pass `entries`
+        // to a `Dictionary[K, V]` parameter that is the very same type. This is
+        // the same move #3976 made for channels — the lattice reads the types,
+        // not the spelling.
+        //
+        // Like the channel lattice, this OWNS the pair it recognises when one
+        // side's element is open: `Dictionary<K, V>` and `ValueTuple<…>` are
+        // invariant, so over an open element the ONLY relation that exists is
+        // element-wise identity, and anything else has no runtime conversion to
+        // emit. Saying so here is what lets #3984's local canonicalization go:
+        // that rewrite was rejecting `(int32, object)` at a `ValueTuple[int32,
+        // T]` slot by restating it as a `TupleTypeSymbol` pair, and without a
+        // rule of its own the general imported machinery quietly accepted the
+        // pair and left ILVerify's StackUnexpected in the emitted constructor.
+        if (from != null && to != null
+            && TryClassifyStructuralSpellingConversion(from, to, out var structuralSpelling))
+        {
+            return structuralSpelling;
+        }
+
         // ADR-0174 D1/D2: the channel lattice. `chan[T]` IS `Channel<T>` (and
         // the runtime's constructed `Chan<T>` is one too), so a same-direction
         // pair over an identical element is identity in either direction
@@ -3167,6 +3196,86 @@ public sealed class Conversion
                 return false;
         }
     }
+
+    // Issue #3987: classifies the two SPELLINGS of one structural type — G#'s
+    // canonical symbol on one side and the imported CLR family it IS on the
+    // other. Only the shapes whose identity is an ADR fact participate:
+    // `map[K, V]` / `Dictionary<K, V>` (ADR-0104) and a tuple /
+    // `System.ValueTuple<…>` (ADR-0158). Slices, sequences and channels
+    // already have their own cross-spelling rules (`[]T -> T[]`,
+    // `TryGetEnumerableInterfaceShape`, `TryClassifyChannelConversion`), so
+    // they are deliberately not restated here.
+    //
+    // A same-kind pair is left entirely to `TryClassifyWrappedElementIdentity`
+    // above (which has already run), and a nullable wrapper on either side is
+    // declined so the lifted rules keep their say over the underlying pair.
+    //
+    // The helper takes ownership of a recognised pair only when one side's
+    // `ClrType` is unreadable — that is, when an element is open. Both CLR
+    // families are INVARIANT, so over an open element the only relation that
+    // exists is element-wise identity and there is nothing else to emit; a
+    // pair that is fully CLR-backed on both sides is left to the existing
+    // rules, which can still read the two types and decide for themselves.
+    private static bool TryClassifyStructuralSpellingConversion(
+        TypeSymbol from,
+        TypeSymbol to,
+        out Conversion conversion)
+    {
+        conversion = Conversion.None;
+
+        if (from.GetType() == to.GetType()
+            || from is NullableTypeSymbol
+            || to is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        bool identical;
+        if (MapTypeSymbol.TryGetMapShape(from, out var fromKey, out var fromValue)
+            && MapTypeSymbol.TryGetMapShape(to, out var toKey, out var toValue))
+        {
+            identical = IsCrossContextIdenticalElement(fromKey, toKey)
+                && IsCrossContextIdenticalElement(fromValue, toValue);
+        }
+        else if (TupleTypeSymbol.TryGetTupleShape(from, out var fromElements)
+            && TupleTypeSymbol.TryGetTupleShape(to, out var toElements))
+        {
+            identical = fromElements.Length == toElements.Length;
+            for (var i = 0; identical && i < fromElements.Length; i++)
+            {
+                identical = IsCrossContextIdenticalElement(fromElements[i], toElements[i]);
+            }
+        }
+        else
+        {
+            return false;
+        }
+
+        if (identical)
+        {
+            conversion = Conversion.Identity;
+            return true;
+        }
+
+        // Not the same type. Decline the pair by name — rather than leaving it
+        // to a rule that cannot see it is a `Dictionary`/`ValueTuple` at all —
+        // exactly when an OPEN element is in play. Both CLR families are
+        // invariant, and a substituted `ValueTuple<int32, !T0>` still reports a
+        // (type-erased) `ClrType`, so a rule reading only CLR shapes sees
+        // `ValueTuple<int32, object>` on both sides and says yes to a pair that
+        // has no conversion to emit — which is how `(int32, object)` reached a
+        // `(int32, T)` slot and left ILVerify's StackUnexpected behind.
+        return ContainsOpenElement(from) || ContainsOpenElement(to);
+    }
+
+    // Issue #3987: whether a type structurally carries an element with no CLR
+    // identity of its own — an open type parameter, or a type declared in this
+    // compilation. Both are the cases in which a constructed imported symbol's
+    // `ClrType` is the ADR-0004 type-ERASED shape rather than the real one, so
+    // CLR-shape comparisons stop being able to tell two different types apart.
+    private static bool ContainsOpenElement(TypeSymbol type)
+        => TypeSymbol.ContainsTypeParameter(type)
+            || TypeSymbol.ContainsSameCompilationUserType(type);
 
     // ADR-0174 D2: classifies conversions where at least one side is a G#
     // channel type clause and the other is channel-shaped (a magic symbol,

@@ -21,6 +21,9 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </remarks>
 public sealed class TupleTypeSymbol : TypeSymbol
 {
+    /// <summary>The full-name prefix of the CLR family a tuple IS (ADR-0158).</summary>
+    private const string ValueTupleDefinitionPrefix = "System.ValueTuple`";
+
     private static readonly ConcurrentDictionary<string, TupleTypeSymbol> Cache = new();
 
     private TupleTypeSymbol(ImmutableArray<TypeSymbol> elementTypes, ImmutableArray<string?> elementNames)
@@ -213,6 +216,50 @@ public sealed class TupleTypeSymbol : TypeSymbol
     }
 
     /// <summary>
+    /// Issue #3987: recognizes a tuple-shaped type by SHAPE rather than by
+    /// spelling — G#'s own <see cref="TupleTypeSymbol"/>, or the
+    /// <c>System.ValueTuple&lt;…&gt;</c> it IS (ADR-0158 identity) arriving from
+    /// metadata as an <see cref="ImportedTypeSymbol"/> — and yields its
+    /// elements FLATTENED through the canonical
+    /// <c>ValueTuple&lt;T1..T7, TRest&gt;</c> nesting.
+    /// </summary>
+    /// <remarks>
+    /// The direct analogue of <see cref="ChannelTypeSymbol.TryGetChannelShape"/>
+    /// and <see cref="MapTypeSymbol.TryGetMapShape"/>. Flattening is not
+    /// optional: an 8-or-more-element tuple is a NESTED
+    /// <c>ValueTuple&lt;…, TRest&gt;</c> on the imported side and a flat element
+    /// list on G#'s side, so comparing arity without unwinding the chain would
+    /// exclude exactly the long tuples.
+    /// </remarks>
+    /// <param name="type">The candidate type.</param>
+    /// <param name="elementTypes">The recovered, flattened element types.</param>
+    /// <returns>True when <paramref name="type"/> is tuple-shaped.</returns>
+    public static bool TryGetTupleShape(
+        TypeSymbol? type,
+        out ImmutableArray<TypeSymbol> elementTypes)
+    {
+        elementTypes = default;
+        if (type is NullabilityAnnotatedTypeSymbol annotated)
+        {
+            return TryGetTupleShape(annotated.BaseType, out elementTypes);
+        }
+
+        if (type is not (TupleTypeSymbol or ImportedTypeSymbol))
+        {
+            return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
+        if (!TryFlattenTupleShape(type, builder) || builder.Count < 2)
+        {
+            return false;
+        }
+
+        elementTypes = builder.ToImmutable();
+        return true;
+    }
+
+    /// <summary>
     /// Removes all entries from the static type cache. Called by
     /// <see cref="ReferenceResolver.Dispose"/> to release stale
     /// <see cref="Type"/> objects backed by a disposed metadata load context
@@ -296,5 +343,86 @@ public sealed class TupleTypeSymbol : TypeSymbol
         Array.Copy(elementTypes, start, arguments, 0, 7);
         arguments[7] = BuildClrType(elementTypes, start + 7, count - 7);
         return GetOpenClrType(8).MakeGenericType(arguments);
+    }
+
+    /// <summary>
+    /// Issue #3987: appends <paramref name="type"/>'s tuple elements to
+    /// <paramref name="elements"/>, walking the canonical
+    /// <c>ValueTuple&lt;T1..T7, TRest&gt;</c> chain.
+    /// </summary>
+    /// <param name="type">The candidate tuple-shaped type.</param>
+    /// <param name="elements">The accumulating element list.</param>
+    /// <returns>Whether the type was tuple-shaped throughout.</returns>
+    private static bool TryFlattenTupleShape(
+        TypeSymbol? type,
+        ImmutableArray<TypeSymbol>.Builder elements)
+    {
+        if (type is NullabilityAnnotatedTypeSymbol annotated)
+        {
+            return TryFlattenTupleShape(annotated.BaseType, elements);
+        }
+
+        if (type is TupleTypeSymbol tuple)
+        {
+            elements.AddRange(tuple.ElementTypes);
+            return true;
+        }
+
+        if (type is not ImportedTypeSymbol imported)
+        {
+            return false;
+        }
+
+        var open = imported.OpenDefinition;
+        if (open == null && imported.ClrType is { IsGenericType: true } closed)
+        {
+            open = closed.GetGenericTypeDefinition();
+        }
+
+        if (open?.FullName?.StartsWith(ValueTupleDefinitionPrefix, StringComparison.Ordinal) != true)
+        {
+            return false;
+        }
+
+        var arguments = imported.TypeArguments;
+        if (arguments.IsDefaultOrEmpty)
+        {
+            if (imported.ClrType is not { IsGenericType: true } closedShape)
+            {
+                return false;
+            }
+
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
+            foreach (var argument in closedShape.GetGenericArguments())
+            {
+                var symbol = FromClrType(argument);
+                if (symbol == null)
+                {
+                    return false;
+                }
+
+                builder.Add(symbol);
+            }
+
+            arguments = builder.ToImmutable();
+        }
+
+        if (arguments.Length is < 1 or > 8)
+        {
+            return false;
+        }
+
+        if (arguments.Length <= 7)
+        {
+            elements.AddRange(arguments);
+            return true;
+        }
+
+        for (var i = 0; i < 7; i++)
+        {
+            elements.Add(arguments[i]);
+        }
+
+        return TryFlattenTupleShape(arguments[7], elements);
     }
 }

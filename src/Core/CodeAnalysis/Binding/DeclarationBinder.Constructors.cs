@@ -335,7 +335,7 @@ internal sealed partial class DeclarationBinder
             // boxed each element and handed an `object[]` to a MemberRef whose
             // signature says `T0[]`, which ILVerify rejects.
             var symbolicParamsSlice =
-                TryProjectSymbolicBaseParameterType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, paramsIndex, argumentType: null)
+                TryProjectSymbolicBaseParameterType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, paramsIndex)
                     as SliceTypeSymbol;
             var elementTypeSymbol = symbolicParamsSlice?.ElementType
                 ?? (elementClrType == null
@@ -431,8 +431,7 @@ internal sealed partial class DeclarationBinder
                 openBaseCtorParams,
                 openBaseDefinition,
                 baseTypeArguments,
-                i,
-                orderedArg.Type);
+                i);
             if (symbolicTarget != null)
             {
                 targetType = symbolicTarget;
@@ -567,16 +566,12 @@ internal sealed partial class DeclarationBinder
     /// <param name="openBaseDefinition">The base type's open generic definition.</param>
     /// <param name="baseTypeArguments">The base type's symbolic type arguments.</param>
     /// <param name="index">The parameter ordinal.</param>
-    /// <param name="argumentType">The argument's own type, when there is one to
-    /// consult; the projection keeps the raw imported spelling whenever the
-    /// argument already satisfies it.</param>
     /// <returns>The symbolic parameter type, or <see langword="null"/>.</returns>
     private static TypeSymbol? TryProjectSymbolicBaseParameterType(
         ParameterInfo[]? openBaseCtorParams,
         System.Type? openBaseDefinition,
         ImmutableArray<TypeSymbol> baseTypeArguments,
-        int index,
-        TypeSymbol? argumentType)
+        int index)
     {
         if (openBaseCtorParams == null
             || openBaseDefinition == null
@@ -592,144 +587,22 @@ internal sealed partial class DeclarationBinder
             openBaseDefinition,
             baseTypeArguments);
 
-        // Issue #3984 (review): canonicalising is a repair for the classifier
-        // gap #3987, so apply it only where that gap actually bites — when the
-        // ARGUMENT is written in G#'s structural spelling and the projection
-        // handed back the imported one. An argument the author spelled as the
-        // imported type (`entries Dictionary[K, V]`) already satisfies the raw
-        // projection, and rewriting the target to `map[K, V]` would push a valid
-        // base call into the very gap the rewrite exists to route around.
-        //
-        // The test is the source's spelling, deliberately, and not whether some
-        // conversion to `raw` exists: an explicit or lossy one exists between
-        // `(int32, object)` and `ValueTuple[int32, T]`, and honouring it here is
-        // exactly how an erased value reached the emitter before this fix.
-        var mapped = ShouldCanonicalizeAgainst(argumentType)
-            ? CanonicalizeStructuralShape(raw)
-            : raw;
+        // Issue #3987: #3984 canonicalised `raw` here — a `Dictionary`2`-shaped
+        // `ImportedTypeSymbol` became a `MapTypeSymbol`, a `ValueTuple`n`-shaped
+        // one a `TupleTypeSymbol` — because `Conversion` related the two
+        // spellings of one type only while their `ClrType`s were readable, and
+        // an argument the author wrote as `map[K, V]` therefore could not reach
+        // the `Dictionary[K, V]` parameter it IS. That rewrite (and the
+        // `ShouldCanonicalizeAgainst` guard that kept it from breaking the
+        // opposite spelling) is DELETED: `Conversion` now recognises both
+        // shapes by shape rather than by spelling, so the raw projection is
+        // accepted whichever way either side is written.
+        var mapped = raw;
 
         return mapped != TypeSymbol.Error
             && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
             ? mapped
             : null;
-    }
-
-    /// <summary>
-    /// Issue #3984 (review): reports whether the projected parameter type should
-    /// be rewritten into G#'s canonical structural symbol, which is true exactly
-    /// when the argument itself is written that way (or when there is no
-    /// argument to consult, as for a synthesised <c>params</c> array).
-    /// </summary>
-    /// <param name="argumentType">The argument's type, if any.</param>
-    /// <returns>Whether to canonicalize.</returns>
-    private static bool ShouldCanonicalizeAgainst(TypeSymbol? argumentType)
-    {
-        if (argumentType == null)
-        {
-            return true;
-        }
-
-        var underlying = argumentType is NullableTypeSymbol nullable
-            ? nullable.UnderlyingType
-            : argumentType;
-        return underlying is MapTypeSymbol or TupleTypeSymbol;
-    }
-
-    /// <summary>
-    /// Issue #3984: rewrites a projected parameter type to G#'s own canonical
-    /// symbol for that CLR shape — <c>Dictionary&lt;K, V&gt;</c> IS
-    /// <c>map[K, V]</c> and <c>ValueTuple&lt;…&gt;</c> IS a tuple (ADR-0158
-    /// identity).
-    /// </summary>
-    /// <remarks>
-    /// A CLOSED <c>Dictionary[string, int32]</c> and a <c>map[string, int32]</c>
-    /// already classify as identity, because <c>Conversion</c> compares their
-    /// <c>ClrType</c>s. Once an element is open both <c>ClrType</c>s are null
-    /// and the only remaining rule is the same-wrapper-kind recursion, which a
-    /// <c>MapTypeSymbol</c>/<c>ImportedTypeSymbol</c> pair does not satisfy — so
-    /// the projection hands back the spelling the author did not write and the
-    /// conversion is refused. Naming the shape canonically here keeps that
-    /// decision where G# already makes it, for the base-initializer position
-    /// only; the general classifier gap is unchanged and is reachable from the
-    /// ordinary imported-constructor probe too.
-    /// </remarks>
-    /// <param name="mapped">The projected parameter type.</param>
-    /// <returns>The canonical structural symbol, or the input unchanged.</returns>
-    private static TypeSymbol CanonicalizeStructuralShape(TypeSymbol mapped)
-    {
-        if (mapped is not ImportedTypeSymbol { OpenDefinition: { } openDefinition } imported
-            || imported.TypeArguments.IsDefaultOrEmpty)
-        {
-            return mapped;
-        }
-
-        var definitionName = openDefinition.FullName;
-        if (string.Equals(definitionName, "System.Collections.Generic.Dictionary`2", StringComparison.Ordinal)
-            && imported.TypeArguments.Length == 2)
-        {
-            return MapTypeSymbol.Get(imported.TypeArguments[0], imported.TypeArguments[1]);
-        }
-
-        // Issue #3984 (review): an 8-or-more-element tuple is
-        // `ValueTuple<T1..T7, TRest>`, so the arity check has to run over the
-        // FLATTENED chain — otherwise exactly the tuples that need the rewrite
-        // most (the long ones) keep the imported spelling.
-        if (definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true)
-        {
-            var elements = ImmutableArray.CreateBuilder<TypeSymbol>();
-            if (TryFlattenValueTupleElements(mapped, elements) && elements.Count >= 2)
-            {
-                return TupleTypeSymbol.Get(elements.ToImmutable());
-            }
-        }
-
-        return mapped;
-    }
-
-    /// <summary>
-    /// Issue #3984: appends <paramref name="type"/>'s tuple elements to
-    /// <paramref name="elements"/>, walking the canonical
-    /// <c>ValueTuple&lt;T1..T7, TRest&gt;</c> chain so an 8-or-more-element
-    /// tuple flattens to its real element list.
-    /// </summary>
-    /// <param name="type">The projected tuple-shaped type.</param>
-    /// <param name="elements">The accumulating element list.</param>
-    /// <returns>Whether the type was tuple-shaped throughout.</returns>
-    private static bool TryFlattenValueTupleElements(
-        TypeSymbol type,
-        ImmutableArray<TypeSymbol>.Builder elements)
-    {
-        if (type is TupleTypeSymbol nested)
-        {
-            elements.AddRange(nested.ElementTypes);
-            return true;
-        }
-
-        if (type is not ImportedTypeSymbol { OpenDefinition: { } nestedDefinition } nestedImported
-            || nestedDefinition.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) != true
-            || nestedImported.TypeArguments.IsDefaultOrEmpty)
-        {
-            return false;
-        }
-
-        var arguments = nestedImported.TypeArguments;
-        if (arguments.Length <= 7)
-        {
-            elements.AddRange(arguments);
-            return true;
-        }
-
-        if (arguments.Length != 8)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < 7; i++)
-        {
-            elements.Add(arguments[i]);
-        }
-
-        return TryFlattenValueTupleElements(arguments[7], elements);
     }
 
     private BoundExpression BindConstructorInitializerArgument(ExpressionSyntax syntax)
