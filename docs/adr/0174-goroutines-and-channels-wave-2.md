@@ -2833,7 +2833,7 @@ implementation had to refine it.
     parameter's nullability at a call site — a `string?` reaches a
     non-nullable `string` parameter — and the symbolic pair reaches no rule
     that says so. `!!` is the portable spelling; the asymmetry is issue
-    #3985.
+    #3985, resolved in errata 42.
 
     The imported **instance-method** probe had the same hole (GS0159 on the
     same argument) and is fixed by the same arm. Two consequences for D10:
@@ -2897,6 +2897,62 @@ implementation had to refine it.
     explicit type argument, because the element erases before overload
     resolution sees it. That is the same family as errata 32's `chunks`
     paragraph and issue #3876, and is filed separately.
+
+42. **A nullable channel is a nullable reference, whatever its element (issue
+    #3985).** A `chan[T]?` with an OPEN element was refused at a non-nullable
+    imported `Channel[T]` parameter with GS0155, where the closed `chan[int32]?`
+    was accepted and so was a `string?` at a non-nullable `string` parameter.
+    So the rejection was never G# enforcing nullability at a CLR call boundary —
+    it does not, in either control — it was a symbolic pair reaching no rule
+    at all.
+
+    `TryClassifyChannelConversion` declines a nullable operand deliberately
+    (errata 39) and leaves the pair to the general reference rules. Those
+    rescue the closed form through the #1627 arm — a checked reference
+    conversion that drops the annotation — but that arm is guarded by
+    `Conversion.IsReferenceLikeTarget`, and `ChannelTypeSymbol.MakeClrType`
+    returns null the moment the element has no CLR backing, so `chan[T]` was
+    reported as not reference-like and the pair fell through every arm to
+    `Conversion.None`. `IsReferenceLikeTarget` already names every other
+    structural shape that is a reference type while a same-compilation element
+    leaves its `ClrType` unavailable — slices, fixed and rectangular arrays,
+    named delegates, function types — and simply omitted the channel. A
+    channel is a CLR class in every direction, so the omission was never
+    defensible, and a closed-element channel answered `true` through the
+    `ClrType` fallback all along, which is exactly why only the open spelling
+    broke.
+
+    `IsNominalReferenceShape` — the sibling predicate gating the #3843 WIDENING
+    arm, which is what carries a nullable source across the D2 view to a
+    `ChannelReader[T]`/`ChannelWriter[T]` parameter — had the identical hole
+    for the identical reason: it bottoms out on `IsClassLikeReferenceType`,
+    which reads `ClrType`. Its exclusion list is G#'s STRUCTURAL shapes, and a
+    channel is not one of those; it is a nominal class a `castclass` can name.
+    So the two spellings disagreed at a directional parameter exactly as they
+    did at a bidirectional one, and both predicates are repaired here.
+
+    The issue allowed either answer — accept the open form like the closed one,
+    or enforce nullability at CLR parameters generally — and required only that
+    the two spellings agree. **The lenient answer is taken**, because it is what
+    the language is measured to do at the comparable CLR boundaries — a
+    `string?` at a non-nullable `string` parameter, and a `chan[int32]?` at a
+    non-nullable `Channel[int32]` one, both of which this errata's suite
+    asserts — because the alternative is a breaking change to every existing
+    call site, and because the leniency stays confined to CLR boundaries: a
+    G#-DECLARED parameter still reports GS0154 for a `chan[int32]?` argument,
+    untouched. It is not a universal CLR-boundary rule and is not claimed as
+    one: a nullable channel still does not reach a NON-generic
+    `ChannelWriter[T]` parameter, which is issue #3992. Direction and element
+    are untouched too — an `out chan[T]?` still cannot reach a
+    `ChannelReader[T]` parameter.
+
+    One neighbouring asymmetry is measured and left alone, because it is not
+    channel-specific: `OverloadResolver`'s own `IsReferenceLikeType`, which its
+    comment describes as mirroring `Conversion.IsReferenceLikeTarget`, lists
+    neither channels nor slices nor delegates, so at a **G#-declared**
+    parameter the open `chan[T]?` is silently accepted where `chan[int32]?`
+    reports GS0154. That is the same drift one layer over, it predates this fix
+    and is unchanged by it, and it is filed separately.
 
 ## Addendum A — The ten patterns, three ways
 
