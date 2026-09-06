@@ -297,29 +297,11 @@ internal sealed partial class ExpressionBinder
                     BindingFlags.Public | BindingFlags.Instance);
                 if (constrainedEvent != null)
                 {
-                    var constrainedHandlerType = Invariant.Required(
-                        constrainedEvent.EventHandlerType,
-                        "a reflected event has a handler type");
                     var constrainedHandlerTypeSymbol = MemberLookup.GetClrEventHandlerTypeSymbol(
                         clrInterfaceConstraint,
                         constrainedEvent);
-                    var constrainedBoundHandler = BindEventSubscriptionHandler(syntax.Value, constrainedHandlerTypeSymbol);
-                    BoundExpression constrainedConvertedHandler;
-                    if (constrainedBoundHandler is BoundFunctionLiteralExpression
-                        || constrainedBoundHandler is BoundMethodGroupExpression
-                        || constrainedBoundHandler is BoundClrMethodGroupExpression
-                        || (constrainedBoundHandler.Type is FunctionTypeSymbol constrainedFunction
-                            && IsSignatureCompatibleWithDelegate(constrainedFunction, constrainedHandlerType)))
-                    {
-                        constrainedConvertedHandler = constrainedBoundHandler;
-                    }
-                    else
-                    {
-                        constrainedConvertedHandler = conversions.BindConversion(
-                            syntax.Value.Location,
-                            constrainedBoundHandler,
-                            constrainedHandlerTypeSymbol);
-                    }
+                    var constrainedConvertedHandler =
+                        BindEventSubscriptionHandler(syntax.Value, constrainedHandlerTypeSymbol);
 
                     return new BoundClrEventSubscriptionExpression(
                         null,
@@ -446,32 +428,16 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var handlerType = Invariant.Required(eventInfo.EventHandlerType, "a CLR event has an event-handler type");
         var handlerTypeSymbol = importedEventTarget != null
             ? MemberLookup.GetClrEventHandlerTypeSymbol(importedEventTarget, eventInfo)
             : MemberLookup.GetClrEventHandlerTypeSymbol(eventInfo);
-        var boundHandler = BindEventSubscriptionHandler(syntax.Value, handlerTypeSymbol);
 
-        // The handler is most useful when expressed as a function literal of
-        // matching signature. For that path we skip BindConversion (which has
-        // no generic fn → custom-delegate rule) and rely on the evaluator /
-        // emitter to materialize the right delegate type. Otherwise fall back
-        // to the standard conversion (covers null, already-typed delegate
-        // variables, etc.). Method-group handlers were already routed through
-        // BindEventSubscriptionHandler above and arrive here resolved.
-        BoundExpression convertedHandler;
-        if (boundHandler is BoundFunctionLiteralExpression
-            || boundHandler is BoundMethodGroupExpression
-            || boundHandler is BoundClrMethodGroupExpression
-            || (boundHandler.Type is FunctionTypeSymbol fn
-                && IsSignatureCompatibleWithDelegate(fn, handlerType)))
-        {
-            convertedHandler = boundHandler;
-        }
-        else
-        {
-            convertedHandler = conversions.BindConversion(syntax.Value.Location, boundHandler, handlerTypeSymbol);
-        }
+        // BindEventSubscriptionHandler is the single conversion seam. In
+        // particular, a nilable structural arrow is converted to the event's
+        // nilable named delegate target there; converting that result again to
+        // the event's bare delegate would reject the nil that this site
+        // deliberately accepts (issue #3775).
+        var convertedHandler = BindEventSubscriptionHandler(syntax.Value, handlerTypeSymbol);
 
         var eventContainingType = importedEventTarget == null
             ? null
@@ -585,7 +551,10 @@ internal sealed partial class ExpressionBinder
             // already-bound LeftPart. The fast path is `recv.MemberName`
             // where the rebind is cheap; the slower path materializes the
             // bound receiver into a synthetic local so it isn't re-evaluated.
-            return BindEventSubscriptionHandlerFromBoundAccessor(memberAccess, boundReceiver, targetDelegateType);
+            return ConvertEventSubscriptionHandler(
+                handlerSyntax,
+                BindEventSubscriptionHandlerFromBoundAccessor(memberAccess, boundReceiver, targetDelegateType),
+                targetDelegateType);
         }
 
         // Issue #2389: an untyped arrow lambda handler (`Ticked += (count) ->
@@ -627,15 +596,20 @@ internal sealed partial class ExpressionBinder
         // `TickHandler`) is expected, producing invalid IL. Route it (and any
         // other not-yet-matching handler shape) through the same conversion
         // the method-group branches above already apply.
-        if (bound.Type != targetDelegateType && bound is not BoundErrorExpression)
-        {
-            return conversions.BindConversion(
-                handlerSyntax.Location,
-                bound,
-                NilTolerantHandlerTarget(bound, targetDelegateType));
-        }
+        return ConvertEventSubscriptionHandler(handlerSyntax, bound, targetDelegateType);
+    }
 
-        return bound;
+    private BoundExpression ConvertEventSubscriptionHandler(
+        ExpressionSyntax handlerSyntax,
+        BoundExpression handler,
+        TypeSymbol targetDelegateType)
+    {
+        return handler.Type != targetDelegateType && handler is not BoundErrorExpression
+            ? conversions.BindConversion(
+                handlerSyntax.Location,
+                handler,
+                NilTolerantHandlerTarget(handler, targetDelegateType))
+            : handler;
     }
 
     /// <summary>

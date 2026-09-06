@@ -29,7 +29,7 @@ namespace Cs2Gs.Tests;
 /// assignment STATEMENT: `TranslateExpressionStatement`'s
 /// <c>AssignmentExpressionSyntax</c> case computes its RHS via
 /// <c>CoerceConstantToUnsigned</c> / <c>CoerceCompoundAssignmentRhs</c> /
-/// <c>CoercePointerConversion</c> / <c>ForgiveEventSubscriptionRhs</c> /
+/// <c>CoercePointerConversion</c> /
 /// <c>ForgiveElementAccessAssignmentRhs</c>, none of which apply
 /// <c>IsObliviousExternalNullableMember</c> forgiveness. This is exactly the
 /// real-world `Oahu.Core` `BookLibrary.gs:469` shape surfaced by #2426:

@@ -577,12 +577,36 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   has **no range operator** (gsc gap, §G OD-1); a `RangeExpression` index over a
   `Span`/`Memory`/`ReadOnlySpan` lowers to a `.Slice` call: `s[i..j]` →
   `s.Slice(i, j - i)`, `s[i..]` → `s.Slice(i)`, `s[..j]` → `s.Slice(0, j)`.
-- **Null-forgiving `expr!` → non-null assertion `expr!!` when still needed.**
-  G#'s postfix `!!` asserts non-null (spec: "Postfix `!!` asserts non-null"),
-  but cs2gs omits it when native pattern bindings, G# smart-cast flow, or
-  non-null conditional/coalesce arms already give the translated value a
-  non-null type. Assertion insertion is idempotent, so an existing `!!` is
-  never wrapped in another one.
+- **Null-forgiving `expr!` is erased whenever the sink accepts nil; otherwise it
+  maps to `expr!!` (issue #3775).** C#'s `!` is compile-time-only, while G#'s
+  postfix `!!` is a checked operation that throws on nil. cs2gs therefore omits
+  the assertion when the contextual return, initializer, assignment, argument,
+  conditional arm, or switch arm remains nullable, as well as when native
+  pattern bindings, G# smart-cast flow, or non-null conditional/coalesce arms
+  already give the translated value a non-null type. When the emitted sink
+  remains non-nullable, G# has no erased equivalent: cs2gs retains `!!` as the
+  smallest compiling representation of the author's `!`, accepting that a
+  genuinely nil value throws earlier than in C#. Assertion insertion is
+  idempotent, so an existing `!!` is never wrapped in another one. An inferred
+  local whose C# type became non-null through `!` also retains the assertion:
+  erasing it only at the initializer would infer nullable G# storage while
+  Roslyn still reports every later use as non-null, losing the downstream
+  bridge the program needs.
+
+  The same explicit policy governs translator-added bridges in
+  nullable-oblivious code. A sink whose declaration can be widened is widened;
+  a sink with no declaration to widen (an element/indexer write), or whose
+  emitted contract deliberately remains non-nullable, receives `!!`. This
+  preserves the emitted contract but can turn a C# null store into an immediate
+  throw; broad contract widening is rejected because it changes unrelated
+  reads and callers.
+
+  Two construct-specific rules take precedence. Event subscription accepts a
+  nilable handler directly because `Delegate.Combine`/`Remove` define
+  `e += null` and `e -= null` as no-ops (ADR-0036); cs2gs must never add `!!` at
+  that site. `Nullable<T>.Value` still maps to `!!`; G# recognizes the
+  value-nullable operand and emits `Nullable<T>.Value`, so an empty value throws
+  `InvalidOperationException` just as it does in C#.
 - **Post/pre-increment/decrement as an expression.** G# now models `++`/`--`
   both as statements *and* as value-producing expressions (issue #1027). A
   `PostIncrementExpression`/`PostDecrementExpression` used as a **value** in a

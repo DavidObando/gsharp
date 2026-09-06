@@ -498,9 +498,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case PostfixUnaryExpressionSyntax suppressNullable
                     when suppressNullable.IsKind(SyntaxKind.SuppressNullableWarningExpression):
-                    // The C# null-forgiving operator `expr!` maps to G#'s postfix
-                    // non-null assertion `expr!!` when the translated operand
-                    // still has a nullable static type (ADR-0115 §B).
+                    // C# erases `expr!`; G# checks `expr!!` at run time. Preserve
+                    // the operand when its actual sink accepts nil, and use the
+                    // checked G# spelling only where the sink still requires a
+                    // non-null reference (ADR-0115 §B, issue #3775).
                     // A null literal is never forgivable: preserve `nil` so its
                     // target type accepts nullable sinks and rejects non-null ones.
                     if (IsNullOrSuppressedNull(suppressNullable.Operand))
@@ -509,11 +510,16 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     GExpression suppressed = this.TranslateExpression(suppressNullable.Operand);
+                    (ITypeSymbol suppressTargetType, ISymbol suppressTargetSymbol) =
+                        this.FindNullForgivingTarget(suppressNullable);
                     return this.GSharpExpressionIsStaticallyNonNull(
-                        suppressNullable.Operand,
-                        suppressed)
-                            ? suppressed
-                            : EnsureNonNullAssertion(suppressed);
+                            suppressNullable.Operand,
+                            suppressed)
+                            || this.NullForgivingTargetAcceptsNil(
+                            suppressTargetType,
+                            suppressTargetSymbol)
+                                ? suppressed
+                                : EnsureNonNullAssertion(suppressed);
 
                 case PostfixUnaryExpressionSyntax postfixValue
                     when postfixValue.IsKind(SyntaxKind.PostIncrementExpression)

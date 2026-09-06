@@ -111,12 +111,12 @@ namespace Demo
     }
 
     [Fact]
-    public void Oblivious_PromotedDelegateSubscribedToEvent_ForgivesRhsWithBang()
+    public void Oblivious_PromotedDelegateSubscribedToEvent_PreservesNilableHandler()
     {
         // `handler` is a delegate parameter defaulted to `null`, so it promotes to
-        // `((object, EventArgs) -> void)?`. Subscribing it to the named-delegate
-        // event `Fired` needs a `!!` so the promoted `T?` converts to the event's
-        // non-nullable delegate type (GS0155 otherwise).
+        // `((object, EventArgs) -> void)?`. Issue #3775 made event subscription
+        // itself nil-tolerant, matching Delegate.Combine/Remove, so cs2gs must
+        // preserve the handler instead of restoring the old throwing `!!` bridge.
         string printed = TranslateOblivious(@"
 using System;
 namespace Demo
@@ -137,7 +137,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("s.Fired += handler!!", printed);
+        Assert.Contains("s.Fired += handler", printed);
+        Assert.DoesNotContain("s.Fired += handler!!", printed);
     }
 
     [Fact]

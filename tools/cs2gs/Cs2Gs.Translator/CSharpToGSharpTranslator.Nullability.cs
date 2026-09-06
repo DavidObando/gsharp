@@ -420,15 +420,37 @@ public sealed partial class CSharpToGSharpTranslator
         private ISymbol ResolveValueSink(ExpressionSyntax value)
         {
             SyntaxNode node = value;
-            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            while (true)
             {
-                node = node.Parent;
+                if (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+                {
+                    node = node.Parent;
+                    continue;
+                }
+
+                if (node.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == node || conditional.WhenFalse == node))
+                {
+                    node = conditional;
+                    continue;
+                }
+
+                if (node.Parent is SwitchExpressionArmSyntax arm && arm.Expression == node)
+                {
+                    node = arm.Parent;
+                    continue;
+                }
+
+                break;
             }
 
             switch (node.Parent)
             {
                 case EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }:
                     return this.context.GetDeclaredSymbol(declarator);
+
+                case EqualsValueClauseSyntax { Parent: PropertyDeclarationSyntax property }:
+                    return this.context.GetDeclaredSymbol(property);
 
                 case AssignmentExpressionSyntax assignment
                     when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)

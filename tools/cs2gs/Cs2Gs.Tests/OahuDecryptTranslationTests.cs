@@ -167,8 +167,8 @@ namespace Demo
     }
 
     /// <summary>
-    /// The C# null-forgiving operator <c>expr!</c> maps to G#'s postfix non-null
-    /// assertion <c>expr!!</c> (ADR-0115 §B).
+    /// At a non-null sink, the C# null-forgiving operator <c>expr!</c> maps to
+    /// G#'s postfix non-null assertion <c>expr!!</c> (ADR-0115 §B).
     /// </summary>
     [Fact]
     public void SuppressNullableWarning_MapsToNonNullAssertion()
