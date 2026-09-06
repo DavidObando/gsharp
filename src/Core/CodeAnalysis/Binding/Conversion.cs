@@ -272,6 +272,36 @@ public sealed class Conversion
             return structuralSpelling;
         }
 
+        // Issue #4011: the arm above taught the lattice that `map[K, V]` IS
+        // `Dictionary<K, V>` by SHAPE once an element is open. It stopped at
+        // the concrete CLASS, so the INTERFACES that class implements —
+        // `IDictionary[K, V]`, `IReadOnlyDictionary[K, V]`,
+        // `ICollection`/`IReadOnlyCollection`/`IEnumerable` of
+        // `KeyValuePair[K, V]` — kept reporting `GS0155` while the CLOSED
+        // spelling of the very same conversion (`map[string, int32]` at an
+        // `IDictionary[string, int32]`) was accepted. The closed one is
+        // accepted because the map has a real `Dictionary<string, Int32>`
+        // `ClrType` for the reflective assignability check to read;
+        // `MapTypeSymbol.MakeClrType` gives up the moment a key or value has
+        // no CLR backing, so the open one had nothing left to read and no rule
+        // of its own. Same family as #3982 (a channel at an open imported
+        // parameter) and #3877 (extension lookup through the same erasure):
+        // the symbolic answer was simply never consulted.
+        //
+        // The conversion is IMPLICIT and one-way. A `map[K, V]` really is a
+        // `Dictionary<K, V>` at run time and a `Dictionary<K, V>` really does
+        // implement all five, so this is a plain reference upcast that emits
+        // nothing — exactly what the closed spelling already does. The reverse
+        // direction is deliberately absent: an `IDictionary[K, V]` is not
+        // necessarily a `Dictionary[K, V]`, and this arm must not become the
+        // identity rule that `MapTypeSymbol.TryGetMapShape` would have made it
+        // had the interfaces been folded into the SHAPE probe instead.
+        if (from != null && to != null
+            && TryClassifyMapInterfaceConversion(from, to, out var mapInterface))
+        {
+            return mapInterface;
+        }
+
         // ADR-0174 D1/D2: the channel lattice. `chan[T]` IS `Channel<T>` (and
         // the runtime's constructed `Chan<T>` is one too), so a same-direction
         // pair over an identical element is identity in either direction
@@ -2331,6 +2361,26 @@ public sealed class Conversion
         => type is StructSymbol { IsClass: true }
             || type.ClrType is { IsClass: true };
 
+    /// <summary>
+    /// Issue #4011: whether the pair is a <c>map[K, V]</c> flowing into one of
+    /// the interfaces its <c>Dictionary&lt;K, V&gt;</c> backing implements.
+    /// </summary>
+    /// <remarks>
+    /// The emitter's counterpart to
+    /// <see cref="TryClassifyMapInterfaceConversion"/>. A
+    /// <c>Dictionary&lt;K, V&gt;</c> reference already IS every one of these
+    /// interfaces at run time, so the conversion is representation-preserving
+    /// and emits no IL — the same disposition the identity arm beside it takes.
+    /// Exposed rather than re-derived so the two cannot drift apart.
+    /// </remarks>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The target type.</param>
+    /// <returns><see langword="true"/> when the pair is that upcast.</returns>
+    internal static bool IsMapInterfaceReferenceUpcast(TypeSymbol? from, TypeSymbol? to)
+        => from != null
+            && to != null
+            && TryClassifyMapInterfaceConversion(from, to, out _);
+
     internal static bool IsSealedReferenceType(TypeSymbol type)
     {
         if (type is StructSymbol { IsClass: true } userClass)
@@ -2392,13 +2442,27 @@ public sealed class Conversion
             // `IEnumerable<T>`/`IAsyncEnumerable<T>` with their own identity
             // arm in `ClassifyCore` — the #3843 widening must not answer for
             // them. `MapTypeSymbol` is deliberately NOT given a channel-style
-            // arm: measured, adding one changes nothing, because the widening
+            // arm: measured, adding one changed nothing, because the widening
             // it feeds also requires `map[K, V] -> IDictionary[K, V]` to be
-            // implicit and that conversion is unclassifiable while the key and
-            // value are open (`var d IDictionary[K, V] = m` reports GS0155 for
-            // exactly the same reason, with no `?` anywhere). The asymmetry
-            // that remains for an open map at an imported parameter is that
-            // erasure gap — issue #3982's family — and not a nullability one.
+            // implicit, and at the time that conversion did not exist while
+            // the key and value were open (`var d IDictionary[K, V] = m`
+            // reported GS0155 for exactly the same reason, with no `?`
+            // anywhere) — the erasure gap of #3982's family, not a nullability
+            // one.
+            //
+            // Issue #4011 has since supplied that missing conversion, so the
+            // premise of the measurement above is gone and it was re-run: a
+            // `map[K, V]?` now reaches an `(IDictionary[K, V])?` parameter
+            // through the #3843 widening, and a `(map[K, V])?` at a
+            // NON-nullable one reports GS0154 — both rows pinned in
+            // `Issue4011MapAtDictionaryInterfacesTests`. No arm was added here
+            // for either row, and none was needed: where a map's `ClrType` is
+            // readable it is already `IsClassLikeReferenceType`, and where it
+            // is not, `TryClassifyMapInterfaceConversion` answers the pair
+            // before this predicate is consulted. Whether an arm here would
+            // now change anything ELSE was not re-measured — if a future issue
+            // wants one, that measurement has to be redone against #4011
+            // rather than quoted from the paragraph above.
             && (type is ChannelTypeSymbol
                 || (type is not FunctionTypeSymbol
                     && type is not FunctionPointerTypeSymbol
@@ -3552,6 +3616,195 @@ public sealed class Conversion
     private static bool ContainsOpenElement(TypeSymbol type)
         => TypeSymbol.ContainsTypeParameter(type)
             || TypeSymbol.ContainsSameCompilationUserType(type);
+
+    /// <summary>
+    /// Issue #4011: classifies a <c>map[K, V]</c> at one of the interfaces the
+    /// <c>Dictionary&lt;K, V&gt;</c> it IS (ADR-0104) implements, when an open
+    /// key or value has left the map with no <see cref="TypeSymbol.ClrType"/>
+    /// for the reflective assignability rules to read.
+    /// </summary>
+    /// <remarks>
+    /// The sibling of <see cref="TryClassifyStructuralSpellingConversion"/>,
+    /// which recognises the concrete CLASS. Only the five interfaces
+    /// <c>Dictionary&lt;K, V&gt;</c> actually implements over its OWN key and
+    /// value participate, each matched element-wise by the same
+    /// <see cref="IsCrossContextIdenticalElement"/> comparison the class arm
+    /// uses. `sequence[KeyValuePair[K, V]]` is included because it is the alias
+    /// spelling of <c>IEnumerable&lt;KeyValuePair&lt;K, V&gt;&gt;</c>
+    /// (ADR-0040), not a separate rule.
+    /// <para>One-way by construction: <paramref name="from"/> must be
+    /// map-shaped and <paramref name="to"/> must be one of the interfaces, so
+    /// nothing here can make an <c>IDictionary[K, V]</c> flow back into a
+    /// <c>map[K, V]</c>. Declining (rather than owning) an unrecognised pair is
+    /// deliberate — unlike the invariant class arm, an interface target has
+    /// existing variance and boxing rules that must keep their say.</para>
+    /// </remarks>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The target type.</param>
+    /// <param name="conversion">The classified conversion, when recognised.</param>
+    /// <returns><see langword="true"/> when the pair is recognised.</returns>
+    private static bool TryClassifyMapInterfaceConversion(
+        TypeSymbol from,
+        TypeSymbol to,
+        out Conversion conversion)
+    {
+        conversion = Conversion.None;
+
+        // A nullable wrapper on either side is not this conversion; the lifted
+        // rules answer over the underlying pair, exactly as they do for the
+        // class arm and for the channel lattice.
+        if (from is NullableTypeSymbol || to is NullableTypeSymbol)
+        {
+            return false;
+        }
+
+        if (!MapTypeSymbol.TryGetMapShape(from, out var key, out var value))
+        {
+            return false;
+        }
+
+        // Only the case nothing else can answer. With a fully CLR-backed map
+        // the existing reference-assignability rules already read both sides
+        // and decide for themselves; re-answering here would change which
+        // conversion a closed call site picks.
+        if (!ContainsOpenElement(from))
+        {
+            return false;
+        }
+
+        if (to is SequenceTypeSymbol sequenceTarget)
+        {
+            if (!IsKeyValuePairOf(sequenceTarget.ElementType, key, value))
+            {
+                return false;
+            }
+
+            conversion = Conversion.Implicit;
+            return true;
+        }
+
+        if (!TryGetImportedGenericShape(to, out var openName, out var targetArguments))
+        {
+            return false;
+        }
+
+        bool matches;
+        switch (openName)
+        {
+            case "System.Collections.Generic.IDictionary`2":
+            case "System.Collections.Generic.IReadOnlyDictionary`2":
+                matches = targetArguments.Length == 2
+                    && IsCrossContextIdenticalElement(key, targetArguments[0])
+                    && IsCrossContextIdenticalElement(value, targetArguments[1]);
+                break;
+            case "System.Collections.Generic.ICollection`1":
+            case "System.Collections.Generic.IReadOnlyCollection`1":
+            case "System.Collections.Generic.IEnumerable`1":
+                matches = targetArguments.Length == 1
+                    && IsKeyValuePairOf(targetArguments[0], key, value);
+                break;
+            default:
+                return false;
+        }
+
+        if (!matches)
+        {
+            return false;
+        }
+
+        conversion = Conversion.Implicit;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4011: whether <paramref name="element"/> is
+    /// <c>KeyValuePair&lt;key, value&gt;</c> over exactly the map's own key and
+    /// value types.
+    /// </summary>
+    /// <param name="element">The candidate element type.</param>
+    /// <param name="key">The map's key type.</param>
+    /// <param name="value">The map's value type.</param>
+    /// <returns><see langword="true"/> on an exact match.</returns>
+    private static bool IsKeyValuePairOf(TypeSymbol? element, TypeSymbol key, TypeSymbol value)
+        => element != null
+            && TryGetImportedGenericShape(element, out var elementName, out var elementArguments)
+            && string.Equals(elementName, "System.Collections.Generic.KeyValuePair`2", StringComparison.Ordinal)
+            && elementArguments.Length == 2
+            && IsCrossContextIdenticalElement(key, elementArguments[0])
+            && IsCrossContextIdenticalElement(value, elementArguments[1]);
+
+    /// <summary>
+    /// Issue #4011: recovers a constructed imported generic's open-definition
+    /// full name and its SYMBOLIC type arguments.
+    /// </summary>
+    /// <remarks>
+    /// The same two-step recovery <see cref="MapTypeSymbol.TryGetMapShape"/>
+    /// performs: prefer the retained symbolic <c>TypeArguments</c> (the only
+    /// place an open <c>K</c> survives — the <see cref="TypeSymbol.ClrType"/>
+    /// is the ADR-0004 type-ERASED shape), and fall back to reading the closed
+    /// CLR arguments when a metadata-recovered symbol carries none.
+    /// </remarks>
+    /// <param name="type">The candidate type.</param>
+    /// <param name="openDefinitionName">The open definition's full name.</param>
+    /// <param name="typeArguments">The recovered type arguments.</param>
+    /// <returns><see langword="true"/> when a constructed generic was recovered.</returns>
+    private static bool TryGetImportedGenericShape(
+        TypeSymbol? type,
+        out string? openDefinitionName,
+        out ImmutableArray<TypeSymbol> typeArguments)
+    {
+        openDefinitionName = null;
+        typeArguments = ImmutableArray<TypeSymbol>.Empty;
+
+        while (type is NullabilityAnnotatedTypeSymbol annotated)
+        {
+            type = annotated.BaseType;
+        }
+
+        if (type is not ImportedTypeSymbol imported)
+        {
+            return false;
+        }
+
+        var openDefinition = imported.OpenDefinition;
+        if (openDefinition == null && imported.ClrType is { IsGenericType: true } closedType)
+        {
+            openDefinition = closedType.GetGenericTypeDefinition();
+        }
+
+        if (openDefinition == null)
+        {
+            return false;
+        }
+
+        openDefinitionName = openDefinition.FullName;
+
+        if (!imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            typeArguments = imported.TypeArguments;
+            return true;
+        }
+
+        if (imported.ClrType is not { IsGenericType: true } closedShape)
+        {
+            return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
+        foreach (var argument in closedShape.GetGenericArguments())
+        {
+            var mapped = TypeSymbol.FromClrType(argument);
+            if (mapped == null)
+            {
+                return false;
+            }
+
+            builder.Add(mapped);
+        }
+
+        typeArguments = builder.ToImmutable();
+        return true;
+    }
 
     // ADR-0174 D2: classifies conversions where at least one side is a G#
     // channel type clause and the other is channel-shaped (a magic symbol,

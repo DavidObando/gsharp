@@ -769,6 +769,33 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #4011: `map[K, V]` at one of the interfaces its
+        // `Dictionary<K, V>` backing implements, over an OPEN key or value.
+        // The value on the stack already IS that interface — a
+        // `Dictionary<…>` reference implements all five — so, exactly like the
+        // identity and fixed-array-cast arms above, the conversion is a
+        // representation-preserving upcast that needs no IL. It reaches here
+        // rather than the `HasCheckedReferenceConversion` arm for the reason
+        // the issue exists: with an open element the map has NO `ClrType`, so
+        // every `ClrType`-keyed arm declines. The CLOSED spelling does not
+        // need this arm — it compiled and IL-verified before #4011, answered
+        // earlier by one of the `ClrType`-keyed arms, and emits the same
+        // nothing.
+        //
+        // The reference-nullable wrappers are stripped first, exactly as the
+        // delegate arms above strip theirs: a `map[K, V]` IS a
+        // `Dictionary<K, V>` reference, so `map[K, V]?` erases to the identical
+        // representation and `(map[K, V])?` at an `(IDictionary[K, V])?` slot
+        // is the same no-op. The classifier's own arm declines a nullable pair
+        // by design — it leaves the lifted rules their say over the underlying
+        // pair, and #3843's widening then routes it back here.
+        if (Conversion.IsMapInterfaceReferenceUpcast(
+            UnwrapReferenceNullable(from),
+            UnwrapReferenceNullable(to)))
+        {
+            return;
+        }
+
         EmitDiagnosticException.Wrap(
             conv.Syntax,
             new NotSupportedException(
