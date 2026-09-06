@@ -1515,6 +1515,39 @@ internal sealed partial class ExpressionBinder
         var captureRef = new BoundVariableExpression(null, capture);
         var whenNotNull = BindAccessorStep(captureRef, null, rightPart);
 
+        // Issue #3978: the temp scope above exists only to hold the synthetic
+        // capture, but binding the right part can DECLARE user-visible names
+        // in it — an inline `out var` argument is the one that matters:
+        //
+        //     if map?.TryGetValue(key, out var found) == true { use(found) }
+        //
+        // An `out var` binds in the scope enclosing the call, exactly as it
+        // does when the receiver is spelled `map!!.`. Popping this scope
+        // wholesale discarded those declarations, so every later reference
+        // reported GS0125 "Variable 'found' doesn't exist": a `?.` receiver
+        // silently changed where an `out var` landed. Promote whatever the
+        // right part declared — everything except the capture itself, which is
+        // synthetic and must stay invisible — into the enclosing scope.
+        //
+        // Spelled without `?.` and without a discarded call result on purpose:
+        // this file is inside the self-migration corpus, and the defect being
+        // fixed here is precisely a construct that C# accepted and the
+        // migrated G# did not.
+        var enclosingScope = scope.Parent;
+        if (enclosingScope != null)
+        {
+            foreach (var declared in scope.GetDeclaredVariables())
+            {
+                if (!ReferenceEquals(declared, capture))
+                {
+                    // A name already declared in the enclosing scope loses the
+                    // race and keeps its existing binding, which is the same
+                    // shadowing outcome the non-`?.` spelling produces.
+                    enclosingScope.TryDeclareVariable(declared);
+                }
+            }
+        }
+
         scope = scope.Pop();
 
         // Issue #1213: a null-conditional invocation whose access produces no
