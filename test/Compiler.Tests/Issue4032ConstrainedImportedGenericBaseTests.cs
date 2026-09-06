@@ -70,6 +70,24 @@ namespace GSharp.Compiler.Tests;
 /// #4037. The FORWARDED spelling
 /// (<c>class MyGenericHandler[T SchemeOptions] : Handler[T]</c>) verifies and
 /// is the green row here.</para>
+/// <para><b>Review of PR #4040 found the clause sites were not enough.</b>
+/// Three EXPRESSION spellings close an imported generic without passing
+/// through a type clause — a direct constructor call <c>Handler[string]()</c>,
+/// a static member through a closed receiver
+/// <c>Handler[string].Describe()</c>, and an object literal
+/// <c>Handler[string]{…}</c> — and the first version of this change checked
+/// only the clause sites, so all three still compiled and threw
+/// <c>TypeLoadException</c>. Enumerating <c>MakeGenericType</c> across the
+/// binder found FOUR user-facing construction sites beyond the three clause
+/// sites; all now route through the same shared validation, and each has a
+/// violating row and a satisfying control here.</para>
+/// <para><b>One gap remains and is pinned, not hidden.</b> A DEPENDENT
+/// constraint over two distinct same-compilation classes
+/// (<c>Coupled[A, List[Bee]]</c> against
+/// <c>Coupled&lt;T, U&gt; where U : IList&lt;T&gt;</c>) is still accepted,
+/// because both classes erase to the same <c>object</c> placeholder. It is
+/// pre-existing and unchanged here — this change only ADDS rejections — and it
+/// has its own asserting row below. Filed as #4041.</para>
 /// <para><b>#4031's reduction is constructible.</b> The ASP.NET
 /// <c>AddScheme[TOptions, THandler]</c> shape — a two-parameter generic method
 /// whose second constraint mentions the first
@@ -101,6 +119,14 @@ public class Issue4032ConstrainedImportedGenericBaseTests
             where TOptions : SchemeOptions
         {
             public string Tag { get; set; } = "t";
+
+            public static string Describe() => "described";
+        }
+
+        public class Coupled<T, U>
+            where U : System.Collections.Generic.IList<T>
+        {
+            public string Tag { get; set; } = "coupled";
         }
 
         public class HandlerNew<TOptions>
@@ -228,6 +254,52 @@ public class Issue4032ConstrainedImportedGenericBaseTests
 
             let b = BadClass()
             Console.WriteLine(b.Tag)
+            """,
+            "GS0152",
+        };
+
+        // REVIEW FINDING 1. Three EXPRESSION spellings close an imported
+        // generic without ever reaching a type clause, and the first version of
+        // this change checked only the clause sites. Each of these compiled,
+        // emitted an instantiation the CLR refuses, and threw
+        // `TypeLoadException` on that build.
+        yield return new object[]
+        {
+            "review-a-direct-constructor-call-on-a-violating-instantiation",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            let h = Handler[string]()
+            Console.WriteLine(h.Tag)
+            """,
+            "GS0152",
+        };
+
+        yield return new object[]
+        {
+            "review-a-static-member-through-a-violating-receiver",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            Console.WriteLine(Handler[string].Describe())
+            """,
+            "GS0152",
+        };
+
+        yield return new object[]
+        {
+            "review-an-object-literal-of-a-violating-instantiation",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            let h = Handler[string]{Tag: "z"}
+            Console.WriteLine(h.Tag)
             """,
             "GS0152",
         };
@@ -386,6 +458,34 @@ public class Issue4032ConstrainedImportedGenericBaseTests
             new[] { "c", "v" },
         };
 
+        // REVIEW FINDING 1's green side: the same three expression spellings
+        // over a SATISFYING argument must keep binding, running and printing.
+        // The literal uses an IMPORTED type argument because the literal
+        // spelling over a SAME-COMPILATION one does not bind at all — it takes
+        // the `hasSymbolicArgument` branch and reports GS0157 "Cannot find type
+        // Handler". That is pre-existing and untouched here (this change's
+        // literal-site guard sits inside the `!hasSymbolicArgument` branch),
+        // measured on the parent, and filed as #4042.
+        yield return new object[]
+        {
+            "review-the-expression-spellings-still-bind-when-the-constraint-holds",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            class MyOptions : SchemeOptions {
+            }
+
+            let h = Handler[MyOptions]()
+            Console.WriteLine(h.Tag)
+            Console.WriteLine(Handler[MyOptions].Describe())
+            let lit = Handler[SchemeOptions]{Tag: "z"}
+            Console.WriteLine(lit.Tag)
+            """,
+            new[] { "t", "described", "z" },
+        };
+
         // THE OPEN-INSTANTIATION SKIP. Every one of these erases its type
         // argument to `object`, which does NOT satisfy `: SchemeOptions`.
         // Asking the constraint here is the #4031 lesson; the check must not.
@@ -442,6 +542,106 @@ public class Issue4032ConstrainedImportedGenericBaseTests
             """,
             new[] { "1", "4" },
         };
+    }
+
+    /// <summary>
+    /// NOT COVERED, and pinned so it is measured rather than merely described:
+    /// a DEPENDENT constraint (<c>Coupled&lt;T, U&gt; where U : IList&lt;T&gt;</c>)
+    /// over two DIFFERENT same-compilation classes is still accepted, because
+    /// both erase to the same <c>object</c> placeholder and the constraint is
+    /// asked on the erased vector — <c>IList&lt;object&gt;</c> is satisfied by
+    /// <c>List&lt;object&gt;</c>, while the symbols say
+    /// <c>IList&lt;A&gt;</c> is not satisfied by <c>List&lt;B&gt;</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Raised in review of PR #4040 and confirmed by measurement.
+    /// <b>Pre-existing and unchanged by this PR</b>: this change only ADDS
+    /// rejections, so a program it accepts was accepted on the parent too, and
+    /// the parent witness records this row compiling and throwing there as
+    /// well. Closing it needs symbol-aware substitution of the dependent bound
+    /// rather than the erased <c>Type[]</c>, which is the same class of repair
+    /// #4031 had to make for a sibling type parameter and is deliberately not
+    /// attempted here. Filed as #4041.</para>
+    /// <para>The row asserts the CURRENT behaviour — it compiles, and the
+    /// <c>TypeLoadException</c> arrives at run time — so whoever fixes #4041
+    /// gets a red row pointing at the exact program rather than silence. The
+    /// matched spelling <c>Coupled[A, List[A]]</c> is green beside it, which is
+    /// what any fix must not break.</para>
+    /// </remarks>
+    [Fact]
+    public void ADependentConstraintOverTwoErasedClasses_IsStillAccepted_Issue4041()
+    {
+        const string Violating = """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib2
+
+            class A {
+                public var N int32
+            }
+
+            class Bee {
+                public var M int32
+            }
+
+            var c Coupled[A, List[Bee]]
+            Console.WriteLine("compiled")
+            """;
+
+        const string Matched = """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib2
+
+            class A {
+                public var N int32
+            }
+
+            var c Coupled[A, List[A]]
+            Console.WriteLine("compiled")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4032_dep_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+
+            // The gap: two distinct same-compilation classes collapse to one
+            // placeholder, so the erased check cannot tell them apart.
+            var violatingPath = Path.Combine(tempDir, "Violating.dll");
+            var violatingLog = Compile(
+                tempDir, "Violating.gs", Violating, violatingPath, "/target:exe", "/reference:" + libPath);
+            Assert.DoesNotContain("GS9998", violatingLog, StringComparison.Ordinal);
+            Assert.True(
+                File.Exists(violatingPath),
+                "#4041 is still open, so this must still compile. If it now reports GS0152, the gap is "
+                    + $"closed — delete this row and add it to ConstraintViolations. Log:\n{violatingLog}");
+
+            var (violatingExit, violatingOutput) = RunDotnet(violatingPath);
+            Assert.True(
+                violatingExit != 0 && violatingOutput.Contains("TypeLoadException", StringComparison.Ordinal),
+                "the accepted instantiation must still be the one the CLR refuses; if it now loads, the "
+                    + $"premise of #4041 changed. Exit {violatingExit}:\n{violatingOutput}");
+
+            // The control any fix must not break: the MATCHED spelling is a
+            // legitimate program and stays green.
+            var matchedPath = Path.Combine(tempDir, "Matched.dll");
+            var matchedLog = Compile(
+                tempDir, "Matched.gs", Matched, matchedPath, "/target:exe", "/reference:" + libPath);
+            Assert.True(File.Exists(matchedPath), $"the matched spelling must compile. Log:\n{matchedLog}");
+
+            IlVerifier.Verify(matchedPath, new[] { libPath });
+
+            var (matchedExit, matchedOutput) = RunDotnet(matchedPath);
+            Assert.True(matchedExit == 0, $"the matched spelling must run. Exit {matchedExit}:\n{matchedOutput}");
+            Assert.Equal("compiled", matchedOutput.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     /// <summary>

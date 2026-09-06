@@ -1775,9 +1775,23 @@ internal sealed partial class ExpressionBinder
                     && importedCandidate != null
                     && importedCandidate.ClassType.IsGenericTypeDefinition
                     && TryResolveClrConstructionTypeArgs(
-                        syntax.TypeArgumentList, out var clrTypeArguments, out _, out var hasSymbolicArgument)
+                        syntax.TypeArgumentList, out var clrTypeArguments, out var literalSymbolicArgs, out var hasSymbolicArgument)
                     && !hasSymbolicArgument)
                 {
+                    // Issue #4032 (review finding 1): the literal spelling
+                    // `Handler[string]{Tag: "z"}` closes the imported generic here
+                    // and did not ask the constraints. Measured: it emitted an
+                    // instantiation the CLR refuses and threw TypeLoadException.
+                    if (Binder.ReportUnsatisfiedGenericTypeConstraint(
+                            Diagnostics,
+                            importedCandidate.ClassType,
+                            clrTypeArguments,
+                            literalSymbolicArgs,
+                            syntax.TypeIdentifier.Location))
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
                     Type closedImportedType;
                     try
                     {

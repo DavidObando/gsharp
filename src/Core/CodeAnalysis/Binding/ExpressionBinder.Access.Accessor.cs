@@ -3115,6 +3115,22 @@ internal sealed partial class ExpressionBinder
             clrArgs[i] = scope.References.MapClrTypeToReferences(clr);
         }
 
+        // Issue #4032 (review finding 1): a static member reached through a
+        // closed imported generic — `Handler[string].Describe()` — closes the
+        // receiver here, and this site did not ask the constraints. Measured on
+        // the first review build: it emitted an instantiation the CLR refuses
+        // and threw TypeLoadException. This is the receiver-shaped sibling of
+        // the direct-construction and literal sites.
+        if (Binder.ReportUnsatisfiedGenericTypeConstraint(
+                Diagnostics,
+                openClrType,
+                clrArgs,
+                typeArgs,
+                receiverSyntax.Location))
+        {
+            return false;
+        }
+
         try
         {
             var closed = openClrType.MakeGenericType(clrArgs);

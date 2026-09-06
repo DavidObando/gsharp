@@ -694,6 +694,21 @@ internal sealed partial class ExpressionBinder
                         continue;
                     }
 
+                    // Issue #4032 (review finding 1): a static member reached
+                    // through a closed imported generic — `Handler[string].Describe()`
+                    // — closes the type here, and this site did not ask the
+                    // constraints either. Measured: it emitted an instantiation the
+                    // CLR refuses and threw TypeLoadException.
+                    if (Binder.ReportUnsatisfiedGenericTypeConstraint(
+                            Diagnostics,
+                            openType,
+                            clrArgs,
+                            symbolic.ToImmutable(),
+                            typeArgumentList!.Location))
+                    {
+                        return false;
+                    }
+
                     try
                     {
                         clrType = openType.MakeGenericType(clrArgs);

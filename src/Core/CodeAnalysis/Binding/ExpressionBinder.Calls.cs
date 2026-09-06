@@ -1220,6 +1220,22 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
+            // Issue #4032 (review finding 1): the constraint check added for
+            // type CLAUSES did not cover the direct-construction expression
+            // `Handler[string]()`, so under MetadataLoadContext — where
+            // MakeGenericType validates nothing — that spelling still emitted an
+            // instantiation the CLR refuses and threw TypeLoadException at run
+            // time. Same defect, same remedy, one syntax over.
+            if (Binder.ReportUnsatisfiedGenericTypeConstraint(
+                    Diagnostics,
+                    openType,
+                    clrArgs,
+                    symbolicTypeArgs,
+                    syntax.Identifier.Location))
+            {
+                return false;
+            }
+
             try
             {
                 clrType = openType.MakeGenericType(clrArgs);

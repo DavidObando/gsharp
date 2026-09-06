@@ -397,11 +397,17 @@ public class Issue4027NilAtReferenceConstrainedTypeParameterTests
     /// <summary>
     /// The emitted call site carries the exact three opcodes <c>csc</c> emits
     /// for the same C# program — <c>ldloca.s N</c>, <c>initobj !!T</c>,
-    /// <c>ldloc.N</c> — and NOT a bare <c>ldnull</c>. Pinned as bytes because
-    /// "it verifies" alone would also accept a <c>box</c>/<c>unbox.any</c>
-    /// pair, and the point of the fix is that gsc matches the reference
+    /// <c>ldloc.N</c> — and NOT a bare <c>ldnull</c>. Pinned because "it
+    /// verifies" alone would also accept a <c>box</c>/<c>unbox.any</c> pair,
+    /// and the point of the fix is that gsc matches the reference
     /// implementation.
     /// </summary>
+    /// <remarks>The body is DECODED into opcodes rather than scanned as bytes.
+    /// A metadata token operand can hold any byte value, <c>ldnull</c>'s
+    /// <c>0x14</c> included, so a raw byte scan can answer for the wrong reason
+    /// in either direction — it could report the defect's opcode inside the
+    /// <c>initobj</c> TypeSpec token, or miss a real one. Raised in review of
+    /// PR #4040.</remarks>
     [Fact]
     public void TheCallSiteEmitsInitobj_NotLdnull()
     {
@@ -422,19 +428,19 @@ public class Issue4027NilAtReferenceConstrainedTypeParameterTests
             var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
             Assert.True(File.Exists(appPath), $"the shape case must compile. Log:\n{appLog}");
 
-            var il = ReadMethodIl(appPath, "fwdClassT");
+            var opcodes = DecodeOpcodes(ReadMethodIl(appPath, "fwdClassT"));
 
-            // ldloca.s 0 (0x12 0x00), initobj <TypeSpec> (0xFE 0x15 + token),
-            // ldloc.0 (0x06), call <MethodSpec> (0x28 + token), ret (0x2A).
-            Assert.True(il.Length >= 4, $"fwdClassT body is too short to hold the shape: {Describe(il)}");
-            Assert.Equal(0x12, il[0]);
-            Assert.Equal(0x00, il[1]);
-            Assert.Equal(0xFE, il[2]);
-            Assert.Equal(0x15, il[3]);
-            Assert.Equal(0x06, il[8]);
+            // The exact shape `csc` emits for `Takes<T>(null)` under
+            // `where T : class`, compared as DECODED OPCODES rather than as raw
+            // bytes: a metadata token operand can legitimately contain any byte
+            // value, including `ldnull`'s 0x14, so a byte scan can answer for the
+            // wrong reason in either direction.
+            Assert.Equal(
+                new[] { "ldloca.s", "initobj", "ldloc.0", "call", "ret" },
+                opcodes);
 
-            // The defect's own byte must be gone from this body entirely.
-            Assert.DoesNotContain((byte)0x14, il);
+            // And the defect's own instruction is gone as an INSTRUCTION.
+            Assert.DoesNotContain("ldnull", opcodes);
         }
         finally
         {
@@ -494,6 +500,77 @@ public class Issue4027NilAtReferenceConstrainedTypeParameterTests
         }
 
         throw new InvalidOperationException($"method '{methodName}' not found in '{assemblyPath}'");
+    }
+
+    /// <summary>
+    /// Decodes a method body into its opcode mnemonics, skipping each
+    /// instruction's operand by the operand size its opcode declares. Only the
+    /// opcodes this fixture can legitimately encounter are named; anything else
+    /// surfaces as its hex value so a drift shows up as a readable mismatch
+    /// rather than as a silent pass.
+    /// </summary>
+    /// <param name="il">The raw method body bytes.</param>
+    /// <returns>The decoded opcode mnemonics, in order.</returns>
+    private static string[] DecodeOpcodes(byte[] il)
+    {
+        // (mnemonic, operand bytes) for the single-byte opcodes reachable here.
+        var oneByte = new Dictionary<byte, (string Name, int Operand)>
+        {
+            [0x00] = ("nop", 0),
+            [0x02] = ("ldarg.0", 0),
+            [0x06] = ("ldloc.0", 0),
+            [0x0A] = ("stloc.0", 0),
+            [0x11] = ("ldloc.s", 1),
+            [0x12] = ("ldloca.s", 1),
+            [0x13] = ("stloc.s", 1),
+            [0x14] = ("ldnull", 0),
+            [0x16] = ("ldc.i4.0", 0),
+            [0x17] = ("ldc.i4.1", 0),
+            [0x18] = ("ldc.i4.2", 0),
+            [0x28] = ("call", 4),
+            [0x2A] = ("ret", 0),
+            [0x2B] = ("br.s", 1),
+            [0x2C] = ("brfalse.s", 1),
+            [0x2D] = ("brtrue.s", 1),
+            [0x39] = ("brfalse", 4),
+            [0x3A] = ("brtrue", 4),
+            [0x6F] = ("callvirt", 4),
+            [0x74] = ("castclass", 4),
+            [0x8C] = ("box", 4),
+            [0xA5] = ("unbox.any", 4),
+        };
+
+        // (mnemonic, operand bytes) for the 0xFE-prefixed opcodes reachable here.
+        var twoByte = new Dictionary<byte, (string Name, int Operand)>
+        {
+            [0x01] = ("ceq", 0),
+            [0x15] = ("initobj", 4),
+        };
+
+        var decoded = new List<string>();
+        var i = 0;
+        while (i < il.Length)
+        {
+            if (il[i] == 0xFE)
+            {
+                Assert.True(i + 1 < il.Length, $"truncated two-byte opcode at {i}: {Describe(il)}");
+                Assert.True(
+                    twoByte.TryGetValue(il[i + 1], out var wide),
+                    $"unhandled opcode FE {il[i + 1]:X2} at {i}: {Describe(il)}");
+                decoded.Add(wide.Name);
+                i += 2 + wide.Operand;
+                continue;
+            }
+
+            Assert.True(
+                oneByte.TryGetValue(il[i], out var op),
+                $"unhandled opcode {il[i]:X2} at {i}: {Describe(il)}");
+            decoded.Add(op.Name);
+            i += 1 + op.Operand;
+        }
+
+        Assert.True(i == il.Length, $"operand decoding overran the body: {Describe(il)}");
+        return decoded.ToArray();
     }
 
     private static string Describe(byte[] il)

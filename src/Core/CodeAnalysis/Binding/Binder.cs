@@ -3940,6 +3940,7 @@ public sealed class Binder
             // Issue #4032: MetadataLoadContext's MakeGenericType does not
             // validate constraints, so ask them here.
             if (ReportUnsatisfiedGenericTypeConstraint(
+                    Diagnostics,
                     clrOpenType,
                     clrArgs,
                     symbolicArgs.ToImmutable(),
@@ -4938,6 +4939,7 @@ public sealed class Binder
         // Issue #4032: MetadataLoadContext's MakeGenericType does not validate
         // constraints, so ask them here.
         if (ReportUnsatisfiedGenericTypeConstraint(
+                Diagnostics,
                 clrType,
                 clrArgs,
                 symbolicArgs.ToImmutable(),
@@ -5202,6 +5204,7 @@ public sealed class Binder
         // Issue #4032: MetadataLoadContext's MakeGenericType does not validate
         // constraints, so ask them here.
         if (ReportUnsatisfiedGenericTypeConstraint(
+                Diagnostics,
                 nestedDef,
                 clrArgs,
                 symbolicArgs.ToImmutable(),
@@ -5337,12 +5340,14 @@ public sealed class Binder
     /// than reading the erased <c>object</c>. That is the whole reason
     /// <c>class MyOptions : SchemeOptions</c> stays green.</para>
     /// </remarks>
+    /// <param name="diagnostics">The bag the diagnostic is reported into.</param>
     /// <param name="openDefinition">The open generic CLR definition.</param>
     /// <param name="clrArgs">The projected (possibly erased) CLR arguments.</param>
     /// <param name="symbolicArgs">The symbolic arguments, in the same order.</param>
     /// <param name="location">Where to anchor the diagnostic.</param>
     /// <returns><see langword="true"/> when a diagnostic was reported.</returns>
-    private bool ReportUnsatisfiedGenericTypeConstraint(
+    internal static bool ReportUnsatisfiedGenericTypeConstraint(
+        DiagnosticBag diagnostics,
         Type openDefinition,
         Type[] clrArgs,
         ImmutableArray<TypeSymbol> symbolicArgs,
@@ -5394,7 +5399,7 @@ public sealed class Binder
             return false;
         }
 
-        Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
+        diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
             location,
             failedParameter.Name,
             symbolicArgs[failedIndex],
