@@ -680,9 +680,24 @@ public class TypeSymbol : Symbol
     /// <returns><c>true</c> when a reflection-recovered array appears at any depth.</returns>
     public static bool ContainsMetadataRecoveredArray(TypeSymbol? type)
     {
-        if (type is ImportedTypeSymbol { ClrType: { IsArray: true } })
+        if (type is ImportedTypeSymbol imported)
         {
-            return true;
+            if (imported.ClrType is { IsArray: true })
+            {
+                return true;
+            }
+
+            // A CONSTRUCTED generic recovered from metadata carries no
+            // symbolic type-argument vector at all, so
+            // <see cref="GetWrappedTypes"/> yields nothing for it and a nested
+            // array would be missed — `List<List<int[]>>` is exactly as
+            // length-less as the bare `int[]` one level up, and must be treated
+            // the same way. Its CLR arguments are the only description it has,
+            // so read those.
+            if (imported.TypeArguments.IsDefaultOrEmpty && ClrTypeContainsArray(imported.ClrType))
+            {
+                return true;
+            }
         }
 
         if (type == null)
@@ -699,6 +714,45 @@ public class TypeSymbol : Symbol
         }
 
         return false;
+
+        static bool ClrTypeContainsArray(Type? clr)
+        {
+            if (clr == null)
+            {
+                return false;
+            }
+
+            if (clr.IsArray)
+            {
+                return true;
+            }
+
+            Type[] arguments;
+            try
+            {
+                if (!clr.IsGenericType || clr.IsGenericTypeDefinition)
+                {
+                    return false;
+                }
+
+                arguments = clr.GetGenericArguments();
+            }
+            catch (NotSupportedException)
+            {
+                // A TypeBuilder instantiation cannot be reflected over mid-emit.
+                return false;
+            }
+
+            foreach (var argument in arguments)
+            {
+                if (ClrTypeContainsArray(argument))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 
     /// <summary>
