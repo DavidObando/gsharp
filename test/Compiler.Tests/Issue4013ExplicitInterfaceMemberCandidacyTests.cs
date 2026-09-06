@@ -103,6 +103,18 @@ namespace GSharp.Compiler.Tests;
 /// <c>GS0159 Cannot find function Contains</c> a misspelling produces. That is
 /// the <c>map-contains</c> row, and it is a BEHAVIOUR CHANGE: the call used to
 /// compile.</para>
+/// <para><b>GS0577 is chosen only when an excluded member is APPLICABLE.</b> A
+/// name match alone would make the diagnostic lie: its advice — reach it
+/// through an interface-typed receiver — is a dead end unless one of the
+/// excluded members could really have taken the call. So the finder ranks them
+/// against the bound arguments and keeps <c>GS0159</c> otherwise
+/// (<c>map[string, int32]{}.Contains(1, 2)</c> and <c>Greeter{}.Secret(1)</c>
+/// are those rows, from the review on PR #4031). Ranking also picks the RIGHT
+/// interface to name: for <c>d.Contains("k")</c> it reports <c>IDictionary</c>,
+/// whose <c>Contains(object)</c> accepts the string, rather than
+/// <c>ICollection&lt;KeyValuePair&lt;K, V&gt;&gt;</c>, whose does not — so
+/// <c>cast[IDictionary](d).Contains("k")</c> is advice that actually
+/// works.</para>
 /// <para><b>What the issue expected, and what the compiler actually does.</b>
 /// The issue expects <c>ys.Add("x")</c> to report <c>GS0154</c> naming
 /// <c>int32</c> and <c>string</c>. It reports <c>GS0159</c> — and so does the
@@ -238,6 +250,41 @@ public class Issue4013ExplicitInterfaceMemberCandidacyTests
             Console.WriteLine(d.Contains("k"))
             """,
             "GS0577",
+        };
+
+        // Review finding on PR #4031: GS0577 must not fire when NO excluded
+        // interface member could have taken the call. `Contains` matches by
+        // name, but every `Contains` on `Dictionary<K, V>` is unary, so
+        // "reach it through an interface-typed receiver" would be a dead end.
+        // The ordinary GS0159 is the honest answer here.
+        yield return new object[]
+        {
+            "an-inapplicable-arity-keeps-gs0159-rather-than-gs0577",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+
+            let d = map[string, int32]{}
+            Console.WriteLine(d.Contains(1, 2))
+            """,
+            "GS0159",
+        };
+
+        // The same rule on a user-written type: `IHidden.Secret()` is
+        // parameterless, so a one-argument call cannot reach it either.
+        yield return new object[]
+        {
+            "an-inapplicable-explicit-member-keeps-gs0159-rather-than-gs0577",
+            """
+            package P
+            import System
+            import Interop
+
+            let g = Greeter{}
+            Console.WriteLine(g.Secret(1))
+            """,
+            "GS0159",
         };
     }
 

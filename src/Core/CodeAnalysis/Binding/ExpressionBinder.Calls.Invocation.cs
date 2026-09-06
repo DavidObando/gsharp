@@ -135,9 +135,26 @@ internal sealed partial class ExpressionBinder
                 // `ExpressionBinder.Calls.cs`, which stopped flattening a
                 // symbolic TUPLE type argument to `object` for exactly this
                 // reason.
-                resolved[i] = MemberLookup.TryProjectErasedClrType(ta, out var erasedTypeArg)
-                    ? scope.References.MapClrTypeToReferences(erasedTypeArg)
-                    : scope.References.GetCoreType("System.Object");
+                // Review finding (#4031): a direct same-compilation ENUM keeps
+                // the established `System.Object` placeholder.
+                // `TryProjectErasedClrType` erases an `EnumSymbol` to `int`,
+                // which is a VALUE type, and
+                // `TryCloseOverUserValueTypePlaceholders` only substitutes for
+                // NON-value-type placeholders — so a candidate whose
+                // `MakeGenericMethod` rejects `int` (`Enum.TryParse[TEnum]`,
+                // whose `where TEnum : Enum` an `int` does not satisfy) would be
+                // dropped outright rather than retried. The enum's own erasure
+                // is not what #4016 is about: this fix exists to make a
+                // same-compilation CLASS agree with the imported-base surrogate
+                // its arguments already present, and every row of it is a
+                // class. Reported green either way (`Issue1599`/`Issue1601`
+                // pass with and without this guard, because an `EnumSymbol`
+                // carries a non-null `ClrType` and so takes the branch above),
+                // but the guard states the intent rather than relying on that.
+                resolved[i] = ta is not EnumSymbol
+                    && MemberLookup.TryProjectErasedClrType(ta, out var erasedTypeArg)
+                        ? scope.References.MapClrTypeToReferences(erasedTypeArg)
+                        : scope.References.GetCoreType("System.Object");
             }
         }
 
@@ -4013,15 +4030,34 @@ internal sealed partial class ExpressionBinder
         // (`List[int32]().Add("x")`) stays GS0159, which is what an imported
         // member with no interface sibling (`Stack[int32]().Push("x")`) already
         // reported before this change.
+        // The excluded members are ranked against the bound arguments, so the
+        // diagnostic is chosen only when one of them could really have taken
+        // this call — `map[string, int32]{}.Contains(1, 2)` matches `Contains`
+        // by name but no unary `ICollection<KeyValuePair<K, V>>.Contains`
+        // accepts two arguments, and keeps GS0159 (review finding on #4031).
+        var explicitIfaceArgClrTypes = new System.Type?[arguments.Length];
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            explicitIfaceArgClrTypes[i] =
+                arguments[i].Type is { } explicitIfaceArgType
+                && MemberLookup.TryProjectErasedClrType(explicitIfaceArgType, out var explicitIfaceArgClr)
+                    ? explicitIfaceArgClr
+                    : null;
+        }
+
         if (receiver?.Type is { } explicitIfaceRecvType
             && MemberLookup.TryProjectErasedClrType(explicitIfaceRecvType, out var explicitIfaceRecvClr)
-            && MemberLookup.TryFindInterfaceOnlyInstanceMethod(explicitIfaceRecvClr, methodName, out var declaringIfaces))
+            && MemberLookup.TryFindInterfaceOnlyInstanceMethod(
+                explicitIfaceRecvClr,
+                methodName,
+                explicitIfaceArgClrTypes,
+                out var declaringIface))
         {
             Diagnostics.ReportExplicitInterfaceMemberNotOnTypeSurface(
                 ce.Location,
                 explicitIfaceRecvType.Name,
                 methodName,
-                TypeSymbol.FromClrType(declaringIfaces[0]).ToDisplayString(DisplayFormat.Minimal));
+                TypeSymbol.FromClrType(declaringIface).ToDisplayString(DisplayFormat.Minimal));
             return new BoundErrorExpression(null);
         }
 

@@ -513,10 +513,10 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Issue #4013: the interfaces that declare an abstract instance member
-    /// named <paramref name="name"/> which <paramref name="clrType"/> — a class
-    /// — implements EXPLICITLY, in the case where the class exposes no member of
-    /// that name on its own surface at all.
+    /// Issue #4013: the interface declaring an abstract instance member named
+    /// <paramref name="name"/> that <paramref name="clrType"/> — a class —
+    /// implements EXPLICITLY and that is APPLICABLE to this call, in the case
+    /// where the class exposes no member of that name on its own surface.
     /// </summary>
     /// <remarks>
     /// The diagnostic companion to the interface-walk rule in
@@ -529,22 +529,31 @@ internal sealed class MemberLookup
     /// <para>
     /// Deliberately UNCACHED and called only from the terminal
     /// member-not-found error path, so the memoized candidate lookup on the hot
-    /// path is untouched. Only reports when the class surface is empty for this
-    /// name: when the class does expose a same-named member, the call is an
-    /// ordinary inapplicable-overload failure and keeps GS0159, exactly as an
-    /// imported member with no interface sibling already does.
+    /// path is untouched. Two conditions gate it. The class surface must be
+    /// empty for this name — when the class does expose a same-named member the
+    /// call is an ordinary inapplicable-overload failure and keeps GS0159,
+    /// exactly as an imported member with no interface sibling already does.
+    /// And one of the EXCLUDED members must actually be applicable to the bound
+    /// arguments: a name match alone is not enough, because the advice this
+    /// diagnostic gives — "reach it through an interface-typed receiver" — is a
+    /// dead end otherwise. <c>map[string, int32]{}.Contains(1, 2)</c> matches
+    /// <c>Contains</c> by name, but no unary
+    /// <c>ICollection&lt;KeyValuePair&lt;K, V&gt;&gt;.Contains</c> can take two
+    /// arguments, so that call keeps GS0159 (review finding on PR #4031).
     /// </para>
     /// </remarks>
     /// <param name="clrType">The class receiver's CLR type.</param>
     /// <param name="name">The member name the call site used.</param>
-    /// <param name="declaringInterfaces">The interfaces declaring the member, in metadata order.</param>
+    /// <param name="argumentClrTypes">The bound arguments' erased CLR types, in source order.</param>
+    /// <param name="declaringInterface">The interface declaring the applicable member.</param>
     /// <returns>True when the member is reachable only through an interface-typed receiver.</returns>
     public static bool TryFindInterfaceOnlyInstanceMethod(
         Type clrType,
         string name,
-        out IReadOnlyList<Type> declaringInterfaces)
+        IReadOnlyList<Type?> argumentClrTypes,
+        [NotNullWhen(true)] out Type? declaringInterface)
     {
-        declaringInterfaces = Array.Empty<Type>();
+        declaringInterface = null;
         if (clrType == null || clrType.IsInterface || string.IsNullOrEmpty(name))
         {
             return false;
@@ -557,22 +566,36 @@ internal sealed class MemberLookup
             return false;
         }
 
-        var found = new List<Type>();
+        var excluded = new List<MethodInfo>();
         foreach (var iface in ClrTypeUtilities.SafeGetInterfaces(clrType))
         {
             foreach (var m in ClrTypeUtilities.SafeGetMethods(iface, BindingFlags.Public | BindingFlags.Instance))
             {
-                if (m.IsAbstract
-                    && ClrTypeUtilities.EmittedMemberNameMatches(m, name)
-                    && !found.Contains(iface))
+                if (m.IsAbstract && ClrTypeUtilities.EmittedMemberNameMatches(m, name))
                 {
-                    found.Add(iface);
+                    excluded.Add(m);
                 }
             }
         }
 
-        declaringInterfaces = found;
-        return found.Count != 0;
+        if (excluded.Count == 0)
+        {
+            return false;
+        }
+
+        // Ask the resolver, not the name: only an excluded member that could
+        // have taken this call makes the interface-typed-receiver advice true.
+        // An ambiguity still means at least one of them applies, so it counts.
+        var resolution = ClrOverloadResolution.Resolve(excluded, argumentClrTypes);
+        var applicable = resolution.Best
+            ?? (resolution.Ambiguous.IsDefaultOrEmpty ? null : resolution.Ambiguous[0]);
+        if (applicable?.DeclaringType is not { } declaring)
+        {
+            return false;
+        }
+
+        declaringInterface = declaring;
+        return true;
     }
 
     /// <summary>
