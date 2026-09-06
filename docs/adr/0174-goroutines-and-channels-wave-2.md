@@ -2405,7 +2405,9 @@ implementation had to refine it.
     Without those overloads `ch.ReceiveBatch(…)` on a `chan[T]` is
     member-not-found, which is not a distinction worth teaching. Filed as issue
     #3877 — a G#-declared extension on `in chan[T]` binds on that receiver, so
-    only the imported path is missing the classification.
+    only the imported path is missing the classification. **Resolved: the four
+    `Channel[T]` overloads are deleted, and the diagnosis in this paragraph is
+    corrected, in errata 41.**
 
     Writing them surfaced a real gap in D4: an imported `[Suspending]`
     *extension* method was never completed at the call site. A suspending
@@ -2794,6 +2796,56 @@ implementation had to refine it.
     matching what C# has always allowed; the matrix's rows govern what that
     handle can then do. The lattice, not the operator, is the mechanism — G#
     reaches the same pairs by the rule it already had.
+
+41. **The receiver's contribution to CLR type inference, and errata 32's
+    workaround retired (issue #3877).** Errata 32 records the batch surface as
+    eight methods where D10 specifies four: `TryReceiveBatch` / `TrySendBatch` /
+    `ReceiveBatch` / `SendBatch` on the directional handles, plus a `Channel[T]`
+    overload of each so that `ch.ReceiveBatch(…)` on a plain `chan[T]` was not
+    member-not-found. The four twins are gone; the D10 suites now exercise the
+    directional methods through the receiver conversion.
+
+    The report's diagnosis was wrong, and the correction is worth recording
+    because it moves the defect to a different layer. It read the gap as
+    *receiver versus argument* — imported extension lookup filling the receiver
+    slot without classifying the view. The real dividing line is **generic
+    versus non-generic**. A non-generic `this ChannelReader[int32]` extension
+    already bound on a `chan[int32]` receiver and already emitted `get_Reader`;
+    a generic one failed in **argument** position too. The report's control
+    passed only because it reached the extension through a G#-declared function,
+    whose argument goes through `Conversion` rather than through CLR inference.
+
+    The cause is that `ClrOverloadResolution.UnifyForInference` matched a closed
+    generic formal against the argument's own class hierarchy and interfaces.
+    The direction lattice is the one implicit conversion G# admits between two
+    *distinct* closed generic CLR types — no base class or interface links
+    `Channel[T]` to `ChannelReader[T]` — so a method type parameter mentioned
+    only inside the channel formal received no bound at all, inference failed,
+    and the candidate never reached the applicability pass that would have
+    accepted it. `ch.SendAll(3, 4)` bound throughout, because `T` was reachable
+    from a user argument; only the receiver's own contribution was missing.
+
+    Inference now contributes the element and stays deliberately
+    direction-blind, which is the same separation C# draws between §12.6.3
+    inference and §12.6.4 applicability: inference produces a bound, the
+    lattice decides whether the source may flow there. An `out chan[T]` still
+    finds no reader surface and an `in chan[T]` no writer surface, and the
+    element still has to match — `Conversion` remains the single place those
+    rules live.
+
+    The gap was **not** general. A CLR base-class or interface conversion in
+    receiver position already fed inference, and a user-defined implicit
+    operator does not feed it in C# either. Channel direction is the only
+    implicit non-identity view G# admits between two distinct generic CLR
+    instantiations, so it was the only instance — and any future sibling view
+    would land in the same routine.
+
+    One neighbouring gap is untouched: an element type declared in the *current*
+    compilation (`chan[Pair]` for a G# `struct Pair`) still finds no imported
+    generic extension, in receiver and argument position alike and even with an
+    explicit type argument, because the element erases before overload
+    resolution sees it. That is the same family as errata 32's `chunks`
+    paragraph and issue #3876, and is filed separately.
 
 ## Addendum A — The ten patterns, three ways
 
