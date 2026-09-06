@@ -750,6 +750,25 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #3998 (review finding 2): the explicit `cast[[M]T]([N]T)` the
+        // binder now offers. #3998 made a fixed array's declared LENGTH part
+        // of its type precisely because both lengths are backed by the ONE
+        // CLR SZ-array `T[]` — which is also why this cast is a pure
+        // reinterpretation that needs no IL at all, exactly like the identity
+        // arm above. Only a SAME-COMPILATION element reaches here: with a
+        // CLR-backed element both symbols carry the same `ClrType` and the
+        // reference-conversion arm answers first, whereas `[3]Foo` and
+        // `[4]Foo` both have a null `ClrType` while binding, so no
+        // `ClrType`-keyed arm can fire. Emitting nothing keeps the value —
+        // and therefore its real `.Length` — unchanged, which is what the
+        // spec says the cast does.
+        if (from is ArrayTypeSymbol fromFixedArrayCast
+            && to is ArrayTypeSymbol toFixedArrayCast
+            && Conversion.Classify(fromFixedArrayCast.ElementType, toFixedArrayCast.ElementType).IsIdentity)
+        {
+            return;
+        }
+
         EmitDiagnosticException.Wrap(
             conv.Syntax,
             new NotSupportedException(

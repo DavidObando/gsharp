@@ -1291,7 +1291,12 @@ public sealed class Conversion
         // the CLR allows array reference covariance, because G# slices are
         // invariant in their element type. The IL is a no-op since the
         // runtime representation is identical.
-        if (from is SliceTypeSymbol sliceSrc)
+        // Issue #3998: `to is not ArrayTypeSymbol` — a `[N]T` target's CLR
+        // backing is the same `T[]`, so without this guard every slice reached
+        // every fixed length implicitly. Narrowing an unknown length to a
+        // declared one is not implicit; the pair falls through to the #2516
+        // guard below, which offers it as an explicit `cast[[N]T](s)`.
+        if (from is SliceTypeSymbol sliceSrc && to is not ArrayTypeSymbol)
         {
             var targetArray = to?.ClrType;
             var sourceElement = sliceSrc.ElementType?.ClrType;
@@ -1317,10 +1322,13 @@ public sealed class Conversion
         // `AreTypeArgumentsEquivalent` requires the elements to match.
         if (from is SliceTypeSymbol sliceSrcSym && sliceSrcSym.ClrType == null)
         {
+            // Issue #3998: the `ArrayTypeSymbol` arm this switch used to carry
+            // is the symbolic-element twin of the CLR-backed hole closed just
+            // above — `[]Foo -> [3]Foo` was implicit whenever `Foo` was a
+            // same-compilation type. Dropped for the same reason.
             TypeSymbol? targetElementSym = to switch
             {
                 SliceTypeSymbol toSlice => toSlice.ElementType,
-                ArrayTypeSymbol toArray => toArray.ElementType,
                 _ => null,
             };
 
@@ -1337,6 +1345,92 @@ public sealed class Conversion
         if (from is SliceTypeSymbol
             && (to is SliceTypeSymbol or ArrayTypeSymbol || to?.ClrType?.IsArray == true))
         {
+            return allowExplicitReference
+                && (HasCheckedReferenceConversion(from, to) || IsCovariantArrayUpcast(from, to))
+                ? Conversion.Explicit
+                : Conversion.None;
+        }
+
+        // Issue #3998: the same guard for a FIXED-ARRAY source. `[N]T`'s CLR
+        // backing is the plain `T[]` shared by `[]T` and by every other
+        // length, so without this arm the pair fell through to the general
+        // #521 reference-assignability rule and `[3]int32` converted to
+        // `[4]int32` — the bare rule underneath #3962's generic-argument case.
+        //
+        // The only implicit conversions out of a `[N]T` into another G#-native
+        // array shape are:
+        //   * `[N]T -> [N]T` — identity, already answered at the top of
+        //     `ClassifyCore` by `TryClassifyWrappedElementIdentity`;
+        //   * `[N]T -> []T`  — dropping a KNOWN length for an unknown one is a
+        //     widening, and a representation no-op, so it stays implicit and
+        //     a fixed array still reaches every `[]T` parameter.
+        // A different length, a different element, or a rectangular target is
+        // a different type and stops here.
+        //
+        // Deliberately NOT guarded: an imported SZ-array target
+        // (`ImportedTypeSymbol(T[])`, i.e. a C# `int[]` parameter). Reflection
+        // records no length to disagree with, so that pair keeps the lenient
+        // comparison — the same metadata-recovery line #3924's
+        // `IsMetadataRecoveredElement` and #3962's `interop-*` cases draw.
+        //
+        // `cast[…]` remains available for an author asserting a shape the
+        // compiler cannot see, exactly as it is for slice covariance.
+        if (from is ArrayTypeSymbol fromFixedArray
+            && to is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol)
+        {
+            TypeSymbol? fixedTargetElement = to switch
+            {
+                SliceTypeSymbol toSliceTarget => toSliceTarget.ElementType,
+                ArrayTypeSymbol toArrayTarget => toArrayTarget.ElementType,
+                _ => null,
+            };
+
+            // Review finding 1 (#4018): this gate uses the SAME element
+            // comparison the identity path uses (`TryClassifyWrappedElementIdentity`
+            // -> `IsCrossContextIdenticalElement`), never the looser
+            // `AreTypeArgumentsEquivalent`. That helper falls back to symbol
+            // kind plus simple NAME when both elements have a null `ClrType`,
+            // so two distinct same-compilation homonyms — `A.Item` and
+            // `B.Item`, legal per the spec's dotted-qualifier rule — compared
+            // equal and `[1]A.Item` became assignable to `[1]B.Item`. That is
+            // the very failure mode this issue exists to remove, one level
+            // down, and it type-confuses at run time (reading `B.Item`'s field
+            // off an `A.Item` value threw `NullReferenceException`).
+            // `IsCrossContextIdenticalElement` compares user types by their
+            // `Definition`, while still answering `true` for the cross-context
+            // and reference-nullability pairs the CLR-backed elements need.
+            var sameElement = fixedTargetElement != null
+                && IsCrossContextIdenticalElement(fromFixedArray.ElementType, fixedTargetElement);
+
+            if (sameElement
+                && (to is SliceTypeSymbol
+                    || (to is ArrayTypeSymbol matchingLength
+                        && matchingLength.Length == fromFixedArray.Length)))
+            {
+                return Conversion.Implicit;
+            }
+
+            // Review finding 2 (#4018): the cast the diagnostic and the spec
+            // promise has to exist for a same-compilation element too. Both
+            // `[3]Foo` and `[4]Foo` have a null `ClrType` while binding, so
+            // `HasCheckedReferenceConversion` cannot see that they share one
+            // runtime representation and the pair fell out as `None` — the
+            // escape hatch existed for `[3]int32` and not for `[3]Foo`.
+            // Answer it from the symbols instead: identical element, differing
+            // declared length, one CLR array type underneath.
+            if (sameElement && to is ArrayTypeSymbol)
+            {
+                return allowExplicitReference ? Conversion.Explicit : Conversion.None;
+            }
+
+            // Everything else — a different element, or a rectangular target —
+            // is explicit-only, the same disposition slice covariance already
+            // has (`GS0156` points at `cast[…]`). The cast is a
+            // representation-level reinterpretation and does NOT change the
+            // value: a `[3]int32` cast to `[4]int32` still reports
+            // `.Length == 3`. That is the author asserting a shape, exactly as
+            // `cast[[]Base]` asserts an element; the implicit conversion is
+            // what G# withdraws.
             return allowExplicitReference
                 && (HasCheckedReferenceConversion(from, to) || IsCovariantArrayUpcast(from, to))
                 ? Conversion.Explicit
