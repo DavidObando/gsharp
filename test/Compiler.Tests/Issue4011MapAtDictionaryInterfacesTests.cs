@@ -43,6 +43,15 @@ namespace GSharp.Compiler.Tests;
 /// ADR-0040 alias spelling of the last) — recognised by shape, exactly as
 /// #3987 recognised the class and #3982 recognised the channel. The conversion
 /// emits no IL: the value on the stack already IS that interface.</para>
+/// <para><b>Where it manifests, measured.</b> At an ASSIGNMENT and at a
+/// G#-DECLARED parameter. NOT at an imported one: an imported call ranks its
+/// argument on the ERASED shape, where an open map presents as
+/// <c>Dictionary&lt;object, object&gt;</c> and is already CLR-assignable to
+/// the equally erased <c>IDictionary&lt;object, object&gt;</c> parameter, so
+/// no conversion is ever asked for. Every row in <see cref="AcceptedCases"/>
+/// and <see cref="RejectedCases"/> is red on the parent commit; the
+/// <see cref="InteropCases"/> row is green there and is kept as a
+/// must-not-change row rather than as proof.</para>
 /// <para><b>One-way by construction.</b> The source must be map-shaped and the
 /// target must be one of the interfaces, so nothing here lets an
 /// <c>IDictionary[K, V]</c> flow back into a <c>map[K, V]</c> — which is why
@@ -67,8 +76,7 @@ public class Issue4011MapAtDictionaryInterfacesTests
 
     /// <summary>
     /// The C# library the interop cases link against: genuine imported
-    /// parameters typed as the dictionary interface family, so the conversion
-    /// is exercised at a real metadata slot rather than only at an assignment.
+    /// parameters typed as the dictionary interface family.
     /// </summary>
     private const string LibrarySource = """
         using System.Collections.Generic;
@@ -119,6 +127,7 @@ public class Issue4011MapAtDictionaryInterfacesTests
                 var d IDictionary[K, V] = m
                 var r IReadOnlyDictionary[K, V] = m
                 var c ICollection[KeyValuePair[K, V]] = m
+                var rc IReadOnlyCollection[KeyValuePair[K, V]] = m
                 var e IEnumerable[KeyValuePair[K, V]] = m
                 var s sequence[KeyValuePair[K, V]] = m
                 var n int32 = 0
@@ -131,7 +140,7 @@ public class Issue4011MapAtDictionaryInterfacesTests
                     m2 = m2 + 1
                 }
 
-                return d.Count + r.Count + c.Count + n + m2
+                return d.Count + r.Count + c.Count + rc.Count + n + m2
             }
 
             func main2() {
@@ -141,7 +150,7 @@ public class Issue4011MapAtDictionaryInterfacesTests
 
             main2()
             """,
-            new[] { "10" },
+            new[] { "12" },
         };
 
         // The CLOSED spelling of the same conversions, which already worked.
@@ -338,10 +347,29 @@ public class Issue4011MapAtDictionaryInterfacesTests
     }
 
     /// <summary>
-    /// The same conversion at a genuine IMPORTED parameter rather than at an
-    /// assignment, so the row is exercised through overload resolution and the
-    /// emitted call as well as through <c>Conversion</c>.
+    /// An open <c>map[K, V]</c> at a genuine IMPORTED interface parameter —
+    /// a MUST-NOT-CHANGE row, not proof.
     /// </summary>
+    /// <remarks>
+    /// <para>Review feedback on #4030 was right twice over. The map is now
+    /// passed DIRECTLY to each probe: an earlier draft converted it to
+    /// interface-typed locals first, so the imported parameter received an
+    /// interface and the argument boundary was never crossed (the row did fail
+    /// on the parent commit, but on the local assignments, not on the
+    /// call).</para>
+    /// <para>And once corrected, the row is GREEN on the parent commit too —
+    /// measured, not assumed. An imported call ranks its argument on the
+    /// ERASED shape, where an open <c>map[K, V]</c> presents as
+    /// <c>Dictionary&lt;object, object&gt;</c>
+    /// (<c>MemberLookup.TryProjectErasedClrType</c>) and is CLR-assignable to
+    /// the equally erased <c>IDictionary&lt;object, object&gt;</c> parameter,
+    /// so the argument is left alone and no conversion is ever asked for. That
+    /// is the same reason the nullability correction above holds: at an
+    /// IMPORTED parameter this issue does not manifest at all. It manifests at
+    /// an assignment and at a G#-DECLARED parameter, which is where
+    /// <see cref="AcceptedCases"/> and <see cref="RejectedCases"/> measure it
+    /// — every one of those rows IS red on the parent.</para>
+    /// </remarks>
     /// <returns>Name, G# source, expected stdout lines.</returns>
     public static IEnumerable<object[]> InteropCases()
     {
@@ -355,12 +383,9 @@ public class Issue4011MapAtDictionaryInterfacesTests
             import Interop
 
             func countVia[K, V](m map[K, V]) int32 {
-                var d IDictionary[K, V] = m
-                var r IReadOnlyDictionary[K, V] = m
-                var e IEnumerable[KeyValuePair[K, V]] = m
-                return MapProbes.CountDictionary[K, V](d)
-                    + MapProbes.CountReadOnly[K, V](r)
-                    + MapProbes.CountPairs[K, V](e)
+                return MapProbes.CountDictionary[K, V](m)
+                    + MapProbes.CountReadOnly[K, V](m)
+                    + MapProbes.CountPairs[K, V](m)
             }
 
             func main2() {
@@ -431,14 +456,15 @@ public class Issue4011MapAtDictionaryInterfacesTests
     }
 
     /// <summary>
-    /// The conversion also holds at a genuine imported parameter.
+    /// The conversion also holds at a genuine imported parameter — where,
+    /// measured, it already held before this fix. See <see cref="InteropCases"/>.
     /// </summary>
     /// <param name="name">The case name.</param>
     /// <param name="source">The G# source.</param>
     /// <param name="expectedLines">The expected stdout lines, in order.</param>
     [Theory]
     [MemberData(nameof(InteropCases))]
-    public void AnOpenMap_ReachesAnImportedInterfaceParameter(string name, string source, string[] expectedLines)
+    public void AnOpenMap_StillReachesAnImportedInterfaceParameter(string name, string source, string[] expectedLines)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_4011_interop_").FullName;
         try

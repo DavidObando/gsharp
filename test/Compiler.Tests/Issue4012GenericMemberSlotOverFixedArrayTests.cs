@@ -56,6 +56,19 @@ namespace GSharp.Compiler.Tests;
 /// <c>List[[3]int32]().Add([3]int32{…})</c> both bound. That is the "needs
 /// BOTH a symbolic element and the fixed-array shape" signature the issue
 /// reports; the declared length is not consulted by this arm at all.</para>
+/// <para><b>Which CALL PATH, measured.</b> The INSTANCE-call path only.
+/// <c>TryResolveAndBindClrInstanceCall</c> abandons the whole call when an
+/// argument yields no effective CLR type, while a STATIC or EXTENSION imported
+/// call has its own <c>MemberLookup.TryProjectErasedClrType</c> fallback
+/// (#833 — the #3876 note inside
+/// <c>GetEffectiveArgumentClrTypeForOverloadResolution</c> says exactly that
+/// this is the one probe that already consulted it). So a <c>[3]T</c> reached
+/// a static imported slot all along, and only member calls such as
+/// <c>List[[3]Foo]().Add(…)</c> reported <c>GS0159</c>. The discriminating
+/// rows for sub-case 2 are the four instance calls in
+/// <see cref="NewlyAcceptedCases"/>, all red on the parent commit; the static
+/// row in <see cref="InteropCases"/> is green there and is a must-not-change
+/// row.</para>
 /// <para><b>The leniency that had to be withdrawn.</b>
 /// <c>BindClrParameterConversions</c> re-binds a CLR argument with
 /// <c>allowExplicit: true</c>. With sub-case 1 fixed, the CLR-backed pair
@@ -462,6 +475,29 @@ public class Issue4012GenericMemberSlotOverFixedArrayTests
     /// <returns>Name, G# source, expected stdout lines.</returns>
     public static IEnumerable<object[]> InteropCases()
     {
+        // Review feedback on #4030, and the measurement that followed it. The
+        // reviewer was right that the old second line
+        // (`ArrayProbes.CountAny[int32]([5]int32{…})`) proved nothing: a
+        // `[5]int32` already HAS a concrete `int32[]` `ClrType`, so
+        // `GetEffectiveArgumentClrType` answers before sub-case 2's arm is
+        // consulted. It is now called from an OPEN generic function, so the
+        // argument really is a `[3]T` with no CLR type of its own — and
+        // `[3]Foo` beside it, whose erasure is `object[]`.
+        //
+        // MEASURED, and worth stating plainly: this row is STILL green on the
+        // parent commit. A STATIC or EXTENSION imported call has its own
+        // `MemberLookup.TryProjectErasedClrType` fallback (issue #833 — see
+        // `TryBindImportedExtensionCall`, and the #3876 note inside
+        // `GetEffectiveArgumentClrTypeForOverloadResolution` itself, which
+        // says exactly that this is the ONE probe that already consulted it),
+        // so a `[3]T` argument reached a static imported slot all along. The
+        // INSTANCE-call path (`TryResolveAndBindClrInstanceCall`) has no such
+        // fallback and simply `return false`s — which is why sub-case 2
+        // manifests as `List[[3]Foo]().Add(…)` reporting GS0159 while the
+        // static call beside it binds. The discriminating rows for sub-case 2
+        // are the four in `NewlyAcceptedCases`, all of which are instance
+        // calls and all of which are red on the parent. This one is here as a
+        // MUST-NOT-CHANGE row for the static path, not as proof.
         yield return new object[]
         {
             "interop-a-fixed-array-still-reaches-a-genuine-clr-array-parameter",
@@ -470,14 +506,21 @@ public class Issue4012GenericMemberSlotOverFixedArrayTests
             import System
             import Interop
 
+            struct Foo { var X int32 }
+
+            func countFixed[T](first T, second T, third T) int32 {
+                return ArrayProbes.CountAny[T]([3]T{first, second, third})
+            }
+
             func main2() {
                 Console.WriteLine(ArrayProbes.Count([3]int32{1, 2, 3}).ToString())
-                Console.WriteLine(ArrayProbes.CountAny[int32]([5]int32{1, 2, 3, 4, 5}).ToString())
+                Console.WriteLine(countFixed[int32](1, 2, 3).ToString())
+                Console.WriteLine(countFixed[Foo](Foo{X: 1}, Foo{X: 2}, Foo{X: 3}).ToString())
             }
 
             main2()
             """,
-            new[] { "3", "5" },
+            new[] { "3", "3", "3" },
         };
 
         // A `List<int[]>` built on the C# side comes back with no length
