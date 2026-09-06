@@ -48,11 +48,21 @@ namespace GSharp.Compiler.Tests;
 /// <para><b>Known residue, deliberately out of scope (#3998).</b>
 /// <c>List[[]int32]</c> to <c>List[[3]int32]</c> is still accepted: a SLICE
 /// argument is erased by the same binder mechanism, and retaining it
-/// symbolically would touch every <c>List[[]T]</c> in the corpus. It matches
-/// the pre-existing top-level behaviour, where <c>[]int32</c> to
-/// <c>[3]int32</c> (and <c>[3]int32</c> to <c>[4]int32</c>) are likewise
-/// accepted — a separate gap filed as #3998. The <c>bare-*</c> cases pin that
-/// unchanged behaviour so this PR's blast radius is visible.</para>
+/// symbolically would touch every <c>List[[]T]</c> in the corpus. It matched
+/// the then-current top-level behaviour, where <c>[]int32</c> to
+/// <c>[3]int32</c> (and <c>[3]int32</c> to <c>[4]int32</c>) were likewise
+/// accepted — a separate gap filed as #3998. The <c>bare-*</c> cases pinned
+/// that behaviour so this PR's blast radius was visible.</para>
+/// <para><b>Since then (#3998).</b> The bare rule IS fixed: a fixed array's
+/// length is part of its type, <c>[N]T</c> widens implicitly to <c>[]T</c>,
+/// and nothing else converts implicitly into a <c>[N]T</c>. The two rows this
+/// file pinned that #3998 flipped are kept, flipped, in
+/// <see cref="FlippedByIssue3998Cases"/>. What #3998 left is narrower than
+/// what it found: the SLICE-argument erasure above, and a member-projection
+/// gap where a generic's member slot (<c>List[[3]int32]</c>'s <c>Add</c>) is
+/// still read off the erased <c>List&lt;int32[]&gt;</c> rather than projected
+/// through the retained <c>[3]int32</c>. Both stay pinned in
+/// <see cref="UnchangedBareCases"/>.</para>
 /// </remarks>
 public class Issue3962GenericOverFixedArrayIdentityTests
 {
@@ -717,62 +727,62 @@ public class Issue3962GenericOverFixedArrayIdentityTests
     }
 
     /// <summary>
-    /// Behaviour this PR deliberately does NOT change, pinned so the blast
-    /// radius is visible and a later fix for #3998 has to update this file on
-    /// purpose. At the TOP level a fixed array's length is not part of
-    /// conversion at all on <c>main</c>, and this PR does not touch that.
+    /// Bare-level behaviour this PR deliberately did not change, pinned so the
+    /// blast radius stayed visible. #3998 has since fixed the bare rule, so
+    /// what remains here is the part that survived it: the widening direction,
+    /// and the two erasure gaps #3998 also left. The rows it FLIPPED are in
+    /// <see cref="FlippedByIssue3998Cases"/>, not deleted.
     /// </summary>
     /// <returns>Name, G# source, expected stdout lines.</returns>
     public static IEnumerable<object[]> UnchangedBareCases()
     {
+        // #3998 flipped the first two lines of this case (`var a4 [4]int32 =
+        // a3` and `takes4(a3)`) into errors — they are now the
+        // `bare-fixed-array-lengths-no-longer-interconvert` rejection row
+        // below. The third line survives, and is the direction #3998
+        // deliberately kept implicit: dropping a KNOWN length for an unknown
+        // one is a widening, so a fixed array still reaches every `[]T` slot.
         yield return new object[]
         {
-            "bare-fixed-array-lengths-still-interconvert",
+            "bare-fixed-array-still-widens-to-a-slice",
             """
             package P
             import System
 
-            func takes4(a [4]int32) int32 {
-                return a[0]
-            }
-
             func main2() {
                 var a3 [3]int32 = [3]int32{1, 2, 3}
-                var a4 [4]int32 = a3
-                Console.WriteLine(a4.Length.ToString())
-                Console.WriteLine(takes4(a3).ToString())
-
                 var s []int32 = a3
                 Console.WriteLine(s.Length.ToString())
             }
 
             main2()
             """,
-            new[] { "3", "1", "3" },
+            new[] { "3" },
         };
 
-        // Review finding 1: `xs.Add([4]int32{...})` on a `List[[3]int32]` is
-        // still accepted. That is NOT member-projection erasure — it is the
-        // #3998 bare rule, and the `take3` line proves it: a G#-declared
-        // `[3]int32` parameter, which owes nothing to reflection, accepts a
-        // `[4]int32` argument too. A fully substituted `Add([3]int32)` would
-        // therefore accept the same call. Pinned so that fixing #3998 has to
-        // revisit both lines together.
+        // Review finding 1, revisited by #3998. This case used to pin the
+        // `take3` and `xs.Add` lines TOGETHER, on the reasoning that both were
+        // the one bare rule seen at two levels and no fix should split them
+        // silently. #3998 split them LOUDLY: `take3([4]int32{…})` is now an
+        // error (see `member-argument-length-follows-the-bare-conversion-rule`
+        // below), while `xs.Add([4]int32{…})` is still accepted — because
+        // `Add`'s parameter is read off the erased `List<int32[]>` rather than
+        // projected through the `[3]int32` this receiver still carries. So the
+        // original reasoning was half right: the two lines are NOT the same
+        // rule, and the `Add` line really is a member-projection gap.
+        // Measured, not assumed: #4002's hand-off predicted that widening
+        // `ImportedTypeSymbol.HasSubstitutableTypeArgument` to include
+        // `ContainsFixedLengthArray` would close it; #3998 measured that
+        // widening and it changed nothing here.
         yield return new object[]
         {
-            "member-argument-length-follows-the-bare-conversion-rule",
+            "member-argument-still-follows-the-erased-member-slot",
             """
             package P
             import System
             import System.Collections.Generic
 
-            func take3(a [3]int32) int32 {
-                return a[0]
-            }
-
             func main2() {
-                Console.WriteLine(take3([4]int32{1, 2, 3, 4}).ToString())
-
                 var xs = List[[3]int32]()
                 xs.Add([4]int32{5, 6, 7, 8})
                 Console.WriteLine(xs.Count.ToString())
@@ -780,9 +790,13 @@ public class Issue3962GenericOverFixedArrayIdentityTests
 
             main2()
             """,
-            new[] { "1", "1" },
+            new[] { "1" },
         };
 
+        // Unchanged by #3998 as well, and for its own reason: a SLICE type
+        // argument is erased to `T[]` by `Binder.ProjectGenericArgument`
+        // before any comparison can see it, which is a different mechanism
+        // from the member gap above.
         yield return new object[]
         {
             "slice-argument-still-reaches-a-fixed-array-generic",
@@ -801,6 +815,54 @@ public class Issue3962GenericOverFixedArrayIdentityTests
             main2()
             """,
             new[] { "1" },
+        };
+    }
+
+    /// <summary>
+    /// The rows this file pinned as ACCEPTED behaviour and #3998 turned into
+    /// errors. Kept here, flipped rather than deleted, so the change reads as
+    /// deliberate: #3998 made a fixed array's declared length part of its type
+    /// at the bare level, which is what these two cases measured before.
+    /// </summary>
+    /// <returns>Name, G# source, a substring the diagnostics must name.</returns>
+    public static IEnumerable<object[]> FlippedByIssue3998Cases()
+    {
+        yield return new object[]
+        {
+            "bare-fixed-array-lengths-no-longer-interconvert",
+            """
+            package P
+            import System
+
+            func main2() {
+                var a3 [3]int32 = [3]int32{1, 2, 3}
+                var a4 [4]int32 = a3
+                Console.WriteLine(a4.Length.ToString())
+            }
+
+            main2()
+            """,
+            "Cannot convert type '[3]int32' to '[4]int32'",
+        };
+
+        yield return new object[]
+        {
+            "member-argument-length-follows-the-bare-conversion-rule",
+            """
+            package P
+            import System
+
+            func take3(a [3]int32) int32 {
+                return a[0]
+            }
+
+            func main2() {
+                Console.WriteLine(take3([4]int32{1, 2, 3, 4}).ToString())
+            }
+
+            main2()
+            """,
+            "requires a value of type '[3]int32' but was given a value of type '[4]int32'",
         };
     }
 
@@ -876,6 +938,7 @@ public class Issue3962GenericOverFixedArrayIdentityTests
     /// <param name="expectedMention">A substring the diagnostics must name.</param>
     [Theory]
     [MemberData(nameof(RejectedCases))]
+    [MemberData(nameof(FlippedByIssue3998Cases))]
     public void ADifferentFixedLength_IsADifferentType(string name, string source, string expectedMention)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3962_neg_").FullName;
