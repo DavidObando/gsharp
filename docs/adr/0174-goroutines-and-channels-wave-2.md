@@ -2953,7 +2953,9 @@ implementation had to refine it.
     neither channels nor slices nor delegates, so at a **G#-declared**
     parameter the open `chan[T]?` is silently accepted where `chan[int32]?`
     reports GS0154. That is the same drift one layer over, it predates this fix
-    and is unchanged by it, and it is filed as issue #3988.
+    and is unchanged by it, and it is filed as issue #3988. **Closed by errata
+    47** — which also corrects the cause: the mirror was the oracle, not the
+    gate, and unifying it alone was measured to change nothing.
 
 43. **A channel element declared in the current compilation (issue #3982).** A
     C#-authored `CountSoFar[T](this ChannelReader[T])` bound on a `chan[int32]`
@@ -3040,7 +3042,8 @@ implementation had to refine it.
     because the annotation-dropping conversion is EXPLICIT and the
     applicability probe asks for an implicit one. Both element spellings agree
     on that, so it is not errata 42's question; it is issue #3992, whose repro
-    is corrected to the non-generic form.
+    is corrected to the non-generic form. **Closed by errata 48**, which admits
+    the explicit form in the symbolic applicability fallback only.
 
 44. **A `chan[T]` in a `: base(...)` initializer was a different probe, and
     errata 40's claim about it is corrected (issue #3984).** Errata 40 lists
@@ -3070,6 +3073,159 @@ implementation had to refine it.
     become bind-time errors. Second, the `chan[T]?` asymmetry errata 40 records
     — refused where the closed `chan[int32]?` is accepted, filed as #3985 — is
     visible in this position too and is not addressed here.
+
+47. **A nullable channel at an OPEN G#-declared parameter was silently
+    accepted, and it was not the predicate errata 42 pointed at (issue
+    #3988).** Errata 42 closed by naming one neighbouring asymmetry and leaving
+    it alone: `OverloadResolver`'s own `IsReferenceLikeType`, whose comment
+    claims to mirror `Conversion.IsReferenceLikeTarget`, lists neither channels
+    nor slices nor delegates, so a `chan[T]?` argument reached a non-nullable
+    G#-declared `chan[T]` parameter with no diagnostic while the closed
+    `chan[int32]?` correctly reported GS0154. That description of the SYMPTOM
+    is exactly right and is confirmed here. Its description of the CAUSE is
+    not, and this errata corrects it.
+
+    **The mirror is not the gate.** The #1552 null-safety gate that consulted
+    that predicate during applicability was REMOVED by issue #1627 — the
+    comment sitting where it used to be says so — because `Conversion.Classify`
+    now rejects an `S?` argument at a non-null-tolerant `S` parameter at the
+    classification source, consistently in every `BindConversion` position.
+    What the predicate still feeds is the empty-candidate-set diagnostic
+    ATTRIBUTION fallback, not applicability. Measured: unifying the mirror
+    alone, rebuilt, changed nothing whatsoever — the repro compiled silently
+    exactly as before, and the probe's eight GS0154s stayed eight.
+
+    **What the cause actually is.** `OverloadResolver.CallBinding`'s
+    argument-conversion loop skips `Conversion.Classify` outright when the
+    substituted parameter type still mentions a type parameter. That bypass is
+    defensible for the general lattice — an open pair has no closed answer to
+    give — but it also swallowed the one rule that needs no closed answer.
+    Kotlin-model null safety is a pure SHAPE question, and both halves are
+    decidable on an open type: `chan[T]` is a reference in every
+    instantiation, and a `[T class]` parameter is one by constraint. So the
+    discriminator was never open-vs-closed ELEMENT, as the issue assumed: a
+    `chan[Pair]?` over a same-compilation `Pair` reported GS0154 all along, and
+    so did a `chan[T]?` at a non-generic method of a generic class, which takes
+    a different path. It was open-vs-closed PARAMETER, and `([]T)?` at `[]T`,
+    `([4]T)?` at `[4]T`, an open generic delegate `D[T]?` at `D[T]`, an open
+    structural function `((T) -> T)?` at `(T) -> T`, and a
+    reference-constrained `T?` at `T` all had the identical hole. Only the
+    CLOSED forms of the delegate and function shapes were already rejected —
+    those mention no type parameter, never reach the bypass, and
+    `Conversion.Classify` answered them all along (review finding, PR #3999).
+
+    One further correction the review forced, and it is not confined to this
+    fix. The gate is a SHAPE test on both sides, and shape alone does not
+    establish that dropping the `?` would make the call work. Where it would
+    not, GS0154 named a parameter the argument could never satisfy and
+    prescribed `!!`, which cannot help: `func f(ch chan[string])` beside
+    `func f(xs []string)`, called with a `chan[T]?`, reported
+    `GS0154 … requires 'chan[string]' … was given 'chan[T]?'`. That defect is
+    OLDER than this unification — a `string?` against the same overload set
+    misattributed identically on the parent, through the `ClrType` fallback
+    that has answered for `string` since #1552 — so the delegation widened
+    which shapes reach it rather than creating it. The gate now requires the
+    argument's NON-nullable form to actually reach the parameter. Declining
+    alone was measured to be worse, not better: the untouched arity set then
+    ties in the betterness ranking and the call is reported GS0266,
+    "ambiguous … disambiguate with explicit types", which is false and is the
+    very outcome #1552's gate was introduced to prevent. So a narrow companion
+    routes an argument that reaches no candidate in EITHER form to the truthful
+    GS0267 the caller already emits for an empty set, while the general
+    wholly-unsatisfiable set keeps GS0266 exactly as before.
+
+    **Both halves are load-bearing, in the opposite order from the one filed.**
+    The bypass now makes an exception for `IsNullableReferenceGateRejected`,
+    and that gate bottoms out on `IsReferenceLikeType` — so left as a stale
+    copy it would have fired for none of the kinds that reach it. The mirror is
+    not the cause, but it is the oracle, and it is now a delegation to
+    `Conversion.IsReferenceLikeTarget` rather than a restatement of it. Its
+    dropped `TypeSymbol.String` arm was already redundant: `string`'s `ClrType`
+    is `System.String`, which the fallback answers identically.
+
+    **This was a soundness hole, not a missing message.** Measured on the
+    parent commit, `fOpen[int32](nil)` compiled with no diagnostic, IL-VERIFIED,
+    and threw `ChannelClosedException: close of nil channel` at run time.
+
+    **It is a breaking change**, and deliberately so — it is what makes the two
+    spellings agree, which is all errata 42 and issue #3985 ever asked for. The
+    remedies the diagnostic points at are `!!`, a nullable-typed parameter, and
+    ordinary `!= nil` smart-cast narrowing; all three are asserted. An
+    UNCONSTRAINED `T?` is deliberately NOT gated, because
+    `IsReferenceLikeTarget` answers false for it: its `T?` erases to
+    `Nullable<T>` and it keeps the value-type rules.
+
+    **`IsNominalReferenceShape` is deliberately NOT merged into this family.**
+    It is a sibling, not a copy: it exists to EXCLUDE G#'s structural shapes
+    from the #3843 widening arm because a `castclass` cannot name them, where
+    `IsReferenceLikeTarget` exists to INCLUDE them. Merging the two would
+    silently re-admit the issue #2850 structural-function materialisation that
+    predicate's own comment records as load-bearing.
+
+    **A fourth copy turned up, and it had to be unified too.**
+    `StatementBinder.Narrowing.IsReferenceLikeType` also says it mirrors the
+    conversion classifier's rule, and had drifted the same way — interfaces,
+    user classes and reference-constrained type parameters, but no structural
+    shape. That became load-bearing the moment the diagnostic above started
+    firing, because the diagnostic names narrowing as one of its remedies.
+    Measured with only the overload-resolution half applied, `var s chan[T]? =
+    nil; s = source; takesOpen[T](s)` reported GS0154 **with no way to satisfy
+    it**: ASSIGNMENT narrowing did not lift a structural shape, though
+    CONDITION narrowing (`if s != nil`) did. Every shape the delegation adds is
+    a genuine CLR reference, so the narrowed read stays the metadata-only no-op
+    the predicate's own #2159 arm already relied on, and the row that pins it
+    executes and IL-verifies.
+
+    **Two shapes the fix deliberately does not reach.** `map[K, V]?` at
+    `map[K, V]` and `(sequence[T])?` at `sequence[T]` are still accepted,
+    because `IsReferenceLikeTarget` ITSELF omits those two symbol kinds — the
+    same drift one layer deeper, now in the original rather than in a copy.
+    Adding them changes conversion and emission for every `map` and `sequence`
+    in the language, not only this gate, so it needs its own witness and is
+    issue #3997.
+
+48. **The annotation was dropped only where a CLR relation already linked the
+    two shapes (issue #3992).** Errata 42 closed by stating its own limit: a
+    nullable channel still did not reach a NON-generic `ChannelWriter[T]` /
+    `ChannelReader[T]` parameter. This closes that.
+
+    Applicability ALREADY ignores a reference annotation on the CLR path.
+    `NullableTypeSymbol.ClrType` relays its underlying, so a `chan[int32]?`
+    argument is presented to `ClrOverloadResolution` as `Chan<int>` and reaches
+    a `Channel[int32]` parameter by ordinary CLR assignability, exactly as a
+    `string?` reaches a `string` parameter — the annotation is invisible there
+    and always was. Only ADR-0148's SYMBOLIC fallback,
+    `MakeStructuralProjectionArgumentCheck`, which exists because CLR
+    surrogates cannot see a G# argument's structural shape, re-asked the
+    question on the still-ANNOTATED symbol, and so re-introduced an annotation
+    the rest of the boundary had already dropped.
+
+    That mattered only where no CLR relation links the two shapes, which is
+    precisely the D2 view: no base class or interface links `Chan<T>` to
+    `ChannelWriter<T>`, so a non-generic `Plain.W(ChannelWriter[int32])` was
+    ranked only by that callback. The annotation-dropping conversion the
+    boundary then performs is classified EXPLICIT on purpose — that is what
+    keeps a G#-declared `chan[int32]` parameter reporting GS0154 — and the
+    callback asked for an IMPLICIT one, so the candidate was dropped before the
+    conversion was ever reached. The generic half of the same asymmetry
+    disappeared with errata 43's `ChannelViewAppliesAtErasedGenericSlot`, which
+    never sees the annotation because it works on erased CLR shapes; that is
+    why #3992 was narrowed rather than closed.
+
+    The fix — `IsApplicableIgnoringReferenceNullability` — lets the symbolic
+    fallback also answer yes when the argument's NON-NULLABLE form is
+    applicable. Nothing becomes applicable whose non-nullable form was not;
+    only a REFERENCE nullable is peeled, so a value-type `Nullable<T>` keeps
+    its own lifted rules; and `StructuralProjectionPlanner.CanProject` is not
+    re-asked. The leniency stays confined to CLR boundaries, because
+    `BindClrParameterConversions` is the only call path that passes
+    `allowExplicit: true`. Direction and element still decide, and a
+    G#-declared parameter still reports GS0154 — five rejection rows hold all
+    three.
+
+    Errata 42's note that "this is not a universal CLR-boundary rule" now has
+    one fewer exception, but remains true in the same sense: what is lenient is
+    the CLR argument-conversion path specifically, not the language.
 
 ## Addendum A — The ten patterns, three ways
 

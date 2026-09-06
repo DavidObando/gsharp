@@ -397,6 +397,31 @@ internal sealed partial class OverloadResolver
                 {
                     return null;
                 }
+
+                // Review finding (#3988, Copilot on PR #3999): the gate above
+                // now declines when the argument's NON-nullable form would not
+                // reach the parameter either, because GS0154 must not prescribe
+                // `!!` where `!!` cannot help. Declining alone is not enough:
+                // this branch keeps the arity set precisely so the "pre-existing
+                // diagnostics" survive, and for a wholly non-convertible set
+                // those two candidates then TIE in the betterness ranking and
+                // the call is reported GS0266 — "ambiguous … disambiguate with
+                // explicit types" — which is not merely mis-framed but FALSE:
+                // there is no choice to disambiguate, and no explicit type makes
+                // one applicable. Measured on this branch before the fix below,
+                // `func f(ch chan[string])` / `func f(xs []string)` called with a
+                // `chan[T]?` reported exactly that.
+                //
+                // When a nullable-REFERENCE argument reaches no candidate in
+                // either form, the truthful answer is the one this method's own
+                // caller already emits for an empty set: GS0267, no overload is
+                // applicable. Narrowly clearing the set for that case routes it
+                // there. The general wholly-unsatisfiable set is untouched and
+                // still reports GS0266 as before.
+                if (HasUnsatisfiableNullableReferenceArgument(applicable, argumentCount, boundArguments))
+                {
+                    applicable = new List<FunctionSymbol>();
+                }
             }
         }
 
@@ -1719,7 +1744,34 @@ internal sealed partial class OverloadResolver
 
         // Only reference parameters are gated; a nullable-reference argument to
         // a value-type parameter is already non-convertible via Conversion.
-        return IsReferenceLikeType(paramType);
+        if (!IsReferenceLikeType(paramType))
+        {
+            return false;
+        }
+
+        // Review finding (#3988, Copilot on PR #3999): the gate must only claim
+        // that NULLABILITY is the reason the candidate failed. Everything above
+        // is a SHAPE test — both sides are reference-like — and shape alone does
+        // not establish that dropping the `?` would make the call work. Where it
+        // would not, GS0154 names a parameter the argument could never satisfy
+        // and prescribes a remedy (`!!`, or narrowing) that cannot possibly
+        // help, which is worse than the generic no-applicable-overload answer it
+        // displaces. So require that the argument's NON-NULLABLE form actually
+        // reaches the parameter; if it does not, decline and let the ordinary
+        // diagnostic stand.
+        //
+        // Measured: `func f(ch chan[string])` / `func f(xs []string)` called
+        // with a `chan[T]?` reported `GS0154: Parameter 'ch' requires a value of
+        // type 'chan[string]' but was given a value of type 'chan[T]?'` — true
+        // as far as it goes, but `!!` makes neither overload applicable. The
+        // defect is OLDER than the predicate unification that exposed it here: a
+        // `string?` against the same unrelated overload set misattributed
+        // identically on the parent commit, through the `ClrType` fallback that
+        // has answered for `string` since #1552. Fixing it here repairs both.
+        var underlying = argNullable.UnderlyingType;
+        var underlyingConversion = Conversion.Classify(underlying, paramType);
+        return underlyingConversion.Exists
+            && (underlyingConversion.IsImplicit || underlyingConversion.IsIdentity);
     }
 
     /// <summary>
@@ -1743,36 +1795,128 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
-    /// Issue #1552: the reference-like notion used by the null-safety gate,
-    /// mirroring <c>Conversion.IsReferenceLikeTarget</c>. A type is reference-
-    /// like when it is a user interface, a user <c>class</c> (StructSymbol with
-    /// IsClass), the built-in <c>string</c>, or an imported/CLR-backed type
-    /// whose backing is a class/interface. User classes/interfaces carry a null
-    /// ClrType during binding and are matched by their symbol kind.
+    /// Issue #1552: the reference-like notion used by the null-safety gate.
+    /// Issue #3988: this WAS a hand-copied mirror of
+    /// <see cref="Conversion.IsReferenceLikeTarget"/> — its own doc comment
+    /// said so — and it had drifted. It listed only interfaces, user
+    /// <c>class</c>es, <c>string</c> and the <c>ClrType</c> fallback, while
+    /// the original had grown arms for every structural shape that IS a
+    /// reference type while a type-parameter element leaves its
+    /// <c>ClrType</c> null: slices, fixed and rectangular arrays, named
+    /// delegates, structural function types, reference-constrained type
+    /// parameters and (since #3985) channels. A copy whose comment claims to
+    /// mirror another is the #3705 shape, so the copy is gone: this now
+    /// DELEGATES, and the two answers cannot disagree again.
     /// </summary>
+    /// <remarks>
+    /// The dropped <c>TypeSymbol.String</c> arm was already redundant —
+    /// <c>string</c>'s <c>ClrType</c> is <c>System.String</c>, a class, so the
+    /// delegate's own <c>ClrType</c> fallback answers it identically.
+    /// </remarks>
+    /// <param name="type">The candidate type.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is reference-like.</returns>
     private static bool IsReferenceLikeType(TypeSymbol type)
+        => type != null && Conversion.IsReferenceLikeTarget(type);
+
+    /// <summary>
+    /// Review finding (#3988, Copilot on PR #3999): true when some supplied
+    /// argument is a nullable REFERENCE that reaches no candidate's
+    /// corresponding parameter in EITHER form — neither as <c>S?</c> nor as the
+    /// bare <c>S</c>. Such a call is not a null-safety failure (dropping the
+    /// annotation would not help) and it is not an ambiguity (nothing is
+    /// applicable to choose between), so it belongs on the
+    /// no-applicable-overload path rather than on GS0266's.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately conservative in three ways, so that only the shape the
+    /// review raised is diverted. It requires an argument that actually is a
+    /// nullable reference; it requires EVERY candidate to reject BOTH forms, so
+    /// a set containing even one overload the bare value could reach keeps its
+    /// existing diagnostic; and it skips the same candidates
+    /// <see cref="TryFindNullSafetyArgumentMismatch"/> skips, so the two agree
+    /// about what they are looking at.
+    /// </remarks>
+    /// <param name="candidates">The arity-applicable candidates.</param>
+    /// <param name="argumentCount">The supplied argument count.</param>
+    /// <param name="boundArguments">The bound arguments.</param>
+    /// <returns><see langword="true"/> when no overload can accept the argument in either form.</returns>
+    private static bool HasUnsatisfiableNullableReferenceArgument(
+        List<FunctionSymbol> candidates,
+        int argumentCount,
+        ImmutableArray<BoundExpression>.Builder boundArguments)
     {
-        if (type is InterfaceSymbol)
+        if (candidates == null || candidates.Count == 0)
         {
-            return true;
+            return false;
         }
 
-        if (type is StructSymbol { IsClass: true })
+        var count = Math.Min(argumentCount, boundArguments.Count);
+        for (var i = 0; i < count; i++)
         {
-            return true;
-        }
+            if (boundArguments[i]?.Type is not NullableTypeSymbol argNullable
+                || !IsReferenceLikeType(argNullable.UnderlyingType))
+            {
+                continue;
+            }
 
-        if (type == TypeSymbol.String)
-        {
-            return true;
-        }
+            var sawCandidate = false;
+            var everyCandidateRejectsBothForms = true;
+            foreach (var candidate in candidates)
+            {
+                if (candidate.IsGeneric)
+                {
+                    continue;
+                }
 
-        if (type?.ClrType is { } clrBacking)
-        {
-            return !clrBacking.IsValueType && !clrBacking.IsPointer && !clrBacking.IsByRef;
+                var parameterOffset = candidate.ExplicitReceiverParameter == null ? 0 : 1;
+                var paramIndex = i + parameterOffset;
+                if (paramIndex < 0 || paramIndex >= candidate.Parameters.Length)
+                {
+                    continue;
+                }
+
+                var parameter = candidate.Parameters[paramIndex];
+                if (parameter.RefKind != RefKind.None || parameter.IsVariadic)
+                {
+                    continue;
+                }
+
+                sawCandidate = true;
+                if (IsConvertibleForNullSafetyAttribution(argNullable, parameter.Type)
+                    || IsConvertibleForNullSafetyAttribution(argNullable.UnderlyingType, parameter.Type))
+                {
+                    everyCandidateRejectsBothForms = false;
+                    break;
+                }
+            }
+
+            if (sawCandidate && everyCandidateRejectsBothForms)
+            {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="from"/> reaches <paramref name="to"/> by an
+    /// identity or implicit conversion — the question "would this argument be
+    /// applicable here?", asked without the structural-projection allowance so
+    /// it matches what the convertibility pass already decided.
+    /// </summary>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The parameter type.</param>
+    /// <returns><see langword="true"/> when the conversion exists and is implicit or identity.</returns>
+    private static bool IsConvertibleForNullSafetyAttribution(TypeSymbol? from, TypeSymbol? to)
+    {
+        if (from == null || to == null)
+        {
+            return false;
+        }
+
+        var conversion = Conversion.Classify(from, to);
+        return conversion.Exists && (conversion.IsImplicit || conversion.IsIdentity);
     }
 
     /// <summary>
