@@ -76,7 +76,18 @@ internal sealed partial class MethodBodyEmitter
         // IL level (`Chan<T>` IS a `Channel<T>`; a foreign `ChannelReader<T>`
         // IS an `in chan[T]`). Narrowing a bidirectional handle to a
         // directional one fetches the reader/writer view.
-        if (conv.Type is ChannelTypeSymbol targetChannel
+        //
+        // Issue #3958: the target's nullable wrapper is looked through first.
+        // Every channel shape is a class, so `out chan[T]?` has the identical
+        // CLR representation as `out chan[T]` — the wrapper is a binder-level
+        // annotation, which is why `TryClassifyChannelConversion` declines a
+        // nullable operand and leaves the pair to the lifted rules. Those rules
+        // classify it fine; it was only this arm that missed it, and the
+        // conversion then fell through to the unsupported-conversion throw. The
+        // source needs no unwrapping here: `TryGetChannelShape` already looks
+        // through one, which is what makes a nil channel's blocked-forever
+        // `select` arm work.
+        if (UnwrapReferenceNullable(conv.Type) is ChannelTypeSymbol targetChannel
             && ChannelTypeSymbol.TryGetChannelShape(conv.Expression.Type, out _, out var sourceDirection, out _))
         {
             this.EmitExpression(conv.Expression);
@@ -103,8 +114,8 @@ internal sealed partial class MethodBodyEmitter
         // shapes are left wrapped and fall through to the value-type arms
         // further down. The null-guarded adaptation helpers already tolerate a
         // null source, so a possibly-null function value stays correct.
-        var delegateSourceType = UnwrapReferenceNullableForDelegateShape(conv.Expression.Type);
-        var delegateTargetType = UnwrapReferenceNullableForDelegateShape(conv.Type);
+        var delegateSourceType = UnwrapReferenceNullable(conv.Expression.Type);
+        var delegateTargetType = UnwrapReferenceNullable(conv.Type);
 
         // Issue #1330: a function literal converted to a delegate type closed
         // over an in-scope generic type parameter (e.g. `Comparison[TResult]`,
@@ -744,18 +755,19 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Issue #2840 / #2841: strips reference-nullable wrappers so the
-    /// delegate-materialisation arms of <see cref="EmitConversion"/> see the
-    /// bare function / delegate shape. A <see cref="NullableTypeSymbol"/> over a
-    /// reference type is a binder-level annotation that erases to the underlying
-    /// type's CLR representation, so a <c>D?</c> or <c>((P…) -&gt; R)?</c> slot
-    /// materialises byte-identically to its bare form. Genuine
+    /// Issue #2840 / #2841: strips reference-nullable wrappers so the arms of
+    /// <see cref="EmitConversion"/> that classify on a representation see the
+    /// bare shape. A <see cref="NullableTypeSymbol"/> over a reference type is a
+    /// binder-level annotation that erases to the underlying type's CLR
+    /// representation, so a <c>D?</c> or <c>((P…) -&gt; R)?</c> slot
+    /// materialises byte-identically to its bare form — and so, issue #3958,
+    /// does an <c>out chan[T]?</c>, every channel shape being a class. Genuine
     /// <c>Nullable&lt;T&gt;</c> value shapes are left wrapped so they keep
     /// reaching the value-type arms.
     /// </summary>
     /// <param name="type">The declared source or target type of the conversion.</param>
     /// <returns>The unwrapped type, or <paramref name="type"/> when no reference-nullable wrapper applies.</returns>
-    private static TypeSymbol UnwrapReferenceNullableForDelegateShape(TypeSymbol type)
+    private static TypeSymbol UnwrapReferenceNullable(TypeSymbol type)
     {
         while (type is NullableTypeSymbol nullable
             && !ReflectionMetadataEmitter.IsValueTypeNullable(nullable)
