@@ -1408,7 +1408,15 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var convertedResult = conversions.BindConversion(syntax.Value.Location, binaryResult, leftType);
+        // Issue #3792: a preceding assignment may smart-cast a nullable
+        // delegate read to its non-nullable underlying type. Compound
+        // assignment still stores into the variable's declared slot type;
+        // Delegate.Remove can produce nil, so converting through the narrowed
+        // read type would incorrectly reject a valid `D? -= handler`.
+        var storeType = binaryResult is BoundBinaryExpression { Op.IsDelegateCombination: true }
+            ? GetAssignmentTargetType(variable) ?? leftType
+            : leftType;
+        var convertedResult = conversions.BindConversion(syntax.Value.Location, binaryResult, storeType);
 
         // Route through the correct assignment path depending on variable kind.
         if (variable is ImplicitFieldVariableSymbol implicitField)

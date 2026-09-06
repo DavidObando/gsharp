@@ -694,6 +694,23 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        if (b.Op.IsDelegateCombination)
+        {
+            this.EmitExpression(b.Left);
+            this.EmitExpression(b.Right);
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(
+                b.Op.Kind == BoundBinaryOperatorKind.Sum
+                    ? this.outer.wellKnown.GetDelegateCombineRef()
+                    : this.outer.wellKnown.GetDelegateRemoveRef());
+            this.il.OpCode(ILOpCode.Castclass);
+            var resultType = b.Type is NullableTypeSymbol nullableResult
+                ? nullableResult.UnderlyingType
+                : b.Type;
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(resultType));
+            return;
+        }
+
         // Issue #1298: lifted equality / inequality over a nullable
         // user-defined enum (`E? == E?`, `E? == E`, `E? == nil`, …). A
         // user EnumSymbol has no static CLR type, so the value-type

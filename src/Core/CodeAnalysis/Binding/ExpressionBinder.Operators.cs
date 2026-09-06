@@ -1780,6 +1780,21 @@ internal sealed partial class ExpressionBinder
 
         if (boundLeft.Type == TypeSymbol.Error || boundRight.Type == TypeSymbol.Error)
         {
+            if (TryBindDelegateCombinationOperator(
+                syntax.OperatorToken.Kind,
+                ref boundLeft,
+                ref boundRight,
+                syntax.Left.Location,
+                syntax.Right.Location,
+                out var delegateOperator))
+            {
+                return new BoundBinaryExpression(
+                    null,
+                    boundLeft,
+                    Invariant.Required(delegateOperator, "a successful delegate bind produces an operator"),
+                    boundRight);
+            }
+
             return new BoundErrorExpression(null);
         }
 
@@ -2533,12 +2548,13 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #1246: shared numeric-operand adaptation for binding a binary
-    /// operator. Attempts an exact per-type bind first, then — when that fails —
-    /// applies, in order, the same adaptations <c>BindBinaryExpression</c>
-    /// performs: constant-integer-literal adaptation (#1144), directional
-    /// implicit integer widening (#1150), the value-type and heterogeneous
-    /// nullable mixed-mode lifts, and lifted (nullable) numeric widening (#1236).
+    /// Issue #1246: shared operand adaptation for binding a binary operator.
+    /// Attempts an exact per-type bind first, then — when that fails — applies
+    /// the same adaptations <c>BindBinaryExpression</c> performs, including
+    /// delegate target typing (#3792), constant-integer-literal adaptation
+    /// (#1144), directional implicit integer widening (#1150), the value-type
+    /// and heterogeneous nullable mixed-mode lifts, and lifted (nullable)
+    /// numeric widening (#1236).
     /// Any inserted conversions mutate <paramref name="boundLeft"/> /
     /// <paramref name="boundRight"/> in place. This is factored out so compound
     /// assignment (<c>a op= b</c>) widens its right operand exactly like the
@@ -2555,6 +2571,18 @@ internal sealed partial class ExpressionBinder
         TextLocation rightLocation)
     {
         var boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+
+        if (boundOperator == null
+            && TryBindDelegateCombinationOperator(
+                operatorKind,
+                ref boundLeft,
+                ref boundRight,
+                leftLocation,
+                rightLocation,
+                out var delegateOperator))
+        {
+            return delegateOperator;
+        }
 
         // Issue #3463: C# defines string concatenation with char operands in
         // either order. Keep char-to-string adaptation local to `+` rather
@@ -2875,6 +2903,118 @@ internal sealed partial class ExpressionBinder
 
         return boundOperator;
     }
+
+    private bool TryBindDelegateCombinationOperator(
+        SyntaxKind operatorKind,
+        ref BoundExpression left,
+        ref BoundExpression right,
+        TextLocation leftLocation,
+        TextLocation rightLocation,
+        out BoundBinaryOperator? op)
+    {
+        op = null;
+        if (operatorKind is not SyntaxKind.PlusToken and not SyntaxKind.MinusToken)
+        {
+            return false;
+        }
+
+        var leftDelegate = GetConcreteDelegateType(left.Type);
+        var rightDelegate = GetConcreteDelegateType(right.Type);
+        TypeSymbol? target = null;
+
+        if (leftDelegate != null && IsUnresolvedMethodGroup(right))
+        {
+            right = conversions.BindConversion(rightLocation, right, leftDelegate);
+            if (right is BoundErrorExpression)
+            {
+                return false;
+            }
+
+            rightDelegate = GetConcreteDelegateType(right.Type);
+        }
+        else if (rightDelegate != null && IsUnresolvedMethodGroup(left))
+        {
+            left = conversions.BindConversion(leftLocation, left, rightDelegate);
+            if (left is BoundErrorExpression)
+            {
+                return false;
+            }
+
+            leftDelegate = GetConcreteDelegateType(left.Type);
+        }
+
+        if (leftDelegate != null && rightDelegate != null)
+        {
+            if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(leftDelegate, rightDelegate))
+            {
+                target = leftDelegate;
+            }
+            else if (rightDelegate is FunctionTypeSymbol
+                && leftDelegate is not FunctionTypeSymbol
+                && Conversion.Classify(right.Type, leftDelegate).IsImplicit)
+            {
+                target = leftDelegate;
+                right = conversions.BindConversion(rightLocation, right, target);
+            }
+            else if (leftDelegate is FunctionTypeSymbol
+                && rightDelegate is not FunctionTypeSymbol
+                && Conversion.Classify(left.Type, rightDelegate).IsImplicit)
+            {
+                target = rightDelegate;
+                left = conversions.BindConversion(leftLocation, left, target);
+            }
+        }
+        else if (leftDelegate != null && right.Type == TypeSymbol.Null)
+        {
+            target = leftDelegate;
+        }
+        else if (rightDelegate != null && left.Type == TypeSymbol.Null)
+        {
+            target = rightDelegate;
+        }
+
+        if (target == null)
+        {
+            return false;
+        }
+
+        var resultType = operatorKind == SyntaxKind.MinusToken
+            || (MayBeNilDelegateOperand(left.Type) && MayBeNilDelegateOperand(right.Type))
+            ? NullableTypeSymbol.Get(target)
+            : target;
+        op = BoundBinaryOperator.MakeDelegateCombination(
+            operatorKind,
+            left.Type,
+            right.Type,
+            resultType);
+        return true;
+    }
+
+    private static TypeSymbol? GetConcreteDelegateType(TypeSymbol type)
+    {
+        var candidate = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        if (candidate is FunctionTypeSymbol or DelegateTypeSymbol)
+        {
+            return candidate;
+        }
+
+        var clrType = candidate.ClrType;
+        if (!ClrTypeUtilities.IsDelegateType(clrType))
+        {
+            return null;
+        }
+
+        return clrType?.FullName is "System.Delegate" or "System.MulticastDelegate"
+            ? null
+            : candidate;
+    }
+
+    private static bool MayBeNilDelegateOperand(TypeSymbol type)
+        => type == TypeSymbol.Null || type is NullableTypeSymbol;
+
+    private static bool IsUnresolvedMethodGroup(BoundExpression expression)
+        => expression is BoundMethodGroupExpression
+            or BoundClrMethodGroupExpression { ResolvedMethod: null };
 
     private BoundExpression ConvertStringConcatCharOperand(BoundExpression expression, TextLocation location)
     {
