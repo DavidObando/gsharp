@@ -981,8 +981,20 @@ public sealed class Binder
                 packagesInOrder.Add(packageSymbol);
                 AttachDocumentation(packageSymbol, packageSyntax);
             }
+            else if (packageSyntax != null)
+            {
+                packageSymbol.MarkExplicitlyDeclared();
+            }
 
             packageByTree[tree] = packageSymbol;
+        }
+
+        foreach (var packageSymbol in packagesInOrder)
+        {
+            if (packageSymbol.IsExplicitlyDeclared)
+            {
+                binder.scope.RegisterSourcePackage(packageSymbol.Name);
+            }
         }
 
         // Issue #2342: runs `action` with `pkg`'s name set as the ambient
@@ -3323,6 +3335,14 @@ public sealed class Binder
             previous = stack.Pop();
             var scope = new BoundScope(parent);
             var preserveImportSyntaxTrees = preserveLatestImportSyntaxTrees && stack.Count == 0;
+
+            foreach (var package in previous.Packages)
+            {
+                if (package.IsExplicitlyDeclared)
+                {
+                    scope.RegisterSourcePackage(package.Name);
+                }
+            }
 
             foreach (var i in previous.Imports)
             {
