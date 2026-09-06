@@ -3483,10 +3483,12 @@ internal sealed partial class ExpressionBinder
         }
 
         // An erasure can only be MISTAKEN for the parameter where the parameter
-        // has an `object` in the position the erasure filled — that is, nested
-        // inside a constructed generic (or an array element). A parameter that
+        // has an erasure SURROGATE in the position the erasure filled — that
+        // is, nested inside a constructed generic (or an array element).
+        // (`object` was the only surrogate this test knew about until #4006;
+        // see below.) A parameter that
         // genuinely is `object` accepts the argument for real; and a parameter
-        // with no `object` in it at all (`System.Array`, the non-generic
+        // with no surrogate in it at all (`System.Array`, the non-generic
         // `IEnumerable`/`ICollection`/`IList`/`IDictionary`, `int`,
         // `Exception`, `IComparable`) was matched on the argument's own CLR
         // shape, which erasure did not invent — a `map[string, Pair]` really is
@@ -3494,32 +3496,55 @@ internal sealed partial class ExpressionBinder
         // elements are. Only the nested position is suspect, which is exactly
         // the invariant-generic-over-an-erased-element shape the issue reports.
         //
-        // Two limits of this test, both measured, neither costing a program:
-        //
-        // `object` is not the only erasure surrogate — `TryProjectErasedClrType`
-        // maps a same-compilation ENUM to `int` and a same-compilation CLASS to
-        // its imported base. The enum case is refused anyway (a `List[MyEnum]`
-        // is not applicable to a `List<int>` slot to begin with). The class case
-        // is a real hole, tracked as #4006, and widening the surrogate list here
-        // would not close it: with this gate instrumented,
-        // `ClassifyImplicit(List<ImportedBase>, List<object>)` came back `None`,
-        // so that candidate was never applicable in `EvaluateCandidate` and this
-        // check was never consulted for it. The bind is completed by some other
-        // path — #4006 carries the trace. The projections have to be reconciled
-        // before any test here can help.
-        //
-        // The test is per PARAMETER where the precise unit is per POSITION: a
-        // parameter declared `Dictionary[T, List[object]]` is exempted whole,
-        // though its nested `List<object>` is genuine. Reading the candidate's
-        // OPEN declaration position by position was implemented and REVERTED —
+        // One limit of this test, measured, not costing a program: it is per
+        // PARAMETER where the precise unit is per POSITION. A parameter
+        // declared `Dictionary[T, List[object]]` is exempted whole, though its
+        // nested `List<object>` is genuine. Reading the candidate's OPEN
+        // declaration position by position was implemented and REVERTED —
         // `Task.ContinueWith[TResult](Func[Task, TResult])` has the identical
         // shape, one concrete nested position beside one open one, so it
-        // rejected every lambda passed to such a slot. Suspicion can be made per
-        // position; the VERDICT below cannot, because `Conversion.Classify`
+        // rejected every lambda passed to such a slot. Suspicion can be made
+        // per position; the VERDICT below cannot, because `Conversion.Classify`
         // answers on the whole parameter. The exempted case is refused a few
         // steps later by `BindClrParameterConversions` (`GS0155`) and emits
         // nothing, so the imprecision is diagnostic quality, not soundness.
-        if (!ContainsNestedObject(clrParameterType))
+        //
+        // Issue #4006 closed two gaps this comment used to describe as one
+        // unreachable hole.
+        //
+        // FIRST, `object` is not the only erasure surrogate: a same-compilation
+        // CLASS erases to its IMPORTED BASE, so a `map[string, Derived]`
+        // presents as `Dictionary<string, ImportedBase>` and matched a
+        // parameter that GENUINELY is `Dictionary<string, ImportedBase>` by
+        // IDENTITY — a nested position with no `object` anywhere in it, which
+        // this test used to wave through. The surrogate set is therefore
+        // derived from the ARGUMENT rather than hard-wired to `object`. A
+        // `map[string, ImportedBase]` that really holds imported bases has no
+        // erased element, so it never reaches this test at all (the erasure
+        // precondition above declines it), and a parameter carrying an imported
+        // type this argument did not erase into is still exempt.
+        //
+        // SECOND, the reported `List[Derived]` repro never reached this check
+        // at all, and widening the surrogate set alone would NOT have closed
+        // it: `ClassifyImplicit(List<ImportedBase>, List<object>)` came back
+        // `None`, and this check is consulted only where the CLR comparison
+        // ALREADY matched. It was admitted by the `conv == None` fallback
+        // instead — the ADR-0148 `structuralProjectionArgumentCheck`, which
+        // asks `StructuralProjectionPlanner.CanProject` directly and gets a
+        // nonsense yes (two `List`s share a parameterless constructor and a
+        // `Capacity`) for a pair `Conversion` refuses outright, so nothing was
+        // emitted and the raw list was pushed. `ClrOverloadResolution` now asks
+        // this same question on that arm too.
+        //
+        // Narrowing the ADR-0148 callback itself was tried first and REVERTED:
+        // requiring `Conversion.Classify(...).Exists` there also refused
+        // `enumAction(List[Mode]{…})` at a `System.Action[List[Mode]]`, whose
+        // `Invoke` parameter erases to `List<int>` — a slot that DID come from
+        // erasure, and exactly what `IsErasedGenericParameterSlot` exists to
+        // exempt. A callback sees only `(argumentIndex, closedParameterType)`
+        // and so cannot apply that exemption; the verdict has to be asked at
+        // the SLOT, which is where this check is asked from.
+        if (!ContainsNestedErasureSurrogate(clrParameterType, CollectErasureSurrogates(sourceType)))
         {
             return false;
         }
@@ -3541,27 +3566,33 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Issue #3989: whether <paramref name="type"/> carries a
-    /// <see cref="object"/> in a NESTED position — a constructed generic's type
-    /// argument, or an array's element — at any depth.
+    /// Issue #3989 / #4006: whether <paramref name="type"/> carries one of
+    /// <paramref name="surrogates"/> in a NESTED position — a constructed
+    /// generic's type argument, or an array's element — at any depth.
     /// </summary>
     /// <remarks>
     /// This is the shape an erased argument can be confused with. An element
-    /// with no CLR identity erases to <c>object</c> INSIDE the argument's own
-    /// constructed shape (<c>List[Pair]</c> presents as <c>List&lt;object&gt;</c>,
-    /// <c>[]Pair</c> as <c>object[]</c>), so only a parameter with an
-    /// <c>object</c> in the matching position can have been reached by that
+    /// with no CLR identity erases to a SURROGATE inside the argument's own
+    /// constructed shape (<c>List[Pair]</c> presents as
+    /// <c>List&lt;object&gt;</c>, <c>[]Pair</c> as <c>object[]</c>,
+    /// <c>map[string, Derived]</c> as
+    /// <c>Dictionary&lt;string, ImportedBase&gt;</c>), so only a parameter with
+    /// that surrogate in the matching position can have been reached by the
     /// erasure rather than by the argument's real shape.
     /// </remarks>
     /// <param name="type">The candidate parameter type.</param>
-    /// <returns>True when an <c>object</c> appears nested inside the type.</returns>
-    private static bool ContainsNestedObject(System.Type type)
+    /// <param name="surrogates">The argument's erasure surrogates.</param>
+    /// <returns>True when a surrogate appears nested inside the type.</returns>
+    private static bool ContainsNestedErasureSurrogate(
+        System.Type type,
+        IReadOnlyCollection<System.Type> surrogates)
     {
         if (type.IsArray)
         {
             var element = type.GetElementType();
             return element != null
-                && (ClrTypeUtilities.AreSame(element, typeof(object)) || ContainsNestedObject(element));
+                && (IsErasureSurrogate(element, surrogates)
+                    || ContainsNestedErasureSurrogate(element, surrogates));
         }
 
         if (!type.IsGenericType || type.IsGenericTypeDefinition)
@@ -3571,13 +3602,108 @@ internal sealed partial class ExpressionBinder
 
         foreach (var argument in type.GetGenericArguments())
         {
-            if (ClrTypeUtilities.AreSame(argument, typeof(object)) || ContainsNestedObject(argument))
+            if (IsErasureSurrogate(argument, surrogates)
+                || ContainsNestedErasureSurrogate(argument, surrogates))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issue #4006: whether <paramref name="candidate"/> is one of the CLR
+    /// types the argument's erased elements could have presented as.
+    /// </summary>
+    /// <param name="candidate">A nested position of the parameter type.</param>
+    /// <param name="surrogates">The argument's erasure surrogates.</param>
+    /// <returns>True when the position could have been filled by an erasure.</returns>
+    private static bool IsErasureSurrogate(
+        System.Type candidate,
+        IReadOnlyCollection<System.Type> surrogates)
+    {
+        foreach (var surrogate in surrogates)
+        {
+            if (ClrTypeUtilities.AreSame(candidate, surrogate))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4006: the CLR types <paramref name="sourceType"/>'s own erased
+    /// elements present as.
+    /// </summary>
+    /// <remarks>
+    /// <para><c>object</c> is always in the set: it is what an in-scope type
+    /// parameter and a same-compilation struct/interface/delegate erase to, and
+    /// it is the only surrogate #3989 knew about. A same-compilation CLASS
+    /// erases to its IMPORTED BASE instead
+    /// (<c>MemberLookup.TryProjectErasedClrType</c>), which is how a
+    /// <c>map[string, Derived]</c> reached a genuine
+    /// <c>Dictionary&lt;string, ImportedBase&gt;</c> parameter by identity with
+    /// no <c>object</c> in sight.</para>
+    /// <para>In practice the set is exactly
+    /// <c>{ object } ∪ { the imported base of each same-compilation CLASS in
+    /// the argument }</c>: an in-scope type parameter, a same-compilation
+    /// struct, interface or named delegate all erase to <c>object</c>, which is
+    /// already present. A same-compilation ENUM is deliberately EXCLUDED: it
+    /// erases to <c>int</c>, and treating every nested <c>int</c> position as
+    /// suspect is both far too broad and unnecessary — a <c>List[MyEnum]</c> at
+    /// a <c>List&lt;int&gt;</c> parameter is already refused by
+    /// <c>MemberLookup.ExcludeErasureOnlyEnumCandidates</c>, which drops those
+    /// candidates before applicability runs.</para>
+    /// <para>Deriving it from the ARGUMENT rather than from a fixed list is
+    /// what keeps the suspicion as narrow as the erasure that caused it: a
+    /// parameter mentioning an imported type this argument did not erase into
+    /// is untouched.</para>
+    /// <para>Suspicion is not a verdict. A <c>[]Derived</c> trips this test at
+    /// an <c>ImportedBase[]</c> parameter just as a <c>map[string, Derived]</c>
+    /// does at a <c>Dictionary&lt;string, ImportedBase&gt;</c> one — and keeps
+    /// binding, because CLR arrays are COVARIANT and
+    /// <c>Conversion.Classify</c> therefore finds a real conversion to emit.
+    /// Invariance is what makes the map case unsound, not the erasure.</para>
+    /// </remarks>
+    /// <param name="sourceType">The argument's real (symbolic) type.</param>
+    /// <returns>The erasure surrogates, always including <c>object</c>.</returns>
+    private static IReadOnlyCollection<System.Type> CollectErasureSurrogates(TypeSymbol sourceType)
+    {
+        var surrogates = new List<System.Type> { typeof(object) };
+        if (sourceType != null)
+        {
+            Collect(sourceType);
+        }
+
+        return surrogates;
+
+        void Collect(TypeSymbol type)
+        {
+            // A same-compilation CLASS, and only that: it is the one leaf whose
+            // surrogate is a REAL imported type rather than `object`, so it is
+            // the one that can make a genuine parameter look like an erasure.
+            // A same-compilation ENUM erases to `int`, and adding `int` to the
+            // set would make every nested `int` position suspect for any
+            // argument that happens to carry a user enum — measured to break
+            // `Issue2889`'s `enumAction(List[Mode]{…})`, an imported delegate
+            // whose invocation is not this gate's business at all.
+            if (type is StructSymbol { IsClass: true }
+                && type.ClrType == null
+                && MemberLookup.TryProjectErasedClrType(type, out var erased)
+                && !ClrTypeUtilities.AreSame(erased, typeof(object)))
+            {
+                surrogates.Add(erased);
+                return;
+            }
+
+            foreach (var inner in TypeSymbol.GetWrappedTypes(type))
+            {
+                Collect(inner);
+            }
+        }
     }
 
     /// <summary>

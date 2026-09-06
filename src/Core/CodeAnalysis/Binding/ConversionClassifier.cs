@@ -1227,6 +1227,61 @@ internal sealed class ConversionClassifier
                         substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
                     }
 
+                    // Issue #4000: a TUPLE is the same erasure as the channel
+                    // arm above, one level in. A G# `(int32, T)` IS a
+                    // `System.ValueTuple<int32, T>` (ADR-0158 identity), but an
+                    // open element leaves the candidate's CLOSED parameter type
+                    // erased to `ValueTuple<int32, object>` — and the argument's
+                    // own top-level type is a `TupleTypeSymbol`, so none of the
+                    // arms above fire. Unlike the map sibling of the same call
+                    // — `Dictionary<K, V>` has no element-wise rebuild path, so
+                    // `Conversion` says None, the argument is left alone, and
+                    // the raw value it pushes happens to be right — a tuple DOES
+                    // have one: the conversion machinery faithfully rebuilt the
+                    // tuple at the erased target (`box !!T; newobj
+                    // ValueTuple<int32, object>`) and handed it to a MethodSpec
+                    // closed over the REAL `T`, which wants
+                    // `ValueTuple<int32, !!0>`. That is correct machinery aimed
+                    // at the wrong shape: ILVerify StackUnexpected, and the
+                    // program still prints the right answer, which is what made
+                    // it invisible. Recovering the real slot makes the argument
+                    // `(int32, T) -> (int32, T)` identity — no rebuild, no box —
+                    // exactly as it already is where nothing erased.
+                    //
+                    // The recovery is asked for EVERY tuple-shaped argument,
+                    // not only one whose own elements are symbolic. Review
+                    // feedback on #4019 found the mirror of the reported case,
+                    // measured and confirmed: inside
+                    // `func bad[T](pair (int32, object))`,
+                    // `Probes.FirstOf[T](pair)` kept the erased
+                    // `(int32, object)` target — which here is also the
+                    // argument's own type, so the conversion is identity and
+                    // NOTHING is rebuilt — and pushed it straight at a
+                    // MethodSpec wanting `ValueTuple<int32, !!0>`. Same
+                    // `StackUnexpected`, reached from the concrete side. The
+                    // question that decides both is what the SLOT is, not what
+                    // the argument is, so the argument-shape test was the wrong
+                    // guard.
+                    //
+                    // Widening it costs nothing where the slot is concrete:
+                    // `TrySubstituteParameterTypeFromMethodTypeArgs` returns
+                    // null unless the mapped parameter still
+                    // `ContainsTypeParameter` or
+                    // `ContainsSameCompilationUserType`, so a fully closed
+                    // `FirstOf[string]((9, "z"))` recovers `(int32, string)`,
+                    // fails that test, and falls through to
+                    // `GetClrParameterTargetType` exactly as before. What it
+                    // adds is the refusal #3984 and #3987 already reach in the
+                    // constructor and `: base(...)` positions — a tuple whose
+                    // element does not match the target's type argument has no
+                    // runtime conversion to emit, so `(int32, object)` at a
+                    // `(int32, T)` slot now reports `GS0155` instead of
+                    // emitting IL that does not verify.
+                    if (substituted == null && argument.Type is TupleTypeSymbol)
+                    {
+                        substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
+                    }
+
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
 
