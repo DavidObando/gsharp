@@ -38,7 +38,13 @@ public sealed class AfterTimer : ISelectable<DateTime>, ISelectableCore<DateTime
     internal AfterTimer(TimeSpan due)
     {
         Order = SelectOrder.Next();
-        timer = new Timer(static state => ((AfterTimer)state!).OnFire(), this, due, Timeout.InfiniteTimeSpan); // state is `this`.
+
+        // Issue #4001: `new Timer(cb, state, due, period)` arms the timer before
+        // it returns, so a short `due` lets `OnFire` run on a thread-pool thread
+        // while `timer` is still unassigned — and `OnFire` ends in
+        // `timer.Dispose()`. Construct disarmed, assign, then arm.
+        timer = new Timer(static state => ((AfterTimer)state!).OnFire(), this, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); // state is `this`.
+        timer.Change(due, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>Gets a value indicating whether the delay has elapsed (a snapshot).</summary>
@@ -184,7 +190,13 @@ public sealed class TickTimer : ISelectable<DateTime>, ISelectableCore<DateTime>
         }
 
         Order = SelectOrder.Next();
-        timer = new Timer(static state => ((TickTimer)state!).OnTick(), this, period, period); // state is `this`.
+
+        // Issue #4001: armed only once the field is assigned, as in `AfterTimer`.
+        // This constructor was *not* the crashing one — `OnTick` never touches
+        // `timer` — but the two shapes stay identical so that adding a `timer.…`
+        // to `OnTick` cannot quietly reintroduce that race.
+        timer = new Timer(static state => ((TickTimer)state!).OnTick(), this, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan); // state is `this`.
+        timer.Change(period, period);
     }
 
     /// <inheritdoc/>

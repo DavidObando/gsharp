@@ -29,6 +29,14 @@ Key shape decisions:
 
    The relaxation is deliberately *not* a general "nilable is assignable to non-nilable" hole: it is scoped to the subscription argument, where the CLR contract itself is nil-tolerant.
 
+   The single handler-binding seam also owns structural-arrow conversion.
+   A nilable `((object, DataReceivedEventArgs) -> void)?` value — the form
+   cs2gs emits for a C# `DataReceivedEventHandler` declaration — converts once
+   to the event's nilable named delegate target. The CLR-event caller must not
+   then reconvert that result to the event's bare delegate type, which would
+   recreate `GS0155` after the nil-tolerant conversion had already succeeded
+   (issue #3775).
+
 ## Alternatives considered
 
 - **Extend `FieldAssignmentExpressionSyntax` with an operator token.** Rejected: the existing node models a single `Receiver: SyntaxToken`, so multi-segment LHS would still require a parallel shape. A dedicated node keeps both paths clean.

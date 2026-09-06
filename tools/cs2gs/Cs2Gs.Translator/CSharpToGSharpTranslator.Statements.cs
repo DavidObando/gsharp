@@ -610,37 +610,6 @@ public sealed partial class CSharpToGSharpTranslator
             return this.context.GetTypeInfo(assignment.Left).Type?.TypeKind == TypeKind.Delegate;
         }
 
-        // Issue #914 (oblivious sink): a CLR event subscription `e += handler` /
-        // `e -= handler` whose right-hand side is an oblivious-promoted nullable
-        // function value (e.g. a `DataReceivedEventHandler eventHandler = null`
-        // parameter that promotes to `((object, DataReceivedEventArgs) -> void)?`)
-        // assigns a `T?` into the event's NAMED delegate type. gsc imports that
-        // delegate target as a non-nullable reference — even when the C# BCL event
-        // is annotated `DataReceivedEventHandler?`, the metadata annotation is not
-        // carried onto the arrow type gsc converts through — so the extra `?` on
-        // the promoted RHS is rejected (GS0155). Forgive it at the sink with `!!`,
-        // exactly like every other promoted-nullable-into-non-nullable sink
-        // (return/argument/tuple). Gated to a promoted RHS, so a nullable-enabled
-        // compilation (nothing is promoted) and every non-promoted RHS are
-        // byte-identical.
-        private GExpression ForgiveEventSubscriptionRhs(
-            AssignmentExpressionSyntax assignment, GExpression translatedRhs)
-        {
-            if ((!assignment.IsKind(SyntaxKind.AddAssignmentExpression)
-                    && !assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
-                || translatedRhs is NonNullAssertionExpression
-                || IsNullOrSuppressedNull(assignment.Right)
-                || this.context.GetSymbolInfo(assignment.Left).Symbol is not IEventSymbol eventSymbol
-                || eventSymbol.Type is not { IsReferenceType: true })
-            {
-                return translatedRhs;
-            }
-
-            return this.IsNullablePromotedValue(assignment.Right)
-                ? EnsureNonNullAssertion(translatedRhs)
-                : translatedRhs;
-        }
-
         // Issue #2259 (oblivious sink): an ELEMENT-access assignment target
         // (`arr[i] = …`, a `Dictionary`/user-indexer write, …) whose RHS is a
         // null-conditional access result (`x?[i]` / `x?.Member`) or any other
@@ -2037,7 +2006,6 @@ public sealed partial class CSharpToGSharpTranslator
             value = this.CoerceCovariantArrayConversion(
                 assignment.Right,
                 this.CoercePointerConversion(assignment.Right, value));
-            value = this.ForgiveEventSubscriptionRhs(assignment, value);
             value = this.ForgiveElementAccessAssignmentRhs(assignment, value);
             value = this.ForgiveObliviousExternalAssignmentRhs(assignment, value);
             if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))

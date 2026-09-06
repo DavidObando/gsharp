@@ -2092,6 +2092,36 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
+        private (ITypeSymbol Type, ISymbol Symbol) FindNullForgivingTarget(
+            PostfixUnaryExpressionSyntax value)
+        {
+            ISymbol sink = this.ResolveValueSink(value);
+            return sink switch
+            {
+                ILocalSymbol local when ExplicitLocalTypeIsNullable(local) =>
+                    (local.Type, local),
+                IFieldSymbol { Type.NullableAnnotation: NullableAnnotation.Annotated } field =>
+                    (field.Type, field),
+                IPropertySymbol { Type.NullableAnnotation: NullableAnnotation.Annotated } property =>
+                    (property.Type, property),
+                _ => this.FindContextualValueTarget(value),
+            };
+
+            static bool ExplicitLocalTypeIsNullable(ILocalSymbol local) =>
+                local.Type.NullableAnnotation == NullableAnnotation.Annotated
+                && local.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() is VariableDeclaratorSyntax
+                    {
+                        Parent: VariableDeclarationSyntax { Type.IsVar: false },
+                    });
+        }
+
+        private bool NullForgivingTargetAcceptsNil(ITypeSymbol targetType, ISymbol targetSymbol) =>
+            targetType?.NullableAnnotation == NullableAnnotation.Annotated
+            || targetType?.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T
+            || (targetType is { IsReferenceType: true }
+                && !this.TargetWillRemainNonNullableReference(targetType, targetSymbol));
+
         // Issue #2511: element-access arguments are call-like value sinks too.
         // Apply the established forgiveness predicate only when Roslyn bound the
         // argument to a non-null reference parameter that cs2gs will keep

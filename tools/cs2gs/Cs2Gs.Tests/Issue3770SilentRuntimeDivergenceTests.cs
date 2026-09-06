@@ -38,6 +38,12 @@ namespace Cs2Gs.Tests;
 /// with it 6 of the 13 migrated <c>GSharp.GeneratorHost.Tests</c> failures.
 /// </para>
 /// <para>
+/// #3775 completes the policy: an event handler is passed through because G#
+/// now models C#'s nil-tolerant subscription contract, and an explicit C#
+/// null-forgiving operator is erased when its sink already accepts nil. A
+/// non-null sink still receives <c>!!</c>, because G# has no erased equivalent.
+/// </para>
+/// <para>
 /// Both are invisible to a binding-only assertion, so each is asserted by
 /// EXECUTING the translated G#.
 /// </para>
@@ -72,6 +78,74 @@ public sealed class Issue3770SilentRuntimeDivergenceTests
 
             return d;
         }
+    }
+";
+
+    private const string NilEventHandlerSource = @"
+    public class Clock
+    {
+        public event EventHandler Ticked;
+
+        public void Subscribe(EventHandler handler)
+        {
+            Ticked += handler;
+            Ticked -= handler;
+        }
+    }
+
+    public static class EventProbe
+    {
+        private static EventHandler Pick(bool present) =>
+            present ? (_, _) => { } : null;
+
+        public static void Run()
+        {
+            var clock = new Clock();
+            EventHandler handler = Pick(false);
+            clock.Subscribe(handler);
+            Console.WriteLine(""event-ok"");
+        }
+    }
+";
+
+    private const string NullForgivingSource = @"
+    public static class NullForgivingProbe
+    {
+        private static string? Pick(bool present) => present ? ""value"" : null;
+
+        public static object? NullableProperty { get; } = Pick(false)!;
+
+        public static object? NullableSink() => Pick(false)!;
+
+        public static int InferredNonNullLocal()
+        {
+            var value = Pick(true)!;
+            return value.Length;
+        }
+
+        public static bool NullableLocal()
+        {
+            string? value = Pick(false);
+            object? result = value!;
+            return result is null;
+        }
+
+        public static bool NullableConditional(bool flag)
+        {
+            string? value = Pick(false);
+            object? result = flag ? value! : null;
+            return result is null;
+        }
+
+        public static object NonNullSink()
+        {
+            string? value = Pick(false);
+            return value!;
+        }
+
+        public static int NullableValue(int? value) => value.Value;
+
+        public static T Generic<T>(T? value) => value!;
     }
 ";
 
@@ -144,10 +218,112 @@ public sealed class Issue3770SilentRuntimeDivergenceTests
         Assert.Equal("3", stdout.Trim());
     }
 
-    private static string Translate(string source)
+    /// <summary>
+    /// Once gsc accepts a nilable event-subscription handler, cs2gs must not
+    /// reintroduce the old run-time divergence by appending <c>!!</c>.
+    /// </summary>
+    [Fact]
+    public void NilEventHandler_DoesNotReceiveANonNullAssertion()
+    {
+        string printed = Translate(NilEventHandlerSource, nullableEnabled: false);
+
+        Assert.Contains("Ticked += handler", printed, StringComparison.Ordinal);
+        Assert.Contains("Ticked -= handler", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ticked += handler!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ticked -= handler!!", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The executing half of <see cref="NilEventHandler_DoesNotReceiveANonNullAssertion"/>.
+    /// The pre-fix translation threw at the first subscription.
+    /// </summary>
+    [Fact]
+    public void NilEventHandler_RemainsASilentNoOpAtRuntime()
+    {
+        string printed = Translate(NilEventHandlerSource, nullableEnabled: false);
+        string stdout = CompileAndRun(printed, "EventProbe.Run()");
+
+        Assert.Equal("event-ok", stdout.Trim());
+    }
+
+    /// <summary>
+    /// C#'s null-forgiving operator is erased when the contextual G# sink is
+    /// nullable, but remains a checked assertion when a non-null sink requires
+    /// it. <c>Nullable&lt;T&gt;.Value</c> keeps the same checked spelling under
+    /// the accepted exception-type compatibility limit recorded in ADR-0115.
+    /// </summary>
+    [Fact]
+    public void NullForgivingOperator_FollowsTheContextualSinkPolicy()
+    {
+        string printed = Translate(NullForgivingSource);
+
+        Assert.Contains("func NullableSink() object? -> Pick(false)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("func NullableSink() object? -> Pick(false)!!", printed, StringComparison.Ordinal);
+        Assert.Contains("prop NullableProperty object?", printed, StringComparison.Ordinal);
+        Assert.Contains("let value = Pick(true)!!", printed, StringComparison.Ordinal);
+        Assert.Contains("let result object? = value", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let result object? = value!!", printed, StringComparison.Ordinal);
+        Assert.Contains("return value!!", printed, StringComparison.Ordinal);
+        Assert.Contains("func NullableValue(value int32?) int32 -> value!!", printed, StringComparison.Ordinal);
+        Assert.Contains("func Generic[T](value T?) T -> value!!", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A genuinely nil value reaches a nullable sink unchanged. This is the
+    /// run-time behavior that a text-only assertion cannot prove.
+    /// </summary>
+    [Fact]
+    public void NullForgivingOperator_AtNullableSink_RemainsNilAtRuntime()
+    {
+        string printed = Translate(NullForgivingSource);
+        string stdout = CompileAndRun(
+            printed,
+            "Console.WriteLine(if NullForgivingProbe.NullableProperty == nil && NullForgivingProbe.NullableSink() == nil && NullForgivingProbe.NullableLocal() && NullForgivingProbe.NullableConditional(true) { \"nil\" } else { \"value\" })");
+
+        Assert.Equal("nil", stdout.Trim());
+    }
+
+    /// <summary>
+    /// Pins the retained non-null-sink assertion and verifies that
+    /// <c>Nullable&lt;T&gt;.Value</c> now preserves C#'s
+    /// <see cref="InvalidOperationException"/> contract.
+    /// </summary>
+    [Fact]
+    public void RetainedAssertions_KeepTheirDocumentedRuntimeBehavior()
+    {
+        string printed = Translate(NullForgivingSource);
+        string stdout = CompileAndRun(
+            printed,
+            """
+            try {
+                NullForgivingProbe.NonNullSink()
+            } catch (NullReferenceException) {
+                Console.WriteLine("non-null-sink")
+            }
+            try {
+                NullForgivingProbe.NullableValue(nil)
+            } catch (InvalidOperationException) {
+                Console.WriteLine("nullable-value")
+            }
+            """);
+
+        Assert.Equal(
+            "non-null-sink" + Environment.NewLine + "nullable-value",
+            stdout.Trim());
+    }
+
+    private static string Translate(string source, bool nullableEnabled = true)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Snippet.cs", "#nullable enable\nusing System;\n\nnamespace Demo\n{\n" + source + "\n}\n") });
+            new[]
+            {
+                (
+                    "Snippet.cs",
+                    (nullableEnabled ? "#nullable enable\n" : string.Empty)
+                        + "using System;\n\nnamespace Demo\n{\n"
+                        + source
+                        + "\n}\n"),
+            });
         Assert.True(
             project.BoundWithoutErrors,
             "Snippet should bind with no C# errors: "
