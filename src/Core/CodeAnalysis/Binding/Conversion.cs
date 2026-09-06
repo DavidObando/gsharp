@@ -140,8 +140,33 @@ public sealed class Conversion
 
         // Issue #3093: sequence[T] is an identity alias, not merely a
         // reference conversion, for the matching enumerable interface.
+        //
+        // Issue #3997: the arm must not also erase the `?`. Its shape probe
+        // reaches a `NullableTypeSymbol` through the final `ClrType` fallback
+        // (a nullable RELAYS its underlying's CLR type — the same relay that
+        // produced issue #1627's leak), and
+        // `AreRuntimeEquivalentIgnoringReferenceNullability` then answers
+        // `true` for `sequence[int32]?` against `sequence[int32]` by
+        // construction. So a nullable enumerable reaching a NON-nullable
+        // enumerable slot was classified IDENTITY: measured on the parent
+        // commit, `takes(s)` with `s (sequence[int32])?` at `sequence[int32]`
+        // compiled silently, as did `IEnumerable[int32]?` at
+        // `IEnumerable[int32]` — while `string?`, `List[int32]?`,
+        // `Dictionary[string, int32]?` and `map[string, int32]?` all
+        // correctly reported GS0154 at their own non-nullable forms. The
+        // enumerable shapes were the only reference types in the language
+        // exempt from Kotlin-model null safety, and only because this alias
+        // arm ran before the rules that enforce it. Declining here lets the
+        // conversion fall through to the ordinary explicit-reference arm,
+        // which classifies the annotation-dropping `S? -> S` exactly as it
+        // does for every other reference type.
+        //
+        // Only this direction is restricted. `sequence[T] -> IEnumerable[T]?`
+        // and `sequence[T]? -> IEnumerable[T]?` keep the alias identity: they
+        // ADD or PRESERVE the annotation and drop nothing.
         if (SequenceTypeSymbol.TryGetEnumerableInterfaceShape(from, out _, out _)
             && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(to, out _, out _)
+            && !(from is NullableTypeSymbol && to is not NullableTypeSymbol)
             && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to))
         {
             return Conversion.Identity;
@@ -1825,6 +1850,36 @@ public sealed class Conversion
             return true;
         }
 
+        // Issue #3997, the same drift as the two arms above: a
+        // `map[K, V]` IS a `Dictionary<K, V>`, a
+        // `sequence[T]` IS an `IEnumerable<T>` and an `async sequence[T]` IS
+        // an `IAsyncEnumerable<T>` — a class and two interfaces, reference
+        // types in every instantiation. Each one's `MakeClrType` returns null
+        // the moment a key/value/element has no CLR backing (a type
+        // parameter, or a same-compilation user type), so the `ClrType`
+        // fallback below answered `true` for the CLOSED spelling and `false`
+        // for the OPEN one — the identical hole the slice/array arm above
+        // closes for `[]T` and the channel arm closes for `chan[T]`. The
+        // consequence, measured on the parent commit, was that
+        // `takes[K, V](m)` with an `m (map[K, V])?` compiled with no
+        // diagnostic at all while its closed sibling correctly reported
+        // GS0154: the Kotlin-model null-safety gate in
+        // `OverloadResolver.CallBinding` bottoms out here (via
+        // `IsNullableReferenceGateRejected`), and a shape it does not
+        // recognise as a reference is a shape it declines to gate.
+        //
+        // `AsyncSequenceTypeSymbol` is a THIRD kind the issue did not name;
+        // it is included because it fails and succeeds for exactly the same
+        // reason as its synchronous sibling. `TupleTypeSymbol` and
+        // `FunctionPointerTypeSymbol` are deliberately NOT here — a tuple is
+        // a `System.ValueTuple<…>` and a function pointer is a value type, so
+        // the `ClrType` fallback's `IsValueType` answer is already the right
+        // one for both spellings.
+        if (type is MapTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol)
+        {
+            return true;
+        }
+
         // Issue #2841: a user-declared named delegate (ADR-0059 / issue #255) is
         // emitted as a sealed class deriving from `System.MulticastDelegate`, so
         // it is unconditionally a reference type. Like `StructSymbol`/
@@ -2233,6 +2288,23 @@ public sealed class Conversion
             // (its `ClrType` is a real class) and refused `chan[T]?` /
             // `chan[Pair]?` at the very same one — precisely the disagreement
             // between the two spellings that this issue forbids.
+            //
+            // Issue #3997 asked whether `map`/`sequence` belong here too, now
+            // that both are named in `IsReferenceLikeTarget`. They do not, and
+            // the two predicates are SIBLINGS rather than copies precisely so
+            // they can disagree: this one asks what a `castclass` can NAME,
+            // not what is a reference. `sequence[T]`/`async sequence[T]` stay
+            // excluded by name below because they are ALIASES for
+            // `IEnumerable<T>`/`IAsyncEnumerable<T>` with their own identity
+            // arm in `ClassifyCore` — the #3843 widening must not answer for
+            // them. `MapTypeSymbol` is deliberately NOT given a channel-style
+            // arm: measured, adding one changes nothing, because the widening
+            // it feeds also requires `map[K, V] -> IDictionary[K, V]` to be
+            // implicit and that conversion is unclassifiable while the key and
+            // value are open (`var d IDictionary[K, V] = m` reports GS0155 for
+            // exactly the same reason, with no `?` anywhere). The asymmetry
+            // that remains for an open map at an imported parameter is that
+            // erasure gap — issue #3982's family — and not a nullability one.
             && (type is ChannelTypeSymbol
                 || (type is not FunctionTypeSymbol
                     && type is not FunctionPointerTypeSymbol
