@@ -5383,6 +5383,29 @@ internal static class ClrOverloadResolution
             // matching the parameter's open generic definition. Walk class
             // hierarchy first, then interfaces.
             var matched = FindClosedGeneric(argumentType, openDef);
+
+            // Issue #3877 / ADR-0174 D2: the channel direction lattice is the
+            // one implicit conversion G# admits between two *distinct* closed
+            // generic CLR types. A `chan[T]` is a `Channel<T>` (or the runtime's
+            // `Chan<T>`) and views as `ChannelReader<T>` / `ChannelWriter<T>`
+            // through `get_Reader` / `get_Writer` — but no base class or
+            // interface links those three, so the hierarchy walk above finds
+            // nothing and a method type parameter mentioned only inside the
+            // channel formal (`CountSoFar<T>(this ChannelReader<T>)`) received
+            // no bound at all. Inference then failed outright and the candidate
+            // never reached the applicability pass, which has classified this
+            // conversion correctly since #3981. Contribute the element as a
+            // bound; whether the DIRECTION is legal is not inference's call —
+            // `Conversion` owns the lattice, and applicability
+            // (structuralProjectionArgumentCheck) still rejects an `out chan[T]`
+            // source against a `ChannelReader<T>` formal.
+            if (matched == null
+                && paramArgs.Length == 1
+                && TryGetChannelViewElement(openDef, argumentType, out var channelElement))
+            {
+                return UnifyForInference(paramArgs[0], channelElement, bounds);
+            }
+
             if (matched != null)
             {
                 var matchedArgs = matched.GetGenericArguments();
@@ -5400,6 +5423,58 @@ internal static class ClrOverloadResolution
             return true;
         }
 
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #3877 / ADR-0174 D2: yields a channel-shaped argument's element
+    /// type when the formal is itself channel-shaped, so method type inference
+    /// can see through the direction lattice's view conversions.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately direction-blind. Inference's job is to produce a bound, not
+    /// to decide whether the source may flow to the formal; the lattice lives in
+    /// <c>Conversion</c> and is enforced by the applicability pass, exactly as
+    /// C# separates §12.6.3 inference from §12.6.4 applicability.
+    /// </remarks>
+    /// <param name="openFormalDefinition">The formal parameter's open generic definition.</param>
+    /// <param name="argumentType">The supplied argument's CLR type.</param>
+    /// <param name="elementType">The argument channel's element type.</param>
+    /// <returns>True when both sides are channel-shaped.</returns>
+    private static bool TryGetChannelViewElement(
+        Type openFormalDefinition,
+        Type argumentType,
+        [NotNullWhen(true)] out Type? elementType)
+    {
+        elementType = null;
+        if (!ChannelTypeSymbol.IsChannelClrDefinitionName(openFormalDefinition.FullName)
+            || !argumentType.IsGenericType
+            || argumentType.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        Type argumentDefinition;
+        Type[] argumentArguments;
+        try
+        {
+            argumentDefinition = argumentType.GetGenericTypeDefinition();
+            argumentArguments = argumentType.GetGenericArguments();
+        }
+        catch (NotSupportedException)
+        {
+            // TypeBuilderInstantiation and other cross-context constructions may
+            // refuse to describe themselves; there is simply nothing to infer.
+            return false;
+        }
+
+        if (argumentArguments.Length != 1
+            || !ChannelTypeSymbol.IsChannelClrDefinitionName(argumentDefinition.FullName))
+        {
+            return false;
+        }
+
+        elementType = argumentArguments[0];
         return true;
     }
 

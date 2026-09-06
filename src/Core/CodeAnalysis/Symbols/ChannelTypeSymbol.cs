@@ -164,6 +164,31 @@ public sealed class ChannelTypeSymbol : TypeSymbol
         }
     }
 
+    /// <summary>
+    /// Recognizes a channel-shaped type by the full name of its <em>open</em>
+    /// generic definition — the runtime's <c>Chan&lt;&gt;</c> plus the three BCL
+    /// views <c>Channel&lt;&gt;</c> / <c>ChannelReader&lt;&gt;</c> /
+    /// <c>ChannelWriter&lt;&gt;</c>.
+    /// </summary>
+    /// <remarks>
+    /// This is the name-only companion to <see cref="TryGetChannelShape"/>, for
+    /// the layers that work on raw reflection <see cref="Type"/> surrogates
+    /// rather than on symbols. Comparing full names is what keeps it correct
+    /// across reflection contexts, where a reference-loaded
+    /// <c>ChannelReader`1</c> is not reference-equal to the host's.
+    /// </remarks>
+    /// <param name="openDefinitionFullName">The candidate open definition's <see cref="Type.FullName"/>.</param>
+    /// <returns>True when the name is one of the four channel-shaped definitions.</returns>
+    internal static bool IsChannelClrDefinitionName(string? openDefinitionFullName) =>
+        openDefinitionFullName switch
+        {
+            ConstructedChannelFullName => true,
+            ChannelFullName => true,
+            ChannelReaderFullName => true,
+            ChannelWriterFullName => true,
+            _ => false,
+        };
+
     /// <summary>Gets the open BCL generic definition a direction binds to.</summary>
     /// <param name="direction">The direction.</param>
     /// <returns><c>Channel&lt;&gt;</c>, <c>ChannelReader&lt;&gt;</c>, or <c>ChannelWriter&lt;&gt;</c>.</returns>
