@@ -240,6 +240,7 @@ internal sealed partial class DeclarationBinder
                 interpolatedStringArgs: interpolatedStringArgs,
                 constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
                 structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(boundArguments),
+                erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
                 delegateRefKindArgumentCheck: ExpressionBinder.MakeDelegateRefKindArgumentCheck(boundArguments));
             switch (resolution.Outcome)
             {
@@ -705,6 +706,7 @@ internal sealed partial class DeclarationBinder
                 applicabilityArgumentTypes,
                 constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments),
                 structuralProjectionArgumentCheck: ExpressionBinder.MakeStructuralProjectionArgumentCheck(boundArguments),
+                erasedArgumentMismatchCheck: ExpressionBinder.MakeErasedArgumentMismatchCheck(boundArguments),
                 delegateRefKindArgumentCheck: refKindCheck);
             if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
             {

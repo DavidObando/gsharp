@@ -3071,6 +3071,38 @@ implementation had to refine it.
     — refused where the closed `chan[int32]?` is accepted, filed as #3985 — is
     visible in this position too and is not addressed here.
 
+45. **Errata 43's slot gate is now slot-precise for a generic CLASS too (issue
+    #3989).** Errata 43 records the gate as "slot-precise for a generic METHOD
+    and deliberately slot-blind for a generic CLASS, whose open constructor is
+    not addressable across reflection contexts". The second half is no longer
+    true, and it was already contradicted inside this ADR: errata 44's repair
+    locates a base type's open constructor by matching `MetadataToken` plus
+    `Module` on the generic definition, which is exactly the addressing said to
+    be unavailable. `IsErasedGenericParameterSlot` now uses that technique for
+    any `MethodBase` — constructor or method — on a constructed generic
+    declaring type, and falls back to the slot-BLIND answer only when the open
+    member genuinely cannot be located.
+
+    Nothing in D2 changes and no channel case moves: the `Issue3982`,
+    `Issue3985`, `Issue3876`, `Issue3877` and `Issue3976` suites are green
+    across the change (97/97), because a generic class's channel-carrying
+    constructor — `Sink[T](ChannelReader[T])` — has an open parameter that
+    mentions the class's own type parameter and therefore still answers "yes".
+    What moves is the residual imprecision errata 43 accepted: a genuine
+    `ChannelReader[object]` parameter on a generic class is now refused at
+    APPLICABILITY rather than a few steps later by
+    `BindClrParameterConversions`, so the diagnostic that case reports is the
+    ordinary GS0159/GS0267 rather than the by-name GS0155 guard.
+
+    The predicate is shared, and that is the point. The general form of the
+    ambiguity errata 43 left open — a `List[Pair]` reaching a genuine
+    `List<object>` parameter, filed there as #3989 — is answered by the SAME
+    question with the opposite polarity: the channel gate ADDS applicability
+    where a slot's `object` could have come from erasure, and #3989's check
+    REMOVES it where it could not. Neither subsumes the other, and both are
+    needed. That fix is not channel-specific and lives outside this ADR; only
+    the shared predicate is recorded here.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

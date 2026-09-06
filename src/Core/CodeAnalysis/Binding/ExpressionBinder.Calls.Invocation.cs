@@ -3687,6 +3687,7 @@ internal sealed partial class ExpressionBinder
                     supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                     constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
                     structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+                    erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                     delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                     methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
                     methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
@@ -3720,6 +3721,7 @@ internal sealed partial class ExpressionBinder
                             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
                             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
                             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
+                            erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
                             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
                             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
                             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));

@@ -3259,6 +3259,160 @@ internal sealed partial class ExpressionBinder
         };
     }
 
+    // Issue #3989: the SUBTRACTIVE twin of the callback above. Applicability
+    // ranks imported candidates on CLR shapes, and an element declared in the
+    // current compilation (or an in-scope type parameter) has none:
+    // `MemberLookup.TryProjectErasedClrType` presents `Pair` as
+    // `System.Object`, so a `List[Pair]` argument arrives as `List<object>`
+    // and matches a parameter that GENUINELY is `List<object>` by identity. At
+    // the erased level the two are indistinguishable — which is the whole
+    // point of the erasure, and is what lets `[]Pair{…}.Count()` reach LINQ —
+    // so applicability has to get a second opinion from the one layer that can
+    // still see the real types.
+    //
+    // This callback is that opinion: given the source-argument index and the
+    // candidate's CLOSED parameter type, it reports whether the argument's REAL
+    // type has no conversion to that parameter at all. `ClrOverloadResolution`
+    // asks it only at a slot that could NOT have acquired its `object` by
+    // erasure (`IsErasedGenericParameterSlot`), so an inferred generic slot —
+    // `Count[TSource](IEnumerable[TSource])`, `M[T](List[T])` — is never
+    // second-guessed and keeps binding exactly as before.
+    //
+    // Three narrowings keep this off every path it has no business on:
+    // an argument whose own shape was not erased cannot have matched by
+    // accident; a top-level `object` parameter accepts everything anyway, and
+    // the unsound match is always an erased `object` standing in a NESTED
+    // position; and EXISTING — not merely IMPLICIT — is the bar, mirroring
+    // `ConversionClassifier.BindClrParameterConversions`, which re-binds CLR
+    // arguments with `allowExplicit: true` and would therefore accept an
+    // explicit conversion this check must not have already refused. No measured
+    // row turns on that distinction after the first two narrowings; it is the
+    // permissive choice, taken so this check can only ever remove a candidate
+    // the layer below could not have emitted anyway.
+    //
+    // What is left is exactly the pair that has NOTHING to emit, which before
+    // this check was pushed raw: ILVerify StackUnexpected, and at run time a
+    // hard failure (a `[]Pair` reaching a genuine `IEnumerable<object>`
+    // parameter throws `EntryPointNotFoundException` from inside the callee,
+    // because CLR variance does not reach a value-type element).
+    internal static Func<int, System.Type, bool>? MakeErasedArgumentMismatchCheck(
+        IReadOnlyList<BoundExpression>? boundArguments,
+        int argumentOffset = 0)
+    {
+        if (boundArguments == null)
+        {
+            return null;
+        }
+
+        return (index, clrParameterType) =>
+        {
+            var argIndex = index - argumentOffset;
+            return argIndex >= 0
+                && argIndex < boundArguments.Count
+                && IsErasedArgumentApplicabilityMismatch(boundArguments[argIndex].Type, clrParameterType);
+        };
+    }
+
+    /// <summary>
+    /// Issue #3989: whether <paramref name="sourceType"/> reached
+    /// <paramref name="clrParameterType"/> only because its own CLR projection
+    /// was erased, with no conversion between the real types to emit.
+    /// </summary>
+    /// <param name="sourceType">The argument's real (symbolic) type.</param>
+    /// <param name="clrParameterType">The candidate's closed parameter type.</param>
+    /// <returns>True when the erased match is spurious.</returns>
+    internal static bool IsErasedArgumentApplicabilityMismatch(
+        TypeSymbol? sourceType,
+        System.Type? clrParameterType)
+    {
+        if (sourceType == null
+            || clrParameterType == null
+            || clrParameterType.IsByRef
+            || clrParameterType.IsPointer
+            || clrParameterType.ContainsGenericParameters)
+        {
+            return false;
+        }
+
+        // Only an argument that HAS an erasure can have matched through one.
+        if (!TypeSymbol.ContainsTypeParameter(sourceType)
+            && !TypeSymbol.ContainsSameCompilationUserType(sourceType))
+        {
+            return false;
+        }
+
+        // An erasure can only be MISTAKEN for the parameter where the parameter
+        // has an `object` in the position the erasure filled — that is, nested
+        // inside a constructed generic (or an array element). A parameter that
+        // genuinely is `object` accepts the argument for real; and a parameter
+        // with no `object` in it at all (`System.Array`, the non-generic
+        // `IEnumerable`/`ICollection`/`IList`/`IDictionary`, `int`,
+        // `Exception`, `IComparable`) was matched on the argument's own CLR
+        // shape, which erasure did not invent — a `map[string, Pair]` really is
+        // an `IDictionary` and a user `enum` really is an `int`, whatever their
+        // elements are. Only the nested position is suspect, which is exactly
+        // the invariant-generic-over-an-erased-element shape the issue reports.
+        if (!ContainsNestedObject(clrParameterType))
+        {
+            return false;
+        }
+
+        var targetType = TypeSymbol.FromClrType(clrParameterType);
+        if (targetType == null)
+        {
+            return false;
+        }
+
+        // `StructuralProjectionPlanner.CanProject` is deliberately NOT consulted.
+        // A projection is only ever PLANNED from the `conv == None` arm of
+        // applicability (that is what `structuralProjectionArgumentCheck` is
+        // for); once the CLR comparison has already answered, no projection node
+        // is produced and the raw value is pushed. Treating "a projection would
+        // have been possible" as acceptance here would therefore accept exactly
+        // the pairs that emit the invalid IL this check exists to stop.
+        return !Conversion.Classify(sourceType, targetType).Exists;
+    }
+
+    /// <summary>
+    /// Issue #3989: whether <paramref name="type"/> carries a
+    /// <see cref="object"/> in a NESTED position — a constructed generic's type
+    /// argument, or an array's element — at any depth.
+    /// </summary>
+    /// <remarks>
+    /// This is the shape an erased argument can be confused with. An element
+    /// with no CLR identity erases to <c>object</c> INSIDE the argument's own
+    /// constructed shape (<c>List[Pair]</c> presents as <c>List&lt;object&gt;</c>,
+    /// <c>[]Pair</c> as <c>object[]</c>), so only a parameter with an
+    /// <c>object</c> in the matching position can have been reached by that
+    /// erasure rather than by the argument's real shape.
+    /// </remarks>
+    /// <param name="type">The candidate parameter type.</param>
+    /// <returns>True when an <c>object</c> appears nested inside the type.</returns>
+    private static bool ContainsNestedObject(System.Type type)
+    {
+        if (type.IsArray)
+        {
+            var element = type.GetElementType();
+            return element != null
+                && (ClrTypeUtilities.AreSame(element, typeof(object)) || ContainsNestedObject(element));
+        }
+
+        if (!type.IsGenericType || type.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        foreach (var argument in type.GetGenericArguments())
+        {
+            if (ClrTypeUtilities.AreSame(argument, typeof(object)) || ContainsNestedObject(argument))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal static Func<int, System.Type, bool?>? MakeDelegateRefKindArgumentCheck(
         IReadOnlyList<BoundExpression>? boundArguments,
         int argumentOffset = 0)

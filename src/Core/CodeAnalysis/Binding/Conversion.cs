@@ -223,9 +223,13 @@ public sealed class Conversion
         // `TupleTypeSymbol`/`ImportedTypeSymbol`) pair, which that guard
         // rejects. With CLOSED elements nothing noticed, because the
         // `ClrType` comparison at the top of this method answered first; once
-        // an element is open both `ClrType`s are null and there was no rule
-        // left, so `makeMap[K, V](entries map[K, V])` could not pass `entries`
-        // to a `Dictionary[K, V]` parameter that is the very same type. This is
+        // an element is open those `ClrType`s stop identifying the types — the
+        // structural side's is null (`MapTypeSymbol.MakeClrType` gives up the
+        // moment a key or value has no CLR backing) and the imported side's is
+        // the ADR-0004 type-ERASED `Dictionary<object, object>` — so there was
+        // no rule left, and `makeMap[K, V](entries map[K, V])` could not pass
+        // `entries` to a `Dictionary[K, V]` parameter that is the very same
+        // type. This is
         // the same move #3976 made for channels — the lattice reads the types,
         // not the spelling.
         //

@@ -78,9 +78,11 @@ public sealed class MapTypeSymbol : TypeSymbol
     /// it exists for the same reason: with CLOSED key/value types the two
     /// spellings are already identity because <c>Conversion</c> compares their
     /// <see cref="TypeSymbol.ClrType"/>s, but the moment one of them is open
-    /// both <c>ClrType</c>s are null and the comparison has nothing left to
-    /// read. Which name the author (or the metadata) happened to use is not a
-    /// fact about the type.
+    /// those <c>ClrType</c>s stop identifying the types — this side's is null,
+    /// and the imported side's is the ADR-0004 type-ERASED
+    /// <c>Dictionary&lt;object, object&gt;</c> — so the comparison has nothing
+    /// left it can trust. Which name the author (or the metadata) happened to
+    /// use is not a fact about the type.
     /// </remarks>
     /// <param name="type">The candidate type.</param>
     /// <param name="keyType">The recovered key type.</param>
