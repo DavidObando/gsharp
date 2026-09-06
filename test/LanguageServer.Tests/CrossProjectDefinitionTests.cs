@@ -159,7 +159,7 @@ public class CrossProjectDefinitionTests
         var resolved = PdbSourceLocator.TryGetMethodSourceLocation(assemblyPath, method.MetadataToken, out var location);
 
         Assert.True(resolved, $"Expected to read sidecar PDB next to {assemblyPath}");
-        Assert.EndsWith("CrossProjectDefinitionTests.cs", location.FilePath);
+        Assert.Equal("CrossProjectDefinitionTests", Path.GetFileNameWithoutExtension(location.FilePath));
         Assert.True(location.StartLine > 0, "Expected a 1-based source line");
     }
 
@@ -182,7 +182,7 @@ public class CrossProjectDefinitionTests
         var resolved = PdbSourceLocator.TryGetTypeSourceLocation(assemblyPath, type.MetadataToken, out var location);
 
         Assert.True(resolved);
-        Assert.EndsWith("CrossProjectDefinitionTests.cs", location.FilePath);
+        Assert.Equal("CrossProjectDefinitionTests", Path.GetFileNameWithoutExtension(location.FilePath));
     }
 
     /// <summary>
@@ -205,7 +205,9 @@ public class CrossProjectDefinitionTests
 
         Assert.True(resolved);
         Assert.NotNull(location);
-        Assert.Contains("CrossProjectDefinitionTests.cs", location.Uri.GetFileSystemPath());
+        Assert.Equal(
+            "CrossProjectDefinitionTests",
+            Path.GetFileNameWithoutExtension(location.Uri.GetFileSystemPath()));
     }
 
     /// <summary>

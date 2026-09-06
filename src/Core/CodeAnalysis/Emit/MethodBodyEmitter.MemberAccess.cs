@@ -214,8 +214,10 @@ internal sealed partial class MethodBodyEmitter
 
     private void EmitStoreVariable(VariableSymbol variable)
     {
-        if (this.asyncFieldMap != null
-            && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField))
+        if ((this.asyncFieldMap != null
+                && this.asyncFieldMap.TryGetHoistedField(variable, out var hoistedField))
+            || (this.iteratorEmitCtx != null
+                && this.iteratorEmitCtx.FieldMap.TryGetValue(variable, out hoistedField)))
         {
             // stfld needs the receiver below the value; the planned fallback
             // local provides the stack reorder without changing value identity.

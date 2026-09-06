@@ -34,6 +34,46 @@ namespace GSharp.Compiler.Tests.Emit;
 [Collection("Issue3689Console")]
 public class Issue3689GenericIteratorHoistedSlotEmitTests
 {
+    [Fact]
+    public void PatternVariableUsedAfterYield_IsHoisted()
+    {
+        const string source = """
+            package Issue3724.IteratorPattern
+            import System
+
+            class Box {
+                var Value int32 = 7
+            }
+
+            func Values(value object) sequence[int32] {
+                switch value {
+                    case box is Box {
+                        yield box.Value
+                        yield box.Value + 1
+                    }
+                }
+            }
+
+            for value in Values(Box()) {
+                Console.WriteLine(value)
+            }
+            """;
+
+        var directory = CreateDirectory("pattern-variable");
+        try
+        {
+            var assemblyPath = Compile(source, directory);
+            IlVerifier.Verify(assemblyPath);
+            Assert.Equal(
+                "7" + Environment.NewLine + "8" + Environment.NewLine,
+                Run(assemblyPath, directory));
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
     private const string FindNodesSource = """
         package Issue3689.GenericIterator
         import System
