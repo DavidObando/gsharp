@@ -147,6 +147,73 @@ public class Issue3984BaseInitializerOpenArgumentTests
             public string Tag { get; }
         }
 
+        public class OptHolder<T>
+        {
+            public OptHolder(IEnumerable<T> items, int tag = 0)
+            {
+                var n = 0;
+                foreach (var _ in items)
+                {
+                    n++;
+                }
+
+                this.Tag = "seq:" + n + ":" + tag;
+            }
+
+            public OptHolder(int capacity)
+            {
+                this.Tag = "int:" + capacity;
+            }
+
+            public string Tag { get; }
+        }
+
+        public class FallbackHolder<T>
+        {
+            public FallbackHolder(IEnumerable<T> items, T fallback = default!)
+            {
+                var n = 0;
+                foreach (var _ in items)
+                {
+                    n++;
+                }
+
+                this.Tag = "seq:" + n + ":" + (fallback == null ? "nil" : fallback.ToString());
+            }
+
+            public FallbackHolder(int capacity)
+            {
+                this.Tag = "int:" + capacity;
+            }
+
+            public string Tag { get; }
+        }
+
+        public class ParamsHolder<T>
+        {
+            public ParamsHolder(params T[] items)
+            {
+                this.Tag = "params:" + items.Length;
+            }
+
+            public string Tag { get; }
+        }
+
+        public class BigTupleHolder<T>
+        {
+            public BigTupleHolder((int, int, int, int, int, int, int, T) pair)
+            {
+                this.Tag = "big:" + pair.Item1 + ":" + pair.Item8;
+            }
+
+            public BigTupleHolder(int n)
+            {
+                this.Tag = "int:" + n;
+            }
+
+            public string Tag { get; }
+        }
+
         public class PairHolder<T>
         {
             public PairHolder(IEnumerable<T> items, int n)
@@ -376,6 +443,154 @@ public class Issue3984BaseInitializerOpenArgumentTests
             Console.WriteLine(Derived(chan[int32](2)).Tag)
             """,
             new[] { "chan:4" },
+        };
+
+        // Review of this PR, finding 1. Ranking an erased argument reaches, for
+        // the first time, a constructor selected with an OMITTED optional
+        // parameter — and the per-parameter loop walks the PARAMETERS. Without
+        // materialising the omitted default it indexed past the supplied
+        // arguments and crashed the compiler outright (GS9998,
+        // IndexOutOfRangeException). The printed `:0` is the default arriving.
+        yield return new object[]
+        {
+            "an-omitted-optional-parameter-beside-an-erased-argument",
+            """
+            package P
+            import System
+            import Interop
+
+            class Opt[T] : OptHolder[T] {
+                init(items []T) : base(items) {
+                }
+            }
+
+            Console.WriteLine(Opt[int32]([]int32{1, 2, 3}).Tag)
+            """,
+            new[] { "seq:3:0" },
+        };
+
+        // The same omitted optional against a CLOSED base — no erasure anywhere,
+        // and `main` crashes on it too (`GS9998: IndexOutOfRangeException`).
+        // The crash therefore PREDATES this PR: the conversion loop always
+        // walked the parameters while the argument list held only what was
+        // supplied. What this PR changed is that an erased argument can now
+        // reach that loop as well; the repair covers both, and this row is what
+        // says the older half is fixed rather than merely avoided.
+        yield return new object[]
+        {
+            "an-omitted-optional-on-a-closed-base-crashed-on-main-too",
+            """
+            package P
+            import System
+            import Interop
+
+            class D : OptHolder[int32] {
+                init(items []int32) : base(items) {
+                }
+            }
+
+            Console.WriteLine(D([]int32{1, 2, 3}).Tag)
+            """,
+            new[] { "seq:3:0" },
+        };
+
+        // Review follow-up: the omitted default is materialised from the
+        // parameter's ERASED CLR type, so `T fallback = default` on a `Base[T]`
+        // arrived as `default(object)` and met a symbolic `T` slot it could not
+        // convert to (GS0156). It is re-materialised at the recovered target,
+        // the same recovery #1471 applies to an explicit `default` argument and
+        // for the same reason: `default(T)` must reify over the real slot rather
+        // than lower to `ldnull`. `T` closes to `int32` here, so the default
+        // arriving is `0`.
+        yield return new object[]
+        {
+            "an-omitted-symbolic-default-beside-an-erased-argument",
+            """
+            package P
+            import System
+            import Interop
+
+            class Fb[T] : FallbackHolder[T] {
+                init(items []T) : base(items) {
+                }
+            }
+
+            Console.WriteLine(Fb[int32]([]int32{1, 2, 3}).Tag)
+            """,
+            new[] { "seq:3:0" },
+        };
+
+        // Review of this PR, finding 2. The synthesised `params` array is what
+        // the emitter pushes, so it has to be built over the SYMBOLIC element:
+        // `params T[]` on a `Base[T]` is `!T0[]`. Built over the erased element
+        // it boxed into an `object[]` and handed that to a MemberRef whose
+        // signature says `T0[]` — this case ran and printed the right string
+        // while failing ILVerify, which is why the harness verifies as well as
+        // runs.
+        yield return new object[]
+        {
+            "an-expanded-params-array-over-the-open-element",
+            """
+            package P
+            import System
+            import Interop
+
+            class Pk[T] : ParamsHolder[T] {
+                init(item T) : base(item) {
+                }
+            }
+
+            Console.WriteLine(Pk[int32](7).Tag)
+            """,
+            new[] { "params:1" },
+        };
+
+        // Review of this PR, finding 3. An argument the author SPELLED as the
+        // imported type already satisfies the projected parameter, so the
+        // structural canonicalisation must not fire — rewriting the target to
+        // `map[K, V]` pushed this valid call into the very classifier gap
+        // (#3987) the rewrite exists to route around. Green on `main`, so this
+        // is a regression guard, not a new capability.
+        yield return new object[]
+        {
+            "control-an-explicitly-imported-dictionary-spelling",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import Interop
+
+            class Holder[K, V] : MapHolder[K, V] {
+                init(entries Dictionary[K, V]) : base(entries) {
+                }
+            }
+
+            Console.WriteLine(Holder[string, int32](Dictionary[string, int32]()).Tag)
+            """,
+            new[] { "map:0" },
+        };
+
+        // Review of this PR, finding 4. A tuple of arity 8 or more is
+        // `ValueTuple<T1..T7, TRest>`, so the canonicalisation has to flatten
+        // the `TRest` chain before it can name the shape — otherwise the long
+        // tuples, which need the rewrite most, keep the imported spelling and
+        // hit the open-element identity gap.
+        yield return new object[]
+        {
+            "a-tuple-of-arity-eight-carrying-the-open-element",
+            """
+            package P
+            import System
+            import Interop
+
+            class Big[T] : BigTupleHolder[T] {
+                init(pair (int32, int32, int32, int32, int32, int32, int32, T)) : base(pair) {
+                }
+            }
+
+            Console.WriteLine(Big[string]((1, 2, 3, 4, 5, 6, 7, "z")).Tag)
+            """,
+            new[] { "big:1:z" },
         };
     }
 

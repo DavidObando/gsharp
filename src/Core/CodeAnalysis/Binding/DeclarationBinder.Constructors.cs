@@ -300,6 +300,15 @@ internal sealed partial class DeclarationBinder
             }
         }
 
+        // Issue #3984: the open definition's constructor is where the parameter
+        // types still mention the base's own generic parameters; `clrBase` has
+        // already erased them.
+        var openBaseDefinition = clrBase.IsConstructedGenericType ? clrBase.GetGenericTypeDefinition() : null;
+        var openBaseCtorParams = TryGetOpenBaseConstructorParameters(openBaseDefinition, bestCtor);
+        var baseTypeArguments = importedBaseType is ImportedTypeSymbol importedBase
+            ? importedBase.TypeArguments
+            : default;
+
         // Issue #306 (item 2): honor `ref`/`out`/`in` base-constructor parameters.
         // For a by-ref parameter the bound argument must already be an address-of
         // expression (`&x`); the emitter forwards the address rather than a value.
@@ -311,16 +320,28 @@ internal sealed partial class DeclarationBinder
         // positional arguments into a synthesised slice/array first. The fixed
         // leading parameters and the synthesised array slot then go through the
         // same per-parameter ref/conversion loop as the normal-form path.
+        var suppliedArgumentCount = boundArguments.Count;
         ImmutableArray<BoundExpression> orderedArgs;
         if (isExpanded)
         {
             var paramsIndex = ctorParams.Length - 1;
             var paramArrayType = ctorParams[paramsIndex].ParameterType;
             var elementClrType = paramArrayType.GetElementType();
-            var elementTypeSymbol = elementClrType == null
-                ? TypeSymbol.Object
-                : TypeSymbol.FromClrType(elementClrType);
-            var sliceType = SliceTypeSymbol.Get(elementTypeSymbol);
+
+            // Issue #3984 (review): the packed array is what the emitter pushes
+            // at the base call, so it has to be built over the SYMBOLIC element
+            // — `params T[]` on a `Base[T]` is `!T0[]`, not the erased
+            // `object[]` the constructed type reports. Building the erased one
+            // boxed each element and handed an `object[]` to a MemberRef whose
+            // signature says `T0[]`, which ILVerify rejects.
+            var symbolicParamsSlice =
+                TryProjectSymbolicBaseParameterType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, paramsIndex, argumentType: null)
+                    as SliceTypeSymbol;
+            var elementTypeSymbol = symbolicParamsSlice?.ElementType
+                ?? (elementClrType == null
+                    ? TypeSymbol.Object
+                    : TypeSymbol.FromClrType(elementClrType));
+            var sliceType = symbolicParamsSlice ?? SliceTypeSymbol.Get(elementTypeSymbol);
 
             var tailCount = boundArguments.Count - paramsIndex;
             var packed = ImmutableArray.CreateBuilder<BoundExpression>(tailCount);
@@ -356,17 +377,18 @@ internal sealed partial class DeclarationBinder
         }
         else
         {
-            orderedArgs = boundArguments.ToImmutable();
+            // Issue #3984 (review): a constructor selected with OMITTED optional
+            // parameters supplies fewer arguments than it has parameters, and
+            // the per-parameter loop below walks the parameters. Materialize the
+            // omitted defaults first — the same step every ordinary CLR call
+            // site runs — or the loop indexes past the supplied arguments and
+            // the compiler crashes with an IndexOutOfRangeException. Before this
+            // fix the case was unreachable from an erased argument only because
+            // resolution never ran at all.
+            orderedArgs = ConversionClassifier.AppendOmittedOptionalArguments(
+                boundArguments.ToImmutable(),
+                ctorParams);
         }
-
-        // Issue #3984: the open definition's constructor is where the parameter
-        // types still mention the base's own generic parameters; `clrBase` has
-        // already erased them.
-        var openBaseDefinition = clrBase.IsConstructedGenericType ? clrBase.GetGenericTypeDefinition() : null;
-        var openBaseCtorParams = TryGetOpenBaseConstructorParameters(openBaseDefinition, bestCtor);
-        var baseTypeArguments = importedBaseType is ImportedTypeSymbol importedBase
-            ? importedBase.TypeArguments
-            : default;
 
         var refKindsBuilder = ImmutableArray.CreateBuilder<RefKind>(ctorParams.Length);
         var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(ctorParams.Length);
@@ -404,18 +426,38 @@ internal sealed partial class DeclarationBinder
             // arguments into the OPEN definition's constructor — the same
             // projection `ConversionClassifier.TrySubstituteParameterTypeFrom
             // Receiver` applies to an imported instance call's parameters.
-            var symbolicTarget = isExpanded && i == ctorParams.Length - 1
-                ? null
-                : TryProjectSymbolicBaseParameterType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, i);
+            var orderedArg = orderedArgs[i];
+            var symbolicTarget = TryProjectSymbolicBaseParameterType(
+                openBaseCtorParams,
+                openBaseDefinition,
+                baseTypeArguments,
+                i,
+                orderedArg.Type);
             if (symbolicTarget != null)
             {
                 targetType = symbolicTarget;
             }
 
-            var argLoc = isExpanded && i == ctorParams.Length - 1
+            // The synthesised params array and any materialised optional default
+            // have no source argument of their own, so they report at the call.
+            var argLoc = (isExpanded && i == ctorParams.Length - 1) || i >= suppliedArgumentCount
                 ? location
                 : argLocation(i);
-            var orderedArg = orderedArgs[i];
+
+            // Issue #3984 (review follow-up): an omitted optional is
+            // materialised from the parameter's ERASED CLR type, so
+            // `T fallback = default` on a `Base[T]` arrives as
+            // `default(object)` and meets a symbolic `T` slot it cannot
+            // convert to. Re-materialise it at the recovered target instead —
+            // the same recovery #1471 applies to an explicit `default`
+            // argument, and the reason it matters is identical: `default(T)`
+            // must reify over the real slot rather than lower to `ldnull`.
+            if (symbolicTarget != null
+                && i >= suppliedArgumentCount
+                && orderedArg is BoundDefaultExpression)
+            {
+                orderedArg = new BoundDefaultExpression(orderedArg.Syntax, symbolicTarget);
+            }
 
             // Issue #506 follow-up: when the synthesised params array already
             // carries the exact CLR type of the parameter (SliceTypeSymbol(T)
@@ -525,12 +567,16 @@ internal sealed partial class DeclarationBinder
     /// <param name="openBaseDefinition">The base type's open generic definition.</param>
     /// <param name="baseTypeArguments">The base type's symbolic type arguments.</param>
     /// <param name="index">The parameter ordinal.</param>
+    /// <param name="argumentType">The argument's own type, when there is one to
+    /// consult; the projection keeps the raw imported spelling whenever the
+    /// argument already satisfies it.</param>
     /// <returns>The symbolic parameter type, or <see langword="null"/>.</returns>
     private static TypeSymbol? TryProjectSymbolicBaseParameterType(
         ParameterInfo[]? openBaseCtorParams,
         System.Type? openBaseDefinition,
         ImmutableArray<TypeSymbol> baseTypeArguments,
-        int index)
+        int index,
+        TypeSymbol? argumentType)
     {
         if (openBaseCtorParams == null
             || openBaseDefinition == null
@@ -541,15 +587,52 @@ internal sealed partial class DeclarationBinder
             return null;
         }
 
-        var mapped = CanonicalizeStructuralShape(MemberLookup.MapOpenClrParameterTypeToSymbolic(
+        var raw = MemberLookup.MapOpenClrParameterTypeToSymbolic(
             openBaseCtorParams[index].ParameterType,
             openBaseDefinition,
-            baseTypeArguments));
+            baseTypeArguments);
+
+        // Issue #3984 (review): canonicalising is a repair for the classifier
+        // gap #3987, so apply it only where that gap actually bites — when the
+        // ARGUMENT is written in G#'s structural spelling and the projection
+        // handed back the imported one. An argument the author spelled as the
+        // imported type (`entries Dictionary[K, V]`) already satisfies the raw
+        // projection, and rewriting the target to `map[K, V]` would push a valid
+        // base call into the very gap the rewrite exists to route around.
+        //
+        // The test is the source's spelling, deliberately, and not whether some
+        // conversion to `raw` exists: an explicit or lossy one exists between
+        // `(int32, object)` and `ValueTuple[int32, T]`, and honouring it here is
+        // exactly how an erased value reached the emitter before this fix.
+        var mapped = ShouldCanonicalizeAgainst(argumentType)
+            ? CanonicalizeStructuralShape(raw)
+            : raw;
 
         return mapped != TypeSymbol.Error
             && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
             ? mapped
             : null;
+    }
+
+    /// <summary>
+    /// Issue #3984 (review): reports whether the projected parameter type should
+    /// be rewritten into G#'s canonical structural symbol, which is true exactly
+    /// when the argument itself is written that way (or when there is no
+    /// argument to consult, as for a synthesised <c>params</c> array).
+    /// </summary>
+    /// <param name="argumentType">The argument's type, if any.</param>
+    /// <returns>Whether to canonicalize.</returns>
+    private static bool ShouldCanonicalizeAgainst(TypeSymbol? argumentType)
+    {
+        if (argumentType == null)
+        {
+            return true;
+        }
+
+        var underlying = argumentType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : argumentType;
+        return underlying is MapTypeSymbol or TupleTypeSymbol;
     }
 
     /// <summary>
@@ -587,13 +670,66 @@ internal sealed partial class DeclarationBinder
             return MapTypeSymbol.Get(imported.TypeArguments[0], imported.TypeArguments[1]);
         }
 
-        if (definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
-            && imported.TypeArguments.Length is >= 2 and <= 7)
+        // Issue #3984 (review): an 8-or-more-element tuple is
+        // `ValueTuple<T1..T7, TRest>`, so the arity check has to run over the
+        // FLATTENED chain — otherwise exactly the tuples that need the rewrite
+        // most (the long ones) keep the imported spelling.
+        if (definitionName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true)
         {
-            return TupleTypeSymbol.Get(imported.TypeArguments);
+            var elements = ImmutableArray.CreateBuilder<TypeSymbol>();
+            if (TryFlattenValueTupleElements(mapped, elements) && elements.Count >= 2)
+            {
+                return TupleTypeSymbol.Get(elements.ToImmutable());
+            }
         }
 
         return mapped;
+    }
+
+    /// <summary>
+    /// Issue #3984: appends <paramref name="type"/>'s tuple elements to
+    /// <paramref name="elements"/>, walking the canonical
+    /// <c>ValueTuple&lt;T1..T7, TRest&gt;</c> chain so an 8-or-more-element
+    /// tuple flattens to its real element list.
+    /// </summary>
+    /// <param name="type">The projected tuple-shaped type.</param>
+    /// <param name="elements">The accumulating element list.</param>
+    /// <returns>Whether the type was tuple-shaped throughout.</returns>
+    private static bool TryFlattenValueTupleElements(
+        TypeSymbol type,
+        ImmutableArray<TypeSymbol>.Builder elements)
+    {
+        if (type is TupleTypeSymbol nested)
+        {
+            elements.AddRange(nested.ElementTypes);
+            return true;
+        }
+
+        if (type is not ImportedTypeSymbol { OpenDefinition: { } nestedDefinition } nestedImported
+            || nestedDefinition.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) != true
+            || nestedImported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var arguments = nestedImported.TypeArguments;
+        if (arguments.Length <= 7)
+        {
+            elements.AddRange(arguments);
+            return true;
+        }
+
+        if (arguments.Length != 8)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < 7; i++)
+        {
+            elements.Add(arguments[i]);
+        }
+
+        return TryFlattenValueTupleElements(arguments[7], elements);
     }
 
     private BoundExpression BindConstructorInitializerArgument(ExpressionSyntax syntax)
