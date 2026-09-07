@@ -338,7 +338,7 @@ public class GoldenTests
             "package Demo",
             string.Empty,
             "let value = (\"\" + `head",
-            "` + \"${x,4:D2}\" + \"`\" + `",
+            "` + \"${x,4:D2}\" + \"\\u0060\" + `",
             "` + \"$y\" + \"\")");
 
         AssertGolden(expected, unit);

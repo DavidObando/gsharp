@@ -16,7 +16,10 @@ path = pathlib.Path(sys.argv[1])
 path.write_text(
     "let reducible = " + " + ".join(["x"] * 90) + "\n"
     + "let atomicIdentifier = " + ("a" * 301) + "\n"
-    + 'let filteredFixture = "' + ("z" * 301) + '"\n',
+    + 'let filteredFixture = "' + ("z" * 301) + '"\n'
+    + 'let multiline = (`short` + "\\u0060" + `\n'
+    + ("x " * 160) + "\n"
+    + "`)\n",
     encoding="utf-8",
 )
 PY
@@ -24,16 +27,19 @@ PY
 # shellcheck source=build/selfmig-common.sh
 source "$repo_root/build/selfmig-common.sh"
 
+filtered=$(cs2gs_code_lines "$tree")
+[[ "$filtered" != *filteredFixture* ]]
+
 read -r reducible atomic total < <(cs2gs_long_line_counts "$tree")
-[[ "$reducible $atomic $total" == "1 2 3" ]]
+[[ "$reducible $atomic $total" == "1 3 4" ]]
 
 report=$(TMPDIR="$scratch" cs2gs_counter_report "$tree" "counter contract")
 grep -Fq '| lines >300 chars (reducible) | n/a | 1 |' <<< "$report"
-grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 2 |' <<< "$report"
-grep -Fq '| lines >300 chars (total) | n/a | 3 |' <<< "$report"
+grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 3 |' <<< "$report"
+grep -Fq '| lines >300 chars (total) | n/a | 4 |' <<< "$report"
 
 selfmig_measure "$tree"
-[[ "$long_lines $long_lines_atomic" == "1 2" ]]
+[[ "$long_lines $long_lines_atomic" == "1 3" ]]
 
 cat > "$scratch/baseline.json" <<'JSON'
 {

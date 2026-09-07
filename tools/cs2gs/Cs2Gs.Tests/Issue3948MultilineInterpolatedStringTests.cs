@@ -25,7 +25,7 @@ public sealed class Issue3948MultilineInterpolatedStringTests
     {
         string printed = Translate(FixtureSource);
 
-        Assert.Contains("`head ` + \"`\" + `{} $", printed, StringComparison.Ordinal);
+        Assert.Contains("`head ` + \"\\u0060\" + `{} $", printed, StringComparison.Ordinal);
         Assert.Contains("\"${Next(),7:F1}\"", printed, StringComparison.Ordinal);
         Assert.Contains("\"${Next(),-7:F1}\"", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("\\n", printed, StringComparison.Ordinal);

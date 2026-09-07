@@ -1306,9 +1306,12 @@ public static class GSharpPrinter
                 }
 
                 string run = part.Text.Substring(start, end - start);
+
+                // Do not print a literal backtick inside a quoted segment:
+                // raw-line tooling cannot distinguish it from a delimiter.
                 segments.Add(rawSafe
                     ? $"`{run}`"
-                    : $"\"{RenderStringLiteralBody(run)}\"");
+                    : $"\"{RenderStringLiteralBody(run).Replace("`", "\\u0060")}\"");
                 start = end;
             }
         }
