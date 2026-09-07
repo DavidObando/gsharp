@@ -1338,7 +1338,7 @@ internal sealed partial class DeclarationBinder
 
     /// <summary>
     /// Issue #4043: rejects a circular dependent-constraint chain
-    /// (<c>[T T]</c>, <c>[A B, B A]</c>) with <c>GS0578</c>, mirroring C#'s
+    /// (<c>[T T]</c>, <c>[A B, B A]</c>) with <c>GS0579</c>, mirroring C#'s
     /// <c>CS0454</c>. A cycle would emit a <c>GenericParamConstraint</c> the CLR
     /// refuses and would make every constraint walk that follows a
     /// <see cref="TypeParameterSymbol.TypeParameterBound"/> chain non-terminating,

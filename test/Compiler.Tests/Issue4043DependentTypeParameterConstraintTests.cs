@@ -62,7 +62,7 @@ namespace GSharp.Compiler.Tests;
 /// <para><b>Cycles.</b> A chain of dependent bounds must be acyclic, and the
 /// check has to be a post-pass: while the first parameter is being resolved the
 /// second's bound is still empty, so <c>[A B, B A]</c> is invisible from inside
-/// the resolution loop. Reported as the new <c>GS0578</c> (C# spells it
+/// the resolution loop. Reported as the new <c>GS0579</c> (C# spells it
 /// CS0454), and the offending bound is CLEARED as well as reported so no later
 /// walk of the chain can fail to terminate.</para>
 /// </remarks>
@@ -577,7 +577,7 @@ public class Issue4043DependentTypeParameterConstraintTests
             // The reported defect, in its own words.
             Assert.DoesNotContain("GS0153", appLog, StringComparison.Ordinal);
             Assert.DoesNotContain("GS0152", appLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("GS0578", appLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS0579", appLog, StringComparison.Ordinal);
             Assert.True(File.Exists(appPath), $"'{name}' must compile. Log:\n{appLog}");
 
             IlVerifier.Verify(appPath);
@@ -633,7 +633,7 @@ public class Issue4043DependentTypeParameterConstraintTests
     }
 
     /// <summary>
-    /// A circular chain of dependent bounds reports <c>GS0578</c> — once per
+    /// A circular chain of dependent bounds reports <c>GS0579</c> — once per
     /// cycle, not once per member of it — and does not hang the binder.
     /// </summary>
     /// <param name="name">The case name.</param>
@@ -651,10 +651,10 @@ public class Issue4043DependentTypeParameterConstraintTests
             Assert.False(File.Exists(appPath), $"'{name}' must not compile. Log:\n{appLog}");
             Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
 
-            var occurrences = appLog.Split("GS0578", StringSplitOptions.None).Length - 1;
+            var occurrences = appLog.Split("GS0579", StringSplitOptions.None).Length - 1;
             Assert.True(
                 occurrences == 1,
-                $"'{name}' must report GS0578 exactly once, saw {occurrences}. Log:\n{appLog}");
+                $"'{name}' must report GS0579 exactly once, saw {occurrences}. Log:\n{appLog}");
         }
         finally
         {

@@ -477,7 +477,7 @@ internal static class DiagnosticDescriptors
     // Issue #4043: a type parameter may be constrained by ANOTHER type
     // parameter (`[TBase, TDerived TBase]`, C#'s `where TDerived : TBase`), so
     // the chain of such bounds must be acyclic. C# spells the same rule CS0454.
-    internal static readonly DiagnosticDescriptor CircularConstraintDependency = new("GS0578", DiagnosticSeverity.Error, "Circular constraint dependency involving '{0}' and '{1}'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.");
+    internal static readonly DiagnosticDescriptor CircularConstraintDependency = new("GS0579", DiagnosticSeverity.Error, "Circular constraint dependency involving '{0}' and '{1}'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
