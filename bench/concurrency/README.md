@@ -49,7 +49,8 @@ python3 build/run-concurrency-bench.py --scenario select-ready --launches 3 \
   --json out/select-ready.json
 
 # Record what was measured. Refuses to loosen a ceiling without a stated reason.
-python3 build/run-concurrency-bench.py --go --update-baseline bench/concurrency/baseline.json
+python3 build/run-concurrency-bench.py --go --aot \
+  --update-baseline bench/concurrency/baseline.json
 
 # Check the harness still hangs together (this runs on every PR)
 python3 build/verify-concurrency-bench.py --smoke
@@ -129,6 +130,9 @@ spike:
    an older baseline without a comparison key is reported but cannot gate until
    it is re-recorded. When Go is requested, JIT/AOT/Go launch order rotates on
    each sample so a warming or drifting host cannot consistently favor one side.
+   A baseline update requires the full `--go --aot` suite without `--scenario`;
+   a partial run may report or check, but cannot relabel untouched rows with its
+   narrower comparison key.
 
 ## Known limits of the current numbers
 

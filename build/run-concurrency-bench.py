@@ -249,6 +249,7 @@ def make_fingerprint(
     gsc: Path,
     extensions: Path,
     assembly: Path,
+    aot_binary: Path | None,
     go_binary: Path | None,
     launches: int,
     scenario: str | None,
@@ -312,6 +313,7 @@ def make_fingerprint(
             "Bench.dll": sha256(assembly),
             "Gsharp.Extensions.dll": sha256(extensions),
             "Gsharp.Runtime.Channels.dll": sha256(assembly.parent / "Gsharp.Runtime.Channels.dll"),
+            "NativeAOT": sha256(aot_binary) if aot_binary else None,
             "go": sha256(go_binary) if go_binary else None,
         },
     }
@@ -528,7 +530,11 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
         fingerprint = payload.get("fingerprint")
         key = payload.get("aggregationKey")
         if key is None:
-            key = f"legacy:{payload.get('hardwareClass')}"
+            if len(paths) > 1:
+                raise SystemExit(
+                    f"refusing to aggregate legacy run '{path}': it has no aggregationKey"
+                )
+            key = f"legacy-single:{payload.get('hardwareClass')}"
         if aggregation_key is None:
             aggregation_key = key
         elif key != aggregation_key:
@@ -715,6 +721,27 @@ def update(
     return 0
 
 
+def complete_baseline_fingerprint(fingerprint: dict) -> bool:
+    comparison = fingerprint["comparison"]
+    return (
+        comparison["scenario"] == "all"
+        and comparison["modes"] == ["gsharp", "gsharp_aot", "go"]
+    )
+
+
+def complete_baseline_results(
+    measured: dict[str, dict],
+    measured_aot: dict[str, dict],
+    go_measured: dict[str, dict],
+) -> bool:
+    return all(
+        scenario["name"] in measured
+        and scenario["name"] in measured_aot
+        and (scenario.get("go") is None or scenario["go"] in go_measured)
+        for scenario in load_scenarios()
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--launches", type=int, default=7, help="process launches per side (default 7)")
@@ -827,6 +854,7 @@ def main() -> int:
             gsc=gsc,
             extensions=extensions,
             assembly=assembly,
+            aot_binary=aot_binary,
             go_binary=go_binary,
             launches=args.launches,
             scenario=args.scenario,
@@ -907,6 +935,17 @@ def main() -> int:
             return 1
         if not fingerprint.get("comparable", True):
             print("cannot update a baseline from a run marked incomparable", file=sys.stderr)
+            return 1
+        if (
+            args.scenario
+            or not complete_baseline_fingerprint(fingerprint)
+            or not complete_baseline_results(measured, measured_aot, go_measured)
+        ):
+            print(
+                "baseline updates require a full --go --aot run without --scenario "
+                "so every scenario and mode shares the recorded comparison key",
+                file=sys.stderr,
+            )
             return 1
         path = Path(args.update_baseline)
         baseline = json.loads(path.read_text())

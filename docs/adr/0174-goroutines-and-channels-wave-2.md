@@ -3342,8 +3342,11 @@ implementation had to refine it.
     per-run medians survive aggregation, so a shifted or bimodal distribution
     remains inspectable. JIT, NativeAOT and Go launches rotate order when they
     are measured together, preventing a warming or drifting host from always
-    favoring the same runtime. The existing `gsharp`, `gsharp_aot`, `go` and
-    `hardwareClass` JSON fields remain unchanged for dashboard consumers.
+    favoring the same runtime. Since the baseline carries one global comparison
+    identity, only a complete JIT + NativeAOT + Go suite may update it; partial
+    runs remain valid for reporting and checks. The existing `gsharp`,
+    `gsharp_aot`, `go` and `hardwareClass` JSON fields remain unchanged for
+    dashboard consumers.
 
 ## Addendum A — The ten patterns, three ways
 

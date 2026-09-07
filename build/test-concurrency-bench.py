@@ -80,6 +80,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "Bench.dll": "bench-hash",
             "Gsharp.Extensions.dll": "extensions-hash",
             "Gsharp.Runtime.Channels.dll": "runtime-hash",
+            "Bench": "aot-hash",
             "baseline": "go-hash",
         }
 
@@ -101,6 +102,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 gsc=Path("gsc"),
                 extensions=Path("Gsharp.Extensions.dll"),
                 assembly=Path("Bench.dll"),
+                aot_binary=Path("Bench"),
                 go_binary=Path("baseline"),
                 launches=7,
                 scenario="select-ready",
@@ -117,6 +119,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(["10.0.11"], fingerprint["comparison"]["toolchains"]["dotnetRuntime"])
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
+        self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
         self.assertNotEqual(fingerprint["comparisonKey"], fingerprint["aggregationKey"])
 
     def test_json_aggregation_rejects_different_build_or_methodology_keys(self) -> None:
@@ -142,6 +145,12 @@ class ConcurrencyBenchTests(unittest.TestCase):
 
         second.write_text(json.dumps({**common, "aggregationKey": "different"}))
         with self.assertRaisesRegex(SystemExit, "incomparable benchmark runs"):
+            bench.load_runs([str(first), str(second)])
+
+        first.write_text(json.dumps(common))
+        second.write_text(json.dumps(common))
+        bench.load_runs([str(first)])
+        with self.assertRaisesRegex(SystemExit, "no aggregationKey"):
             bench.load_runs([str(first), str(second)])
 
     def test_baseline_without_comparison_key_is_report_only(self) -> None:
@@ -170,6 +179,25 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(0, failures)
         self.assertIn("baseline has no comparison fingerprint", output.getvalue())
         self.assertIn("report-only", output.getvalue())
+
+    def test_baseline_update_requires_all_scenarios_and_modes(self) -> None:
+        full = {"comparison": {"scenario": "all", "modes": ["gsharp", "gsharp_aot", "go"]}}
+        partial = {"comparison": {"scenario": "select-ready", "modes": ["gsharp"]}}
+
+        self.assertTrue(bench.complete_baseline_fingerprint(full))
+        self.assertFalse(bench.complete_baseline_fingerprint(partial))
+        scenarios = [{"name": "paired", "go": "go-paired"}, {"name": "jit-only", "go": None}]
+        with mock.patch.object(bench, "load_scenarios", return_value=scenarios):
+            self.assertTrue(bench.complete_baseline_results(
+                {"paired": {}, "jit-only": {}},
+                {"paired": {}, "jit-only": {}},
+                {"go-paired": {}},
+            ))
+            self.assertFalse(bench.complete_baseline_results(
+                {"paired": {}, "jit-only": {}},
+                {"paired": {}},
+                {"go-paired": {}},
+            ))
 
     def test_dashboard_accepts_additive_result_schema(self) -> None:
         results = SCRATCH / "results.json"
