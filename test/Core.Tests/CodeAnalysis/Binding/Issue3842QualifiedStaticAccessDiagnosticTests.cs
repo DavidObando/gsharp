@@ -152,9 +152,25 @@ public sealed class Issue3842QualifiedStaticAccessDiagnosticTests
             }
             """);
 
-        Assert.Equal("GS0149", diagnostic.Id);
-        Assert.Equal("Type 'Nullable' is not generic.", diagnostic.Message);
-        Assert.Equal("Nullable", diagnostic.Location.Text!.ToString(diagnostic.Location.Span));
+        // Issue #4032: this expression's single error USED to be GS0149 "Type
+        // 'Nullable' is not generic" — a last-resort fallback the qualified
+        // walker reached whenever the closed construction failed for any
+        // reason. It is factually wrong: `System.Nullable`1` IS generic; what
+        // is wrong is the argument, because `string` does not satisfy the
+        // declared `struct` constraint. gsc now validates declared constraints
+        // at every construction site (`Type.MakeGenericType` does not do it
+        // under MetadataLoadContext), so the accurate diagnostic is available
+        // and the fallback is suppressed when the failure was already
+        // explained.
+        //
+        // The test's stated intent is unchanged and still enforced: exactly ONE
+        // error (`SingleError`), and it is not the "cannot find type"
+        // GS0157 this fixture exists to rule out.
+        Assert.Equal("GS0152", diagnostic.Id);
+        Assert.Equal(
+            "Type argument 'string' for type parameter 'T' does not satisfy the 'struct' constraint.",
+            diagnostic.Message);
+        Assert.Equal("Nullable[string]", diagnostic.Location.Text!.ToString(diagnostic.Location.Span));
     }
 
     [Fact]

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -3957,6 +3958,18 @@ public sealed class Binder
                 clrArgs[i] = ProjectGenericArgument(ta, erasedArgument, ref hasSymbolicArg);
             }
 
+            // Issue #4032: MetadataLoadContext's MakeGenericType does not
+            // validate constraints, so ask them here.
+            if (ReportUnsatisfiedGenericTypeConstraint(
+                    Diagnostics,
+                    clrOpenType,
+                    clrArgs,
+                    symbolicArgs.ToImmutable(),
+                    identifierToken.Location))
+            {
+                return null;
+            }
+
             try
             {
                 var closed = clrOpenType.MakeGenericType(clrArgs);
@@ -4944,6 +4957,18 @@ public sealed class Binder
             clrArgs[i] = ProjectGenericArgument(ta, typeof(object), ref hasSymbolicArg);
         }
 
+        // Issue #4032: MetadataLoadContext's MakeGenericType does not validate
+        // constraints, so ask them here.
+        if (ReportUnsatisfiedGenericTypeConstraint(
+                Diagnostics,
+                clrType,
+                clrArgs,
+                symbolicArgs.ToImmutable(),
+                identifierToken.Location))
+        {
+            return null;
+        }
+
         try
         {
             var closed = clrType.MakeGenericType(clrArgs);
@@ -5197,6 +5222,18 @@ public sealed class Binder
             clrArgs[i] = ProjectGenericArgument(ta, typeof(object), ref hasSymbolicArg);
         }
 
+        // Issue #4032: MetadataLoadContext's MakeGenericType does not validate
+        // constraints, so ask them here.
+        if (ReportUnsatisfiedGenericTypeConstraint(
+                Diagnostics,
+                nestedDef,
+                clrArgs,
+                symbolicArgs.ToImmutable(),
+                identifierToken.Location))
+        {
+            return null;
+        }
+
         try
         {
             var closed = nestedDef.MakeGenericType(clrArgs);
@@ -5301,6 +5338,209 @@ public sealed class Binder
 
         return ResolveClrTypeForGenericArg(type)
             ?? scope.References.MapClrTypeToReferences(type.ClrType);
+    }
+
+    /// <summary>
+    /// Issue #4032: reports <c>GS0152</c> when a closed generic TYPE clause
+    /// (<c>class MyHandler : Handler[MyOptions]</c>, <c>var h Handler[Bad]</c>,
+    /// …) violates a constraint the imported definition declares.
+    /// </summary>
+    /// <remarks>
+    /// <para><c>Type.MakeGenericType</c> checks constraints for a live runtime
+    /// definition and does NOT for one loaded by a
+    /// <see cref="System.Reflection.MetadataLoadContext"/> — which is where
+    /// every <c>/reference</c> assembly lives. So <c>Handler[string]</c> over
+    /// <c>Handler&lt;TOptions&gt; where TOptions : SchemeOptions</c> closed
+    /// silently, the emitted <c>extends</c> row named a type the CLR refuses,
+    /// and the program threw <c>TypeLoadException: GenericArguments[0],
+    /// 'System.String', … violates the constraint of type parameter
+    /// 'TOptions'</c> the first time it touched the type. The imported generic
+    /// METHOD path has checked this explicitly since #750/ADR-0088 for exactly
+    /// the same reason; this is that check one type parameter over.</para>
+    /// <para><b>Only fully CLOSED instantiations are asked.</b> A type
+    /// argument that still mentions a type parameter is erased to the
+    /// <c>object</c> placeholder in <paramref name="clrArgs"/>, and asking a
+    /// constraint of a placeholder is how a projection breaks constraint
+    /// satisfaction for a SIBLING parameter (the #4016/#4031 lesson). An open
+    /// instantiation has no closed answer to give, so it is left alone — the
+    /// CLR only loads the type once it is closed anyway. The same-compilation
+    /// class case is NOT skipped, because
+    /// <c>ClrOverloadResolution.SatisfiesGenericTypeConstraints</c> is handed
+    /// the SYMBOLIC vector and walks a user class's own base chain
+    /// (<c>UserReferenceTypeErasedSymbolSatisfiesBaseConstraint</c>) rather
+    /// than reading the erased <c>object</c>. That is the whole reason
+    /// <c>class MyOptions : SchemeOptions</c> stays green.</para>
+    /// </remarks>
+    /// <param name="diagnostics">The bag the diagnostic is reported into.</param>
+    /// <param name="openDefinition">The open generic CLR definition.</param>
+    /// <param name="clrArgs">The projected (possibly erased) CLR arguments.</param>
+    /// <param name="symbolicArgs">The symbolic arguments, in the same order.</param>
+    /// <param name="location">Where to anchor the diagnostic.</param>
+    /// <returns><see langword="true"/> when a diagnostic was reported.</returns>
+    internal static bool ReportUnsatisfiedGenericTypeConstraint(
+        DiagnosticBag diagnostics,
+        Type openDefinition,
+        Type[] clrArgs,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        TextLocation location)
+    {
+        if (openDefinition == null
+            || clrArgs == null
+            || symbolicArgs.IsDefaultOrEmpty
+            || symbolicArgs.Length != clrArgs.Length)
+        {
+            return false;
+        }
+
+        foreach (var symbolic in symbolicArgs)
+        {
+            if (symbolic == null || TypeSymbol.ContainsTypeParameter(symbolic))
+            {
+                return false;
+            }
+        }
+
+        var symbolicVector = ImmutableArray.CreateRange(symbolicArgs, static arg => (TypeSymbol?)arg);
+        if (ClrOverloadResolution.SatisfiesGenericTypeConstraints(
+                openDefinition,
+                clrArgs,
+                symbolicVector,
+                out var failedIndex,
+                out var failedConstraint)
+            || failedIndex < 0
+            || failedIndex >= symbolicArgs.Length)
+        {
+            return false;
+        }
+
+        Type failedParameter;
+        try
+        {
+            var typeParameters = openDefinition.GetGenericArguments();
+            if (failedIndex >= typeParameters.Length)
+            {
+                return false;
+            }
+
+            failedParameter = typeParameters[failedIndex];
+        }
+        catch (Exception)
+        {
+            // A metadata load failure did not disprove the constraint.
+            return false;
+        }
+
+        var typeArgument = symbolicArgs[failedIndex];
+        var constraintDescription = DescribeClrConstraint(failedParameter, failedConstraint);
+
+        // Issue #4032 (review follow-up): report ONCE PER EXPRESSION, not once
+        // per call. `ExpressionBinder.TryCloseImportedGenericTypeReceiver` is a
+        // BACKTRACKING PROBE — it is reached THREE times while binding
+        // `System.Nullable[string].Value` and TWICE for
+        // `Handler[string].Describe()`. Measured with a stack dump at the
+        // probe's entry rather than read off the code, because the obvious
+        // reading (three different resolvers) is wrong: it is `BindAccessorExpression`
+        // re-attempting THE SAME qualified walk through three entry points,
+        // all converging on `TryWalkQualifiedClrTypePath`:
+        //
+        //   1  BindAccessorExpression:~81  -> TryBindFullyQualifiedClrStaticAccess
+        //                                     (the full out-param overload, tried first)
+        //   2  BindAccessorExpression:~558 -> TryBindImportAccessor
+        //   3  BindAccessorExpression:~630 -> TryBindFullyQualifiedClrStaticAccess
+        //                                     (the 3-arg overload, which DISCARDS the out-params)
+        //
+        // The unqualified "two" is the same method attempting the other
+        // resolver twice — `TryResolveConstructedGenericTypeReceiver`, from
+        // `BindAccessorExpression` at ~221 and again at ~690. Every OTHER
+        // construction site calls this checker exactly once (measured, by
+        // tracing all seven), so this is not a general fan-out.
+        //
+        // A per-call report turned one violation into three identical errors,
+        // and the COUNT was a function of how many internal paths the binder
+        // happened to take — which is exactly the kind of detail that must not
+        // reach an author. Suppressing a byte-identical diagnostic (same id,
+        // same span, same message) loses nothing a reader could have
+        // distinguished, and the repo already takes this position for exact
+        // duplicates (`DiagnosticBag.SuppressDuplicateDiagnosticsIn`).
+        //
+        // The RETURN VALUE is unchanged when a duplicate is suppressed: callers
+        // use it to mean "this construction is invalid, stop", and every probe
+        // must still bail out even though only the first one printed.
+        var message = string.Format(
+            CultureInfo.CurrentCulture,
+            DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.MessageFormat,
+            typeArgument,
+            failedParameter.Name,
+            constraintDescription);
+        foreach (var existing in diagnostics)
+        {
+            if (string.Equals(
+                    existing.Id,
+                    DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.Id,
+                    StringComparison.Ordinal)
+                && ReferenceEquals(existing.Location.Text, location.Text)
+                && existing.Location.Span.Start == location.Span.Start
+                && existing.Location.Span.Length == location.Span.Length
+                && string.Equals(existing.Message, message, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
+            location,
+            failedParameter.Name,
+            typeArgument,
+            constraintDescription);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4032: renders the constraint that a closed generic type clause
+    /// failed, for the <c>GS0152</c> message.
+    /// </summary>
+    /// <param name="typeParameter">The CLR generic parameter.</param>
+    /// <param name="failedConstraint">
+    /// The type-bound constraint that failed, or <see langword="null"/> when a
+    /// special (<c>class</c>/<c>struct</c>/<c>new()</c>) constraint did.
+    /// </param>
+    /// <returns>A short human-readable constraint description.</returns>
+    private static string DescribeClrConstraint(Type typeParameter, Type? failedConstraint)
+    {
+        if (failedConstraint != null)
+        {
+            var name = failedConstraint.FullName ?? failedConstraint.Name;
+            var tick = name.IndexOf('`');
+            return tick >= 0 ? name.Substring(0, tick) : name;
+        }
+
+        GenericParameterAttributes attributes;
+        try
+        {
+            attributes = typeParameter.GenericParameterAttributes;
+        }
+        catch (Exception)
+        {
+            return typeParameter.Name;
+        }
+
+        var special = attributes & GenericParameterAttributes.SpecialConstraintMask;
+        if ((special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
+        {
+            return "struct";
+        }
+
+        if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
+        {
+            return "class";
+        }
+
+        if ((special & GenericParameterAttributes.DefaultConstructorConstraint) != 0)
+        {
+            return "new()";
+        }
+
+        return typeParameter.Name;
     }
 
     /// <summary>

@@ -1629,6 +1629,66 @@ internal static class ClrOverloadResolution
         return false;
     }
 
+    /// <summary>
+    /// Issue #4032: the generic TYPE mirror of
+    /// <see cref="SatisfiesGenericConstraints(MethodInfo, Type[], ImmutableArray{TypeSymbol?})"/>.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Type.MakeGenericType(Type[])"/> validates constraints when
+    /// the definition is a live runtime type, and does NOT when it comes from
+    /// a <see cref="System.Reflection.MetadataLoadContext"/> — which is where
+    /// every <c>/reference</c> assembly lives. So a base clause such as
+    /// <c>class Bad : Handler[string]</c> over
+    /// <c>Handler&lt;TOptions&gt; where TOptions : SchemeOptions</c> was
+    /// closed with no complaint, and the emitted <c>extends</c> row threw
+    /// <c>TypeLoadException: GenericArguments[0], 'System.String', …
+    /// violates the constraint of type parameter 'TOptions'</c> at run time.
+    /// Same defect, same remedy, one type parameter over.
+    /// </remarks>
+    /// <param name="openDefinition">The open generic type definition.</param>
+    /// <param name="typeArgs">The candidate type arguments in declaration order.</param>
+    /// <param name="typeArgSymbols">
+    /// The symbolic type-argument vector, which lets the checks see through
+    /// the <c>object</c> erasure of same-compilation user types.
+    /// </param>
+    /// <param name="failedIndex">The position that failed, or <c>-1</c>.</param>
+    /// <param name="failedConstraint">
+    /// The type-bound constraint that failed, or <see langword="null"/> when a
+    /// special (<c>class</c> / <c>struct</c> / <c>new()</c>) constraint did.
+    /// </param>
+    /// <returns><see langword="true"/> when every constraint is satisfied.</returns>
+    internal static bool SatisfiesGenericTypeConstraints(
+        Type openDefinition,
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol?> typeArgSymbols,
+        out int failedIndex,
+        out Type? failedConstraint)
+    {
+        failedIndex = -1;
+        failedConstraint = null;
+        if (openDefinition is null || typeArgs is null)
+        {
+            return true;
+        }
+
+        Type[] typeParams;
+        try
+        {
+            typeParams = openDefinition.GetGenericArguments();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return true;
+        }
+
+        return SatisfiesDeclaredConstraints(
+            typeParams,
+            typeArgs,
+            typeArgSymbols,
+            out failedIndex,
+            out failedConstraint);
+    }
+
     private static bool TryInferMethodGroupArgument(
         Type delegateType,
         int argumentIndex,
@@ -4562,6 +4622,19 @@ internal static class ClrOverloadResolution
             return true;
         }
 
+        return SatisfiesDeclaredConstraints(typeParams, typeArgs, typeArgSymbols, out _, out _);
+    }
+
+    private static bool SatisfiesDeclaredConstraints(
+        Type[] typeParams,
+        Type[] typeArgs,
+        ImmutableArray<TypeSymbol?> typeArgSymbols,
+        out int failedIndex,
+        out Type? failedConstraint)
+    {
+        failedIndex = -1;
+        failedConstraint = null;
+
         if (typeParams.Length != typeArgs.Length)
         {
             return true;
@@ -4569,6 +4642,8 @@ internal static class ClrOverloadResolution
 
         for (var i = 0; i < typeParams.Length; i++)
         {
+            failedIndex = i;
+            failedConstraint = null;
             var param = typeParams[i];
             var arg = typeArgs[i];
             if (arg is null || arg.IsGenericParameter)
@@ -4724,6 +4799,11 @@ internal static class ClrOverloadResolution
                     continue;
                 }
 
+                // Issue #4032: from here on, every `return false` in this loop
+                // is a type-BOUND constraint failure, so name the bound that
+                // failed. Callers that only want a yes/no discard it.
+                failedConstraint = constraint;
+
                 // Issue #2617: a same-compilation type argument is represented by
                 // `object` while imported generic methods are resolved. Check CLR
                 // interface constraints against the symbol's declared interfaces
@@ -4801,6 +4881,8 @@ internal static class ClrOverloadResolution
             }
         }
 
+        failedIndex = -1;
+        failedConstraint = null;
         return true;
     }
 

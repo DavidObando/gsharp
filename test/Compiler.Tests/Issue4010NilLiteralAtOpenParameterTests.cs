@@ -254,9 +254,9 @@ public class Issue4010NilLiteralAtOpenParameterTests
     {
         // `nil` still reaches every null-tolerant OPEN shape. The
         // reference-constrained `[T class]` arm is exercised by its own
-        // compile-and-run fact below rather than here, because the IL the
-        // compiler emits for it does not verify — a pre-existing defect this
-        // change neither causes nor fixes (see that fact's remarks).
+        // compile-verify-and-run fact below rather than here, because it also
+        // asserts the value that ARRIVES. It used to skip verification for a
+        // pre-existing emit defect; #4027 fixed that and the skip is gone.
         yield return new object[]
         {
             "control-nil-still-reaches-every-null-tolerant-open-shape",
@@ -435,19 +435,24 @@ public class Issue4010NilLiteralAtOpenParameterTests
     /// argument would print <c>2</c>.
     /// </summary>
     /// <remarks>
-    /// <para>This row deliberately does NOT run <c>IlVerifier</c>. The IL the
-    /// compiler emits for the call is <c>ldnull</c> at a slot typed <c>!!0</c>,
-    /// which ILVerify rejects: <c>[StackUnexpected] [found Nullobjref
-    /// 'NullReference'] [expected value 'T']</c>. That is a PRE-EXISTING emit
-    /// defect, not a consequence of this change — <c>Classify(nil, [T class])</c>
-    /// is <c>Implicit</c> (via
+    /// <para><b>This row used to skip <c>IlVerifier</c>; #4027 fixed the emit
+    /// defect and the skip is gone.</b> The IL the compiler emitted for the
+    /// call was <c>ldnull</c> at a slot typed <c>!!0</c>, which ILVerify
+    /// rejects: <c>[StackUnexpected] [found Nullobjref 'NullReference']
+    /// [expected value 'T']</c>. That was a PRE-EXISTING emit defect, not a
+    /// consequence of #4010's change — <c>Classify(nil, [T class])</c> is
+    /// <c>Implicit</c> (via
     /// <c>Conversion.IsNilAssignableWithoutNullableWrapper</c>'s
-    /// reference-constrained arm) both before and after, so the argument
-    /// reaches emit by the same path and the same bytes come out. Measured on
-    /// the parent as part of this PR's witness and filed as #4027; the row is
-    /// kept because it is the control that stops the new gate from becoming
-    /// timid, and losing that control to an unrelated emit bug would be the
-    /// worse trade.</para>
+    /// reference-constrained arm) before and after it, so the argument reached
+    /// emit by the same path and the same bytes came out. It was filed as
+    /// #4027 and the row was kept unverified because it is the control that
+    /// stops #4010's gate from becoming timid. #4027 lowers a <c>nil</c> at a
+    /// bare open type-parameter slot to <c>default(T)</c>, so the call site now
+    /// emits <c>ldloca.s N; initobj !!T; ldloc.N</c> — the same shape
+    /// <c>csc</c> emits for the equivalent C# — and this row verifies. The
+    /// run-and-print assertion is unchanged, so the <c>nil</c> must still
+    /// ARRIVE: <c>default(T)</c> at a <c>[T class]</c> slot is the null
+    /// reference in every instantiation.</para>
     /// </remarks>
     [Fact]
     public void AReferenceConstrainedTypeParameterStillAcceptsNil_AndTheNilArrives()
@@ -468,6 +473,9 @@ public class Issue4010NilLiteralAtOpenParameterTests
             var appPath = Path.Combine(tempDir, "ClassConstrained.dll");
             var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
             Assert.True(File.Exists(appPath), $"a reference-constrained slot must still accept nil. Log:\n{appLog}");
+
+            // #4027: no longer exempt. This assembly IL-verifies.
+            IlVerifier.Verify(appPath, Array.Empty<string>());
 
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the case must run to completion. Exit {exit}:\n{output}");

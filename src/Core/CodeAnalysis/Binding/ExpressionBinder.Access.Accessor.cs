@@ -1807,11 +1807,28 @@ internal sealed partial class ExpressionBinder
                         return false;
                     }
 
+                    var closeDiagnosticCount = Diagnostics.Count;
                     if (TryCloseImportedGenericTypeReceiver(openGenericType, segmentTypeArgs, genericSegment.LeftPart, out var closedGenericImported))
                     {
                         importedClass = closedGenericImported;
                         rightPart = genericSegment.RightPart;
                         return true;
+                    }
+
+                    // Issue #4032: the close can now fail for a reason it has
+                    // already EXPLAINED — a type argument that does not satisfy
+                    // the open definition's declared constraint (GS0152). The
+                    // `invalidGenericType` fallback below exists for the
+                    // unexplained case, and its message is "Type 'X' is not
+                    // generic" — which for `System.Nullable[string]` is simply
+                    // false: `Nullable`1` IS generic, the argument is wrong.
+                    // Follow the same convention the type-argument branch above
+                    // already uses (snapshot the bag, and treat growth as
+                    // "handled") so the accurate diagnostic stands alone.
+                    if (Diagnostics.Count > closeDiagnosticCount)
+                    {
+                        failureHandled = true;
+                        return false;
                     }
 
                     if (!scope.TryLookupSourceTypeInPackage(
@@ -3307,6 +3324,22 @@ internal sealed partial class ExpressionBinder
             // MetadataLoadContext when references are supplied via /reference:),
             // which MakeGenericType requires (mirrors Binder.BindGenericClrType).
             clrArgs[i] = scope.References.MapClrTypeToReferences(clr);
+        }
+
+        // Issue #4032 (review finding 1): a static member reached through a
+        // closed imported generic — `Handler[string].Describe()` — closes the
+        // receiver here, and this site did not ask the constraints. Measured on
+        // the first review build: it emitted an instantiation the CLR refuses
+        // and threw TypeLoadException. This is the receiver-shaped sibling of
+        // the direct-construction and literal sites.
+        if (Binder.ReportUnsatisfiedGenericTypeConstraint(
+                Diagnostics,
+                openClrType,
+                clrArgs,
+                typeArgs,
+                receiverSyntax.Location))
+        {
+            return false;
         }
 
         try
