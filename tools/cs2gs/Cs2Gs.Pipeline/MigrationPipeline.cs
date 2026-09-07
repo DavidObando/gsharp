@@ -814,7 +814,7 @@ public sealed class MigrationPipeline
 
             Console.WriteLine(
                 $"cs2gs: {app.Id}: {stageName} {outcome.Status.ToString().ToLowerInvariant()} in " +
-                $"{stageTimer.Elapsed.TotalSeconds:F1}s.");
+                $"{stageTimer.Elapsed.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)}s.");
 
             if (outcome.Status == StageStatus.Passed)
             {
