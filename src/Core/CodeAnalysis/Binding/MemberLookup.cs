@@ -4761,11 +4761,38 @@ internal sealed class MemberLookup
                 // constructed receiver such as AsyncLocal<string?>. Keep the
                 // receiver-projected property type when CLR metadata cannot
                 // represent its symbolic shape.
+                //
+                // Issue #4033: "cannot represent its symbolic shape" is true of
+                // EVERY position that is a type parameter of the declaring
+                // type, not only of the shapes the two probes below recognise.
+                // A declaration-site byte at a parameter position is a
+                // placeholder — `Dictionary<,>.Values` carries
+                // `[Nullable({1, 0, 0})]`, whose two zeroes stand for "whatever
+                // TKey/TValue are substituted with", because the declarer
+                // cannot know. Reading them as concrete positions applies
+                // #1354's "oblivious means `T?`" rule to a slot that has no
+                // annotation to be oblivious ABOUT, so a closed
+                // `Dictionary[string, string]` surfaced `.Keys`/`.Values` with
+                // a `string?` element while the very same dictionary's
+                // indexer, `for k, v in m` and `TryGetValue` all surfaced
+                // `string` — and `for v in m.Values { v.Length }` then lost the
+                // whole CLR property/field surface (GS0158, or GS9998 when the
+                // element was a constructed generic). Measured, the old
+                // reading was not even faithful to a declaration that DID
+                // annotate: a `Dictionary<string, string?>` and a
+                // `Dictionary<string, string>` handed over from the same
+                // nullable-enabled assembly both surfaced `string?` here,
+                // because both read the same placeholder.
+                // MergeDeclarationNullability below already carves parameter
+                // positions out of the #1354 rule and takes their nullability
+                // from the receiver's argument, which is why the OPEN
+                // `map[K, V].Keys` spelling was right all along; the gate
+                // simply never let a closed receiver reach it. Project whenever
+                // the open property type mentions a parameter at all, and let
+                // the merge keep deciding concrete positions.
                 if (!projectOnlyWhenSymbolicallyRequired
                     || openProperty.PropertyType.IsGenericParameter
-                    || (openProperty.PropertyType.ContainsGenericParameters
-                        && (TypeSymbol.RequiresSymbolicProjection(mapped)
-                            || TypeSymbol.ContainsNamedTupleElements(mapped))))
+                    || openProperty.PropertyType.ContainsGenericParameters)
                 {
                     // Issue #3705 (family 2): this branch returned the
                     // receiver-substituted type RAW, exactly as
@@ -5163,9 +5190,53 @@ internal sealed class MemberLookup
     /// <returns>The imported type carrying the symbolic arguments, or <see langword="null"/>.</returns>
     internal static ImportedTypeSymbol? GetProjectionReceiverImportedType(TypeSymbol type)
         => GetImportedTypeSymbol(type)
+            ?? TryGetClosedMapProjectionView(type)
             ?? (type is StructSymbol userClass
                 ? TypeMemberModel.GetNearestImportedBase(userClass) as ImportedTypeSymbol
                 : null);
+
+    /// <summary>
+    /// Issue #4033: the <c>Dictionary[K, V]</c> view of a CLOSED
+    /// <c>map[K, V]</c>, so a member read through the map spelling projects
+    /// through the receiver's symbolic arguments exactly as the
+    /// <c>Dictionary[K, V]</c> spelling of the SAME type does (ADR-0104 says
+    /// they ARE one type).
+    /// </summary>
+    /// <remarks>
+    /// <para><see cref="TryGetSymbolicOpenMapReceiverView"/> is the OPEN twin
+    /// and deliberately refuses a map with a CLR type, because an open map has
+    /// no other way to reach the dictionary surface. A closed map does reach
+    /// it — by reflection off its own <c>ClrType</c> — but arrives as a
+    /// <see cref="MapTypeSymbol"/>, which is neither an
+    /// <see cref="ImportedTypeSymbol"/> nor a <see cref="StructSymbol"/>, so
+    /// every projector above answered <see langword="null"/> and the member's
+    /// type was read straight from declaration metadata. For
+    /// <c>.Keys</c>/<c>.Values</c> that metadata is a placeholder at the
+    /// TKey/TValue positions, so <c>for v in m.Values { v.Length }</c> lost the
+    /// element's property surface for the map spelling alone, after the
+    /// <c>Dictionary</c> spelling had already been fixed.</para>
+    /// <para>The open definition comes from the map's OWN <c>ClrType</c> rather
+    /// than the host <c>typeof(Dictionary&lt;,&gt;)</c>: issue #4023 gave a map
+    /// over an imported key or value a backing dictionary built inside that
+    /// key/value's <c>MetadataLoadContext</c>, and a member reflected off a
+    /// context type must be described by that same context's open definition —
+    /// mixing the two is what #4023 was about.</para>
+    /// </remarks>
+    /// <param name="type">The receiver type a member was reflected through.</param>
+    /// <returns>The symbolic dictionary view, or <see langword="null"/>.</returns>
+    internal static ImportedTypeSymbol? TryGetClosedMapProjectionView(TypeSymbol type)
+    {
+        if (type is not MapTypeSymbol map
+            || map.ClrType is not { IsGenericType: true, IsGenericTypeDefinition: false } mapClr)
+        {
+            return null;
+        }
+
+        return ImportedTypeSymbol.GetConstructed(
+            mapClr,
+            mapClr.GetGenericTypeDefinition(),
+            ImmutableArray.Create(map.KeyType, map.ValueType));
+    }
 
     internal static PropertyInfo? FindOpenIndexerDefinition(Type? openDefinition, PropertyInfo closedIndexer)
     {
@@ -6076,6 +6147,23 @@ internal sealed class MemberLookup
                     imp.OpenDefinition.GetGenericArguments(),
                     imp.TypeArguments,
                     contextObject);
+            case NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true } nullableValue:
+                // Issue #4035: a `NullableTypeSymbol` answers its UNDERLYING
+                // type's `ClrType`, so the `default` arm below would erase
+                // `int32?` to a bare `System.Int32` and close
+                // `Dictionary<,>.ValueCollection` over `int32` while the map's
+                // own backing dictionary is `Dictionary<string,
+                // Nullable<int32>>`. `for v in m.Values` then loaded a
+                // `ValueCollection<string, Nullable<int32>>.Enumerator` where
+                // the IL claimed `ValueCollection<string, int32>.Enumerator`
+                // and ilverify rejected it with `StackUnexpected` — the same
+                // dropped-`Nullable<>` defect as the map's construction, one
+                // erasure further out. Build the wrapper in `contextObject`'s
+                // own load context for the reason `BuildErasedTupleInContext`
+                // and `ResolveErasedObjectInContext` exist: a host
+                // `typeof(Nullable<>)` cannot close over an MLC-loaded
+                // underlying.
+                return BuildErasedNullableInContext(nullableValue, contextObject);
             case TupleTypeSymbol tuple:
                 // Issue #1902: a positional tuple carrying a same-compilation
                 // user element (e.g. the `(Owner, Pet)` transparent identifier
@@ -6132,6 +6220,46 @@ internal sealed class MemberLookup
         }
 
         return BuildErasedTupleInContext(erasedElements, 0, erasedElements.Length, contextObject);
+    }
+
+    /// <summary>
+    /// Issue #4035: the <c>Nullable&lt;T&gt;</c> analogue of
+    /// <see cref="BuildErasedTupleInContext(TupleTypeSymbol, Type)"/> — closes
+    /// <paramref name="contextObject"/>'s own <c>System.Nullable`1</c> over the
+    /// erased underlying so a nullable VALUE type keeps its wrapper through
+    /// erasure instead of collapsing to the bare underlying that
+    /// <see cref="TypeSymbol.ClrType"/> answers.
+    /// </summary>
+    /// <param name="nullable">The nullable value type symbol.</param>
+    /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
+    /// <returns>The erased <c>Nullable&lt;T&gt;</c>, or the bare underlying when the context cannot name it.</returns>
+    private static Type? BuildErasedNullableInContext(NullableTypeSymbol nullable, Type contextObject)
+    {
+        var underlying = ProjectSymbolicArgToErasedClr(nullable.UnderlyingType, contextObject);
+        if (underlying == null || !underlying.IsValueType)
+        {
+            // The underlying erased to the `object` placeholder (or to a
+            // reference type); `Nullable<>` cannot close over it, and the bare
+            // erasure is the shape every other reader already expects.
+            return underlying;
+        }
+
+        var openNullable = contextObject.Assembly == typeof(object).Assembly
+            ? typeof(Nullable<>)
+            : contextObject.Assembly.GetType("System.Nullable`1", throwOnError: false);
+        if (openNullable == null)
+        {
+            return underlying;
+        }
+
+        try
+        {
+            return openNullable.MakeGenericType(underlying);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or NotSupportedException or TypeLoadException)
+        {
+            return underlying;
+        }
     }
 
     private static Type? BuildErasedTupleInContext(Type[] elementTypes, int start, int count, Type contextObject)
