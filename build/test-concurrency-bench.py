@@ -108,9 +108,13 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 go_binary=Path("baseline"),
                 launches=7,
                 scenario="select-ready",
-                modes=["gsharp", "go"],
-                runtime_versions={"gsharp": ["10.0.11"], "go": ["go1.27"]},
-                processor_counts={"gsharp": [2], "go": [2]},
+                modes=["gsharp", "gsharp_aot", "go"],
+                runtime_versions={
+                    "gsharp": ["10.0.11"],
+                    "gsharp_aot": ["10.0.11"],
+                    "go": ["go1.27"],
+                },
+                processor_counts={"gsharp": [2], "gsharp_aot": [2], "go": [2]},
                 runtime_environment={
                     **bench.PINNED_TIER_ENV,
                     "COMPLUS_GCSERVER": "1",
@@ -123,6 +127,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertTrue(fingerprint["comparable"])
         self.assertEqual("tiered-pgo-steady-state", fingerprint["comparison"]["jitMode"])
         self.assertEqual(["10.0.11"], fingerprint["comparison"]["toolchains"]["dotnetRuntime"])
+        self.assertEqual(["10.0.11"], fingerprint["comparison"]["toolchains"]["nativeAotRuntime"])
         self.assertEqual(["go1.27"], fingerprint["comparison"]["toolchains"]["go"])
         self.assertEqual(3, fingerprint["comparison"]["goWarmupRounds"])
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])

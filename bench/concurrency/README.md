@@ -83,14 +83,15 @@ any one of them produced a wrong conclusion at least once during the original
 spike:
 
 1. **Warm up, and pin the JIT tier.** Tiered JIT depresses cold CLR numbers by
-   **2–3×**. The harness runs three rounds and only round 3 is reportable — but
-   rounds are not sufficient on their own. The runtime's call-counting delay is
-   100 ms and restarts on every new JIT compilation, so a bench process that
-   keeps first-calling methods can exit before counting ever begins: the
-   scenario's own loop gets promoted by on-stack replacement while every method
-   it calls stays at Tier0. That is a real measurement this harness reported for
-   weeks, and it moved `select-ready` by **3.4×** between launches of an
-   unchanged binary (issue #3901). The runner therefore sets
+   **2–3×**. The G# program makes 120 cheap call-counted entries into each
+   selected scenario, waits for promotion to install, then runs one measured
+   round. The runtime's call-counting delay is 100 ms and restarts on every new
+   JIT compilation, so a bench process that keeps first-calling methods can exit
+   before counting ever begins: the scenario's own loop gets promoted by
+   on-stack replacement while every method it calls stays at Tier0. That is a
+   real measurement this harness reported for weeks, and it moved
+   `select-ready` by **3.4×** between launches of an unchanged binary (issue
+   #3901). The runner therefore sets
    `DOTNET_TieredCompilation=1`, `DOTNET_TieredPGO=1`, and
    `DOTNET_TC_CallCountingDelayMs=0` for the JIT mode, after removing inherited
    `DOTNET_*` / `COMPlus_*` tier and JIT overrides. Do not substitute

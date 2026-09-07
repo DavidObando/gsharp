@@ -320,6 +320,7 @@ def make_fingerprint(
         "toolchains": {
             "dotnetSdk": command_output(["dotnet", "--version"]),
             "dotnetRuntime": runtime_versions.get("gsharp", []),
+            "nativeAotRuntime": runtime_versions.get("gsharp_aot", []) if aot_binary else None,
             "go": runtime_versions.get("go", []) if go_binary else None,
         },
         "runtimeEnvironment": {
