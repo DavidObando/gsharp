@@ -29,7 +29,7 @@ errata 12.
 
 | Path | What it is |
 | --- | --- |
-| `gsharp/Bench.gs` | **The G# side.** Eight scenarios in the language itself, three in-process warm-up rounds, one `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
+| `gsharp/Bench.gs` | **The G# side.** Twelve scenarios in the language itself, 120 cheap call-counted warm-up entries, then one measured `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
 | `scenarios.json` | The registry: which G# scenario pairs with which Go row, and what each one measures. |
 | `baseline.json` | The recorded medians, ceilings and Go ratios. Written only by `--update-baseline`, never by hand. |
 | `aot/` | The NativeAOT measurement mode. Compiles no G# and holds no benchmark logic: it borrows the SDK's `PublishAot` pipeline and points ILC at the assembly gsc already emitted, so the AOT and JIT rows run byte-identical IL. |
