@@ -56,6 +56,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -69,7 +70,7 @@ ROW = re.compile(
 GO_ROW = re.compile(r"^\[(?P<name>[^\]]+?)\s*\]\s+[0-9.]+ ms\s+(?P<value>[0-9.]+) ns/op$")
 RUNTIME_ROW = re.compile(r"^runtime (?P<version>\S+) cores (?P<cores>[0-9]+)$")
 GO_RUNTIME_ROW = re.compile(
-    r"^go=(?P<version>\S+) numcpu=(?P<numcpu>[0-9]+) gomaxprocs=(?P<cores>[0-9]+)$"
+    r"^go=(?P<version>.+?) numcpu=(?P<numcpu>[0-9]+) gomaxprocs=(?P<cores>[0-9]+)$"
 )
 
 # Pinning the tiering delay is normative, not a tuning knob; see the module
@@ -379,6 +380,7 @@ def make_fingerprint(
     )
 
     fingerprint = {
+        "runId": str(uuid.uuid4()),
         "comparison": comparison,
         "build": build,
         "removedRuntimeSettings": removed_runtime_settings,
@@ -397,6 +399,8 @@ def aggregate_fingerprint(fingerprints: list[dict]) -> dict | None:
     comparison = fingerprint["comparison"]
     comparison["wholeRuns"] = len(fingerprints)
     comparison["intervalMethod"] = "range-of-run-medians"
+    fingerprint.pop("runId", None)
+    fingerprint["sourceRunIds"] = [item["runId"] for item in fingerprints]
     fingerprint["comparisonKey"] = stable_key(comparison)
     fingerprint["aggregationKey"] = stable_key({
         "comparison": comparison,
@@ -629,6 +633,7 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
     aggregation_key = None
     seen_paths = set()
     seen_payloads = set()
+    seen_run_ids = set()
     for path in paths:
         resolved = Path(path).resolve()
         if resolved in seen_paths:
@@ -673,6 +678,18 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
             metadata["sourceFingerprints"].extend(source_fingerprints)
         elif fingerprint:
             metadata["sourceFingerprints"].append(fingerprint)
+            source_fingerprints = [fingerprint]
+        else:
+            source_fingerprints = []
+        source_run_ids = [item.get("runId") for item in source_fingerprints]
+        if len(paths) > 1 and fingerprint and any(run_id is None for run_id in source_run_ids):
+            raise SystemExit(f"refusing to aggregate '{path}': source run identity is missing")
+        overlap = seen_run_ids.intersection(run_id for run_id in source_run_ids if run_id)
+        if overlap:
+            raise SystemExit(
+                f"refusing duplicate source run evidence in '{path}': {sorted(overlap)}"
+            )
+        seen_run_ids.update(run_id for run_id in source_run_ids if run_id)
 
         source_environments = payload.get("sourceEnvironments")
         if source_environments is not None:

@@ -315,7 +315,6 @@ func all() {
 	closedRecv()
 	spawn()
 	selectCost()
-	parkScale()
 }
 
 var _ = io.Discard

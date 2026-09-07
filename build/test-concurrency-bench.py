@@ -138,13 +138,17 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertFalse(fingerprint["build"]["gitDirty"])
         self.assertEqual("1", fingerprint["comparison"]["runtimeEnvironment"]["COMPLUS_GCSERVER"])
         self.assertNotEqual(fingerprint["comparisonKey"], fingerprint["aggregationKey"])
+        self.assertTrue(fingerprint["runId"])
         self.assertEqual(1, fingerprint["comparison"]["wholeRuns"])
         self.assertEqual("bootstrap-launch-median", fingerprint["comparison"]["intervalMethod"])
 
-        aggregated = bench.aggregate_fingerprint([fingerprint, fingerprint])
+        second_fingerprint = json.loads(json.dumps(fingerprint))
+        second_fingerprint["runId"] = "second-run"
+        aggregated = bench.aggregate_fingerprint([fingerprint, second_fingerprint])
         self.assertEqual(2, aggregated["comparison"]["wholeRuns"])
         self.assertEqual("range-of-run-medians", aggregated["comparison"]["intervalMethod"])
         self.assertNotEqual(fingerprint["comparisonKey"], aggregated["comparisonKey"])
+        self.assertEqual([fingerprint["runId"], "second-run"], aggregated["sourceRunIds"])
 
         preserved = {
             "select-ready": {
@@ -226,6 +230,25 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual([{"id": 1}, {"id": 2}], metadata["environments"])
         self.assertEqual([[["gsharp"]], [["gsharp"]]], metadata["launchOrders"])
         self.assertEqual(2, metadata["effectiveFingerprints"][0]["comparison"]["wholeRuns"])
+
+        direct_fingerprint = {
+            "runId": "same-run",
+            "comparison": {"wholeRuns": 1},
+            "comparable": True,
+        }
+        first.write_text(json.dumps({
+            **common,
+            "aggregationKey": "same",
+            "fingerprint": direct_fingerprint,
+        }))
+        second.write_text(json.dumps({
+            **second_run,
+            "aggregationKey": "same",
+            "fingerprint": direct_fingerprint,
+            "sourceFingerprints": [direct_fingerprint],
+        }))
+        with self.assertRaisesRegex(SystemExit, "duplicate source run evidence"):
+            bench.load_runs([str(first), str(second)])
 
     def test_baseline_without_comparison_key_is_report_only(self) -> None:
         result = {"median_ns": 200.0, "ci95_ns": [190.0, 210.0], "samples": 3}
@@ -324,6 +347,10 @@ class ConcurrencyBenchTests(unittest.TestCase):
         header = bench.GO_RUNTIME_ROW.match("go=go1.27.0 numcpu=18 gomaxprocs=6")
         self.assertIsNotNone(header)
         self.assertEqual("6", header["cores"])
+        development = bench.GO_RUNTIME_ROW.match(
+            "go=devel go1.28-abcdef Mon Sep 7 numcpu=18 gomaxprocs=6"
+        )
+        self.assertEqual("devel go1.28-abcdef Mon Sep 7", development["version"])
 
         with self.assertRaisesRegex(SystemExit, "divisible by the 2 measured modes"):
             bench.measure_modes([{"name": "a"}, {"name": "b"}], 3)

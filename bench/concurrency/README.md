@@ -97,7 +97,8 @@ spike:
    `DOTNET_*` / `COMPlus_*` tier and JIT overrides. Do not substitute
    `DOTNET_TieredCompilation=0`, which also discards dynamic PGO.
    Paired Go launches use their existing three unreported warm-up rounds; a
-   scoped run warms only the matching Go row.
+   scoped run warms only the matching Go row. The `go-park` memory probe is
+   explicit-only and never runs in those rate warm-ups.
 2. **Release build, both sides.**
 3. **Multiple process launches.** In-process repetition alone understates
    variance. Report a confidence interval, not a single number. JSON retains

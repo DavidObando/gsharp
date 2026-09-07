@@ -46,6 +46,9 @@ def smoke() -> int:
         failures.append("main.go has no single-scenario selector")
     if "runtime.GOMAXPROCS(0)" not in go_program:
         failures.append("main.go does not report effective Go scheduler parallelism")
+    go_all = re.search(r"func all\(\) \{(?P<body>.*?)\n\}", go_program, re.DOTALL)
+    if not go_all or "parkScale()" in go_all["body"]:
+        failures.append("main.go includes the explicit-only park probe in rate runs")
     for scenario in scenarios:
         row = scenario.get("go")
         if row and f'"{row}"' not in go_program:
