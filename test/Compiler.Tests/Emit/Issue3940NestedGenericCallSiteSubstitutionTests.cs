@@ -137,47 +137,54 @@ public class Issue3940NestedGenericCallSiteSubstitutionTests
             """;
 
         var result = CompileVerifyAndRun(source);
-        Assert.Equal(
-            new[] { "4/i", "s/7", "5/m/True", "o/8", "9/closed", "11" },
-            result.Output);
-        AssertConstructedGenericMethodCallTokens(
-            result.AssemblyPath,
-            "Make3940",
-            "Pass3940",
-            "MakeShared3940",
-            "PassShared3940",
-            "PassDeep3940",
-            "PassPlain3940",
-            "ClosedControl3940");
+        try
+        {
+            Assert.Equal(
+                new[] { "4/i", "s/7", "5/m/True", "o/8", "9/closed", "11" },
+                result.Output);
+            AssertConstructedGenericMethodCallTokens(
+                result.AssemblyPath,
+                "Make3940",
+                "Pass3940",
+                "MakeShared3940",
+                "PassShared3940",
+                "PassDeep3940",
+                "PassPlain3940",
+                "ClosedControl3940");
 
-        var assembly = EmittedFixture.Load(result.AssemblyPath);
-        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
-        AssertGenericArguments(program, "instance3940", typeof(int), typeof(string));
-        AssertGenericArguments(program, "shared3940", typeof(string), typeof(int));
-        AssertGenericArguments(program, "deep3940", typeof(int), typeof(string), typeof(bool));
-        AssertGenericArguments(program, "plain3940", typeof(string), typeof(int));
-        AssertGenericArguments(program, "closed3940", typeof(int), typeof(string));
-        AssertGenericArguments(program, "flat3940", typeof(int));
+            var assembly = EmittedFixture.Load(result.AssemblyPath);
+            var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+            AssertGenericArguments(program, "instance3940", typeof(int), typeof(string));
+            AssertGenericArguments(program, "shared3940", typeof(string), typeof(int));
+            AssertGenericArguments(program, "deep3940", typeof(int), typeof(string), typeof(bool));
+            AssertGenericArguments(program, "plain3940", typeof(string), typeof(int));
+            AssertGenericArguments(program, "closed3940", typeof(int), typeof(string));
+            AssertGenericArguments(program, "flat3940", typeof(int));
 
-        var outer = assembly.GetTypes().Single(t => t.Name == "Outer3940`1");
-        AssertOpenNestedSignature(outer.GetMethod("Make3940")!, expectedMethodParameterCount: 1);
-        AssertOpenNestedSignature(outer.GetMethod("Pass3940")!, expectedMethodParameterCount: 1);
-        AssertOpenNestedSignature(outer.GetMethod("MakeShared3940")!, expectedMethodParameterCount: 1);
-        AssertOpenNestedSignature(outer.GetMethod("PassShared3940")!, expectedMethodParameterCount: 1);
+            var outer = assembly.GetTypes().Single(t => t.Name == "Outer3940`1");
+            AssertOpenNestedSignature(outer.GetMethod("Make3940")!, expectedMethodParameterCount: 1);
+            AssertOpenNestedSignature(outer.GetMethod("Pass3940")!, expectedMethodParameterCount: 1);
+            AssertOpenNestedSignature(outer.GetMethod("MakeShared3940")!, expectedMethodParameterCount: 1);
+            AssertOpenNestedSignature(outer.GetMethod("PassShared3940")!, expectedMethodParameterCount: 1);
 
-        var deepOuter = assembly.GetTypes().Single(t => t.Name == "DeepOuter3940`1");
-        AssertOpenNestedSignature(deepOuter.GetMethod("PassDeep3940")!, expectedMethodParameterCount: 2);
+            var deepOuter = assembly.GetTypes().Single(t => t.Name == "DeepOuter3940`1");
+            AssertOpenNestedSignature(deepOuter.GetMethod("PassDeep3940")!, expectedMethodParameterCount: 2);
 
-        var passPlain = deepOuter.GetMethod("PassPlain3940")!;
-        var plainArguments = passPlain.ReturnType.GetGenericArguments();
-        Assert.Equal(2, plainArguments.Length);
-        Assert.True(plainArguments[0].IsGenericTypeParameter);
-        Assert.True(plainArguments[1].IsGenericMethodParameter);
+            var passPlain = deepOuter.GetMethod("PassPlain3940")!;
+            var plainArguments = passPlain.ReturnType.GetGenericArguments();
+            Assert.Equal(2, plainArguments.Length);
+            Assert.True(plainArguments[0].IsGenericTypeParameter);
+            Assert.True(plainArguments[1].IsGenericMethodParameter);
 
-        var closedControl = deepOuter.GetMethod("ClosedControl3940")!;
-        Assert.Equal(
-            new[] { typeof(int), typeof(string) },
-            closedControl.ReturnType.GetGenericArguments());
+            var closedControl = deepOuter.GetMethod("ClosedControl3940")!;
+            Assert.Equal(
+                new[] { typeof(int), typeof(string) },
+                closedControl.ReturnType.GetGenericArguments());
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(result.AssemblyPath)!, recursive: true);
+        }
     }
 
     private static void AssertConstructedGenericMethodCallTokens(
@@ -239,57 +246,65 @@ public class Issue3940NestedGenericCallSiteSubstitutionTests
     private static (string[] Output, string AssemblyPath) CompileVerifyAndRun(string source)
     {
         var directory = Directory.CreateTempSubdirectory("gs_3940_").FullName;
-        var sourcePath = Path.Combine(directory, "Program.gs");
-        var assemblyPath = Path.Combine(directory, "Program.dll");
-        File.WriteAllText(sourcePath, source);
-
-        using var compileOut = new StringWriter();
-        using var compileErr = new StringWriter();
-        var previousOut = Console.Out;
-        var previousErr = Console.Error;
-        Console.SetOut(compileOut);
-        Console.SetError(compileErr);
-        int exitCode;
         try
         {
-            exitCode = Program.Main(new[]
+            var sourcePath = Path.Combine(directory, "Program.gs");
+            var assemblyPath = Path.Combine(directory, "Program.dll");
+            File.WriteAllText(sourcePath, source);
+
+            using var compileOut = new StringWriter();
+            using var compileErr = new StringWriter();
+            var previousOut = Console.Out;
+            var previousErr = Console.Error;
+            Console.SetOut(compileOut);
+            Console.SetError(compileErr);
+            int exitCode;
+            try
             {
-                "/out:" + assemblyPath,
-                "/target:exe",
-                "/targetframework:net10.0",
-                sourcePath,
-            });
+                exitCode = Program.Main(new[]
+                {
+                    "/out:" + assemblyPath,
+                    "/target:exe",
+                    "/targetframework:net10.0",
+                    sourcePath,
+                });
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                Console.SetError(previousErr);
+            }
+
+            Assert.True(exitCode == 0, $"gsc failed:\n{compileOut}\n{compileErr}");
+            IlVerifier.Verify(assemblyPath);
+
+            var startInfo = new ProcessStartInfo("dotnet")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = directory,
+            };
+            startInfo.ArgumentList.Add("exec");
+            startInfo.ArgumentList.Add("--runtimeconfig");
+            startInfo.ArgumentList.Add(Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"));
+            startInfo.ArgumentList.Add(assemblyPath);
+
+            using var process = Process.Start(startInfo);
+            var stdout = process!.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
+            Assert.True(process.ExitCode == 0, $"runtime failed:\n{stdout}\n{stderr}");
+
+            return (
+                stdout.ReplaceLineEndings(Environment.NewLine)
+                    .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries),
+                assemblyPath);
         }
-        finally
+        catch
         {
-            Console.SetOut(previousOut);
-            Console.SetError(previousErr);
+            Directory.Delete(directory, recursive: true);
+            throw;
         }
-
-        Assert.True(exitCode == 0, $"gsc failed:\n{compileOut}\n{compileErr}");
-        IlVerifier.Verify(assemblyPath);
-
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = directory,
-        };
-        startInfo.ArgumentList.Add("exec");
-        startInfo.ArgumentList.Add("--runtimeconfig");
-        startInfo.ArgumentList.Add(Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"));
-        startInfo.ArgumentList.Add(assemblyPath);
-
-        using var process = Process.Start(startInfo);
-        var stdout = process!.StandardOutput.ReadToEnd();
-        var stderr = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
-        Assert.True(process.ExitCode == 0, $"runtime failed:\n{stdout}\n{stderr}");
-
-        return (
-            stdout.ReplaceLineEndings(Environment.NewLine)
-                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries),
-            assemblyPath);
     }
 }
