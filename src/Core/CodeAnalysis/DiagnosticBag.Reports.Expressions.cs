@@ -351,6 +351,19 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint, typeArgument, typeParameterName, constraintDescription);
 
     /// <summary>
+    /// Issue #4037: reports an OPEN instantiation of a constrained generic
+    /// whose type argument is the enclosing declaration's own type parameter,
+    /// and that parameter does not forward the constraint the definition
+    /// requires (<c>class Unforwarded[T] : Handler[T]</c>).
+    /// </summary>
+    /// <param name="location">The text location of the offending instantiation.</param>
+    /// <param name="argumentTypeParameterName">The supplied type parameter (e.g. <c>T</c>).</param>
+    /// <param name="declaredTypeParameterName">The definition's type-parameter name (e.g. <c>TOptions</c>).</param>
+    /// <param name="constraintDescription">A human-readable description of the constraint that is not forwarded.</param>
+    public void ReportTypeParameterDoesNotForwardConstraint(TextLocation location, string argumentTypeParameterName, string declaredTypeParameterName, string constraintDescription)
+    => Report(location, DiagnosticDescriptors.TypeParameterDoesNotForwardConstraint, argumentTypeParameterName, declaredTypeParameterName, constraintDescription);
+
+    /// <summary>
     /// Reports that the parameter requires a value of a different type.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

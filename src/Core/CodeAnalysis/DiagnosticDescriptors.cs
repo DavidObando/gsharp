@@ -474,6 +474,15 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor AwaitInsideLockBody = new("GS0575", DiagnosticSeverity.Error, "Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (ADR-0174 D4; C# spells the same rule CS1996).");
     internal static readonly DiagnosticDescriptor ExplicitInterfaceMemberNotOnTypeSurface = new("GS0577", DiagnosticSeverity.Error, "Type '{0}' has no member '{1}' of its own. '{1}' is declared by the interface '{2}', which '{0}' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead (issue #4013).");
 
+    // Issue #4037: an OPEN instantiation of a constrained generic. The type
+    // argument is the enclosing declaration's own type parameter, so the
+    // question is not "does this argument satisfy the bound" (GS0152) but
+    // "does this parameter's own constraint set IMPLY the bound". C# spells
+    // this CS0314 — measured against csc, which reports it at every open
+    // position: a base clause, a field type, a local type, an interface list
+    // entry and a return type.
+    internal static readonly DiagnosticDescriptor TypeParameterDoesNotForwardConstraint = new("GS0578", DiagnosticSeverity.Error, "Type parameter '{0}' does not carry the '{2}' constraint that type parameter '{1}' requires, so this instantiation is not valid for every '{0}'. Forward the constraint onto the declaration of '{0}' (issue #4037; C# spells the same rule CS0314).");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

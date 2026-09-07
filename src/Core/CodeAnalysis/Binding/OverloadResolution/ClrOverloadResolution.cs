@@ -29,6 +29,13 @@ namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 /// </remarks>
 internal static class ClrOverloadResolution
 {
+    /// <summary>
+    /// Issue #4037: the depth bound on a walk of forwarded class constraints
+    /// (<c>[T U]</c> whose <c>U</c> is itself constrained). No real declaration
+    /// nests bounds this deep; the bound exists so a cyclic chain terminates.
+    /// </summary>
+    private const int ForwardedBoundChainLimit = 32;
+
     // C# §7.5.3.4 "Better conversion target" — signed integral T1 beats unsigned
     // integral T2 in this map. Used only as a secondary signed/unsigned tie-break
     // when the implicit-conversion direction between T1 and T2 does not resolve
@@ -1687,6 +1694,298 @@ internal static class ClrOverloadResolution
             typeArgSymbols,
             out failedIndex,
             out failedConstraint);
+    }
+
+    /// <summary>
+    /// Issue #4037: for an OPEN instantiation of a generic type definition —
+    /// one whose type argument at <paramref name="index"/> is the enclosing
+    /// declaration's OWN type parameter, as in
+    /// <c>class Unforwarded[T] : Handler[T]</c> — decides whether that type
+    /// parameter's constraint set IMPLIES the constraint the definition
+    /// declares at that position.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is a different question from
+    /// <see cref="SatisfiesGenericTypeConstraints"/>, which asks "does this
+    /// ARGUMENT satisfy the bound" and can only answer for a closed
+    /// instantiation. Here there is no argument to test: <c>T</c> stands for
+    /// every type its own bounds admit, so the instantiation is valid exactly
+    /// when <c>T</c>'s bounds are at least as strong as the definition's.
+    /// Measured against <c>csc</c>, which reports <c>CS0314</c> for this shape
+    /// at a base clause, a field type, a local type, an interface list entry
+    /// and a return type alike.</para>
+    /// <para><b>A DEPENDENT bound is deliberately not asked.</b> When the
+    /// definition's constraint at this position mentions another of the
+    /// definition's own type parameters (<c>Coupled&lt;T, U&gt; where U :
+    /// IList&lt;T&gt;</c>), answering it requires substituting the whole
+    /// symbolic vector, which is the repair #4031 had to make for a sibling
+    /// parameter and is the exact shape a placeholder answer gets wrong. Such
+    /// a position reports satisfied, so the rule only ever ADDS rejections it
+    /// can prove.</para>
+    /// </remarks>
+    /// <param name="openDefinition">The open generic type definition.</param>
+    /// <param name="index">The type-argument position to ask about.</param>
+    /// <param name="argument">The type parameter written at that position.</param>
+    /// <param name="failedConstraint">
+    /// The type-bound constraint that is not forwarded, or
+    /// <see langword="null"/> when a special (<c>class</c> / <c>struct</c> /
+    /// <c>new()</c>) constraint is not, or when nothing failed.
+    /// </param>
+    /// <param name="declaredParameterName">
+    /// The definition's own name for the parameter at <paramref name="index"/>
+    /// (e.g. <c>TOptions</c>), when a constraint failed.
+    /// </param>
+    /// <returns><see langword="true"/> when the constraint set is forwarded.</returns>
+    internal static bool TypeParameterForwardsDeclaredConstraints(
+        Type openDefinition,
+        int index,
+        TypeParameterSymbol argument,
+        out Type? failedConstraint,
+        out string? declaredParameterName)
+    {
+        failedConstraint = null;
+        declaredParameterName = null;
+        if (openDefinition is null || argument is null || index < 0)
+        {
+            return true;
+        }
+
+        Type declaredParameter;
+        GenericParameterAttributes attrs;
+        Type[] typeConstraints;
+        Type[] siblings;
+        try
+        {
+            siblings = openDefinition.GetGenericArguments();
+            if (index >= siblings.Length)
+            {
+                return true;
+            }
+
+            declaredParameter = siblings[index];
+            attrs = declaredParameter.GenericParameterAttributes;
+            typeConstraints = declaredParameter.GetGenericParameterConstraints();
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            // A metadata load failure did not disprove the constraint.
+            return true;
+        }
+
+        declaredParameterName = declaredParameter.Name;
+
+        var special = attrs & GenericParameterAttributes.SpecialConstraintMask;
+        if ((special & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0
+            && !argument.HasValueTypeConstraint
+            && !argument.HasUnmanagedConstraint)
+        {
+            return false;
+        }
+
+        if ((special & GenericParameterAttributes.ReferenceTypeConstraint) != 0
+            && !argument.HasReferenceTypeConstraint
+            && !TypeParameterHasClassBound(argument))
+        {
+            return false;
+        }
+
+        if ((special & GenericParameterAttributes.DefaultConstructorConstraint) != 0
+            && (special & GenericParameterAttributes.NotNullableValueTypeConstraint) == 0
+            && !argument.HasDefaultConstructorConstraint
+            && !argument.HasValueTypeConstraint
+            && !argument.HasUnmanagedConstraint)
+        {
+            return false;
+        }
+
+        foreach (var constraint in typeConstraints)
+        {
+            if (constraint is null)
+            {
+                continue;
+            }
+
+            bool dependent;
+            try
+            {
+                // A bound that mentions any type parameter — the definition's
+                // own, most commonly — is the #4031 shape. Skip it.
+                dependent = constraint.IsGenericParameter || constraint.ContainsGenericParameters;
+            }
+            catch (Exception ex) when (IsMetadataLoadFailure(ex))
+            {
+                continue;
+            }
+
+            if (dependent)
+            {
+                continue;
+            }
+
+            if (TypeParameterSatisfiesClrBound(argument, constraint))
+            {
+                continue;
+            }
+
+            failedConstraint = constraint;
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4037: whether a type parameter's own bounds prove it is a
+    /// reference type — either an explicit <c>class</c> constraint or a
+    /// class-typed bound, both of which imply it in every instantiation.
+    /// </summary>
+    /// <param name="argument">The type parameter.</param>
+    /// <returns><see langword="true"/> when the parameter is provably a reference type.</returns>
+    private static bool TypeParameterHasClassBound(TypeParameterSymbol argument)
+    {
+        // The depth bound terminates a cycle in a chain of forwarded bounds.
+        TypeSymbol? current = argument.ClassConstraint;
+        for (var depth = 0; current != null && depth < ForwardedBoundChainLimit; depth++)
+        {
+            switch (current)
+            {
+                case TypeParameterSymbol nested:
+                    if (nested.HasReferenceTypeConstraint)
+                    {
+                        return true;
+                    }
+
+                    current = nested.ClassConstraint;
+                    continue;
+
+                case StructSymbol { IsClass: true }:
+                    return true;
+
+                default:
+                    return current.ClrType is { IsClass: true, IsValueType: false };
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4037: whether a type parameter's own bounds imply the CLR bound
+    /// <paramref name="constraint"/> — an interface bound through the existing
+    /// <c>ErasedSymbolSatisfiesInterfaceConstraint</c> walk, a base-class bound
+    /// by walking the parameter's own <c>ClassConstraint</c> chain (which may
+    /// end in an imported CLR class, a same-compilation user class, or another
+    /// forwarded type parameter).
+    /// </summary>
+    /// <param name="argument">The type parameter written as the type argument.</param>
+    /// <param name="constraint">The CLR bound the definition declares.</param>
+    /// <returns><see langword="true"/> when the bound is forwarded.</returns>
+    private static bool TypeParameterSatisfiesClrBound(TypeParameterSymbol argument, Type constraint)
+    {
+        try
+        {
+            if (constraint.IsSameAs(typeof(object)) || constraint.IsSameAs(typeof(ValueType)))
+            {
+                return true;
+            }
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return true;
+        }
+
+        if (constraint.IsInterface)
+        {
+            if (ErasedSymbolSatisfiesInterfaceConstraint(argument, constraint))
+            {
+                return true;
+            }
+
+            // Issue #4037 (review): a CLASS bound implies every interface that
+            // class implements — `[T DisposableOptions]` forwards
+            // `where T : IDisposable` when `DisposableOptions : IDisposable`,
+            // and `csc` accepts exactly that (measured; the first version of
+            // this rule reported GS0578 on it, which is a FALSE rejection of
+            // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
+            // type-parameter arm reads only the interface bounds, so the class
+            // chain has to be walked here.
+            TypeSymbol? bound = argument.ClassConstraint;
+            for (var depth = 0; bound != null && depth < ForwardedBoundChainLimit; depth++)
+            {
+                if (bound.ClrType is Type boundClr)
+                {
+                    try
+                    {
+                        if (ClrTypeUtilities.IsAssignableByName(constraint, boundClr))
+                        {
+                            return true;
+                        }
+                    }
+                    catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                    {
+                        return true;
+                    }
+                }
+
+                switch (bound)
+                {
+                    case StructSymbol userClassBound:
+                        // A same-compilation class bound: its own interface
+                        // list and imported base chain answer this.
+                        return ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint);
+
+                    case TypeParameterSymbol nestedBound:
+                        if (ErasedSymbolSatisfiesInterfaceConstraint(nestedBound, constraint))
+                        {
+                            return true;
+                        }
+
+                        bound = nestedBound.ClassConstraint;
+                        continue;
+
+                    default:
+                        return false;
+                }
+            }
+
+            return false;
+        }
+
+        // A base-class bound: walk this parameter's own class-constraint chain.
+        // The depth bound terminates a cycle in a chain of forwarded bounds.
+        TypeSymbol? current = argument.ClassConstraint;
+        for (var depth = 0; current != null && depth < ForwardedBoundChainLimit; depth++)
+        {
+            if (current.ClrType is Type clr)
+            {
+                try
+                {
+                    if (ClrTypeUtilities.IsAssignableByName(constraint, clr))
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    return true;
+                }
+            }
+
+            switch (current)
+            {
+                case StructSymbol userClass:
+                    return UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(userClass, constraint);
+
+                case TypeParameterSymbol nested:
+                    current = nested.ClassConstraint;
+                    continue;
+
+                default:
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryInferMethodGroupArgument(

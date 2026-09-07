@@ -56,20 +56,23 @@ namespace GSharp.Compiler.Tests;
 /// class's own base chain, so <c>class MyOptions : SchemeOptions</c> satisfies
 /// <c>where TOptions : SchemeOptions</c> even though its CLR surrogate is
 /// <c>object</c>. Both are green rows.</para>
-/// <para><b>One neighbour is out of scope and filed separately.</b> A G#
-/// generic class that derives from a constrained imported base WITHOUT
+/// <para><b>One neighbour was out of scope here and is now FIXED by #4037.</b>
+/// A G# generic class that derives from a constrained imported base WITHOUT
 /// forwarding the bound to its own parameter —
 /// <c>class MyGenericHandler[T] : Handler[T]</c> where <c>Handler</c> requires
-/// <c>TOptions : SchemeOptions</c> — compiles, and its IL does not verify:
+/// <c>TOptions : SchemeOptions</c> — compiled, and its IL did not verify:
 /// <c>[UnsatisfiedMethodParentInst] … Method parent instantiation has
-/// unsatisfied class type parameter constraints</c>. C# requires the derived
-/// declaration to repeat the constraint, and G# does not enforce that. It is
-/// NOT a closed instantiation, so this change's check deliberately does not
-/// see it, and inferring or demanding constraint forwarding is a language
-/// rule rather than a missing check — C# spells it <c>CS0311</c>. Filed as
-/// #4037. The FORWARDED spelling
-/// (<c>class MyGenericHandler[T SchemeOptions] : Handler[T]</c>) verifies and
-/// is the green row here.</para>
+/// unsatisfied class type parameter constraints</c>. It is NOT a closed
+/// instantiation, so THIS change's check deliberately does not see it, and it
+/// still does not: the rule it needed is different in kind — "does the derived
+/// declaration's constraint set IMPLY the base's" — and it landed as its own
+/// diagnostic, <c>GS0578</c>, in
+/// <c>Issue4037UnforwardedConstrainedGenericBaseTests</c>. (Measured against
+/// <c>csc</c>: the C# rule is <b>CS0314</b>, the type-PARAMETER-argument case,
+/// not CS0311, which is the concrete-argument case G# already spells GS0152.)
+/// The FORWARDED spelling
+/// (<c>class MyGenericHandler[T SchemeOptions] : Handler[T]</c>) verified
+/// before and after, and is the green row here.</para>
 /// <para><b>Review of PR #4040 found the clause sites were not enough.</b>
 /// Three EXPRESSION spellings close an imported generic without passing
 /// through a type clause — a direct constructor call <c>Handler[string]()</c>,
@@ -488,7 +491,22 @@ public class Issue4032ConstrainedImportedGenericBaseTests
 
         // THE OPEN-INSTANTIATION SKIP. Every one of these erases its type
         // argument to `object`, which does NOT satisfy `: SchemeOptions`.
-        // Asking the constraint here is the #4031 lesson; the check must not.
+        // Asking THIS change's closed check here is the #4031 lesson; it must
+        // not.
+        //
+        // Issue #4037 (follow-up PR): the bounds are FORWARDED at every open
+        // position in this row, and that is now load-bearing rather than
+        // incidental. #4032's check still does not see an open instantiation —
+        // that skip is unchanged, and it is what keeps this row out of GS0152 —
+        // but a separate rule (GS0578) now asks the DIFFERENT question "does
+        // the declaration's own constraint set IMPLY the base's", which `csc`
+        // spells CS0314 and reports at a base clause, a field type and a local
+        // type alike (measured). The UNFORWARDED spellings this row used to
+        // carry (`class Holder[T] { var H Handler[T] }` and
+        // `func openLocal[T]()`) are the #4037 repro and are violation rows in
+        // `Issue4037UnforwardedConstrainedGenericBaseTests`. What belongs here
+        // is the invariant #4032 owns: a forwarded open instantiation is not
+        // constraint-CHECKED against the erased vector, and stays green.
         yield return new object[]
         {
             "control-open-instantiations-are-not-constraint-checked",
@@ -497,14 +515,14 @@ public class Issue4032ConstrainedImportedGenericBaseTests
             import System
             import HelperLib2
 
-            class Holder[T] {
+            class Holder[T SchemeOptions] {
                 public var H Handler[T]
             }
 
             class MyGenericHandler[T SchemeOptions] : Handler[T] {
             }
 
-            func openLocal[T]() int32 {
+            func openLocal[T SchemeOptions]() int32 {
                 var h Handler[T]
                 if h == nil { return 1 }
                 return 2
