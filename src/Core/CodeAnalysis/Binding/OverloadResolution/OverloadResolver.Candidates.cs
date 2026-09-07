@@ -22,6 +22,40 @@ namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 
 internal sealed partial class OverloadResolver
 {
+    /// <summary>
+    /// Issue #4043: pairs a positional type-argument list with the type
+    /// parameters it closes, so a DEPENDENT bound
+    /// (<c>[TBase, TDerived TBase]</c>) can be answered on the whole vector.
+    /// Returns <see langword="null"/> when the two do not line up — the
+    /// constraint check then falls back to its pre-#4043 per-position answer
+    /// rather than reading a mismatched map.
+    /// </summary>
+    /// <param name="typeParameters">The candidate's type parameters, in order.</param>
+    /// <param name="typeArguments">The supplied type arguments, in the same order.</param>
+    /// <returns>The positional map, or <see langword="null"/>.</returns>
+    internal static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? BuildTypeArgumentVector(
+        ImmutableArray<TypeParameterSymbol> typeParameters,
+        ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (typeParameters.IsDefaultOrEmpty
+            || typeArguments.IsDefaultOrEmpty
+            || typeParameters.Length != typeArguments.Length)
+        {
+            return null;
+        }
+
+        var vector = new Dictionary<TypeParameterSymbol, TypeSymbol>(typeParameters.Length);
+        for (var i = 0; i < typeParameters.Length; i++)
+        {
+            if (typeArguments[i] != null)
+            {
+                vector[typeParameters[i]] = typeArguments[i];
+            }
+        }
+
+        return vector;
+    }
+
     public FunctionSymbol? SelectInstanceOverloadOrReport(
         ImmutableArray<FunctionSymbol> overloads,
         ImmutableArray<BoundExpression> arguments,
@@ -63,11 +97,14 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
+                // Issue #4043: a DEPENDENT bound is answered on the whole
+                // vector, so build the positional map before asking.
+                var explicitVector = BuildTypeArgumentVector(candidate.TypeParameters, boundTypeArguments);
                 var constraintsSatisfied = true;
                 for (var i = 0; i < candidate.TypeParameters.Length; i++)
                 {
                     constraintsSatisfied &=
-                        satisfiesConstraint(boundTypeArguments[i], candidate.TypeParameters[i]);
+                        satisfiesConstraint(boundTypeArguments[i], candidate.TypeParameters[i], explicitVector);
                 }
 
                 if (constraintsSatisfied)
@@ -334,7 +371,7 @@ internal sealed partial class OverloadResolver
             {
                 if (!cand.IsGeneric
                     || (GetCandidateSubstitution(cand) is { } substitution
-                        && cand.TypeParameters.All(tp => satisfiesConstraint(substitution[tp], tp))))
+                        && cand.TypeParameters.All(tp => satisfiesConstraint(substitution[tp], tp, substitution))))
                 {
                     constrained.Add(cand);
                 }

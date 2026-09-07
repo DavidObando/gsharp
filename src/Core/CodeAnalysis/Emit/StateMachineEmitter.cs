@@ -645,6 +645,16 @@ internal sealed class StateMachineEmitter
                         HasDefaultConstructorConstraint = scopeTP.HasDefaultConstructorConstraint,
                         ClrInterfaceConstraint = scopeTP.ClrInterfaceConstraint,
                         ClassConstraint = scopeTP.ClassConstraint,
+
+                        // Issue #4043: carry the dependent bound onto the
+                        // state-machine class's own parameter. It still names
+                        // the SOURCE parameter, exactly as `ClassConstraint`
+                        // above does; `ActiveIteratorStateMachineRemap` rewrites
+                        // it to this class's VAR slot when the
+                        // GenericParamConstraint row is tokenised, so a bound
+                        // that came from a method type parameter does not leak
+                        // an MVAR encoding into a class GenericParam.
+                        TypeParameterBound = scopeTP.TypeParameterBound,
                         IsMethodTypeParameter = false,
                     };
                     b.Add(classTP);
@@ -988,6 +998,16 @@ internal sealed class StateMachineEmitter
                         HasDefaultConstructorConstraint = scopeTP.HasDefaultConstructorConstraint,
                         ClrInterfaceConstraint = scopeTP.ClrInterfaceConstraint,
                         ClassConstraint = scopeTP.ClassConstraint,
+
+                        // Issue #4043: carry the dependent bound onto the
+                        // state-machine class's own parameter. It still names
+                        // the SOURCE parameter, exactly as `ClassConstraint`
+                        // above does; `ActiveIteratorStateMachineRemap` rewrites
+                        // it to this class's VAR slot when the
+                        // GenericParamConstraint row is tokenised, so a bound
+                        // that came from a method type parameter does not leak
+                        // an MVAR encoding into a class GenericParam.
+                        TypeParameterBound = scopeTP.TypeParameterBound,
                         IsMethodTypeParameter = false,
                     });
                 }

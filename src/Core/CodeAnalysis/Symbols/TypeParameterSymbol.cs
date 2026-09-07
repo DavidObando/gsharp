@@ -70,6 +70,29 @@ public sealed class TypeParameterSymbol : TypeSymbol
     public TypeSymbol? ClassConstraint { get; set; }
 
     /// <summary>
+    /// Gets or sets the DEPENDENT bound — another type parameter this one must
+    /// derive from, satisfy, or equal (issue #4043). Mirrors C#'s
+    /// <c>where TDerived : TBase</c>, spelled <c>[TBase, TDerived TBase]</c> in
+    /// G#. The bound may be declared on the same list (a method's or a type's
+    /// own parameters) or on the ENCLOSING type when a generic method's
+    /// parameter names the class's — <c>class Box[T] { func Accept[U T](u U) }</c>.
+    /// <para>Deliberately a SEPARATE slot from <see cref="ClassConstraint"/>.
+    /// Roughly forty consumers read <c>ClassConstraint != null</c> as "this
+    /// parameter is a reference type" (nil acceptance, boxing decisions,
+    /// <c>callvirt</c> without a <c>constrained.</c> prefix). A dependent bound
+    /// proves nothing of the sort — <c>TBase</c> may itself be unconstrained,
+    /// so <c>TDerived</c> can be instantiated with a struct — and reusing the
+    /// slot would admit <c>nil</c> at a value-type slot, which is the #4027
+    /// unverifiable-<c>ldnull</c> defect one release later.</para>
+    /// <para>The emitter projects this onto a <c>GenericParamConstraint</c>
+    /// metadata row whose <c>TypeDefOrRefOrSpec</c> is a TypeSpec naming
+    /// <c>VAR(n)</c> / <c>MVAR(n)</c> — the encoding Roslyn emits for the same
+    /// C# shape — through the existing <c>TypeParameterSymbol</c> branch of
+    /// <c>ImportedMemberRefFactory.GetElementTypeToken</c>.</para>
+    /// </summary>
+    public TypeParameterSymbol? TypeParameterBound { get; set; }
+
+    /// <summary>
     /// Gets the single interface bound carried by this type parameter, if any —
     /// either the G# <see cref="InterfaceConstraint"/> or the imported
     /// <see cref="ClrInterfaceConstraint"/> (issue #943). Used by the emitter to
@@ -82,10 +105,11 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// Gets the single TypeDefOrRefOrSpec bound this type parameter projects onto
     /// a <c>GenericParamConstraint</c> metadata row — the interface bound
     /// (<see cref="ConstraintInterfaceType"/>) or the base-class bound
-    /// (<see cref="ClassConstraint"/>, issue #1056). At most one of these is set
-    /// for a given type parameter.
+    /// (<see cref="ClassConstraint"/>, issue #1056), or the dependent bound on
+    /// another type parameter (<see cref="TypeParameterBound"/>, issue #4043).
+    /// At most one of these is set for a given type parameter.
     /// </summary>
-    public TypeSymbol? ConstraintReferenceType => ConstraintInterfaceType ?? ClassConstraint;
+    public TypeSymbol? ConstraintReferenceType => ConstraintInterfaceType ?? ClassConstraint ?? TypeParameterBound;
 
     /// <summary>
     /// Gets or sets a value indicating whether this type parameter carries a

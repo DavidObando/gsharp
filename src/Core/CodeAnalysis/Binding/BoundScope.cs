@@ -3391,7 +3391,7 @@ public sealed class BoundScope
                 return false;
             }
 
-            if (!Binder.SatisfiesConstraint(arg, tp))
+            if (!Binder.SatisfiesConstraint(arg, tp, substitution))
             {
                 return false;
             }

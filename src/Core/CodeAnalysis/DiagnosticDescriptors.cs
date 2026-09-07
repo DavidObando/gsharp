@@ -68,7 +68,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor TypeParameterVariancePositionViolation = new("GS0150", DiagnosticSeverity.Error, "Type parameter '{0}' declared '{1}' cannot appear in {2} position.");
     internal static readonly DiagnosticDescriptor TypeArgumentInferenceFailed = new("GS0151", DiagnosticSeverity.Error, "Cannot infer type argument '{0}' for generic function '{1}'; supply it explicitly via '[{2}]'.");
     internal static readonly DiagnosticDescriptor TypeArgumentDoesNotSatisfyConstraint = new("GS0152", DiagnosticSeverity.Error, "Type argument '{0}' for type parameter '{1}' does not satisfy the '{2}' constraint.");
-    internal static readonly DiagnosticDescriptor ConstraintNotInterface = new("GS0153", DiagnosticSeverity.Error, "Type '{0}' cannot be used as a type-parameter constraint because it is neither an interface nor a class.");
+    internal static readonly DiagnosticDescriptor ConstraintNotInterface = new("GS0153", DiagnosticSeverity.Error, "Type '{0}' cannot be used as a type-parameter constraint because it is neither an interface, a class, nor a type parameter.");
     internal static readonly DiagnosticDescriptor WrongArgumentType = new("GS0154", DiagnosticSeverity.Error, "Parameter '{0}' requires a value of type '{1}' but was given a value of type '{2}'.");
     internal static readonly DiagnosticDescriptor CannotConvert = new("GS0155", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'.");
     internal static readonly DiagnosticDescriptor CannotConvertImplicitly = new("GS0156", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'. An explicit conversion exists (are you missing a cast?)");
@@ -473,6 +473,11 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor AwaitInsideGoOperand = new("GS0576", DiagnosticSeverity.Error, "Cannot 'await' inside a 'go' operand: the spawn takes the call, and an await nested in its arguments has no place to suspend. Bind the awaited value to a local first, then 'go' the call that uses it (ADR-0174 D5).");
     internal static readonly DiagnosticDescriptor AwaitInsideLockBody = new("GS0575", DiagnosticSeverity.Error, "Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (ADR-0174 D4; C# spells the same rule CS1996).");
     internal static readonly DiagnosticDescriptor ExplicitInterfaceMemberNotOnTypeSurface = new("GS0577", DiagnosticSeverity.Error, "Type '{0}' has no member '{1}' of its own. '{1}' is declared by the interface '{2}', which '{0}' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead (issue #4013).");
+
+    // Issue #4043: a type parameter may be constrained by ANOTHER type
+    // parameter (`[TBase, TDerived TBase]`, C#'s `where TDerived : TBase`), so
+    // the chain of such bounds must be acyclic. C# spells the same rule CS0454.
+    internal static readonly DiagnosticDescriptor CircularConstraintDependency = new("GS0578", DiagnosticSeverity.Error, "Circular constraint dependency involving '{0}' and '{1}'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

@@ -140,6 +140,19 @@ internal static class SynthesizedClosureReifier
             clone.ClassConstraint = src.ClassConstraint is { } classConstraint
                 ? StructSymbol.SubstituteTypeParameters(classConstraint, subst)
                 : null;
+
+            // Issue #4043: a DEPENDENT bound must point at the CLONED sibling,
+            // not at the original. Ordinal-based VAR/MVAR encoding would come
+            // out right either way, but every identity comparison downstream
+            // (constraint propagation, partial-declaration equivalence) reads
+            // the symbol, so a bound left pointing into the source set silently
+            // stops matching. A bound on a parameter OUTSIDE this set is not in
+            // `subst`; it is carried through unchanged.
+            clone.TypeParameterBound = src.TypeParameterBound is { } dependentBound
+                ? (subst.TryGetValue(dependentBound, out var clonedBound)
+                    ? clonedBound as TypeParameterSymbol ?? dependentBound
+                    : dependentBound)
+                : null;
         }
 
         return ImmutableArray.Create(clones);

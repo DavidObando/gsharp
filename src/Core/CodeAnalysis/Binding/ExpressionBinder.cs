@@ -2727,7 +2727,7 @@ internal sealed partial class ExpressionBinder
             foreach (var typeParameter in candidate.TypeParameters)
             {
                 if (!substitution.TryGetValue(typeParameter, out var typeArgument)
-                    || !Binder.SatisfiesConstraint(typeArgument, typeParameter))
+                    || !Binder.SatisfiesConstraint(typeArgument, typeParameter, substitution))
                 {
                     return false;
                 }

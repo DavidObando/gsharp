@@ -160,7 +160,7 @@ internal sealed partial class OverloadResolver
     private readonly TryGetFunctionLiteralDelegate tryGetFunctionLiteral;
     private readonly Action<TypeSymbol, TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>> inferTypeArguments;
     private readonly Func<TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>, TypeSymbol> substituteType;
-    private readonly Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint;
+    private readonly Func<TypeSymbol, TypeParameterSymbol, IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>?, bool> satisfiesConstraint;
     private readonly Func<TypeParameterSymbol, string> describeConstraint;
     private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTarget;
@@ -244,7 +244,11 @@ internal sealed partial class OverloadResolver
     /// type expression under the supplied substitution map.</param>
     /// <param name="satisfiesConstraint">Callback that checks whether a
     /// resolved type argument satisfies the declared constraint of a
-    /// type parameter.</param>
+    /// type parameter. Issue #4043: the third argument is the WHOLE
+    /// type-argument vector, which a DEPENDENT bound
+    /// (<c>[TBase, TDerived TBase]</c>) needs and a per-position check cannot
+    /// supply; every other constraint kind ignores it, and <see langword="null"/>
+    /// (no vector available) keeps the pre-#4043 answer.</param>
     /// <param name="describeConstraint">Callback that produces a
     /// human-readable description of a type-parameter constraint for
     /// diagnostics.</param>
@@ -291,7 +295,7 @@ internal sealed partial class OverloadResolver
         TryGetFunctionLiteralDelegate tryGetFunctionLiteral,
         Action<TypeSymbol, TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>> inferTypeArguments,
         Func<TypeSymbol, Dictionary<TypeParameterSymbol, TypeSymbol>, TypeSymbol> substituteType,
-        Func<TypeSymbol, TypeParameterSymbol, bool> satisfiesConstraint,
+        Func<TypeSymbol, TypeParameterSymbol, IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>?, bool> satisfiesConstraint,
         Func<TypeParameterSymbol, string> describeConstraint,
         Func<FunctionSymbol?> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTarget = null,

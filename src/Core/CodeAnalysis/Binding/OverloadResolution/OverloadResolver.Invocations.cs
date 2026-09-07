@@ -1304,7 +1304,7 @@ internal sealed partial class OverloadResolver
             foreach (var tp in extension.TypeParameters)
             {
                 var typeArg = substitution[tp];
-                if (!satisfiesConstraint(typeArg, tp))
+                if (!satisfiesConstraint(typeArg, tp, substitution))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, describeConstraint(tp));
                     return new BoundErrorExpression(null);
@@ -1722,7 +1722,7 @@ internal sealed partial class OverloadResolver
             foreach (var tp in method.TypeParameters)
             {
                 var typeArg = substitution[tp];
-                if (!satisfiesConstraint(typeArg, tp))
+                if (!satisfiesConstraint(typeArg, tp, substitution))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, describeConstraint(tp));
                     return new BoundErrorExpression(null);

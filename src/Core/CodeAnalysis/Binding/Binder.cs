@@ -6735,8 +6735,33 @@ public sealed class Binder
     // Phase 4.2 / ADR-0020: returns true if `typeArgument` satisfies the constraint of a
     // type parameter. Both the enum constraint and the optional sealed-interface bound
     // must hold.
-    internal static bool SatisfiesConstraint(TypeSymbol typeArgument, TypeParameterSymbol tp)
+    //
+    // Issue #4043: `substitution` carries the WHOLE type-argument vector, which
+    // a DEPENDENT bound (`[TBase, TDerived TBase]`) needs and a per-position
+    // check cannot supply — the question "does TDerived's argument satisfy
+    // TBase's bound" is only answerable once TBase's own argument is known.
+    // Every other constraint kind ignores it. It is optional and defaults to
+    // `null`: a caller that has no vector (or a vector missing the bound
+    // parameter) gets the pre-#4043 answer, which ACCEPTS. That direction is
+    // deliberate — an indeterminate dependent bound must never manufacture a
+    // GS0152 on a program that is legal.
+    internal static bool SatisfiesConstraint(
+        TypeSymbol typeArgument,
+        TypeParameterSymbol tp,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? substitution = null)
     {
+        // Issue #4043: the dependent bound, checked against the sibling's
+        // resolved argument.
+        if (tp.TypeParameterBound is { } dependentBound
+            && substitution != null
+            && substitution.TryGetValue(dependentBound, out var boundArgument)
+            && boundArgument != null
+            && !ReferenceEquals(boundArgument, dependentBound)
+            && !SatisfiesDependentBound(typeArgument, boundArgument, tp))
+        {
+            return false;
+        }
+
         if (tp.InterfaceConstraint != null)
         {
             var expectedIface = tp.InterfaceConstraint;
@@ -6826,6 +6851,97 @@ public sealed class Binder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #4043: returns <see langword="true"/> when the argument supplied for
+    /// a DEPENDENTLY bounded type parameter satisfies the bound, given the
+    /// argument the bounding parameter itself received. C#'s rule for
+    /// <c>where TDerived : TBase</c> is that an implicit reference conversion
+    /// (or boxing to <c>object</c>) must exist from the one to the other, so
+    /// this composes the relations the binder already owns: identity, the
+    /// universal <c>object</c> bound, interface implementation, base-class
+    /// derivation, and propagation through a type parameter's own bound.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately built from <see cref="SatisfiesClassConstraint"/> /
+    /// <see cref="ImplementsInterface"/> / <see cref="SatisfiesClrInterfaceConstraint"/>
+    /// rather than from <c>Conversion.Classify(...).Exists</c>: the conversion
+    /// classifier admits user-defined and boxing conversions that a CLR
+    /// <c>GenericParamConstraint</c> does not, so a "yes" from it would let
+    /// through instantiations the runtime refuses.
+    /// <para><b>Indeterminate answers accept.</b> When either side still
+    /// mentions an unsubstituted type parameter, the relation has no closed
+    /// answer here and the pre-#4043 behaviour (accept) is kept — the CLR only
+    /// loads the instantiation once it is closed, and a wrong "no" would be a
+    /// GS0152 on a legal program.</para>
+    /// </remarks>
+    /// <param name="typeArgument">The argument supplied for the bounded parameter.</param>
+    /// <param name="boundArgument">The argument supplied for the bounding parameter.</param>
+    /// <param name="tp">The bounded type parameter (for CLR self-substitution).</param>
+    /// <returns><see langword="true"/> when the bound holds or cannot be disproved.</returns>
+    internal static bool SatisfiesDependentBound(
+        TypeSymbol typeArgument,
+        TypeSymbol boundArgument,
+        TypeParameterSymbol tp)
+    {
+        if (typeArgument is null || boundArgument is null)
+        {
+            return true;
+        }
+
+        if (ReferenceEquals(typeArgument, boundArgument)
+            || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(typeArgument, boundArgument))
+        {
+            return true;
+        }
+
+        // `where TDerived : TBase` with TBase substituted by `object` is the
+        // universal bound — every type argument, value types included, converts.
+        if (boundArgument.ClrType is { } boundClr
+            && string.Equals(boundClr.FullName, "System.Object", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Propagation: the supplied argument is itself a dependently bounded
+        // type parameter whose chain reaches the bound. The chain is acyclic —
+        // `ReportCircularConstraints` rejects cycles at declaration — but the
+        // walk is bounded anyway so a malformed symbol cannot hang the binder.
+        if (typeArgument is TypeParameterSymbol argumentParameter)
+        {
+            var current = argumentParameter;
+            for (var steps = 0; steps < 64 && current.TypeParameterBound is { } next; steps++)
+            {
+                if (ReferenceEquals(next, boundArgument))
+                {
+                    return true;
+                }
+
+                current = next;
+            }
+        }
+
+        if (boundArgument is InterfaceSymbol userInterface)
+        {
+            return ImplementsInterface(typeArgument, userInterface)
+                || TypeSymbol.ContainsTypeParameter(typeArgument);
+        }
+
+        if (boundArgument.ClrType is { IsInterface: true })
+        {
+            return SatisfiesClrInterfaceConstraint(typeArgument, boundArgument, tp)
+                || TypeSymbol.ContainsTypeParameter(typeArgument);
+        }
+
+        if (SatisfiesClassConstraint(typeArgument, boundArgument))
+        {
+            return true;
+        }
+
+        // Indeterminate: an open instantiation has no closed answer to give.
+        return TypeSymbol.ContainsTypeParameter(typeArgument)
+            || TypeSymbol.ContainsTypeParameter(boundArgument);
     }
 
     /// <summary>
@@ -7385,6 +7501,15 @@ public sealed class Binder
         if (tp.ClassConstraint != null)
         {
             flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClassConstraint));
+        }
+
+        // Issue #4043: a dependent bound reads as the NAME of the bounding type
+        // parameter — `TBase`, not whatever it happened to be substituted with
+        // at this call. That is what the author wrote and what C# names in
+        // CS0311, and it stays stable across call sites.
+        if (tp.TypeParameterBound != null)
+        {
+            flags.Add(tp.TypeParameterBound.Name);
         }
 
         if (tp.Constraint == TypeParameterConstraint.Comparable)
