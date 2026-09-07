@@ -91,6 +91,8 @@ RUNTIME_SETTING_PREFIXES = (
     "COMPLUS_JIT",
     "DOTNET_READYTORUN",
     "COMPLUS_READYTORUN",
+    "DOTNET_ALTJIT",
+    "COMPLUS_ALTJIT",
 )
 JSON_SCHEMA_VERSION = 2
 METHODOLOGY_VERSION = 2
@@ -240,7 +242,16 @@ def stable_key(value: dict) -> str:
 
 
 def git_value(*args: str) -> str | None:
-    return command_output(["git", "-C", str(REPO), *args])
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPO), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def gsc_informational_version(gsc: Path) -> str | None:
@@ -266,8 +277,11 @@ def incomparability_reasons(
     if not any(start_environment["power"].values()):
         reasons.append("the host exposes no observable power-state identity")
     for mode, counts in processor_counts.items():
-        if not runtime_versions.get(mode):
+        versions = runtime_versions.get(mode, [])
+        if not versions:
             reasons.append(f"{mode} did not report its runtime version")
+        elif len(versions) > 1:
+            reasons.append(f"{mode} reported different runtime versions across launches: {versions}")
         if not counts:
             reasons.append(f"{mode} did not report its processor count")
         elif len(counts) > 1:
@@ -343,9 +357,10 @@ def make_fingerprint(
             )
         } if go_binary else None,
     }
+    git_status = git_value("status", "--porcelain")
     build = {
         "gitCommit": git_value("rev-parse", "HEAD"),
-        "gitDirty": bool(git_value("status", "--porcelain")),
+        "gitDirty": None if git_status is None else bool(git_status),
         "gscInformationalVersion": gsc_informational_version(gsc),
         "artifacts": {
             "gsc": sha256(gsc),
@@ -508,6 +523,11 @@ def measure_modes(
     launches: int,
 ) -> tuple[dict[str, dict[str, list[float]]], dict[str, list[str]], dict[str, list[int]], list[list[str]]]:
     """Rotate launch order so a drifting host does not consistently favor one runtime."""
+    if launches % len(specs) != 0:
+        raise SystemExit(
+            f"--launches must be divisible by the {len(specs)} measured modes "
+            "so each mode occupies every launch position equally"
+        )
     samples = {spec["name"]: {} for spec in specs}
     runtime_versions = {spec["name"]: [] for spec in specs}
     processor_counts = {spec["name"]: [] for spec in specs}
@@ -858,7 +878,7 @@ def complete_baseline_results(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--launches", type=int, default=7, help="process launches per side (default 7)")
+    parser.add_argument("--launches", type=int, default=6, help="process launches per side (default 6)")
     parser.add_argument("--scenario", help="run one scenario instead of all of them")
     parser.add_argument("--go", action="store_true", help="also run the Go side and report the ratio")
     parser.add_argument(

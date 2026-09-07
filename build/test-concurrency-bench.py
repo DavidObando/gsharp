@@ -45,6 +45,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "COMPlus_TC_CallCountingDelayMs": "999",
             "COMPlus_JitStress": "2",
             "COMPLUS_READYTORUN": "0",
+            "DOTNET_ALTJIT": "clrjit_unstable",
         }
 
         configured, removed = bench.clean_runtime_environment(original, pinned=True)
@@ -59,6 +60,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual("999", removed["COMPlus_TC_CallCountingDelayMs"])
         self.assertEqual("2", removed["COMPlus_JitStress"])
         self.assertEqual("0", removed["COMPLUS_READYTORUN"])
+        self.assertEqual("clrjit_unstable", removed["DOTNET_ALTJIT"])
         self.assertEqual("0", original["DOTNET_TIEREDCOMPILATION"])
 
     def test_raw_launch_samples_survive_summary_and_aggregation(self) -> None:
@@ -96,7 +98,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             mock.patch.object(bench.platform, "machine", return_value="x86_64"),
             mock.patch.object(bench.os, "cpu_count", return_value=2),
             mock.patch.object(bench, "command_output", side_effect=["10.0.400", "go1.27"]),
-            mock.patch.object(bench, "git_value", side_effect=["commit", None]),
+            mock.patch.object(bench, "git_value", side_effect=["", "commit"]),
             mock.patch.object(bench, "gsc_informational_version", return_value="0.4.test"),
             mock.patch.object(bench, "sha256", side_effect=lambda path: hashes.get(path.name)),
         ):
@@ -133,6 +135,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
+        self.assertFalse(fingerprint["build"]["gitDirty"])
         self.assertEqual("1", fingerprint["comparison"]["runtimeEnvironment"]["COMPLUS_GCSERVER"])
         self.assertNotEqual(fingerprint["comparisonKey"], fingerprint["aggregationKey"])
         self.assertEqual(1, fingerprint["comparison"]["wholeRuns"])
@@ -289,18 +292,27 @@ class ConcurrencyBenchTests(unittest.TestCase):
         reasons = bench.incomparability_reasons(
             start,
             start,
-            {"gsharp": ["10.0.11"]},
+            {"gsharp": ["10.0.11", "10.0.12"]},
             {"gsharp": [2, 4]},
         )
 
         self.assertIn("the host exposes no observable power-state identity", reasons)
+        self.assertTrue(any("different runtime versions" in reason for reason in reasons))
         self.assertTrue(any("different processor counts" in reason for reason in reasons))
 
         with (
-            mock.patch.object(bench.os, "getloadavg", side_effect=AttributeError),
+            mock.patch.object(bench.os, "getloadavg", side_effect=AttributeError, create=True),
             mock.patch.object(bench, "power_state", return_value=start["power"]),
         ):
             self.assertIsNone(bench.environment_sample()["loadAverage"])
+
+    def test_git_state_distinguishes_clean_from_unavailable(self) -> None:
+        clean = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(bench.subprocess, "run", return_value=clean):
+            self.assertEqual("", bench.git_value("status", "--porcelain"))
+
+        with mock.patch.object(bench.subprocess, "run", side_effect=OSError):
+            self.assertIsNone(bench.git_value("status", "--porcelain"))
 
     def test_each_launch_must_emit_its_expected_rows(self) -> None:
         spec = {"name": "gsharp", "expectedRows": {"buf64", "select-ready"}}
@@ -312,6 +324,9 @@ class ConcurrencyBenchTests(unittest.TestCase):
         header = bench.GO_RUNTIME_ROW.match("go=go1.27.0 numcpu=18 gomaxprocs=6")
         self.assertIsNotNone(header)
         self.assertEqual("6", header["cores"])
+
+        with self.assertRaisesRegex(SystemExit, "divisible by the 2 measured modes"):
+            bench.measure_modes([{"name": "a"}, {"name": "b"}], 3)
 
     def test_dashboard_accepts_additive_result_schema(self) -> None:
         results = SCRATCH / "results.json"

@@ -38,7 +38,7 @@ on:
       launches:
         description: 'Process launches per side'
         required: false
-        default: '7'
+        default: '6'
   pull_request:
     types: [labeled, synchronize]
 
@@ -105,7 +105,7 @@ jobs:
           for pass in 1 2 3; do
             echo "::group::pass $pass"
             python3 build/run-concurrency-bench.py \
-              --launches "${{ github.event.inputs.launches || '7' }}" \
+              --launches "${{ github.event.inputs.launches || '6' }}" \
               --go \
               --aot \
               --json "$RUNNER_TEMP/concurrency-$pass.json"

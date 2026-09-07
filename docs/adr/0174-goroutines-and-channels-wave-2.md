@@ -3343,10 +3343,11 @@ implementation had to refine it.
     per-run medians survive aggregation, so a shifted or bimodal distribution
     remains inspectable. JIT, NativeAOT and Go launches rotate order when they
     are measured together, preventing a warming or drifting host from always
-    favoring the same runtime. Since the baseline carries one global comparison
-    identity, only a complete JIT + NativeAOT + Go suite may update it; partial
-    runs remain valid for reporting. Recording and checking use the same
-    three-run aggregate and range-of-run-medians interval. A scoped paired run
+    favoring the same runtime; launch counts must complete whole rotation
+    cycles. Since the baseline carries one global comparison identity, only a
+    complete JIT + NativeAOT + Go suite may update it; partial runs remain valid
+    for reporting. Recording and checking use the same three-run aggregate and
+    range-of-run-medians interval. A scoped paired run
     selects and warms the matching Go row rather than running Go's whole suite;
     a row with no honest Go counterpart omits Go. A host that exposes no
     power-state identity is explicitly report-only. The existing `gsharp`,

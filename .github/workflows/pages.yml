@@ -85,7 +85,7 @@ jobs:
         continue-on-error: true
         run: |
           dotnet build src/Sdk/Gsharp.Extensions --configuration Release
-          python3 build/run-concurrency-bench.py --launches 5 --go             --json "$RUNNER_TEMP/concurrency.json"
+          python3 build/run-concurrency-bench.py --launches 6 --go             --json "$RUNNER_TEMP/concurrency.json"
       - name: Generate quality dashboard data
         if: github.event_name != 'pull_request'
         run: |

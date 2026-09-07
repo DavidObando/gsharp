@@ -144,7 +144,9 @@ spike:
    it is re-recorded. A single run whose environment changed remains loadable
    for diagnosis, but cannot aggregate, update a baseline, or gate. When Go is
    requested, JIT/AOT/Go launch order rotates on each sample so a warming or
-   drifting host cannot consistently favor one side.
+   drifting host cannot consistently favor one side. The launch count must
+   complete whole rotation cycles; the default six launches balances both the
+   two-mode and three-mode forms.
    A baseline update and its checks require three full `--go --aot` runs
    aggregated with `--from-json`, without `--scenario`; a partial or single run
    may report, but cannot relabel untouched rows or gate with a different
