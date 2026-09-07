@@ -435,6 +435,43 @@ no consumer and cannot regress anything.
 | 8 | Repo adoption | `gsfmt -w` over hand-written `.gs`; CI `gsfmt --check`. | `gsfmt --check` in CI |
 | 9 | The other 62 | 9a: cs2gs preserves doc-comment line structure (−32). 9b: backtick-safe raw strings — split a literal containing a backtick into concatenation, as Go does (−30, not −61: see the correction above). **DONE, #3950**, measured 631 → 565 locally. | — |
 
+> **Correction (Phase 6 completion, #4093/#4094).** Every phase-6 inventory in
+> this ADR — the 537 wrappable lines, the 317/173 split between 6a and 6b — was
+> measured on `GSharpPrinter`'s output, *before* the gsfmt post-pass. Re-measured
+> on the same corpus with the post-pass on (3,873 `.gs` files,
+> `cs2gs migrate --translate-only`), the picture is different in kind, not just
+> in size:
+>
+> | | printer only | gsfmt, before #4093 | gsfmt, after #4094 |
+> |---|---:|---:|---:|
+> | lines >300 (reducible) | 437 | 29 | **1** |
+> | lines >300 (total) | 580 | 66 | **37** |
+> | files gsfmt refuses to format | – | 29 | **0** |
+> | files not idempotent | – | 111 | **0** |
+>
+> The breaks themselves — argument lists, collection and object literals,
+> `&&`/`||`/`+` chains, and if-expressions, which the plan lists as unplanned but
+> which fall out of the brace layout — were already working when phase 6 was
+> declared done. What was not working was **D4 failing soft**: three spacing
+> rules and one break rule produced G# the parser reads as a different program,
+> so 29 files silently kept the printer's layout, and those 29 files held **28 of
+> the 29 remaining reducible long lines**. The lesson generalises: a fail-soft
+> formatter reports a defect as "no wrapping happened here", so the round-trip
+> rejection count is the metric to watch, not only the line count.
+>
+> Two gaps in the phase-1 newline-significance surface were found this way and
+> are handled in the layout builder rather than in `SyntaxFacts`, because both
+> need the parent node that a two-token predicate does not have:
+> `Parser.Expressions.Creation.cs:1567` (a collection initializer's first element
+> must share the brace's line) and the fact that `IsBreakLegalBetween`'s refusal
+> to break before `(`/`{`/`*` is about what follows an *expression*, and does not
+> apply after a comma or a binary operator.
+>
+> Phase 6b's scope also needed widening in one place the plan did not anticipate:
+> G# spells pattern disjunction as the contextual identifiers `or`/`and` rather
+> than as operator tokens, so `case A or B or C:` had no break point at all and
+> could not be reached by any `SyntaxKind`-keyed rule.
+
 **Implementation note (September 5, 2026):** phases 1–6, 7a, and 8 were
 implemented when the ADR was accepted. The formatter library, CLI,
 language-server/SDK integration, repository rewrite, and CI gate are active;
