@@ -62,13 +62,8 @@ public sealed class Issue4080ForClauseBraceExpressionParserTests
         Assert.IsType<BlockStatementSyntax>(statement.Body);
     }
 
-    private static IEnumerable<SyntaxNode> Descendants(SyntaxNode? node)
+    private static IEnumerable<SyntaxNode> Descendants(SyntaxNode node)
     {
-        if (node == null)
-        {
-            yield break;
-        }
-
         foreach (var child in node.GetChildren())
         {
             yield return child;
