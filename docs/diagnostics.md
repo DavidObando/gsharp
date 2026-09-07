@@ -174,7 +174,7 @@ reported as [GS9305](#analyzer-host-diagnostics-gs9300gs9319-reserved).
 | GS0182 | Error | Method is overridable; `override` required. | Redefining an `open` method without the `override` keyword. |
 | GS0183 | Error | No matching open base method for `override`. | `override` keyword present but no base class defines a matching open method. |
 | GS0184 | Error | Cannot override a non-open base method. | `override` targets a method that was not declared `open`. |
-| GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. |
+| GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. Also an `override` property whose by-ref return does not match the base slot's (issue #3879): `ref` may only override `ref`, and by-value only by-value. |
 | GS0186 | Error | _(historical — removed)_ Interface method may not have a body. | Default-interface methods are now supported (see GS0318–GS0321). |
 | GS0187 | Error | Class or struct does not implement interface method. | A class or struct claims to implement an interface but a required method is absent. |
 | GS0188 | Error | Class or struct cannot implement a sealed interface from a different package. | A class or struct implements a `sealed interface` defined outside its package. |

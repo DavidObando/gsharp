@@ -1672,6 +1672,17 @@ internal sealed partial class DeclarationBinder
                         {
                             Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName);
                         }
+                        else if (baseProp.ReturnRefKind != propReturnRefKind)
+                        {
+                            // Issue #3879: a source base property is selected by
+                            // NAME here, so without this the ref-kind never
+                            // participated — `override prop P ref T` bound
+                            // happily to a by-value base slot, and the override
+                            // then returned a managed pointer through a slot the
+                            // caller reads by value. The two directions are both
+                            // wrong and both report the same signature mismatch.
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
+                        }
                         else
                         {
                             overriddenProperty = baseProp;
@@ -1688,7 +1699,8 @@ internal sealed partial class DeclarationBinder
                             hasSetter,
                             getterAccessibility,
                             setterAccessibility,
-                            binderCtx.References);
+                            binderCtx.References,
+                            propReturnRefKind);
                         if (externalMatch.Member != null)
                         {
                             externalOverriddenProperty = externalMatch.Member;

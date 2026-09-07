@@ -309,9 +309,33 @@ repeating it after the arrow would be pure noise. There is exactly one spelling:
 | --- | --- | --- |
 | `prop Slot ref int32` (auto-property) | GS0578 | A by-ref return must name the storage it aliases. An auto-property's getter copies out of a compiler-synthesized backing field, so `ref` would silently alias the *field*. #3878's GS0219 sweep found that the auto-property backing-field path is exactly where by-ref hazards concentrate. |
 | `prop Slot ref int32 { get }` (bodiless) | GS0578 | Same rule: an abstract slot or a read-only auto-property names no storage. |
-| `interface I { prop Slot ref int32 { get } }` | GS0578 | An interface member is a slot, not storage. G# has no ref-kind matching for property slots (GS0255 covers *methods* only), so an implementor could satisfy a `ref` requirement with a copy-returning property and nothing would catch it. Rejected rather than accepted-and-unchecked. A default-bodied interface accessor is rejected for the same reason — an override of it would be unchecked. |
+| `interface I { prop Slot ref int32 { get } }` | GS0578 | An interface member is a slot, not storage: the requirement names nothing to alias. An implementor would also be unchecked — the ref-kind matching described below covers CLASS overrides, not interface satisfaction. Rejected rather than accepted-and-unchecked. A default-bodied interface accessor is rejected for the same reason. |
 | a `set` / `init` accessor alongside `ref` | GS0579 | The returned reference *is* the write path; a setter would be a second, contradictory one. C# spells the same rule CS8147. |
 | `prop P ref *int32` | GS0250 (reused) | `ref *T` is redundant — the same rule a ref-returning `func` gets. |
+
+**The by-ref return participates in override matching.** It is part of a
+property's signature, not a decoration on it, so `override prop P ref T` matches a
+base slot only when that slot is itself `ref` — and a by-value override may not
+take over a `ref` base slot either. Both directions report **GS0185** (override
+signature mismatch), the same diagnostic a mismatched return type gets. This holds
+on both lookup paths: a same-compilation base property (found by name, so the
+ref-kind is compared explicitly) and an imported CLR base property (whose
+`PropertyType` reports `T&`, so the ref-kind is compared and the *pointee* is what
+gets matched against the declared type). Without this, a `ref` override bound
+silently to a by-value base slot and then returned a managed pointer through a slot
+every caller reads by value; symmetrically, a genuine override of an external
+by-ref property could never match, because `T&` is never equal to `T`. Methods
+already did this — `ExternalClrOverrideResolver.FindMethod` has taken a
+`returnRefKind` since #490 — so this brings properties into line rather than
+inventing a rule.
+
+**cs2gs carries the concrete-only restriction.** C# permits abstract and
+interface-declared `ref` properties and indexers, which the table above rejects, so
+the translator reports them as unsupported at the *declaration* rather than
+emitting G# that gsc then refuses. A translate-stage gap is local and names the
+construct; a compile-stage failure several steps downstream does not. This is the
+same reasoning that made the whole-member gap the right interim answer in #3839 /
+PR #3878.
 
 Everything else about a ref-returning getter is the **existing** GS0248–GS0255
 surface, unchanged and un-duplicated: the accessor body is bound with the getter's

@@ -222,6 +222,110 @@ public sealed class Issue3879RefReturningPropertyTranslationTests
     }
 
     /// <summary>
+    /// C# allows an ABSTRACT <c>ref</c> property; gsc does not, because a slot
+    /// names nothing to alias and G# has no ref-kind matching for property slots
+    /// (GS0578). The difference has to surface HERE, as a translate-stage gap —
+    /// emitting `prop P ref T` and letting gsc refuse it turns a local, loud
+    /// answer into a compile failure several steps downstream, which is the
+    /// failure mode #3839/#3878 established this gap to avoid.
+    /// </summary>
+    [Fact]
+    public void AbstractRefProperty_StaysLoudGap()
+    {
+        Assert.Contains(
+            Diagnose("""
+                namespace Repro
+                {
+                    public abstract class Holder
+                    {
+                        public abstract ref int Property { get; }
+                    }
+                }
+                """),
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("abstract or declared on an interface", StringComparison.Ordinal));
+    }
+
+    /// <summary>The interface form of the same concrete-only restriction.</summary>
+    [Fact]
+    public void InterfaceRefProperty_StaysLoudGap()
+    {
+        Assert.Contains(
+            Diagnose("""
+                namespace Repro
+                {
+                    public interface IHolder
+                    {
+                        ref int Property { get; }
+                    }
+                }
+                """),
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("abstract or declared on an interface", StringComparison.Ordinal));
+    }
+
+    /// <summary>The abstract indexer form.</summary>
+    [Fact]
+    public void AbstractRefIndexer_StaysLoudGap()
+    {
+        Assert.Contains(
+            Diagnose("""
+                namespace Repro
+                {
+                    public abstract class Holder
+                    {
+                        public abstract ref int this[int index] { get; }
+                    }
+                }
+                """),
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("abstract or declared on an interface", StringComparison.Ordinal));
+    }
+
+    /// <summary>The interface indexer form.</summary>
+    [Fact]
+    public void InterfaceRefIndexer_StaysLoudGap()
+    {
+        Assert.Contains(
+            Diagnose("""
+                namespace Repro
+                {
+                    public interface IHolder
+                    {
+                        ref int this[int index] { get; }
+                    }
+                }
+                """),
+            d => d.Severity == TranslationSeverity.Unsupported
+                && d.Message.Contains("abstract or declared on an interface", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Anti-vacuity for the four gaps above: a CONCRETE ref property and indexer
+    /// on an ordinary class must still translate cleanly, so the new check cannot
+    /// have been written as a blanket refusal of every ref member.
+    /// </summary>
+    [Fact]
+    public void ConcreteRefMembers_StillTranslate()
+    {
+        Assert.DoesNotContain(
+            Diagnose("""
+                namespace Repro
+                {
+                    public class Holder
+                    {
+                        private readonly int[] values = new[] { 40, 41, 42 };
+
+                        public ref int Property => ref values[0];
+
+                        public ref int this[int index] => ref values[index];
+                    }
+                }
+                """),
+            d => d.Severity == TranslationSeverity.Unsupported);
+    }
+
+    /// <summary>
     /// Issue #1987's USE-site gap is lifted for a plain <c>ref</c> indexer: the
     /// declaration now translates, and gsc's emitter loads through the returned
     /// managed pointer at the read, so a plain index expression is the correct

@@ -2526,9 +2526,11 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #3879 (ADR-0060 amendment): a C# `ref` PROPERTY now HAS a
             // canonical G# form — `prop P ref T { get { return ref lvalue } }`
             // and its arrow sugar `prop P ref T -> lvalue`. gsc restricts it to
-            // the computed, read-only shapes, which is exactly the shape a C#
-            // ref-returning property always has (C# forbids a setter on one,
-            // CS8147), so the mapping is total. Before #3879 this gapped, which
+            // the computed, read-only shapes. The read-only half is free — C#
+            // forbids a setter on a ref property too (CS8147) — but the COMPUTED
+            // half is not: C# also allows abstract and interface `ref`
+            // properties, which gsc rejects, so the two gaps below carry the
+            // difference. Before #3879 this gapped entirely, which
             // was the right interim answer: the alternative was emitting an
             // ordinary `prop P T` that silently returns a COPY (issue #3839).
             //
@@ -2538,6 +2540,31 @@ public sealed partial class CSharpToGSharpTranslator
             // widening, which is the same class of quiet behaviour change the
             // copy-returning form was.
             bool isRefReturnProperty = symbol != null && symbol.ReturnsByRef;
+
+            // Issue #3879: gsc restricts the by-ref property to the CONCRETE,
+            // computed shapes — an abstract slot and an interface member (bodied
+            // default implementations included) are both rejected with GS0578,
+            // because neither names storage a reference can point at and G# has
+            // no ref-kind matching for property slots. C# permits both, so the
+            // mapping is NOT total and this is where the difference has to be
+            // reported. Without it cs2gs emitted `prop P ref T` that gsc then
+            // refused, turning a translate-stage gap into a compile-stage
+            // failure several steps downstream — the opposite of the loud,
+            // local answer #3839/#3878 established.
+            if (symbol != null
+                && symbol.ReturnsByRef
+                && !symbol.ReturnsByRefReadonly
+                && (symbol.IsAbstract || symbol.ContainingType?.TypeKind == TypeKind.Interface))
+            {
+                string abstractRefPropertyMessage =
+                    $"ref-returning property '{node.Identifier.Text}' is abstract or declared on an interface, which " +
+                    "has no G# form: G#'s by-ref property (issue #3879, ADR-0060 §14) is a concrete, computed-getter " +
+                    "form only, because a slot names nothing to alias and an implementor could satisfy a `ref` " +
+                    "requirement with a copy-returning property unchecked. A concrete `ref` property translates.";
+                this.context.ReportUnsupported(node, abstractRefPropertyMessage);
+                isRefReturnProperty = false;
+            }
+
             if (symbol != null && symbol.ReturnsByRefReadonly)
             {
                 string refReadonlyPropertyMessage =

@@ -2974,21 +2974,29 @@ internal sealed partial class DeclarationBinder
             return RefKind.None;
         }
 
-        if (!hasBodiedGetter)
-        {
-            Diagnostics.ReportRefPropertyRequiresComputedGetter(location, propertyName);
-            return RefKind.None;
-        }
-
-        // The bare auto-property form (`prop P ref T`, no accessor list) also
-        // implies a setter, but it never reaches here: it has no bodied getter
-        // either, and GS0578 above is the more informative of the two answers.
+        // An explicitly written `set` / `init` is answered FIRST, ahead of the
+        // computed-getter rule. Both rules can fire on one declaration — a
+        // setter-only `prop P ref T { set(v) { … } }` has a write accessor AND
+        // no bodied getter — and GS0579 is the more specific answer: it names
+        // the accessor the author actually wrote, whereas GS0578 would send
+        // them looking for a getter shape when the real defect is that a by-ref
+        // property cannot have a setter at all.
         if (writeAccessor != null)
         {
             Diagnostics.ReportRefPropertyCannotHaveSetter(
                 writeAccessor.AccessorKeyword.Location,
                 propertyName,
                 writeAccessor.AccessorKeyword.Text ?? "set");
+            return RefKind.None;
+        }
+
+        // The bare auto-property form (`prop P ref T`, no accessor list) also
+        // implies a setter, but it has no accessor OBJECT to point the GS0579
+        // message at — so it falls through to here, and GS0578 is both the only
+        // available answer and the more informative one.
+        if (!hasBodiedGetter)
+        {
+            Diagnostics.ReportRefPropertyRequiresComputedGetter(location, propertyName);
             return RefKind.None;
         }
 

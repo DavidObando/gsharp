@@ -342,6 +342,152 @@ public class Issue3879RefPropertyEmitTests
         }
     }
 
+    /// <summary>
+    /// The read-site dereference is owed by EVERY source-member call branch, not
+    /// only by the property access the rest of this file exercises. A plain
+    /// <c>func … ref T</c> binds to <c>BoundCallExpression</c>, a distinct emit
+    /// branch — and one that was left unguarded when this file was first
+    /// written: reverting its dereference passed all nine original tests. The
+    /// symptom is not a crash but a printed RAW ADDRESS, so the assertion has to
+    /// be on the value.
+    /// </summary>
+    [Fact]
+    public void RefReturningFunc_ReadFromGSharp_LoadsThroughThePointer()
+    {
+        const string Source = """
+            package Repro
+            import System
+
+            var storage []int32 = []int32{40, 41, 42}
+
+            func pickRef(index int32) ref int32 {
+                return ref storage[index]
+            }
+
+            Console.WriteLine(pickRef(0))
+            Console.WriteLine(pickRef(2))
+            """;
+
+        string output = CompileAndRun(Source, nameof(RefReturningFunc_ReadFromGSharp_LoadsThroughThePointer));
+
+        Assert.Equal(
+            new[] { "40", "42" },
+            output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Trim()).ToArray());
+    }
+
+    /// <summary>
+    /// <c>base.RefMethod()</c> and <c>base.RefProperty</c> bind to
+    /// <c>BoundBaseClassCallExpression</c> — a third emit branch, carrying
+    /// EITHER a method or a property accessor. Both arms owe the dereference and
+    /// neither had it, so a valid base call preserved the raw-address read this
+    /// issue exists to remove.
+    /// </summary>
+    [Fact]
+    public void BaseClassRefMembers_ReadFromGSharp_LoadThroughThePointer()
+    {
+        const string Source = """
+            package Repro
+            import System
+
+            open class Base {
+                var values []int32 = []int32{10, 11}
+
+                open prop First ref int32 { get { return ref values[0] } }
+
+                open func At(index int32) ref int32 { return ref values[index] }
+            }
+
+            class Derived : Base {
+                func ReadBaseProperty() int32 { return base.First }
+
+                func ReadBaseMethod() int32 { return base.At(1) }
+            }
+
+            var d = Derived{}
+            Console.WriteLine(d.ReadBaseProperty())
+            Console.WriteLine(d.ReadBaseMethod())
+            """;
+
+        string output = CompileAndRun(Source, nameof(BaseClassRefMembers_ReadFromGSharp_LoadThroughThePointer));
+
+        Assert.Equal(
+            new[] { "10", "11" },
+            output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => line.Trim()).ToArray());
+    }
+
+    /// <summary>
+    /// GS0579, not GS0578. A setter-only <c>ref</c> property breaks both rules at
+    /// once — it has a write accessor AND no computed getter — and the write
+    /// accessor is the more specific answer, because it names the accessor the
+    /// author actually wrote instead of sending them after a getter shape.
+    /// </summary>
+    [Fact]
+    public void SetterOnlyRefProperty_ReportsGS0579()
+    {
+        AssertRejected(
+            """
+            package Repro
+            public class Holder {
+                private var x int32 = 1
+                public prop P ref int32 { set(v) { x = v } }
+            }
+            """,
+            "GS0579",
+            nameof(SetterOnlyRefProperty_ReportsGS0579));
+    }
+
+    /// <summary>
+    /// The by-ref return is part of a property's signature, so it has to
+    /// participate in override matching. A source base property is found by NAME
+    /// alone, so without the ref-kind comparison a <c>ref</c> override bound
+    /// happily to a by-value base slot — and then returned a managed pointer
+    /// through a slot every caller reads by value.
+    /// </summary>
+    [Fact]
+    public void RefOverrideOfByValueBaseProperty_ReportsGS0185()
+    {
+        AssertRejected(
+            """
+            package Repro
+            open class Base {
+                var slot int32 = 1
+                public open prop P int32 -> slot
+            }
+
+            class Derived : Base {
+                var own int32 = 2
+                public override prop P ref int32 { get { return ref own } }
+            }
+            """,
+            "GS0185",
+            nameof(RefOverrideOfByValueBaseProperty_ReportsGS0185));
+    }
+
+    /// <summary>
+    /// The opposite direction of <see cref="RefOverrideOfByValueBaseProperty_ReportsGS0185"/>:
+    /// a by-value override must not silently take over a <c>ref</c> base slot
+    /// either, or callers holding the base contract lose the alias.
+    /// </summary>
+    [Fact]
+    public void ByValueOverrideOfRefBaseProperty_ReportsGS0185()
+    {
+        AssertRejected(
+            """
+            package Repro
+            open class Base {
+                var slot int32 = 1
+                public open prop P ref int32 { get { return ref slot } }
+            }
+
+            class Derived : Base {
+                var own int32 = 2
+                public override prop P int32 -> own
+            }
+            """,
+            "GS0185",
+            nameof(ByValueOverrideOfRefBaseProperty_ReportsGS0185));
+    }
+
     private static Type LoadHolder(AssemblyLoadContext loadContext, string libraryPath)
     {
         Assembly library = loadContext.LoadFromAssemblyPath(libraryPath);

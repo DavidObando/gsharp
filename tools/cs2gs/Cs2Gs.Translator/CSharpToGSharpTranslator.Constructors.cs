@@ -194,6 +194,25 @@ public sealed partial class CSharpToGSharpTranslator
             // lvalue } }` and its arrow sugar. See the twin comment in
             // TranslateProperty for why `ref readonly` still gaps.
             bool isRefReturnIndexer = symbol != null && symbol.ReturnsByRef;
+
+            // Issue #3879: the twin of the abstract/interface gap in
+            // TranslateProperty — gsc's by-ref form is concrete-only, so an
+            // abstract or interface-declared `ref` indexer must gap HERE rather
+            // than be emitted and refused later by gsc's GS0578.
+            if (symbol != null
+                && symbol.ReturnsByRef
+                && !symbol.ReturnsByRefReadonly
+                && (symbol.IsAbstract || symbol.ContainingType?.TypeKind == TypeKind.Interface))
+            {
+                string abstractRefIndexerMessage =
+                    "ref-returning indexer is abstract or declared on an interface, which has no G# form: G#'s by-ref " +
+                    "property (issue #3879, ADR-0060 §14) is a concrete, computed-getter form only, because a slot " +
+                    "names nothing to alias and an implementor could satisfy a `ref` requirement with a copy-returning " +
+                    "indexer unchecked. A concrete `ref` indexer translates.";
+                this.context.ReportUnsupported(node, abstractRefIndexerMessage);
+                isRefReturnIndexer = false;
+            }
+
             if (symbol != null && symbol.ReturnsByRefReadonly)
             {
                 string refReadonlyIndexerMessage =

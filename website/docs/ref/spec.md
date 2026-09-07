@@ -603,8 +603,10 @@ Inside the getter, the existing `ref`-return rules apply unchanged: the body mus
 `return ref <lvalue>` (GS0252 for a plain `return`, GS0253 for a non-lvalue,
 GS0254 for a getter-local). A G# *read* of such a member loads through the
 returned pointer and observes the pointee, exactly as a read of an imported
-ref-returning member does; G# itself cannot bind the result as an alias. See
-ADR-0060 §14.
+ref-returning member does; G# itself cannot bind the result as an alias. The
+by-ref return is part of the signature for override purposes: `override prop P
+ref T` matches only a `ref` base slot, and a by-value override may not take over
+a `ref` one — both mismatches report **GS0185**. See ADR-0060 §14.
 
 #### Protected accessibility
 
