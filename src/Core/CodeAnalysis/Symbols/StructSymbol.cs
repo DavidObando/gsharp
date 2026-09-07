@@ -2114,12 +2114,18 @@ public sealed class StructSymbol : TypeSymbol
             var builder = ImmutableArray.CreateBuilder<ParameterSymbol>(source.Length);
             foreach (var parameter in source)
             {
-                builder.Add(new ParameterSymbol(
+                var substituted = new ParameterSymbol(
                     parameter.Name,
                     SubstituteTypeForConstruction(parameter.Type, GetSubstitutionMap(), mapClrType),
                     isVariadic: parameter.IsVariadic,
                     isScoped: parameter.IsScoped,
-                    refKind: parameter.RefKind));
+                    refKind: parameter.RefKind);
+                if (parameter.HasExplicitDefaultValue)
+                {
+                    substituted.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
+                }
+
+                builder.Add(substituted);
             }
 
             value = builder.MoveToImmutable();
