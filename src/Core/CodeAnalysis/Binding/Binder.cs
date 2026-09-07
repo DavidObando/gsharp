@@ -7303,22 +7303,26 @@ public sealed class Binder
         }
 
         // Constraint propagation: follow both ordinary class constraints and
-        // #4043's separate dependent-bound slot. The walk is bounded so a
-        // malformed symbol cannot hang the binder.
-        for (var steps = 0; steps < 64 && typeArgument is TypeParameterSymbol tpArg; steps++)
-        {
-            var next = tpArg.ClassConstraint ?? tpArg.TypeParameterBound;
-            if (next == null)
-            {
-                return false;
-            }
-
-            typeArgument = next;
-        }
-
+        // #4043's separate dependent-bound slot. Reference-identity tracking
+        // protects against malformed cycles without limiting valid chain depth.
         if (typeArgument is TypeParameterSymbol)
         {
-            return false;
+            var visited = new HashSet<TypeParameterSymbol>(ReferenceEqualityComparer.Instance);
+            while (typeArgument is TypeParameterSymbol tpArg)
+            {
+                if (!visited.Add(tpArg))
+                {
+                    return false;
+                }
+
+                var next = tpArg.ClassConstraint ?? tpArg.TypeParameterBound;
+                if (next == null)
+                {
+                    return false;
+                }
+
+                typeArgument = next;
+            }
         }
 
         if (classConstraint is StructSymbol classDef)
