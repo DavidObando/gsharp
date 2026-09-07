@@ -6928,10 +6928,26 @@ public sealed class Binder
                 || TypeSymbol.ContainsTypeParameter(typeArgument);
         }
 
-        if (boundArgument.ClrType is { IsInterface: true })
+        if (boundArgument.ClrType is { IsInterface: true } boundInterfaceClr)
         {
-            return SatisfiesClrInterfaceConstraint(typeArgument, boundArgument, tp)
-                || TypeSymbol.ContainsTypeParameter(typeArgument);
+            if (SatisfiesClrInterfaceConstraint(typeArgument, boundArgument, tp))
+            {
+                return true;
+            }
+
+            // Review finding (#4068): a SAME-COMPILATION class or struct that
+            // implements the bound interface directly has no CLR type of its
+            // own, so `SatisfiesClrInterfaceConstraint` returned false without
+            // ever reading the symbol's declared interfaces — rejecting
+            // `Take[IDisposable, D]` for `class D : IDisposable`, which is a
+            // GS0152 on a legal program. Ask the symbol.
+            if (typeArgument.ClrType is null
+                && SourceSymbolImplementsImportedInterface(typeArgument, boundArgument, boundInterfaceClr))
+            {
+                return true;
+            }
+
+            return TypeSymbol.ContainsTypeParameter(typeArgument);
         }
 
         if (SatisfiesClassConstraint(typeArgument, boundArgument))
@@ -6942,6 +6958,170 @@ public sealed class Binder
         // Indeterminate: an open instantiation has no closed answer to give.
         return TypeSymbol.ContainsTypeParameter(typeArgument)
             || TypeSymbol.ContainsTypeParameter(boundArgument);
+    }
+
+    /// <summary>
+    /// Review finding (#4068): returns <see langword="true"/> when a
+    /// SAME-COMPILATION symbol implements the imported interface a dependent
+    /// bound names. Such a symbol has no CLR type while binding, so the
+    /// reflective path cannot see its interface list at all.
+    /// </summary>
+    /// <remarks>
+    /// A GENERIC bound is compared on the SYMBOLIC arguments, through the same
+    /// walk <c>ClrOverloadResolution</c> uses for the imported-definition side
+    /// of this repair — so <c>class Impl : IDep[Bee]</c> does NOT satisfy a
+    /// bound of <c>IDep[A]</c>, even though both project to the identical
+    /// erased <c>IDep&lt;object&gt;</c>. A NON-generic bound has no arguments
+    /// to disagree about and is answered by the declared-interface walk.
+    /// </remarks>
+    /// <param name="typeArgument">The same-compilation type argument.</param>
+    /// <param name="boundArgument">The bound, as a symbol.</param>
+    /// <param name="boundInterfaceClr">The bound's CLR interface type.</param>
+    /// <returns><see langword="true"/> when the symbol implements the bound.</returns>
+    private static bool SourceSymbolImplementsImportedInterface(
+        TypeSymbol typeArgument,
+        TypeSymbol boundArgument,
+        Type boundInterfaceClr)
+    {
+        Type openDefinition;
+        try
+        {
+            openDefinition = boundInterfaceClr.IsGenericType
+                ? boundInterfaceClr.GetGenericTypeDefinition()
+                : boundInterfaceClr;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        var expected = boundArgument is ImportedTypeSymbol importedBound
+            ? importedBound.TypeArguments
+            : ImmutableArray<TypeSymbol>.Empty;
+
+        foreach (var implemented in EnumerateDeclaredClrInterfaces(typeArgument))
+        {
+            // A NON-generic bound has no arguments to disagree about, so
+            // reaching the interface at all is the whole answer — and reaching
+            // it includes reaching it through a derived one (`IList` gives
+            // `IEnumerable`). This is the `class D : IDisposable` case.
+            if (expected.IsDefaultOrEmpty)
+            {
+                if (implemented.ClrType is { } implementedClr
+                    && ClrTypeUtilities.IsAssignableByName(boundInterfaceClr, implementedClr))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            // A GENERIC bound is decided on the SYMBOLIC arguments, so
+            // `class Impl : IDep[Bee]` does not satisfy a bound of `IDep[A]`
+            // even though both project to the identical erased
+            // `IDep<object>` — the same distinction the imported-definition
+            // half of this repair makes.
+            if (implemented is not ImportedTypeSymbol importedInterface
+                || importedInterface.OpenDefinition is not { } implementedOpen
+                || !string.Equals(
+                    implementedOpen.FullName ?? implementedOpen.Name,
+                    openDefinition.FullName ?? openDefinition.Name,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var actual = importedInterface.TypeArguments;
+            if (actual.IsDefaultOrEmpty || actual.Length != expected.Length)
+            {
+                continue;
+            }
+
+            var allMatch = true;
+            for (var i = 0; i < expected.Length; i++)
+            {
+                if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual[i], expected[i]))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+
+            if (allMatch)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the imported CLR interfaces a same-compilation
+    /// symbol declares — directly, through its base chain, and through the
+    /// G#-declared interfaces it implements. Each is a CLOSED symbolic
+    /// construction, so its type arguments still tell two same-compilation
+    /// classes apart after the CLR projection has collapsed both to
+    /// <c>object</c>.
+    /// </summary>
+    /// <param name="symbol">The same-compilation symbol.</param>
+    /// <returns>The CLR interface symbols it declares.</returns>
+    private static IEnumerable<TypeSymbol> EnumerateDeclaredClrInterfaces(TypeSymbol symbol)
+    {
+        if (symbol is StructSymbol aggregate)
+        {
+            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
+            {
+                foreach (var implemented in current.ImplementedClrInterfaces)
+                {
+                    if (implemented != null)
+                    {
+                        yield return implemented;
+                    }
+                }
+
+                foreach (var userInterface in current.Interfaces)
+                {
+                    foreach (var projection in EnumerateInterfaceClrBases(userInterface))
+                    {
+                        yield return projection;
+                    }
+                }
+            }
+        }
+
+        if (symbol is InterfaceSymbol declaredInterface)
+        {
+            foreach (var projection in EnumerateInterfaceClrBases(declaredInterface))
+            {
+                yield return projection;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the imported interfaces a G#-declared interface
+    /// and its base interfaces extend.
+    /// </summary>
+    /// <param name="userInterface">The declared interface.</param>
+    /// <returns>The imported constructions it carries.</returns>
+    private static IEnumerable<TypeSymbol> EnumerateInterfaceClrBases(InterfaceSymbol? userInterface)
+    {
+        if (userInterface == null)
+        {
+            yield break;
+        }
+
+        foreach (var candidate in userInterface.SelfAndAllBaseInterfaces())
+        {
+            foreach (var importedBase in candidate.BaseClrInterfaces)
+            {
+                if (importedBase != null)
+                {
+                    yield return importedBase;
+                }
+            }
+        }
     }
 
     /// <summary>

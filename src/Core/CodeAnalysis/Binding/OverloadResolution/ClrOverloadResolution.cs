@@ -5516,7 +5516,13 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        var verdict = MatchDependentShape(rawConstraint, argSymbol, typeParams, typeArgSymbols, depth: 0);
+        var verdict = MatchDependentShape(
+            rawConstraint,
+            argSymbol,
+            typeParams,
+            typeArgSymbols,
+            atTopOfBound: true,
+            shapePath: new List<string>());
         if (verdict == DependentShapeIndeterminate)
         {
             return false;
@@ -5537,16 +5543,33 @@ internal static class ClrOverloadResolution
     /// <param name="actual">The symbol that fragment must match.</param>
     /// <param name="typeParams">The definition's own generic parameters.</param>
     /// <param name="typeArgSymbols">The recovered symbolic type arguments.</param>
-    /// <param name="depth">Recursion depth; a malformed metadata cycle cannot hang the binder.</param>
+    /// <param name="atTopOfBound">
+    /// Whether this is the bound's outermost position. The relation there is
+    /// ASSIGNABILITY, not the invariant identity that is correct at an argument
+    /// position, so a bare type parameter at the top declines to answer. This
+    /// is load-bearing and was measured: with it removed, the legal
+    /// <c>Chain[ChBase, ChDerived]</c> fails with a false <c>GS0152</c>.
+    /// </param>
+    /// <param name="shapePath">
+    /// The printed forms of the shape fragments on the path from the bound's root to this node.
+    /// Review finding (#4068): the previous form of this method stopped at a
+    /// fixed depth of eight, which silently turned a legal deeply nested bound
+    /// into an indeterminate answer and handed it to the erased comparison —
+    /// the very hole this check exists to close, measured at nine levels.
+    /// Recursion is bounded by CYCLE detection on this path instead, which
+    /// terminates on malformed metadata without capping legal signatures: a
+    /// well-formed shape tree is finite and strictly shrinks at every step.
+    /// </param>
     /// <returns>One of the three <c>DependentShape*</c> verdicts.</returns>
     private static int MatchDependentShape(
         Type? shape,
         TypeSymbol? actual,
         Type[] typeParams,
         ImmutableArray<TypeSymbol?> typeArgSymbols,
-        int depth)
+        bool atTopOfBound,
+        List<string> shapePath)
     {
-        if (shape is null || actual is null || depth > 8)
+        if (shape is null || actual is null)
         {
             return DependentShapeIndeterminate;
         }
@@ -5566,7 +5589,7 @@ internal static class ClrOverloadResolution
                 // arguments for identity would reject `Chain[Base, Derived]`
                 // outright. That is the imported analogue of #4043 and is left
                 // to the CLR comparison, which keeps its pre-#4041 answer.
-                if (depth == 0)
+                if (atTopOfBound)
                 {
                     return DependentShapeIndeterminate;
                 }
@@ -5616,25 +5639,58 @@ internal static class ClrOverloadResolution
                 return DependentShapeIndeterminate;
             }
 
-            var verdict = DependentShapeMatches;
-            for (var k = 0; k < shapeArguments.Length; k++)
+            // Review finding (#4068): terminate on an actual cycle rather than
+            // at an arbitrary depth. A repeat along THIS path is the only way
+            // the descent can fail to shrink; a fragment legitimately recurring
+            // at sibling positions (`IDictionary<IList<T>, IList<T>>`) is not a
+            // cycle and must still be compared.
+            // NOT `IsSameAs`: `Type.FullName` is NULL for an OPEN constructed
+            // generic, so that comparison reports every nested `List<...>` as
+            // the same type and fires a false cycle at the first argument —
+            // measured, it collapsed the catchable nesting from seven levels
+            // to one. The shape's printed form is well defined for open types
+            // and distinct per level, so it identifies a genuine repeat.
+            var shapeKey = shape.ToString();
+            foreach (var visited in shapePath)
             {
-                var inner = MatchDependentShape(
-                    shapeArguments[k], actualArguments[k], typeParams, typeArgSymbols, depth + 1);
-                if (inner == DependentShapeDiffers)
+                if (string.Equals(visited, shapeKey, StringComparison.Ordinal))
                 {
-                    return DependentShapeDiffers;
-                }
-
-                if (inner == DependentShapeIndeterminate)
-                {
-                    // Keep looking: another position may still disprove the
-                    // bound outright, which is a stronger answer than "unsure".
-                    verdict = DependentShapeIndeterminate;
+                    return DependentShapeIndeterminate;
                 }
             }
 
-            return verdict;
+            shapePath.Add(shapeKey);
+            try
+            {
+                var verdict = DependentShapeMatches;
+                for (var k = 0; k < shapeArguments.Length; k++)
+                {
+                    var inner = MatchDependentShape(
+                        shapeArguments[k],
+                        actualArguments[k],
+                        typeParams,
+                        typeArgSymbols,
+                        atTopOfBound: false,
+                        shapePath);
+                    if (inner == DependentShapeDiffers)
+                    {
+                        return DependentShapeDiffers;
+                    }
+
+                    if (inner == DependentShapeIndeterminate)
+                    {
+                        // Keep looking: another position may still disprove the
+                        // bound outright, which is a stronger answer than "unsure".
+                        verdict = DependentShapeIndeterminate;
+                    }
+                }
+
+                return verdict;
+            }
+            finally
+            {
+                shapePath.RemoveAt(shapePath.Count - 1);
+            }
         }
         catch (Exception ex) when (IsMetadataLoadFailure(ex))
         {
@@ -5695,23 +5751,120 @@ internal static class ClrOverloadResolution
     {
         arguments = Array.Empty<TypeSymbol?>();
 
-        var imported = symbol as ImportedTypeSymbol;
-        if (imported is null)
+        // Review finding (#4068): a source type reaches an imported open
+        // definition through EVERY imported projection it carries, not only
+        // through its imported BASE. `class Impl : IDep[Bee]` implements the
+        // imported generic interface DIRECTLY, and reading only
+        // `ImportedBaseType` returned "no symbolic answer" for it — after
+        // which the erased comparison saw `IDep<object>` on both sides and
+        // ACCEPTED `Coupled2[A, Impl]`, which the CLR then refused. That is
+        // this PR's own defect reached by a different route, so every
+        // projection is enumerated here.
+        foreach (var projection in EnumerateImportedProjections(symbol))
         {
-            // A same-compilation class carries its imported base symbolically;
-            // walk to it. The user portion of the chain cannot instantiate an
-            // imported open definition, so nothing is lost by skipping it.
-            for (var current = symbol as StructSymbol; current != null; current = current.BaseClass)
+            if (TryGetSymbolicInstantiationFromImported(projection, openDefinition, out arguments))
             {
+                return true;
+            }
+        }
+
+        arguments = Array.Empty<TypeSymbol?>();
+        return false;
+    }
+
+    /// <summary>
+    /// Review finding (#4068): every imported construction a symbol carries —
+    /// itself when it is imported, the CLR interfaces a source aggregate
+    /// implements directly, the imported bases of the user interfaces it
+    /// implements, and its own imported base chain. Each is a CLOSED symbolic
+    /// instantiation, so its <c>TypeArguments</c> still distinguish two
+    /// same-compilation classes that the CLR projection collapses.
+    /// </summary>
+    /// <param name="symbol">The symbol whose imported projections are wanted.</param>
+    /// <returns>The imported constructions, nearest first.</returns>
+    private static IEnumerable<ImportedTypeSymbol> EnumerateImportedProjections(TypeSymbol? symbol)
+    {
+        if (symbol is ImportedTypeSymbol self)
+        {
+            yield return self;
+        }
+
+        if (symbol is StructSymbol aggregate)
+        {
+            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
+            {
+                foreach (var implemented in current.ImplementedClrInterfaces)
+                {
+                    if (implemented is ImportedTypeSymbol importedInterface)
+                    {
+                        yield return importedInterface;
+                    }
+                }
+
+                foreach (var userInterface in current.Interfaces)
+                {
+                    foreach (var projection in EnumerateInterfaceProjections(userInterface))
+                    {
+                        yield return projection;
+                    }
+                }
+
                 if (current.ImportedBaseType is ImportedTypeSymbol importedBase)
                 {
-                    imported = importedBase;
-                    break;
+                    yield return importedBase;
                 }
             }
         }
 
-        if (imported?.OpenDefinition is not { } symbolOpenDefinition
+        if (symbol is InterfaceSymbol declaredInterface)
+        {
+            foreach (var projection in EnumerateInterfaceProjections(declaredInterface))
+            {
+                yield return projection;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the imported interfaces a G#-declared interface
+    /// and its base interfaces extend.
+    /// </summary>
+    /// <param name="userInterface">The declared interface, or <see langword="null"/>.</param>
+    /// <returns>The imported constructions it carries.</returns>
+    private static IEnumerable<ImportedTypeSymbol> EnumerateInterfaceProjections(InterfaceSymbol? userInterface)
+    {
+        if (userInterface == null)
+        {
+            yield break;
+        }
+
+        foreach (var candidate in userInterface.SelfAndAllBaseInterfaces())
+        {
+            foreach (var importedBase in candidate.BaseClrInterfaces)
+            {
+                if (importedBase is ImportedTypeSymbol projection)
+                {
+                    yield return projection;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the original single-projection walk, now applied
+    /// to each projection <see cref="EnumerateImportedProjections"/> yields.
+    /// </summary>
+    /// <param name="imported">One imported construction.</param>
+    /// <param name="openDefinition">The open generic definition sought.</param>
+    /// <param name="arguments">The recovered symbolic arguments, on success.</param>
+    /// <returns><see langword="true"/> when the instantiation was recovered.</returns>
+    private static bool TryGetSymbolicInstantiationFromImported(
+        ImportedTypeSymbol imported,
+        Type openDefinition,
+        out TypeSymbol?[] arguments)
+    {
+        arguments = Array.Empty<TypeSymbol?>();
+        if (imported.OpenDefinition is not { } symbolOpenDefinition
             || imported.TypeArguments.IsDefaultOrEmpty)
         {
             return false;

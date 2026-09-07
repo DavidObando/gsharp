@@ -272,6 +272,67 @@ public class Issue4043DependentTypeParameterConstraintTests
             new[] { "iface" },
         };
 
+        // REVIEW FINDING (#4068): a SAME-COMPILATION class that implements the
+        // bound interface DIRECTLY. Such a symbol has no CLR type while
+        // binding, so the reflective interface check returned false without
+        // ever reading its declared interfaces and reported a GS0152 on a
+        // legal program.
+        yield return new object[]
+        {
+            "review-a-source-class-implementing-the-bounding-interface",
+            """
+            package P
+            import System
+
+            class D : IDisposable {
+                public func Dispose() {
+                }
+            }
+
+            class Fixture {
+                shared {
+                    func Take[TBase, TDerived TBase]() string {
+                        return "took"
+                    }
+                }
+            }
+
+            Console.WriteLine(Fixture.Take[IDisposable, D]())
+            """,
+            new[] { "took" },
+        };
+
+        // REVIEW FINDING (#4068): the same shape one level removed — the source
+        // class reaches the bound interface through a G#-declared interface
+        // rather than by implementing it itself.
+        yield return new object[]
+        {
+            "review-a-source-class-reaching-the-bound-through-a-declared-interface",
+            """
+            package P
+            import System
+
+            interface ICloser : IDisposable {
+            }
+
+            class C : ICloser {
+                public func Dispose() {
+                }
+            }
+
+            class Fixture {
+                shared {
+                    func Take[TBase, TDerived TBase]() string {
+                        return "took"
+                    }
+                }
+            }
+
+            Console.WriteLine(Fixture.Take[IDisposable, C]())
+            """,
+            new[] { "took" },
+        };
+
         // FORWARDING: the bound is still OPEN at the inner call, so the
         // relation has no closed answer and the instantiation is accepted. A
         // check that rejected here would break every generic that passes its
@@ -798,6 +859,88 @@ public class Issue4043DependentTypeParameterConstraintTests
             Assert.Contains("'Unrelated'", appLog, StringComparison.Ordinal);
             Assert.Contains("'TDerived'", appLog, StringComparison.Ordinal);
             Assert.Contains("'TBase'", appLog, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Review finding (#4068): extension-overload identity compares a
+    /// dependent bound POSITIONALLY, not by the bound parameter's NAME.
+    /// </summary>
+    /// <remarks>
+    /// Folding <c>TypeParameterBound</c> into <c>ConstraintReferenceType</c>
+    /// made <c>ExtensionTypeParameterConstraintsEqual</c> compare it by name.
+    /// Interface and base-class bounds are named by stable TYPE names, but a
+    /// type parameter's name is arbitrary, and the result was wrong in both
+    /// directions — both measured before the repair:
+    /// <list type="bullet">
+    /// <item>two spellings of ONE overload differing only by a rename
+    /// (<c>[A, B A]</c> vs <c>[X, Y X]</c>) were treated as two, so the
+    /// duplicate went unreported;</item>
+    /// <item>a bound on a type parameter named <c>Marker</c> and a bound on the
+    /// CLASS <c>Marker</c> compared EQUAL, so two genuinely distinct overloads
+    /// drew a false <c>GS0264</c>.</item>
+    /// </list>
+    /// Ordinal plus owner-kind identifies the bound parameter exactly, and is
+    /// what the emitted <c>VAR</c>/<c>MVAR</c> encoding already keys on.
+    /// </remarks>
+    [Fact]
+    public void ExtensionOverloadIdentityComparesTheBoundPositionally()
+    {
+        // Renaming the type parameters does not make a second overload.
+        const string Renamed = """
+            package P
+            import System
+
+            func (self string) Ext[A, B A](v B) string { return "first" }
+
+            func (self string) Ext[X, Y X](v Y) string { return "second" }
+
+            Console.WriteLine("compiled")
+            """;
+
+        // A DEPENDENT bound on a type parameter named `Marker` and a CLASS
+        // bound on the class `Marker` are different constraints.
+        const string Distinct = """
+            package P
+            import System
+
+            open class Marker {
+                public var N int32
+            }
+
+            func (self string) Ext2[Marker, U Marker](v U) string { return "dependent" }
+
+            func (self string) Ext2[T, U Marker](v U) string { return "class" }
+
+            Console.WriteLine("compiled")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4043_ident_").FullName;
+        try
+        {
+            var renamedPath = Path.Combine(tempDir, "Renamed.dll");
+            var renamedLog = Compile(tempDir, "Renamed.gs", Renamed, renamedPath, "/target:exe");
+            Assert.False(
+                File.Exists(renamedPath),
+                $"a rename does not make a second overload; the duplicate must be reported. Log:\n{renamedLog}");
+            var duplicates = renamedLog.Split("GS0264", StringSplitOptions.None).Length - 1;
+            Assert.True(
+                duplicates == 1,
+                $"the renamed pair must report GS0264 exactly once, saw {duplicates}. Log:\n{renamedLog}");
+
+            var distinctPath = Path.Combine(tempDir, "Distinct.dll");
+            var distinctLog = Compile(tempDir, "Distinct.gs", Distinct, distinctPath, "/target:exe");
+            Assert.DoesNotContain("GS0264", distinctLog, StringComparison.Ordinal);
+            Assert.True(
+                File.Exists(distinctPath),
+                "a dependent bound and a class bound that merely share a name are distinct "
+                    + $"overloads and must both be declarable. Log:\n{distinctLog}");
+
+            IlVerifier.Verify(distinctPath);
         }
         finally
         {

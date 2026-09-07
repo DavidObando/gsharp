@@ -122,6 +122,28 @@ public class Issue4041DependentConstraintOverErasedClassesTests
             public string Tag { get; set; } = "chain";
         }
 
+        // Review finding (#4068): an imported GENERIC interface a source class
+        // can implement DIRECTLY, rather than inheriting through an imported
+        // base. The symbolic walk used to follow only `ImportedBaseType`.
+        public interface IDep<T>
+        {
+            T? Item { get; }
+        }
+
+        public class Coupled3<T, U>
+            where U : IDep<T>
+        {
+            public string Tag { get; set; } = "coupled3";
+        }
+
+        // Review finding (#4068): a bound nested far deeper than the old
+        // hard-coded recursion cap of eight.
+        public class Deep<T, U>
+            where U : IList<List<List<List<List<List<List<List<List<List<List<T>>>>>>>>>>>
+        {
+            public string Tag { get; set; } = "deep";
+        }
+
         public static class Probe
         {
             public static string Take<T, U>(U value)
@@ -203,6 +225,67 @@ public class Issue4041DependentConstraintOverErasedClassesTests
             }
 
             var c Coupled[string, List[Bee]]
+            Console.WriteLine("compiled")
+            """,
+            "GS0152",
+        };
+
+        // REVIEW FINDING (#4068), the serious half. A source class that
+        // implements the imported generic interface DIRECTLY —
+        // `class Impl : IDep[Bee]` — reached the symbolic walk, which followed
+        // only `ImportedBaseType`, found nothing, and returned "no answer". The
+        // erased comparison then saw `IDep<object>` on both sides and ACCEPTED
+        // this, and it threw `TypeLoadException` at run time. That is this
+        // change's own defect reached by a different route.
+        yield return new object[]
+        {
+            "review-a-source-class-implementing-the-bound-generic-interface",
+            """
+            package P
+            import System
+            import HelperLib3
+
+            class A {
+                public var N int32
+            }
+
+            class Bee {
+                public var M int32
+            }
+
+            class Impl : IDep[Bee] {
+                public prop Item Bee { get { return nil } }
+            }
+
+            var c Coupled3[A, Impl]
+            Console.WriteLine("compiled")
+            """,
+            "GS0152",
+        };
+
+        // REVIEW FINDING (#4068): eleven levels of invariant nesting, well past
+        // the recursion cap of eight the first version of this check imposed.
+        // At that cap the shape returned indeterminate and fell back to the
+        // erased comparison — the very hole the check exists to close — so the
+        // cap was replaced by cycle detection.
+        yield return new object[]
+        {
+            "review-a-bound-nested-past-the-old-recursion-cap",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib3
+
+            class A {
+                public var N int32
+            }
+
+            class Bee {
+                public var M int32
+            }
+
+            var d Deep[A, List[List[List[List[List[List[List[List[List[List[List[Bee]]]]]]]]]]]]
             Console.WriteLine("compiled")
             """,
             "GS0152",
@@ -372,6 +455,51 @@ public class Issue4041DependentConstraintOverErasedClassesTests
             }
 
             var c Chain[ChBase, ChDerived]
+            Console.WriteLine("compiled")
+            """,
+            new[] { "compiled" },
+        };
+
+        // REVIEW FINDING (#4068) control: the MATCHED spelling of the
+        // source-implements-the-bound-interface shape must keep binding.
+        yield return new object[]
+        {
+            "review-a-source-class-implementing-the-bound-interface-matched",
+            """
+            package P
+            import System
+            import HelperLib3
+
+            class A {
+                public var N int32
+            }
+
+            class Impl : IDep[A] {
+                public prop Item A { get { return nil } }
+            }
+
+            var c Coupled3[A, Impl]
+            Console.WriteLine("compiled")
+            """,
+            new[] { "compiled" },
+        };
+
+        // REVIEW FINDING (#4068) control: the deeply nested bound SATISFIED.
+        // Removing the cap must not turn a legal deep bound into a rejection.
+        yield return new object[]
+        {
+            "review-a-deeply-nested-bound-that-holds",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib3
+
+            class A {
+                public var N int32
+            }
+
+            var d Deep[A, List[List[List[List[List[List[List[List[List[List[List[A]]]]]]]]]]]]
             Console.WriteLine("compiled")
             """,
             new[] { "compiled" },
