@@ -59,4 +59,38 @@ fi
 grep -Fq 'lines>300(raw)=1 reducible' <<< "$output"
 grep -Fq 'GATE: reducible raw >300-char line count 1 exceeded ceiling 0.' <<< "$output"
 
+measurement_tree="$scratch/measurement-tree"
+artifact="$measurement_tree/out/bin/Release/Cs2Gs.Tests/issue-2231-e2e/guid/Snippet.gs"
+source_file="$measurement_tree/src/Translated.gs"
+mkdir -p "$(dirname "$artifact")" "$(dirname "$source_file")"
+python3 - "$artifact" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    "goto __patternGuardEnd0\n"
+    "__patternGuardEnd0:\n"
+    "let __local_0 = value!!\n"
+    + "let reducible = " + " + ".join(["x"] * 90) + "\n",
+    encoding="utf-8",
+)
+PY
+mkdir -p "$measurement_tree/src/App/bin/Release" "$measurement_tree/src/App/obj/Release"
+cp "$artifact" "$measurement_tree/src/App/bin/Release/Snippet.gs"
+cp "$artifact" "$measurement_tree/src/App/obj/Release/Snippet.gs"
+
+selfmig_measure "$measurement_tree"
+[[ "$labels $lifts $long_lines $long_lines_atomic $bangs" == "0 0 0 0 0" ]]
+
+cp "$artifact" "$source_file"
+selfmig_measure "$measurement_tree"
+[[ "$labels $lifts $long_lines $long_lines_atomic $bangs" == "2 1 1 0 1" ]]
+
+report=$(TMPDIR="$scratch" cs2gs_counter_report "$measurement_tree" "artifact exclusion")
+grep -Fq '| `.gs` files | 1 | 1 |' <<< "$report"
+grep -Fq '| `__patternGuardEnd` | 2 | 2 |' <<< "$report"
+grep -Fq '| `__local_` | 1 | 1 |' <<< "$report"
+grep -Fq '| `!!` null assertions | 1 | 1 |' <<< "$report"
+grep -Fq '| lines >300 chars (reducible) | n/a | 1 |' <<< "$report"
+
 echo "cs2gs counter contract tests passed"

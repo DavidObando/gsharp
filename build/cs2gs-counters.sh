@@ -70,6 +70,18 @@ cs2gs_synthetic_families=(
 # How many distinct unknown identifiers to name in the table before truncating.
 cs2gs_unknown_sample_limit=${CS2GS_UNKNOWN_SAMPLE_LIMIT:-25}
 
+# Visits translated source files while pruning conventional build-output trees.
+# Validation can create transient .gs test fixtures under these directories;
+# they are artifacts, not translator output, and must not move readability
+# counters. Callers supply the find action so every metric shares this scope.
+cs2gs_find_translated_sources() {
+  local tree=$1
+  shift
+  find "$tree" \
+    \( -type d \( -name out -o -name bin -o -name obj \) -prune \) -o \
+    \( -type f -name '*.gs' "$@" \)
+}
+
 # Emits the CODE lines of a migrated tree: every line of every .gs file minus
 # the ones that are not code for metric purposes.
 #
@@ -84,14 +96,14 @@ cs2gs_unknown_sample_limit=${CS2GS_UNKNOWN_SAMPLE_LIMIT:-25}
 # alongside, clearly labelled, so the gap is visible instead of merely absent.
 cs2gs_code_lines() {
   local tree=$1
-  find "$tree" -name '*.gs' -type f -exec cat {} + 2>/dev/null \
+  cs2gs_find_translated_sources "$tree" -exec cat {} + 2>/dev/null \
     | grep -v '"' | grep -vE '^[[:space:]]*//' || true
 }
 
 # Every line of every .gs file, unfiltered.
 cs2gs_raw_lines() {
   local tree=$1
-  find "$tree" -name '*.gs' -type f -exec cat {} + 2>/dev/null || true
+  cs2gs_find_translated_sources "$tree" -exec cat {} + 2>/dev/null || true
 }
 
 # Prints "<reducible> <single-atom-bounded> <total>" for lines wider than 300
@@ -100,17 +112,19 @@ cs2gs_raw_lines() {
 # can shorten that line without changing the token stream (ADR-0179).
 cs2gs_long_line_counts() {
   local tree=$1
-  python3 - "$tree" <<'PY'
+  python3 - 3< <(cs2gs_find_translated_sources "$tree" -print0) <<'PY'
+import os
 import pathlib
 import re
-import sys
 
-root = pathlib.Path(sys.argv[1])
 string_atom = re.compile(r'"(?:\\.|[^"\\])*"')
 identifier_atom = re.compile(r'\b[A-Za-z_$][A-Za-z0-9_$]*\b')
 reducible = atomic = 0
 
-for path in root.rglob("*.gs"):
+for raw_path in os.fdopen(3, "rb").read().split(b"\0"):
+    if not raw_path:
+        continue
+    path = pathlib.Path(os.fsdecode(raw_path))
     in_raw = False
     for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if len(raw_line) <= 300:
@@ -213,7 +227,7 @@ cs2gs_counter_report() {
   awk -F'\t' '{ c[$1]++ } END { for (f in c) print f, c[f] }' "$raw_ids" > "$raw_tally"
 
   local gs_files bangs bangs_raw long_lines atomic_long_lines total_long_lines syn_total syn_total_raw
-  gs_files=$(find "$tree" -name '*.gs' -type f | wc -l | tr -d ' ')
+  gs_files=$(cs2gs_find_translated_sources "$tree" -print | wc -l | tr -d ' ')
   bangs=$(cs2gs_count_stream '!!' < "$code_lines")
   bangs_raw=$(cs2gs_count_stream '!!' < "$raw_lines")
   read -r long_lines atomic_long_lines total_long_lines < <(cs2gs_long_line_counts "$tree")
