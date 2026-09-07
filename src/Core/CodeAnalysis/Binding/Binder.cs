@@ -7287,9 +7287,10 @@ public sealed class Binder
     /// satisfies a base-class constraint <paramref name="classConstraint"/> — it
     /// is the constraint class itself (by definition identity, so a constructed
     /// instantiation of the same generic class counts) or transitively derives
-    /// from it. A constraining type parameter whose own class constraint already
-    /// derives from the target is accepted (constraint propagation). For an
-    /// imported reference class the CLR assignability relation is used.
+    /// from it. A constraining type parameter whose own class or dependent
+    /// constraint already derives from the target is accepted (constraint
+    /// propagation). For an imported reference class the CLR assignability
+    /// relation is used.
     /// </summary>
     /// <param name="typeArgument">The candidate type argument.</param>
     /// <param name="classConstraint">The required base class.</param>
@@ -7301,12 +7302,23 @@ public sealed class Binder
             return false;
         }
 
-        // Constraint propagation: a type parameter constrained to a class that
-        // is or derives from the target satisfies the bound.
-        if (typeArgument is TypeParameterSymbol tpArg)
+        // Constraint propagation: follow both ordinary class constraints and
+        // #4043's separate dependent-bound slot. The walk is bounded so a
+        // malformed symbol cannot hang the binder.
+        for (var steps = 0; steps < 64 && typeArgument is TypeParameterSymbol tpArg; steps++)
         {
-            return tpArg.ClassConstraint != null
-                && SatisfiesClassConstraint(tpArg.ClassConstraint, classConstraint);
+            var next = tpArg.ClassConstraint ?? tpArg.TypeParameterBound;
+            if (next == null)
+            {
+                return false;
+            }
+
+            typeArgument = next;
+        }
+
+        if (typeArgument is TypeParameterSymbol)
+        {
+            return false;
         }
 
         if (classConstraint is StructSymbol classDef)

@@ -369,6 +369,33 @@ public class Issue4043DependentTypeParameterConstraintTests
             new[] { "inner" },
         };
 
+        // Issue #4091: a type parameter's dependent bound can itself carry the
+        // class constraint required by a constructed G# generic.
+        yield return new object[]
+        {
+            "a-class-constraint-reached-through-a-dependent-bound",
+            """
+            package P
+            import System
+
+            open class SchemeOptions {
+                public var Name string = ""
+            }
+
+            open class GsHandler[TOptions SchemeOptions] {
+                public var Tag string = "g"
+            }
+
+            func f[U SchemeOptions, T U]() string {
+                let x = GsHandler[T]{ Tag: "c" }
+                return x.Tag
+            }
+
+            Console.WriteLine(f[SchemeOptions, SchemeOptions]())
+            """,
+            new[] { "c" },
+        };
+
         // A dependent bound does NOT make the bounded parameter a reference
         // type, so a VALUE type is a legal argument when the bounding parameter
         // was given one. This is the shape that would have broken had the bound
