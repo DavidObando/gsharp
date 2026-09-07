@@ -140,7 +140,8 @@ internal static class RepositoryMirror
         string destinationRoot,
         IReadOnlyList<string> sourceFiles,
         IEnumerable<string> additionalFiles = null,
-        RepositoryExcludedScope excludedScope = null)
+        RepositoryExcludedScope excludedScope = null,
+        IEnumerable<string> translatedSourceFiles = null)
     {
         // Issue #3580: sources a targeted run's --exclude removed from scope
         // have no TRANSLATED mirrors by design — the completeness contract
@@ -163,6 +164,19 @@ internal static class RepositoryMirror
         if (additionalFiles is not null)
         {
             expected.UnionWith(additionalFiles);
+        }
+
+        // Issue #3993: an excluded project may link a shared source that an
+        // included project also evaluates. The exclusion scope alone cannot
+        // decide ownership; the repository-wide translation manifest can.
+        if (translatedSourceFiles is not null)
+        {
+            string source = Path.GetFullPath(sourceRoot);
+            expected.UnionWith(
+                translatedSourceFiles
+                    .Select(path => Path.GetRelativePath(source, Path.GetFullPath(path)))
+                    .Where(path => !RepositoryFileInventory.HasExcludedDirectory(path))
+                    .SelectMany(DestinationRelativePaths));
         }
 
         if (!sourceFiles.Any(path =>
