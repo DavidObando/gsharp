@@ -168,6 +168,16 @@ public class Issue3984BaseInitializerOpenArgumentTests
             public string Tag { get; }
         }
 
+        public class OptionalOnlyBase
+        {
+            public OptionalOnlyBase(string? tag = null)
+            {
+                this.Tag = tag ?? "default";
+            }
+
+            public string Tag { get; }
+        }
+
         public class FallbackHolder<T>
         {
             public FallbackHolder(IEnumerable<T> items, T fallback = default!)
@@ -742,6 +752,75 @@ public class Issue3984BaseInitializerOpenArgumentTests
                 .Where(line => line.Length > 0)
                 .ToArray();
             Assert.Equal(expectedLines, lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ImplicitBaseCall_MaterializesOmittedOptionalArgument()
+    {
+        // Issue #3880: derived default/designated ctors referenced a nonexistent
+        // base .ctor() instead of calling the real optional-only .ctor(string)
+        // with its materialized nil default.
+        var tempDir = Directory.CreateTempSubdirectory("gs_3880_base_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            const string source = """
+                package P
+                import System
+                import Interop
+
+                class Derived : OptionalOnlyBase {
+                }
+
+                class DerivedWithConstructor : OptionalOnlyBase {
+                    init(value int32) {
+                    }
+                }
+
+                class PrimaryAndExplicit(value int32) : OptionalOnlyBase {
+                    init() {
+                    }
+                }
+
+                open class GPrimaryBase(tag string? = nil) {
+                }
+
+                class GPrimaryDerived : GPrimaryBase {
+                }
+
+                open class GExplicitBase {
+                    prop Tag string
+
+                    init(tag string? = nil) {
+                        this.Tag = tag ?? "default"
+                    }
+                }
+
+                class GExplicitDerived : GExplicitBase {
+                }
+
+                Console.WriteLine(Derived().Tag)
+                Console.WriteLine(DerivedWithConstructor(1).Tag)
+                Console.WriteLine(PrimaryAndExplicit(1).Tag)
+                Console.WriteLine(GPrimaryDerived().tag ?? "default")
+                Console.WriteLine(GExplicitDerived().Tag)
+                """;
+
+            var appPath = Path.Combine(tempDir, "implicit-optional-base.dll");
+            var appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
+            Assert.True(File.Exists(appPath), $"The derived class must compile. Log:\n{appLog}");
+
+            IlVerifier.Verify(appPath, new[] { libPath });
+            var (exit, output) = RunDotnet(appPath);
+            Assert.Equal(0, exit);
+            Assert.Equal(
+                string.Concat(Enumerable.Repeat($"default{Environment.NewLine}", 5)),
+                output);
         }
         finally
         {

@@ -120,6 +120,72 @@ public class NamedArgumentEmitTests
     }
 
     [Fact]
+    public void ClrStatic_ReorderedNamedArguments_DoNotCaptureNilIntoALocal()
+    {
+        // Issue #3880: reordered calls captured every source argument into a
+        // temp, including side-effect-free nil, whose unencodable local type
+        // crashed emission with GS9998.
+        var source = """
+            package P
+
+            public var trace = ""
+            public var result = 0
+
+            func mark(value string) string {
+                trace = trace + "B"
+                return value
+            }
+
+            result = string.Compare(
+                strB: mark("x"),
+                strA: nil)
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var traceField = program.GetField("trace", BindingFlags.Public | BindingFlags.Static);
+        var resultField = program.GetField("result", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal("B", (string)traceField!.GetValue(null)!);
+        Assert.Equal(-1, (int)resultField!.GetValue(null)!);
+    }
+
+    [Fact]
+    public void UserFunction_ReorderedNamedArguments_CaptureSideEffectingNilExpression()
+    {
+        var source = """
+            package P
+
+            public var trace = ""
+
+            func mark(label string) bool {
+                trace = trace + label
+                return true
+            }
+
+            func consume(a string?, b string?) {
+                trace = trace + if a == nil && b == nil { "N" } else { "V" }
+            }
+
+            consume(
+                b: if mark("B") { nil } else { nil },
+                a: if mark("A") { nil } else { nil })
+            """;
+
+        var assembly = CompileToAssembly(source, target: "exe");
+        var program = assembly.GetTypes().Single(t => t.Name == "<Program>");
+        var entry = program.GetMethod("<Main>$", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        var traceField = program.GetField("trace", BindingFlags.Public | BindingFlags.Static);
+
+        entry!.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { System.Array.Empty<string>() });
+
+        Assert.Equal("BAN", (string)traceField!.GetValue(null)!);
+    }
+
+    [Fact]
     public void UserClassPrimaryCtor_NamedArguments_ReorderFields()
     {
         var source = """

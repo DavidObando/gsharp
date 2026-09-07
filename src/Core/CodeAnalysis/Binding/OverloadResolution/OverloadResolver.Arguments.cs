@@ -865,6 +865,15 @@ internal sealed partial class OverloadResolver
         {
             var slot = parameterOffset + sourceToParameterMapping[sourceIndex];
             BoundExpression argument = parameterOrderedArguments[slot];
+            if (StatementBinder.IsNilLiteral(argument))
+            {
+                // A nil literal has no evaluation to preserve. Capturing it
+                // would create a local whose type is `nil`, which has no CLR
+                // signature representation; leave it in its parameter slot.
+                replacements[slot] = argument;
+                continue;
+            }
+
             var temp = new LocalVariableSymbol(
                 $"<>namedArg{sourceIndex}",
                 isReadOnly: true,
@@ -876,7 +885,7 @@ internal sealed partial class OverloadResolver
         var carrier = parameterOffset;
         replacements[carrier] = new BoundBlockExpression(
             parameterOrderedArguments[carrier].Syntax,
-            evaluations.MoveToImmutable(),
+            evaluations.ToImmutable(),
             replacements[carrier]);
         return ImmutableArray.Create(replacements);
     }

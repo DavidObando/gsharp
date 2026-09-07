@@ -24,13 +24,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal sealed partial class DeclarationBinder
 {
     /// <summary>
-    /// Issue #306: binds the explicit base-constructor argument list
-    /// (<c>: Base(args)</c>) of a class declaration and resolves it against the
-    /// base class's constructors. The arguments are bound in a scope that
-    /// exposes the primary-constructor parameters so they can be forwarded to
-    /// the base. On success the resolved <see cref="BaseConstructorInitializer"/>
-    /// is recorded on <paramref name="structSymbol"/> for the emitter; failures
-    /// surface a diagnostic.
+    /// Binds a class declaration's explicit <c>: Base(args)</c> initializer, or
+    /// its implicit zero-argument base call when no <c>init</c> body owns that
+    /// call. Resolution materializes omitted optional arguments, so the emitter
+    /// calls the constructor that actually exists instead of inventing a
+    /// parameterless MemberRef.
     /// </summary>
     private void BindBaseConstructorInitializer(
         StructDeclarationSyntax syntax,
@@ -39,7 +37,13 @@ internal sealed partial class DeclarationBinder
         TypeSymbol? importedBaseType,
         ImmutableArray<ParameterSymbol> primaryCtorParameters)
     {
-        if (!syntax.HasBaseConstructorArguments)
+        var hasImplicitBaseConstructorToResolve =
+            importedBaseType != null
+            || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false;
+        if (!syntax.HasBaseConstructorArguments
+            && ((!hasImplicitBaseConstructorToResolve)
+                || (!syntax.Constructors.IsDefaultOrEmpty
+                    && !structSymbol.HasPrimaryConstructor)))
         {
             return;
         }
@@ -56,13 +60,17 @@ internal sealed partial class DeclarationBinder
             // ambient lookup preference (see field-initializer closure above
             // for the full rationale) for the duration of this deferred bind.
             var savedPackage = scope.SetCurrentDeclaringPackage(structSymbol.PackageName);
-            var savedTree = scope.SetCurrentReferencingSyntaxTree(
-                Invariant.Required(
-                    syntax.BaseConstructorOpenParenthesisToken,
-                    "a base-constructor argument list has an opening parenthesis").SyntaxTree);
+            var savedTree = scope.SetCurrentReferencingSyntaxTree(syntax.SyntaxTree);
             try
             {
-                BindBaseConstructorInitializerCore(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
+                if (syntax.HasBaseConstructorArguments)
+                {
+                    BindBaseConstructorInitializerCore(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
+                }
+                else
+                {
+                    BindImplicitBaseConstructorInitializer(syntax, structSymbol, baseClassSymbol, importedBaseType);
+                }
             }
             finally
             {
@@ -71,6 +79,44 @@ internal sealed partial class DeclarationBinder
                 scope = outerScope;
             }
         });
+    }
+
+    private void BindImplicitBaseConstructorInitializer(
+        StructDeclarationSyntax syntax,
+        StructSymbol structSymbol,
+        StructSymbol? baseClassSymbol,
+        TypeSymbol? importedBaseType)
+    {
+        var location = syntax.Identifier?.Location ?? syntax.Location;
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        BaseConstructorInitializer? initializer;
+        if (importedBaseType?.ClrType is System.Type clrBase)
+        {
+            initializer = ResolveClrBaseConstructor(
+                _ => location,
+                clrBase,
+                importedBaseType,
+                arguments,
+                location);
+        }
+        else if (baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false)
+        {
+            initializer = ResolveGSharpBaseConstructor(
+                _ => location,
+                structSymbol.Name,
+                baseClassSymbol,
+                arguments,
+                location);
+        }
+        else
+        {
+            return;
+        }
+
+        if (initializer is { Arguments.IsEmpty: false })
+        {
+            structSymbol.SetBaseConstructorInitializer(initializer);
+        }
     }
 
     private void BindBaseConstructorInitializerCore(
@@ -812,17 +858,29 @@ internal sealed partial class DeclarationBinder
         }
 
         var baseParams = baseClassSymbol.PrimaryConstructorParameters;
-        if (boundArguments.Count != baseParams.Length)
+        var requiredCount = baseParams.Length;
+        while (requiredCount > 0 && baseParams[requiredCount - 1].HasExplicitDefaultValue)
+        {
+            requiredCount--;
+        }
+
+        if (boundArguments.Count < requiredCount || boundArguments.Count > baseParams.Length)
         {
             Diagnostics.ReportNoMatchingBaseConstructor(location, baseClassSymbol.Name, boundArguments.Count);
             return null;
         }
 
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
-        for (var i = 0; i < boundArguments.Count; i++)
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(baseParams.Length);
+        for (var i = 0; i < baseParams.Length; i++)
         {
-            var argument = boundArguments[i];
             var parameter = baseParams[i];
+            if (i >= boundArguments.Count)
+            {
+                convertedArgs.Add(CreateProjectedOptionalUserDefaultArgument(parameter, parameter.Type));
+                continue;
+            }
+
+            var argument = boundArguments[i];
             if (ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(argument, out _))
             {
                 argument = conversions.BindConversion(argLocation(i), argument, parameter.Type);
@@ -884,6 +942,7 @@ internal sealed partial class DeclarationBinder
         ConstructorSymbol? best = null;
         ImmutableArray<TypeSymbol> bestParamTypes = default;
         var bestExactMatches = -1;
+        var bestOmittedCount = int.MaxValue;
         var ambiguous = false;
         var anyArgIsError = false;
 
@@ -903,14 +962,21 @@ internal sealed partial class DeclarationBinder
         foreach (var candidate in baseClassSymbol.EffectiveExplicitConstructors)
         {
             var paramTypes = baseClassSymbol.GetConstructorParameterTypesForConstruction(candidate);
-            if (paramTypes.Length != boundArguments.Count)
+            var requiredCount = candidate.Parameters.Length;
+            while (requiredCount > 0
+                && candidate.Parameters[requiredCount - 1].HasExplicitDefaultValue)
+            {
+                requiredCount--;
+            }
+
+            if (boundArguments.Count < requiredCount || boundArguments.Count > paramTypes.Length)
             {
                 continue;
             }
 
             var applicable = true;
             var exactMatches = 0;
-            for (var i = 0; i < paramTypes.Length; i++)
+            for (var i = 0; i < boundArguments.Count; i++)
             {
                 var argType = boundArguments[i].Type;
                 var paramType = paramTypes[i];
@@ -976,14 +1042,17 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            if (exactMatches > bestExactMatches)
+            var omittedCount = paramTypes.Length - boundArguments.Count;
+            if (exactMatches > bestExactMatches
+                || (exactMatches == bestExactMatches && omittedCount < bestOmittedCount))
             {
                 best = candidate;
                 bestParamTypes = paramTypes;
                 bestExactMatches = exactMatches;
+                bestOmittedCount = omittedCount;
                 ambiguous = false;
             }
-            else if (exactMatches == bestExactMatches)
+            else if (exactMatches == bestExactMatches && omittedCount == bestOmittedCount)
             {
                 ambiguous = true;
             }
@@ -1001,15 +1070,36 @@ internal sealed partial class DeclarationBinder
             return null;
         }
 
-        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(boundArguments.Count);
-        for (var i = 0; i < boundArguments.Count; i++)
+        var convertedArgs = ImmutableArray.CreateBuilder<BoundExpression>(best.Parameters.Length);
+        for (var i = 0; i < best.Parameters.Length; i++)
         {
+            if (i >= boundArguments.Count)
+            {
+                convertedArgs.Add(
+                    CreateProjectedOptionalUserDefaultArgument(
+                        best.Parameters[i],
+                        bestParamTypes[i]));
+                continue;
+            }
+
             convertedArgs.Add(best.Parameters[i].RefKind != RefKind.None
                 ? boundArguments[i]
                 : conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i]));
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol, best);
+    }
+
+    private static BoundExpression CreateProjectedOptionalUserDefaultArgument(
+        ParameterSymbol parameter,
+        TypeSymbol targetType)
+    {
+        if (parameter.ExplicitDefaultValue == null)
+        {
+            return new BoundDefaultExpression(null, targetType);
+        }
+
+        return new BoundLiteralExpression(null, parameter.ExplicitDefaultValue, targetType);
     }
 
     private static bool TryGetAddressedArgumentType(
@@ -1292,15 +1382,20 @@ internal sealed partial class DeclarationBinder
             constructorSymbol.MarkConvenience();
         }
 
-        // Resolve the optional `: base(args)` initializer, with the constructor
-        // parameters in scope so they can be forwarded to the base.
+        // Resolve the explicit `: base(args)` initializer, or the implicit
+        // zero-argument base call of a designated constructor, with the
+        // constructor parameters in scope so explicit arguments can be
+        // forwarded to the base.
         //
         // Issue #1085: the argument expressions may construct other user types
         // whose explicit constructors are not yet populated when this type body
         // is bound (the constructed type may live in a source file processed
         // later). Defer the argument binding and base-constructor resolution to
         // a post-pass that runs after every declared type's constructors exist.
-        if (ctorSyntax.HasBaseInitializer)
+        if (ctorSyntax.HasBaseInitializer
+            || (!ctorSyntax.IsConvenience
+                && (importedBaseType != null
+                    || baseClassSymbol?.EffectiveExplicitConstructors.IsDefaultOrEmpty == false)))
         {
             var capturedScope = scope;
             pendingBaseInitializerBindings.Add(() =>
@@ -1338,9 +1433,12 @@ internal sealed partial class DeclarationBinder
         StructSymbol? baseClassSymbol,
         TypeSymbol? importedBaseType)
     {
-        var location = Invariant.Required(
-            ctorSyntax.BaseKeyword,
-            "a constructor base initializer has a base keyword").Location;
+        var hasExplicitBaseInitializer = ctorSyntax.HasBaseInitializer;
+        var location = hasExplicitBaseInitializer
+            ? Invariant.Required(
+                ctorSyntax.BaseKeyword,
+                "a constructor base initializer has a base keyword").Location
+            : ctorSyntax.InitKeyword.Location;
 
         // Issue #1194: expose the enclosing type's static members (consts, static
         // fields/properties, static methods) and — because this runs after all
@@ -1376,8 +1474,9 @@ internal sealed partial class DeclarationBinder
                     scope.TryDeclareVariable(p);
                 }
 
-                boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(ctorSyntax.BaseArguments.Count);
-                for (var i = 0; i < ctorSyntax.BaseArguments.Count; i++)
+                var baseArgumentCount = hasExplicitBaseInitializer ? ctorSyntax.BaseArguments.Count : 0;
+                boundArguments = ImmutableArray.CreateBuilder<BoundExpression>(baseArgumentCount);
+                for (var i = 0; i < baseArgumentCount; i++)
                 {
                     boundArguments.Add(BindConstructorInitializerArgument(ctorSyntax.BaseArguments[i]));
                 }
@@ -1401,13 +1500,17 @@ internal sealed partial class DeclarationBinder
                 }
                 else if (importedBaseType?.ClrType is System.Type clrBase)
                 {
-                    System.Func<int, TextLocation> argumentLocation = i => ctorSyntax.BaseArguments[i].Location;
-                    System.Func<int, ExpressionSyntax> argumentSyntax = i => ctorSyntax.BaseArguments[i];
+                    System.Func<int, TextLocation> argumentLocation =
+                        i => hasExplicitBaseInitializer ? ctorSyntax.BaseArguments[i].Location : location;
+                    System.Func<int, ExpressionSyntax>? argumentSyntax = hasExplicitBaseInitializer
+                        ? i => ctorSyntax.BaseArguments[i]
+                        : null;
                     init = ResolveClrBaseConstructor(argumentLocation, clrBase, importedBaseType, boundArguments, location, argumentSyntax);
                 }
                 else
                 {
-                    System.Func<int, TextLocation> argumentLocation = i => ctorSyntax.BaseArguments[i].Location;
+                    System.Func<int, TextLocation> argumentLocation =
+                        i => hasExplicitBaseInitializer ? ctorSyntax.BaseArguments[i].Location : location;
                     init = ResolveGSharpBaseConstructor(
                         argumentLocation,
                         structSymbol.Name,
