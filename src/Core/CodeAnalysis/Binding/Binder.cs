@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -5429,11 +5430,68 @@ public sealed class Binder
             return false;
         }
 
+        var typeArgument = symbolicArgs[failedIndex];
+        var constraintDescription = DescribeClrConstraint(failedParameter, failedConstraint);
+
+        // Issue #4032 (review follow-up): report ONCE PER EXPRESSION, not once
+        // per call. `ExpressionBinder.TryCloseImportedGenericTypeReceiver` is a
+        // BACKTRACKING PROBE — it is reached THREE times while binding
+        // `System.Nullable[string].Value` and TWICE for
+        // `Handler[string].Describe()`. Measured with a stack dump at the
+        // probe's entry rather than read off the code, because the obvious
+        // reading (three different resolvers) is wrong: it is `BindAccessorExpression`
+        // re-attempting THE SAME qualified walk through three entry points,
+        // all converging on `TryWalkQualifiedClrTypePath`:
+        //
+        //   1  BindAccessorExpression:~81  -> TryBindFullyQualifiedClrStaticAccess
+        //                                     (the full out-param overload, tried first)
+        //   2  BindAccessorExpression:~558 -> TryBindImportAccessor
+        //   3  BindAccessorExpression:~630 -> TryBindFullyQualifiedClrStaticAccess
+        //                                     (the 3-arg overload, which DISCARDS the out-params)
+        //
+        // The unqualified "two" is the same method attempting the other
+        // resolver twice — `TryResolveConstructedGenericTypeReceiver`, from
+        // `BindAccessorExpression` at ~221 and again at ~690. Every OTHER
+        // construction site calls this checker exactly once (measured, by
+        // tracing all seven), so this is not a general fan-out.
+        //
+        // A per-call report turned one violation into three identical errors,
+        // and the COUNT was a function of how many internal paths the binder
+        // happened to take — which is exactly the kind of detail that must not
+        // reach an author. Suppressing a byte-identical diagnostic (same id,
+        // same span, same message) loses nothing a reader could have
+        // distinguished, and the repo already takes this position for exact
+        // duplicates (`DiagnosticBag.SuppressDuplicateDiagnosticsIn`).
+        //
+        // The RETURN VALUE is unchanged when a duplicate is suppressed: callers
+        // use it to mean "this construction is invalid, stop", and every probe
+        // must still bail out even though only the first one printed.
+        var message = string.Format(
+            CultureInfo.CurrentCulture,
+            DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.MessageFormat,
+            typeArgument,
+            failedParameter.Name,
+            constraintDescription);
+        foreach (var existing in diagnostics)
+        {
+            if (string.Equals(
+                    existing.Id,
+                    DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.Id,
+                    StringComparison.Ordinal)
+                && ReferenceEquals(existing.Location.Text, location.Text)
+                && existing.Location.Span.Start == location.Span.Start
+                && existing.Location.Span.Length == location.Span.Length
+                && string.Equals(existing.Message, message, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
         diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
             location,
             failedParameter.Name,
-            symbolicArgs[failedIndex],
-            DescribeClrConstraint(failedParameter, failedConstraint));
+            typeArgument,
+            constraintDescription);
         return true;
     }
 

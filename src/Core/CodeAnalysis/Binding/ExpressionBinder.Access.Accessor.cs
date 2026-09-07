@@ -1807,11 +1807,28 @@ internal sealed partial class ExpressionBinder
                         return false;
                     }
 
+                    var closeDiagnosticCount = Diagnostics.Count;
                     if (TryCloseImportedGenericTypeReceiver(openGenericType, segmentTypeArgs, genericSegment.LeftPart, out var closedGenericImported))
                     {
                         importedClass = closedGenericImported;
                         rightPart = genericSegment.RightPart;
                         return true;
+                    }
+
+                    // Issue #4032: the close can now fail for a reason it has
+                    // already EXPLAINED — a type argument that does not satisfy
+                    // the open definition's declared constraint (GS0152). The
+                    // `invalidGenericType` fallback below exists for the
+                    // unexplained case, and its message is "Type 'X' is not
+                    // generic" — which for `System.Nullable[string]` is simply
+                    // false: `Nullable`1` IS generic, the argument is wrong.
+                    // Follow the same convention the type-argument branch above
+                    // already uses (snapshot the bag, and treat growth as
+                    // "handled") so the accurate diagnostic stands alone.
+                    if (Diagnostics.Count > closeDiagnosticCount)
+                    {
+                        failureHandled = true;
+                        return false;
                     }
 
                     if (!scope.TryLookupSourceTypeInPackage(

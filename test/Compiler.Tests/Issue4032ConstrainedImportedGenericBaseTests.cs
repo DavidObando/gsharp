@@ -664,11 +664,24 @@ public class Issue4032ConstrainedImportedGenericBaseTests
             var appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
 
             Assert.False(File.Exists(appPath), $"'{name}' must not compile. Log:\n{appLog}");
-            Assert.Contains(expectedId, appLog, StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
 
             // The wrong message would be the issue's own complaint.
             Assert.DoesNotContain("GS0149", appLog, StringComparison.Ordinal);
+
+            // Issue #4032 (CI follow-up): assert the COUNT, not merely the
+            // presence. `Assert.Contains` is what let a real defect through —
+            // the binder PROBES the same receiver several times before it
+            // commits to a reading of it, so `System.Nullable[string].Value`
+            // reported the identical violation THREE times and
+            // `Handler[string].Describe()` twice. An
+            // author fixing one violation saw three errors, and the count was a
+            // function of how many internal paths the binder happened to take.
+            // One violation, one diagnostic — at every spelling.
+            var occurrences = appLog.Split(expectedId, StringSplitOptions.None).Length - 1;
+            Assert.True(
+                occurrences == 1,
+                $"'{name}' must report {expectedId} exactly once, saw {occurrences}. Log:\n{appLog}");
         }
         finally
         {
