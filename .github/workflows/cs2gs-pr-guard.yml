@@ -33,38 +33,55 @@ name: cs2gs-pr-guard
 # src/Formatting/GSharp.Formatting in addition to the original hot core. See
 # build/run-cs2gs-selfmig-pr-guard.sh for the closed ProjectReference set.
 #
-# THE paths FILTER
+# THE TRIGGER: every PR to `main`, no `paths:` filter
 #
-# Scoped to exactly what the job can actually judge: the sources of the
-# guarded projects, plus the compiler and translator machinery that decides
-# how they translate, plus this job's own definition. #3836 suggested
-# `tools/cs2gs/**` alone — but #3896, the most expensive of the three
-# incidents, was a src/Core change, and src/Core is already inside the guarded
-# closure, so including it costs nothing extra to run and catches strictly
-# more.
+# Matching build.yml, and deliberately so. The reason is REQUIRED-CHECK
+# ELIGIBILITY, not cost.
 #
-# Note: `tools/cs2gs/**` is included in full even though only Cs2Gs.CodeModel
-# and Cs2Gs.Translator are guarded — a change to any part of cs2gs changes how
-# the guarded sources translate, which is the thing being measured.
+# A `paths:`-filtered workflow does not report a neutral status when the
+# filter misses: GitHub skips the workflow and the check never appears at all.
+# A required check in that state parks every docs-only or website-only PR
+# forever on "Expected — waiting for status to be reported". So a top-level
+# `paths:` filter and "required" are mutually exclusive, and this guard is
+# worth more as a required check than as a cheap one — #3831, #3896 and #3905
+# each reached `main` with CI fully green, which is precisely the situation an
+# advisory check does not survive.
+#
+# WHAT THAT COSTS
+#
+# The job takes ~30-45 minutes (five consecutive runs measured 29, 41, 44, 44
+# and 45 minutes), and it is now paid on PRs that cannot possibly affect
+# translation. build.yml's entire matrix finishes in ~21-25 minutes, so on a
+# docs-only PR this guard becomes the critical path and roughly doubles the
+# time to green. That is the price of the check being reportable on every PR.
+#
+# WHAT THE OLD FILTER SAID, AND WHERE THAT KNOWLEDGE LIVES NOW
+#
+# It was scoped to what this job can actually judge: the guarded projects'
+# sources (src/Core, src/Analyzers/InternalAnalyzers,
+# src/Formatting/GSharp.Formatting, src/Sdk/Gsharp.Runtime.Channels), the
+# whole tools/cs2gs tree — which decides how those sources translate, not just
+# the two guarded projects in it — plus src/Compiler and src/Sdk/Gsharp.NET.Sdk,
+# which decide whether the translated result compiles (#3905 was a gsc crash,
+# not a translation defect), and this job's own definition.
+#
+# That set is still the honest answer to "which changes can turn this job
+# red". It is simply no longer the answer to "when does this job run". If the
+# cost above stops being acceptable, the shape to reach for is a changed-paths
+# step INSIDE the job that short-circuits the expensive steps with `if:`, so
+# the check still reports on every PR. Do not reintroduce a top-level `paths:`
+# filter while this check is required — that is the failure this trigger
+# exists to avoid.
+#
+# `push:` on `main` is deliberately absent, and `tags:` more so. This is a
+# PR-time instrument (see the concurrency group, keyed on the PR number); the
+# nightly cs2gs-selfmig gate is the `main`-branch one, and `workflow_dispatch`
+# covers an on-demand run.
 
 on:
   pull_request:
-    paths:
-      # The guarded projects' own sources: a new file here is the #3831 /
-      # #3896 / #3905 hazard directly.
-      - 'src/Core/**'
-      - 'src/Analyzers/InternalAnalyzers/**'
-      - 'src/Formatting/GSharp.Formatting/**'
-      - 'src/Sdk/Gsharp.Runtime.Channels/**'
-      # The translator: it decides what the guarded sources become.
-      - 'tools/cs2gs/**'
-      # The compiler and the SDK: they decide whether what it produces
-      # compiles. #3905 was a gsc crash, not a translation defect.
-      - 'src/Compiler/**'
-      - 'src/Sdk/Gsharp.NET.Sdk/**'
-      # The guard itself, so changes to it are exercised by it.
-      - 'build/run-cs2gs-selfmig-pr-guard.sh'
-      - '.github/workflows/cs2gs-pr-guard.yml'
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
