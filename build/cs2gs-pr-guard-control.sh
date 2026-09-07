@@ -8,7 +8,7 @@ case "${1:-}" in
         .config/*|build/*|src/Analyzers/*|src/Compiler/*|src/Core/*|\
         src/Formatting/*|src/Sdk/*|tools/*|Directory.Build.*|\
         Directory.Packages.props|global.json|GSharp.sln|nuget.config|version.json|\
-        .github/workflows/cs2gs-pr-guard.yml)
+        test/Shared/*|.github/workflows/cs2gs-pr-guard.yml)
           printf '%s\n' "$path"
           exit 0
           ;;

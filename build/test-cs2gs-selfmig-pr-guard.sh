@@ -92,6 +92,8 @@ relevant_path=$(
     "$control" relevant-paths
 )
 [[ "$relevant_path" == src/Core/CodeAnalysis/Binder.cs ]]
+linked_path=$(printf 'test/Shared/GoldenFile.cs\0' | "$control" relevant-paths)
+[[ "$linked_path" == test/Shared/GoldenFile.cs ]]
 
 timeout_cause=$(printf '%s' \
   '[{"message":"The job has exceeded the maximum execution time of 1h30m0s"},'\
@@ -115,6 +117,8 @@ grep -qx '    name: hot-core cancellation cause' "$repo_root/.github/workflows/c
 grep -q '::notice title=Hot-core guard superseded::' \
   "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
 grep -qx '          if-no-files-found: ignore' \
+  "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -q 'git diff --no-renames --name-only -z' \
   "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
 
 echo "selfmig PR guard regressions PASSED."

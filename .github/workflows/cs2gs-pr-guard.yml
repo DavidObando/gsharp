@@ -123,7 +123,7 @@ jobs:
         run: |
           if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] ||
              ./build/cs2gs-pr-guard-control.sh relevant-paths \
-               < <(git diff --name-only -z "$BASE_SHA...$HEAD_SHA"); then
+               < <(git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA"); then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
