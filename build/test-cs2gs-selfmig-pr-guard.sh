@@ -94,6 +94,8 @@ relevant_path=$(
 [[ "$relevant_path" == src/Core/CodeAnalysis/Binder.cs ]]
 linked_path=$(printf 'test/Shared/GoldenFile.cs\0' | "$control" relevant-paths)
 [[ "$linked_path" == test/Shared/GoldenFile.cs ]]
+config_path=$(printf '.editorconfig\0' | "$control" relevant-paths)
+[[ "$config_path" == .editorconfig ]]
 
 timeout_cause=$(printf '%s' \
   '[{"message":"The job has exceeded the maximum execution time of 1h30m0s"},'\

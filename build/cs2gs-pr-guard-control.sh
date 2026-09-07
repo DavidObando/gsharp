@@ -5,7 +5,8 @@ case "${1:-}" in
   relevant-paths)
     while IFS= read -r -d '' path; do
       case "$path" in
-        .config/*|build/*|src/Analyzers/*|src/Compiler/*|src/Core/*|\
+        .config/*|.editorconfig|.gitattributes|build/*|\
+        src/Analyzers/*|src/Compiler/*|src/Core/*|\
         src/Formatting/*|src/Sdk/*|tools/*|Directory.Build.*|\
         Directory.Packages.props|global.json|GSharp.sln|nuget.config|version.json|\
         test/Shared/*|.github/workflows/cs2gs-pr-guard.yml)
