@@ -1572,17 +1572,20 @@ internal sealed class MemberLookup
             && openParams[^1].ParameterType.GetElementType() is Type paramsElementType)
         {
             var paramsIndex = openParams.Length - 1;
+            var directParamsSlot = paramsElementType.IsGenericParameter && paramsElementType.DeclaringMethod != null
+                ? paramsElementType.GenericParameterPosition
+                : -1;
             var conflicting = new bool[arity];
             var fixedPairs = Math.Min(paramsIndex, argumentCount);
             for (var i = 0; i < fixedPairs; i++)
             {
-                UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result);
+                UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result, directMethodTypeArgument: true);
             }
 
             for (var i = paramsIndex; i < argumentCount; i++)
             {
                 var tailInference = new TypeSymbol?[arity];
-                UnifyForMethodTypeArgs(paramsElementType, symbolicArgTypes[i], openMethod, tailInference);
+                UnifyForMethodTypeArgs(paramsElementType, symbolicArgTypes[i], openMethod, tailInference, directMethodTypeArgument: true);
                 for (var slot = 0; slot < arity; slot++)
                 {
                     if (conflicting[slot] || tailInference[slot] == null)
@@ -1590,15 +1593,22 @@ internal sealed class MemberLookup
                         continue;
                     }
 
+                    var hasDirectObjectBound = slot == directParamsSlot
+                        && (ReferenceEquals(result[slot], TypeSymbol.Object)
+                            || ReferenceEquals(tailInference[slot], TypeSymbol.Object));
                     if (result[slot] != null
-                        && !DeclarationBinder.TypeSignaturesEquivalent(result[slot], tailInference[slot]))
+                        && !DeclarationBinder.TypeSignaturesEquivalent(result[slot], tailInference[slot])
+                        && !hasDirectObjectBound)
                     {
                         result[slot] = null;
                         conflicting[slot] = true;
                         continue;
                     }
 
-                    result[slot] = MergeInferredTypeArgument(result[slot], tailInference[slot]);
+                    result[slot] = MergeRecoveredTypeArgument(
+                        result[slot],
+                        tailInference[slot],
+                        directObjectBound: slot == directParamsSlot);
                 }
             }
         }
@@ -1607,7 +1617,7 @@ internal sealed class MemberLookup
             var pairs = Math.Min(openParams.Length, argumentCount);
             for (var i = 0; i < pairs; i++)
             {
-                UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result);
+                UnifyForMethodTypeArgs(openParams[i].ParameterType, symbolicArgTypes[i], openMethod, result, directMethodTypeArgument: true);
             }
         }
 
@@ -6720,7 +6730,12 @@ internal sealed class MemberLookup
         }
     }
 
-    private static void UnifyForMethodTypeArgs(Type? openClr, TypeSymbol? actual, MethodInfo openMethod, TypeSymbol?[] result)
+    private static void UnifyForMethodTypeArgs(
+        Type? openClr,
+        TypeSymbol? actual,
+        MethodInfo openMethod,
+        TypeSymbol?[] result,
+        bool directMethodTypeArgument = false)
     {
         if (openClr == null || actual == null)
         {
@@ -6745,7 +6760,10 @@ internal sealed class MemberLookup
                 if ((uint)pos < (uint)result.Length)
                 {
                     var recovered = NormalizeRecoveredNullability(actual);
-                    result[pos] = MergeInferredTypeArgument(result[pos], recovered);
+                    result[pos] = MergeRecoveredTypeArgument(
+                        result[pos],
+                        recovered,
+                        directObjectBound: directMethodTypeArgument);
                 }
             }
 
@@ -7128,7 +7146,8 @@ internal sealed class MemberLookup
     private static TypeSymbol? MergeRecoveredTypeArgument(
         TypeSymbol? existing,
         TypeSymbol? incoming,
-        bool allowBaseWidening = true)
+        bool allowBaseWidening = true,
+        bool directObjectBound = false)
     {
         if (existing == null)
         {
@@ -7138,6 +7157,15 @@ internal sealed class MemberLookup
         if (incoming == null || ReferenceEquals(existing, incoming))
         {
             return existing;
+        }
+
+        // Issue #4086: direct `object` is a genuine lower bound, not an
+        // erased symbolic projection. It must win over a source type parameter.
+        if (directObjectBound
+            && (ReferenceEquals(existing, TypeSymbol.Object)
+                || ReferenceEquals(incoming, TypeSymbol.Object)))
+        {
+            return TypeSymbol.Object;
         }
 
         if (existing.ClrType?.IsSameAs(typeof(object)) == true

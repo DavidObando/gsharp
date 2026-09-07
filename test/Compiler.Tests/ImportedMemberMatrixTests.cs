@@ -14,8 +14,9 @@ namespace GSharp.Compiler.Tests;
 public class ImportedMemberMatrixTests
 {
     // PR #4088 owns #4070's broad applicability matrix. This keeps only the
-    // prerequisite needed by #4086's exact repro, then covers ranking through
-    // ordinary static and constrained-instance dispatch.
+    // prerequisite needed by #4086's exact repro, then covers ranking and
+    // MethodSpec emission through ordinary, constrained-instance, and
+    // constrained-static dispatch.
     [Fact]
     public void Issue4086_InferredTypeParameterIdentityBeatsObjectErasure()
     {
@@ -52,6 +53,8 @@ public class ImportedMemberMatrixTests
                     where T : System.IDisposable;
 
                 static abstract string Take(object value);
+
+                static abstract string Pick<T>(T first, T second);
             }
 
             public sealed class StaticOverloads : IStaticOverloads<StaticOverloads>
@@ -62,6 +65,9 @@ public class ImportedMemberMatrixTests
 
                 public static string Take(object value)
                     => "static-object";
+
+                public static string Pick<T>(T first, T second)
+                    => typeof(T).Name;
             }
 
             public static class Overloads
@@ -78,6 +84,15 @@ public class ImportedMemberMatrixTests
 
                 public static string Pick(object first, object second)
                     => "object";
+            }
+
+            public static class GenericOnly
+            {
+                public static string Pick<T>(T first, T second)
+                    => typeof(T).Name;
+
+                public static string PickParams<T>(params T[] values)
+                    => typeof(T).Name;
             }
             """;
 
@@ -101,6 +116,14 @@ public class ImportedMemberMatrixTests
 
             func throughMixedInference[T](first T, second object) string {
                 return Overloads.Pick(first, second)
+            }
+
+            func throughGenericOnlyMixedInference[T](first T, second object) string {
+                return GenericOnly.Pick(first, second)
+            }
+
+            func throughExpandedMixedInference[T](first T, second object) string {
+                return GenericOnly.PickParams(first, second)
             }
 
             func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
@@ -132,10 +155,22 @@ public class ImportedMemberMatrixTests
                 return TReceiver.Take(value)
             }
 
+            func throughConstrainedStaticMixedInference[
+                TReceiver IStaticOverloads[TReceiver],
+                TValue](first TValue, second object) string {
+                return TReceiver.Pick(first, second)
+            }
+
             Console.WriteLine(throughClassBound[DisposableBase](DisposableBase()))
             Console.WriteLine(throughInterface[DisposableBase](DisposableBase()))
             Console.WriteLine(throughObject(DisposableBase()))
             Console.WriteLine(throughMixedInference[DisposableBase](DisposableBase(), DisposableBase()))
+            Console.WriteLine(throughGenericOnlyMixedInference[DisposableBase](
+                DisposableBase(),
+                DisposableBase()))
+            Console.WriteLine(throughExpandedMixedInference[DisposableBase](
+                DisposableBase(),
+                DisposableBase()))
             Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
                 InstanceOverloads(),
                 DisposableBase()))
@@ -148,14 +183,17 @@ public class ImportedMemberMatrixTests
                 DisposableBase()).Result)
             Console.WriteLine(throughConstrainedStaticObject[StaticOverloads](
                 DisposableBase()))
+            Console.WriteLine(throughConstrainedStaticMixedInference[StaticOverloads, DisposableBase](
+                DisposableBase(),
+                DisposableBase()))
             """;
 
         Assert.Equal(
             $"generic-disposable{Environment.NewLine}generic-disposable{Environment.NewLine}object{Environment.NewLine}"
-                + $"object{Environment.NewLine}"
+                + $"object{Environment.NewLine}Object{Environment.NewLine}Object{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
-                + $"static-object{Environment.NewLine}",
+                + $"static-object{Environment.NewLine}Object{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 csSource,
                 gsSource,
