@@ -572,7 +572,11 @@ public sealed class TriageBuilder
     /// translator/emitter ("a real regression, not translation pending") when
     /// the actual signal is a runtime test failure, and is the same class of
     /// misleading degradation as #2842. The diagnostic id is
-    /// <c>LIBRARY-TESTS-FAILED</c>.
+    /// <c>LIBRARY-TESTS-FAILED</c>. Its fingerprint uses the complete,
+    /// normalized failing-test identity set. If the console output does not
+    /// contain every identity reported by the run summary, the artifact says
+    /// so and uses an explicit app-scoped unclassified fingerprint instead of
+    /// pretending the failure shares a root cause with another app.
     /// </summary>
     /// <param name="output">The captured <c>dotnet test</c> output.</param>
     /// <param name="gsFile">The emitted G# library file (relative path), or null.</param>
@@ -580,12 +584,27 @@ public sealed class TriageBuilder
     public TriageArtifact TestParityLibraryTestFailure(string output, string gsFile = null)
     {
         string message = string.IsNullOrWhiteSpace(output) ? "(no test output captured)" : output.Trim();
+        IReadOnlyList<string> failingTests = TestParityAllowList.ParseFailedTestNames(message);
+        int reportedFailures = TestParityAllowList.ReportedFailureCount(message);
+        bool hasCompleteFailureIdentities =
+            reportedFailures > 0 && failingTests.Count == reportedFailures;
+        string fingerprintNotice = null;
+        if (!hasCompleteFailureIdentities)
+        {
+            fingerprintNotice =
+                $"Fingerprint evidence unavailable: captured {failingTests.Count} of " +
+                $"{reportedFailures} reported failing test identities. The fingerprint is " +
+                $"unclassified and scoped only to '{this.CorpusAppId}'; equality with another " +
+                "fingerprint does not imply a shared cause.";
+        }
 
         var artifact = this.NewArtifact(MigrationStageKind.TestParity, TriageCategory.TestParityFailure);
         artifact.Diagnostic = new TriageDiagnostic
         {
             Id = "LIBRARY-TESTS-FAILED",
-            Message = message,
+            Message = fingerprintNotice is null
+                ? message
+                : fingerprintNotice + Environment.NewLine + message,
             Severity = "error",
         };
         artifact.SourceLocation = new TriageSourceLocation
@@ -602,12 +621,12 @@ public sealed class TriageBuilder
             Kind = "LibraryTestRun",
             Snippet = Truncate(message),
         };
-        artifact.Fingerprint = Fingerprint.Compute(
+        artifact.Fingerprint = Fingerprint.ComputeTestParityFailure(
             artifact.Category,
             artifact.Stage,
             artifact.Diagnostic.Id,
-            artifact.OffendingCSharpConstruct.Kind,
-            message);
+            hasCompleteFailureIdentities ? failingTests : Array.Empty<string>(),
+            this.CorpusAppId);
         artifact.SuggestedIssue = this.TestParityIssue(artifact);
         return artifact;
     }

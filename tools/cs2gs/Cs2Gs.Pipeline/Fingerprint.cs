@@ -3,6 +3,8 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,6 +22,9 @@ namespace Cs2Gs.Pipeline;
 /// rendered as <c>"sha256:" + lowercase-hex</c>. It deliberately excludes
 /// <c>runId</c>, <c>corpusAppId</c>, <c>gscVersion</c>, and concrete source
 /// positions so the same defect dedups regardless of where/when it surfaced.
+/// Test-run failures use <see cref="ComputeTestParityFailure"/> because their
+/// stable evidence is a set of failing test identities rather than a source
+/// construct shape.
 /// </summary>
 public static class Fingerprint
 {
@@ -98,8 +103,63 @@ public static class Fingerprint
             constructKind ?? string.Empty,
             shape);
 
-        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
-        return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+        return "sha256:" + Hash(payload);
+    }
+
+    /// <summary>
+    /// Computes a stage-4 fingerprint from the complete set of failing test
+    /// method identities. Identity order, duplicate result lines, theory data,
+    /// durations, warnings, paths, and the rest of the process output do not
+    /// participate.
+    /// </summary>
+    /// <remarks>
+    /// When a completed run does not expose a complete per-test identity set,
+    /// the result is explicitly marked <c>unclassified-test-parity</c> and
+    /// scoped to one corpus app. Such a value is deterministic, but is not a
+    /// cross-app shared-cause signal.
+    /// </remarks>
+    /// <param name="category">The schema category.</param>
+    /// <param name="stage">The schema stage.</param>
+    /// <param name="diagnosticId">The diagnostic id.</param>
+    /// <param name="failingTestNames">The complete reported failing-test name set, or an empty set.</param>
+    /// <param name="fallbackScope">The stable corpus-app scope used only when the set is empty.</param>
+    /// <returns>A classified <c>sha256:</c> fingerprint or an explicit unclassified fingerprint.</returns>
+    public static string ComputeTestParityFailure(
+        string category,
+        string stage,
+        string diagnosticId,
+        IReadOnlyList<string> failingTestNames,
+        string fallbackScope)
+    {
+        string[] identities = (failingTestNames ?? Array.Empty<string>())
+            .Select(TestParityAllowList.NormalizeTestName)
+            .Select(name => WhitespacePattern.Replace(name, " ").Trim())
+            .Where(name => name.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        if (identities.Length == 0)
+        {
+            string scope = (fallbackScope ?? string.Empty).Trim().Replace('\\', '/');
+            string fallbackPayload = string.Join(
+                "|",
+                category ?? string.Empty,
+                stage ?? string.Empty,
+                diagnosticId ?? string.Empty,
+                "unclassified-app-scope",
+                scope);
+            return "unclassified-test-parity:sha256:" + Hash(fallbackPayload);
+        }
+
+        string payload = string.Join(
+            "|",
+            category ?? string.Empty,
+            stage ?? string.Empty,
+            diagnosticId ?? string.Empty,
+            "failing-test-identities",
+            string.Join("\n", identities));
+        return "sha256:" + Hash(payload);
     }
 
     /// <summary>
@@ -165,5 +225,11 @@ public static class Fingerprint
         }
 
         return shape.Substring(0, ShapeMaxLength) + "…";
+    }
+
+    private static string Hash(string payload)
+    {
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(payload));
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }
