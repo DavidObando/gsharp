@@ -480,6 +480,15 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RefPropertyRequiresComputedGetter = new("GS0578", DiagnosticSeverity.Error, "Property '{0}' cannot return by reference here: a 'ref' return needs a concrete getter with a body to name the storage it aliases. An auto-property's getter only copies out of its backing field, and an abstract or interface slot names no storage at all. Write 'prop {0} ref T {{ get {{ return ref <lvalue> }} }}' or 'prop {0} ref T -> <lvalue>' on a class, struct, or shared block (issue #3879).");
     internal static readonly DiagnosticDescriptor RefPropertyCannotHaveSetter = new("GS0579", DiagnosticSeverity.Error, "Property '{0}' returns by reference, so it cannot declare a '{1}' accessor: a caller writes through the returned reference instead of calling a setter. Drop the '{1}' accessor, or drop the 'ref' from the declaration (issue #3879).");
 
+    // Issue #4037: an OPEN instantiation of a constrained generic. The type
+    // argument is the enclosing declaration's own type parameter, so the
+    // question is not "does this argument satisfy the bound" (GS0152) but
+    // "does this parameter's own constraint set IMPLY the bound". C# spells
+    // this CS0314 — measured against csc, which reports it at every open
+    // position: a base clause, a field type, a local type, an interface list
+    // entry and a return type.
+    internal static readonly DiagnosticDescriptor TypeParameterDoesNotForwardConstraint = new("GS0580", DiagnosticSeverity.Error, "Type parameter '{0}' does not carry the '{2}' constraint that type parameter '{1}' requires, so this instantiation is not valid for every '{0}'. Forward the constraint onto the declaration of '{0}' (issue #4037; C# spells the same rule CS0314).");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");
