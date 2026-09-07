@@ -81,13 +81,18 @@ namespace GSharp.Compiler.Tests;
 /// binder found FOUR user-facing construction sites beyond the three clause
 /// sites; all now route through the same shared validation, and each has a
 /// violating row and a satisfying control here.</para>
-/// <para><b>One gap remains and is pinned, not hidden.</b> A DEPENDENT
-/// constraint over two distinct same-compilation classes
+/// <para><b>The gap this class once pinned is closed (issue #4041).</b> A
+/// DEPENDENT constraint over two distinct same-compilation classes
 /// (<c>Coupled[A, List[Bee]]</c> against
-/// <c>Coupled&lt;T, U&gt; where U : IList&lt;T&gt;</c>) is still accepted,
-/// because both classes erase to the same <c>object</c> placeholder. It is
-/// pre-existing and unchanged here — this change only ADDS rejections — and it
-/// has its own asserting row below. Filed as #4041.</para>
+/// <c>Coupled&lt;T, U&gt; where U : IList&lt;T&gt;</c>) used to be accepted,
+/// because both classes erase to the same <c>object</c> placeholder and
+/// <c>List&lt;object&gt;</c> honestly satisfies <c>IList&lt;object&gt;</c>.
+/// The bound is now answered on the SYMBOLIC vector, where <c>IList[A]</c> and
+/// <c>List[Bee]</c>'s own <c>IList[Bee]</c> differ, so the two violating
+/// spellings are rows in <c>ConstraintViolations</c> and the matched, imported
+/// and COVARIANT spellings are rows in <c>DependentBoundControls</c>. The
+/// asserting row that used to stand here — the one whose message said to move
+/// it — is gone, moved rather than deleted.</para>
 /// <para><b>#4031's reduction is constructible.</b> The ASP.NET
 /// <c>AddScheme[TOptions, THandler]</c> shape — a two-parameter generic method
 /// whose second constraint mentions the first
@@ -127,6 +132,15 @@ public class Issue4032ConstrainedImportedGenericBaseTests
             where U : System.Collections.Generic.IList<T>
         {
             public string Tag { get; set; } = "coupled";
+        }
+
+        // Issue #4041's variance control: `IEnumerable<out T>` is COVARIANT, so
+        // `Covariant<CovBase, List<CovDerived>>` is legal C# and identity is
+        // the wrong relation at that position.
+        public class Covariant<T, U>
+            where U : System.Collections.Generic.IEnumerable<T>
+        {
+            public string Tag { get; set; } = "covariant";
         }
 
         public class HandlerNew<TOptions>
@@ -300,6 +314,67 @@ public class Issue4032ConstrainedImportedGenericBaseTests
 
             let h = Handler[string]{Tag: "z"}
             Console.WriteLine(h.Tag)
+            """,
+            "GS0152",
+        };
+
+        // ISSUE #4041, moved here from its own asserting row. A DEPENDENT
+        // bound over two DISTINCT same-compilation classes: `A` and `Bee` both
+        // erase to the same `System.Object` placeholder, so the vector handed
+        // to the erased check was `Coupled<object, List<object>>` — and
+        // `List<object>` honestly does satisfy `IList<object>`. The check
+        // passed on what it was given; the information that distinguishes `A`
+        // from `Bee` was gone before it was asked, and emission then reified
+        // `Coupled<A, List<Bee>>`, which the CLR refuses with
+        // `TypeLoadException: GenericArguments[1] … violates the constraint of
+        // type parameter 'U'`. The bound is now answered on the SYMBOLIC
+        // vector, where `IList[A]` and `List[Bee]`'s `IList[Bee]` differ.
+        yield return new object[]
+        {
+            "a-dependent-constraint-over-two-distinct-erased-classes",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib2
+
+            class A {
+                public var N int32
+            }
+
+            class Bee {
+                public var M int32
+            }
+
+            var c Coupled[A, List[Bee]]
+            Console.WriteLine("compiled")
+            """,
+            "GS0152",
+        };
+
+        // The same violation through the CONSTRUCTOR spelling, which #4041
+        // records as additionally failing `ilverify` with
+        // `UnsatisfiedMethodParentInst`. One repair covers both because the
+        // constructor path routes through the same shared checker #4032 built.
+        yield return new object[]
+        {
+            "a-dependent-constraint-violated-through-the-constructor-spelling",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib2
+
+            class A {
+                public var N int32
+            }
+
+            class Bee {
+                public var M int32
+            }
+
+            let c = Coupled[A, List[Bee]]()
+            Console.WriteLine(c.Tag)
             """,
             "GS0152",
         };
@@ -545,51 +620,22 @@ public class Issue4032ConstrainedImportedGenericBaseTests
     }
 
     /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described:
-    /// a DEPENDENT constraint (<c>Coupled&lt;T, U&gt; where U : IList&lt;T&gt;</c>)
-    /// over two DIFFERENT same-compilation classes is still accepted, because
-    /// both erase to the same <c>object</c> placeholder and the constraint is
-    /// asked on the erased vector — <c>IList&lt;object&gt;</c> is satisfied by
-    /// <c>List&lt;object&gt;</c>, while the symbols say
-    /// <c>IList&lt;A&gt;</c> is not satisfied by <c>List&lt;B&gt;</c>.
+    /// Issue #4041's controls, which are what the symbolic dependent-bound
+    /// check must not break: the MATCHED same-compilation spelling
+    /// <c>Coupled[A, List[A]]</c>, the matched IMPORTED spelling
+    /// <c>Coupled[string, List[string]]</c>, and the COVARIANT bound
+    /// <c>where U : IEnumerable&lt;T&gt;</c> where
+    /// <c>Coupled2[Base, List[Derived]]</c> is legal C# — identity is the wrong
+    /// relation at a variant position, so that shape is deliberately left to
+    /// the CLR comparison rather than answered symbolically.
     /// </summary>
-    /// <remarks>
-    /// <para>Raised in review of PR #4040 and confirmed by measurement.
-    /// <b>Pre-existing and unchanged by this PR</b>: this change only ADDS
-    /// rejections, so a program it accepts was accepted on the parent too, and
-    /// the parent witness records this row compiling and throwing there as
-    /// well. Closing it needs symbol-aware substitution of the dependent bound
-    /// rather than the erased <c>Type[]</c>, which is the same class of repair
-    /// #4031 had to make for a sibling type parameter and is deliberately not
-    /// attempted here. Filed as #4041.</para>
-    /// <para>The row asserts the CURRENT behaviour — it compiles, and the
-    /// <c>TypeLoadException</c> arrives at run time — so whoever fixes #4041
-    /// gets a red row pointing at the exact program rather than silence. The
-    /// matched spelling <c>Coupled[A, List[A]]</c> is green beside it, which is
-    /// what any fix must not break.</para>
-    /// </remarks>
-    [Fact]
-    public void ADependentConstraintOverTwoErasedClasses_IsStillAccepted_Issue4041()
+    /// <returns>Case name, G# source, expected stdout lines.</returns>
+    public static IEnumerable<object[]> DependentBoundControls()
     {
-        const string Violating = """
-            package P
-            import System
-            import System.Collections.Generic
-            import HelperLib2
-
-            class A {
-                public var N int32
-            }
-
-            class Bee {
-                public var M int32
-            }
-
-            var c Coupled[A, List[Bee]]
-            Console.WriteLine("compiled")
-            """;
-
-        const string Matched = """
+        yield return new object[]
+        {
+            "a-dependent-constraint-matched-over-one-erased-class",
+            """
             package P
             import System
             import System.Collections.Generic
@@ -601,42 +647,88 @@ public class Issue4032ConstrainedImportedGenericBaseTests
 
             var c Coupled[A, List[A]]
             Console.WriteLine("compiled")
-            """;
+            """,
+            new[] { "compiled" },
+        };
 
-        var tempDir = Directory.CreateTempSubdirectory("gs_4032_dep_").FullName;
+        yield return new object[]
+        {
+            "a-dependent-constraint-matched-over-imported-types",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib2
+
+            var c Coupled[string, List[string]]
+            Console.WriteLine("compiled")
+            """,
+            new[] { "compiled" },
+        };
+
+        yield return new object[]
+        {
+            "a-covariant-dependent-constraint-over-erased-classes",
+            """
+            package P
+            import System
+            import System.Collections.Generic
+            import HelperLib2
+
+            open class CovBase {
+                public var N int32
+            }
+
+            class CovDerived : CovBase {
+                public var M int32
+            }
+
+            var c Covariant[CovBase, List[CovDerived]]
+            Console.WriteLine("compiled")
+            """,
+            new[] { "compiled" },
+        };
+    }
+
+    /// <summary>
+    /// Issue #4041's controls compile, IL-verify, run, and print. A dependent
+    /// bound that HOLDS must stay green — a wrong "no" here would be a GS0152
+    /// on a legal program, which is why the symbolic check is three-state and
+    /// falls back to the CLR comparison rather than to a rejection.
+    /// </summary>
+    /// <param name="name">The case name.</param>
+    /// <param name="source">The G# source.</param>
+    /// <param name="expectedLines">The expected stdout lines, in order.</param>
+    [Theory]
+    [MemberData(nameof(DependentBoundControls))]
+    public void ASatisfiedDependentBound_CompilesVerifiesAndRuns(
+        string name,
+        string source,
+        string[] expectedLines)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4041_ok_").FullName;
         try
         {
             var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, name + ".dll");
+            var appLog = Compile(
+                tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
 
-            // The gap: two distinct same-compilation classes collapse to one
-            // placeholder, so the erased check cannot tell them apart.
-            var violatingPath = Path.Combine(tempDir, "Violating.dll");
-            var violatingLog = Compile(
-                tempDir, "Violating.gs", Violating, violatingPath, "/target:exe", "/reference:" + libPath);
-            Assert.DoesNotContain("GS9998", violatingLog, StringComparison.Ordinal);
-            Assert.True(
-                File.Exists(violatingPath),
-                "#4041 is still open, so this must still compile. If it now reports GS0152, the gap is "
-                    + $"closed — delete this row and add it to ConstraintViolations. Log:\n{violatingLog}");
+            Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS0152", appLog, StringComparison.Ordinal);
+            Assert.True(File.Exists(appPath), $"'{name}' must compile. Log:\n{appLog}");
 
-            var (violatingExit, violatingOutput) = RunDotnet(violatingPath);
-            Assert.True(
-                violatingExit != 0 && violatingOutput.Contains("TypeLoadException", StringComparison.Ordinal),
-                "the accepted instantiation must still be the one the CLR refuses; if it now loads, the "
-                    + $"premise of #4041 changed. Exit {violatingExit}:\n{violatingOutput}");
+            IlVerifier.Verify(appPath, new[] { libPath });
 
-            // The control any fix must not break: the MATCHED spelling is a
-            // legitimate program and stays green.
-            var matchedPath = Path.Combine(tempDir, "Matched.dll");
-            var matchedLog = Compile(
-                tempDir, "Matched.gs", Matched, matchedPath, "/target:exe", "/reference:" + libPath);
-            Assert.True(File.Exists(matchedPath), $"the matched spelling must compile. Log:\n{matchedLog}");
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"'{name}' must run to completion. Exit {exit}:\n{output}");
 
-            IlVerifier.Verify(matchedPath, new[] { libPath });
-
-            var (matchedExit, matchedOutput) = RunDotnet(matchedPath);
-            Assert.True(matchedExit == 0, $"the matched spelling must run. Exit {matchedExit}:\n{matchedOutput}");
-            Assert.Equal("compiled", matchedOutput.Trim());
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(expectedLines, lines);
         }
         finally
         {
