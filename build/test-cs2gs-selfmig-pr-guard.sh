@@ -112,5 +112,9 @@ unknown_cause=$(printf '%s' '[{"message":"The operation was canceled."}]' |
 grep -qx '    timeout-minutes: 90' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
 grep -qx '    concurrency:' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
 grep -qx '    name: hot-core cancellation cause' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -q '::notice title=Hot-core guard superseded::' \
+  "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -qx '          if-no-files-found: ignore' \
+  "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
 
 echo "selfmig PR guard regressions PASSED."
