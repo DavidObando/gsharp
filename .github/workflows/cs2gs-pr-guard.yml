@@ -24,7 +24,7 @@ name: cs2gs-pr-guard
 #
 # WHAT IT IS NOT
 #
-# It is not the gate. It checks six projects, not fifty-three; it says
+# It is not the gate. It checks eight projects, not fifty-three; it says
 # nothing about the readability ceilings or corpus-wide test parity. The job's
 # own output repeats that on every run, pass or fail, because a partial check
 # mistaken for a full one is worse than no check at all.
@@ -49,11 +49,10 @@ name: cs2gs-pr-guard
 #
 # WHAT THAT COSTS
 #
-# The job takes ~30-45 minutes (five consecutive runs measured 29, 41, 44, 44
-# and 45 minutes), and it is now paid on PRs that cannot possibly affect
-# translation. build.yml's entire matrix finishes in ~21-25 minutes, so on a
-# docs-only PR this guard becomes the critical path and roughly doubles the
-# time to green. That is the price of the check being reportable on every PR.
+# Recent successful runs of the current eight-project set take ~53-55 minutes,
+# almost all inside the migrate step. Runner variance has pushed that work past
+# the old 60-minute job limit. The cost is paid even on PRs that cannot affect
+# translation because the check must report on every PR to remain required.
 #
 # WHAT THE OLD FILTER SAID, AND WHERE THAT KNOWLEDGE LIVES NOW
 #
@@ -98,9 +97,10 @@ jobs:
   guard:
     name: hot-core translation guard
     runs-on: ubuntu-latest
-    # The measured run is well under this; the headroom is for a gsc hang,
-    # which is a failure mode this job specifically exists to catch (#3905).
-    timeout-minutes: 60
+    # Current eight-project runs measure ~53-55 minutes. Ninety minutes restores
+    # runner-variance headroom while keeping a finite whole-job backstop; each
+    # compiler/test child retains its tighter ProcessRunner timeout.
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v5

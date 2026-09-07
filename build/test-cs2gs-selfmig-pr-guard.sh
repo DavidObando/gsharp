@@ -81,4 +81,6 @@ grep -q "run FAILED" "$test_root/run-failed.log"
 grep -q "run succeeded=false" "$test_root/run-failed.log"
 ! grep -q "PR guard PASSED." "$test_root/run-failed.log"
 
+grep -qx '    timeout-minutes: 90' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+
 echo "selfmig PR guard regressions PASSED."

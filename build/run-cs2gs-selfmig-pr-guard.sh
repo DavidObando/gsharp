@@ -136,8 +136,8 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # translate/compile/ilverify/test-parity green in gate run 33943018295, so it
 # is not a red-from-day-one addition. Cs2Gs.ProjectLoading comes with it only
 # to keep the set closed under ProjectReference (verify_closure below would
-# otherwise fail the run). The two add roughly one more app's worth of
-# translate + compile to a ~30-minute job.
+# otherwise fail the run). This expanded the guard from six apps to eight;
+# recent eight-app migrations measure ~50-52 minutes on GitHub-hosted runners.
 #
 # STILL DELIBERATELY ABSENT: tools/cs2gs/Cs2Gs.Tests, which #3836 names as the
 # natural next step. It has ~9 known migration failures and would be red by
@@ -210,7 +210,7 @@ done < <(cd "$repo_root" && git ls-files '*.csproj' | sort)
 
 # A short list would mean the enumeration silently failed, and a migrate with
 # too few --excludes would quietly migrate the whole repository instead of the
-# hot core — a 30-minute job pretending to be a 20-minute one.
+# hot core.
 if (( ${#excludes[@]} < 80 )); then
   echo "PR guard: enumerated only $(( ${#excludes[@]} / 2 )) project(s) to exclude; the" >&2
   echo "repository has ~60. Is this a git checkout?" >&2

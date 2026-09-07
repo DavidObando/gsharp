@@ -554,6 +554,61 @@ public class MigrationPipelineTests
         Assert.False(result.Unverified);
     }
 
+    /// <summary>
+    /// Stage progress names the active app/stage before work starts, then reports
+    /// its pass/fail result and elapsed time after the stage completes.
+    /// </summary>
+    [Fact]
+    public async Task StageProgress_ReportsStartBeforePassOrFail_WithElapsedTime()
+    {
+        string outRoot = NewOutputRoot("stage-progress");
+        string projectPath = Path.Combine(outRoot, "Progress.csproj");
+        File.WriteAllText(projectPath, "<Project />");
+        var options = new PipelineOptions
+        {
+            GscPath = typeof(MigrationPipeline).Assembly.Location,
+            OutputRoot = outRoot,
+        };
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[]
+            {
+                new PassStage(MigrationStageKind.Translate),
+                new FailStage(MigrationStageKind.Compile),
+            });
+        var app = new CorpusApp("tests/Progress", projectPath, TargetKind.Library);
+
+        TextWriter originalOut = Console.Out;
+        using var captured = new StringWriter();
+        try
+        {
+            Console.SetOut(captured);
+            await pipeline.RunAsync(new[] { app });
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        string[] lines = captured.ToString()
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        int translateStart = Array.IndexOf(lines, "cs2gs: tests/Progress: translate started.");
+        int translatePass = Array.FindIndex(
+            lines,
+            line => line.StartsWith("cs2gs: tests/Progress: translate passed in ", StringComparison.Ordinal));
+        int compileStart = Array.IndexOf(lines, "cs2gs: tests/Progress: compile started.");
+        int compileFail = Array.FindIndex(
+            lines,
+            line => line.StartsWith("cs2gs: tests/Progress: compile failed in ", StringComparison.Ordinal));
+
+        Assert.True(translateStart >= 0);
+        Assert.True(translateStart < translatePass);
+        Assert.True(translatePass < compileStart);
+        Assert.True(compileStart < compileFail);
+        Assert.Matches(@"^cs2gs: tests/Progress: translate passed in [0-9]+\.[0-9]s\.$", lines[translatePass]);
+        Assert.Matches(@"^cs2gs: tests/Progress: compile failed in [0-9]+\.[0-9]s\.$", lines[compileFail]);
+    }
+
     /// <summary>A fixed-outcome stage double, used to drive pipeline rollup tests deterministically.</summary>
     private sealed class PassStage : IMigrationStage
     {
