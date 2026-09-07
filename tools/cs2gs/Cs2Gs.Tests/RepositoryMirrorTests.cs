@@ -96,6 +96,9 @@ public sealed class RepositoryMirrorTests
             props,
             """
             <Project>
+              <PropertyGroup>
+                <GsharpRepoRoot>$(MSBuildThisFileDirectory)..</GsharpRepoRoot>
+              </PropertyGroup>
               <ItemGroup>
                 <GsharpCore Include="$(GsharpRepoRoot)\src\Core\Core.csproj" />
                 <GsharpCompiler Include="$(GsharpRepoRoot)\src\Compiler\Compiler.csproj" />
@@ -155,9 +158,14 @@ public sealed class RepositoryMirrorTests
             sharedBuildFile,
             """
             <Project>
+              <PropertyGroup>
+                <RepoRoot>$(MSBuildThisFileDirectory)..</RepoRoot>
+              </PropertyGroup>
               <ItemGroup>
                 <LiteralProject Include="../src/Core/Core.csproj" />
                 <PropertyProject Include="$(RepoRoot)\src\Core\Core.csproj" />
+                <UnknownPropertyProject Include="$(ExternalRoot)\src\Core\Core.csproj" />
+                <ImportingProjectPath Include="$(MSBuildProjectDirectory)\..\src\Core\Core.csproj" />
                 <ComputedProject Include="$(RepoRoot)\src\$(ProjectName)\Core.csproj" />
                 <ExternalProject Include="../external/External.csproj" />
                 <Compile Include="../src/Core/Core.cs" />
@@ -181,6 +189,12 @@ public sealed class RepositoryMirrorTests
         Assert.Equal(
             "$(RepoRoot)/src/Core/Core.gsproj",
             mirrored.Descendants("PropertyProject").Single().Attribute("Include")?.Value);
+        Assert.Equal(
+            "$(ExternalRoot)\\src\\Core\\Core.csproj",
+            mirrored.Descendants("UnknownPropertyProject").Single().Attribute("Include")?.Value);
+        Assert.Equal(
+            "$(MSBuildProjectDirectory)\\..\\src\\Core\\Core.csproj",
+            mirrored.Descendants("ImportingProjectPath").Single().Attribute("Include")?.Value);
         Assert.Equal(
             "$(RepoRoot)\\src\\$(ProjectName)\\Core.csproj",
             mirrored.Descendants("ComputedProject").Single().Attribute("Include")?.Value);

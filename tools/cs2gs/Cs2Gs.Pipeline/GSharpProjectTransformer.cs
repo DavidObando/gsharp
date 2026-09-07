@@ -161,10 +161,10 @@ internal static class GSharpProjectTransformer
         string destinationRoot,
         IReadOnlyDictionary<string, string> generatedProjectPaths)
     {
-        // Shared props/targets often anchor item paths at a repository-root
-        // property whose value is not available while mirroring. Treat only
-        // its literal suffix as root-relative, then require an exact hit in
-        // the source-to-generated project map before preserving the expression.
+        IReadOnlySet<string> repositoryRootExpressions = FindRepositoryRootExpressions(
+            document,
+            sourceFileDirectory,
+            sourceRoot);
         bool changed = false;
         foreach (XElement itemGroup in ElementsNamed(document, "ItemGroup"))
         {
@@ -182,7 +182,8 @@ internal static class GSharpProjectTransformer
                     destinationFileDirectory,
                     generatedProjectPaths,
                     sourceRoot,
-                    destinationRoot);
+                    destinationRoot,
+                    repositoryRootExpressions);
                 if (!string.Equals(rewritten, include.Value, StringComparison.Ordinal))
                 {
                     include.Value = rewritten;
@@ -192,6 +193,47 @@ internal static class GSharpProjectTransformer
         }
 
         return changed;
+    }
+
+    private static IReadOnlySet<string> FindRepositoryRootExpressions(
+        XDocument document,
+        string sourceFileDirectory,
+        string sourceRoot)
+    {
+        var expressions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (XElement propertyGroup in ElementsNamed(document, "PropertyGroup"))
+        {
+            foreach (XElement property in propertyGroup.Elements())
+            {
+                string value = property.Value.Trim();
+                const string anchor = "$(MSBuildThisFileDirectory)";
+                if (property.HasElements ||
+                    !value.StartsWith(anchor, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string remainder = value.Substring(anchor.Length);
+                if (remainder.Contains("$(", StringComparison.Ordinal) ||
+                    remainder.Contains("@(", StringComparison.Ordinal) ||
+                    remainder.Contains('*'))
+                {
+                    continue;
+                }
+
+                string resolved = Path.GetFullPath(
+                    Path.Combine(sourceFileDirectory, NormalizeDirectorySeparators(remainder)));
+                if (string.Equals(
+                    Path.TrimEndingDirectorySeparator(resolved),
+                    Path.TrimEndingDirectorySeparator(sourceRoot),
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    expressions.Add("$(" + property.Name.LocalName + ")");
+                }
+            }
+        }
+
+        return expressions;
     }
 
     private static void AddSourceSdkDefaults(XDocument document, string sourceSdk)
@@ -352,7 +394,8 @@ internal static class GSharpProjectTransformer
         string destinationProjectDirectory,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
         string sourceRoot = null,
-        string destinationRoot = null)
+        string destinationRoot = null,
+        IReadOnlySet<string> repositoryRootExpressions = null)
     {
         if (value.IndexOf(".csproj", StringComparison.OrdinalIgnoreCase) < 0)
         {
@@ -370,6 +413,7 @@ internal static class GSharpProjectTransformer
                 generatedProjectPaths,
                 sourceRoot,
                 destinationRoot,
+                repositoryRootExpressions,
                 out string mapped))
             {
                 specs[i] = mapped;
@@ -393,6 +437,7 @@ internal static class GSharpProjectTransformer
         IReadOnlyDictionary<string, string> generatedProjectPaths,
         string sourceRoot,
         string destinationRoot,
+        IReadOnlySet<string> repositoryRootExpressions,
         out string mapped)
     {
         mapped = null;
@@ -423,9 +468,17 @@ internal static class GSharpProjectTransformer
             }
 
             prefix = value.Substring(0, close + 1);
+            if (prefix.Equals("$(MSBuildProjectDirectory)", StringComparison.OrdinalIgnoreCase)
+                && sourceRoot is not null)
+            {
+                return false;
+            }
+
             if (!IsAnchorExpression(prefix))
             {
-                if (string.IsNullOrEmpty(sourceRoot) || string.IsNullOrEmpty(destinationRoot))
+                if (string.IsNullOrEmpty(sourceRoot) ||
+                    string.IsNullOrEmpty(destinationRoot) ||
+                    repositoryRootExpressions?.Contains(prefix) != true)
                 {
                     return false;
                 }
