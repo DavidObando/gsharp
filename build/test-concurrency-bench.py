@@ -161,16 +161,23 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 }
             },
         }
+        second_run = json.loads(json.dumps(common))
+        second_run["gsharp"]["select-ready"]["median_ns"] = 153.0
         first = SCRATCH / "first.json"
         second = SCRATCH / "second.json"
         first.write_text(json.dumps({**common, "aggregationKey": "same"}))
-        second.write_text(json.dumps({**common, "aggregationKey": "same"}))
+        second.write_text(json.dumps({**second_run, "aggregationKey": "same"}))
 
         gsharp, _, _, hardware, _ = bench.load_runs([str(first), str(second)])
         self.assertEqual("test-host", hardware)
         self.assertEqual(2, len(gsharp))
+        with self.assertRaisesRegex(SystemExit, "duplicate --from-json path"):
+            bench.load_runs([str(first), str(first)])
+        second.write_text(first.read_text())
+        with self.assertRaisesRegex(SystemExit, "duplicate benchmark evidence"):
+            bench.load_runs([str(first), str(second)])
 
-        second.write_text(json.dumps({**common, "aggregationKey": "different"}))
+        second.write_text(json.dumps({**second_run, "aggregationKey": "different"}))
         with self.assertRaisesRegex(SystemExit, "incomparable benchmark runs"):
             bench.load_runs([str(first), str(second)])
 
@@ -283,6 +290,12 @@ class ConcurrencyBenchTests(unittest.TestCase):
 
         self.assertIn("the host exposes no observable power-state identity", reasons)
         self.assertTrue(any("different processor counts" in reason for reason in reasons))
+
+        with (
+            mock.patch.object(bench.os, "getloadavg", side_effect=AttributeError),
+            mock.patch.object(bench, "power_state", return_value=start["power"]),
+        ):
+            self.assertIsNone(bench.environment_sample()["loadAverage"])
 
     def test_each_launch_must_emit_its_expected_rows(self) -> None:
         spec = {"name": "gsharp", "expectedRows": {"buf64", "select-ready"}}

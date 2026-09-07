@@ -168,7 +168,7 @@ def power_state() -> dict:
 def environment_sample() -> dict:
     try:
         load = [round(value, 3) for value in os.getloadavg()]
-    except OSError:
+    except (AttributeError, OSError):
         load = None
 
     affinity = None
@@ -606,8 +606,18 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
         "launchOrders": [],
     }
     aggregation_key = None
+    seen_paths = set()
+    seen_payloads = set()
     for path in paths:
-        payload = json.loads(Path(path).read_text())
+        resolved = Path(path).resolve()
+        if resolved in seen_paths:
+            raise SystemExit(f"refusing duplicate --from-json path '{path}'")
+        seen_paths.add(resolved)
+        payload = json.loads(resolved.read_text())
+        payload_key = stable_key(payload)
+        if payload_key in seen_payloads:
+            raise SystemExit(f"refusing duplicate benchmark evidence '{path}'")
+        seen_payloads.add(payload_key)
         recorded_class = payload.get("hardwareClass") or recorded_class
         fingerprint = payload.get("fingerprint")
         if (
