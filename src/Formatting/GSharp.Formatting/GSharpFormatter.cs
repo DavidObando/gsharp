@@ -545,8 +545,6 @@ public static class GSharpFormatter
 
     private sealed class LayoutBuilder
     {
-        // Three links is the point at which a member chain reads better broken
-        // than kept on one line; below it, breaking only strands the receiver.
         private const int MemberChainBreakThreshold = 3;
 
         private readonly SyntaxTree tree;
@@ -554,7 +552,7 @@ public static class GSharpFormatter
         private readonly Dictionary<int, int> matchingDelimiters = new();
         private readonly Dictionary<int, int> breaksBefore = new();
         private readonly Dictionary<string, bool> fusionCache = new(StringComparer.Ordinal);
-        private readonly Dictionary<int, int> memberChainLengths = new();
+        private readonly Dictionary<int, MemberChainInfo> memberChains = new();
 
         public LayoutBuilder(SyntaxTree tree)
         {
@@ -815,7 +813,7 @@ public static class GSharpFormatter
                 }
                 else if (previous is not null && !separatorAlreadyEmitted)
                 {
-                    segment.Add(Separator(previous, current, index));
+                    segment.Add(Separator(previous, current));
                 }
 
                 separatorAlreadyEmitted = false;
@@ -888,6 +886,16 @@ public static class GSharpFormatter
                                 Doc.Nest(4, Doc.Concat(afterOpen, inner)),
                                 Doc.SoftLine,
                                 Doc.Text(tokens[close].Text)));
+
+                        // Keep the member-call prefix in its own group. A block
+                        // argument can then break the argument list without also
+                        // forcing a short `Console.WriteLine` prefix to break,
+                        // while an over-wide short chain can still break at `.`.
+                        if (ShouldGroupMemberCallPrefix(current))
+                        {
+                            FlushSegment(completed, segment, group: true);
+                        }
+
                         segment.Add(delimited);
                     }
 
@@ -1012,9 +1020,9 @@ public static class GSharpFormatter
         /// Applies the spacing rule for a token boundary, then re-checks that
         /// the result cannot be re-lexed into a different token stream.
         /// </summary>
-        private Doc Separator(LayoutToken previous, LayoutToken current, int currentIndex)
+        private Doc Separator(LayoutToken previous, LayoutToken current)
         {
-            Doc separator = InlineSeparator(previous, current, currentIndex);
+            Doc separator = InlineSeparator(previous, current);
             return ReferenceEquals(separator, Doc.Empty) && WouldFuse(previous.Text, current.Text)
                 ? Doc.Text(" ")
                 : separator;
@@ -1051,24 +1059,20 @@ public static class GSharpFormatter
             return fuses;
         }
 
-        // Records, for every `.`/`?.` token, how many links its member chain has.
-        // The layout only offers a break inside a chain long enough to be worth
-        // reading vertically. `Console.WriteLine(...)` is one link, and breaking
-        // it stranded the receiver on a line of its own every time an argument
-        // contained a block. Three links is the threshold prettier uses, for the
-        // same reason; the fresh phase-6 inventory also found member chains had
-        // all but stopped causing long lines, so breaking short ones buys little.
+        // Short chains normally stay flat, but still need a break opportunity
+        // when their own tokens exceed the line budget.
         private void BuildMemberChains()
         {
             for (int i = 0; i < tokens.Count; i++)
             {
                 if (tokens[i].Token.Kind is not (SyntaxKind.DotToken or SyntaxKind.QuestionDotToken)
-                    || memberChainLengths.ContainsKey(i))
+                    || memberChains.ContainsKey(i))
                 {
                     continue;
                 }
 
                 var chain = new List<int>();
+                int start = Math.Max(0, i - 1);
                 int index = i;
                 while (index < tokens.Count
                     && tokens[index].Token.Kind is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken)
@@ -1076,9 +1080,6 @@ public static class GSharpFormatter
                     chain.Add(index);
                     index++;
 
-                    // Step over the member name and any call, index or
-                    // type-argument brackets hanging off it; the next link, if
-                    // there is one, starts after those.
                     if (index < tokens.Count && !IsDelimiterOpen(tokens[index].Token.Kind))
                     {
                         index++;
@@ -1091,11 +1092,33 @@ public static class GSharpFormatter
                     }
                 }
 
+                int flatWidth = 0;
+                for (int tokenIndex = start; tokenIndex < index; tokenIndex++)
+                {
+                    flatWidth += tokens[tokenIndex].Text.Length;
+                }
+
+                var info = new MemberChainInfo(chain.Count, flatWidth > MaxLineWidth);
                 foreach (int dot in chain)
                 {
-                    memberChainLengths[dot] = chain.Count;
+                    memberChains[tokens[dot].Token.Position] = info;
                 }
             }
+        }
+
+        private bool ShouldGroupMemberCallPrefix(LayoutToken token)
+        {
+            if (token.Token.Kind != SyntaxKind.OpenParenthesisToken
+                || token.Parent is not CallExpressionSyntax
+                {
+                    Parent: AccessorExpressionSyntax accessor,
+                })
+            {
+                return false;
+            }
+
+            return memberChains.TryGetValue(accessor.DotToken.Position, out MemberChainInfo chain)
+                && chain.Links < MemberChainBreakThreshold;
         }
 
         private static bool IsDelimiterOpen(SyntaxKind kind) =>
@@ -1104,7 +1127,7 @@ public static class GSharpFormatter
                 or SyntaxKind.QuestionOpenBracketToken
                 or SyntaxKind.OpenBraceToken;
 
-        private Doc InlineSeparator(LayoutToken previous, LayoutToken current, int currentIndex)
+        private Doc InlineSeparator(LayoutToken previous, LayoutToken current)
         {
             SyntaxKind left = previous.Token.Kind;
             SyntaxKind right = current.Token.Kind;
@@ -1124,8 +1147,8 @@ public static class GSharpFormatter
 
             if (right is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken)
             {
-                return memberChainLengths.TryGetValue(currentIndex, out int links)
-                    && links >= MemberChainBreakThreshold
+                return memberChains.TryGetValue(current.Token.Position, out MemberChainInfo chain)
+                    && (chain.Links >= MemberChainBreakThreshold || chain.ExceedsLineWidth)
                         ? Doc.Nest(4, Doc.SoftLine)
                         : Doc.Empty;
             }
@@ -1341,6 +1364,8 @@ public static class GSharpFormatter
                 completed.Add(Doc.HardLine);
             }
         }
+
+        private readonly record struct MemberChainInfo(int Links, bool ExceedsLineWidth);
 
         private sealed class LayoutToken
         {

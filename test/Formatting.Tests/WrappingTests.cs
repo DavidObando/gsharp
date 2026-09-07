@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
 
@@ -52,7 +53,7 @@ public sealed class WrappingTests
         foreach (string line in result.Text!.ToString().Split('\n'))
         {
             Assert.True(
-                line.Length <= MaxLineWidth || WidestAtom(line) + Indentation(line) > MaxLineWidth,
+                line.Length <= MaxLineWidth || WidestToken(line) + Indentation(line) > MaxLineWidth,
                 name + ": line exceeded the canonical width: " + line);
         }
     }
@@ -225,6 +226,16 @@ public sealed class WrappingTests
             + "}\n");
 
         yield return Shape(
+            "short member chain",
+            "func run() {\n"
+            + new string('r', 46)
+            + "."
+            + new string('m', 44)
+            + "()."
+            + new string('n', 44)
+            + "()\n}\n");
+
+        yield return Shape(
             "switch-arm pattern disjunction",
             "func run(kind SyntaxKind) bool {\n"
             + "return switch kind {\ncase "
@@ -242,25 +253,10 @@ public sealed class WrappingTests
 
     private static int Indentation(string line) => line.Length - line.TrimStart().Length;
 
-    private static int WidestAtom(string line)
-    {
-        int widest = 0;
-        int index = 0;
-        while (index < line.Length)
-        {
-            int start = index;
-            while (index < line.Length && !char.IsWhiteSpace(line[index]))
-            {
-                index++;
-            }
-
-            widest = Math.Max(widest, index - start);
-            while (index < line.Length && char.IsWhiteSpace(line[index]))
-            {
-                index++;
-            }
-        }
-
-        return widest;
-    }
+    private static int WidestToken(string line) =>
+        SyntaxTree.ParseTokens(line)
+            .Where(token => token.Kind is not SyntaxKind.WhitespaceToken and not SyntaxKind.EndOfFileToken)
+            .Select(token => token.Text.Length)
+            .DefaultIfEmpty()
+            .Max();
 }
