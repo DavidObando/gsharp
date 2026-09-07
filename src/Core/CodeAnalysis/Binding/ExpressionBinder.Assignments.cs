@@ -2770,9 +2770,22 @@ internal sealed partial class ExpressionBinder
                 syntax.Receiver,
                 out var ctorStruct,
                 out var ctorIface,
-                out var ctorImported))
+                out var ctorImported,
+                out var ctorFailureHandled))
         {
             return BindConstructedGenericStaticFieldWrite(syntax, ctorStruct, ctorIface, ctorImported);
+        }
+
+        // Issue #4051: the write path's version of the read path's cascade.
+        // `Handler[string].Field = "z"` reported the accurate GS0152 and then
+        // fell through to `BindExpression(syntax.Receiver)` below — which is
+        // exactly the index-expression re-reading the comment above says this
+        // branch exists to prevent, and it produced the same two false
+        // `GS0125 Variable 'X' doesn't exist`. The construction already
+        // explained itself.
+        if (ctorFailureHandled)
+        {
+            return new BoundErrorExpression(syntax);
         }
 
         var receiver = BindExpression(syntax.Receiver);
