@@ -893,6 +893,10 @@ def complete_baseline_results(
     )
 
 
+def methodology_label(fingerprint: dict | None) -> str:
+    return "jit=tiered-pgo delay=0" if fingerprint else "jit=unknown (legacy evidence)"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--launches", type=int, default=6, help="process launches per side (default 6)")
@@ -1048,7 +1052,7 @@ def main() -> int:
     current_class = recorded_class or hardware_class()
     print(
         f"hardware class: {current_class}   {provenance}   "
-        f"jit=tiered-pgo delay=0   comparison={(comparison_key or 'legacy')[:12]}"
+        f"{methodology_label(fingerprint)}   comparison={(comparison_key or 'legacy')[:12]}"
     )
     if fingerprint and not fingerprint.get("comparable", True):
         print("warning: run is not comparable: " + "; ".join(fingerprint["incomparabilityReasons"]))

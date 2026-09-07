@@ -305,6 +305,8 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 {"paired": {}},
                 {"go-paired": {}},
             ))
+        self.assertEqual("jit=unknown (legacy evidence)", bench.methodology_label(None))
+        self.assertEqual("jit=tiered-pgo delay=0", bench.methodology_label({"comparison": {}}))
 
     def test_missing_power_or_changing_processor_count_marks_run_incomparable(self) -> None:
         start = {
