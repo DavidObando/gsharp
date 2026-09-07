@@ -81,6 +81,36 @@ grep -q "run FAILED" "$test_root/run-failed.log"
 grep -q "run succeeded=false" "$test_root/run-failed.log"
 ! grep -q "PR guard PASSED." "$test_root/run-failed.log"
 
+control="$repo_root/build/cs2gs-pr-guard-control.sh"
+if printf 'docs/self-migration-policy.md\0website/docs/intro.md\0' |
+  "$control" relevant-paths; then
+  echo "irrelevant paths unexpectedly selected the expensive guard" >&2
+  exit 1
+fi
+relevant_path=$(
+  printf 'docs/self-migration-policy.md\0src/Core/CodeAnalysis/Binder.cs\0' |
+    "$control" relevant-paths
+)
+[[ "$relevant_path" == src/Core/CodeAnalysis/Binder.cs ]]
+
+timeout_cause=$(printf '%s' \
+  '[{"message":"The job has exceeded the maximum execution time of 1h30m0s"},'\
+'{"message":"The operation was canceled."}]' |
+  "$control" cancellation)
+[[ "$timeout_cause" == timeout ]]
+
+superseded_cause=$(printf '%s' \
+  '[{"message":"Canceling since a higher priority waiting request for cs2gs-pr-guard-4077 exists"},'\
+'{"message":"The operation was canceled."}]' |
+  "$control" cancellation)
+[[ "$superseded_cause" == superseded ]]
+
+unknown_cause=$(printf '%s' '[{"message":"The operation was canceled."}]' |
+  "$control" cancellation)
+[[ "$unknown_cause" == unknown ]]
+
 grep -qx '    timeout-minutes: 90' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -qx '    concurrency:' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -qx '    name: hot-core cancellation cause' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
 
 echo "selfmig PR guard regressions PASSED."
