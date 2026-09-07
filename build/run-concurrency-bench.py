@@ -654,7 +654,10 @@ def combine_loaded_runs(results: list[dict]) -> dict:
     return results[0] if len(results) == 1 else aggregate(results)
 
 
-def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str | None, dict]:
+def load_runs(
+    paths: list[str],
+    allow_incomparable: bool = False,
+) -> tuple[list[dict], list[dict], list[dict], str | None, dict]:
     """Read run JSONs written by an earlier --json invocation."""
     gsharp, gsharp_aot, go = [], [], []
     recorded_class = None
@@ -700,7 +703,12 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
                 "refusing to aggregate incomparable benchmark runs: "
                 f"'{paths[0]}' has key {aggregation_key}, '{path}' has key {key}"
             )
-        if len(paths) > 1 and fingerprint and not fingerprint.get("comparable", True):
+        if (
+            len(paths) > 1
+            and fingerprint
+            and not fingerprint.get("comparable", True)
+            and not allow_incomparable
+        ):
             raise SystemExit(
                 f"refusing to aggregate '{path}': "
                 + "; ".join(fingerprint.get("incomparabilityReasons", ["run marked incomparable"]))
@@ -955,6 +963,12 @@ def main() -> int:
         help="aggregate previously written run JSONs instead of measuring; repeatable. "
              "Several whole runs is what a reported number should rest on — a single run's "
              "interval covers only its own launches.")
+    parser.add_argument(
+        "--allow-incomparable-aggregate",
+        action="store_true",
+        help="aggregate report-only runs whose environment fingerprint is incomplete; "
+             "the result remains incomparable and cannot update or gate a baseline",
+    )
     args = parser.parse_args()
     if args.launches < 1:
         parser.error("--launches must be at least 1")
@@ -976,7 +990,10 @@ def main() -> int:
     launch_order = None
     source_fingerprints = []
     if args.from_json:
-        gsharp_runs, aot_runs, go_runs, recorded_class, metadata = load_runs(args.from_json)
+        gsharp_runs, aot_runs, go_runs, recorded_class, metadata = load_runs(
+            args.from_json,
+            allow_incomparable=args.allow_incomparable_aggregate,
+        )
         measured = combine_loaded_runs(gsharp_runs)
         measured_aot = combine_loaded_runs(aot_runs)
         go_measured = combine_loaded_runs(go_runs)

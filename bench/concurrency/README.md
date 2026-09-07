@@ -153,6 +153,11 @@ spike:
    may report, but cannot relabel untouched rows or gate with a different
    interval method.
 
+   The hosted nightly is deliberately report-only and may lack an observable
+   power identity. It uses `--allow-incomparable-aggregate` to retain a
+   clearly-marked aggregate for diagnosis; that flag never makes the result
+   baseline-comparable, and baseline update/check logic remains report-only.
+
 ## Known limits of the current numbers
 
 Carried here so they are not lost when the numbers are quoted:

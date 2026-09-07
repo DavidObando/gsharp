@@ -114,10 +114,12 @@ jobs:
 
       - name: Aggregate and report
         run: |
+          set -o pipefail
           python3 build/run-concurrency-bench.py \
             --from-json "$RUNNER_TEMP/concurrency-1.json" \
             --from-json "$RUNNER_TEMP/concurrency-2.json" \
             --from-json "$RUNNER_TEMP/concurrency-3.json" \
+            --allow-incomparable-aggregate \
             --json "$RUNNER_TEMP/concurrency.json" \
             | tee "$RUNNER_TEMP/summary.txt"
           {
