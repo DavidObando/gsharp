@@ -3,6 +3,8 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -10,6 +12,7 @@ using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.Tests;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -132,6 +135,31 @@ public class Issue3888ExpandedParamsElementNullabilityTests
     }
 
     [Fact]
+    public void CarrierShapedArrayElement_PromotesNestedElementAndRuns()
+    {
+        string printed = TranslateOblivious("""
+            namespace Demo
+            {
+                public static class Fixture
+                {
+                    public static int Count(params string[][] values) => values.Length;
+                }
+
+                public static class Caller
+                {
+                    public static int Go() => Fixture.Count(null, new[] { "x" });
+                }
+            }
+            """);
+
+        Assert.Contains("func Count(values ...[][]?string)", printed, StringComparison.Ordinal);
+        Assert.Contains("Fixture.Count(nil, []string{\"x\"})", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
+
+        AssertEvaluates(printed, "Caller.Go()", 2);
+    }
+
+    [Fact]
     public void AnnotatedNullableParamsElement_RemainsNullableAndRuns()
     {
         string printed = TranslateOblivious("""
@@ -155,6 +183,52 @@ public class Issue3888ExpandedParamsElementNullabilityTests
         Assert.Contains("Fixture.Count(nil, \"x\")", printed, StringComparison.Ordinal);
 
         AssertEvaluates(printed, "Caller.Go()", 2);
+    }
+
+    [Fact]
+    public void CrossProjectSameArityOverloads_KeepEvidenceOnSelectedParamsPosition()
+    {
+        const string libSource = """
+            namespace Lib
+            {
+                public static class Fixture
+                {
+                    public static int Count(params string[] values) => values.Length;
+                    public static int Count(params object[] values) => values.Length;
+                }
+            }
+            """;
+        const string appSource = """
+            using Lib;
+
+            namespace App
+            {
+                public static class Caller
+                {
+                    public static int Go()
+                    {
+                        string maybe = null;
+                        return Fixture.Count(maybe, "x");
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject library = LoadOblivious(libSource, "Lib");
+        LoadedCSharpProject app = LoadOblivious(
+            appSource,
+            "App",
+            new[] { library.Compilation.ToMetadataReference() });
+        var siblings = new[] { library.Compilation, app.Compilation };
+
+        string printedLibrary = TranslateProject(library, siblings);
+        string printedApp = TranslateProject(app, siblings);
+        TranslationTestValidation.AssertBinds(printedLibrary, printedApp);
+
+        Assert.Contains("func Count(values ...string?)", printedLibrary, StringComparison.Ordinal);
+        Assert.Contains("func Count(values ...object)", printedLibrary, StringComparison.Ordinal);
+        Assert.DoesNotContain("func Count(values ...object?)", printedLibrary, StringComparison.Ordinal);
+        Assert.DoesNotContain("maybe!!", printedApp, StringComparison.Ordinal);
     }
 
     private static void AssertEvaluates(string printed, string expression, object expected)
@@ -188,5 +262,39 @@ public class Issue3888ExpandedParamsElementNullabilityTests
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
         return printed;
+    }
+
+    private static LoadedCSharpProject LoadOblivious(
+        string source,
+        string assemblyName,
+        IReadOnlyList<MetadataReference> extraReferences = null)
+    {
+        IReadOnlyList<MetadataReference> references = extraReferences is null
+            ? CSharpProjectLoader.RuntimeReferences()
+            : CSharpProjectLoader.RuntimeReferences().Concat(extraReferences).ToList();
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { (assemblyName + ".cs", source) },
+            references,
+            assemblyName);
+        Assert.True(
+            project.BoundWithoutErrors,
+            $"{assemblyName} should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        Assert.Equal(NullableContextOptions.Disable, project.Compilation.Options.NullableContextOptions);
+        return project;
+    }
+
+    private static string TranslateProject(
+        LoadedCSharpProject project,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations,
+            repositoryCompilations: siblingCompilations);
+        return GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
     }
 }

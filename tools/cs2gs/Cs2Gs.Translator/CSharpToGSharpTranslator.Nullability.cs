@@ -291,7 +291,8 @@ public sealed partial class CSharpToGSharpTranslator
         private GTypeReference PromoteParamsElementIfUsedAsNullable(
             GTypeReference type,
             IParameterSymbol parameter,
-            ITypeSymbol elementType)
+            ITypeSymbol elementType,
+            bool elementNestedInArrayType)
         {
             if (type == null
                 || type.IsNullable
@@ -301,12 +302,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return type;
             }
 
-            return ObliviousNullabilityAnalyzer.IsParamsElementTainted(
+            if (!ObliviousNullabilityAnalyzer.IsParamsElementTainted(
                 this.context.Compilation,
                 parameter,
-                this.context.RepositoryCompilations ?? this.context.SiblingCompilations)
-                    ? MakeNullable(type)
-                    : type;
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations))
+            {
+                return type;
+            }
+
+            return elementNestedInArrayType && type is ArrayTypeReference array
+                ? new ArrayTypeReference(MakeNullable(array.ElementType), array.Rank)
+                {
+                    IsNullable = array.IsNullable,
+                }
+                : MakeNullable(type);
         }
 
         // Issue #2113/#914: method/local-function returns are just another

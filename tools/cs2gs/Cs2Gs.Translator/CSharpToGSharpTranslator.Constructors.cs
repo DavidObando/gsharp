@@ -995,13 +995,20 @@ public sealed partial class CSharpToGSharpTranslator
             bool variadic = symbol.IsParams
                 && (symbol.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(symbol.Type));
             ITypeSymbol parameterType = symbol.Type;
-            ITypeSymbol variadicElementType = null;
+            ITypeSymbol variadicElementType =
+                variadic && symbol.Type is IArrayTypeSymbol paramsArray
+                    ? paramsArray.ElementType
+                    : null;
+            bool variadicElementNestedInArrayType = false;
             if (variadic && parameterType is IArrayTypeSymbol arrayType
                 && arrayType.ElementType is not IArrayTypeSymbol
                 && !IsSupportedParamsCollectionType(arrayType.ElementType))
             {
                 parameterType = arrayType.ElementType;
-                variadicElementType = parameterType;
+            }
+            else if (variadicElementType != null)
+            {
+                variadicElementNestedInArrayType = true;
             }
 
             // An array params whose ELEMENT is itself carrier-shaped (e.g.
@@ -1026,7 +1033,8 @@ public sealed partial class CSharpToGSharpTranslator
                 type = this.PromoteParamsElementIfUsedAsNullable(
                     type,
                     symbol,
-                    variadicElementType);
+                    variadicElementType,
+                    variadicElementNestedInArrayType);
             }
             else if (!variadic && promoteNullability)
             {
