@@ -340,7 +340,8 @@ public sealed class MigrationPipeline
                         destinationRoot,
                         repositoryFiles,
                         this.options.RepositoryAdditionalFiles,
-                        excludedScope);
+                        excludedScope,
+                        this.options.RepositoryTranslations.Keys);
                 }
                 catch (InvalidOperationException ex)
                 {

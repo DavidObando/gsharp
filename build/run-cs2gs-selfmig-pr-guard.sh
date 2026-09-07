@@ -257,7 +257,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --artifacts "$work_root/runs" \
   --config Release \
   "${excludes[@]}" \
-  | tee "$work_root/guard.log"
+  2>&1 | tee "$work_root/guard.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
 
@@ -272,6 +272,7 @@ fi
 green=$(jq '[.apps[] | select(.succeeded)] | length' "$run_json")
 total=$(jq '.apps | length' "$run_json")
 failed=$(jq -r '.apps[] | select(.succeeded | not) | .appId' "$run_json")
+run_succeeded=$(jq -r '.succeeded' "$run_json")
 
 echo
 echo "PR guard: $green/$total guarded app(s) migrated and compiled in ${elapsed}s (migrate exit $migrate_exit)."
@@ -301,6 +302,8 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     echo
     echo "\`$green/$total\` guarded app(s) migrated + compiled in ${elapsed}s."
     echo
+    echo "Migration run: **$([[ "$run_succeeded" == true ]] && echo PASSED || echo FAILED)** (exit \`$migrate_exit\`)."
+    echo
     if [[ -n "$failed" ]]; then
       echo "**Failed:**"
       echo "$failed" | sed 's/^/- `/; s/$/`/'
@@ -312,6 +315,14 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 
+guard_exit=$migrate_exit
+if (( guard_exit == 0 )) && [[ "$run_succeeded" != true ]]; then
+  guard_exit=1
+fi
+if (( guard_exit == 0 )) && [[ -n "$failed" ]]; then
+  guard_exit=1
+fi
+
 if [[ -n "$failed" ]]; then
   echo >&2
   echo "PR guard FAILED: the following guarded app(s) did not survive migration:" >&2
@@ -320,7 +331,17 @@ if [[ -n "$failed" ]]; then
   echo "This is the #3831/#3896/#3905 hazard: the C# compiles, the migrated G#" >&2
   echo "does not. See $work_root/guard.log and the uploaded run artifacts for the" >&2
   echo "diagnostics, and fix the source shape rather than the baseline." >&2
-  exit 1
+  exit "$guard_exit"
+fi
+
+if (( guard_exit != 0 )); then
+  echo >&2
+  echo "PR guard FAILED: cs2gs reported a global migration failure even though" >&2
+  echo "all guarded app stage rows are green (run succeeded=$run_succeeded," >&2
+  echo "migrate exit $migrate_exit)." >&2
+  echo "See $work_root/guard.log and run.json; global repository validation and" >&2
+  echo "report failures must never be masked by the per-app summary." >&2
+  exit "$guard_exit"
 fi
 
 echo "PR guard PASSED."

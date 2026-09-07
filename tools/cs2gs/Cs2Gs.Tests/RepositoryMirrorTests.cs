@@ -206,6 +206,72 @@ public sealed class RepositoryMirrorTests
     }
 
     [Fact]
+    public void ValidateCompleted_RejectsUnexpectedOutput()
+    {
+        using var scratch = new ScratchDirectory();
+        string source = Path.Combine(scratch.Path, "source");
+        string destination = Path.Combine(scratch.Path, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        File.WriteAllText(Path.Combine(source, "Product.slnx"), "<Solution />");
+        File.WriteAllText(Path.Combine(destination, "Product.slnx"), "<Solution />");
+        File.WriteAllText(Path.Combine(destination, "Unexpected.gs"), "func unexpected() {}");
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+            () => RepositoryMirror.ValidateCompleted(
+                source,
+                destination,
+                new[] { "Product.slnx" }));
+
+        Assert.Contains("unexpected file 'Unexpected.gs'", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ValidateCompleted_AcceptsTranslatedLinkedOutputExcludedByAnotherProject()
+    {
+        using var scratch = new ScratchDirectory();
+        string source = Path.Combine(scratch.Path, "source");
+        string destination = Path.Combine(scratch.Path, "destination");
+        string sharedSource = Path.Combine(source, "test", "Shared", "GoldenFile.cs");
+        string excludedProject = Path.Combine(source, "test", "Core.Tests", "Core.Tests.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(sharedSource));
+        Directory.CreateDirectory(Path.GetDirectoryName(excludedProject));
+        Directory.CreateDirectory(Path.Combine(destination, "test", "Shared"));
+        File.WriteAllText(Path.Combine(source, "Product.slnx"), "<Solution />");
+        File.WriteAllText(sharedSource, "internal static class GoldenFile {}");
+        File.WriteAllText(
+            excludedProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <Compile Include="..\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(destination, "Product.slnx"), "<Solution />");
+        File.WriteAllText(
+            Path.Combine(destination, "test", "Shared", "GoldenFile.gs"),
+            "internal class GoldenFile {}");
+        RepositoryExcludedScope scope = RepositoryExcludedScope.Compute(source, new[] { excludedProject });
+
+        RepositoryMirror.ValidateCompleted(
+            source,
+            destination,
+            new[]
+            {
+                "Product.slnx",
+                "test/Core.Tests/Core.Tests.csproj",
+                "test/Shared/GoldenFile.cs",
+            },
+            excludedScope: scope,
+            translatedSourceFiles: new[]
+            {
+                sharedSource,
+                Path.Combine(source, "out", "obj", "Core", "Generated.cs"),
+            });
+    }
+
+    [Fact]
     public void RepositoryDiscovery_IncludesTestsAndUsesRelativeProjectPaths()
     {
         using var scratch = new ScratchDirectory();

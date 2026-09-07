@@ -120,6 +120,9 @@ jobs:
       - name: Restore .NET local tools
         run: dotnet tool restore
 
+      - name: Test PR guard failure propagation
+        run: ./build/test-cs2gs-selfmig-pr-guard.sh
+
       # The script builds the solution itself (which repacks the
       # Gsharp.NET.Sdk nupkg the compile stage consumes) and then migrates.
       # That ordering is load-bearing: a freshly built gsc.dll alone is
