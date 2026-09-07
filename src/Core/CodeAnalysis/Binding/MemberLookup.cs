@@ -5862,6 +5862,23 @@ internal sealed class MemberLookup
                     imp.OpenDefinition.GetGenericArguments(),
                     imp.TypeArguments,
                     contextObject);
+            case NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true } nullableValue:
+                // Issue #4035: a `NullableTypeSymbol` answers its UNDERLYING
+                // type's `ClrType`, so the `default` arm below would erase
+                // `int32?` to a bare `System.Int32` and close
+                // `Dictionary<,>.ValueCollection` over `int32` while the map's
+                // own backing dictionary is `Dictionary<string,
+                // Nullable<int32>>`. `for v in m.Values` then loaded a
+                // `ValueCollection<string, Nullable<int32>>.Enumerator` where
+                // the IL claimed `ValueCollection<string, int32>.Enumerator`
+                // and ilverify rejected it with `StackUnexpected` — the same
+                // dropped-`Nullable<>` defect as the map's construction, one
+                // erasure further out. Build the wrapper in `contextObject`'s
+                // own load context for the reason `BuildErasedTupleInContext`
+                // and `ResolveErasedObjectInContext` exist: a host
+                // `typeof(Nullable<>)` cannot close over an MLC-loaded
+                // underlying.
+                return BuildErasedNullableInContext(nullableValue, contextObject);
             case TupleTypeSymbol tuple:
                 // Issue #1902: a positional tuple carrying a same-compilation
                 // user element (e.g. the `(Owner, Pet)` transparent identifier
@@ -5918,6 +5935,46 @@ internal sealed class MemberLookup
         }
 
         return BuildErasedTupleInContext(erasedElements, 0, erasedElements.Length, contextObject);
+    }
+
+    /// <summary>
+    /// Issue #4035: the <c>Nullable&lt;T&gt;</c> analogue of
+    /// <see cref="BuildErasedTupleInContext(TupleTypeSymbol, Type)"/> — closes
+    /// <paramref name="contextObject"/>'s own <c>System.Nullable`1</c> over the
+    /// erased underlying so a nullable VALUE type keeps its wrapper through
+    /// erasure instead of collapsing to the bare underlying that
+    /// <see cref="TypeSymbol.ClrType"/> answers.
+    /// </summary>
+    /// <param name="nullable">The nullable value type symbol.</param>
+    /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
+    /// <returns>The erased <c>Nullable&lt;T&gt;</c>, or the bare underlying when the context cannot name it.</returns>
+    private static Type? BuildErasedNullableInContext(NullableTypeSymbol nullable, Type contextObject)
+    {
+        var underlying = ProjectSymbolicArgToErasedClr(nullable.UnderlyingType, contextObject);
+        if (underlying == null || !underlying.IsValueType)
+        {
+            // The underlying erased to the `object` placeholder (or to a
+            // reference type); `Nullable<>` cannot close over it, and the bare
+            // erasure is the shape every other reader already expects.
+            return underlying;
+        }
+
+        var openNullable = contextObject.Assembly == typeof(object).Assembly
+            ? typeof(Nullable<>)
+            : contextObject.Assembly.GetType("System.Nullable`1", throwOnError: false);
+        if (openNullable == null)
+        {
+            return underlying;
+        }
+
+        try
+        {
+            return openNullable.MakeGenericType(underlying);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or NotSupportedException or TypeLoadException)
+        {
+            return underlying;
+        }
     }
 
     private static Type? BuildErasedTupleInContext(Type[] elementTypes, int start, int count, Type contextObject)

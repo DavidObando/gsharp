@@ -423,10 +423,16 @@ internal sealed partial class MethodBodyEmitter
                     : null;
                 var keyParameter = dictionaryArguments is { Length: 2 }
                     ? dictionaryArguments[0]
-                    : Invariant.Required(mapType.KeyType.ClrType, "a map key has a CLR representation");
+                    // Issue #4035: read the map's key/value through the same
+                    // `Nullable<>` correction its backing dictionary is now
+                    // built with, so this fallback cannot describe
+                    // `map[string, int32?]`'s `TryGetValue` with a bare
+                    // `int32` while the dictionary's own value type is
+                    // `Nullable<int32>`.
+                    : Invariant.Required(NullableLifting.GetEffectiveClrType(mapType.KeyType), "a map key has a CLR representation");
                 var valueParameter = dictionaryArguments is { Length: 2 }
                     ? dictionaryArguments[1]
-                    : Invariant.Required(mapType.ValueType.ClrType, "a map value has a CLR representation");
+                    : Invariant.Required(NullableLifting.GetEffectiveClrType(mapType.ValueType), "a map value has a CLR representation");
                 tryGet = dictType.GetMethod(
                     "TryGetValue",
                     new[] { keyParameter, valueParameter.MakeByRefType() });
