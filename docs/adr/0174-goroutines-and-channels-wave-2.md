@@ -3318,6 +3318,33 @@ implementation had to refine it.
     one fewer exception, but remains true in the same sense: what is lenient is
     the CLR argument-conversion path specifically, not the language.
 
+49. **D11 run identity and raw evidence are part of the result (issue #3901).**
+    Errata 33 and 35 fixed the tiering mechanism, but the JSON still retained
+    only medians, confidence intervals and a CPU-model key. That was not enough
+    to distinguish a code shift from a toolchain, power-state or build shift
+    after the process exited.
+
+    The JIT mode now removes inherited tier/JIT overrides, explicitly enables
+    tiered compilation and dynamic PGO, pins the call-counting delay to zero,
+    and keeps errata 35's 120 call-counted warm-up entries. Every result retains
+    each process launch's sample and fingerprints the benchmark definition,
+    built assemblies/binaries, source revision and dirty state, .NET/Go
+    versions, OS/kernel, CPU model and affinity, governor/scaling driver or
+    power source, and start/end load/frequency observations. It changes no
+    governor and requires no privileged host setup.
+
+    Comparability is explicit rather than inferred. A comparison key covers the
+    methodology, scenario scope, measured modes, launch count/order, warm-up,
+    JIT settings, benchmark definition, host/power identity and toolchains.
+    Aggregating whole runs additionally requires identical build hashes. A
+    mismatch is rejected; an older baseline without the key reports but cannot
+    gate until it is re-recorded on its named machine. Raw launch samples and
+    per-run medians survive aggregation, so a shifted or bimodal distribution
+    remains inspectable. JIT, NativeAOT and Go launches rotate order when they
+    are measured together, preventing a warming or drifting host from always
+    favoring the same runtime. The existing `gsharp`, `gsharp_aot`, `go` and
+    `hardwareClass` JSON fields remain unchanged for dashboard consumers.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

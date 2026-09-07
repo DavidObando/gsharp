@@ -45,7 +45,8 @@ python3 build/run-concurrency-bench.py --go --aot --check-baseline bench/concurr
 
 # Drop --aot while iterating: it adds a NativeAOT publish (minutes) per run.
 # One scenario, fewer launches, while iterating
-python3 build/run-concurrency-bench.py --scenario rendezvous --launches 3
+python3 build/run-concurrency-bench.py --scenario select-ready --launches 3 \
+  --json out/select-ready.json
 
 # Record what was measured. Refuses to loosen a ceiling without a stated reason.
 python3 build/run-concurrency-bench.py --go --update-baseline bench/concurrency/baseline.json
@@ -79,13 +80,22 @@ spike:
    it calls stays at Tier0. That is a real measurement this harness reported for
    weeks, and it moved `select-ready` by **3.4×** between launches of an
    unchanged binary (issue #3901). The runner therefore sets
-   `DOTNET_TC_CallCountingDelayMs=0` for the JIT mode. Do not remove it, and do
-   not substitute `DOTNET_TieredCompilation=0`, which also discards dynamic PGO.
+   `DOTNET_TieredCompilation=1`, `DOTNET_TieredPGO=1`, and
+   `DOTNET_TC_CallCountingDelayMs=0` for the JIT mode, after removing inherited
+   `DOTNET_*` / `COMPlus_*` tier and JIT overrides. Do not substitute
+   `DOTNET_TieredCompilation=0`, which also discards dynamic PGO.
 2. **Release build, both sides.**
 3. **Multiple process launches.** In-process repetition alone understates
-   variance. Report a confidence interval, not a single number.
+   variance. Report a confidence interval, not a single number. JSON retains
+   `launch_samples_ns` for every row; aggregation retains those samples and the
+   per-run medians instead of collapsing the evidence to one statistic.
 4. **Pin and record both toolchains and the hardware class.** The reference
    numbers in ADR-0174 are .NET 10.0.11 / Go 1.27.0, Apple silicon, 18 cores.
+   Every JSON result also records the runner and benchmark-definition hashes,
+   built-artifact hashes, git revision/dirty state, OS/kernel, CPU model and
+   affinity, runtime versions and effective runtime settings,
+   governor/scaling driver or power source, and start/end load and frequency
+   samples. These are observations, not requests to change a host's governor.
 5. **Measure the G# side in both modes.** `--aot` adds a NativeAOT row beside
    the pinned-tier JIT row. Neither is "the" number: the JIT row is what a
    deployed G# program does, the AOT row is what the language does once
@@ -112,6 +122,13 @@ spike:
    recorded ceiling **and** the confidence intervals are disjoint **and** the
    hardware class matches. Any one of those alone produces false failures often
    enough to get the gate switched off, which is the real failure mode.
+8. **Compare only like methodology.** Run JSON carries a comparison key over
+   the scenario scope, modes, launch count/order, warm-up, JIT settings,
+   benchmark definition, host/power state and toolchains. Whole-run aggregation
+   additionally requires identical build hashes. Different keys are rejected;
+   an older baseline without a comparison key is reported but cannot gate until
+   it is re-recorded. When Go is requested, JIT/AOT/Go launch order rotates on
+   each sample so a warming or drifting host cannot consistently favor one side.
 
 ## Known limits of the current numbers
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -68,6 +69,11 @@ def smoke() -> int:
 
     runner = (REPO / "build" / "run-concurrency-bench.py").read_text()
     compile(runner, "run-concurrency-bench.py", "exec")
+    tests = REPO / "build" / "test-concurrency-bench.py"
+    if not tests.exists():
+        failures.append("build/test-concurrency-bench.py is missing")
+    else:
+        subprocess.run([sys.executable, str(tests)], check=True, cwd=REPO)
 
     for failure in failures:
         print(f"error: {failure}", file=sys.stderr)
