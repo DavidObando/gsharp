@@ -84,6 +84,18 @@ internal sealed partial class ExpressionBinder
         // has to see it.
         var constructedReceiverFailureHandled = false;
 
+        // Issue #4056: the SYMBOLIC constructed view of a generic receiver whose
+        // closed CLR shape is type-erased — `Handler[MyOptions]` over a
+        // same-compilation `MyOptions` closes over the `object` surrogate
+        // because the user type has no CLR type while binding. The read
+        // (ExpressionBinder.Access.MemberLookup.cs) and simple-write
+        // (BindMemberFieldAssignmentExpression) paths both carry it onto the
+        // bound node as the static container so the emitter parents the field
+        // reference at `Handler<MyOptions>`; this path dropped it and the
+        // emitted TypeSpec named `Handler<object>`, which ILVerify rejects
+        // (UnsatisfiedFieldParentInst) and the CLR refuses to load.
+        ImportedTypeSymbol? staticSymbolicContainer = null;
+
         var staticLeftName = accessor.LeftPart as NameExpressionSyntax;
         TypeSymbol? staticSourceType = null;
         ImportedClassSymbol? staticImportedOverride = null;
@@ -226,6 +238,12 @@ internal sealed partial class ExpressionBinder
             else if (ctorImported != null)
             {
                 receiverClrType = ctorImported.ClassType;
+
+                // Issue #4056: `ClassType` is the ERASED close
+                // (`Handler<object>`); the symbolic view is what names the
+                // construction the author wrote. Carry it so the emitted
+                // TypeSpec matches the read and simple-write spellings.
+                staticSymbolicContainer = ctorImported.SymbolicReceiver;
                 flags = BindingFlags.Public | BindingFlags.Static;
             }
             else
@@ -438,7 +456,8 @@ internal sealed partial class ExpressionBinder
                     eventName,
                     eventNameSyntax,
                     syntax,
-                    baseOpSyntaxKind);
+                    baseOpSyntaxKind,
+                    staticSymbolicContainer);
                 if (clrCompound != null)
                 {
                     return clrCompound;
