@@ -394,6 +394,232 @@ public class Issue2918InlineLambdaErasedReceiverTests
             WithExecutionScope(declarations, statements, topLevel));
     }
 
+    [Fact]
+    public void Issue3874_ReceiverSubstitution_PreservesImportedDelegateIdentity_VerifyLoadAndRun()
+    {
+        const string source = """
+            package Issue3874ImportedDelegates
+            import System
+
+            class GenericPredicateFirst[T] {
+                func Add(cb Predicate[T]) string { return "generic-pred-first:pred" }
+                func Add(cb Func[T, bool]) string { return "generic-pred-first:func" }
+                func Call(cb Predicate[T]) string { return Add(cb) }
+                func Call(cb Func[T, bool]) string { return Add(cb) }
+            }
+
+            class GenericFuncFirst[T] {
+                func Add(cb Func[T, bool]) string { return "generic-func-first:func" }
+                func Add(cb Predicate[T]) string { return "generic-func-first:pred" }
+            }
+
+            class NonGeneric {
+                func Add(cb Predicate[int32]) string { return "non-generic:pred" }
+                func Add(cb Func[int32, bool]) string { return "non-generic:func" }
+            }
+
+            class GenericClosed[T] {
+                func Add(cb Predicate[int32]) string { return "generic-closed:pred" }
+                func Add(cb Func[int32, bool]) string { return "generic-closed:func" }
+            }
+
+            class ReceiverAndMethodGeneric[T] {
+                func Add[U](tag U, cb Predicate[T]) string { return "method:pred:" + tag.ToString() }
+                func Add[U](tag U, cb Func[T, bool]) string { return "method:func:" + tag.ToString() }
+            }
+
+            class ReceiverInferenceConflict[T] {
+                func Pick[U](cb Predicate[T], tag U) string { return "receiver" }
+                func Pick[U](cb Predicate[U], tag U) string { return "method" }
+            }
+
+            open class GenericBase[T] {
+                func Add(cb Predicate[T]) string { return "base:pred" }
+                func Add(cb Func[T, bool]) string { return "base:func" }
+                func Pick[U](tag U, cb Predicate[T]) string { return "base-method:pred:" + tag.ToString() }
+                func Pick[U](tag U, cb Func[T, bool]) string { return "base-method:func:" + tag.ToString() }
+            }
+
+            open class Derived : GenericBase[int32] {
+                func CallBase(cb Predicate[int32]) string { return base.Add(cb) }
+                func CallBase(cb Func[int32, bool]) string { return base.Add(cb) }
+            }
+
+            open class GenericDerived[T] : GenericBase[int32] {
+            }
+
+            func Always(value int32) bool { return true }
+            func AlwaysString(value string) bool { return true }
+            func ThroughConstraint[X GenericBase[int32]](
+                value X,
+                predicate Predicate[int32],
+                function Func[int32, bool]) string {
+                return value.Add(predicate) + "|" + value.Add(function)
+            }
+            func ThroughGenericConstraint[X GenericBase[int32]](
+                value X,
+                predicate Predicate[int32],
+                function Func[int32, bool]) string {
+                return value.Pick[string]("explicit", predicate)
+                    + "|" + value.Pick("inferred", function)
+            }
+            func ThroughDerivedConstraint[X Derived](
+                value X,
+                predicate Predicate[int32],
+                function Func[int32, bool]) string {
+                return value.Add(predicate) + "|" + value.Add(function)
+            }
+            func ThroughGenericDerivedConstraint[X GenericDerived[string]](
+                value X,
+                predicate Predicate[int32],
+                function Func[int32, bool]) string {
+                return value.Add(predicate) + "|" + value.Add(function)
+                    + "|" + value.Pick[string]("explicit", predicate)
+                    + "|" + value.Pick("inferred", function)
+            }
+
+            func Main() {
+                let keepAlive Action = () -> { }
+                let predicate Predicate[int32] = Always
+                let function Func[int32, bool] = Always
+
+                let genericPredicateFirst = GenericPredicateFirst[int32]()
+                Console.WriteLine(genericPredicateFirst.Add(predicate))
+                Console.WriteLine(genericPredicateFirst.Add(function))
+                Console.WriteLine(genericPredicateFirst.Call(predicate))
+                Console.WriteLine(genericPredicateFirst.Call(function))
+
+                let genericFuncFirst = GenericFuncFirst[int32]()
+                Console.WriteLine(genericFuncFirst.Add(predicate))
+                Console.WriteLine(genericFuncFirst.Add(function))
+
+                let nonGeneric = NonGeneric()
+                Console.WriteLine(nonGeneric.Add(predicate))
+                Console.WriteLine(nonGeneric.Add(function))
+
+                let genericClosed = GenericClosed[string]()
+                Console.WriteLine(genericClosed.Add(predicate))
+                Console.WriteLine(genericClosed.Add(function))
+
+                let methodGeneric = ReceiverAndMethodGeneric[int32]()
+                Console.WriteLine(methodGeneric.Add[string]("explicit", predicate))
+                Console.WriteLine(methodGeneric.Add("inferred", function))
+
+                let stringPredicate Predicate[string] = AlwaysString
+                Console.WriteLine(ReceiverInferenceConflict[int32]().Pick(stringPredicate, "method"))
+
+                let derived = Derived()
+                Console.WriteLine(derived.Add(predicate))
+                Console.WriteLine(derived.Add(function))
+                Console.WriteLine(derived.CallBase(predicate))
+                Console.WriteLine(derived.CallBase(function))
+                Console.WriteLine(ThroughConstraint[Derived](derived, predicate, function))
+                Console.WriteLine(ThroughGenericConstraint[Derived](derived, predicate, function))
+                Console.WriteLine(ThroughDerivedConstraint[Derived](derived, predicate, function))
+                let genericDerived = GenericDerived[string]()
+                Console.WriteLine(ThroughGenericDerivedConstraint[GenericDerived[string]](
+                    genericDerived,
+                    predicate,
+                    function))
+                keepAlive()
+            }
+            """;
+
+        Assert.Equal(
+            string.Join(
+                Environment.NewLine,
+                "generic-pred-first:pred",
+                "generic-pred-first:func",
+                "generic-pred-first:pred",
+                "generic-pred-first:func",
+                "generic-func-first:pred",
+                "generic-func-first:func",
+                "non-generic:pred",
+                "non-generic:func",
+                "generic-closed:pred",
+                "generic-closed:func",
+                "method:pred:explicit",
+                "method:func:inferred",
+                "method",
+                "base:pred",
+                "base:func",
+                "base:pred",
+                "base:func",
+                "base:pred|base:func",
+                "base-method:pred:explicit|base-method:func:inferred",
+                "base:pred|base:func",
+                "base:pred|base:func|base-method:pred:explicit|base-method:func:inferred",
+                string.Empty),
+            CompileVerifyLoadAndRun(source, expectedSourceTypeName: string.Empty));
+    }
+
+    [Fact]
+    public void Issue3874_ReceiverSubstitution_PreservesSourceNamedDelegateIdentity_VerifyLoadAndRun()
+    {
+        const string source = """
+            package Issue3874NamedDelegates
+            import System
+
+            delegate First[T](value T) bool;
+            delegate Second[T](value T) bool;
+
+            class NamedOverloads[T] {
+                func Add(cb First[T]) string { return "first" }
+                func Add(cb Second[T]) string { return "second" }
+            }
+
+            func Always(value int32) bool { return true }
+
+            func Main() {
+                let keepAlive Action = () -> { }
+                let first First[int32] = Always
+                let second Second[int32] = Always
+                let overloads = NamedOverloads[int32]()
+                Console.WriteLine(overloads.Add(first))
+                Console.WriteLine(overloads.Add(second))
+                keepAlive()
+            }
+            """;
+
+        Assert.Equal(
+            $"first{Environment.NewLine}second{Environment.NewLine}",
+            CompileVerifyLoadAndRun(source, expectedSourceTypeName: string.Empty));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Issue3874_StructuralArguments_RemainAmbiguous(bool funcFirst, bool methodGroup)
+    {
+        var overloads = funcFirst
+            ? """
+                func Add(cb Func[T, bool]) string { return "func" }
+                func Add(cb Predicate[T]) string { return "pred" }
+                """
+            : """
+                func Add(cb Predicate[T]) string { return "pred" }
+                func Add(cb Func[T, bool]) string { return "func" }
+                """;
+        var argument = methodGroup ? "Always" : "(value int32) -> true";
+        var source = $$"""
+            package Issue3874StructuralAmbiguity
+            import System
+
+            class Overloads[T] {
+            {{overloads}}
+            }
+
+            func Always(value int32) bool { return true }
+
+            Console.WriteLine(Overloads[int32]().Add({{argument}}))
+            """;
+
+        var diagnostics = CompileExpectingFailure(source);
+        Assert.Contains("GS0266", diagnostics, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
