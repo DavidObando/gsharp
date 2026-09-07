@@ -719,6 +719,58 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     /// <summary>
+    /// Issue #3888: whether a <c>params T[]</c> parameter's expanded ELEMENT
+    /// position receives direct or transitive null evidence. This is deliberately
+    /// separate from <see cref="IsTainted(CSharpCompilation, ISymbol, IReadOnlyList{CSharpCompilation})"/>,
+    /// which describes the nullable array/carrier position.
+    /// </summary>
+    /// <param name="compilation">The compilation containing the declaration or call evidence.</param>
+    /// <param name="parameter">The params-array declaration whose element position is queried.</param>
+    /// <param name="siblingCompilations">Other compilations loaded in the same translation run.</param>
+    /// <returns><see langword="true"/> when an expanded element can be null.</returns>
+    public static bool IsParamsElementTainted(
+        CSharpCompilation compilation,
+        IParameterSymbol parameter,
+        IReadOnlyList<CSharpCompilation> siblingCompilations)
+    {
+        if (parameter == null
+            || compilation == null
+            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+        {
+            return false;
+        }
+
+        string parameterId = ParamsElementId(parameter);
+        if (parameterId == null)
+        {
+            return false;
+        }
+
+        RegisterSourceAssemblies(compilation, siblingCompilations);
+        IEnumerable<CSharpCompilation> candidates =
+            new[] { compilation }.Concat(siblingCompilations ?? Enumerable.Empty<CSharpCompilation>());
+        foreach (CSharpCompilation candidateCompilation in candidates.Distinct())
+        {
+            if (candidateCompilation == null
+                || candidateCompilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+            {
+                continue;
+            }
+
+            TaintResult result = Cache.GetValue(candidateCompilation, Compute);
+            if (result.ParamsElementTainted.Contains(parameterId)
+                || result.ParamsElementEdges.Any(edge =>
+                    edge.Target == parameterId
+                    && IsTainted(candidateCompilation, edge.Source, siblingCompilations)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Whether one reference-typed leaf inside a tuple-valued declaration is
     /// null-tainted. Tuple leaves are tracked independently so evidence for
     /// one element never widens its siblings.
@@ -1795,6 +1847,8 @@ internal static class ObliviousNullabilityAnalyzer
         var tupleScalarEdges = new List<(TupleElementKey Target, ISymbol Source)>();
         var scalarTupleEdges = new List<(ISymbol Target, TupleElementKey Source)>();
         var delegateReturnEdges = new List<(ISymbol Target, ISymbol Source)>();
+        var paramsElementTainted = new HashSet<string>(System.StringComparer.Ordinal);
+        var paramsElementEdges = new List<(string Target, ISymbol Source)>();
 
         foreach (SyntaxTree tree in compilation.SyntaxTrees)
         {
@@ -1804,7 +1858,14 @@ internal static class ObliviousNullabilityAnalyzer
             foreach (SyntaxNode node in root.DescendantNodes())
             {
                 SeedDirectTaint(node, model, tainted);
-                CollectEdges(node, model, tainted, edges, scalarTupleEdges);
+                CollectEdges(
+                    node,
+                    model,
+                    tainted,
+                    edges,
+                    scalarTupleEdges,
+                    paramsElementTainted,
+                    paramsElementEdges);
             }
 
             // Method / accessor / local-function RETURN taint: a `return null`,
@@ -1895,7 +1956,9 @@ internal static class ObliviousNullabilityAnalyzer
             tupleEdges,
             tupleScalarEdges,
             scalarTupleEdges,
-            delegateReturnEdges);
+            delegateReturnEdges,
+            paramsElementTainted,
+            paramsElementEdges);
     }
 
     private static void SeedEfEntityPropertyTaint(
@@ -2005,7 +2068,9 @@ internal static class ObliviousNullabilityAnalyzer
         SemanticModel model,
         HashSet<ISymbol> tainted,
         List<(ISymbol Target, ISymbol Source)> edges,
-        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges)
+        List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
+        HashSet<string> paramsElementTainted,
+        List<(string Target, ISymbol Source)> paramsElementEdges)
     {
         // Interprocedural parameter taint: an argument that is directly null or
         // reads a (possibly tainted) declaration flows to the bound parameter, so
@@ -2036,6 +2101,11 @@ internal static class ObliviousNullabilityAnalyzer
             or ElementBindingExpressionSyntax)
         {
             CollectArgumentEdges(node, model, tainted, edges, scalarTupleEdges);
+            CollectExpandedParamsElementEdges(
+                node,
+                model,
+                paramsElementTainted,
+                paramsElementEdges);
         }
 
         switch (node)
@@ -2096,6 +2166,86 @@ internal static class ObliviousNullabilityAnalyzer
                 break;
         }
     }
+
+    // Issue #3888: Roslyn represents an expanded params tail as one synthesized
+    // array argument, so the ordinary argument→parameter pass above sees only
+    // the carrier. Walk the source arguments positionally and record evidence
+    // against the distinct element position. A normal-form array argument is
+    // excluded by its conversion to the full carrier type.
+    private static void CollectExpandedParamsElementEdges(
+        SyntaxNode call,
+        SemanticModel model,
+        HashSet<string> paramsElementTainted,
+        List<(string Target, ISymbol Source)> paramsElementEdges)
+    {
+        BaseArgumentListSyntax argumentList = call switch
+        {
+            InvocationExpressionSyntax invocation => invocation.ArgumentList,
+            BaseObjectCreationExpressionSyntax creation => creation.ArgumentList,
+            ConstructorInitializerSyntax initializer => initializer.ArgumentList,
+            ElementAccessExpressionSyntax elementAccess => elementAccess.ArgumentList,
+            ElementBindingExpressionSyntax elementBinding => elementBinding.ArgumentList,
+            _ => null,
+        };
+        ISymbol callable = model.GetSymbolInfo(call).Symbol;
+        ImmutableArray<IParameterSymbol> parameters = callable switch
+        {
+            IMethodSymbol method => method.Parameters,
+            IPropertySymbol property => property.Parameters,
+            _ => default,
+        };
+        if (argumentList == null
+            || parameters.IsDefaultOrEmpty
+            || parameters[^1] is not { IsParams: true, Type: IArrayTypeSymbol array } parameter
+            || array.ElementType is not { IsReferenceType: true }
+            || array.ElementType.NullableAnnotation == NullableAnnotation.Annotated)
+        {
+            return;
+        }
+
+        string target = ParamsElementId(parameter);
+        if (target == null)
+        {
+            return;
+        }
+
+        int firstExpandedPosition = parameters.Length - 1;
+        for (int i = firstExpandedPosition; i < argumentList.Arguments.Count; i++)
+        {
+            ArgumentSyntax argument = argumentList.Arguments[i];
+            if (argument.NameColon != null)
+            {
+                continue;
+            }
+
+            ITypeSymbol convertedType = model.GetTypeInfo(argument.Expression).ConvertedType;
+            if (convertedType != null
+                && SymbolEqualityComparer.Default.Equals(convertedType, parameter.Type))
+            {
+                continue;
+            }
+
+            if (IsDirectlyNullable(argument.Expression, model))
+            {
+                paramsElementTainted.Add(target);
+                continue;
+            }
+
+            foreach (ISymbol source in ResolveSources(argument.Expression, model))
+            {
+                paramsElementEdges.Add((target, source));
+            }
+        }
+    }
+
+    // Parameters do not have documentation IDs of their own. The owning
+    // method's ID includes its full parameter-type signature, and the ordinal
+    // selects this declaration position without the overload ambiguity of the
+    // general-purpose cross-compilation remapper.
+    private static string ParamsElementId(IParameterSymbol parameter) =>
+        parameter?.ContainingSymbol?.OriginalDefinition.GetDocumentationCommentId() is { } ownerId
+            ? ownerId + ":" + parameter.Ordinal
+            : null;
 
     // Interprocedural: map each call argument to its bound parameter and add a
     // taint edge (or a direct taint for a directly-null argument), so a parameter
@@ -5082,7 +5232,9 @@ internal static class ObliviousNullabilityAnalyzer
             List<(TupleElementKey Target, TupleElementKey Source)> tupleEdges,
             List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges,
             List<(ISymbol Target, TupleElementKey Source)> scalarTupleEdges,
-            List<(ISymbol Target, ISymbol Source)> delegateReturnEdges)
+            List<(ISymbol Target, ISymbol Source)> delegateReturnEdges,
+            HashSet<string> paramsElementTainted,
+            List<(string Target, ISymbol Source)> paramsElementEdges)
         {
             this.Tainted = tainted;
             this.TupleTainted = tupleTainted;
@@ -5090,6 +5242,8 @@ internal static class ObliviousNullabilityAnalyzer
             this.TupleScalarEdges = tupleScalarEdges;
             this.ScalarTupleEdges = scalarTupleEdges;
             this.DelegateReturnEdges = delegateReturnEdges;
+            this.ParamsElementTainted = paramsElementTainted;
+            this.ParamsElementEdges = paramsElementEdges;
         }
 
         public HashSet<ISymbol> Tainted { get; }
@@ -5103,6 +5257,10 @@ internal static class ObliviousNullabilityAnalyzer
         public List<(ISymbol Target, TupleElementKey Source)> ScalarTupleEdges { get; }
 
         public List<(ISymbol Target, ISymbol Source)> DelegateReturnEdges { get; }
+
+        public HashSet<string> ParamsElementTainted { get; }
+
+        public List<(string Target, ISymbol Source)> ParamsElementEdges { get; }
     }
 
     private sealed class SourceAssemblySet

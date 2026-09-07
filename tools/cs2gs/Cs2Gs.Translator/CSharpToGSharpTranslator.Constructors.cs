@@ -995,11 +995,20 @@ public sealed partial class CSharpToGSharpTranslator
             bool variadic = symbol.IsParams
                 && (symbol.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(symbol.Type));
             ITypeSymbol parameterType = symbol.Type;
+            ITypeSymbol variadicElementType =
+                variadic && symbol.Type is IArrayTypeSymbol paramsArray
+                    ? paramsArray.ElementType
+                    : null;
+            bool variadicElementNestedInArrayType = false;
             if (variadic && parameterType is IArrayTypeSymbol arrayType
                 && arrayType.ElementType is not IArrayTypeSymbol
                 && !IsSupportedParamsCollectionType(arrayType.ElementType))
             {
                 parameterType = arrayType.ElementType;
+            }
+            else if (variadicElementType != null)
+            {
+                variadicElementNestedInArrayType = true;
             }
 
             // An array params whose ELEMENT is itself carrier-shaped (e.g.
@@ -1015,11 +1024,19 @@ public sealed partial class CSharpToGSharpTranslator
 
             GTypeReference type = this.typeMapper.Map(parameterType, this.context, symbol.Locations.FirstOrDefault());
 
-            // Issue #1072: a non-nullable reference/array parameter that is
-            // null-checked or null-assigned in the method body is really nullable;
-            // render it `T?` so the `== nil` guard type-checks (variadic params are
-            // never null-compared as a whole, so they are excluded).
-            if (!variadic && promoteNullability)
+            // Issue #1072/#3888: promote the declaration position that actually
+            // receives null. Ordinary parameters use their carrier symbol; a
+            // variadic array uses the separately tracked expanded-ELEMENT
+            // evidence, never nullable evidence about the array itself.
+            if (promoteNullability && variadicElementType != null)
+            {
+                type = this.PromoteParamsElementIfUsedAsNullable(
+                    type,
+                    symbol,
+                    variadicElementType,
+                    variadicElementNestedInArrayType);
+            }
+            else if (!variadic && promoteNullability)
             {
                 type = this.PromoteIfUsedAsNullable(type, symbol);
             }
