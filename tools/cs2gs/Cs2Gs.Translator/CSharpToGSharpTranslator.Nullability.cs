@@ -283,6 +283,32 @@ public sealed partial class CSharpToGSharpTranslator
             return this.ShouldPromoteToNullableReference(symbol) ? MakeNullable(type) : type;
         }
 
+        // Issue #3888: a `params T[]` declaration has two distinct nullable
+        // positions. The variadic G# spelling drops the array envelope and emits
+        // only `...T`, so direct null evidence from EXPANDED arguments must widen
+        // that element position without treating a nullable array/carrier as
+        // element evidence.
+        private GTypeReference PromoteParamsElementIfUsedAsNullable(
+            GTypeReference type,
+            IParameterSymbol parameter,
+            ITypeSymbol elementType)
+        {
+            if (type == null
+                || type.IsNullable
+                || elementType is not { IsReferenceType: true }
+                || elementType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return type;
+            }
+
+            return ObliviousNullabilityAnalyzer.IsParamsElementTainted(
+                this.context.Compilation,
+                parameter,
+                this.context.RepositoryCompilations ?? this.context.SiblingCompilations)
+                    ? MakeNullable(type)
+                    : type;
+        }
+
         // Issue #2113/#914: method/local-function returns are just another
         // symbol-position declaration sink, so their promote/not-promote answer
         // must come from the shared decision table.
@@ -1453,10 +1479,18 @@ public sealed partial class CSharpToGSharpTranslator
             // errors on the error-typed result).
             //
             // Mirror the declaration rule: a variadic carrier's contract is
-            // whatever its own annotation says, never a promoted one.
+            // whatever its own annotation says, never a promoted one. Issue
+            // #3888 adds one deliberately separate exception: when this query
+            // is for the expanded ELEMENT position and that position's own
+            // evidence widened `...T` to `...T?`, no bridge is needed.
             if (IsVariadicCarrierParameter(targetSymbol))
             {
-                return true;
+                return targetSymbol is not IParameterSymbol { Type: IArrayTypeSymbol array } paramsParameter
+                    || !SymbolEqualityComparer.Default.Equals(targetType, array.ElementType)
+                    || !ObliviousNullabilityAnalyzer.IsParamsElementTainted(
+                        this.context.Compilation,
+                        paramsParameter,
+                        this.context.RepositoryCompilations ?? this.context.SiblingCompilations);
             }
 
             bool targetDeclaredInThisCompilation = targetSymbol?.DeclaringSyntaxReferences
