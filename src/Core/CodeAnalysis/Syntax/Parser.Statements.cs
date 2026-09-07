@@ -1252,7 +1252,9 @@ public partial class Parser
         ExpressionSyntax? condition = null;
         if (Current.Kind != SyntaxKind.SemicolonToken)
         {
-            condition = ParseExpressionInBodyHeader();
+            // Unlike a condition-only loop, this expression ends at `;`, so
+            // brace-carrying expressions cannot consume the loop body.
+            condition = ParseExpression();
         }
 
         var secondSemicolon = MatchToken(SyntaxKind.SemicolonToken);
