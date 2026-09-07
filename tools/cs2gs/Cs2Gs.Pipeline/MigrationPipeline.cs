@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -786,6 +787,11 @@ public sealed class MigrationPipeline
                 continue;
             }
 
+            // ProcessRunner captures child output for diagnostics. Emit the
+            // outer boundary so CI still identifies the active app and stage.
+            var stageTimer = Stopwatch.StartNew();
+            Console.WriteLine($"cs2gs: {app.Id}: {stageName} started.");
+
             StageOutcome outcome;
             try
             {
@@ -805,6 +811,10 @@ public sealed class MigrationPipeline
                 Console.Error.WriteLine(ex);
                 outcome = StageOutcome.Failed(new[] { StageCrashArtifact(context.Triage, stage.Kind, ex) });
             }
+
+            Console.WriteLine(
+                $"cs2gs: {app.Id}: {stageName} {outcome.Status.ToString().ToLowerInvariant()} in " +
+                $"{stageTimer.Elapsed.TotalSeconds:F1}s.");
 
             if (outcome.Status == StageStatus.Passed)
             {

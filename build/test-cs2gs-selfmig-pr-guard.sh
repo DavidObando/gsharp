@@ -81,4 +81,12 @@ grep -q "run FAILED" "$test_root/run-failed.log"
 grep -q "run succeeded=false" "$test_root/run-failed.log"
 ! grep -q "PR guard PASSED." "$test_root/run-failed.log"
 
+grep -qx '    timeout-minutes: 90' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -Fq 'Console.WriteLine($"cs2gs: {app.Id}: {stageName} started.");' \
+  "$repo_root/tools/cs2gs/Cs2Gs.Pipeline/MigrationPipeline.cs"
+grep -Fq '$"cs2gs: {app.Id}: {stageName} {outcome.Status.ToString().ToLowerInvariant()} in "' \
+  "$repo_root/tools/cs2gs/Cs2Gs.Pipeline/MigrationPipeline.cs"
+grep -Fq '$"{stageTimer.Elapsed.TotalSeconds:F1}s.");' \
+  "$repo_root/tools/cs2gs/Cs2Gs.Pipeline/MigrationPipeline.cs"
+
 echo "selfmig PR guard regressions PASSED."
