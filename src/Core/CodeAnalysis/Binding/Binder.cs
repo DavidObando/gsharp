@@ -7037,12 +7037,17 @@ public sealed class Binder
     /// </remarks>
     /// <param name="typeArgument">The argument supplied for the bounded parameter.</param>
     /// <param name="boundArgument">The argument supplied for the bounding parameter.</param>
-    /// <param name="tp">The bounded type parameter (for CLR self-substitution).</param>
+    /// <param name="tp">The bounded type parameter, used only to recognise a
+    /// SELF-REFERENTIAL generic interface bound. Issue #4063: the IMPORTED
+    /// spelling of this bound reaches the relation from a reflective
+    /// <c>Type</c> vector and has no such symbol, so it passes
+    /// <see langword="null"/> — and declines to ask at all unless both sides
+    /// are closed, which is precisely when self-substitution cannot matter.</param>
     /// <returns><see langword="true"/> when the bound holds or cannot be disproved.</returns>
     internal static bool SatisfiesDependentBound(
         TypeSymbol typeArgument,
         TypeSymbol boundArgument,
-        TypeParameterSymbol tp)
+        TypeParameterSymbol? tp)
     {
         if (typeArgument is null || boundArgument is null)
         {
@@ -7694,7 +7699,7 @@ public sealed class Binder
     /// <param name="constraint">The CLR interface constraint type.</param>
     /// <param name="tp">The constrained type parameter (for self-substitution).</param>
     /// <returns><see langword="true"/> when the constraint is satisfied.</returns>
-    internal static bool SatisfiesClrInterfaceConstraint(TypeSymbol typeArgument, TypeSymbol constraint, TypeParameterSymbol tp)
+    internal static bool SatisfiesClrInterfaceConstraint(TypeSymbol typeArgument, TypeSymbol constraint, TypeParameterSymbol? tp)
     {
         // Constraint propagation: another type parameter constrained to the same
         // interface trivially satisfies the constraint.
@@ -7781,7 +7786,7 @@ public sealed class Binder
         Type[] candidateArgs,
         ImmutableArray<TypeSymbol> constraintArgs,
         Type[] constraintClrArgs,
-        TypeParameterSymbol tp,
+        TypeParameterSymbol? tp,
         Type typeArgClr)
     {
         var expectedCount = !constraintArgs.IsDefaultOrEmpty
