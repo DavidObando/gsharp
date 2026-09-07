@@ -476,11 +476,10 @@ touch. It was **done first**, for exactly that reason — and it is what finally
    counter in `build/cs2gs-counters.sh` into `lines>300 (reducible)` and
    `lines>300 (single-atom-bounded)`. Only the reducible count is ratcheted; the
    irreducible count is reported — because ratcheting a number nobody can move is how
-   a gate teaches people to raise ceilings. This also fixes a live inconsistency:
-   `cs2gs_counter_report` labels the long-line row "code" but computes it from
-   `cs2gs_raw_lines`, so comments and string-bearing lines are counted while the `!!`
-   row excludes them (filed as #3949, deliberately not fixed alongside the phase-9
-   improvement).
+   a gate teaches people to raise ceilings. #3949 then made that denominator explicit:
+   the report's long-line rows are raw-only (`code` is `n/a`), and the self-migration
+   summary labels the gated reducible count as raw. The denominator and baseline did
+   not change.
 4. `longLineCeiling` is **not** retired. Wrapping is a property of emitted code and
    can still regress.
 
@@ -500,10 +499,12 @@ touch. It was **done first**, for exactly that reason — and it is what finally
 
 1. ~~Should Phase 9 be pulled ahead of Phase 1?~~ **Resolved: yes.** Done in #3950
    before any formatter work; `longLineCeiling` 640 → 580 in the same PR.
-2. G#'s backtick raw string has no escape hatch, so a multi-line string containing a
-   backtick is unspellable except as an escaped one-liner or a concatenation. Go has
-   the same hole and lives with it. Is a `` ``` ``-fenced or `#`-delimited raw string
-   worth a separate ADR?
+2. ~~Does multiline interpolation need a new raw-string syntax?~~ **Resolved
+   2026-09-07: no.** #3948 uses existing syntax: a parenthesized concatenation of
+   backtick literal runs and ordinary single-hole interpolated strings. Splitting
+   literal runs around backticks and raw-unsafe control characters preserves the
+   value; keeping each hole inside interpolation preserves evaluation order,
+   alignment, format and culture semantics.
 3. Should `gsfmt` reflow `///` doc comments to the width (`rustfmt`'s `wrap_comments`,
    off by default)? Recommendation: **no** — reflowing a comment is editing prose. The
    32 long comment lines are cs2gs failing to preserve line structure it had, which is

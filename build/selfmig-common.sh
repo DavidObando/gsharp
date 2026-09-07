@@ -66,17 +66,19 @@ selfmig_build_prerequisites() {
   dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
 }
 
-# Metrics count CODE, not fixtures: migrated test sources embed expected-output
-# strings (and docs quote constructs), so lines containing a string quote or
-# leading with a comment marker are excluded before counting.
+# Most metrics count CODE, not fixtures: migrated test sources embed
+# expected-output strings (and docs quote constructs), so lines containing a
+# string quote or leading with a comment marker are excluded before counting.
+# Long lines are the exception: they are classified over raw lines because a
+# long string fixture is still a readability problem.
 #
 # The line filter now lives in build/cs2gs-counters.sh (cs2gs_code_lines) so the
 # three corpora measure identically; the counting semantics here are UNCHANGED,
 # and deliberately so. The quote exclusion undercounts (#3937: a removed `!!` on
 # a line reading `Arguments: []object{uri!!, ...}` was invisible to the metric),
-# but every ceiling in tools/cs2gs/selfmig-baseline.json was measured through
-# it, so "fixing" it would silently move all of them. The gated numbers keep the
-# old behaviour; the raw counts are reported alongside in the counter table.
+# but the non-long-line ceilings in tools/cs2gs/selfmig-baseline.json were
+# measured through it, so "fixing" it would silently move them. Raw counts are
+# reported alongside in the counter table.
 selfmig_code_grep() {
   local migrated_dir=$1 pattern=$2
   # A ZERO-match metric is success, not failure: without the || true, the
@@ -147,7 +149,7 @@ selfmig_apply_baseline() {
   bang_ceiling=$(jq -r '.nullAssertionCeiling' "$baseline")
 
   local summary
-  summary="self-migration: $green/$total green (floor $green_floor); labels=$labels (ceiling $label_ceiling); __local_=$lifts (ceiling $lift_ceiling); lines>300=$long_lines reducible (ceiling $long_ceiling), ${long_lines_atomic:-0} single-atom-bounded; bangs=$bangs (ceiling $bang_ceiling)"
+  summary="self-migration: $green/$total green (floor $green_floor); labels=$labels (ceiling $label_ceiling); __local_=$lifts (ceiling $lift_ceiling); lines>300(raw)=$long_lines reducible (ceiling $long_ceiling), ${long_lines_atomic:-0} single-atom-bounded; bangs=$bangs (ceiling $bang_ceiling)"
   echo "$summary"
   if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
     {
@@ -158,8 +160,8 @@ selfmig_apply_baseline() {
       echo "| green apps | $green/$total | floor $green_floor |"
       echo "| synthetic labels | $labels | ceiling $label_ceiling |"
       echo "| \`__local_\` lifts | $lifts | ceiling $lift_ceiling |"
-      echo "| lines >300 chars (reducible) | $long_lines | ceiling $long_ceiling |"
-      echo "| lines >300 chars (single-atom-bounded) | ${long_lines_atomic:-0} | report only |"
+      echo "| raw lines >300 chars (reducible) | $long_lines | ceiling $long_ceiling |"
+      echo "| raw lines >300 chars (single-atom-bounded) | ${long_lines_atomic:-0} | report only |"
       echo "| \`!!\` assertions | $bangs | ceiling $bang_ceiling |"
       echo ''
     } >> "$GITHUB_STEP_SUMMARY"
@@ -188,7 +190,7 @@ selfmig_apply_baseline() {
     status=1
   fi
   if (( long_lines > long_ceiling )); then
-    echo "GATE: reducible >300-char line count $long_lines exceeded ceiling $long_ceiling." >&2
+    echo "GATE: reducible raw >300-char line count $long_lines exceeded ceiling $long_ceiling." >&2
     status=1
   fi
   if (( bangs > bang_ceiling )); then

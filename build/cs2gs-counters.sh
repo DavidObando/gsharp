@@ -189,9 +189,9 @@ cs2gs_tally_lookup() {
 #
 # Two tables under one heading: the corpus-wide counters, then the synthetic
 # `__identifier` breakdown per family with the catch-all row last. Both carry a
-# "code" column (the quote/comment-filtered count the ceilings are measured
-# against) and a "raw" column (unfiltered), because the two disagree and the
-# disagreement is itself information.
+# "code" column (quote/comment-filtered) and a "raw" column (unfiltered).
+# Long-line counts are raw-only because longLineCeiling deliberately gates the
+# formatter-reducible raw count; `n/a` keeps that denominator explicit.
 #
 # Callers append the output to $GITHUB_STEP_SUMMARY, print it, or both. It is
 # pure text — this function neither gates nor exits.
@@ -230,9 +230,9 @@ cs2gs_counter_report() {
   echo "|---|---:|---:|"
   echo "| \`.gs\` files | $gs_files | $gs_files |"
   echo "| \`!!\` null assertions | $bangs | $bangs_raw |"
-  echo "| lines >300 chars (reducible) | $long_lines | $long_lines |"
-  echo "| lines >300 chars (single-atom-bounded) | $atomic_long_lines | $atomic_long_lines |"
-  echo "| lines >300 chars (total) | $total_long_lines | $total_long_lines |"
+  echo "| lines >300 chars (reducible) | n/a | $long_lines |"
+  echo "| lines >300 chars (single-atom-bounded) | n/a | $atomic_long_lines |"
+  echo "| lines >300 chars (total) | n/a | $total_long_lines |"
   echo "| synthetic \`__\` identifiers | $syn_total | $syn_total_raw |"
   echo ''
   echo "Synthetic \`__identifier\`s by family (#3501 target: all zero)"

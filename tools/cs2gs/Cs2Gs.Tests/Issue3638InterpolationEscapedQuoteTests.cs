@@ -12,21 +12,15 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #3638: a MULTILINE interpolated string is lowered to a concatenation
-/// of backtick raw segments and hole values (issue #3501), but a non-atomic
-/// hole expression (<c>{i + 1}</c>) got the synthetic <c>.ToString()</c>
-/// appended without parentheses — <c>i + 1.ToString()</c> — which does not
-/// even parse when the trailing operand is a numeric literal (ADR-0054: no
-/// postfix chain on a bare numeric token, GS0005 on the DotToken) and is
-/// semantically wrong wherever it does. The escaped-quote segments themselves
-/// (<c>\"</c> in the C# literal) render correctly: quote-bearing single-line
-/// chunks keep the escaped double-quoted form and multi-line chunks become
-/// fully-literal backtick raws, both of which the G# lexer accepts.
+/// Issue #3638: multiline interpolation must keep non-atomic holes intact.
+/// Issue #3948 now keeps every hole inside a quoted interpolation fragment
+/// instead of appending a synthetic <c>.ToString()</c>, preserving both the
+/// original precedence and interpolation semantics.
 /// </summary>
 public class Issue3638InterpolationEscapedQuoteTests
 {
     [Fact]
-    public void MultilineInterpolation_EscapedQuotesAndExpressionHole_ParenthesizesHoleAndRoundTrips()
+    public void MultilineInterpolation_EscapedQuotesAndExpressionHole_StaysInterpolatedAndRoundTrips()
     {
         // The Adr0158SyncMapSpikeTests shape: escaped quotes, `{{`/`}}` brace
         // escapes, a plain `{i}` hole, and a non-atomic `{i + 1}` hole.
@@ -43,13 +37,13 @@ namespace Corpus.Issue3638
 }
 ");
 
-        Assert.Contains("(i + 1).ToString()", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("1.ToString", rendered.Replace("(i + 1).ToString", string.Empty), StringComparison.Ordinal);
+        Assert.Contains("\"${i + 1}\"", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("ToString()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
     [Fact]
-    public void MultilineInterpolation_PlainIdentifierHole_NeedsNoParentheses()
+    public void MultilineInterpolation_PlainIdentifierHole_UsesShorthand()
     {
         string rendered = Render(@"
 namespace Corpus.Issue3638
@@ -64,13 +58,13 @@ namespace Corpus.Issue3638
 }
 ");
 
-        Assert.Contains("i.ToString()", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("(i).ToString()", rendered, StringComparison.Ordinal);
+        Assert.Contains("\"$i\"", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("ToString()", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
     [Fact]
-    public void MultilineVerbatimInterpolation_EscapedQuotesAndExpressionHole_ParenthesizesHoleAndRoundTrips()
+    public void MultilineVerbatimInterpolation_EscapedQuotesAndExpressionHole_StaysInterpolatedAndRoundTrips()
     {
         // Verbatim `$@""...""` uses `""""` quote escapes and real newlines but
         // flows through the same classic single-dollar machinery.
@@ -89,12 +83,12 @@ line3"";
 }
 ");
 
-        Assert.Contains("(i + 1).ToString()", rendered, StringComparison.Ordinal);
+        Assert.Contains("\"${i + 1}\"", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
     [Fact]
-    public void MultilineInterpolation_UnaryHole_ParenthesizesReceiver()
+    public void MultilineInterpolation_UnaryHole_StaysInterpolated()
     {
         string rendered = Render(@"
 namespace Corpus.Issue3638
@@ -109,7 +103,7 @@ namespace Corpus.Issue3638
 }
 ");
 
-        Assert.Contains("(-i).ToString()", rendered, StringComparison.Ordinal);
+        Assert.Contains("\"${-i}\"", rendered, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(rendered);
     }
 
