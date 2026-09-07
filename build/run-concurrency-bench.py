@@ -93,6 +93,7 @@ RUNTIME_SETTING_PREFIXES = (
 JSON_SCHEMA_VERSION = 2
 METHODOLOGY_VERSION = 2
 BASELINE_RUNS = 3
+GO_WARMUP_ROUNDS = 3
 
 
 def load_scenarios() -> list[dict]:
@@ -298,6 +299,7 @@ def make_fingerprint(
         "jitMode": "tiered-pgo-steady-state",
         "jitEnvironment": PINNED_TIER_ENV,
         "warmup": warmup_configuration(),
+        "goWarmupRounds": GO_WARMUP_ROUNDS if go_binary else None,
         "launches": launches,
         "scenario": scenario or "all",
         "launchOrder": "rotating-interleaved" if len(modes) > 1 else "single-mode",
@@ -929,7 +931,7 @@ def main() -> int:
             specs.append(
                 {
                     "name": "go",
-                    "command": [str(go_binary)],
+                    "command": [str(go_binary), f"-warmup={GO_WARMUP_ROUNDS}"],
                     "cwd": BENCH / "go",
                     "env": go_env,
                     "pattern": GO_ROW,

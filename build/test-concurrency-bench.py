@@ -124,6 +124,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual("tiered-pgo-steady-state", fingerprint["comparison"]["jitMode"])
         self.assertEqual(["10.0.11"], fingerprint["comparison"]["toolchains"]["dotnetRuntime"])
         self.assertEqual(["go1.27"], fingerprint["comparison"]["toolchains"]["go"])
+        self.assertEqual(3, fingerprint["comparison"]["goWarmupRounds"])
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])

@@ -3347,11 +3347,11 @@ implementation had to refine it.
     identity, only a complete JIT + NativeAOT + Go suite may update it; partial
     runs remain valid for reporting. Recording and checking use the same
     three-run aggregate and range-of-run-medians interval. A scoped paired run
-    selects the matching Go row rather than running Go's whole suite; a row with
-    no honest Go counterpart omits Go. A host that exposes no power-state
-    identity is explicitly report-only. The existing `gsharp`, `gsharp_aot`,
-    `go` and `hardwareClass` JSON fields remain unchanged for dashboard
-    consumers.
+    selects and warms the matching Go row rather than running Go's whole suite;
+    a row with no honest Go counterpart omits Go. A host that exposes no
+    power-state identity is explicitly report-only. The existing `gsharp`,
+    `gsharp_aot`, `go` and `hardwareClass` JSON fields remain unchanged for
+    dashboard consumers.
 
 ## Addendum A — The ten patterns, three ways
 
