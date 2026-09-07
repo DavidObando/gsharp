@@ -369,6 +369,68 @@ public class Issue4043DependentTypeParameterConstraintTests
             new[] { "inner" },
         };
 
+        // Issue #4091: a type parameter's dependent bound can itself carry the
+        // class constraint required by a constructed G# generic.
+        yield return new object[]
+        {
+            "a-class-constraint-reached-through-a-dependent-bound",
+            """
+            package P
+            import System
+
+            open class SchemeOptions {
+                public var Name string = ""
+            }
+
+            open class GsHandler[TOptions SchemeOptions] {
+                public var Tag string = "g"
+            }
+
+            func f[U SchemeOptions, T U]() string {
+                let x = GsHandler[T]{ Tag: "c" }
+                return x.Tag
+            }
+
+            Console.WriteLine(f[SchemeOptions, SchemeOptions]())
+            """,
+            new[] { "c" },
+        };
+
+        // Review finding (#4102): valid dependent-bound chains have no fixed
+        // maximum depth. This follows 65 dependent bounds before reaching the
+        // terminal class constraint, one beyond the removed binder cap.
+        const int chainLength = 66;
+        var longChainParameters = string.Join(
+            ", ",
+            Enumerable.Range(0, chainLength).Select(
+                index => index == 0 ? "T0 SchemeOptions" : $"T{index} T{index - 1}"));
+        var longChainArguments = string.Join(
+            ", ",
+            Enumerable.Repeat("SchemeOptions", chainLength));
+        yield return new object[]
+        {
+            "a-class-constraint-after-65-dependent-bound-links",
+            $$"""
+            package P
+            import System
+
+            open class SchemeOptions {
+            }
+
+            open class GsHandler[TOptions SchemeOptions] {
+                public var Tag string = "g"
+            }
+
+            func f[{{longChainParameters}}]() string {
+                let x = GsHandler[T{{chainLength - 1}}]{ Tag: "long" }
+                return x.Tag
+            }
+
+            Console.WriteLine(f[{{longChainArguments}}]())
+            """,
+            new[] { "long" },
+        };
+
         // A dependent bound does NOT make the bounded parameter a reference
         // type, so a VALUE type is a legal argument when the bounding parameter
         // was given one. This is the shape that would have broken had the bound
