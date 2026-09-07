@@ -159,13 +159,16 @@ core** — the projects whose migration failures cascade widest:
 
 ```
 src/Analyzers/InternalAnalyzers  src/Core
+src/Formatting/GSharp.Formatting src/Sdk/Gsharp.Runtime.Channels
 tools/cs2gs/Cs2Gs.CodeModel      tools/cs2gs/Cs2Gs.Translator
+tools/cs2gs/Cs2Gs.ProjectLoading tools/cs2gs/Cs2Gs.Pipeline
 ```
 
-That is `Cs2Gs.Translator`'s reference closure, so it covers #3831 and #3896
-but **not** #3905: `src/Sdk/Gsharp.Runtime.Channels` is outside the closure and
-is red on `main` today (#3907), and a guard that is red from day one gets
-disabled. Adding it back is one line, and worth doing the moment #3907 closes.
+That includes `Cs2Gs.Translator`'s reference closure plus Channels,
+Formatting, Pipeline, and ProjectLoading, covering #3831, #3896, #3905, and
+#3978. The workflow reports on every PR so it can remain required. An in-job
+changed-path check skips the expensive migration when a PR cannot affect these
+projects or the compiler/SDK/translation machinery.
 
 Everything else is `--exclude`d. That is safe here — and only here — because
 the set is **closed under `ProjectReference`**, so no kept app references an
@@ -174,7 +177,7 @@ refuses to run otherwise. Widening the set means adding whole reference
 closures, never a single project. `SELFMIG_PR_GUARD_APPS` overrides the list
 (e.g. to add `tools/cs2gs/Cs2Gs.Tests` once #3836's known failures clear).
 
-**It is not the gate.** Four apps, no readability ceilings, no corpus-wide
+**It is not the gate.** Eight apps, no readability ceilings, no corpus-wide
 test parity. The script prints that disclaimer on every run, pass or fail,
 because a partial check mistaken for a full one is how #3831/#3896/#3905
 reached `main` in the first place.

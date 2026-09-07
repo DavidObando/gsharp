@@ -47,12 +47,20 @@ name: cs2gs-pr-guard
 # each reached `main` with CI fully green, which is precisely the situation an
 # advisory check does not survive.
 #
-# WHAT THAT COSTS
+# WHAT THAT COSTS, AND WHEN IT IS PAID
 #
 # Recent successful runs of the current eight-project set take ~53-55 minutes,
 # almost all inside the migrate step. Runner variance has pushed that work past
-# the old 60-minute job limit. The cost is paid even on PRs that cannot affect
-# translation because the check must report on every PR to remain required.
+# the old 60-minute job limit. Run 34153792929's stage timings put 1,747 of
+# 2,217 migrate seconds in compile, with Pipeline + ProjectLoading accounting
+# for 625 seconds. Those builds intentionally isolate outputs and package
+# caches per app; sharing or parallelizing them would change the gate rather
+# than safely optimize it.
+#
+# The workflow still starts on every PR so the required check always reports,
+# but the first step compares the PR diff with the inputs that can affect this
+# guard. An unrelated PR reports a successful no-op instead of paying ~55
+# minutes. Relevant changes retain the complete eight-app gate unchanged.
 #
 # WHAT THE OLD FILTER SAID, AND WHERE THAT KNOWLEDGE LIVES NOW
 #
@@ -64,13 +72,9 @@ name: cs2gs-pr-guard
 # which decide whether the translated result compiles (#3905 was a gsc crash,
 # not a translation defect), and this job's own definition.
 #
-# That set is still the honest answer to "which changes can turn this job
-# red". It is simply no longer the answer to "when does this job run". If the
-# cost above stops being acceptable, the shape to reach for is a changed-paths
-# step INSIDE the job that short-circuits the expensive steps with `if:`, so
-# the check still reports on every PR. Do not reintroduce a top-level `paths:`
-# filter while this check is required — that is the failure this trigger
-# exists to avoid.
+# That set is the input to build/cs2gs-pr-guard-control.sh. Keep the workflow
+# always-triggering: the in-job check is what preserves both required-check
+# eligibility and the old filter's cost profile.
 #
 # `push:` on `main` is deliberately absent, and `tags:` more so. This is a
 # PR-time instrument (see the concurrency group, keyed on the PR number); the
@@ -83,10 +87,6 @@ on:
       - main
   workflow_dispatch:
 
-concurrency:
-  group: cs2gs-pr-guard-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 env:
   # See build.yml: parallel MSBuild nodes corrupt $GITHUB_ENV via
   # Nerdbank.GitVersioning's GitBuildVersion* emission.
@@ -97,6 +97,12 @@ jobs:
   guard:
     name: hot-core translation guard
     runs-on: ubuntu-latest
+    # Job-level concurrency cancels only obsolete expensive work. The separate
+    # classifier job survives and turns GitHub's cancellation annotation into
+    # an explicit superseded-push or timeout result.
+    concurrency:
+      group: cs2gs-pr-guard-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     # Current eight-project runs measure ~53-55 minutes. Ninety minutes restores
     # runner-variance headroom while keeping a finite whole-job backstop; each
     # compiler/test child retains its tighter ProcessRunner timeout.
@@ -109,19 +115,60 @@ jobs:
           # migrated tree is restored as NuGet packages that carry it.
           fetch-depth: 0
 
+      - name: Test PR guard control and failure propagation
+        run: ./build/test-cs2gs-selfmig-pr-guard.sh
+
+      - name: Detect changes that can affect the guard
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run_guard=true
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+            changed_paths="$RUNNER_TEMP/cs2gs-pr-guard-paths"
+            if git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"; then
+              if ./build/cs2gs-pr-guard-control.sh relevant-paths < "$changed_paths"; then
+                :
+              else
+                helper_status=$?
+                if (( helper_status == 1 )); then
+                  run_guard=false
+                else
+                  echo "::warning title=Path classification failed::Classifier exited $helper_status; running guard."
+                fi
+              fi
+            else
+              diff_status=$?
+              echo "::warning title=PR diff failed::git diff exited $diff_status; running guard."
+            fi
+          fi
+          echo "run=$run_guard" >> "$GITHUB_OUTPUT"
+
+      - name: Report unaffected change
+        if: steps.scope.outputs.run != 'true'
+        run: |
+          {
+            echo "### cs2gs PR translation guard"
+            echo
+            echo "Skipped: this PR changes no input that can affect the hot-core translation guard."
+            echo
+            echo "The required check still reports; no translation, compile, ILVerify, or parity gate was needed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Setup .NET SDK
+        if: steps.scope.outputs.run == 'true'
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
       - name: Restore
+        if: steps.scope.outputs.run == 'true'
         run: dotnet restore GSharp.sln --locked-mode
 
       - name: Restore .NET local tools
+        if: steps.scope.outputs.run == 'true'
         run: dotnet tool restore
-
-      - name: Test PR guard failure propagation
-        run: ./build/test-cs2gs-selfmig-pr-guard.sh
 
       # The script builds the solution itself (which repacks the
       # Gsharp.NET.Sdk nupkg the compile stage consumes) and then migrates.
@@ -130,14 +177,16 @@ jobs:
       # another `dotnet build` between the pack and the migrate is how MSB4236
       # appears here. Do not add build steps above this one.
       - name: Migrate and compile the hot core
+        if: steps.scope.outputs.run == 'true'
         run: ./build/run-cs2gs-selfmig-pr-guard.sh
 
       - name: Upload guard artifacts
-        if: always()
+        if: always() && steps.scope.outputs.run == 'true'
         uses: actions/upload-artifact@v5
         with:
           name: cs2gs-pr-guard
           retention-days: 7
+          if-no-files-found: ignore
           path: |
             /tmp/gsharp-cs2gs-pr-guard/guard.log
             /tmp/gsharp-cs2gs-pr-guard/runs/**/*.json
@@ -146,3 +195,68 @@ jobs:
             # The migrated .gs of the guarded projects, so a failure can be
             # read at the source rather than reproduced locally.
             /tmp/gsharp-cs2gs-pr-guard/migrated/**/*.gs
+
+  classify-cancellation:
+    name: hot-core cancellation cause
+    needs: guard
+    if: always() && needs.guard.result == 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report cancellation cause
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          job_id=$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name == "hot-core translation guard") | .id' |
+              head -1
+          )
+          if [[ -z "$job_id" ]]; then
+            echo "::error title=Hot-core cancellation unknown::Could not find the cancelled guard job."
+            exit 1
+          fi
+
+          cause=unknown
+          for attempt in {1..5}; do
+            annotations=$(gh api \
+              "repos/$GITHUB_REPOSITORY/check-runs/$job_id/annotations?per_page=100")
+            cause=$(./build/cs2gs-pr-guard-control.sh cancellation <<< "$annotations")
+            [[ "$cause" != unknown ]] && break
+            sleep 2
+          done
+          messages=$(jq -r '.[].message // empty' <<< "$annotations")
+
+          case "$cause" in
+            superseded)
+              summary="**Superseded by a newer push.** This was not a timeout."
+              echo "::notice title=Hot-core guard superseded::Cancelled because a newer push replaced this run; this was not a timeout."
+              ;;
+            timeout)
+              summary="**Timed out.** GitHub stopped the guard after its 90-minute job limit."
+              echo "::error title=Hot-core guard timed out::GitHub stopped the guard after its 90-minute job limit."
+              ;;
+            *)
+              summary="**Unknown cancellation.** GitHub did not return a recognized timeout or concurrency annotation."
+              echo "::error title=Hot-core cancellation unknown::GitHub did not return a recognized timeout or concurrency annotation."
+              ;;
+          esac
+
+          {
+            echo "### Hot-core guard cancellation"
+            echo
+            echo "$summary"
+            echo
+            echo '```text'
+            printf '%s\n' "$messages"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [[ "$cause" == superseded ]]
