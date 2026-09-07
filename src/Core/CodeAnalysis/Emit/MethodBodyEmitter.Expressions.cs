@@ -223,6 +223,12 @@ internal sealed partial class MethodBodyEmitter
                 // No erasure-widening is required at the call boundary; the
                 // surrounding code path (assignment, return, argument
                 // conversion) handles any further coercion.
+                //
+                // Issue #3879: except for the by-ref return, which is a
+                // representation difference the call boundary DOES have to
+                // settle — a `ref`-returning function or static property
+                // accessor leaves `T&` where the bound tree says `T`.
+                this.EmitRefReturnDereferenceIfNeeded(call.Function.ReturnRefKind, call.Type);
                 break;
             case BoundImportedCallExpression impCall:
                 this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
@@ -388,6 +394,14 @@ internal sealed partial class MethodBodyEmitter
 
             case BoundConstrainedStaticCallExpression cstatic:
                 this.EmitConstrainedStaticCall(cstatic);
+
+                // Issue #3879: a `constrained.` static-interface call resolves
+                // to a G#-declared interface member when InterfaceMethod is
+                // present (the ClrMethod arm is an imported signature, whose
+                // by-ref return the imported paths already handle).
+                this.EmitRefReturnDereferenceIfNeeded(
+                    cstatic.InterfaceMethod?.ReturnRefKind ?? RefKind.None,
+                    cstatic.Type);
                 break;
             case BoundAddressOfExpression addressOf:
                 this.EmitAddressOf(addressOf);
@@ -546,12 +560,34 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundUserInstanceCallExpression uic:
                 this.EmitUserInstanceCall(uic);
+
+                // Issue #3879: covers a `ref`-returning instance method AND a
+                // `ref`-returning INDEXER, whose read binds to a call of the
+                // `get_Item` accessor symbol rather than to a property access.
+                this.EmitRefReturnDereferenceIfNeeded(uic.Method.ReturnRefKind, uic.Type);
                 break;
             case BoundBaseInterfaceCallExpression bic:
                 this.EmitBaseInterfaceCall(bic);
+
+                // Issue #3879: `base.RefMethod()` through a default-interface
+                // implementation is a source-member call like any other, so it
+                // owes the same dereference. Missing it here left `T&` on the
+                // stack where the bound node says `T` — the raw-address read
+                // this issue exists to fix, just reached by a rarer path.
+                this.EmitRefReturnDereferenceIfNeeded(bic.Method.ReturnRefKind, bic.Type);
                 break;
             case BoundBaseClassCallExpression bcc:
                 this.EmitBaseClassCall(bcc);
+
+                // Issue #3879: the base-class form carries EITHER a method
+                // (`base.RefMethod()`) or a property accessor (`base.RefProp`,
+                // issue #1347) — never both — so take the ref-kind from
+                // whichever is present. A setter accessor pushes nothing to
+                // dereference, hence the read-only guard.
+                this.EmitRefReturnDereferenceIfNeeded(
+                    bcc.Method?.ReturnRefKind
+                        ?? (bcc.IsSetterAccessor ? RefKind.None : bcc.Property?.ReturnRefKind ?? RefKind.None),
+                    bcc.Type);
                 break;
             case BoundFieldAccessExpression fa:
                 this.EmitFieldAccess(fa);

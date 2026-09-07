@@ -1639,6 +1639,18 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
+                // Issue #3879 (ADR-0060 amendment): `prop P ref T { get { … } }`
+                // / `prop this[…] ref T -> …`. The getter returns a managed
+                // pointer so a CLR consumer can alias the storage; the form is
+                // restricted to the computed, read-only shapes — see
+                // ValidatePropertyReturnRefKind for why.
+                var propReturnRefKind = ValidatePropertyReturnRefKind(
+                    propSyntax,
+                    propName,
+                    propType,
+                    hasBodiedGetter: propSyntax.Accessors.Any(a => a.IsGetter && a.Body != null),
+                    writeAccessor: propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit));
+
                 // Validate: open only on open class
                 bool isVirtual = propSyntax.OpenModifier != null;
                 bool isOverride = propSyntax.OverrideModifier != null;
@@ -1660,6 +1672,17 @@ internal sealed partial class DeclarationBinder
                         {
                             Diagnostics.ReportOverrideOfSealedMethod(propSyntax.Identifier.Location, propName);
                         }
+                        else if (baseProp.ReturnRefKind != propReturnRefKind)
+                        {
+                            // Issue #3879: a source base property is selected by
+                            // NAME here, so without this the ref-kind never
+                            // participated — `override prop P ref T` bound
+                            // happily to a by-value base slot, and the override
+                            // then returned a managed pointer through a slot the
+                            // caller reads by value. The two directions are both
+                            // wrong and both report the same signature mismatch.
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
+                        }
                         else
                         {
                             overriddenProperty = baseProp;
@@ -1676,7 +1699,8 @@ internal sealed partial class DeclarationBinder
                             hasSetter,
                             getterAccessibility,
                             setterAccessibility,
-                            binderCtx.References);
+                            binderCtx.References,
+                            propReturnRefKind);
                         if (externalMatch.Member != null)
                         {
                             externalOverriddenProperty = externalMatch.Member;
@@ -1714,6 +1738,7 @@ internal sealed partial class DeclarationBinder
                 {
                     IsIndexer = isIndexer,
                     Parameters = indexerParameters,
+                    ReturnRefKind = propReturnRefKind,
                 };
                 propertySymbol.OverriddenProperty = overriddenProperty;
                 Binder.AttachDocumentation(propertySymbol, propSyntax);
@@ -1800,6 +1825,14 @@ internal sealed partial class DeclarationBinder
                         // ADR-0118: indexer accessors are emitted as SpecialName
                         // CLR default-member accessors (get_Item).
                         getterSymbol.IsSpecialName = isIndexer;
+
+                        // Issue #3879: the by-ref return lives on the ACCESSOR
+                        // symbol as well as the property. The getter's body is
+                        // bound with this symbol as its enclosing function, so
+                        // this is what makes `return ref <lvalue>` legal inside
+                        // it (and a plain `return` a GS0252), and what makes
+                        // FunctionEmitter encode the MethodDef return as `T&`.
+                        getterSymbol.ReturnRefKind = propReturnRefKind;
                         getterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenGetter;
                         propertySymbol.GetterSymbol = getterSymbol;
                         propertySymbol.GetterBodySyntax = getAccessor.Body;
@@ -2708,6 +2741,16 @@ internal sealed partial class DeclarationBinder
                                   && propSyntax.Accessors.All(a => a.Body == null);
                 }
 
+                // Issue #3879 (ADR-0060 amendment): a `shared` (static) property
+                // may return by reference on exactly the same terms as an
+                // instance one — C#'s `public static ref int P => ref slot`.
+                var staticPropReturnRefKind = ValidatePropertyReturnRefKind(
+                    propSyntax,
+                    propName,
+                    propType,
+                    hasBodiedGetter: propSyntax.Accessors.Any(a => a.IsGetter && a.Body != null),
+                    writeAccessor: propSyntax.Accessors.FirstOrDefault(a => a.IsSetterOrInit));
+
                 var propertySymbol = new PropertySymbol(
                     propName,
                     propType,
@@ -2721,7 +2764,10 @@ internal sealed partial class DeclarationBinder
                     isStatic: true,
                     declaration: propSyntax,
                     getterAccessibility: getterAccessibility,
-                    setterAccessibility: setterAccessibility);
+                    setterAccessibility: setterAccessibility)
+                {
+                    ReturnRefKind = staticPropReturnRefKind,
+                };
 
                 if (isAutoProperty)
                 {
@@ -2775,6 +2821,11 @@ internal sealed partial class DeclarationBinder
                             receiverType: (TypeSymbol?)null);
                         getterSymbol.IsStatic = true;
                         getterSymbol.StaticOwnerType = structSymbol;
+
+                        // Issue #3879: see the instance path — the accessor
+                        // symbol carries the ref-kind so the body binder and
+                        // FunctionEmitter both see it.
+                        getterSymbol.ReturnRefKind = staticPropReturnRefKind;
                         propertySymbol.GetterSymbol = getterSymbol;
                         propertySymbol.GetterBodySyntax = getAccessor.Body;
                     }

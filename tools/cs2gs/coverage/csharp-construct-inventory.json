@@ -1155,7 +1155,7 @@
     "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/IndexerDeclaration.cs",
-    "notes": "User indexers (issue #944). A \u0060ref\u0060/\u0060ref readonly\u0060-returning indexer gaps loudly at the declaration site: G#\u0027s by-ref return is a \u0060func\u0060 feature (issue #490 / ADR-0060) and there is no \u0060prop this[...] ref T\u0060 spelling, so translating it would silently return a copy (issue #3839)."
+    "notes": "User indexers (issue #944). A \u0060ref\u0060-returning indexer translates to \u0060prop this[...] ref T\u0060 (issue #3879, the ADR-0060 amendment that extends the by-ref return from \u0060func\u0060 to \u0060prop\u0060). \u0060ref readonly\u0060 still gaps loudly at the declaration site: G# has no read-only by-ref return, so it would have to render either a copy (drops the aliasing) or a plain \u0060ref\u0060 (makes read-only storage writable) \u2014 issue #3839."
   },
   {
     "kind": "IndexerMemberCref",
@@ -1769,7 +1769,7 @@
     "rule": "ADR-0115 \u00A7B.11",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs",
-    "notes": "A \u0060ref\u0060/\u0060ref readonly\u0060-returning property gaps loudly at the declaration site: G#\u0027s by-ref return is a \u0060func\u0060 feature (issue #490 / ADR-0060) and there is no \u0060prop P ref T\u0060 spelling, so translating it would silently return a copy (issue #3839)."
+    "notes": "A \u0060ref\u0060-returning property translates to \u0060prop P ref T\u0060 (issue #3879, the ADR-0060 amendment that extends the by-ref return from \u0060func\u0060 to \u0060prop\u0060). \u0060ref readonly\u0060 still gaps loudly at the declaration site: G# has no read-only by-ref return, so it would have to render either a copy (drops the aliasing) or a plain \u0060ref\u0060 (makes read-only storage writable) \u2014 issue #3839."
   },
   {
     "kind": "PropertyPatternClause",

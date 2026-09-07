@@ -32,11 +32,13 @@ namespace Cs2Gs.Tests;
 /// <c>return ref lvalue</c>.</item>
 /// <item>A <c>ref</c> PROPERTY or INDEXER lost its <c>ref</c> entirely and
 /// became a copy-returning member — no error anywhere, a pure behaviour change.
-/// G# has NO such construct (the by-ref return is a <c>func</c> feature; there
-/// is no <c>prop P ref T</c> spelling), so the honest verdict is a loud gap, the
-/// same one cs2gs already reaches at the USE site of a ref-returning indexer
-/// (#1987). Silently emitting the copy-returning form is the one outcome that
-/// must not happen.</item>
+/// At the time G# had NO such construct (the by-ref return was a <c>func</c>
+/// feature; there was no <c>prop P ref T</c> spelling), so the honest verdict
+/// was a loud gap. Issue #3879 then added the spelling, and the plain-<c>ref</c>
+/// property and indexer now TRANSLATE — see
+/// <c>Issue3879RefReturningPropertyTranslationTests</c>. What remains gapped here
+/// is <c>ref readonly</c>, which still has no G# form. Silently emitting the
+/// copy-returning form is the one outcome that must not happen.</item>
 /// </list>
 /// <para>
 /// The method half is proven by EXECUTION, not by printed shape: a printed-shape
@@ -166,32 +168,12 @@ public sealed class Issue3839RefReturningMemberTranslationTests
     }
 
     /// <summary>
-    /// A C# <c>ref</c> property has no G# form, so it must gap loudly rather than
-    /// silently become a copy-returning <c>prop</c>.
-    /// </summary>
-    [Fact]
-    public void RefProperty_StaysLoudGap()
-    {
-        Assert.Contains(
-            Diagnose("""
-                namespace Repro
-                {
-                    public class Holder
-                    {
-                        private readonly int[] values = new[] { 40, 41, 42 };
-
-                        public ref int Property => ref values[0];
-                    }
-                }
-                """),
-            d => d.Severity == TranslationSeverity.Unsupported
-                && d.Message.Contains("ref-returning property", StringComparison.Ordinal));
-    }
-
-    /// <summary>
-    /// <c>ref readonly</c> is the same hazard: the reference is read-only, but it
-    /// is still a reference, and a copy-returning property is still a behaviour
-    /// change (the caller observes a stale snapshot rather than live storage).
+    /// <c>ref readonly</c> remains the gap after #3879: the reference is
+    /// read-only, but it is still a reference. A copy-returning property is a
+    /// behaviour change (the caller observes a stale snapshot rather than live
+    /// storage), and a plain-<c>ref</c> property is a different one (the caller
+    /// gets a WRITABLE alias to storage declared read-only). G# has no read-only
+    /// by-ref return, so neither rendering is faithful.
     /// </summary>
     [Fact]
     public void RefReadonlyProperty_StaysLoudGap()
@@ -209,31 +191,7 @@ public sealed class Issue3839RefReturningMemberTranslationTests
                 }
                 """),
             d => d.Severity == TranslationSeverity.Unsupported
-                && d.Message.Contains("ref-returning property", StringComparison.Ordinal));
-    }
-
-    /// <summary>
-    /// The indexer form of the same gap. cs2gs already refuses to translate a
-    /// READ through a ref-returning indexer (#1987); the declaration site was the
-    /// hole.
-    /// </summary>
-    [Fact]
-    public void RefIndexer_StaysLoudGap()
-    {
-        Assert.Contains(
-            Diagnose("""
-                namespace Repro
-                {
-                    public class Holder
-                    {
-                        private readonly int[] values = new[] { 40, 41, 42 };
-
-                        public ref int this[int index] => ref values[index];
-                    }
-                }
-                """),
-            d => d.Severity == TranslationSeverity.Unsupported
-                && d.Message.Contains("ref-returning indexer", StringComparison.Ordinal));
+                && d.Message.Contains("ref readonly", StringComparison.Ordinal));
     }
 
     /// <summary>
