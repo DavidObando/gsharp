@@ -463,12 +463,13 @@ public class Issue4032ConstrainedImportedGenericBaseTests
 
         // REVIEW FINDING 1's green side: the same three expression spellings
         // over a SATISFYING argument must keep binding, running and printing.
-        // The literal uses an IMPORTED type argument because the literal
-        // spelling over a SAME-COMPILATION one does not bind at all — it takes
-        // the `hasSymbolicArgument` branch and reports GS0157 "Cannot find type
-        // Handler". That is pre-existing and untouched here (this change's
-        // literal-site guard sits inside the `!hasSymbolicArgument` branch),
-        // measured on the parent, and filed as #4042.
+        // The literal used an IMPORTED type argument because the literal
+        // spelling over a SAME-COMPILATION one did not bind at all — it took
+        // the `hasSymbolicArgument` branch and reported GS0157 "Cannot find
+        // type Handler". That was pre-existing, was filed as #4042, and is
+        // FIXED by the follow-up PR; this row keeps the imported-argument
+        // spelling exactly as it was, so that the fix is measured by the new
+        // fixture rather than by silently changing a #4032 row.
         yield return new object[]
         {
             "review-the-expression-spellings-still-bind-when-the-constraint-holds",
