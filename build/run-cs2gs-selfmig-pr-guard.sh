@@ -77,6 +77,9 @@
 #                          set can be widened (e.g. to tools/cs2gs/Cs2Gs.Tests
 #                          once #3836's ~9 known failures clear) without
 #                          editing this file.
+#   SELFMIG_PR_GUARD_MIGRATE_TIMEOUT
+#                          optional GNU timeout duration for migrate; CI sets
+#                          75m so it can report timeout before the 90m job cap.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -250,18 +253,31 @@ dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Releas
 
 started=$(date +%s)
 
+migrate_command=(
+  dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate
+  --corpus "$repo_root"
+  --out "$work_root/migrated"
+  --artifacts "$work_root/runs"
+  --config Release
+  "${excludes[@]}"
+)
+if [[ -n "${SELFMIG_PR_GUARD_MIGRATE_TIMEOUT:-}" ]]; then
+  migrate_command=(timeout --verbose "$SELFMIG_PR_GUARD_MIGRATE_TIMEOUT" "${migrate_command[@]}")
+fi
+
 set +e
-dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
-  --corpus "$repo_root" \
-  --out "$work_root/migrated" \
-  --artifacts "$work_root/runs" \
-  --config Release \
-  "${excludes[@]}" \
-  2>&1 | tee "$work_root/guard.log"
+"${migrate_command[@]}" 2>&1 | tee "$work_root/guard.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
 
 elapsed=$(( $(date +%s) - started ))
+
+if [[ -n "${SELFMIG_PR_GUARD_MIGRATE_TIMEOUT:-}" ]] && (( migrate_exit == 124 )); then
+  echo >&2
+  echo "::error title=Hot-core migration timeout::PR guard TIMED OUT: cs2gs migrate exceeded its $SELFMIG_PR_GUARD_MIGRATE_TIMEOUT deadline after ${elapsed}s." >&2
+  echo "This is the guard's internal timeout, not a push/concurrency cancellation." >&2
+  exit 124
+fi
 
 run_json=$(find "$work_root/runs" -maxdepth 2 -name run.json | sort | tail -1)
 if [[ -z "$run_json" ]]; then

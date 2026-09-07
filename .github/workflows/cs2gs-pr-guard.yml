@@ -92,14 +92,18 @@ env:
   # Nerdbank.GitVersioning's GitBuildVersion* emission.
   NBGV_SetCloudBuildVersionVars: false
   SELFMIG_PR_GUARD_ROOT: /tmp/gsharp-cs2gs-pr-guard
+  # GitHub reports both job timeouts and concurrency cancellations as
+  # "cancelled". Expire migrate first so the script can identify a real timeout.
+  SELFMIG_PR_GUARD_MIGRATE_TIMEOUT: 75m
 
 jobs:
   guard:
     name: hot-core translation guard
     runs-on: ubuntu-latest
     # Current eight-project runs measure ~53-55 minutes. Ninety minutes restores
-    # runner-variance headroom while keeping a finite whole-job backstop; each
-    # compiler/test child retains its tighter ProcessRunner timeout.
+    # runner-variance headroom while keeping a finite whole-job backstop. The
+    # migrate step has a 75-minute reporting deadline, and each compiler/test
+    # child retains its tighter ProcessRunner timeout.
     timeout-minutes: 90
 
     steps:

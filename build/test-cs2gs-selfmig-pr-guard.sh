@@ -16,6 +16,10 @@ if [[ "${1:-}" == build ]]; then
   exit 0
 fi
 
+if [[ -n "${FAKE_MIGRATE_SLEEP:-}" ]]; then
+  sleep "$FAKE_MIGRATE_SLEEP"
+fi
+
 artifacts=
 while (( $# )); do
   if [[ "$1" == --artifacts ]]; then
@@ -48,13 +52,16 @@ chmod +x "$fake_bin/dotnet"
 
 run_case() {
   local name=$1 run_succeeded=$2 migrate_exit=$3 expected_exit=$4
+  local migrate_timeout=${5:-} migrate_sleep=${6:-}
   local case_root="$test_root/$name"
   local log="$case_root.log"
   set +e
   PATH="$fake_bin:$PATH" \
     FAKE_RUN_SUCCEEDED="$run_succeeded" \
     FAKE_MIGRATE_EXIT="$migrate_exit" \
+    FAKE_MIGRATE_SLEEP="$migrate_sleep" \
     SELFMIG_PR_GUARD_ROOT="$case_root" \
+    SELFMIG_PR_GUARD_MIGRATE_TIMEOUT="$migrate_timeout" \
     "$repo_root/build/run-cs2gs-selfmig-pr-guard.sh" >"$log" 2>&1
   local actual_exit=$?
   set -e
@@ -65,22 +72,31 @@ run_case() {
     exit 1
   fi
 
-  grep -q "PR guard: 8/8 guarded app(s)" "$log"
 }
 
 run_case success true 0 0
+grep -q "PR guard: 8/8 guarded app(s)" "$test_root/success.log"
 grep -q "PR guard PASSED." "$test_root/success.log"
 
 run_case migrate-exit-nonzero true 7 7
+grep -q "PR guard: 8/8 guarded app(s)" "$test_root/migrate-exit-nonzero.log"
 grep -q "migrate exit 7" "$test_root/migrate-exit-nonzero.log"
 grep -q "PR guard FAILED: cs2gs reported a global migration failure" "$test_root/migrate-exit-nonzero.log"
 ! grep -q "PR guard PASSED." "$test_root/migrate-exit-nonzero.log"
 
 run_case run-failed false 0 1
+grep -q "PR guard: 8/8 guarded app(s)" "$test_root/run-failed.log"
 grep -q "run FAILED" "$test_root/run-failed.log"
 grep -q "run succeeded=false" "$test_root/run-failed.log"
 ! grep -q "PR guard PASSED." "$test_root/run-failed.log"
 
+run_case migrate-timeout true 0 124 1s 2
+grep -q "PR guard TIMED OUT: cs2gs migrate exceeded its 1s deadline" "$test_root/migrate-timeout.log"
+grep -q "not a push/concurrency cancellation" "$test_root/migrate-timeout.log"
+! grep -q "no run.json produced" "$test_root/migrate-timeout.log"
+
 grep -qx '    timeout-minutes: 90' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -qx '  SELFMIG_PR_GUARD_MIGRATE_TIMEOUT: 75m' \
+  "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
 
 echo "selfmig PR guard regressions PASSED."
