@@ -7068,24 +7068,9 @@ public sealed class Binder
         // walk is bounded anyway so a malformed symbol cannot hang the binder.
         if (typeArgument is TypeParameterSymbol argumentParameter)
         {
-            // The pattern is deliberately NOT in the loop condition. G#'s `for`
-            // header carries no parentheses, so an empty property pattern
-            // (`is { } next`) there prints as `for …is { } next; steps++ {`,
-            // where the pattern's brace is indistinguishable from the loop
-            // body's — cs2gs emits it verbatim and the migrated G# does not
-            // parse. That is the #3831/#3896/#3905 hazard the hot-core
-            // translation guard exists to catch, and it took the guard from
-            // 8/8 to 2/8 apps green. Hoisting the read out of the condition is
-            // equivalent, and translates.
             var current = argumentParameter;
-            for (var steps = 0; steps < 64; steps++)
+            for (var steps = 0; steps < 64 && current.TypeParameterBound is { } next; steps++)
             {
-                var next = current.TypeParameterBound;
-                if (next == null)
-                {
-                    break;
-                }
-
                 if (ReferenceEquals(next, boundArgument))
                 {
                     return true;
