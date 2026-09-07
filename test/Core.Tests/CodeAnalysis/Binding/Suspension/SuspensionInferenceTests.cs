@@ -288,6 +288,54 @@ public class SuspensionInferenceTests
     }
 
     [Fact]
+    public void DirectChannelOpsCallWithContext_DoesNotColor()
+    {
+        var program = Bind("""
+            package P
+            import Gsharp.Concurrency
+            func send() {
+                let ch = Chan[int32](1)
+                ChannelOps.Send(ch, 1, Context.None)
+            }
+            """);
+
+        Assert.Equal(SuspendingKind.None, Function(program, "send").SuspendingKind);
+        Assert.Empty(program.Diagnostics);
+    }
+
+    [Fact]
+    public void DirectChannelOpsCallWithDefaultContext_DoesNotColor()
+    {
+        var program = Bind("""
+            package P
+            import Gsharp.Concurrency
+            func send() {
+                let ch = Chan[int32](1)
+                ChannelOps.Send(ch, 1, default(Context))
+            }
+            """);
+
+        Assert.Equal(SuspendingKind.None, Function(program, "send").SuspendingKind);
+        Assert.Empty(program.Diagnostics);
+    }
+
+    [Fact]
+    public void DirectScopeFrameExit_DoesNotColor()
+    {
+        var program = Bind("""
+            package P
+            import Gsharp.Concurrency
+            func finish() {
+                let frame = ScopeFrame.Enter(Context.None)
+                frame.Exit()
+            }
+            """);
+
+        Assert.Equal(SuspendingKind.None, Function(program, "finish").SuspendingKind);
+        Assert.Empty(program.Diagnostics);
+    }
+
+    [Fact]
     public void ChannelOperationInsideLock_DoesNotColor()
     {
         var program = Bind("""

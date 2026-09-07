@@ -335,6 +335,30 @@ namespace Demo
         Assert.DoesNotContain("__gsAsyncVoidBody", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AsyncExpressionLambda_WithVoidAwait_UsesStatementBody()
+    {
+        string printed = TranslateAndValidate(@"
+using System;
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public sealed class WorkItem
+    {
+        public WorkItem(Func<ValueTask> body) { }
+    }
+
+    public sealed class C
+    {
+        public WorkItem Build() => new WorkItem(async () => await Task.Yield());
+    }
+}");
+
+        Assert.Contains("await Task.Yield()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("return await Task.Yield()", printed, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// A direct Task-returning method-group VALUE (assigned to a
     /// <c>Func&lt;object, EventArgs, Task&gt;</c>-shaped variable, never a void

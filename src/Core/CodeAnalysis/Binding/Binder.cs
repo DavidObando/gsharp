@@ -6043,7 +6043,8 @@ public sealed class Binder
             // `(...)->void` overload (spurious GS0266). Skipping the binding
             // leaves the type parameter un-inferred, so the candidate is
             // rejected and the `(...)->void` overload wins unambiguously.
-            if (argumentType == TypeSymbol.Void)
+            if (argumentType == TypeSymbol.Void
+                || TypeSymbol.ContainsNullLiteralType(argumentType))
             {
                 return;
             }

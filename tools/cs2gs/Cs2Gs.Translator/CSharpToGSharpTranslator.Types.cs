@@ -203,6 +203,19 @@ public sealed partial class CSharpToGSharpTranslator
                         isAsync: isAsync);
                 }
 
+                if (isAsync
+                    && lambda.Body is ExpressionSyntax voidAsyncBody
+                    && this.context.GetTypeInfo(voidAsyncBody).Type?.SpecialType == SpecialType.System_Void)
+                {
+                    return new LambdaExpression(
+                        parameters,
+                        blockBody: new BlockStatement(this.WithSpillSeam(
+                            () => this.TranslateExpressionStatements(voidAsyncBody).ToList()).ToList()),
+                        isAsync: true,
+                        returnType: exactReturnType,
+                        isFunctionLiteral: exactTargetInvoke != null);
+                }
+
                 // A value-returning expression-bodied lambda (`x => x.Get() is {…}`)
                 // has no statement seam of its own; open one via
                 // <see cref="WithSpillSeam"/> so a nested spill (issue #1731) lands

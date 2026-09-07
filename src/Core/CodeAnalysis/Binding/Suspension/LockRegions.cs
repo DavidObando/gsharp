@@ -37,7 +37,8 @@ internal static class LockRegions
     public static bool IsBlockingBridge(BoundImportedCallExpression node)
         => node.Function.Name == "Wait"
             && node.Function.ImportedClass.ClassType.FullName == "Gsharp.Concurrency.Blocking"
-            && node.Arguments.Length == 1;
+            && node.Arguments.Length == 1
+            && ReferenceEquals(node.Syntax, node.Arguments[0].Syntax);
 
     private static bool IsMonitorExit(BoundExpression expression)
         => expression is BoundImportedCallExpression { Function: { Name: "Exit" } function }

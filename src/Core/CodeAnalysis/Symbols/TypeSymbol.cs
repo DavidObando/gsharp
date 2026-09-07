@@ -1077,6 +1077,27 @@ public class TypeSymbol : Symbol
         return false;
     }
 
+    /// <summary>Returns whether a type contains the open <c>nil</c>-literal type.</summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> contains <see cref="Null"/>.</returns>
+    public static bool ContainsNullLiteralType(TypeSymbol type)
+    {
+        if (type == Null)
+        {
+            return true;
+        }
+
+        foreach (var inner in GetWrappedTypes(type))
+        {
+            if (ContainsNullLiteralType(inner))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Compares runtime type identity while ignoring nullable-reference
     /// annotations, which are metadata-only and do not change a CLR signature.

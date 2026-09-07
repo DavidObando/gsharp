@@ -235,8 +235,15 @@ public sealed class ImportedClassSymbol : Symbol
         // CLR type inference; the type argument comes from the symbolic vector
         // instead (see the `deferredInferenceArgs` hand-off to Resolve below).
         bool[]? symbolicByRefArgs = null;
+        bool[]? deferredInferenceArgs = null;
         for (var i = 0; i < arguments.Length; i++)
         {
+            if (TypeSymbol.ContainsNullLiteralType(arguments[i].Type))
+            {
+                deferredInferenceArgs ??= new bool[arguments.Length];
+                deferredInferenceArgs[i] = true;
+            }
+
             // Issue #1391: the untyped `default` literal (bound as a
             // BoundDefaultExpression whose type is the Error sentinel until a
             // target type is known) is convertible to any parameter type. Pass
@@ -311,6 +318,8 @@ public sealed class ImportedClassSymbol : Symbol
                 argTypes[i] = ClrOverloadResolution.SymbolicByRefArgumentType;
                 symbolicByRefArgs ??= new bool[arguments.Length];
                 symbolicByRefArgs[i] = true;
+                deferredInferenceArgs ??= new bool[arguments.Length];
+                deferredInferenceArgs[i] = true;
                 continue;
             }
 
@@ -446,7 +455,8 @@ public sealed class ImportedClassSymbol : Symbol
                 {
                     return Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable");
                 }),
-            deferredInferenceArgs: symbolicByRefArgs);
+            deferredInferenceArgs: deferredInferenceArgs,
+            openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(arguments));
 
         switch (result.Outcome)
         {

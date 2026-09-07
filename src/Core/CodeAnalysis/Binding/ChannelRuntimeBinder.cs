@@ -52,6 +52,7 @@ internal sealed class ChannelRuntimeBinder
     public const string SelectWaiterTypeName = "Gsharp.Concurrency.SelectWaiter";
 
     private const string CancellationTokenTypeName = "System.Threading.CancellationToken";
+    private const string ContextTypeName = "Gsharp.Concurrency.Context";
     private const string AsyncLetCellTypeName = "Gsharp.Concurrency.AsyncLetCell";
 
     private readonly ReferenceResolver references;
@@ -86,7 +87,7 @@ internal sealed class ChannelRuntimeBinder
         references.TryResolveType("Gsharp.Concurrency.Blocking", out blockingType);
         references.TryResolveType("Gsharp.Concurrency.ScopeFrame", out scopeFrameType);
         references.TryResolveType("Gsharp.Concurrency.SelectWaiter", out selectWaiterType);
-        references.TryResolveType("Gsharp.Concurrency.Context", out contextType);
+        references.TryResolveType(ContextTypeName, out contextType);
         references.TryResolveType("Gsharp.Concurrency.GoroutineRuntime", out goroutineRuntimeType);
         references.TryResolveType(AsyncLetCellTypeName, out asyncLetCellType);
     }
@@ -396,7 +397,10 @@ internal sealed class ChannelRuntimeBinder
     /// <param name="call">An imported instance call.</param>
     /// <returns><see langword="true"/> for <c>SelectWaiter.Wait</c>.</returns>
     public static bool IsSelectWait(BoundImportedInstanceCallExpression call)
-        => call.Method.Name == "Wait" && call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.SelectWaiter";
+        => call.Receiver is BoundVariableExpression { Variable.Name: var name }
+            && name.StartsWith("<select$waiter$", StringComparison.Ordinal)
+            && call.Method.Name == "Wait"
+            && call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.SelectWaiter";
 
     /// <summary>Binds <c>frame.Context</c>, the block's implicit <c>ctx</c> (ADR-0174 D6).</summary>
     /// <param name="frame">The frame local.</param>
@@ -428,7 +432,10 @@ internal sealed class ChannelRuntimeBinder
     /// <param name="call">An imported instance call.</param>
     /// <returns><see langword="true"/> for <c>ScopeFrame.Exit</c>.</returns>
     public static bool IsScopeExit(BoundImportedInstanceCallExpression call)
-        => call.Method.Name == "Exit" && call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.ScopeFrame";
+        => call.Receiver is BoundVariableExpression { Variable.Name: var name }
+            && name.StartsWith("<scope$frame$", StringComparison.Ordinal)
+            && call.Method.Name == "Exit"
+            && call.Method.DeclaringType?.FullName == "Gsharp.Concurrency.ScopeFrame";
 
     /// <summary>Turns a blocking scope exit into the awaited <c>ExitAsync</c> (inside a state machine).</summary>
     /// <param name="exit">The blocking exit call.</param>
@@ -697,8 +704,9 @@ internal sealed class ChannelRuntimeBinder
     /// <returns><see langword="true"/> when the trailing cancellation argument was written by the author rather than supplied by the binder.</returns>
     public static bool HasAuthorWrittenCancellation(BoundImportedCallExpression call)
         => call.Arguments.Length != 0
-            && call.Arguments[^1] is not BoundDefaultExpression
-            && call.Arguments[^1].Type?.ClrType?.FullName == CancellationTokenTypeName;
+            && (call.Arguments[^1] is not BoundDefaultExpression
+                || call.Arguments[^1].Syntax is DefaultExpressionSyntax)
+            && call.Arguments[^1].Type?.ClrType?.FullName is CancellationTokenTypeName or ContextTypeName;
 
     /// <summary>
     /// ADR-0174 D7: rebinds a facade call that was bound with the

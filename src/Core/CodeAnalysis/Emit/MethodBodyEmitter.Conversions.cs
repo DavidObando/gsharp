@@ -45,11 +45,11 @@ internal sealed partial class MethodBodyEmitter
     /// </summary>
     /// <param name="from">The source type.</param>
     /// <param name="to">The target type.</param>
-    /// <returns><see langword="true"/> when the conversion changes a channel's direction.</returns>
-    private static bool IsChannelDirectionChange(TypeSymbol? from, TypeSymbol? to)
-        => ChannelTypeSymbol.TryGetChannelShape(from, out _, out var fromDirection, out _)
-            && ChannelTypeSymbol.TryGetChannelShape(to, out _, out var toDirection, out _)
-            && fromDirection != toDirection;
+    /// <returns><see langword="true"/> when the channel conversion needs emitted IL.</returns>
+    private static bool RequiresChannelConversionEmission(TypeSymbol? from, TypeSymbol? to)
+        => ChannelTypeSymbol.TryGetChannelShape(from, out _, out var fromDirection, out var fromConstructed)
+            && ChannelTypeSymbol.TryGetChannelShape(to, out _, out var toDirection, out var toConstructed)
+            && (fromDirection != toDirection || (toConstructed && !fromConstructed));
 
     private void EmitConversion(BoundConversionExpression conv)
     {
@@ -66,7 +66,7 @@ internal sealed partial class MethodBodyEmitter
         if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
             conv.Expression.Type,
             conv.Type)
-            && !IsChannelDirectionChange(conv.Expression.Type, conv.Type))
+            && !RequiresChannelConversionEmission(conv.Expression.Type, conv.Type))
         {
             this.EmitExpression(conv.Expression);
             return;
@@ -89,12 +89,18 @@ internal sealed partial class MethodBodyEmitter
         // instead of the unsupported-conversion throw below. Testing the target
         // for `is ChannelTypeSymbol` asked which NAME the author wrote; the
         // classifier no longer asks that, and neither does this.
-        if (ChannelTypeSymbol.TryGetChannelShape(conv.Type, out var targetElement, out var targetDirection, out _)
-            && ChannelTypeSymbol.TryGetChannelShape(conv.Expression.Type, out _, out var sourceDirection, out _))
+        if (ChannelTypeSymbol.TryGetChannelShape(conv.Type, out var targetElement, out var targetDirection, out var targetConstructed)
+            && ChannelTypeSymbol.TryGetChannelShape(conv.Expression.Type, out _, out var sourceDirection, out var sourceConstructed))
         {
             this.EmitExpression(conv.Expression);
             if (sourceDirection == targetDirection)
             {
+                if (targetConstructed && !sourceConstructed)
+                {
+                    this.il.OpCode(ILOpCode.Castclass);
+                    this.il.Token(this.outer.memberRefs.GetElementTypeToken(conv.Type));
+                }
+
                 return;
             }
 

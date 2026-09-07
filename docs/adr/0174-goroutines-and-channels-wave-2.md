@@ -3356,6 +3356,25 @@ implementation had to refine it.
     `gsharp`, `gsharp_aot`, `go` and `hardwareClass` JSON fields remain
     unchanged for dashboard consumers.
 
+50. **An explicit blocking bridge is an opt-in; runtime helper calls are not
+    language suspension points (issue #4044).** D4's GS0558 applies to the
+    compiler-inserted `Blocking.Wait` bridge that remains when a suspending call
+    reaches a non-suspending boundary. A source-level `Blocking.Wait(valueTask)`
+    call is instead the existing intentional-blocking spelling: the author
+    selected the bridge directly, so repeating the implicit-blocking warning at
+    that call adds no information. No warning is globally suppressed, and a
+    direct call to a suspending function at the same boundary still reports
+    GS0558.
+
+    The same provenance rule applies to the runtime helpers used by lowering.
+    Calls synthesized for `scope`, `select`, and channel syntax participate in
+    suspension inference and ambient-context diagnostics; source-level calls to
+    `ScopeFrame.Exit`, `SelectWaiter.AddCancelled`, or `ChannelOps` with an
+    explicit `CancellationToken`/`Context` are ordinary runtime API calls. This
+    preserves D4/D7/D8 for language constructs without changing the ABI of
+    tests and low-level code that deliberately exercise the blocking runtime
+    surface.
+
 ## Addendum A — The ten patterns, three ways
 
 The pattern study in the Context section gives ratings. This addendum gives

@@ -1298,7 +1298,11 @@ internal sealed class ConversionClassifier
                     // emitting IL that does not verify.
                     if (substituted == null && argument.Type is TupleTypeSymbol)
                     {
-                        substituted = TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
+                        substituted = TrySubstituteParameterTypeFromMethodTypeArgs(
+                            method,
+                            paramIndex,
+                            symbolicMethodTypeArgs,
+                            allowConcreteSymbolic: TypeSymbol.ContainsNullLiteralType(argument.Type));
                     }
 
                     var targetType = substituted
@@ -1336,7 +1340,18 @@ internal sealed class ConversionClassifier
                     // Invoke signature, the same way it already does for a
                     // user-defined generic function's method-group argument.
                     var isMethodGroupTarget = argument is BoundMethodGroupExpression or BoundClrMethodGroupExpression;
-                    if (argument.Type != targetType
+                    if (substituted != null
+                        && TypeSymbol.ContainsNullLiteralType(argument.Type)
+                        && argument is BoundTupleLiteralExpression
+                        && targetType is TupleTypeSymbol)
+                    {
+                        var sourceIndex = i - receiverArgCount;
+                        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+                            ? call.Arguments[sourceIndex].Location
+                            : call?.Location ?? default;
+                        rebound = BindContextualOpenLiteral(location, argument, targetType);
+                    }
+                    else if (argument.Type != targetType
                         && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget || isMethodGroupTarget)
                         && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
                         && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
@@ -2065,11 +2080,13 @@ internal sealed class ConversionClassifier
     /// <param name="method">The resolved (closed) CLR method (may be null).</param>
     /// <param name="paramIndex">Zero-based index into the method's parameter list.</param>
     /// <param name="methodTypeArgs">The symbolic method type-argument vector.</param>
+    /// <param name="allowConcreteSymbolic">Whether a fully concrete symbolic target is still required for contextual literal conversion.</param>
     /// <returns>The recovered symbolic parameter type, or <see langword="null"/>.</returns>
     public static TypeSymbol? TrySubstituteParameterTypeFromMethodTypeArgs(
         MethodInfo? method,
         int paramIndex,
-        ImmutableArray<TypeSymbol?> methodTypeArgs)
+        ImmutableArray<TypeSymbol?> methodTypeArgs,
+        bool allowConcreteSymbolic = false)
     {
         if (method == null
             || !method.IsGenericMethod
@@ -2129,7 +2146,9 @@ internal sealed class ConversionClassifier
 
         return mapped != null
             && mapped != TypeSymbol.Error
-            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
+            && (allowConcreteSymbolic
+                || TypeSymbol.ContainsTypeParameter(mapped)
+                || TypeSymbol.ContainsSameCompilationUserType(mapped))
             ? mapped
             : null;
     }
@@ -4098,6 +4117,41 @@ internal sealed class ConversionClassifier
             expression.Syntax,
             ImmutableArray.Create<BoundStatement>(declaration),
             rebuilt);
+    }
+
+    private BoundExpression BindContextualOpenLiteral(
+        TextLocation diagnosticLocation,
+        BoundExpression expression,
+        TypeSymbol targetType)
+    {
+        if (StatementBinder.IsNilLiteral(expression))
+        {
+            return targetType is NullableTypeSymbol
+                || Conversion.IsReferenceLikeTarget(targetType)
+                ? new BoundDefaultExpression(expression.Syntax, targetType)
+                : BindConversion(diagnosticLocation, expression, targetType);
+        }
+
+        if (expression is BoundTupleLiteralExpression sourceTuple
+            && targetType is TupleTypeSymbol targetTuple
+            && sourceTuple.Elements.Length == targetTuple.Arity)
+        {
+            var elements = ImmutableArray.CreateBuilder<BoundExpression>(targetTuple.Arity);
+            for (var i = 0; i < targetTuple.Arity; i++)
+            {
+                elements.Add(BindContextualOpenLiteral(
+                    diagnosticLocation,
+                    sourceTuple.Elements[i],
+                    targetTuple.ElementTypes[i]));
+            }
+
+            return new BoundTupleLiteralExpression(
+                expression.Syntax,
+                targetTuple,
+                elements.MoveToImmutable());
+        }
+
+        return BindConversion(diagnosticLocation, expression, targetType, allowExplicit: true);
     }
 
     private BoundExpression BindStructuralProjectionCore(

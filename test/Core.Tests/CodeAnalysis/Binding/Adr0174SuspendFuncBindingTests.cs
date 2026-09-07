@@ -118,6 +118,27 @@ public class Adr0174SuspendFuncBindingTests
     }
 
     [Fact]
+    public void ExplicitBlockingWait_IsTheIntentionalBlockingSpelling()
+    {
+        var program = Bind("""
+            package P
+            import System.Threading.Tasks
+            import Gsharp.Concurrency
+            open class Reader {
+                open func Read() int32 {
+                    return Blocking.Wait(ValueTask[int32](7))
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(program.Diagnostics, d => d.Id == "GS0558");
+        var read = program.Functions.Single(p => p.Key.Name == "Read");
+        Assert.Single(
+            Collect<BoundImportedCallExpression>(read.Value),
+            c => c.Function.Name == "Wait");
+    }
+
+    [Fact]
     public void Call_FromPlainFunction_IsInferred_AndAwaited()
     {
         var program = Bind("""
