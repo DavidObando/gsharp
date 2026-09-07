@@ -5392,12 +5392,34 @@ public sealed class Binder
             return false;
         }
 
+        var anyOpen = false;
         foreach (var symbolic in symbolicArgs)
         {
-            if (symbolic == null || TypeSymbol.ContainsTypeParameter(symbolic))
+            if (symbolic == null)
             {
                 return false;
             }
+
+            anyOpen |= TypeSymbol.ContainsTypeParameter(symbolic);
+        }
+
+        if (anyOpen)
+        {
+            // Issue #4037: an OPEN instantiation. The closed check below cannot
+            // answer here and must not be asked — a type argument that still
+            // mentions a type parameter is erased to an `object` placeholder,
+            // and asking a constraint of a placeholder is the #4016/#4031
+            // defect. A DIFFERENT question does have an answer: when the
+            // argument IS a type parameter, does its own constraint set imply
+            // the bound the definition declares? That is the whole of
+            // `class Unforwarded[T] : Handler[T]`, and it is what `csc` asks
+            // (CS0314). Handled by its own reporter, which never falls through
+            // to the closed path.
+            return ReportUnforwardedGenericTypeParameterConstraint(
+                diagnostics,
+                openDefinition,
+                symbolicArgs,
+                location);
         }
 
         var symbolicVector = ImmutableArray.CreateRange(symbolicArgs, static arg => (TypeSymbol?)arg);
@@ -5472,12 +5494,153 @@ public sealed class Binder
             typeArgument,
             failedParameter.Name,
             constraintDescription);
+        if (AlreadyReportedHere(
+                diagnostics,
+                DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.Id,
+                message,
+                location))
+        {
+            return true;
+        }
+
+        diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
+            location,
+            failedParameter.Name,
+            typeArgument,
+            constraintDescription);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4037: reports <c>GS0580</c> when an OPEN instantiation of a
+    /// constrained generic writes the enclosing declaration's own type
+    /// parameter at a position whose bound that parameter does not forward —
+    /// <c>class Unforwarded[T] : Handler[T]</c> over
+    /// <c>Handler&lt;TOptions&gt; where TOptions : SchemeOptions</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The rule, and why it is not the #4032 check.</b> #4032 asks
+    /// "does this ARGUMENT satisfy the bound", which only a CLOSED
+    /// instantiation can answer. Here there is no argument: <c>T</c> stands
+    /// for every type its own bounds admit, so the instantiation is valid
+    /// exactly when <c>T</c>'s bounds are at least as strong as the
+    /// definition's — C# §13.4.3, which <c>csc</c> reports as
+    /// <b>CS0314</b>. Measured, not assumed: <c>csc</c> reports CS0314 (not
+    /// CS0311, which is the CONCRETE-argument case G# already spells GS0152)
+    /// at a base clause, a field type, a local type, an interface list entry
+    /// and a return type alike, which is why this sits at the shared
+    /// construction sites rather than in the base-clause binder.</para>
+    /// <para><b>What is still not asked.</b> Only a type argument that IS a
+    /// type parameter. A composite open shape (<c>Handler[List[T]]</c>) has
+    /// no forwarding question to ask and is skipped exactly as before, and so
+    /// is a position whose declared bound MENTIONS another of the
+    /// definition's own parameters (#4031's dependent-bound shape). The rule
+    /// therefore only ever ADDS rejections it can prove.</para>
+    /// </remarks>
+    /// <param name="diagnostics">The bag the diagnostic is reported into.</param>
+    /// <param name="openDefinition">The open generic CLR definition.</param>
+    /// <param name="symbolicArgs">The symbolic arguments, in declaration order.</param>
+    /// <param name="location">Where to anchor the diagnostic.</param>
+    /// <returns><see langword="true"/> when a diagnostic was reported.</returns>
+    private static bool ReportUnforwardedGenericTypeParameterConstraint(
+        DiagnosticBag diagnostics,
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        TextLocation location)
+    {
+        for (var i = 0; i < symbolicArgs.Length; i++)
+        {
+            if (symbolicArgs[i] is not TypeParameterSymbol argument)
+            {
+                continue;
+            }
+
+            if (ClrOverloadResolution.TypeParameterForwardsDeclaredConstraints(
+                    openDefinition,
+                    i,
+                    argument,
+                    out var failedConstraint,
+                    out var declaredParameterName)
+                || declaredParameterName == null)
+            {
+                continue;
+            }
+
+            Type declaredParameter;
+            try
+            {
+                declaredParameter = openDefinition.GetGenericArguments()[i];
+            }
+            catch (Exception)
+            {
+                // A metadata load failure did not disprove the constraint.
+                continue;
+            }
+
+            var constraintDescription = DescribeClrConstraint(declaredParameter, failedConstraint);
+
+            // Issue #4037: the same once-per-expression rule #4032 established.
+            // The receiver probes that made a single violation print three
+            // times are the same probes here.
+            var message = string.Format(
+                CultureInfo.CurrentCulture,
+                DiagnosticDescriptors.TypeParameterDoesNotForwardConstraint.MessageFormat,
+                argument.Name,
+                declaredParameterName,
+                constraintDescription);
+            if (!AlreadyReportedHere(
+                    diagnostics,
+                    DiagnosticDescriptors.TypeParameterDoesNotForwardConstraint.Id,
+                    message,
+                    location))
+            {
+                diagnostics.ReportTypeParameterDoesNotForwardConstraint(
+                    location,
+                    argument.Name,
+                    declaredParameterName,
+                    constraintDescription);
+            }
+
+            // One diagnostic per construction, even when two positions fail:
+            // the author fixes the declaration, not the instantiation.
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4032 (review follow-up), reused by #4037: whether a
+    /// byte-identical diagnostic (same id, same span, same message) already
+    /// stands in <paramref name="diagnostics"/>.
+    /// </summary>
+    /// <remarks>
+    /// The generic-receiver resolvers are BACKTRACKING PROBES — measured with
+    /// a stack dump at the probe's entry, `Handler[string].Describe()` reaches
+    /// one twice and `System.Nullable[string].Value` three times, because
+    /// <c>BindAccessorExpression</c> re-attempts THE SAME qualified walk
+    /// through several entry points. A per-call report turned one violation
+    /// into three identical errors, and the COUNT was a function of how many
+    /// internal paths the binder happened to take. Suppressing an exact
+    /// duplicate loses nothing a reader could have distinguished, and the repo
+    /// already takes that position
+    /// (<c>DiagnosticBag.SuppressDuplicateDiagnosticsIn</c>). Callers keep
+    /// returning "invalid, stop" even when the print was suppressed.
+    /// </remarks>
+    /// <param name="diagnostics">The bag to search.</param>
+    /// <param name="id">The diagnostic id.</param>
+    /// <param name="message">The fully formatted message.</param>
+    /// <param name="location">The anchor location.</param>
+    /// <returns><see langword="true"/> when the identical diagnostic is present.</returns>
+    private static bool AlreadyReportedHere(
+        DiagnosticBag diagnostics,
+        string id,
+        string message,
+        TextLocation location)
+    {
         foreach (var existing in diagnostics)
         {
-            if (string.Equals(
-                    existing.Id,
-                    DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.Id,
-                    StringComparison.Ordinal)
+            if (string.Equals(existing.Id, id, StringComparison.Ordinal)
                 && ReferenceEquals(existing.Location.Text, location.Text)
                 && existing.Location.Span.Start == location.Span.Start
                 && existing.Location.Span.Length == location.Span.Length
@@ -5487,12 +5650,7 @@ public sealed class Binder
             }
         }
 
-        diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
-            location,
-            failedParameter.Name,
-            typeArgument,
-            constraintDescription);
-        return true;
+        return false;
     }
 
     /// <summary>

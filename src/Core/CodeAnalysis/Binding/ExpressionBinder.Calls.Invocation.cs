@@ -3676,6 +3676,14 @@ internal sealed partial class ExpressionBinder
         // what keeps the member and why. The memoized collection above is
         // untouched, and a call that admitted no such member pays one loop over
         // its own candidates.
+        //
+        // Issue #4036 (review finding): this filter and the repair below both
+        // compare SOURCE-order arguments against DECLARATION-order parameters,
+        // so both are handed the argument names to reconcile the two. Without
+        // them `Add(value: someCelsius, key: "a")` asked whether a `Celsius`
+        // fits `key: string`, concluded the receiver's own `Add` could not take
+        // the call, removed the widening member, and reported GS0159 for a
+        // valid call.
         var candidates = MemberLookup.ExcludeUnreachableNonGenericInterfaceCandidates(
             MemberLookup.ExcludeErasureOnlyEnumCandidates(
                 MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(
@@ -3688,7 +3696,47 @@ internal sealed partial class ExpressionBinder
                 effectiveReceiverType).ToList(),
             clrType,
             effectiveReceiverType,
-            arguments.Select(argument => argument.Type).ToList()).ToList();
+            arguments.Select(argument => argument.Type).ToList(),
+            argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!).ToList();
+
+        // Issue #4036: the filter above decided WHICH candidates survive. This
+        // decides what happens to the argument once one does. When the widening
+        // member was kept because the receiver's own surface would have taken
+        // the call through a user-defined implicit conversion, the conversion
+        // was never actually APPLIED: the erased argument still presented as
+        // `object`, which is an identity match for `IList.Add(object)` and no
+        // match for `Add(double)`, so the widening member won and
+        // `List[float64]().Add(someCelsius)` threw at run time — while
+        // `List[float64](){ ...someCelsiusSlice }` printed the value, because
+        // the spread lowering converts the item to the collection's element
+        // type BEFORE binding `Add`. Apply the conversion here so the ordinary
+        // call agrees with the spread form. The widening member is still
+        // collected and still applicable — #4028 keeps it here on purpose — it
+        // simply stops winning, because a real `double` beats a boxed one.
+        var conversionRepairTargets = MemberLookup.FindUserDefinedConversionRepairTargets(
+            candidates,
+            clrType,
+            effectiveReceiverType,
+            arguments.Select(argument => argument.Type).ToList(),
+            argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
+        if (!conversionRepairTargets.IsDefault)
+        {
+            var repaired = arguments.ToBuilder();
+            for (var i = 0; i < repaired.Count && i < conversionRepairTargets.Length; i++)
+            {
+                if (conversionRepairTargets[i] is not TypeSymbol repairTarget)
+                {
+                    continue;
+                }
+
+                repaired[i] = conversions.BindConversion(
+                    repaired[i].Syntax?.Location ?? ce.Location,
+                    repaired[i],
+                    repairTarget);
+            }
+
+            arguments = repaired.ToImmutable();
+        }
 
         if (candidates.Count > 0)
         {

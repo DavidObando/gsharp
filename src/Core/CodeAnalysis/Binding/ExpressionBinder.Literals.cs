@@ -1791,6 +1791,16 @@ internal sealed partial class ExpressionBinder
                 // tuples); both report GS0157 there too. So this restores the
                 // slice literal and closes the two pre-existing siblings with
                 // the same predicate.
+                //
+                // Issue #4042: the SURROGATE cases are now admitted too, and the
+                // predicate above survives as the choice of RESULT TYPE inside
+                // the branch rather than as a gate on entering it. A
+                // same-compilation type argument has no CLR type while binding,
+                // so it was never CLR-faithful and the whole branch was skipped
+                // — `Handler[MyOptions]{Tag: "z"}` fell through to GS0157
+                // "Cannot find type Handler" while `Handler[MyOptions]()` bound.
+                // The constructor path has kept the symbolic vector beside the
+                // erased shape since #671; the literal now does the same.
                 else if (syntax.TypeArgumentList != null
                     && hasImportedCandidate
                     && importedCandidate != null
@@ -1799,9 +1809,7 @@ internal sealed partial class ExpressionBinder
                         syntax.TypeArgumentList,
                         out var clrTypeArguments,
                         out var literalSymbolicArguments,
-                        out var hasSymbolicArgument)
-                    && (!hasSymbolicArgument
-                        || HasOnlyClrFaithfulSymbolicArguments(literalSymbolicArguments)))
+                        out var hasSymbolicArgument))
                 {
                     // Issue #4032 (review finding 1): the literal spelling
                     // `Handler[string]{Tag: "z"}` closes the imported generic here
@@ -1826,6 +1834,36 @@ internal sealed partial class ExpressionBinder
                     {
                         Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
                         return new BoundErrorExpression(null);
+                    }
+
+                    // Issue #4042: a RETAINED symbolic argument with no faithful
+                    // closed CLR type of its own — a same-compilation user class
+                    // or an in-scope type parameter — closes over the `object`
+                    // SURROGATE, so `closedImportedType` is `Handler<object>` and
+                    // neither the semantic aggregate nor a plain
+                    // `TypeSymbol.FromClrType` may stand for it: the emitter has
+                    // to reify `Handler<MyOptions>`. Carry the symbolic vector
+                    // beside the erased shape, exactly as the CONSTRUCTOR
+                    // spelling has since #671 — that is what makes
+                    // `Handler[MyOptions]()` work while
+                    // `Handler[MyOptions]{Tag: "z"}` reported GS0157 "Cannot find
+                    // type Handler", because the whole branch used to be gated
+                    // on the argument being CLR-faithful.
+                    //
+                    // The LOSSY-BUT-REAL family (#4024's `[]T`, #3962's `[N]T`,
+                    // ADR-0172's named tuple) is untouched: those have a real
+                    // closed CLR type, `HasOnlyClrFaithfulSymbolicArguments` says
+                    // so, and they keep taking the plain path below.
+                    if (hasSymbolicArgument
+                        && !HasOnlyClrFaithfulSymbolicArguments(literalSymbolicArguments))
+                    {
+                        return BindImportedTypeLiteralExpression(
+                            syntax,
+                            closedImportedType,
+                            ImportedTypeSymbol.GetConstructed(
+                                closedImportedType,
+                                importedCandidate.ClassType,
+                                literalSymbolicArguments));
                     }
 
                     if (ImportedTypeSymbol.TryCreateSemanticAggregate(
@@ -2336,10 +2374,13 @@ internal sealed partial class ExpressionBinder
     /// value-type binder, mirroring the C# object-initializer contract for
     /// either kind.
     /// </summary>
-    private BoundExpression BindImportedTypeLiteralExpression(StructLiteralExpressionSyntax syntax, Type clrType)
+    private BoundExpression BindImportedTypeLiteralExpression(
+        StructLiteralExpressionSyntax syntax,
+        Type clrType,
+        TypeSymbol? resultTypeOverride = null)
         => clrType.IsValueType
-            ? BindImportedValueTypeLiteralExpression(syntax, clrType)
-            : BindImportedClassLiteralExpression(syntax, clrType);
+            ? BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
+            : BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride);
 
     /// <summary>
     /// Issue #4024 (review finding 4): returns <see langword="true"/> when every
@@ -2390,7 +2431,10 @@ internal sealed partial class ExpressionBinder
     /// <see cref="BoundClrPropertyAssignmentExpression"/>) means emit and the
     /// interpreter both work without a new bound-node kind.
     /// </summary>
-    private BoundExpression BindImportedClassLiteralExpression(StructLiteralExpressionSyntax syntax, Type clrType)
+    private BoundExpression BindImportedClassLiteralExpression(
+        StructLiteralExpressionSyntax syntax,
+        Type clrType,
+        TypeSymbol? resultTypeOverride = null)
     {
         // The object-initializer lowering needs a constructed instance; require a
         // public parameterless constructor (the C# object-initializer contract).
@@ -2406,7 +2450,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var resultType = TypeSymbol.FromClrType(clrType);
+        var resultType = resultTypeOverride ?? TypeSymbol.FromClrType(clrType);
         BoundExpression construction = new BoundClrConstructorCallExpression(
             syntax,
             clrType,
@@ -2431,9 +2475,12 @@ internal sealed partial class ExpressionBinder
     /// (see <c>EmitClrPropertyAssignment</c>'s addressable-receiver handling), so
     /// no copy-back step is needed.
     /// </summary>
-    private BoundExpression BindImportedValueTypeLiteralExpression(StructLiteralExpressionSyntax syntax, Type clrType)
+    private BoundExpression BindImportedValueTypeLiteralExpression(
+        StructLiteralExpressionSyntax syntax,
+        Type clrType,
+        TypeSymbol? resultTypeOverride = null)
     {
-        var resultType = TypeSymbol.FromClrType(clrType);
+        var resultType = resultTypeOverride ?? TypeSymbol.FromClrType(clrType);
         var parameterlessCtor = FindPublicParameterlessConstructor(clrType);
         BoundExpression construction = parameterlessCtor != null
             ? new BoundClrConstructorCallExpression(

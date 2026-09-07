@@ -2038,7 +2038,12 @@ internal sealed class MemberLookup
     /// (<c>Issue3096CollectionSpreadEmitTests.UserDefinedSpreadConversions…</c>).
     /// The receiver has no erasure of its own in this branch, so its members'
     /// CLOSED parameter types ARE their real types and no symbolic
-    /// re-derivation is needed.</item>
+    /// re-derivation is needed. Issue #4036: keeping the member is only half
+    /// the answer — the conversion this branch FINDS must also be APPLIED, or
+    /// the kept member wins on the erased argument and the call throws.
+    /// <see cref="FindUserDefinedConversionRepairTargets"/> asks this same
+    /// question a second time and names the parameter type to convert to, so
+    /// the member stays reachable but stops winning.</item>
     /// </list>
     /// <para>What is left over is the reported hole and only it: a genuine
     /// <c>string</c> at a genuine <c>int32</c>, or a <c>Celsius</c> at an
@@ -2058,12 +2063,14 @@ internal sealed class MemberLookup
     /// <param name="clrType">The receiver's CLR type; an interface receiver is exempt.</param>
     /// <param name="receiverType">The receiver's symbolic type.</param>
     /// <param name="argumentTypes">The bound arguments' symbolic types, in source order.</param>
+    /// <param name="argumentNames">The per-source-index argument names; null entries are positional.</param>
     /// <returns>The candidates, less any unreachable widening member.</returns>
     public static IReadOnlyList<MethodInfo> ExcludeUnreachableNonGenericInterfaceCandidates(
         IReadOnlyList<MethodInfo> candidates,
         Type? clrType,
         TypeSymbol? receiverType,
-        IReadOnlyList<TypeSymbol?> argumentTypes)
+        IReadOnlyList<TypeSymbol?> argumentTypes,
+        IReadOnlyList<string?>? argumentNames = null)
     {
         // An abstract member of a NON-GENERIC interface: the kind a class can
         // only have implemented explicitly, and whose parameters are therefore
@@ -2121,11 +2128,27 @@ internal sealed class MemberLookup
                 continue;
             }
 
+            // Issue #4036 (review finding): the arguments arrive in SOURCE
+            // order and these parameters are in DECLARATION order, so a call
+            // that names its arguments out of order compared each one against
+            // the wrong slot — `Add(value: someCelsius, key: "a")` asked
+            // whether a `Celsius` fits `key: string`, decided the receiver's
+            // own `Add` could not take the call, removed the widening member
+            // and reported GS0159 for a call that is perfectly valid. Reorder
+            // through the resolver's OWN mapping, exactly as #4026 had to for
+            // symbolic type-argument recovery, so the two can never disagree.
+            if (!TryMapSourceArgumentsToParameters(own, argumentTypes.Count, argumentNames, out var ownMapping))
+            {
+                // The call names an argument this member does not declare, so
+                // this member genuinely cannot take the call.
+                continue;
+            }
+
             var accepts = true;
             for (var i = 0; i < parameters.Length; i++)
             {
                 var argumentType = argumentTypes[i];
-                var parameterSymbol = TypeSymbol.FromClrType(parameters[i].ParameterType);
+                var parameterSymbol = TypeSymbol.FromClrType(parameters[ownMapping?[i] ?? i].ParameterType);
                 if (argumentType == null
                     || parameterSymbol == null
                     || !(Conversion.Classify(argumentType, parameterSymbol).Exists
@@ -2152,6 +2175,205 @@ internal sealed class MemberLookup
         }
 
         return kept;
+    }
+
+    /// <summary>
+    /// Issue #4036: the conversion-APPLICATION half of what
+    /// <see cref="ExcludeUnreachableNonGenericInterfaceCandidates"/> decides.
+    /// When that filter finds the receiver's own surface would have taken the
+    /// call only through a user-defined implicit conversion, it KEEPS the
+    /// widening member on purpose — the erasure is genuine and there is a
+    /// repair for it. This method names the repair: the parameter type, per
+    /// argument position, that the argument must be converted to for the
+    /// receiver's own member to be applicable on real types.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The defect.</b> A same-compilation struct has no CLR type while
+    /// binding, so <c>Celsius</c> presents to overload resolution as
+    /// <c>object</c>. Against <c>List&lt;double&gt;</c> that is an IDENTITY
+    /// match for <c>System.Collections.IList.Add(object)</c> and no match at
+    /// all for <c>Add(double)</c>, so the widening member wins every
+    /// betterness ranking and <c>list.Add(someCelsius)</c> compiled to
+    /// verifiable IL that threw <c>ArgumentException</c> from inside the BCL.
+    /// The same erasure made <c>list.Contains(someCelsius)</c> answer
+    /// <c>False</c> and <c>list.IndexOf(someCelsius)</c> answer <c>-1</c>
+    /// without any diagnostic at all, and <c>list.Remove(someCelsius)</c>
+    /// report <c>GS0124</c> because <c>IList.Remove</c> is <c>void</c>.</para>
+    /// <para><b>Why the spread form was already right.</b>
+    /// <c>List[float64](){ ...someCelsiusSlice }</c> lowers through
+    /// <c>ExpressionBinder.BindConvertedCollectionAddCall</c>, which types its
+    /// item placeholder as the collection's ELEMENT type and converts the item
+    /// to it BEFORE binding <c>Add</c> — so overload resolution never sees the
+    /// erased argument and picks <c>List&lt;double&gt;.Add(double)</c>. That
+    /// path is collection-shaped: it knows an element type. An ordinary call
+    /// has no element type, only a candidate set, so the two cannot share one
+    /// path. They can agree, and this makes them agree — convert first, then
+    /// bind.</para>
+    /// <para><b>Why this is safe.</b> The gate is
+    /// <see cref="ExcludeUnreachableNonGenericInterfaceCandidates"/>' own,
+    /// verbatim: no widening member in the candidate set means no repair (an
+    /// ordinary call already ranks user-defined conversions for itself); an
+    /// erased RECEIVER means nothing here can judge the call; an argument with
+    /// no bound type means the judgement is unavailable. On top of that, a
+    /// position is repaired only when the ordinary conversion does NOT exist
+    /// and the user-defined one does, and only when the own surface offers
+    /// exactly ONE distinct parameter-type vector — so
+    /// <c>List&lt;double&gt;.Add(double)</c> and
+    /// <c>ICollection&lt;double&gt;.Add(double)</c> count as one answer, and a
+    /// genuinely ambiguous surface is left alone. <c>List[object]</c> is
+    /// untouched because <c>Celsius -&gt; object</c> is an ordinary boxing
+    /// conversion, so no position needs repairing.</para>
+    /// <para><b>What it deliberately does not do.</b> It does not remove the
+    /// widening member — #4028 keeps it here on purpose, and that release note
+    /// stays literally true. The member is still collected and still
+    /// applicable; it simply stops WINNING, because the repaired argument is a
+    /// real <c>double</c> and identity beats boxing.</para>
+    /// </remarks>
+    /// <param name="candidates">The collected candidates, in candidate order.</param>
+    /// <param name="clrType">The receiver's CLR type; an interface receiver is exempt.</param>
+    /// <param name="receiverType">The receiver's symbolic type.</param>
+    /// <param name="argumentTypes">The bound arguments' symbolic types, in source order.</param>
+    /// <param name="argumentNames">The per-source-index argument names; null entries are positional.</param>
+    /// <returns>
+    /// Per SOURCE argument position, the type to convert that argument to, or
+    /// <see langword="null"/> to leave it alone; <c>default</c> when no
+    /// repair applies at all. Source-indexed rather than parameter-indexed so
+    /// the caller can apply it directly to its own argument list, whatever
+    /// order the author wrote the arguments in.
+    /// </returns>
+    public static ImmutableArray<TypeSymbol?> FindUserDefinedConversionRepairTargets(
+        IReadOnlyList<MethodInfo> candidates,
+        Type? clrType,
+        TypeSymbol? receiverType,
+        IReadOnlyList<TypeSymbol?> argumentTypes,
+        IReadOnlyList<string?>? argumentNames = null)
+    {
+        // An abstract member of a NON-GENERIC interface: the widening member
+        // whose presence is the whole reason this repair is needed. Same
+        // predicate as ExcludeUnreachableNonGenericInterfaceCandidates.
+        static bool IsWidening(MethodInfo candidate)
+            => candidate is { IsAbstract: true, DeclaringType: { IsInterface: true, IsGenericType: false } };
+
+        if (candidates == null
+            || candidates.Count == 0
+            || clrType == null
+            || clrType.IsInterface
+            || argumentTypes == null
+            || argumentTypes.Count == 0)
+        {
+            return default;
+        }
+
+        var hasWideningInterfaceCandidate = false;
+        foreach (var candidate in candidates)
+        {
+            if (IsWidening(candidate))
+            {
+                hasWideningInterfaceCandidate = true;
+                break;
+            }
+        }
+
+        if (!hasWideningInterfaceCandidate)
+        {
+            return default;
+        }
+
+        // An erased receiver's own members are surrogates; judge nothing.
+        if (receiverType != null && TypeSymbol.ContainsSameCompilationUserType(receiverType))
+        {
+            return default;
+        }
+
+        foreach (var argumentType in argumentTypes)
+        {
+            if (argumentType == null)
+            {
+                return default;
+            }
+        }
+
+        // Collect the DISTINCT parameter-type vectors of the receiver's own
+        // non-widening surface that accept this call, where at least one
+        // position needs a user-defined implicit conversion to do so.
+        var name = candidates[0].Name;
+        TypeSymbol?[]? agreedVector = null;
+        foreach (var own in SafeGetMethodsIncludingSelfAndInterfaces(clrType, name))
+        {
+            if (IsWidening(own))
+            {
+                continue;
+            }
+
+            var parameters = own.GetParameters();
+            if (parameters.Length != argumentTypes.Count)
+            {
+                continue;
+            }
+
+            // Issue #4036 (review finding): same source-order/declaration-order
+            // reconciliation as the candidacy filter above. Without it
+            // `Add(value: someCelsius, key: "a")` would look for a conversion
+            // from `Celsius` to `key: string`, find none, and decline to repair
+            // a call that only needed its SECOND parameter converted.
+            if (!TryMapSourceArgumentsToParameters(own, argumentTypes.Count, argumentNames, out var ownMapping))
+            {
+                continue;
+            }
+
+            var vector = new TypeSymbol?[parameters.Length];
+            var accepts = true;
+            var needsUserDefined = false;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                var argumentType = argumentTypes[i];
+                var parameterSymbol = TypeSymbol.FromClrType(parameters[ownMapping?[i] ?? i].ParameterType);
+                if (argumentType == null || parameterSymbol == null)
+                {
+                    accepts = false;
+                    break;
+                }
+
+                if (Conversion.Classify(argumentType, parameterSymbol).Exists)
+                {
+                    continue;
+                }
+
+                if (!ConversionClassifier.HasUserDefinedImplicitConversionForTypes(argumentType, parameterSymbol))
+                {
+                    accepts = false;
+                    break;
+                }
+
+                vector[i] = parameterSymbol;
+                needsUserDefined = true;
+            }
+
+            if (!accepts || !needsUserDefined)
+            {
+                continue;
+            }
+
+            if (agreedVector == null)
+            {
+                agreedVector = vector;
+                continue;
+            }
+
+            for (var i = 0; i < vector.Length; i++)
+            {
+                if (!Equals(agreedVector[i], vector[i]))
+                {
+                    // Two own members disagree about what to convert to. That
+                    // is a genuine ambiguity, not an erasure to repair.
+                    return default;
+                }
+            }
+        }
+
+        return agreedVector == null
+            ? default
+            : ImmutableArray.Create(agreedVector);
     }
 
     /// <summary>
@@ -4539,11 +4761,38 @@ internal sealed class MemberLookup
                 // constructed receiver such as AsyncLocal<string?>. Keep the
                 // receiver-projected property type when CLR metadata cannot
                 // represent its symbolic shape.
+                //
+                // Issue #4033: "cannot represent its symbolic shape" is true of
+                // EVERY position that is a type parameter of the declaring
+                // type, not only of the shapes the two probes below recognise.
+                // A declaration-site byte at a parameter position is a
+                // placeholder — `Dictionary<,>.Values` carries
+                // `[Nullable({1, 0, 0})]`, whose two zeroes stand for "whatever
+                // TKey/TValue are substituted with", because the declarer
+                // cannot know. Reading them as concrete positions applies
+                // #1354's "oblivious means `T?`" rule to a slot that has no
+                // annotation to be oblivious ABOUT, so a closed
+                // `Dictionary[string, string]` surfaced `.Keys`/`.Values` with
+                // a `string?` element while the very same dictionary's
+                // indexer, `for k, v in m` and `TryGetValue` all surfaced
+                // `string` — and `for v in m.Values { v.Length }` then lost the
+                // whole CLR property/field surface (GS0158, or GS9998 when the
+                // element was a constructed generic). Measured, the old
+                // reading was not even faithful to a declaration that DID
+                // annotate: a `Dictionary<string, string?>` and a
+                // `Dictionary<string, string>` handed over from the same
+                // nullable-enabled assembly both surfaced `string?` here,
+                // because both read the same placeholder.
+                // MergeDeclarationNullability below already carves parameter
+                // positions out of the #1354 rule and takes their nullability
+                // from the receiver's argument, which is why the OPEN
+                // `map[K, V].Keys` spelling was right all along; the gate
+                // simply never let a closed receiver reach it. Project whenever
+                // the open property type mentions a parameter at all, and let
+                // the merge keep deciding concrete positions.
                 if (!projectOnlyWhenSymbolicallyRequired
                     || openProperty.PropertyType.IsGenericParameter
-                    || (openProperty.PropertyType.ContainsGenericParameters
-                        && (TypeSymbol.RequiresSymbolicProjection(mapped)
-                            || TypeSymbol.ContainsNamedTupleElements(mapped))))
+                    || openProperty.PropertyType.ContainsGenericParameters)
                 {
                     // Issue #3705 (family 2): this branch returned the
                     // receiver-substituted type RAW, exactly as
@@ -4941,9 +5190,53 @@ internal sealed class MemberLookup
     /// <returns>The imported type carrying the symbolic arguments, or <see langword="null"/>.</returns>
     internal static ImportedTypeSymbol? GetProjectionReceiverImportedType(TypeSymbol type)
         => GetImportedTypeSymbol(type)
+            ?? TryGetClosedMapProjectionView(type)
             ?? (type is StructSymbol userClass
                 ? TypeMemberModel.GetNearestImportedBase(userClass) as ImportedTypeSymbol
                 : null);
+
+    /// <summary>
+    /// Issue #4033: the <c>Dictionary[K, V]</c> view of a CLOSED
+    /// <c>map[K, V]</c>, so a member read through the map spelling projects
+    /// through the receiver's symbolic arguments exactly as the
+    /// <c>Dictionary[K, V]</c> spelling of the SAME type does (ADR-0104 says
+    /// they ARE one type).
+    /// </summary>
+    /// <remarks>
+    /// <para><see cref="TryGetSymbolicOpenMapReceiverView"/> is the OPEN twin
+    /// and deliberately refuses a map with a CLR type, because an open map has
+    /// no other way to reach the dictionary surface. A closed map does reach
+    /// it — by reflection off its own <c>ClrType</c> — but arrives as a
+    /// <see cref="MapTypeSymbol"/>, which is neither an
+    /// <see cref="ImportedTypeSymbol"/> nor a <see cref="StructSymbol"/>, so
+    /// every projector above answered <see langword="null"/> and the member's
+    /// type was read straight from declaration metadata. For
+    /// <c>.Keys</c>/<c>.Values</c> that metadata is a placeholder at the
+    /// TKey/TValue positions, so <c>for v in m.Values { v.Length }</c> lost the
+    /// element's property surface for the map spelling alone, after the
+    /// <c>Dictionary</c> spelling had already been fixed.</para>
+    /// <para>The open definition comes from the map's OWN <c>ClrType</c> rather
+    /// than the host <c>typeof(Dictionary&lt;,&gt;)</c>: issue #4023 gave a map
+    /// over an imported key or value a backing dictionary built inside that
+    /// key/value's <c>MetadataLoadContext</c>, and a member reflected off a
+    /// context type must be described by that same context's open definition —
+    /// mixing the two is what #4023 was about.</para>
+    /// </remarks>
+    /// <param name="type">The receiver type a member was reflected through.</param>
+    /// <returns>The symbolic dictionary view, or <see langword="null"/>.</returns>
+    internal static ImportedTypeSymbol? TryGetClosedMapProjectionView(TypeSymbol type)
+    {
+        if (type is not MapTypeSymbol map
+            || map.ClrType is not { IsGenericType: true, IsGenericTypeDefinition: false } mapClr)
+        {
+            return null;
+        }
+
+        return ImportedTypeSymbol.GetConstructed(
+            mapClr,
+            mapClr.GetGenericTypeDefinition(),
+            ImmutableArray.Create(map.KeyType, map.ValueType));
+    }
 
     internal static PropertyInfo? FindOpenIndexerDefinition(Type? openDefinition, PropertyInfo closedIndexer)
     {
@@ -5214,6 +5507,69 @@ internal sealed class MemberLookup
             projectedType = null;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Issue #4036 (review finding): maps each SOURCE argument index to the
+    /// parameter position it actually binds to on <paramref name="candidate"/>,
+    /// so a caller holding arguments in source order can compare them against
+    /// parameters in declaration order.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is the exact hazard #4026 hit one inference over
+    /// (<c>BuildSymbolicMethodTypeArgs</c> zipped open parameters with symbolic
+    /// arguments positionally, and a named call defeated it), and it is
+    /// resolved the same way: through
+    /// <see cref="ClrOverloadResolution.TryBuildNamedArgumentReordering"/>, the
+    /// resolver's own mapping, so no second implementation can drift from
+    /// it.</para>
+    /// <para>Three outcomes, and the middle one is the reason this is a helper
+    /// rather than a call to the reordering directly. <c>true</c> with a null
+    /// mapping means "nothing to reorder" — the call named no argument, so
+    /// source order IS parameter order. <c>true</c> with a mapping means the
+    /// names bound. <c>false</c> means the call DID name an argument and the
+    /// names do not bind against this candidate, which is not a licence to fall
+    /// back on positional order — it means this candidate cannot take this
+    /// call at all.</para>
+    /// </remarks>
+    /// <param name="candidate">The candidate whose parameter names the argument names bind against.</param>
+    /// <param name="argumentCount">The number of source arguments.</param>
+    /// <param name="argumentNames">The per-source-index names; null entries are positional.</param>
+    /// <param name="mapping">The source-index to parameter-position mapping, or null when none is needed.</param>
+    /// <returns>Whether the arguments bind to this candidate's parameters at all.</returns>
+    private static bool TryMapSourceArgumentsToParameters(
+        MethodInfo candidate,
+        int argumentCount,
+        IReadOnlyList<string?>? argumentNames,
+        out int[]? mapping)
+    {
+        mapping = null;
+        if (argumentNames == null)
+        {
+            return true;
+        }
+
+        if (ClrOverloadResolution.TryBuildNamedArgumentReordering(
+                candidate,
+                argumentCount,
+                argumentNames,
+                out var built))
+        {
+            mapping = built;
+            return true;
+        }
+
+        // The reordering answers false both for "no named argument at all" and
+        // for "the names do not bind here". Only the first is benign.
+        for (var i = 0; i < argumentNames.Count; i++)
+        {
+            if (argumentNames[i] != null)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -5791,6 +6147,23 @@ internal sealed class MemberLookup
                     imp.OpenDefinition.GetGenericArguments(),
                     imp.TypeArguments,
                     contextObject);
+            case NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true } nullableValue:
+                // Issue #4035: a `NullableTypeSymbol` answers its UNDERLYING
+                // type's `ClrType`, so the `default` arm below would erase
+                // `int32?` to a bare `System.Int32` and close
+                // `Dictionary<,>.ValueCollection` over `int32` while the map's
+                // own backing dictionary is `Dictionary<string,
+                // Nullable<int32>>`. `for v in m.Values` then loaded a
+                // `ValueCollection<string, Nullable<int32>>.Enumerator` where
+                // the IL claimed `ValueCollection<string, int32>.Enumerator`
+                // and ilverify rejected it with `StackUnexpected` — the same
+                // dropped-`Nullable<>` defect as the map's construction, one
+                // erasure further out. Build the wrapper in `contextObject`'s
+                // own load context for the reason `BuildErasedTupleInContext`
+                // and `ResolveErasedObjectInContext` exist: a host
+                // `typeof(Nullable<>)` cannot close over an MLC-loaded
+                // underlying.
+                return BuildErasedNullableInContext(nullableValue, contextObject);
             case TupleTypeSymbol tuple:
                 // Issue #1902: a positional tuple carrying a same-compilation
                 // user element (e.g. the `(Owner, Pet)` transparent identifier
@@ -5847,6 +6220,46 @@ internal sealed class MemberLookup
         }
 
         return BuildErasedTupleInContext(erasedElements, 0, erasedElements.Length, contextObject);
+    }
+
+    /// <summary>
+    /// Issue #4035: the <c>Nullable&lt;T&gt;</c> analogue of
+    /// <see cref="BuildErasedTupleInContext(TupleTypeSymbol, Type)"/> — closes
+    /// <paramref name="contextObject"/>'s own <c>System.Nullable`1</c> over the
+    /// erased underlying so a nullable VALUE type keeps its wrapper through
+    /// erasure instead of collapsing to the bare underlying that
+    /// <see cref="TypeSymbol.ClrType"/> answers.
+    /// </summary>
+    /// <param name="nullable">The nullable value type symbol.</param>
+    /// <param name="contextObject">The <c>object</c> placeholder resolved in the target context.</param>
+    /// <returns>The erased <c>Nullable&lt;T&gt;</c>, or the bare underlying when the context cannot name it.</returns>
+    private static Type? BuildErasedNullableInContext(NullableTypeSymbol nullable, Type contextObject)
+    {
+        var underlying = ProjectSymbolicArgToErasedClr(nullable.UnderlyingType, contextObject);
+        if (underlying == null || !underlying.IsValueType)
+        {
+            // The underlying erased to the `object` placeholder (or to a
+            // reference type); `Nullable<>` cannot close over it, and the bare
+            // erasure is the shape every other reader already expects.
+            return underlying;
+        }
+
+        var openNullable = contextObject.Assembly == typeof(object).Assembly
+            ? typeof(Nullable<>)
+            : contextObject.Assembly.GetType("System.Nullable`1", throwOnError: false);
+        if (openNullable == null)
+        {
+            return underlying;
+        }
+
+        try
+        {
+            return openNullable.MakeGenericType(underlying);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or NotSupportedException or TypeLoadException)
+        {
+            return underlying;
+        }
     }
 
     private static Type? BuildErasedTupleInContext(Type[] elementTypes, int start, int count, Type contextObject)

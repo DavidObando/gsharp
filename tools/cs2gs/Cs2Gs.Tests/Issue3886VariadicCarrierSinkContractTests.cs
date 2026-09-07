@@ -18,14 +18,10 @@ namespace Cs2Gs.Tests;
 /// <c>!!</c> bridge must agree with the signature the DECLARATION side
 /// actually emits.
 /// <para>
-/// <c>TranslateParameter</c> gates issue #1072 promotion on <c>!variadic</c> —
-/// "variadic params are never null-compared as a whole" — so an ADR-0173
-/// variadic carrier is always emitted <c>...T</c> however much null evidence
-/// (<c>if (paths is null) throw</c>) the oblivious-nullability fixpoint
-/// recorded against that parameter. The call side asked
-/// <c>ShouldPromoteToNullableReference</c> about the same parameter anyway,
-/// concluded the sink had widened to <c>...T?</c>, and dropped the bridge —
-/// so a promoted <c>string?</c> reached a non-null <c>...string</c> slot bare.
+/// Carrier evidence (<c>if (paths is null) throw</c>) never widens a variadic
+/// declaration, so a direct nullable-array argument still needs <c>!!</c>.
+/// Issue #3888 separately lets expanded-element evidence widen <c>...T</c> to
+/// <c>...T?</c>; that element call then stays bare.
 /// </para>
 /// <para>
 /// That is the whole migrated <c>test/Compiler.Tests</c> compile wall:
@@ -40,12 +36,11 @@ namespace Cs2Gs.Tests;
 public class Issue3886VariadicCarrierSinkContractTests
 {
     /// <summary>
-    /// The wall shape: an argument in the EXPANDED tail of a null-guarded
-    /// source-declared <c>params T[]</c> must still be bridged, and the
-    /// bridged program must run.
+    /// Issue #3888 refinement: expanded nullable evidence widens the element
+    /// position, while the carrier's null guard remains irrelevant to it.
     /// </summary>
     [Fact]
-    public void ExpandedArgument_NullGuardedSourceParams_AssertsNonNullAndRuns()
+    public void ExpandedArgument_NullGuardedSourceParams_WidensElementAndRuns()
     {
         string printed = TranslateOblivious("""
             using System;
@@ -87,14 +82,13 @@ public class Issue3886VariadicCarrierSinkContractTests
             }
             """);
 
-        // The evidence that the sink really is non-null: the declaration is a
-        // bare `...string` carrier, so the promoted `string?` argument needs
-        // the bridge.
-        Assert.Contains("func Join(parts ...string)", printed, StringComparison.Ordinal);
+        Assert.Contains("func Join(parts ...string?)", printed, StringComparison.Ordinal);
         Assert.Contains("prop First string?", printed, StringComparison.Ordinal);
-        Assert.Contains("Fixture.Join(result.First!!, \"b\")", printed, StringComparison.Ordinal);
+        Assert.Contains("Fixture.Join(result.First, \"b\")", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("result.First!!", printed, StringComparison.Ordinal);
 
         AssertEvaluates(printed, "Caller.Go(true)", "a|b");
+        AssertEvaluates(printed, "Caller.Go(false)", "|b");
     }
 
     /// <summary>

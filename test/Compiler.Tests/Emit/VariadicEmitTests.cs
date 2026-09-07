@@ -70,6 +70,24 @@ public class VariadicEmitTests
     }
 
     [Fact]
+    public void VariadicNullableReference_PacksNilAndRuns()
+    {
+        var source = """
+            package P
+            import System
+
+            func count(values ...string?) int32 {
+              return values.Length
+            }
+
+            Console.WriteLine(count(nil, "x"))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void VariadicWithFixedPrefix()
     {
         var source = """

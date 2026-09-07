@@ -204,7 +204,11 @@ public sealed class MapTypeSymbol : TypeSymbol
     internal static Type? TryMakeErasedClrTypeInReferenceContext(Type keyClrType, Type valueClrType)
         => keyClrType == null || valueClrType == null
             ? null
-            : TryMakeClrTypeInReferenceContext(keyClrType, valueClrType);
+            : TryMakeClrTypeInReferenceContext(
+                keyClrType,
+                keyIsNullableValueType: false,
+                valueClrType,
+                valueIsNullableValueType: false);
 
     private static Type? MakeClrType(TypeSymbol keyType, TypeSymbol valueType)
     {
@@ -213,9 +217,30 @@ public sealed class MapTypeSymbol : TypeSymbol
             return null;
         }
 
-        if (keyType.ClrType.IsRuntimeProvidedType() && valueType.ClrType.IsRuntimeProvidedType())
+        // Issue #4035: a `NullableTypeSymbol` passes its UNDERLYING type's
+        // `ClrType` straight through — `int32?.ClrType` is `System.Int32`, not
+        // `System.Nullable<System.Int32>` — because for a nullable REFERENCE
+        // type the annotation has no distinct runtime type and emit treats the
+        // underlying as the runtime type. Reading `ClrType` here therefore
+        // backed a `map[K, V?]` over a nullable VALUE type with
+        // `Dictionary<K, V>` while the literal, the indexer's `out` slot and
+        // the loop variable all carried a `Nullable<V>`: the program compiled
+        // clean and then failed ilverify with `StackUnexpected` and threw
+        // `InvalidProgramException` at runtime. `GetEffectiveClrType` is the
+        // correction the compiler already applies for exactly this — it is
+        // what `SequenceTypeSymbol.MakeClrType` and
+        // `AsyncSequenceTypeSymbol.MakeClrType` read — and the map's
+        // construction simply never called it.
+        var keyClrType = NullableLifting.GetEffectiveClrType(keyType);
+        var valueClrType = NullableLifting.GetEffectiveClrType(valueType);
+        if (keyClrType == null || valueClrType == null)
         {
-            return typeof(Dictionary<,>).MakeGenericType(keyType.ClrType, valueType.ClrType);
+            return null;
+        }
+
+        if (keyClrType.IsRuntimeProvidedType() && valueClrType.IsRuntimeProvidedType())
+        {
+            return typeof(Dictionary<,>).MakeGenericType(keyClrType, valueClrType);
         }
 
         // Issue #4023: `typeof(Dictionary<,>)` is a host `RuntimeType`, and
@@ -241,8 +266,35 @@ public sealed class MapTypeSymbol : TypeSymbol
         // the registering resolver's `MapClrTypeToReferences` so all three
         // come from one context, and `MakeGenericType` answers a genuine,
         // member-resolvable constructed type.
-        return TryMakeClrTypeInReferenceContext(keyType.ClrType, valueType.ClrType);
+        //
+        // Issue #4035: the `Nullable<>` wrapper has to be built in that same
+        // context, from the UNDERLYING type, rather than handed down already
+        // constructed. `GetEffectiveClrType` builds it with the HOST
+        // `typeof(Nullable<>)`, so for a `map[string, DateTime?]` — whose
+        // underlying `DateTime` is a `MetadataLoadContext` type — it answers
+        // the very `TypeBuilderInstantiation` stand-in #4023 is about, and one
+        // handed to `MakeGenericType` below (or to `carrier.Assembly` above)
+        // cannot name its own context. Pass the underlying and a flag instead,
+        // and project the open `Nullable<>` alongside the open `Dictionary<,>`.
+        return TryMakeClrTypeInReferenceContext(
+            keyType.ClrType,
+            IsNullableValueType(keyType),
+            valueType.ClrType,
+            IsNullableValueType(valueType));
     }
+
+    /// <summary>
+    /// Issue #4035: whether <paramref name="type"/> is a nullable VALUE type,
+    /// the case whose backing dictionary argument must be
+    /// <c>Nullable&lt;T&gt;</c> rather than the bare underlying <c>T</c>. A
+    /// nullable REFERENCE type is deliberately excluded: its annotation has no
+    /// distinct runtime type, so <c>map[string, string?]</c> is — correctly —
+    /// backed by <c>Dictionary&lt;string, string&gt;</c>.
+    /// </summary>
+    /// <param name="type">The key or value type symbol.</param>
+    /// <returns><see langword="true"/> for a nullable value type.</returns>
+    private static bool IsNullableValueType(TypeSymbol type)
+        => type is NullableTypeSymbol { UnderlyingType.ClrType.IsValueType: true };
 
     /// <summary>
     /// Issue #4023: builds the backing <c>Dictionary&lt;K, V&gt;</c> inside the
@@ -259,10 +311,16 @@ public sealed class MapTypeSymbol : TypeSymbol
     /// (<c>ImportedMemberRefFactory.TryNormalizeToSymbolicContainer</c>'s map
     /// arm, <c>GetMapCtorReference</c> and friends).
     /// </remarks>
-    /// <param name="keyClrType">The key's CLR type; non-null by the caller's check.</param>
-    /// <param name="valueClrType">The value's CLR type; non-null by the caller's check.</param>
+    /// <param name="keyClrType">The key's UNDERLYING CLR type; non-null by the caller's check.</param>
+    /// <param name="keyIsNullableValueType">Whether the key is a nullable value type, so its projected form must be wrapped in the context's <c>Nullable&lt;&gt;</c> (issue #4035).</param>
+    /// <param name="valueClrType">The value's UNDERLYING CLR type; non-null by the caller's check.</param>
+    /// <param name="valueIsNullableValueType">Whether the value is a nullable value type, as <paramref name="keyIsNullableValueType"/>.</param>
     /// <returns>The context-correct closed dictionary type, or <see langword="null"/>.</returns>
-    private static Type? TryMakeClrTypeInReferenceContext(Type keyClrType, Type valueClrType)
+    private static Type? TryMakeClrTypeInReferenceContext(
+        Type keyClrType,
+        bool keyIsNullableValueType,
+        Type valueClrType,
+        bool valueIsNullableValueType)
     {
         // Whichever side is NOT host-provided names the context both must be
         // projected into; when both are, the caller already took the host path.
@@ -283,6 +341,23 @@ public sealed class MapTypeSymbol : TypeSymbol
                 return null;
             }
 
+            // Issue #4035: wrap INSIDE the context. A host-built
+            // `Nullable<contextDateTime>` is the same unreflectable
+            // `TypeBuilderInstantiation` #4023 is about, so project the open
+            // `Nullable<>` the way the open `Dictionary<,>` is projected and
+            // close it over the already-projected underlying.
+            if (keyIsNullableValueType
+                && !TryWrapInContextNullable(project, ref projectedKey))
+            {
+                return null;
+            }
+
+            if (valueIsNullableValueType
+                && !TryWrapInContextNullable(project, ref projectedValue))
+            {
+                return null;
+            }
+
             var closed = openDefinition.MakeGenericType(projectedKey, projectedValue);
 
             // Probe one member rather than infer reflectability from the shape:
@@ -297,5 +372,33 @@ public sealed class MapTypeSymbol : TypeSymbol
             // the instantiation. The symbolic map shape covers it.
             return null;
         }
+    }
+
+    /// <summary>
+    /// Issue #4035: closes the reference context's own <c>Nullable&lt;&gt;</c>
+    /// over <paramref name="projected"/>, which is already a type in that
+    /// context. Returns <see langword="false"/> when the reference set cannot
+    /// name <c>System.Nullable`1</c>, in which case the caller falls back to
+    /// the symbolic map shape rather than to a wrong dictionary.
+    /// </summary>
+    /// <param name="project">The host-to-context type projector.</param>
+    /// <param name="projected">The in-context underlying type; replaced by the in-context <c>Nullable&lt;T&gt;</c> on success.</param>
+    /// <returns><see langword="true"/> when the wrapper was constructed.</returns>
+    private static bool TryWrapInContextNullable(Func<Type?, Type?> project, ref Type projected)
+    {
+        var openNullable = project(typeof(Nullable<>));
+        if (openNullable == null)
+        {
+            return false;
+        }
+
+        var constructed = openNullable.MakeGenericType(projected);
+        if (constructed == null)
+        {
+            return false;
+        }
+
+        projected = constructed;
+        return true;
     }
 }
