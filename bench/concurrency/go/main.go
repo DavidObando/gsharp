@@ -256,7 +256,12 @@ func main() {
 	flag.Parse()
 	requested := os.Getenv("GSHARP_BENCH_SCENARIO")
 
-	fmt.Printf("go=%s cores=%d\n\n", runtime.Version(), runtime.NumCPU())
+	fmt.Printf(
+		"go=%s numcpu=%d gomaxprocs=%d\n\n",
+		runtime.Version(),
+		runtime.NumCPU(),
+		runtime.GOMAXPROCS(0),
+	)
 
 	for i := 0; i < *warmup; i++ {
 		quiet = true

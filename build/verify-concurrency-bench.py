@@ -44,6 +44,8 @@ def smoke() -> int:
     go_program = (BENCH / "go" / "main.go").read_text()
     if "GSHARP_BENCH_SCENARIO" not in go_program:
         failures.append("main.go has no single-scenario selector")
+    if "runtime.GOMAXPROCS(0)" not in go_program:
+        failures.append("main.go does not report effective Go scheduler parallelism")
     for scenario in scenarios:
         row = scenario.get("go")
         if row and f'"{row}"' not in go_program:

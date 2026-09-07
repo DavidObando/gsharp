@@ -194,6 +194,24 @@ class ConcurrencyBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "power state changed"):
             bench.load_runs([str(first), str(second)])
 
+        aggregate_payload = {
+            **common,
+            "aggregationKey": "aggregate",
+            "fingerprint": {
+                "comparison": {"wholeRuns": 2},
+                "comparable": True,
+            },
+            "sourceFingerprints": [{"id": 1}, {"id": 2}],
+            "sourceEnvironments": [{"id": 1}, {"id": 2}],
+            "sourceLaunchOrders": [[["gsharp"]], [["gsharp"]]],
+        }
+        first.write_text(json.dumps(aggregate_payload))
+        _, _, _, _, metadata = bench.load_runs([str(first)])
+        self.assertEqual([{"id": 1}, {"id": 2}], metadata["sourceFingerprints"])
+        self.assertEqual([{"id": 1}, {"id": 2}], metadata["environments"])
+        self.assertEqual([[["gsharp"]], [["gsharp"]]], metadata["launchOrders"])
+        self.assertEqual(2, metadata["effectiveFingerprints"][0]["comparison"]["wholeRuns"])
+
     def test_baseline_without_comparison_key_is_report_only(self) -> None:
         result = {"median_ns": 200.0, "ci95_ns": [190.0, 210.0], "samples": 3}
         baseline = {
@@ -272,6 +290,10 @@ class ConcurrencyBenchTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SystemExit, "missing=\\['select-ready'\\]"):
             bench.validate_rows(spec, {"buf64": 1.0})
+
+        header = bench.GO_RUNTIME_ROW.match("go=go1.27.0 numcpu=18 gomaxprocs=6")
+        self.assertIsNotNone(header)
+        self.assertEqual("6", header["cores"])
 
     def test_dashboard_accepts_additive_result_schema(self) -> None:
         results = SCRATCH / "results.json"

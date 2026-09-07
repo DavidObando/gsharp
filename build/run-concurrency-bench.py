@@ -68,7 +68,9 @@ ROW = re.compile(
     r"(?: ms (?P<elapsed_ms>[0-9]+(?:\.[0-9]+)?))?$")
 GO_ROW = re.compile(r"^\[(?P<name>[^\]]+?)\s*\]\s+[0-9.]+ ms\s+(?P<value>[0-9.]+) ns/op$")
 RUNTIME_ROW = re.compile(r"^runtime (?P<version>\S+) cores (?P<cores>[0-9]+)$")
-GO_RUNTIME_ROW = re.compile(r"^go=(?P<version>\S+) cores=(?P<cores>[0-9]+)$")
+GO_RUNTIME_ROW = re.compile(
+    r"^go=(?P<version>\S+) numcpu=(?P<numcpu>[0-9]+) gomaxprocs=(?P<cores>[0-9]+)$"
+)
 
 # Pinning the tiering delay is normative, not a tuning knob; see the module
 # docstring. Without it the reported number depends on whether a 100 ms timer
@@ -597,7 +599,12 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
     """Read run JSONs written by an earlier --json invocation."""
     gsharp, gsharp_aot, go = [], [], []
     recorded_class = None
-    metadata = {"fingerprints": [], "environments": [], "launchOrders": []}
+    metadata = {
+        "effectiveFingerprints": [],
+        "sourceFingerprints": [],
+        "environments": [],
+        "launchOrders": [],
+    }
     aggregation_key = None
     for path in paths:
         payload = json.loads(Path(path).read_text())
@@ -629,10 +636,23 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
                 + "; ".join(fingerprint.get("incomparabilityReasons", ["run marked incomparable"]))
             )
         if fingerprint:
-            metadata["fingerprints"].append(fingerprint)
-        if payload.get("environment") is not None:
+            metadata["effectiveFingerprints"].append(fingerprint)
+        source_fingerprints = payload.get("sourceFingerprints")
+        if source_fingerprints:
+            metadata["sourceFingerprints"].extend(source_fingerprints)
+        elif fingerprint:
+            metadata["sourceFingerprints"].append(fingerprint)
+
+        source_environments = payload.get("sourceEnvironments")
+        if source_environments is not None:
+            metadata["environments"].extend(source_environments)
+        elif payload.get("environment") is not None:
             metadata["environments"].append(payload["environment"])
-        if payload.get("launchOrder") is not None:
+
+        source_launch_orders = payload.get("sourceLaunchOrders")
+        if source_launch_orders is not None:
+            metadata["launchOrders"].extend(source_launch_orders)
+        elif payload.get("launchOrder") is not None:
             metadata["launchOrders"].append(payload["launchOrder"])
         if payload.get("gsharp"):
             gsharp.append(payload["gsharp"])
@@ -874,11 +894,11 @@ def main() -> int:
         measured = combine_loaded_runs(gsharp_runs)
         measured_aot = combine_loaded_runs(aot_runs)
         go_measured = combine_loaded_runs(go_runs)
-        source_fingerprints = metadata["fingerprints"]
+        source_fingerprints = metadata["sourceFingerprints"]
         fingerprint = (
             aggregate_fingerprint(source_fingerprints)
             if len(args.from_json) > 1
-            else source_fingerprints[0] if source_fingerprints else None
+            else metadata["effectiveFingerprints"][0] if metadata["effectiveFingerprints"] else None
         )
         environment = metadata["environments"]
         launch_order = metadata["launchOrders"]
@@ -1032,6 +1052,8 @@ def main() -> int:
         }
         if source_fingerprints:
             payload["sourceFingerprints"] = source_fingerprints
+            payload["sourceEnvironments"] = environment
+            payload["sourceLaunchOrders"] = launch_order
         Path(args.json).write_text(
             json.dumps(payload, indent=2) + "\n"
         )
