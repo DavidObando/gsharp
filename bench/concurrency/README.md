@@ -128,8 +128,10 @@ spike:
    benchmark definition, host/power state and toolchains. Whole-run aggregation
    additionally requires identical build hashes. Different keys are rejected;
    an older baseline without a comparison key is reported but cannot gate until
-   it is re-recorded. When Go is requested, JIT/AOT/Go launch order rotates on
-   each sample so a warming or drifting host cannot consistently favor one side.
+   it is re-recorded. A single run whose environment changed remains loadable
+   for diagnosis, but cannot aggregate, update a baseline, or gate. When Go is
+   requested, JIT/AOT/Go launch order rotates on each sample so a warming or
+   drifting host cannot consistently favor one side.
    A baseline update requires the full `--go --aot` suite without `--scenario`;
    a partial run may report or check, but cannot relabel untouched rows with its
    narrower comparison key.

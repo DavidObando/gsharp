@@ -41,7 +41,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
     def test_runtime_configuration_replaces_ambient_jit_overrides(self) -> None:
         original = {
             "PATH": "/bin",
-            "DOTNET_TieredCompilation": "0",
+            "DOTNET_TIEREDCOMPILATION": "0",
             "COMPlus_TC_CallCountingDelayMs": "999",
             "COMPlus_JitStress": "2",
         }
@@ -54,10 +54,10 @@ class ConcurrencyBenchTests(unittest.TestCase):
         })
         self.assertNotIn("COMPlus_TC_CallCountingDelayMs", configured)
         self.assertNotIn("COMPlus_JitStress", configured)
-        self.assertEqual("0", removed["DOTNET_TieredCompilation"])
+        self.assertEqual("0", removed["DOTNET_TIEREDCOMPILATION"])
         self.assertEqual("999", removed["COMPlus_TC_CallCountingDelayMs"])
         self.assertEqual("2", removed["COMPlus_JitStress"])
-        self.assertEqual("0", original["DOTNET_TieredCompilation"])
+        self.assertEqual("0", original["DOTNET_TIEREDCOMPILATION"])
 
     def test_raw_launch_samples_survive_summary_and_aggregation(self) -> None:
         first = bench.summarize({"select-ready": [151.0, 152.0, 153.0]})
@@ -108,7 +108,10 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 scenario="select-ready",
                 modes=["gsharp", "go"],
                 runtime_versions={"gsharp": ["10.0.11"]},
-                runtime_environment=bench.PINNED_TIER_ENV,
+                runtime_environment={
+                    **bench.PINNED_TIER_ENV,
+                    "COMPLUS_GCSERVER": "1",
+                },
                 removed_runtime_settings={"COMPlus_JitStress": "2"},
                 start_environment=environment,
                 end_environment=environment,
@@ -120,6 +123,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
+        self.assertEqual("1", fingerprint["comparison"]["runtimeEnvironment"]["COMPLUS_GCSERVER"])
         self.assertNotEqual(fingerprint["comparisonKey"], fingerprint["aggregationKey"])
 
     def test_json_aggregation_rejects_different_build_or_methodology_keys(self) -> None:
@@ -151,6 +155,20 @@ class ConcurrencyBenchTests(unittest.TestCase):
         second.write_text(json.dumps(common))
         bench.load_runs([str(first)])
         with self.assertRaisesRegex(SystemExit, "no aggregationKey"):
+            bench.load_runs([str(first), str(second)])
+
+        incomparable = {
+            **common,
+            "aggregationKey": "same",
+            "fingerprint": {
+                "comparable": False,
+                "incomparabilityReasons": ["power state changed"],
+            },
+        }
+        first.write_text(json.dumps(incomparable))
+        second.write_text(json.dumps(incomparable))
+        bench.load_runs([str(first)])
+        with self.assertRaisesRegex(SystemExit, "power state changed"):
             bench.load_runs([str(first), str(second)])
 
     def test_baseline_without_comparison_key_is_report_only(self) -> None:

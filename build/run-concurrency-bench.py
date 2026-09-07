@@ -77,14 +77,14 @@ PINNED_TIER_ENV = {
     "DOTNET_TC_CallCountingDelayMs": "0",
 }
 RUNTIME_SETTING_PREFIXES = (
-    "DOTNET_Tiered",
-    "COMPlus_Tiered",
+    "DOTNET_TIERED",
+    "COMPLUS_TIERED",
     "DOTNET_TC_",
-    "COMPlus_TC_",
+    "COMPLUS_TC_",
     "DOTNET_OSR_",
-    "COMPlus_OSR_",
-    "DOTNET_Jit",
-    "COMPlus_Jit",
+    "COMPLUS_OSR_",
+    "DOTNET_JIT",
+    "COMPLUS_JIT",
 )
 JSON_SCHEMA_VERSION = 2
 METHODOLOGY_VERSION = 2
@@ -191,7 +191,7 @@ def clean_runtime_environment(base: dict[str, str], pinned: bool) -> tuple[dict[
     env = dict(base)
     removed = {}
     for key in list(env):
-        if key.startswith(RUNTIME_SETTING_PREFIXES):
+        if key.upper().startswith(RUNTIME_SETTING_PREFIXES):
             removed[key] = env.pop(key)
     if pinned:
         env.update(PINNED_TIER_ENV)
@@ -289,7 +289,7 @@ def make_fingerprint(
         "runtimeEnvironment": {
             key: value
             for key, value in runtime_environment.items()
-            if key.startswith(("DOTNET_", "COMPlus_"))
+            if key.upper().startswith(("DOTNET_", "COMPLUS_"))
         },
         "goEnvironment": {
             key: os.environ.get(key)
@@ -397,13 +397,13 @@ def aot_rid() -> str:
     return f"{platform.system().lower()}-{arch}"
 
 
-def build_go() -> Path | None:
+def build_go(out: Path) -> Path | None:
     if shutil.which("go") is None:
         return None
 
     go_dir = BENCH / "go"
-    binary = go_dir / "baseline"
-    subprocess.run(["go", "build", "-o", "baseline", "."], check=True, cwd=go_dir, stdout=subprocess.DEVNULL)
+    binary = out / "go-baseline"
+    subprocess.run(["go", "build", "-o", str(binary), "."], check=True, cwd=go_dir, stdout=subprocess.DEVNULL)
     return binary
 
 
@@ -542,7 +542,7 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
                 "refusing to aggregate incomparable benchmark runs: "
                 f"'{paths[0]}' has key {aggregation_key}, '{path}' has key {key}"
             )
-        if fingerprint and not fingerprint.get("comparable", True):
+        if len(paths) > 1 and fingerprint and not fingerprint.get("comparable", True):
             raise SystemExit(
                 f"refusing to aggregate '{path}': "
                 + "; ".join(fingerprint.get("incomparabilityReasons", ["run marked incomparable"]))
@@ -831,7 +831,7 @@ def main() -> int:
         else:
             removed_aot = {}
 
-        go_binary = build_go() if args.go else None
+        go_binary = build_go(out) if args.go else None
         if go_binary:
             specs.append(
                 {
