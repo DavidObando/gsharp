@@ -211,19 +211,24 @@ public sealed partial class CSharpToGSharpTranslator
                     // ref-returning indexer gsc's binder already auto-
                     // dereferences via `BoundClrIndexExpression` +
                     // `AutoDereferenceRefReturn` — that shape is genuinely
-                    // gap-free and must keep translating as-is). A ref-
-                    // returning indexer declared in the C# project being
-                    // translated has no gsc counterpart at all: G#'s own
-                    // `prop this[i T] U` indexer syntax has no ref-return
-                    // modifier, so the element access below would lower to a
-                    // plain call-under-index that gsc rejects with a generic
-                    // compile error instead of a precise gap. Detect it here.
-                    if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol { RefKind: not RefKind.None } refIndexer &&
+                    // gap-free and must keep translating as-is).
+                    //
+                    // Issue #3879 (ADR-0060 amendment) closed the plain-`ref`
+                    // half of this gap: G#'s indexer grammar now HAS a ref-return
+                    // modifier (`prop this[i T] ref U -> lvalue`), the
+                    // declaration site translates, and gsc's emitter loads
+                    // through the returned managed pointer at the read — so a
+                    // plain index expression is now the correct lowering, with
+                    // the same read semantics C# gives it. `ref readonly` is
+                    // still gapped: its DECLARATION does not translate (there is
+                    // no read-only by-ref return in G#), so an element access
+                    // through one would name a member that was never emitted.
+                    if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol { RefKind: RefKind.RefReadOnly } refIndexer &&
                         refIndexer.Locations.Any(l => l.IsInSource))
                     {
                         this.context.ReportUnsupported(
                             elementAccess,
-                            $"element access '{elementAccess}' targets ref-returning indexer '{refIndexer.ContainingType?.Name}.this[]' which has no canonical G# form yet: G#'s user-defined indexer syntax has no ref-return modifier, so aliasing its element via a plain index expression would drop the ref semantics (issue #1987).");
+                            $"element access '{elementAccess}' targets `ref readonly`-returning indexer '{refIndexer.ContainingType?.Name}.this[]', whose declaration has no G# form: G#'s by-ref return has no read-only variant, so the indexer itself is not emitted (issues #1987 / #3879). A plain `ref` indexer translates.");
                         return new IdentifierExpression("nil");
                     }
 

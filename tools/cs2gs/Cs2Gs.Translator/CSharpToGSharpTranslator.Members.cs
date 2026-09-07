@@ -799,6 +799,21 @@ public sealed partial class CSharpToGSharpTranslator
             PropertyDeclarationSyntax node, Receiver receiver)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+
+            // Issue #3879: an EXTENSION property lowers to a receiver-clause
+            // `func`, not to a `prop`, so the #3879 `prop … ref T` spelling does
+            // not reach it — and this path never carried `isRefReturn` onto the
+            // MethodDeclaration it builds. Gap rather than silently emit a
+            // copy-returning function (the #3839 hazard).
+            if (symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly))
+            {
+                string refExtensionPropertyMessage =
+                    $"ref-returning extension property '{node.Identifier.Text}' has no G# form: an extension property " +
+                    "lowers to a receiver-clause `func` (ADR-0115 §B.19), and the by-ref return is not carried across " +
+                    "that lowering. Emitting it would silently return a copy (issues #3839 / #3879).";
+                this.context.ReportUnsupported(node, refExtensionPropertyMessage);
+            }
+
             GTypeReference returnType = symbol != null
                 ? this.typeMapper.Map(symbol.Type, this.context, node.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
@@ -2508,21 +2523,56 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
 
-            // Issue #3839: a C# `ref`/`ref readonly` PROPERTY has no canonical G#
-            // form — the by-ref return (issue #490 / ADR-0060) exists on `func`
-            // only; `prop P ref T` is not in the grammar (gsc parses the `ref` as
-            // a type name and cascades). Translating it silently as `prop P T`
-            // compiles, but returns a COPY: every write through the returned
-            // reference is lost. That is a behaviour change no compile error
-            // catches, so it gaps loudly here — the same verdict the USE site
-            // already reaches for a ref-returning indexer (#1987).
-            if (symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly))
+            // Issue #3879 (ADR-0060 amendment): a C# `ref` PROPERTY now HAS a
+            // canonical G# form — `prop P ref T { get { return ref lvalue } }`
+            // and its arrow sugar `prop P ref T -> lvalue`. gsc restricts it to
+            // the computed, read-only shapes. The read-only half is free — C#
+            // forbids a setter on a ref property too (CS8147) — but the COMPUTED
+            // half is not: C# also allows abstract and interface `ref`
+            // properties, which gsc rejects, so the two gaps below carry the
+            // difference. Before #3879 this gapped entirely, which
+            // was the right interim answer: the alternative was emitting an
+            // ordinary `prop P T` that silently returns a COPY (issue #3839).
+            //
+            // `ref readonly` still gaps. G# has no read-only by-ref return, and
+            // translating one as a plain `ref` would hand the caller a WRITABLE
+            // alias to storage the C# author declared read-only — a silent
+            // widening, which is the same class of quiet behaviour change the
+            // copy-returning form was.
+            bool isRefReturnProperty = symbol != null && symbol.ReturnsByRef;
+
+            // Issue #3879: gsc restricts the by-ref property to the CONCRETE,
+            // computed shapes — an abstract slot and an interface member (bodied
+            // default implementations included) are both rejected with GS0578,
+            // because neither names storage a reference can point at and G# has
+            // no ref-kind matching for property slots. C# permits both, so the
+            // mapping is NOT total and this is where the difference has to be
+            // reported. Without it cs2gs emitted `prop P ref T` that gsc then
+            // refused, turning a translate-stage gap into a compile-stage
+            // failure several steps downstream — the opposite of the loud,
+            // local answer #3839/#3878 established.
+            if (symbol != null
+                && symbol.ReturnsByRef
+                && !symbol.ReturnsByRefReadonly
+                && (symbol.IsAbstract || symbol.ContainingType?.TypeKind == TypeKind.Interface))
             {
-                string refPropertyMessage =
-                    $"ref-returning property '{node.Identifier.Text}' has no canonical G# form: G#'s by-ref return " +
-                    "(issue #490 / ADR-0060) is a `func` feature and `prop` has no `ref` return spelling. Emitting it " +
-                    "as an ordinary property would silently return a copy and drop the aliasing (issue #3839).";
-                this.context.ReportUnsupported(node, refPropertyMessage);
+                string abstractRefPropertyMessage =
+                    $"ref-returning property '{node.Identifier.Text}' is abstract or declared on an interface, which " +
+                    "has no G# form: G#'s by-ref property (issue #3879, ADR-0060 §14) is a concrete, computed-getter " +
+                    "form only, because a slot names nothing to alias and an implementor could satisfy a `ref` " +
+                    "requirement with a copy-returning property unchecked. A concrete `ref` property translates.";
+                this.context.ReportUnsupported(node, abstractRefPropertyMessage);
+                isRefReturnProperty = false;
+            }
+
+            if (symbol != null && symbol.ReturnsByRefReadonly)
+            {
+                string refReadonlyPropertyMessage =
+                    $"ref-returning property '{node.Identifier.Text}' is `ref readonly`, which has no G# form: G#'s " +
+                    "by-ref return (issue #490 / ADR-0060, extended to `prop` by issue #3879) has no read-only " +
+                    "variant, so emitting it would hand the caller a writable alias to read-only storage. A plain " +
+                    "`ref` property translates (issue #3839).";
+                this.context.ReportUnsupported(node, refReadonlyPropertyMessage);
             }
 
             // Issue #2362, ADR-0149: explicit interface PROPERTY implementations
@@ -2671,7 +2721,8 @@ public sealed partial class CSharpToGSharpTranslator
             // (`string Name => expr;`) renders as the idiomatic G# property-level
             // arrow `prop Name T -> expr` when its get body folds to a single
             // inline statement.
-            GStatement arrowBody = TryFoldComputedPropertyArrow(node.ExpressionBody, accessors);
+            GStatement arrowBody = TryFoldComputedPropertyArrow(
+                node.ExpressionBody, accessors, allowRefReturn: isRefReturnProperty);
             if (arrowBody != null)
             {
                 accessors = new List<PropertyAccessor>();
@@ -2719,7 +2770,8 @@ public sealed partial class CSharpToGSharpTranslator
                 isOverride: isOverride,
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody,
-                explicitInterfaceType: explicitInterfacePropertyType);
+                explicitInterfaceType: explicitInterfacePropertyType,
+                isRefReturn: isRefReturnProperty);
 
             return (property, isStatic, backingField);
         }
@@ -2804,9 +2856,16 @@ public sealed partial class CSharpToGSharpTranslator
         // foldable single statement when the C# member used `=> expr` and its
         // translated get accessor is a single inline statement; otherwise null
         // (the caller keeps the get-only block accessor list).
+        // Issue #3879: `allowRefReturn` is set by the property and indexer paths,
+        // where the G# arrow form IS ref-aware — `prop P ref T -> lvalue`
+        // desugars to `{ get { return ref lvalue } }` in gsc's parser, so the
+        // fold preserves the aliasing. It stays false for the extension-property
+        // path, which lowers to a `func` whose arrow form has no `-> ref lvalue`
+        // spelling (the #3839 method rule).
         private static GStatement TryFoldComputedPropertyArrow(
             ArrowExpressionClauseSyntax csExpressionBody,
-            List<PropertyAccessor> accessors)
+            List<PropertyAccessor> accessors,
+            bool allowRefReturn = false)
         {
             if (csExpressionBody == null
                 || accessors.Count != 1
@@ -2816,7 +2875,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
-            return TryFoldArrowBody(accessors[0].Body);
+            return TryFoldArrowBody(accessors[0].Body, allowRefReturn);
         }
     }
 }

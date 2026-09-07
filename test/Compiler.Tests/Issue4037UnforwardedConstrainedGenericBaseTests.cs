@@ -64,13 +64,13 @@ namespace GSharp.Compiler.Tests;
 /// <para><b>A class bound implies its interfaces, and the first version of
 /// this rule got that wrong.</b> <c>[T DisposableOptions]</c> forwards
 /// <c>where T : IDisposable</c> when <c>DisposableOptions : IDisposable</c> —
-/// <c>csc</c> accepts it, and the first version reported <c>GS0578</c>, a FALSE
+/// <c>csc</c> accepts it, and the first version reported <c>GS0580</c>, a FALSE
 /// rejection of valid code. Caught in review, measured against <c>csc</c>, and
 /// fixed by walking the class-constraint chain in the interface branch too.
 /// Copilot's review of PR #4061 named the same defect at the same branch after
 /// the walk had landed; measured on the reviewed commit, its own shape
 /// (<c>[T DisposableBase]</c>) compiles, verifies and runs, and reverting only
-/// that walk turns it and its three siblings into <c>GS0578</c> — so the
+/// that walk turns it and its three siblings into <c>GS0580</c> — so the
 /// finding is a false positive, but two ARMS of the walk were genuinely
 /// untested and are pinned now: an interface INHERITED from the bound's base,
 /// and a same-compilation class implementing the imported interface DIRECTLY.
@@ -92,7 +92,7 @@ namespace GSharp.Compiler.Tests;
 /// <para><b>Blast radius.</b> This turns previously-compiling code into an
 /// error. The whole <c>.gs</c> corpus was swept before and after: 192 files,
 /// 166 of which emit an assembly under the sweep's reference set,
-/// <b>0 occurrences of GS0578</b>.</para>
+/// <b>0 occurrences of GS0580</b>.</para>
 /// <para><b>One gap remains and is pinned, not hidden.</b> A <b>G#-declared</b>
 /// constrained generic base (<c>class Unf[T] : GsHandler[T]</c> where
 /// <c>GsHandler[TOptions SchemeOptions]</c> is declared in the same
@@ -223,7 +223,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // A FIELD type inside a generic class. `csc` reports CS0314 here too
@@ -244,7 +244,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // A LOCAL declaration inside a generic function. The other half of
@@ -265,7 +265,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine(openLocal[SchemeOptions]())
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // A partially-forwarded constraint set: `SchemeOptions` is forwarded,
@@ -283,7 +283,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // A SPECIAL constraint, so the message comes from the attribute mask
@@ -301,7 +301,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
 
         yield return new object[]
@@ -317,7 +317,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // An INTERFACE bound rather than a base-class bound. Deliberately a
@@ -337,7 +337,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // The DIRECT-CONSTRUCTION spelling, so the rule is not base-clause
@@ -358,7 +358,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine(make[SchemeOptions]())
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // A NESTED type-argument position: the offending `Handler[T]` is
@@ -379,7 +379,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
 
         // A generic CLASS's own method, so the offending parameter belongs to
@@ -400,7 +400,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
             Console.WriteLine("x")
             """,
-            "GS0578",
+            "GS0580",
         };
     }
 
@@ -512,7 +512,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
         // A CLASS bound implies every interface that class implements, so it
         // forwards an INTERFACE constraint without naming the interface. The
-        // first version of this rule reported GS0578 on all three of these —
+        // first version of this rule reported GS0580 on all three of these —
         // a FALSE rejection of code `csc` accepts, caught in review and fixed
         // by walking the class-constraint chain in the interface branch too.
         // Three shapes, because the walk has three arms: an IMPORTED class
@@ -552,7 +552,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
         // false rejection. Measured on the reviewed commit: it compiles,
         // IL-verifies and prints `i` — the class-constraint walk added earlier
         // in this same commit already carries it, and reverting just that walk
-        // turns all four shapes below into GS0578 (measured, one build each
+        // turns all four shapes below into GS0580 (measured, one build each
         // way). So the finding is a false positive AGAINST THE REVIEWED COMMIT.
         //
         // Two ARMS of the walk were nonetheless untested, and that half of the
@@ -788,7 +788,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
             Assert.True(
                 File.Exists(unforwardedPath),
                 "the G#-declared-base gap is still open, so this must still compile. If it now reports "
-                    + $"GS0578, the gap is closed — move this into UnforwardedConstraints. Log:\n{unforwardedLog}");
+                    + $"GS0580, the gap is closed — move this into UnforwardedConstraints. Log:\n{unforwardedLog}");
 
             // The accepted assembly is the one ILVerify refuses with
             // UnsatisfiedMethodParentInst — measured. It is named as a tracked
@@ -821,7 +821,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
 
     /// <summary>
     /// An open instantiation whose type parameter does not forward the bound
-    /// now reports <c>GS0578</c> at compile time instead of emitting IL that
+    /// now reports <c>GS0580</c> at compile time instead of emitting IL that
     /// does not verify.
     /// </summary>
     /// <param name="name">The case name.</param>
@@ -885,7 +885,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
             var appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
 
             Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("GS0578", appLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS0580", appLog, StringComparison.Ordinal);
             Assert.DoesNotContain("GS0152", appLog, StringComparison.Ordinal);
             Assert.True(File.Exists(appPath), $"'{name}' must compile. Log:\n{appLog}");
 
@@ -908,7 +908,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
     }
 
     /// <summary>
-    /// The <c>GS0578</c> text names the offending TYPE PARAMETER, the
+    /// The <c>GS0580</c> text names the offending TYPE PARAMETER, the
     /// definition's own parameter, and the constraint that is not forwarded —
     /// and says what to do about it, which is what separates it from
     /// <c>GS0152</c>: the remedy is to change the DECLARATION, not the type
@@ -935,7 +935,7 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
             var appPath = Path.Combine(tempDir, "Message.dll");
             var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe", "/reference:" + libPath);
 
-            Assert.Contains("GS0578", appLog, StringComparison.Ordinal);
+            Assert.Contains("GS0580", appLog, StringComparison.Ordinal);
             Assert.Contains("'T'", appLog, StringComparison.Ordinal);
             Assert.Contains("'TOptions'", appLog, StringComparison.Ordinal);
             Assert.Contains("'HelperLib2.SchemeOptions'", appLog, StringComparison.Ordinal);

@@ -1905,7 +1905,7 @@ internal static class ClrOverloadResolution
             // class implements — `[T DisposableOptions]` forwards
             // `where T : IDisposable` when `DisposableOptions : IDisposable`,
             // and `csc` accepts exactly that (measured; the first version of
-            // this rule reported GS0578 on it, which is a FALSE rejection of
+            // this rule reported GS0580 on it, which is a FALSE rejection of
             // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
             // type-parameter arm reads only the interface bounds, so the class
             // chain has to be walked here.

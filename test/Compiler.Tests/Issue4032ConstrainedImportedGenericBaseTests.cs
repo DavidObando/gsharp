@@ -66,7 +66,7 @@ namespace GSharp.Compiler.Tests;
 /// instantiation, so THIS change's check deliberately does not see it, and it
 /// still does not: the rule it needed is different in kind — "does the derived
 /// declaration's constraint set IMPLY the base's" — and it landed as its own
-/// diagnostic, <c>GS0578</c>, in
+/// diagnostic, <c>GS0580</c>, in
 /// <c>Issue4037UnforwardedConstrainedGenericBaseTests</c>. (Measured against
 /// <c>csc</c>: the C# rule is <b>CS0314</b>, the type-PARAMETER-argument case,
 /// not CS0311, which is the concrete-argument case G# already spells GS0152.)
@@ -499,7 +499,7 @@ public class Issue4032ConstrainedImportedGenericBaseTests
         // position in this row, and that is now load-bearing rather than
         // incidental. #4032's check still does not see an open instantiation —
         // that skip is unchanged, and it is what keeps this row out of GS0152 —
-        // but a separate rule (GS0578) now asks the DIFFERENT question "does
+        // but a separate rule (GS0580) now asks the DIFFERENT question "does
         // the declaration's own constraint set IMPLY the base's", which `csc`
         // spells CS0314 and reports at a base clause, a field type and a local
         // type alike (measured). The UNFORWARDED spellings this row used to

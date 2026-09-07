@@ -96,7 +96,8 @@ internal static class ExternalClrOverrideResolver
         bool hasSetter,
         Accessibility getterAccessibility,
         Accessibility setterAccessibility,
-        ReferenceResolver references)
+        ReferenceResolver references,
+        RefKind returnRefKind = RefKind.None)
     {
         bool sawName = false;
         var externalBase = FindExternalBaseType(derivedType);
@@ -122,8 +123,28 @@ internal static class ExternalClrOverrideResolver
             }
 
             sawName = true;
+
+            // Issue #3879: the by-ref return is part of the property signature,
+            // not a decoration on it. A CLR by-ref property reports its type as
+            // `T&`, so BOTH halves have to be compared against the G# side —
+            // the ref-kind, and then the POINTEE against the declared type.
+            // Without this an `override prop P ref T` silently matched a
+            // by-value base slot (and a real override of an external `T&`
+            // property could never match, because `T&` never equals `T`).
+            // A mismatch falls through to the `sawName` arm below, which is the
+            // signature-mismatch diagnostic rather than "no base to override".
+            bool externalIsByRef = property.PropertyType?.IsByRef == true;
+            if (externalIsByRef != (returnRefKind == RefKind.Ref))
+            {
+                continue;
+            }
+
+            var comparablePropertyType = externalIsByRef
+                ? property.PropertyType!.GetElementType()
+                : property.PropertyType;
+
             if (!ParametersMatch(property.GetIndexParameters(), indexParameters, typeSubstitutions)
-                || !PropertyTypeMatches(property.PropertyType, propertyType, hasSetter, typeSubstitutions))
+                || !PropertyTypeMatches(comparablePropertyType, propertyType, hasSetter, typeSubstitutions))
             {
                 continue;
             }

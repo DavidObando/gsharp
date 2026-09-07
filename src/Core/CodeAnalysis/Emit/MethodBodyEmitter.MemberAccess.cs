@@ -963,7 +963,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(getterHandle);
-            this.EmitNarrowingCastIfNeeded(GetEffectivePropertyType(access), access.NarrowedType);
+            this.EmitPropertyReadTail(access);
             return;
         }
 
@@ -976,7 +976,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpReceiver));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(getterHandle);
-            this.EmitNarrowingCastIfNeeded(GetEffectivePropertyType(access), access.NarrowedType);
+            this.EmitPropertyReadTail(access);
             return;
         }
 
@@ -995,7 +995,18 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOpCode.Call);
         this.il.Token(getterHandle);
-        this.EmitNarrowingCastIfNeeded(GetEffectivePropertyType(access), access.NarrowedType);
+        this.EmitPropertyReadTail(access);
+    }
+
+    // Issue #3879 / ADR-0069: the tail of every property READ, in the one order
+    // the two adjustments can happen in — dereference the getter's managed
+    // pointer FIRST (a `ref`-returning property leaves `T&` on the stack), then
+    // apply any smart-cast narrowing to the resulting value.
+    private void EmitPropertyReadTail(BoundPropertyAccessExpression access)
+    {
+        var effectiveType = GetEffectivePropertyType(access);
+        this.EmitRefReturnDereferenceIfNeeded(access.Property.ReturnRefKind, effectiveType);
+        this.EmitNarrowingCastIfNeeded(effectiveType, access.NarrowedType);
     }
 
     private static TypeSymbol GetEffectivePropertyType(BoundPropertyAccessExpression access)
@@ -2207,6 +2218,49 @@ internal sealed partial class MethodBodyEmitter
         var token = this.outer.memberRefs.GetElementTypeToken(elementType ?? TypeSymbol.FromClrType(typeof(object)));
         this.il.OpCode(ILOpCode.Ldelema);
         this.il.Token(token);
+    }
+
+    /// <summary>
+    /// Issue #3879 (ADR-0060 amendment, ADR-0056 §1): a call to a
+    /// <c>ref</c>-returning G# member leaves a managed pointer (<c>T&amp;</c>) on
+    /// the stack, but the bound tree types the read as the POINTEE <c>T</c> —
+    /// G#'s ref-alias binder does not accept a call result as an lvalue (the
+    /// documented #1900 limit), so every G# read of such a member is a value
+    /// read. Load through the pointer so the stack matches the bound type.
+    /// <para>
+    /// Without this the IL is either unverifiable (<c>InvalidProgramException</c>
+    /// when the pointer flows into a by-value parameter) or a silent wrong
+    /// answer (the raw address printed as an <c>int32</c>). That is the
+    /// pre-existing shape of issue #490's deferred "consume a ref return at a
+    /// G# call site", which a <c>ref</c>-returning PROPERTY would otherwise
+    /// inherit — and a property read is far more common than a method-call read,
+    /// so it is closed here rather than left to surface as new behaviour.
+    /// </para>
+    /// <para>
+    /// The <see cref="ByRefTypeSymbol"/> guard is load-bearing: an IMPORTED
+    /// ref-returning member is already surfaced as <c>ByRefTypeSymbol</c> and
+    /// dereferenced by the binder
+    /// (<c>ConversionClassifier.AutoDereferenceRefReturn</c>), and
+    /// <c>BaseCallForwarderRewriter</c> synthesizes a forwarder
+    /// <see cref="FunctionSymbol"/> that keeps that by-ref result type while
+    /// also setting <see cref="FunctionSymbol.ReturnRefKind"/>. Dereferencing
+    /// there too would be a double load.
+    /// </para>
+    /// </summary>
+    /// <param name="returnRefKind">The callee's return ref-kind.</param>
+    /// <param name="resultType">The type the bound tree gives the read.</param>
+    private void EmitRefReturnDereferenceIfNeeded(RefKind returnRefKind, TypeSymbol? resultType)
+    {
+        if (returnRefKind != RefKind.Ref
+            || resultType == null
+            || resultType is ByRefTypeSymbol
+            || resultType == TypeSymbol.Void
+            || resultType == TypeSymbol.Error)
+        {
+            return;
+        }
+
+        this.EmitLoadIndirect(resultType);
     }
 
     /// <summary>ADR-0039: Emits ldind.* or ldobj for loading a value through a managed pointer.</summary>

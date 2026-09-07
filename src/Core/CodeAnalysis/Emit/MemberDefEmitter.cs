@@ -152,7 +152,7 @@ internal sealed class MemberDefEmitter
                     .PropertySignature(isInstanceProperty: true)
                     .Parameters(
                         indexParams.Length,
-                        returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type),
+                        returnType => this.EncodePropertyType(returnType, prop),
                         parameters =>
                         {
                             foreach (var indexParam in indexParams)
@@ -165,7 +165,7 @@ internal sealed class MemberDefEmitter
             {
                 new BlobEncoder(propertySignature)
                     .PropertySignature(isInstanceProperty: true)
-                    .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+                    .Parameters(0, returnType => this.EncodePropertyType(returnType, prop), parameters => { });
             }
 
             var propDef = this.emitCtx.Metadata.AddProperty(
@@ -208,6 +208,28 @@ internal sealed class MemberDefEmitter
             this.cache.TypesWithPropertyMap.Add(typeDefHandle);
         }
     }
+
+    /// <summary>
+    /// Issue #3879 (ADR-0060 amendment): encodes a property's type into the
+    /// return-type slot of a PropertyDef or accessor MethodDef signature,
+    /// honouring the property's <see cref="PropertySymbol.ReturnRefKind"/>.
+    /// A <c>ref</c>-returning property is <c>T&amp;</c> in BOTH signatures —
+    /// ECMA-335 §II.23.2.5 allows <c>ELEMENT_TYPE_BYREF</c> in a PropertySig,
+    /// and the two have to agree. Encoding only the getter does not merely cost
+    /// the alias: measured, Roslyn refuses the member outright with CS1546
+    /// ("Property, indexer, or event 'Holder.Property' is not supported by the
+    /// language; try directly calling accessor method 'Holder.get_Property()'").
+    /// <para>
+    /// This is the single funnel for every property-signature return slot
+    /// (instance, static, interface, indexer, and the metadata-only fallback),
+    /// so the implementation assembly and the reference assembly cannot
+    /// disagree about a property's ref-kind.
+    /// </para>
+    /// </summary>
+    /// <param name="encoder">The signature's return-type encoder.</param>
+    /// <param name="prop">The property whose type is encoded.</param>
+    private void EncodePropertyType(ReturnTypeEncoder encoder, PropertySymbol prop)
+        => this.encodeTypeSymbol(encoder.Type(isByRef: prop.ReturnRefKind == RefKind.Ref), prop.Type);
 
     /// <summary>
     /// Emits a property accessor's method body, shared by all four property
@@ -309,7 +331,7 @@ internal sealed class MemberDefEmitter
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
             .Parameters(
                 prop.Parameters.IsDefaultOrEmpty ? 0 : prop.Parameters.Length,
-                r => this.encodeTypeSymbol(r.Type(), prop.Type),
+                r => this.EncodePropertyType(r, prop),
                 ps =>
                 {
                     // Issue #2832: an indexer's getter takes the index
@@ -600,7 +622,7 @@ internal sealed class MemberDefEmitter
             var propertySignature = new BlobBuilder();
             new BlobEncoder(propertySignature)
                 .PropertySignature(isInstanceProperty: false)
-                .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+                .Parameters(0, returnType => this.EncodePropertyType(returnType, prop), parameters => { });
 
             var propDef = this.emitCtx.Metadata.AddProperty(
                 attributes: PropertyAttributes.None,
@@ -658,7 +680,7 @@ internal sealed class MemberDefEmitter
 
         var sigBlob = new BlobBuilder();
         new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: false)
-            .Parameters(0, r => this.encodeTypeSymbol(r.Type(), prop.Type), _ => { });
+            .Parameters(0, r => this.EncodePropertyType(r, prop), _ => { });
 
         var methodAttrs = AccessibilityMap.ToMethodVisibility(prop.GetterAccessibility)
             | MethodAttributes.SpecialName | MethodAttributes.HideBySig | MethodAttributes.Static;
@@ -1654,7 +1676,7 @@ internal sealed class MemberDefEmitter
                     .PropertySignature(isInstanceProperty: !prop.IsStatic)
                     .Parameters(
                         indexParams.Length,
-                        returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type),
+                        returnType => this.EncodePropertyType(returnType, prop),
                         parameters =>
                         {
                             foreach (var indexParam in indexParams)
@@ -1667,7 +1689,7 @@ internal sealed class MemberDefEmitter
             {
                 new BlobEncoder(propertySignature)
                     .PropertySignature(isInstanceProperty: !prop.IsStatic)
-                    .Parameters(0, returnType => this.encodeTypeSymbol(returnType.Type(), prop.Type), parameters => { });
+                    .Parameters(0, returnType => this.EncodePropertyType(returnType, prop), parameters => { });
             }
 
             var propDef = this.emitCtx.Metadata.AddProperty(

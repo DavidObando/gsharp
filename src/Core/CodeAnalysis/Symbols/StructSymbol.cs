@@ -2433,6 +2433,12 @@ public sealed class StructSymbol : TypeSymbol
                 ExternalOverrideContainingType = p.ExternalOverrideContainingType,
                 GetterBodySyntax = p.GetterBodySyntax,
                 SetterBodySyntax = p.SetterBodySyntax,
+
+                // Issue #3879: the by-ref-ness of the getter survives generic
+                // construction — substituting `T` for `int32` in
+                // `prop Slot ref T { get { … } }` must not silently turn the
+                // constructed property into a copy-returning one.
+                ReturnRefKind = p.ReturnRefKind,
             };
             builder.Add(substituted);
         }

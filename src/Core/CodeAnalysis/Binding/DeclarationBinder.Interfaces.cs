@@ -543,6 +543,24 @@ internal sealed partial class DeclarationBinder
                     hasSetter = true;
                 }
 
+                // Issue #3879 (ADR-0060 amendment): a `ref`-returning property or
+                // indexer is a CONCRETE-member form only. An interface member is
+                // a slot, not storage — the requirement `prop P ref int32 { get }`
+                // names nothing to alias, and G# has no ref-kind matching for
+                // property slots the way GS0255 has one for method slots, so an
+                // implementor could satisfy a `ref` requirement with a
+                // copy-returning property and nothing would catch it. A DEFAULT
+                // (bodied) interface accessor is rejected on the same grounds:
+                // an override of it would be unchecked. Reported here rather
+                // than silently dropped, because the silent drop is exactly the
+                // copy-returning behaviour change #3839 called out.
+                if (propSyntax.IsRefReturn)
+                {
+                    Diagnostics.ReportRefPropertyRequiresComputedGetter(
+                        propSyntax.ReturnRefModifier?.Location ?? propSyntax.Identifier.Location,
+                        propName);
+                }
+
                 var isStaticInterfaceProperty = propSyntax.HasStaticModifier;
                 if (isStaticInterfaceProperty && isInitOnly)
                 {

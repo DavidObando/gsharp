@@ -5512,7 +5512,7 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Issue #4037: reports <c>GS0578</c> when an OPEN instantiation of a
+    /// Issue #4037: reports <c>GS0580</c> when an OPEN instantiation of a
     /// constrained generic writes the enclosing declaration's own type
     /// parameter at a position whose bound that parameter does not forward —
     /// <c>class Unforwarded[T] : Handler[T]</c> over

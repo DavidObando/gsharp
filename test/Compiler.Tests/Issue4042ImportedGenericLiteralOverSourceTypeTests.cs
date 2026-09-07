@@ -64,7 +64,7 @@ namespace GSharp.Compiler.Tests;
 /// <c>Handler[NotOptions]{…}</c> now reports <c>GS0152</c> where it used to
 /// report GS0157, and #4037's forwarding rule reaches the literal too, so
 /// <c>Handler[T]{…}</c> inside an unconstrained <c>func f[T]</c> reports
-/// <c>GS0578</c>. Both are rows here.</para>
+/// <c>GS0580</c>. Both are rows here.</para>
 /// <para><b>One shared limitation is out of scope and filed.</b> A member
 /// whose type IS the erased type parameter reads as the surrogate on BOTH
 /// spellings: <c>Handler[MyOptions]().Options.Name</c> and
@@ -298,7 +298,7 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
 
             Console.WriteLine(viaOpen[SchemeOptions]())
             """,
-            "GS0578",
+            "GS0580",
         };
     }
 
@@ -329,7 +329,7 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
             // could not name the type at all.
             Assert.DoesNotContain("GS0157", appLog, StringComparison.Ordinal);
             Assert.DoesNotContain("GS0152", appLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("GS0578", appLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS0580", appLog, StringComparison.Ordinal);
             Assert.True(File.Exists(appPath), $"'{name}' must compile. Log:\n{appLog}");
 
             IlVerifier.Verify(appPath, new[] { libPath });

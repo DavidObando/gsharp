@@ -17,6 +17,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     private SyntaxToken? explicitInterfaceOpenParenToken;
     private TypeClauseSyntax? explicitInterfaceType;
     private SyntaxToken? explicitInterfaceCloseParenToken;
+    private SyntaxToken? returnRefModifier;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PropertyDeclarationSyntax"/> class.
@@ -164,6 +165,29 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this declaration is an indexer member (ADR-0118).</summary>
     public bool IsIndexer => ThisKeyword != null;
 
+    /// <summary>
+    /// Gets or sets the optional <c>ref</c> contextual modifier preceding the
+    /// property's (or indexer's) type clause — <c>prop P ref int32 { get { … } }</c>
+    /// / <c>prop this[i int32] ref int32 -&gt; …</c> (issue #3879, ADR-0060
+    /// amendment). When non-null the property's getter returns a managed
+    /// pointer, so a CLR consumer sees <c>T&amp;</c> and can alias the storage.
+    /// Assigned by the parser; <see langword="null"/> otherwise. Mirrors
+    /// <see cref="FunctionDeclarationSyntax.ReturnRefModifier"/> exactly, which
+    /// is the spelling this one was modelled on.
+    /// </summary>
+    public SyntaxToken? ReturnRefModifier
+    {
+        get => returnRefModifier;
+        set
+        {
+            returnRefModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this property/indexer declares a <c>ref</c> return (issue #3879).</summary>
+    public bool IsRefReturn => ReturnRefModifier != null;
+
     /// <summary>Gets the property type.</summary>
     public TypeClauseSyntax? Type { get; }
 
@@ -183,6 +207,24 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     {
         Annotations = annotations.IsDefault ? ImmutableArray<AnnotationSyntax>.Empty : annotations;
         InvalidateCachedSpan();
+        return this;
+    }
+
+    /// <summary>
+    /// Issue #3879: attaches the parsed <c>ref</c> return modifier (or no-ops when
+    /// <paramref name="modifier"/> is <see langword="null"/>). Returns this same
+    /// instance for fluent parser use.
+    /// </summary>
+    /// <param name="modifier">The <c>ref</c> token, or <see langword="null"/> when the property returns by value.</param>
+    /// <returns>This same <see cref="PropertyDeclarationSyntax"/>.</returns>
+    internal PropertyDeclarationSyntax WithReturnRefModifier(SyntaxToken? modifier)
+    {
+        if (modifier == null)
+        {
+            return this;
+        }
+
+        ReturnRefModifier = modifier;
         return this;
     }
 

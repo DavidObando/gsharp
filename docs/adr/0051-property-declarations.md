@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-05-28
-- **Related**: ADR-0003 (OO surface); ADR-0034 (imported CLR interop — property consumption); ADR-0047 (attribute syntax — `property` target kind); issue #195
+- **Related**: ADR-0003 (OO surface); ADR-0034 (imported CLR interop — property consumption); ADR-0047 (attribute syntax — `property` target kind); ADR-0060 §14 (the `ref` return modifier on `prop`, issue #3879); issue #195
 
 ## Context
 
@@ -17,12 +17,20 @@ Introduce a contextual keyword **`prop`** for declaring CLR properties inside `s
 ### 1. Grammar
 
 ```
-property_declaration = annotations? accessibility_modifier? "prop" identifier type_clause property_body?
+property_declaration = annotations? accessibility_modifier? "prop" identifier "ref"? type_clause property_body?
 property_body        = "{" accessor_list "}"
 accessor_list        = getter_accessor setter_accessor? | setter_accessor getter_accessor?
 getter_accessor      = "get" ( block | ";" )?
 setter_accessor      = "set" ( "(" identifier ")" )? ( block | ";" )?
 ```
+
+The optional `ref` before the type clause is the **by-ref return** (issue #3879 —
+see ADR-0060 §14, which owns the rule): `prop Value ref int32 { get { return ref
+this.slot } }` emits a getter returning `T&`, so a CLR consumer can alias the
+storage. It is restricted to the *computed, read-only* forms below — an
+auto-property, a bodiless `{ get }`, an interface requirement, and any property
+with a `set`/`init` accessor are all rejected (GS0578 / GS0579), because none of
+them names storage a reference can point at.
 
 The `prop` keyword is contextual — it is recognized only inside a type body (struct/class/interface). Outside type bodies, `prop` remains a valid identifier.
 

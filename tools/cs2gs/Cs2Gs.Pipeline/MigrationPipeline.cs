@@ -156,10 +156,26 @@ public sealed class MigrationPipeline
         }
 
         string runDir = Path.Combine(outputRoot, runId);
+        this.options.GeneratedProjectPaths = apps.ToDictionary(
+            app => Path.GetFullPath(app.ProjectPath),
+            app => repositoryLayout
+                ? Path.Combine(
+                    destinationRoot,
+                    Path.ChangeExtension(
+                        app.RelativeProjectPath ?? Path.GetRelativePath(this.options.SourceRoot, app.ProjectPath),
+                        ".gsproj"))
+                : Path.Combine(
+                    runDir,
+                    SanitizeAppId(app.Id),
+                    Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
+            StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<string> repositoryFiles = null;
         if (repositoryLayout)
         {
-            repositoryFiles = RepositoryMirror.Prepare(this.options.SourceRoot, destinationRoot);
+            repositoryFiles = RepositoryMirror.Prepare(
+                this.options.SourceRoot,
+                destinationRoot,
+                this.options.GeneratedProjectPaths);
             this.options.RepositorySourceFiles = repositoryFiles
                 .Where(path => Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
                 .Select(path => Path.GetFullPath(Path.Combine(this.options.SourceRoot, path)))
@@ -186,19 +202,6 @@ public sealed class MigrationPipeline
                 apps.Select(app => app.ProjectPath),
                 evaluatedProjectReferences);
 
-        this.options.GeneratedProjectPaths = apps.ToDictionary(
-            app => Path.GetFullPath(app.ProjectPath),
-            app => repositoryLayout
-                ? Path.Combine(
-                    destinationRoot,
-                    Path.ChangeExtension(
-                        app.RelativeProjectPath ?? Path.GetRelativePath(this.options.SourceRoot, app.ProjectPath),
-                        ".gsproj"))
-                : Path.Combine(
-                    runDir,
-                    SanitizeAppId(app.Id),
-                    Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
-            StringComparer.OrdinalIgnoreCase);
         RepositoryExcludedScope excludedScope = repositoryLayout
             ? RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
             : null;
