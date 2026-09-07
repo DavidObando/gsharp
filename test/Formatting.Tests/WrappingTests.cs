@@ -236,6 +236,38 @@ public sealed class WrappingTests
             + "()\n}\n");
 
         yield return Shape(
+            "indented short member chain",
+            "func run() {\nif true {\nif true {\n"
+            + new string('r', 30)
+            + "."
+            + new string('m', 38)
+            + "()."
+            + new string('n', 38)
+            + "()\n}\n}\n}\n");
+
+        yield return Shape(
+            "wide member chain tail",
+            "func run() {\n"
+            + new string('r', 30)
+            + "."
+            + new string('a', 45)
+            + "()."
+            + new string('b', 45)
+            + "()."
+            + new string('c', 45)
+            + "()\n}\n");
+
+        yield return Shape(
+            "nullable member chain",
+            "func run(argument int32) {\n"
+            + new string('r', 45)
+            + "."
+            + new string('h', 35)
+            + "?(argument)."
+            + new string('f', 35)
+            + "()\n}\n");
+
+        yield return Shape(
             "switch-arm pattern disjunction",
             "func run(kind SyntaxKind) bool {\n"
             + "return switch kind {\ncase "

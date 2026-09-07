@@ -545,7 +545,7 @@ public static class GSharpFormatter
 
     private sealed class LayoutBuilder
     {
-        private const int MemberChainBreakThreshold = 3;
+        private const int MemberChainBreakThreshold = 2;
 
         private readonly SyntaxTree tree;
         private readonly List<LayoutToken> tokens;
@@ -1066,7 +1066,7 @@ public static class GSharpFormatter
             for (int i = 0; i < tokens.Count; i++)
             {
                 if (tokens[i].Token.Kind is not (SyntaxKind.DotToken or SyntaxKind.QuestionDotToken)
-                    || memberChains.ContainsKey(i))
+                    || memberChains.ContainsKey(tokens[i].Token.Position))
                 {
                     continue;
                 }
@@ -1081,6 +1081,11 @@ public static class GSharpFormatter
                     index++;
 
                     if (index < tokens.Count && !IsDelimiterOpen(tokens[index].Token.Kind))
+                    {
+                        index++;
+                    }
+
+                    if (index < tokens.Count && IsCallNullableMarker(tokens[index]))
                     {
                         index++;
                     }
@@ -1118,7 +1123,7 @@ public static class GSharpFormatter
             }
 
             return memberChains.TryGetValue(accessor.DotToken.Position, out MemberChainInfo chain)
-                && chain.Links < MemberChainBreakThreshold;
+                && chain.Links <= MemberChainBreakThreshold;
         }
 
         private static bool IsDelimiterOpen(SyntaxKind kind) =>
