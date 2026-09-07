@@ -46,7 +46,7 @@ namespace GSharp.Compiler.Tests;
 /// struct has no CLR type while binding, so the element erases to
 /// <c>object</c> and cannot match <c>Add(double)</c> — but the user-defined
 /// conversion <c>Celsius -&gt; float64</c> EXISTS, and asking the conversion
-/// classifier about the receiver's own <c>Add</c> on the real types finds it. That is a genuine erasure to repair, so the widening member stays. The
+/// classifier about the receiver's own <c>Add</c> on the real types finds it. That is a genuine erasure to repair, so the widening member stays — and, since #4036, the conversion the classifier finds here is also APPLIED, so the kept member no longer wins. The
 /// exemption is no longer needed because the question is now asked directly
 /// rather than approximated by "some argument is same-compilation".</item>
 /// <item><c>Issue2918InlineLambdaErasedReceiverTests.ImportedGenericReceiverMethods…</c>
@@ -80,14 +80,18 @@ namespace GSharp.Compiler.Tests;
 /// #4028 actually reports close without it, at applicability, which is where the
 /// issue's own body says the discrimination has to happen. The Issue2918
 /// disagreement stays filed as #4016-adjacent work.</para>
-/// <para><b>Out of scope, measured.</b>
+/// <para><b>Out of scope here, and now CLOSED by #4036.</b>
 /// <c>List[float64]().Add(someCelsius)</c> — the author-written form of row (2),
-/// with the user-defined conversion in scope — compiles and throws
-/// <c>ArgumentException</c> on <c>main</c> and still does: the widening member
-/// is correctly kept (the conversion exists), but the ordinary call path binds
+/// with the user-defined conversion in scope — compiled and threw
+/// <c>ArgumentException</c> when this fixture was written: the widening member
+/// is correctly kept (the conversion exists), but the ordinary call path bound
 /// it instead of applying the conversion at the type's own <c>Add(double)</c>.
-/// That is a conversion-application bug, not a candidacy one; filed as
-/// #4036.</para>
+/// That was a conversion-application bug rather than a candidacy one, filed as
+/// #4036 and fixed there. This fixture's decision is unchanged by that fix —
+/// the widening member is still KEPT here, exactly as described above; #4036
+/// only makes it stop WINNING, by converting the argument to the own member's
+/// parameter type before applicability runs. See
+/// <c>Issue4036CollectionCallUserDefinedConversionTests</c>.</para>
 /// <para><b>A case the review raised, and what it measures as.</b> A collection
 /// literal whose ELEMENT type is declared in this compilation —
 /// <c>enum Mode { First }; List[Mode]{"x"}</c> — was suggested to be an open
