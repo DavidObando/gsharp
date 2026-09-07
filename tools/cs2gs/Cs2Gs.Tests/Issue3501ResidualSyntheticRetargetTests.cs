@@ -535,9 +535,9 @@ public class Issue3501ResidualSyntheticRetargetTests
     public void MultilineInterpolatedRawString_LowersToBacktickConcat()
     {
         // C# raw strings can carry interpolation holes; G# backtick raws are
-        // fully literal. A multiline interpolated raw lowers to a
-        // concatenation of backtick segments and hole values (non-string
-        // holes gain ToString), preserving the author's line structure.
+        // fully literal. A multiline interpolated raw prints as backtick
+        // segments plus quoted interpolation holes, preserving both line
+        // structure and interpolation semantics.
         string printed = Translate("""""
             public static class Fixtures
             {
@@ -563,10 +563,9 @@ public class Issue3501ResidualSyntheticRetargetTests
             """"");
 
         string normalized = printed.Replace("\r", string.Empty);
-        Assert.Contains("\"header for \" + name + `\nbody line one\ncount is ` + count.ToString() + `\ntrailer`", normalized, StringComparison.Ordinal);
+        Assert.Contains("(`header for ` + \"$name\" + `\nbody line one\ncount is ` + \"$count\" + `\ntrailer`)", normalized, StringComparison.Ordinal);
 
-        // A hole with a format clause keeps the classic interpolated form.
-        Assert.Contains("${ratio", printed, StringComparison.Ordinal);
+        Assert.Contains("(`first ` + \"${ratio:0.00}\" + `\nsecond\nthird`)", normalized, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 
