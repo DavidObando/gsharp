@@ -1497,8 +1497,10 @@ internal sealed partial class ExpressionBinder
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            deferredInferenceArgs: BuildOpenLiteralInferenceFlags(arguments),
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
-            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
+            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
+            openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments));
 
         switch (resolution.Outcome)
         {
@@ -1855,6 +1857,14 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            if (TypeSymbol.ContainsNullLiteralType(arguments[i].Type))
+            {
+                deferredInferenceArgs[i + 1] = true;
+            }
+        }
+
         // Issue #2523: when a symbolic imported receiver's own reconstructed
         // CLR type is still unavailable, project it onto a candidate's declared
         // generic receiver interface/base. This gives generic inference the
@@ -1965,7 +1975,8 @@ internal sealed partial class ExpressionBinder
                 deferredInferenceArgs: deferredInferenceArgs,
                 functionLiteralArgumentCheck: functionLiteralArgumentCheck,
                 explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
-                explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1));
+                explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1),
+                openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1));
 
         var resolution = ResolveExtensionCandidates();
 

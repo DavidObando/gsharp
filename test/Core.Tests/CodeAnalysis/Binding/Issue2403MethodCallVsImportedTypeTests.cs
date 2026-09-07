@@ -116,6 +116,24 @@ public class Issue2403MethodCallVsImportedTypeTests
     }
 
     [Fact]
+    public void FunctionValuedLocal_ImportedClrTypeCollision_ResolvesToLocal()
+    {
+        var source = """
+            package p
+            import System.Text
+
+            func Run() int32 {
+                let StringBuilder = func (value int32) int32 {
+                    return value + 1
+                }
+                return StringBuilder(4)
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
     public void NullableReturn_ImportedClrTypeCollision_ResolvesToUserMethod()
     {
         var source = """

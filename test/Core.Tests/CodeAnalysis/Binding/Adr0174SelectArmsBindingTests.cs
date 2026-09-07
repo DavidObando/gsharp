@@ -102,6 +102,23 @@ public class Adr0174SelectArmsBindingTests
     }
 
     [Fact]
+    public void DirectSelectWaiterAddCancelled_IsNotAnAmbientCancelledArm()
+    {
+        var diagnostics = Compile("""
+            package P
+            import System.Threading
+            import Gsharp.Concurrency
+            func register() {
+                let waiter = SelectWaiter.Rent(1, CancellationToken.None)
+                waiter.AddCancelled(0)
+            }
+            """);
+
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0557");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+    }
+
+    [Fact]
     public void CancelledArm_InsideAScope_IsAccepted()
     {
         var diagnostics = Compile("""

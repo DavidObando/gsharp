@@ -259,6 +259,22 @@ public class Issue3976ImportedDirectionalChannelTests
             """,
             new[] { "100" },
         };
+
+        yield return new object[]
+        {
+            "an-explicit-downcast-from-channel-to-chan-emits-castclass",
+            """
+            package P
+            import System
+            import System.Threading.Channels
+            import Gsharp.Concurrency
+
+            let baseChannel Channel[int32] = Chan[int32](1)
+            let concrete = cast[Chan[int32]](baseChannel)
+            Console.WriteLine(concrete.IsClosed)
+            """,
+            new[] { "False" },
+        };
     }
 
     /// <summary>

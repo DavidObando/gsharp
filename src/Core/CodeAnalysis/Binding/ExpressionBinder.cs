@@ -2405,6 +2405,73 @@ internal sealed partial class ExpressionBinder
         };
     }
 
+    internal static IReadOnlyList<bool>? BuildOpenLiteralInferenceFlags(
+        IReadOnlyList<BoundExpression> arguments,
+        int argumentOffset = 0)
+    {
+        bool[]? flags = null;
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            if (!TypeSymbol.ContainsNullLiteralType(arguments[i].Type))
+            {
+                continue;
+            }
+
+            flags ??= new bool[arguments.Count + argumentOffset];
+            flags[i + argumentOffset] = true;
+        }
+
+        return flags;
+    }
+
+    internal static Func<int, Type, bool>? MakeOpenLiteralArgumentCheck(
+        IReadOnlyList<BoundExpression> arguments,
+        int argumentOffset = 0)
+    {
+        if (!arguments.Any(argument => TypeSymbol.ContainsNullLiteralType(argument.Type)))
+        {
+            return null;
+        }
+
+        return (index, targetClrType) =>
+        {
+            var argumentIndex = index - argumentOffset;
+            return argumentIndex >= 0
+                && argumentIndex < arguments.Count
+                && OpenLiteralShapeConverts(
+                    arguments[argumentIndex].Type,
+                    TypeSymbol.FromClrType(targetClrType));
+        };
+    }
+
+    private static bool OpenLiteralShapeConverts(TypeSymbol source, TypeSymbol target)
+    {
+        if (source == TypeSymbol.Null)
+        {
+            return target is NullableTypeSymbol
+                || Conversion.IsReferenceLikeTarget(target);
+        }
+
+        if (source is TupleTypeSymbol sourceTuple
+            && target is TupleTypeSymbol targetTuple
+            && sourceTuple.Arity == targetTuple.Arity)
+        {
+            for (var i = 0; i < sourceTuple.Arity; i++)
+            {
+                if (!OpenLiteralShapeConverts(
+                        sourceTuple.ElementTypes[i],
+                        targetTuple.ElementTypes[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return Conversion.ClassifyNonStructural(source, target).IsImplicit;
+    }
+
     private static (Type[] Parameters, Type Return)? ResolveMethodGroupInferenceSignature(
         BoundExpression argument,
         IReadOnlyList<Type> delegateParameterTypes,

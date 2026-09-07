@@ -198,10 +198,11 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
         // there is one is only known here, after the fixed point has decided
         // which functions carry a context; in a boundary or a root without a
         // `scope` the arm would silently never be taken.
-        if (Ambient is null && ChannelRuntimeBinder.IsSelectAddCancelled(rewritten) && rewritten.Syntax is { } syntax)
+        if (Ambient is null
+            && ChannelRuntimeBinder.IsSelectAddCancelled(rewritten)
+            && rewritten.Syntax is SelectCaseSyntax syntax)
         {
-            diagnostics.ReportSelectCancelledArmNeedsContext(
-                syntax is SelectCaseSyntax arm ? arm.Keyword.Location : syntax.Location);
+            diagnostics.ReportSelectCancelledArmNeedsContext(syntax.Keyword.Location);
         }
 
         return rewritten;

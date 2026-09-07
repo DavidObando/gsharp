@@ -1862,7 +1862,10 @@ internal sealed class MemberLookup
             if (inferred[i] is { } inferredType
                 && (TypeSymbol.RequiresSymbolicProjection(inferredType)
                     || TypeSymbol.ContainsNamedTupleElements(inferredType)
-                    || TypeSymbol.ContainsSourceArrayShape(inferredType)))
+                    || TypeSymbol.ContainsSourceArrayShape(inferredType)
+                    || symbolicArgTypes.Any(
+                        symbolic => symbolic != null
+                            && TypeSymbol.ContainsNullLiteralType(symbolic))))
             {
                 anySymbolic = true;
                 break;
@@ -6730,6 +6733,11 @@ internal sealed class MemberLookup
         // evidence instead of depending on argument order.
         if (openClr.IsGenericParameter && openClr.DeclaringMethod != null)
         {
+            if (TypeSymbol.ContainsNullLiteralType(actual))
+            {
+                return;
+            }
+
             if (ReferenceEquals(openClr.DeclaringMethod, openMethod)
                 || openClr.DeclaringMethod.MetadataToken == openMethod.MetadataToken)
             {

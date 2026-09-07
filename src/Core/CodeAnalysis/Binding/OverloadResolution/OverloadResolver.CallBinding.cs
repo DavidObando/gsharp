@@ -554,7 +554,8 @@ internal sealed partial class OverloadResolver
     /// <summary>
     /// Issue #2403: whether <paramref name="syntax"/>'s unqualified callee name
     /// could resolve to a genuine non-constructor callable — a same-compilation
-    /// free/extension <see cref="FunctionSymbol"/> reachable through
+    /// free/extension <see cref="FunctionSymbol"/> or function-valued local
+    /// reachable through
     /// <see cref="Scope"/>, or an implicit-<c>this</c> instance/static sibling
     /// method (including a private one) on the enclosing struct/class or
     /// interface body, or an inherited CLR method on the implicit receiver —
@@ -587,7 +588,13 @@ internal sealed partial class OverloadResolver
         // A same-compilation free function or extension function (extension
         // functions are flattened into the global function table — issue
         // #1103) is directly visible through the scope's symbol table.
-        if (Scope.TryLookupSymbol(name) is FunctionSymbol)
+        var lexicalSymbol = Scope.TryLookupSymbol(name);
+        if (lexicalSymbol is FunctionSymbol
+            || (lexicalSymbol is VariableSymbol callableVariable
+                && (callableVariable.Type is FunctionPointerTypeSymbol
+                    || MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                        callableVariable.Type,
+                        out _))))
         {
             return true;
         }
