@@ -22,7 +22,8 @@ namespace GSharp.Compiler.Tests;
 /// (GS0154) — argument-order-dependent inference.</item>
 /// <item>A bound from a DELEGATE PARAMETER is an upper bound and must not
 /// widen anything. <c>ImmutableArray[Derived].Where(pred)</c> with
-/// <c>pred : func(Base) bool</c> stays <c>Where[Derived]</c>; widening it
+/// <c>pred : func(Base) bool</c> or <c>func(object) bool</c> stays
+/// <c>Where[Derived]</c>; widening it
 /// to <c>Base</c> binds cleanly, emits a MethodSpec whose receiver no longer
 /// matches, and produces IL the verifier rejects with
 /// <c>StackUnexpected</c>.</item>
@@ -62,10 +63,19 @@ func countKept(items ImmutableArray[Derived]) int32 {
     return items.Where(keep).ToList().Count
 }
 
+// (3) `object` is also only an upper bound. It must not replace Derived
+// in the emitted Where MethodSpec.
+func countObjectKept(items ImmutableArray[Derived]) int32 {
+    let keep = func (value object) bool { return value != nil }
+    return items.Where(keep).ToList().Count
+}
+
 var pairLength = pair(Base()).Length
 var keptCount = countKept(ImmutableArray.Create(Derived(), Derived()))
+var objectKeptCount = countObjectKept(ImmutableArray.Create(Derived(), Derived()))
 Console.WriteLine(""pair=$pairLength"")
 Console.WriteLine(""kept=$keptCount"")
+Console.WriteLine(""object-kept=$objectKeptCount"")
 ";
 
         var tempDir = Directory.CreateTempSubdirectory("gs_issue3896_").FullName;
@@ -129,6 +139,7 @@ Console.WriteLine(""kept=$keptCount"")
 
             Assert.Contains("pair=2", stdout);
             Assert.Contains("kept=2", stdout);
+            Assert.Contains("object-kept=2", stdout);
         }
         finally
         {
