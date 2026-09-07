@@ -43,6 +43,20 @@ public class Adr0158SyncMapSpikeTests
     /// Gsharp.Extensions.Sync version is the generic, ConcurrentDictionary-
     /// backed form of this class (see SyncMapGenericShape_CompilesAndRuns;
     /// the generic map-field variant is blocked by #3303).
+    /// <para>
+    /// Issue #4033: <c>Keys()</c> used to read <c>ks.Add(k!!)</c>. That
+    /// <c>!!</c> was not a choice — it was load-bearing, because
+    /// <c>items.Keys</c> handed the loop a spurious <c>string?</c>: the
+    /// element's nullability was read from
+    /// <c>Dictionary&lt;,&gt;.Keys</c>' declaration-site placeholder byte
+    /// instead of from the receiver's own <c>string</c> argument. With that
+    /// fixed the element is <c>string</c>, so the assertion is genuinely
+    /// redundant and the compiler now says so — <c>GS0536</c>, a warning,
+    /// which <see cref="AssertNoRealDiagnostics"/> (correctly) refuses. The
+    /// <c>!!</c> is dropped rather than the warning suppressed: this fixture
+    /// had encoded the defect, and dropping it is what proves the defect is
+    /// gone.
+    /// </para>
     /// </summary>
     private const string SyncMapPrototype = """
         class SyncMap {
@@ -92,7 +106,7 @@ public class Adr0158SyncMapSpikeTests
                 lock items {
                     var ks = System.Collections.Generic.List[string]()
                     for k in items.Keys {
-                        ks.Add(k!!)
+                        ks.Add(k)
                     }
                     return ks.ToArray()
                 }
