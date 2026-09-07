@@ -2894,6 +2894,7 @@ internal static class ClrOverloadResolution
             // recovered symbolic type arguments, so the placeholder never leaks
             // into the produced IL.
             Func<Type, Type>? paramTypeRewrite = null;
+            var resolvedTypeArgSymbols = default(ImmutableArray<TypeSymbol?>);
             if (explicitTypeArgs != null)
             {
                 // Issue #311: explicit type-argument path. Only open generic
@@ -2974,6 +2975,7 @@ internal static class ClrOverloadResolution
                     // leaves the projected vector to do its own job in
                     // `closed`'s parameter types.
                     var constraintTypeArgSymbols = recoverTypeArgSymbols?.Invoke(closed, false) ?? default;
+                    resolvedTypeArgSymbols = constraintTypeArgSymbols;
                     if (!SatisfiesGenericConstraints(
                             gmi,
                             NormaliseErasedTypeArgsForConstraintCheck(explicitTypeArgsArray, constraintTypeArgSymbols),
@@ -3170,7 +3172,8 @@ internal static class ClrOverloadResolution
                 // bound with T = Nullable<int> survives applicability and the
                 // resolver picks the wrong overload, emitting IL that fails
                 // verification at runtime.
-                if (!SatisfiesGenericConstraints(mi, typeArgs, recoverTypeArgSymbols?.Invoke(closed, false) ?? default))
+                resolvedTypeArgSymbols = recoverTypeArgSymbols?.Invoke(closed, false) ?? default;
+                if (!SatisfiesGenericConstraints(mi, typeArgs, resolvedTypeArgSymbols))
                 {
                     return;
                 }
@@ -3240,7 +3243,10 @@ internal static class ClrOverloadResolution
                     symbolicArgTypes != null && i < symbolicArgTypes.Count ? symbolicArgTypes[i] : null,
                     rawCandidate,
                     paramIndex,
-                    expandedParamsElement: false);
+                    isExpanded: false,
+                    resolvedTypeArgSymbols: resolvedTypeArgSymbols,
+                    symbolicArgTypes: symbolicArgTypes,
+                    argumentMapping: mapping);
 
                 // Issue #3989: the CLR comparison just above ranks the ERASED
                 // argument, where an element with no CLR identity is
@@ -3397,17 +3403,20 @@ internal static class ClrOverloadResolution
     /// <summary>
     /// Issue #4086: an in-scope type parameter is represented by
     /// <see cref="object"/> during CLR overload resolution. Preserve the
-    /// identity conversion to an inferred method type-parameter slot, but do
-    /// not let a genuinely declared <see cref="object"/> parameter inherit that
-    /// erased identity; that conversion is a reference conversion for a
-    /// reference-constrained parameter and boxing otherwise.
+    /// identity conversion only when that exact symbol supplied the inferred
+    /// method type argument. A genuine <see cref="object"/> parameter or a
+    /// second genuine-object inference bound instead uses the real reference
+    /// conversion or boxing conversion.
     /// </summary>
     private static ImplicitConversionKind RefineErasedTypeParameterConversion(
         ImplicitConversionKind conversion,
         TypeSymbol? sourceSymbol,
         MethodBase rawCandidate,
         int parameterIndex,
-        bool expandedParamsElement)
+        bool isExpanded,
+        ImmutableArray<TypeSymbol?> resolvedTypeArgSymbols,
+        IReadOnlyList<TypeSymbol>? symbolicArgTypes,
+        int[]? argumentMapping)
     {
         if (conversion != ImplicitConversionKind.Identity
             || sourceSymbol is not TypeParameterSymbol sourceTypeParameter
@@ -3426,7 +3435,7 @@ internal static class ClrOverloadResolution
         }
 
         var declaredParameter = parameters[parameterIndex].ParameterType;
-        if (expandedParamsElement
+        if (isExpanded
             && IsParamsArrayParameter(parameters[parameterIndex])
             && declaredParameter.GetElementType() is { } elementType)
         {
@@ -3434,6 +3443,27 @@ internal static class ClrOverloadResolution
         }
 
         declaredParameter = PeelByRef(declaredParameter) ?? declaredParameter;
+        if (declaredParameter is { IsGenericParameter: true, DeclaringMethod: not null })
+        {
+            var position = declaredParameter.GenericParameterPosition;
+            if ((uint)position < (uint)resolvedTypeArgSymbols.Length
+                && resolvedTypeArgSymbols[position] is { } recovered
+                && DeclarationBinder.TypeSignaturesEquivalent(recovered, sourceTypeParameter)
+                && !HasGenuineObjectInferenceBound(
+                    openCandidate,
+                    declaredParameter,
+                    symbolicArgTypes,
+                    argumentMapping,
+                    isExpanded))
+            {
+                return conversion;
+            }
+
+            return sourceTypeParameter.HasReferenceTypeConstraint || sourceTypeParameter.ClassConstraint != null
+                ? ImplicitConversionKind.Reference
+                : ImplicitConversionKind.Boxing;
+        }
+
         if (!IsSystemObject(declaredParameter))
         {
             return conversion;
@@ -3442,6 +3472,57 @@ internal static class ClrOverloadResolution
         return sourceTypeParameter.HasReferenceTypeConstraint || sourceTypeParameter.ClassConstraint != null
             ? ImplicitConversionKind.Reference
             : ImplicitConversionKind.Boxing;
+    }
+
+    private static bool HasGenuineObjectInferenceBound(
+        MethodBase openCandidate,
+        Type methodTypeParameter,
+        IReadOnlyList<TypeSymbol>? symbolicArgTypes,
+        int[]? argumentMapping,
+        bool isExpanded)
+    {
+        if (symbolicArgTypes == null)
+        {
+            return false;
+        }
+
+        var parameters = openCandidate.GetParameters();
+        for (var sourceIndex = 0; sourceIndex < symbolicArgTypes.Count; sourceIndex++)
+        {
+            var parameterIndex = argumentMapping != null && sourceIndex < argumentMapping.Length
+                ? argumentMapping[sourceIndex]
+                : sourceIndex;
+            if ((uint)parameterIndex >= (uint)parameters.Length)
+            {
+                continue;
+            }
+
+            var parameter = parameters[parameterIndex];
+            var declaredType = parameter.ParameterType;
+            if (isExpanded
+                && parameterIndex == parameters.Length - 1
+                && IsParamsArrayParameter(parameter)
+                && declaredType.GetElementType() is { } elementType)
+            {
+                declaredType = elementType;
+            }
+
+            declaredType = PeelByRef(declaredType) ?? declaredType;
+            if (!declaredType.IsGenericParameter
+                || declaredType.DeclaringMethod == null
+                || declaredType.GenericParameterPosition != methodTypeParameter.GenericParameterPosition)
+            {
+                continue;
+            }
+
+            if (symbolicArgTypes[sourceIndex].ClrType is { } sourceClr
+                && IsSystemObject(sourceClr))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsMethodGroupSignatureCompatible(
@@ -3488,6 +3569,7 @@ internal static class ClrOverloadResolution
     {
         T candidate = rawCandidate;
         Func<Type, Type>? paramTypeRewrite = null;
+        var resolvedTypeArgSymbols = default(ImmutableArray<TypeSymbol?>);
 
         // Issue #506 follow-up: close open generic candidates before applicability
         // classification. Explicit type arguments win; otherwise infer from the
@@ -3524,10 +3606,13 @@ internal static class ClrOverloadResolution
                     }
                 }
 
+                resolvedTypeArgSymbols = recoveredSymbols.IsDefault
+                    ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default
+                    : recoveredSymbols;
                 if (!SatisfiesGenericConstraints(
                     gmi,
                     explicitTypeArgs.ToArray(),
-                    recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default : recoveredSymbols))
+                    resolvedTypeArgSymbols))
                 {
                     return;
                 }
@@ -3622,10 +3707,13 @@ internal static class ClrOverloadResolution
                 }
             }
 
+            resolvedTypeArgSymbols = recoveredSymbols.IsDefault
+                ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default
+                : recoveredSymbols;
             if (!SatisfiesGenericConstraints(
                 mi,
                 typeArgs,
-                recoveredSymbols.IsDefault ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default : recoveredSymbols))
+                resolvedTypeArgSymbols))
             {
                 return;
             }
@@ -3715,7 +3803,10 @@ internal static class ClrOverloadResolution
                 symbolicArgTypes != null && i < symbolicArgTypes.Count ? symbolicArgTypes[i] : null,
                 rawCandidate,
                 slot,
-                expandedParamsElement: slot == paramsIndex);
+                isExpanded: true,
+                resolvedTypeArgSymbols: resolvedTypeArgSymbols,
+                symbolicArgTypes: symbolicArgTypes,
+                argumentMapping: mapping);
 
             // Issue #3989: the same second opinion the normal-form loop takes.
             // A `params object[]` slot is the common shape here, and it is a

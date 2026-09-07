@@ -45,6 +45,25 @@ public class ImportedMemberMatrixTests
                     => "instance-object";
             }
 
+            public interface IStaticOverloads<TSelf>
+                where TSelf : IStaticOverloads<TSelf>
+            {
+                static abstract string Take<T>(T value)
+                    where T : System.IDisposable;
+
+                static abstract string Take(object value);
+            }
+
+            public sealed class StaticOverloads : IStaticOverloads<StaticOverloads>
+            {
+                public static string Take<T>(T value)
+                    where T : System.IDisposable
+                    => "static-generic";
+
+                public static string Take(object value)
+                    => "static-object";
+            }
+
             public static class Overloads
             {
                 public static string Take<T>(T value)
@@ -53,12 +72,19 @@ public class ImportedMemberMatrixTests
 
                 public static string Take(object value)
                     => "object";
+
+                public static string Pick<T>(T first, T second)
+                    => "generic";
+
+                public static string Pick(object first, object second)
+                    => "object";
             }
             """;
 
         const string gsSource = """
             package Issue4086.Probe
             import System
+            import System.Threading.Tasks
             import Issue4086.CSharp
 
             func throughClassBound[T DisposableBase](value T) string {
@@ -73,6 +99,10 @@ public class ImportedMemberMatrixTests
                 return Overloads.Take(value)
             }
 
+            func throughMixedInference[T](first T, second object) string {
+                return Overloads.Pick(first, second)
+            }
+
             func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
                 receiver TReceiver,
                 value TValue) string {
@@ -85,21 +115,43 @@ public class ImportedMemberMatrixTests
                 return receiver.Take(value)
             }
 
+            async func throughConstrainedStaticAsync[
+                TReceiver IStaticOverloads[TReceiver],
+                TValue DisposableBase](value TValue) string {
+                return TReceiver.Take(await Task.FromResult[TValue](value))
+            }
+
+            func throughConstrainedStaticObject[TReceiver IStaticOverloads[TReceiver]](
+                value object) string {
+                return TReceiver.Take(value)
+            }
+
             Console.WriteLine(throughClassBound[DisposableBase](DisposableBase()))
             Console.WriteLine(throughInterface[DisposableBase](DisposableBase()))
             Console.WriteLine(throughObject(DisposableBase()))
+            Console.WriteLine(throughMixedInference[DisposableBase](DisposableBase(), DisposableBase()))
             Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
                 InstanceOverloads(),
                 DisposableBase()))
             Console.WriteLine(throughConstrainedInstanceObject[InstanceOverloads](
                 InstanceOverloads(),
                 DisposableBase()))
+            Console.WriteLine(throughConstrainedStaticAsync[StaticOverloads, DisposableBase](
+                DisposableBase()).Result)
+            Console.WriteLine(throughConstrainedStaticObject[StaticOverloads](
+                DisposableBase()))
             """;
 
         Assert.Equal(
             $"generic-disposable{Environment.NewLine}generic-disposable{Environment.NewLine}object{Environment.NewLine}"
-                + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}",
-            CompileAndRunWithSiblingCs(csSource, gsSource, "Issue4086.CSharp"));
+                + $"object{Environment.NewLine}"
+                + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
+                + $"static-generic{Environment.NewLine}static-object{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                csSource,
+                gsSource,
+                "Issue4086.CSharp",
+                ignoredErrorScope: "throughConstrainedStaticAsync"));
     }
 
     private const string Issue3076CsSource = """
@@ -1216,14 +1268,18 @@ public class ImportedMemberMatrixTests
         Assert.Equal($"yes{Environment.NewLine}", CompileAndRun(source));
     }
 
-    private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
+    internal static string CompileAndRunWithSiblingCs(
+        string csSource,
+        string gSource,
+        string siblingName,
+        string ignoredErrorScope = null)
     {
         var workDir = CreateWorkDir("imported_member_matrix_");
         try
         {
             var siblingDll = BuildCsLibrary(workDir, csSource, siblingName);
             File.Copy(siblingDll, Path.Combine(workDir, Path.GetFileName(siblingDll)), overwrite: true);
-            return CompileAndRun(gSource, new[] { siblingDll }, workDir);
+            return CompileAndRun(gSource, new[] { siblingDll }, workDir, ignoredErrorScope);
         }
         finally
         {
@@ -1365,7 +1421,11 @@ public class ImportedMemberMatrixTests
         }
     }
 
-    private static string CompileAndRun(string source, IReadOnlyCollection<string> references, string workDir)
+    private static string CompileAndRun(
+        string source,
+        IReadOnlyCollection<string> references,
+        string workDir,
+        string ignoredErrorScope = null)
     {
         var srcPath = Path.Combine(workDir, "test.gs");
         var outPath = Path.Combine(workDir, "test.dll");
@@ -1375,7 +1435,13 @@ public class ImportedMemberMatrixTests
         var (exitCode, diagnostics) = RunCompiler(args);
         Assert.True(exitCode == 0, diagnostics);
 
-        IlVerifier.Verify(outPath, additionalReferences: references);
+        IlVerifier.Verify(
+            outPath,
+            additionalReferences: references,
+            ignoredErrorCodes: ignoredErrorScope is null
+                ? null
+                : IlVerifier.KnownIssues.StaticVirtualInterface,
+            ignoredErrorScope: ignoredErrorScope);
 
         var runtimeConfig = Path.ChangeExtension(outPath, ".runtimeconfig.json");
         if (!File.Exists(runtimeConfig))
