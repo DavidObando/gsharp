@@ -8,7 +8,7 @@
 #   - syntheticLabelCeiling: max __switchExit/__iteratorExit/__gotoCase/
 #                            __patternGuardEnd occurrences in migrated output
 #   - liftedLocalCeiling:    max __local_ lifted-helper occurrences
-#   - longLineCeiling:       max lines longer than 300 characters
+#   - longLineCeiling:       max formatter-reducible raw lines over 300 chars
 #   - nullAssertionCeiling:  max !! null-assertion occurrences
 #
 # The ceilings cap readability regressions; the floor caps functional ones.

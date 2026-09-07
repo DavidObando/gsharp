@@ -317,6 +317,33 @@ public class GoldenTests
         AssertGolden(expected, unit);
     }
 
+    /// <summary>Issue #3948: multiline interpolation uses existing string
+    /// concatenation syntax, including empty runs and backticks.</summary>
+    [Fact]
+    public void B9_MultilineStringInterpolation()
+    {
+        var unit = new CompilationUnit("Demo", members: Nodes(
+            new FieldDeclaration(
+                BindingKind.Let,
+                "value",
+                initializer: new InterpolatedStringExpression(List(
+                    InterpolationPart.Literal(string.Empty),
+                    InterpolationPart.Literal("head\n"),
+                    InterpolationPart.Hole(new IdentifierExpression("x"), "4", "D2"),
+                    InterpolationPart.Literal("`\n"),
+                    InterpolationPart.Hole(new IdentifierExpression("y")),
+                    InterpolationPart.Literal(string.Empty))))));
+
+        var expected = Lines(
+            "package Demo",
+            string.Empty,
+            "let value = (\"\" + `head",
+            "` + \"${x,4:D2}\" + \"`\" + `",
+            "` + \"$y\" + \"\")");
+
+        AssertGolden(expected, unit);
+    }
+
     /// <summary>B.10: accessibility emitted only when non-default — a default
     /// (omitted) top-level class, an <c>internal</c> class, and a
     /// <c>private</c> member.</summary>

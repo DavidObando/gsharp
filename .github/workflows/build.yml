@@ -186,6 +186,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify cs2gs counter contract
+        run: build/test-cs2gs-counters.sh
+
       - name: Setup .NET SDK
         uses: actions/setup-dotnet@v5
         with:

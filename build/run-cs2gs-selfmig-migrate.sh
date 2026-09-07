@@ -76,4 +76,4 @@ jq -n \
 translated=$(jq '[.apps[] | select(.succeeded)] | length' "$run_json")
 total=$(jq '.apps | length' "$run_json")
 echo "self-migration translate: $translated/$total apps translated (migrate exit $migrate_exit)."
-echo "pre-validation metrics: labels=$labels __local_=$lifts lines>300=$long_lines bangs=$bangs"
+echo "pre-validation metrics: labels=$labels __local_=$lifts lines>300(raw)=$long_lines bangs=$bangs"

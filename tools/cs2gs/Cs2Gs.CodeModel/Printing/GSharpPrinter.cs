@@ -1264,6 +1264,63 @@ public static class GSharpPrinter
 
     private static string RenderInterpolatedString(InterpolatedStringExpression interpolated, int indent)
     {
+        if (interpolated.Parts.Any(part => !part.IsHole && part.Text.IndexOf('\n') >= 0))
+        {
+            return RenderMultilineInterpolatedString(interpolated, indent);
+        }
+
+        return RenderQuotedInterpolatedString(interpolated, indent);
+    }
+
+    private static string RenderMultilineInterpolatedString(InterpolatedStringExpression interpolated, int indent)
+    {
+        var segments = new List<string>();
+        foreach (InterpolationPart part in interpolated.Parts)
+        {
+            if (part.IsHole)
+            {
+                // Keep the hole inside interpolation: ToString concatenation
+                // would lose alignment, format, culture and null semantics.
+                segments.Add(RenderQuotedInterpolatedString(
+                    new InterpolatedStringExpression(new[] { part }),
+                    indent));
+                continue;
+            }
+
+            if (part.Text.Length == 0)
+            {
+                segments.Add("\"\"");
+                continue;
+            }
+
+            int start = 0;
+            while (start < part.Text.Length)
+            {
+                bool rawSafe = IsRawStringSafeCharacter(part.Text[start])
+                    && part.Text[start] != '`';
+                int end = start + 1;
+                while (end < part.Text.Length
+                    && (IsRawStringSafeCharacter(part.Text[end]) && part.Text[end] != '`') == rawSafe)
+                {
+                    end++;
+                }
+
+                string run = part.Text.Substring(start, end - start);
+                segments.Add(rawSafe
+                    ? $"`{run}`"
+                    : $"\"{RenderStringLiteralBody(run)}\"");
+                start = end;
+            }
+        }
+
+        return $"({string.Join(" + ", segments)})";
+    }
+
+    private static bool IsRawStringSafeCharacter(char value) =>
+        value >= ' ' || value == '\n' || value == '\t';
+
+    private static string RenderQuotedInterpolatedString(InterpolatedStringExpression interpolated, int indent)
+    {
         var sb = new StringBuilder();
         sb.Append('"');
         for (var i = 0; i < interpolated.Parts.Count; i++)
