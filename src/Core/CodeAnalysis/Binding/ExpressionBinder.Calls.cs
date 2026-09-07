@@ -1233,7 +1233,16 @@ internal sealed partial class ExpressionBinder
                     symbolicTypeArgs,
                     syntax.Identifier.Location))
             {
-                return false;
+                // Issue #4051: `false` here means "not a CLR constructor call",
+                // and overload resolution answered the question it was then
+                // left holding with `GS0130 Function 'Handler' doesn't exist` —
+                // beside the accurate GS0152, about a type that plainly does
+                // exist. It IS a CLR constructor call; it is just a refused
+                // one, and the refusal has already been explained. Claim it
+                // with an error node so nothing downstream invents a second
+                // reason.
+                result = new BoundErrorExpression(syntax);
+                return true;
             }
 
             try

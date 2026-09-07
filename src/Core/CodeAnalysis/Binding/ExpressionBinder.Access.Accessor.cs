@@ -219,35 +219,63 @@ internal sealed partial class ExpressionBinder
         {
             var genericTypeIndex = leftPart as IndexExpressionSyntax;
             if (genericTypeIndex is not null
-                && !genericTypeIndex.IsNullConditional
-                && TryResolveConstructedGenericTypeReceiver(
-                    genericTypeIndex,
-                    out var indexedStruct,
-                    out var indexedInterface,
-                    out var indexedImported))
+                && !genericTypeIndex.IsNullConditional)
             {
-                return BindConstructedGenericTypeAccessorStep(
-                    indexedStruct,
-                    indexedInterface,
-                    indexedImported,
-                    rightPart,
-                    leftPart);
+                if (TryResolveConstructedGenericTypeReceiver(
+                        genericTypeIndex,
+                        out var indexedStruct,
+                        out var indexedInterface,
+                        out var indexedImported,
+                        out var indexedFailureHandled))
+                {
+                    return BindConstructedGenericTypeAccessorStep(
+                        indexedStruct,
+                        indexedInterface,
+                        indexedImported,
+                        rightPart,
+                        leftPart);
+                }
+
+                // Issue #4051: THIS is the site the cascade came from — not the
+                // `else if` chain further down. When the resolver fails the
+                // whole method falls through to `receiver =
+                // BindExpression(leftPart)` a few lines below, which binds
+                // `Nullable[string]` as an ordinary INDEX expression and looks
+                // up `Nullable` and `string` as values — two `GS0125 Variable
+                // 'X' doesn't exist` beside the accurate GS0152, one of them
+                // naming a predefined type keyword. The construction already
+                // explained why it is invalid; stop here.
+                if (indexedFailureHandled)
+                {
+                    return new BoundErrorExpression(syntax);
+                }
             }
 
             var genericTypeName = leftPart as GenericNameExpressionSyntax;
-            if (genericTypeName is not null
-                && TryResolveConstructedGenericTypeReceiver(
-                    genericTypeName,
-                    out var namedStruct,
-                    out var namedInterface,
-                    out var namedImported))
+            if (genericTypeName is not null)
             {
-                return BindConstructedGenericTypeAccessorStep(
-                    namedStruct,
-                    namedInterface,
-                    namedImported,
-                    rightPart,
-                    leftPart);
+                if (TryResolveConstructedGenericTypeReceiver(
+                        genericTypeName,
+                        out var namedStruct,
+                        out var namedInterface,
+                        out var namedImported,
+                        out var namedFailureHandled))
+                {
+                    return BindConstructedGenericTypeAccessorStep(
+                        namedStruct,
+                        namedInterface,
+                        namedImported,
+                        rightPart,
+                        leftPart);
+                }
+
+                // Issue #4051: the generic-NAME shape of the same fall-through.
+                // `Handler[string?].Describe()` added `GS0124 Expression must
+                // have a value` and `GS0159 Cannot find function Describe`.
+                if (namedFailureHandled)
+                {
+                    return new BoundErrorExpression(syntax);
+                }
             }
         }
 
@@ -2973,10 +3001,40 @@ internal sealed partial class ExpressionBinder
         out StructSymbol? constructedStruct,
         out InterfaceSymbol? constructedInterface,
         out ImportedClassSymbol? constructedImported)
+        => TryResolveConstructedGenericTypeReceiver(
+            index,
+            out constructedStruct,
+            out constructedInterface,
+            out constructedImported,
+            out _);
+
+    /// <summary>
+    /// Issue #4051: the <paramref name="failureHandled"/> overload of the
+    /// index-expression resolver. See
+    /// <see cref="TryCloseImportedGenericTypeReceiver(Type, ImmutableArray{TypeSymbol}, ExpressionSyntax, out ImportedClassSymbol?, out bool)"/>
+    /// for what the flag means and why it is not a diagnostic-count snapshot.
+    /// Only the IMPORTED close can set it — a user <see cref="StructSymbol"/> /
+    /// <see cref="InterfaceSymbol"/> construction reports nothing here — so a
+    /// caller that consumes only the user-symbol outputs can keep using the
+    /// discarding overload above with no change in behaviour.
+    /// </summary>
+    /// <param name="index">The candidate <c>Name[TypeArg]</c> receiver.</param>
+    /// <param name="constructedStruct">The constructed generic class/struct on success.</param>
+    /// <param name="constructedInterface">The constructed generic interface on success.</param>
+    /// <param name="constructedImported">The constructed imported CLR generic type on success.</param>
+    /// <param name="failureHandled">Whether a <see langword="false"/> result already reported its reason.</param>
+    /// <returns>Whether a constructed generic type receiver was resolved.</returns>
+    private bool TryResolveConstructedGenericTypeReceiver(
+        IndexExpressionSyntax index,
+        out StructSymbol? constructedStruct,
+        out InterfaceSymbol? constructedInterface,
+        out ImportedClassSymbol? constructedImported,
+        out bool failureHandled)
     {
         constructedStruct = null;
         constructedInterface = null;
         constructedImported = null;
+        failureHandled = false;
 
         if (index.Target is not NameExpressionSyntax targetName)
         {
@@ -3053,7 +3111,7 @@ internal sealed partial class ExpressionBinder
         // static-member / static-call binding path resolves members against the
         // closed construction.
         return openClrType is not null
-            && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, index, out constructedImported);
+            && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, index, out constructedImported, out failureHandled);
     }
 
     /// <summary>
@@ -3077,10 +3135,34 @@ internal sealed partial class ExpressionBinder
         out StructSymbol? constructedStruct,
         out InterfaceSymbol? constructedInterface,
         out ImportedClassSymbol? constructedImported)
+        => TryResolveConstructedGenericTypeReceiver(
+            generic,
+            out constructedStruct,
+            out constructedInterface,
+            out constructedImported,
+            out _);
+
+    /// <summary>
+    /// Issue #4051: the <paramref name="failureHandled"/> overload of the
+    /// generic-name resolver, mirroring the index-expression one.
+    /// </summary>
+    /// <param name="generic">The constructed-generic type reference.</param>
+    /// <param name="constructedStruct">The constructed generic class/struct on success.</param>
+    /// <param name="constructedInterface">The constructed generic interface on success.</param>
+    /// <param name="constructedImported">The constructed imported CLR generic type on success.</param>
+    /// <param name="failureHandled">Whether a <see langword="false"/> result already reported its reason.</param>
+    /// <returns>Whether a constructed generic type receiver was resolved.</returns>
+    private bool TryResolveConstructedGenericTypeReceiver(
+        GenericNameExpressionSyntax generic,
+        out StructSymbol? constructedStruct,
+        out InterfaceSymbol? constructedInterface,
+        out ImportedClassSymbol? constructedImported,
+        out bool failureHandled)
     {
         constructedStruct = null;
         constructedInterface = null;
         constructedImported = null;
+        failureHandled = false;
 
         var name = generic.Identifier.ValueText;
 
@@ -3150,7 +3232,7 @@ internal sealed partial class ExpressionBinder
         }
 
         return openClrType is not null
-            && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported);
+            && TryCloseImportedGenericTypeReceiver(openClrType, typeArgs, generic, out constructedImported, out failureHandled);
     }
 
     private bool ImportedGenericTypeHasPrecedence(
@@ -3191,17 +3273,42 @@ internal sealed partial class ExpressionBinder
         out StructSymbol? constructedStruct,
         out InterfaceSymbol? constructedInterface,
         out ImportedClassSymbol? constructedImported)
+        => TryResolveConstructedGenericTypeReceiver(
+            receiver,
+            out constructedStruct,
+            out constructedInterface,
+            out constructedImported,
+            out _);
+
+    /// <summary>
+    /// Issue #4051: the <paramref name="failureHandled"/> overload of the
+    /// shape-agnostic dispatcher, so a write/compound-assignment receiver gets
+    /// the same "the failure explained itself" answer the read path gets.
+    /// </summary>
+    /// <param name="receiver">The candidate constructed-generic-type receiver syntax.</param>
+    /// <param name="constructedStruct">The constructed generic class/struct on success.</param>
+    /// <param name="constructedInterface">The constructed generic interface on success.</param>
+    /// <param name="constructedImported">The constructed imported CLR generic type on success.</param>
+    /// <param name="failureHandled">Whether a <see langword="false"/> result already reported its reason.</param>
+    /// <returns>Whether a constructed generic type receiver was resolved.</returns>
+    private bool TryResolveConstructedGenericTypeReceiver(
+        ExpressionSyntax receiver,
+        out StructSymbol? constructedStruct,
+        out InterfaceSymbol? constructedInterface,
+        out ImportedClassSymbol? constructedImported,
+        out bool failureHandled)
     {
         constructedStruct = null;
         constructedInterface = null;
         constructedImported = null;
+        failureHandled = false;
 
         switch (receiver)
         {
             case IndexExpressionSyntax index when !index.IsNullConditional:
-                return TryResolveConstructedGenericTypeReceiver(index, out constructedStruct, out constructedInterface, out constructedImported);
+                return TryResolveConstructedGenericTypeReceiver(index, out constructedStruct, out constructedInterface, out constructedImported, out failureHandled);
             case GenericNameExpressionSyntax generic:
-                return TryResolveConstructedGenericTypeReceiver(generic, out constructedStruct, out constructedInterface, out constructedImported);
+                return TryResolveConstructedGenericTypeReceiver(generic, out constructedStruct, out constructedInterface, out constructedImported, out failureHandled);
             case AccessorExpressionSyntax accessorChain when !accessorChain.IsNullConditional:
                 // A package-qualified generic type receiver written by cs2gs,
                 // e.g. `Oahu.Aux.Diagnostics.TreeDecomposition[T].field = v`. The
@@ -3211,7 +3318,7 @@ internal sealed partial class ExpressionBinder
                 if (!ReferenceEquals(peeled, accessorChain)
                     && peeled is IndexExpressionSyntax or GenericNameExpressionSyntax)
                 {
-                    return TryResolveConstructedGenericTypeReceiver(peeled, out constructedStruct, out constructedInterface, out constructedImported);
+                    return TryResolveConstructedGenericTypeReceiver(peeled, out constructedStruct, out constructedInterface, out constructedImported, out failureHandled);
                 }
 
                 return false;
@@ -3298,8 +3405,51 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<TypeSymbol> typeArgs,
         ExpressionSyntax receiverSyntax,
         [NotNullWhen(true)] out ImportedClassSymbol? constructedImported)
+        => TryCloseImportedGenericTypeReceiver(
+            openClrType,
+            typeArgs,
+            receiverSyntax,
+            out constructedImported,
+            out _);
+
+    /// <summary>
+    /// Issue #4051: the <paramref name="failureHandled"/> overload. The close
+    /// can now fail for a reason it has already EXPLAINED — a type argument
+    /// that violates the open definition's declared constraint (GS0152, added
+    /// by #4032). A caller that treats every <c>false</c> as "not a type" then
+    /// re-reads <c>Name[Arg]</c> as an index expression and invents a second,
+    /// FALSE reason; <c>Nullable[string].Value</c> reported "Variable
+    /// 'Nullable' doesn't exist" and "Variable 'string' doesn't exist" beside
+    /// the accurate diagnostic, and <c>string</c> is a predefined type keyword.
+    /// </summary>
+    /// <remarks>
+    /// The flag is taken from the checker's RETURN VALUE, never from a
+    /// <c>Diagnostics.Count</c> snapshot: <c>ReportUnsatisfiedGenericTypeConstraint</c>
+    /// suppresses a byte-identical repeat (it is reached twice or three times
+    /// per expression, because the binder probes the same receiver through
+    /// several entry points before committing to a reading of it), so on the
+    /// second probe the bag does not grow while the answer is still "this
+    /// construction is invalid, stop". A count snapshot would therefore read
+    /// "unexplained" on exactly the probe whose caller decides the message.
+    /// </remarks>
+    /// <param name="openClrType">The open generic CLR definition.</param>
+    /// <param name="typeArgs">The bound type arguments.</param>
+    /// <param name="receiverSyntax">The receiver syntax the diagnostic anchors to.</param>
+    /// <param name="constructedImported">The closed construction on success.</param>
+    /// <param name="failureHandled">
+    /// On a <see langword="false"/> result, whether the failure already
+    /// reported its own reason and the caller must not invent another.
+    /// </param>
+    /// <returns>Whether the construction closed.</returns>
+    private bool TryCloseImportedGenericTypeReceiver(
+        Type openClrType,
+        ImmutableArray<TypeSymbol> typeArgs,
+        ExpressionSyntax receiverSyntax,
+        [NotNullWhen(true)] out ImportedClassSymbol? constructedImported,
+        out bool failureHandled)
     {
         constructedImported = null;
+        failureHandled = false;
 
         var clrArgs = new Type[typeArgs.Length];
         for (var i = 0; i < typeArgs.Length; i++)
@@ -3339,6 +3489,10 @@ internal sealed partial class ExpressionBinder
                 typeArgs,
                 receiverSyntax.Location))
         {
+            // Issue #4051: this failure EXPLAINED itself. Say so, so the caller
+            // stops rather than re-reading `Name[Arg]` as an index expression
+            // and reporting the type argument as a missing variable.
+            failureHandled = true;
             return false;
         }
 

@@ -76,6 +76,14 @@ internal sealed partial class ExpressionBinder
         TypeSymbol? importedEventTarget = null;
         BindingFlags flags;
 
+        // Issue #4051: set by the constructed-generic-receiver branch below when
+        // its resolver failed for a reason it already REPORTED (a type argument
+        // that violates a declared constraint, GS0152). Declared out here
+        // because that branch is one link of an `else if` chain, and the
+        // fall-through `else` — which is where the false diagnostics came from —
+        // has to see it.
+        var constructedReceiverFailureHandled = false;
+
         var staticLeftName = accessor.LeftPart as NameExpressionSyntax;
         TypeSymbol? staticSourceType = null;
         ImportedClassSymbol? staticImportedOverride = null;
@@ -171,7 +179,8 @@ internal sealed partial class ExpressionBinder
                 accessor.LeftPart,
                 out var ctorStruct,
                 out var ctorInterface,
-                out var ctorImported))
+                out var ctorImported,
+                out constructedReceiverFailureHandled))
         {
             // Issue #1559 (extends ADR-0089 / issue #1030): compound assignment
             // to a static field/property through a constructed generic *type*
@@ -227,6 +236,18 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
+            // Issue #4051: the compound-assignment path's version of the read
+            // path's cascade. `Handler[string].Field += "z"` reported the
+            // accurate GS0152 from the constructed-receiver branch above, whose
+            // condition then read `false` — dropping the whole chain into this
+            // `else`, where `BindExpression` re-reads `Handler[string]` as an
+            // index expression and reports `Handler` and `string` as two
+            // missing variables. The construction already explained itself.
+            if (constructedReceiverFailureHandled)
+            {
+                return new BoundErrorExpression(null);
+            }
+
             boundReceiver = BindExpression(accessor.LeftPart);
             if (boundReceiver.Type == TypeSymbol.Error)
             {
