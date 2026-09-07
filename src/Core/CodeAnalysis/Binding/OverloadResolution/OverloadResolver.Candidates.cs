@@ -61,7 +61,8 @@ internal sealed partial class OverloadResolver
         ImmutableArray<BoundExpression> arguments,
         CallExpressionSyntax ce,
         string methodName,
-        ImmutableArray<string> argumentNames)
+        ImmutableArray<string> argumentNames,
+        TypeSymbol? receiverType = null)
     {
         if (overloads.Length <= 1)
         {
@@ -128,7 +129,8 @@ internal sealed partial class OverloadResolver
             out var nullSafetyFailure,
             explicitTypeArgCount,
             boundTypeArguments,
-            ce);
+            ce,
+            receiverType);
         if (selected != null)
         {
             return selected;
@@ -212,7 +214,7 @@ internal sealed partial class OverloadResolver
             return null;
         }
 
-        return SelectInstanceOverloadOrReport(unified, arguments, ce, methodName, argumentNames);
+        return SelectInstanceOverloadOrReport(unified, arguments, ce, methodName, argumentNames, structSym);
     }
 
     private FunctionSymbol? SelectBestUserOverload(
@@ -243,7 +245,8 @@ internal sealed partial class OverloadResolver
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
         ImmutableArray<TypeSymbol> explicitTypeArguments = default,
-        CallExpressionSyntax? callSyntax = null)
+        CallExpressionSyntax? callSyntax = null,
+        TypeSymbol? receiverType = null)
     {
         ambiguous = false;
         nullSafetyFailure = null;
@@ -268,7 +271,8 @@ internal sealed partial class OverloadResolver
             out ambiguous,
             out nullSafetyFailure,
             explicitTypeArgCount,
-            explicitTypeArguments);
+            explicitTypeArguments,
+            receiverType);
     }
 
     private FunctionSymbol? SelectBestUserOverloadCore(
@@ -280,7 +284,8 @@ internal sealed partial class OverloadResolver
         out bool ambiguous,
         out NullSafetyArgumentMismatch? nullSafetyFailure,
         int explicitTypeArgCount = 0,
-        ImmutableArray<TypeSymbol> explicitTypeArguments = default)
+        ImmutableArray<TypeSymbol> explicitTypeArguments = default,
+        TypeSymbol? receiverType = null)
     {
         ambiguous = false;
         nullSafetyFailure = null;
@@ -291,24 +296,52 @@ internal sealed partial class OverloadResolver
         // inputs. Memoize per candidate for this call so unification runs once
         // instead of twice per generic candidate.
         var substitutionCache = new Dictionary<FunctionSymbol, (bool Ok, Dictionary<TypeParameterSymbol, TypeSymbol> Substitution)>();
+
+        // Issue #3874: constructed receivers expose their definition's open
+        // methods. Apply the receiver map during selection, not only after a
+        // winner is chosen, and compose it with any method-level type arguments.
+        var receiverSubstitution = receiverType != null
+            ? TryBuildReceiverSubstitution(receiverType)
+            : null;
         Dictionary<TypeParameterSymbol, TypeSymbol>? GetCandidateSubstitution(FunctionSymbol candidate)
         {
+            Dictionary<TypeParameterSymbol, TypeSymbol>? methodSubstitution = null;
             if (!explicitTypeArguments.IsDefaultOrEmpty
                 && candidate.TypeParameters.Length == explicitTypeArguments.Length)
             {
-                return candidate.TypeParameters
+                methodSubstitution = candidate.TypeParameters
                     .Select((parameter, index) => (parameter, argument: explicitTypeArguments[index]))
                     .ToDictionary(pair => pair.parameter, pair => pair.argument);
             }
+            else if (candidate.IsGeneric)
+            {
+                if (!GetCachedCandidateSubstitution(
+                        candidate,
+                        boundArguments,
+                        argumentCount,
+                        substitutionCache,
+                        out var inferred))
+                {
+                    return null;
+                }
 
-            return GetCachedCandidateSubstitution(
-                candidate,
-                boundArguments,
-                argumentCount,
-                substitutionCache,
-                out var inferred)
-                    ? inferred
-                    : null;
+                methodSubstitution = inferred;
+            }
+
+            if (receiverSubstitution == null)
+            {
+                return methodSubstitution;
+            }
+
+            var combined = methodSubstitution != null
+                ? new Dictionary<TypeParameterSymbol, TypeSymbol>(methodSubstitution)
+                : new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            foreach (var pair in receiverSubstitution)
+            {
+                combined[pair.Key] = pair.Value;
+            }
+
+            return combined;
         }
 
         // Phase 1: applicability.
@@ -498,14 +531,9 @@ internal sealed partial class OverloadResolver
                 defaultsUsed = 0;
             }
 
-            // For generic candidates, compute the inferred method-type
-            // substitution so delegate parameter return types can be closed
-            // when classifying the value-return discard case below.
-            Dictionary<TypeParameterSymbol, TypeSymbol>? candSubstitution = null;
-            if (cand.IsGeneric)
-            {
-                candSubstitution = GetCandidateSubstitution(cand);
-            }
+            // Close both receiver- and method-level type parameters before
+            // classifying conversions and comparing their target types.
+            var candSubstitution = GetCandidateSubstitution(cand);
 
             // Classify each supplied argument's conversion to its ACTUAL
             // target slot. Issue #1628: boundArguments[i] is source order,
@@ -517,6 +545,7 @@ internal sealed partial class OverloadResolver
             // parameter type.
             var kinds = new ClrOverloadResolution.ImplicitConversionKind[boundArguments.Count];
             var paramTypes = new TypeSymbol[boundArguments.Count];
+            var openParamTypes = new TypeSymbol[boundArguments.Count];
             var isTailSlot = new bool[boundArguments.Count];
             var elementType = isVariadic
                 && VariadicCarriers.GetElementType(cand.Parameters[cand.Parameters.Length - 1].Type) is { } variadicElement
@@ -610,6 +639,7 @@ internal sealed partial class OverloadResolver
                             variadicCarrierType,
                             "a carrier pass-through candidate has a variadic carrier parameter");
                         paramTypes[i] = normalFormCarrier;
+                        openParamTypes[i] = cand.Parameters[cand.Parameters.Length - 1].Type;
                         kinds[i] = ClassifyUserArgumentConversionKind(tailArgType, normalFormCarrier);
                         continue;
                     }
@@ -639,18 +669,22 @@ internal sealed partial class OverloadResolver
                     }
 
                     paramTypes[i] = elementType;
+                    openParamTypes[i] = VariadicCarriers.GetElementType(
+                        cand.Parameters[cand.Parameters.Length - 1].Type) ?? elementType;
                     kinds[i] = ClassifyUserArgumentConversionKind(tailArgType, elementType);
                     continue;
                 }
 
                 var argType = boundArguments[i]?.Type;
                 var openParamType = cand.Parameters[slot + parameterOffset].Type;
-                paramTypes[i] = openParamType;
+                openParamTypes[i] = openParamType;
                 var paramType = openParamType;
                 if (candSubstitution != null)
                 {
                     paramType = Binder.SubstituteType(paramType, candSubstitution);
                 }
+
+                paramTypes[i] = paramType;
 
                 // Issue #1531 control: a value-returning delegate/method-group
                 // argument that maps onto a `(...)->void` delegate parameter
@@ -673,7 +707,7 @@ internal sealed partial class OverloadResolver
                             : ClassifyUserArgumentConversionKind(argType, paramType);
             }
 
-            data.Add(new UserCandidateRankData(cand, kinds, paramTypes, isTailSlot, defaultsUsed, isVariadic));
+            data.Add(new UserCandidateRankData(cand, kinds, paramTypes, openParamTypes, isTailSlot, defaultsUsed, isVariadic));
         }
 
         // Phase 2a: pairwise domination. A candidate survives when no other
@@ -812,7 +846,7 @@ internal sealed partial class OverloadResolver
             var bareTypeParam = false;
             foreach (var w in current)
             {
-                var openParam = argIndex < w.ParamTypes.Length ? w.ParamTypes[argIndex] : null;
+                var openParam = argIndex < w.OpenParamTypes.Length ? w.OpenParamTypes[argIndex] : null;
                 if (openParam is FunctionTypeSymbol paramFn)
                 {
                     if (IsTaskReturnTypeSymbol(paramFn.ReturnType))
@@ -884,11 +918,12 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private readonly struct UserCandidateRankData
     {
-        public UserCandidateRankData(FunctionSymbol candidate, ClrOverloadResolution.ImplicitConversionKind[] kinds, TypeSymbol[] paramTypes, bool[] isTailSlot, int defaultsUsed, bool isVariadic)
+        public UserCandidateRankData(FunctionSymbol candidate, ClrOverloadResolution.ImplicitConversionKind[] kinds, TypeSymbol[] paramTypes, TypeSymbol[] openParamTypes, bool[] isTailSlot, int defaultsUsed, bool isVariadic)
         {
             Candidate = candidate;
             Kinds = kinds;
             ParamTypes = paramTypes;
+            OpenParamTypes = openParamTypes;
             IsTailSlot = isTailSlot;
             DefaultsUsed = defaultsUsed;
             IsVariadic = isVariadic;
@@ -899,6 +934,8 @@ internal sealed partial class OverloadResolver
         public ClrOverloadResolution.ImplicitConversionKind[] Kinds { get; }
 
         public TypeSymbol[] ParamTypes { get; }
+
+        public TypeSymbol[] OpenParamTypes { get; }
 
         /// <summary>
         /// Gets per-argument flags set when the argument at that index bound

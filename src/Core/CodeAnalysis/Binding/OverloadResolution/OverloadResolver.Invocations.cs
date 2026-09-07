@@ -1970,7 +1970,13 @@ internal sealed partial class OverloadResolver
 
     private static Dictionary<TypeParameterSymbol, TypeSymbol>? TryBuildReceiverSubstitution(TypeSymbol receiverType)
     {
-        if (receiverType is not StructSymbol start)
+        var start = receiverType switch
+        {
+            StructSymbol receiverStruct => receiverStruct,
+            TypeParameterSymbol { ClassConstraint: StructSymbol constraint } => constraint,
+            _ => null,
+        };
+        if (start == null)
         {
             return null;
         }

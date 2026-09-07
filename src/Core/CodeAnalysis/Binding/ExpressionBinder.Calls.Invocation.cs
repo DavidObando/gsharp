@@ -3348,7 +3348,13 @@ internal sealed partial class ExpressionBinder
                     var tpClassOverloads = MemberLookup.CollectSourceInstanceMethods(tpClassRecv, methodName);
                     if (tpClassOverloads.Length > 0)
                     {
-                        var tpClassMethod = overloads.SelectInstanceOverloadOrReport(tpClassOverloads, arguments, ce, methodName, argumentNames);
+                        var tpClassMethod = overloads.SelectInstanceOverloadOrReport(
+                            tpClassOverloads,
+                            arguments,
+                            ce,
+                            methodName,
+                            argumentNames,
+                            receiver.Type);
                         if (tpClassMethod == null)
                         {
                             return new BoundErrorExpression(null);
@@ -3376,7 +3382,13 @@ internal sealed partial class ExpressionBinder
                 var userOverloads = MemberLookup.CollectSourceInstanceMethods(userClass, methodName);
                 if (userOverloads.Length > 0)
                 {
-                    var userMethod = overloads.SelectInstanceOverloadOrReport(userOverloads, arguments, ce, methodName, argumentNames);
+                    var userMethod = overloads.SelectInstanceOverloadOrReport(
+                        userOverloads,
+                        arguments,
+                        ce,
+                        methodName,
+                        argumentNames,
+                        receiver.Type);
                     if (userMethod == null)
                     {
                         return new BoundErrorExpression(null);
@@ -3568,7 +3580,13 @@ internal sealed partial class ExpressionBinder
             var priorityOverloads = MemberLookup.CollectSourceInstanceMethods(userClassPriority, methodName);
             if (priorityOverloads.Length > 0)
             {
-                var userMethodPriority = overloads.SelectInstanceOverloadOrReport(priorityOverloads, arguments, ce, methodName, argumentNames);
+                var userMethodPriority = overloads.SelectInstanceOverloadOrReport(
+                    priorityOverloads,
+                    arguments,
+                    ce,
+                    methodName,
+                    argumentNames,
+                    receiver.Type);
                 if (userMethodPriority == null)
                 {
                     return new BoundErrorExpression(null);

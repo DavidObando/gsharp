@@ -3025,7 +3025,13 @@ internal sealed partial class ExpressionBinder
         }
 
         var arguments = BindBaseCallArguments(ce);
-        var method = overloads.SelectInstanceOverloadOrReport(baseOverloads, arguments, ce, methodName, argumentNames);
+        var method = overloads.SelectInstanceOverloadOrReport(
+            baseOverloads,
+            arguments,
+            ce,
+            methodName,
+            argumentNames,
+            searchBase);
         if (method == null)
         {
             return new BoundErrorExpression(null);

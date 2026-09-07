@@ -161,12 +161,27 @@ internal sealed partial class MethodBodyEmitter
 
             var constraintInterface = (call.ConstrainedInterfaceType as InterfaceSymbol)
                 ?? (call.Method.ReceiverType as InterfaceSymbol);
+            var constraintClass = call.ConstrainedReceiverTypeParameter.ClassConstraint as StructSymbol;
             var openMethod = constraintInterface != null
                 ? ResolveOpenInterfaceMethod(constraintInterface, call.Method)
                 : call.Method;
+            var constraintGenericOwner = constraintClass != null
+                ? this.ResolveInheritedGenericBase(constraintClass, call.Method)
+                    ?? (ReflectionMetadataEmitter.IsUserGenericTypeReference(constraintClass)
+                        ? constraintClass
+                        : null)
+                : null;
             var constrainedMethodToken = constraintInterface != null
                 ? this.outer.userTokens.ResolveUserInterfaceInstanceMethodToken(constraintInterface, openMethod)
+                : constraintGenericOwner != null
+                    ? this.outer.userTokens.ResolveUserInstanceMethodToken(constraintGenericOwner, call.Method)
                 : this.outer.cache.MethodHandles[call.Method];
+            if (call.Method.IsGeneric && !call.Method.TypeParameters.IsDefaultOrEmpty)
+            {
+                constrainedMethodToken = this.outer.userTokens.BuildMethodSpecForGenericInstanceCall(
+                    constrainedMethodToken,
+                    call);
+            }
 
             this.il.OpCode(ILOpCode.Constrained);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(call.ConstrainedReceiverTypeParameter));
