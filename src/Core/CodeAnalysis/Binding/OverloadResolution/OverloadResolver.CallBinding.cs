@@ -1710,11 +1710,15 @@ internal sealed partial class OverloadResolver
                         continue;
                     }
 
+                    // Issue #4043: a DEPENDENT bound is answered on the whole
+                    // vector, so build the positional map before asking.
+                    var explicitVector = BuildTypeArgumentVector(
+                        candidate.TypeParameters, explicitOverloadTypeArguments);
                     var constraintsSatisfied = true;
                     for (var i = 0; i < candidate.TypeParameters.Length; i++)
                     {
                         constraintsSatisfied &=
-                            satisfiesConstraint(explicitOverloadTypeArguments[i], candidate.TypeParameters[i]);
+                            satisfiesConstraint(explicitOverloadTypeArguments[i], candidate.TypeParameters[i], explicitVector);
                     }
 
                     if (constraintsSatisfied)
@@ -2038,7 +2042,7 @@ internal sealed partial class OverloadResolver
             foreach (var tp in function.TypeParameters)
             {
                 var typeArg = substitution[tp];
-                if (!satisfiesConstraint(typeArg, tp))
+                if (!satisfiesConstraint(typeArg, tp, substitution))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, describeConstraint(tp));
                     return new BoundErrorExpression(null);
@@ -2786,6 +2790,11 @@ internal sealed partial class OverloadResolver
             return null;
         }
 
+        // Issue #4043: bind EVERY argument before checking any constraint. A
+        // DEPENDENT bound (`class Pair[TBase, TDerived TBase]`) is answered on
+        // the whole vector, and the bounding parameter is not required to come
+        // first — `[TDerived TBase, TBase]` is legal C# — so a single pass that
+        // checked as it bound would ask about an argument it had not read yet.
         var typeArguments = ImmutableArray.CreateBuilder<TypeSymbol>(typeParameters.Length);
         for (var i = 0; i < typeParameters.Length; i++)
         {
@@ -2795,20 +2804,24 @@ internal sealed partial class OverloadResolver
                 return null;
             }
 
-            if (!satisfiesConstraint(typeArgument, typeParameters[i]))
-            {
-                Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
-                    syntax.TypeArgumentList.Arguments[i].Location,
-                    typeParameters[i].Name,
-                    typeArgument,
-                    describeConstraint(typeParameters[i]));
-                return null;
-            }
-
             typeArguments.Add(typeArgument);
         }
 
         var arguments = typeArguments.MoveToImmutable();
+        var clauseVector = BuildTypeArgumentVector(typeParameters, arguments);
+        for (var i = 0; i < typeParameters.Length; i++)
+        {
+            if (!satisfiesConstraint(arguments[i], typeParameters[i], clauseVector))
+            {
+                Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
+                    syntax.TypeArgumentList.Arguments[i].Location,
+                    typeParameters[i].Name,
+                    arguments[i],
+                    describeConstraint(typeParameters[i]));
+                return null;
+            }
+        }
+
         return type switch
         {
             StructSymbol targetStruct => MapClrType is { } structMapClrType

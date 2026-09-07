@@ -6893,8 +6893,33 @@ public sealed class Binder
     // Phase 4.2 / ADR-0020: returns true if `typeArgument` satisfies the constraint of a
     // type parameter. Both the enum constraint and the optional sealed-interface bound
     // must hold.
-    internal static bool SatisfiesConstraint(TypeSymbol typeArgument, TypeParameterSymbol tp)
+    //
+    // Issue #4043: `substitution` carries the WHOLE type-argument vector, which
+    // a DEPENDENT bound (`[TBase, TDerived TBase]`) needs and a per-position
+    // check cannot supply — the question "does TDerived's argument satisfy
+    // TBase's bound" is only answerable once TBase's own argument is known.
+    // Every other constraint kind ignores it. It is optional and defaults to
+    // `null`: a caller that has no vector (or a vector missing the bound
+    // parameter) gets the pre-#4043 answer, which ACCEPTS. That direction is
+    // deliberate — an indeterminate dependent bound must never manufacture a
+    // GS0152 on a program that is legal.
+    internal static bool SatisfiesConstraint(
+        TypeSymbol typeArgument,
+        TypeParameterSymbol tp,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? substitution = null)
     {
+        // Issue #4043: the dependent bound, checked against the sibling's
+        // resolved argument.
+        if (tp.TypeParameterBound is { } dependentBound
+            && substitution != null
+            && substitution.TryGetValue(dependentBound, out var boundArgument)
+            && boundArgument != null
+            && !ReferenceEquals(boundArgument, dependentBound)
+            && !SatisfiesDependentBound(typeArgument, boundArgument, tp))
+        {
+            return false;
+        }
+
         if (tp.InterfaceConstraint != null)
         {
             var expectedIface = tp.InterfaceConstraint;
@@ -6984,6 +7009,292 @@ public sealed class Binder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #4043: returns <see langword="true"/> when the argument supplied for
+    /// a DEPENDENTLY bounded type parameter satisfies the bound, given the
+    /// argument the bounding parameter itself received. C#'s rule for
+    /// <c>where TDerived : TBase</c> is that an implicit reference conversion
+    /// (or boxing to <c>object</c>) must exist from the one to the other, so
+    /// this composes the relations the binder already owns: identity, the
+    /// universal <c>object</c> bound, interface implementation, base-class
+    /// derivation, and propagation through a type parameter's own bound.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately built from <see cref="SatisfiesClassConstraint"/> /
+    /// <see cref="ImplementsInterface"/> / <see cref="SatisfiesClrInterfaceConstraint"/>
+    /// rather than from <c>Conversion.Classify(...).Exists</c>: the conversion
+    /// classifier admits user-defined and boxing conversions that a CLR
+    /// <c>GenericParamConstraint</c> does not, so a "yes" from it would let
+    /// through instantiations the runtime refuses.
+    /// <para><b>Indeterminate answers accept.</b> When either side still
+    /// mentions an unsubstituted type parameter, the relation has no closed
+    /// answer here and the pre-#4043 behaviour (accept) is kept — the CLR only
+    /// loads the instantiation once it is closed, and a wrong "no" would be a
+    /// GS0152 on a legal program.</para>
+    /// </remarks>
+    /// <param name="typeArgument">The argument supplied for the bounded parameter.</param>
+    /// <param name="boundArgument">The argument supplied for the bounding parameter.</param>
+    /// <param name="tp">The bounded type parameter (for CLR self-substitution).</param>
+    /// <returns><see langword="true"/> when the bound holds or cannot be disproved.</returns>
+    internal static bool SatisfiesDependentBound(
+        TypeSymbol typeArgument,
+        TypeSymbol boundArgument,
+        TypeParameterSymbol tp)
+    {
+        if (typeArgument is null || boundArgument is null)
+        {
+            return true;
+        }
+
+        if (ReferenceEquals(typeArgument, boundArgument)
+            || TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(typeArgument, boundArgument))
+        {
+            return true;
+        }
+
+        // `where TDerived : TBase` with TBase substituted by `object` is the
+        // universal bound — every type argument, value types included, converts.
+        if (boundArgument.ClrType is { } boundClr
+            && string.Equals(boundClr.FullName, "System.Object", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        // Propagation: the supplied argument is itself a dependently bounded
+        // type parameter whose chain reaches the bound. The chain is acyclic —
+        // `ReportCircularConstraints` rejects cycles at declaration — but the
+        // walk is bounded anyway so a malformed symbol cannot hang the binder.
+        if (typeArgument is TypeParameterSymbol argumentParameter)
+        {
+            // The pattern is deliberately NOT in the loop condition. G#'s `for`
+            // header carries no parentheses, so an empty property pattern
+            // (`is { } next`) there prints as `for …is { } next; steps++ {`,
+            // where the pattern's brace is indistinguishable from the loop
+            // body's — cs2gs emits it verbatim and the migrated G# does not
+            // parse. That is the #3831/#3896/#3905 hazard the hot-core
+            // translation guard exists to catch, and it took the guard from
+            // 8/8 to 2/8 apps green. Hoisting the read out of the condition is
+            // equivalent, and translates.
+            var current = argumentParameter;
+            for (var steps = 0; steps < 64; steps++)
+            {
+                var next = current.TypeParameterBound;
+                if (next == null)
+                {
+                    break;
+                }
+
+                if (ReferenceEquals(next, boundArgument))
+                {
+                    return true;
+                }
+
+                current = next;
+            }
+        }
+
+        if (boundArgument is InterfaceSymbol userInterface)
+        {
+            return ImplementsInterface(typeArgument, userInterface)
+                || TypeSymbol.ContainsTypeParameter(typeArgument);
+        }
+
+        if (boundArgument.ClrType is { IsInterface: true } boundInterfaceClr)
+        {
+            if (SatisfiesClrInterfaceConstraint(typeArgument, boundArgument, tp))
+            {
+                return true;
+            }
+
+            // Review finding (#4068): a SAME-COMPILATION class or struct that
+            // implements the bound interface directly has no CLR type of its
+            // own, so `SatisfiesClrInterfaceConstraint` returned false without
+            // ever reading the symbol's declared interfaces — rejecting
+            // `Take[IDisposable, D]` for `class D : IDisposable`, which is a
+            // GS0152 on a legal program. Ask the symbol.
+            if (typeArgument.ClrType is null
+                && SourceSymbolImplementsImportedInterface(typeArgument, boundArgument, boundInterfaceClr))
+            {
+                return true;
+            }
+
+            return TypeSymbol.ContainsTypeParameter(typeArgument);
+        }
+
+        if (SatisfiesClassConstraint(typeArgument, boundArgument))
+        {
+            return true;
+        }
+
+        // Indeterminate: an open instantiation has no closed answer to give.
+        return TypeSymbol.ContainsTypeParameter(typeArgument)
+            || TypeSymbol.ContainsTypeParameter(boundArgument);
+    }
+
+    /// <summary>
+    /// Review finding (#4068): returns <see langword="true"/> when a
+    /// SAME-COMPILATION symbol implements the imported interface a dependent
+    /// bound names. Such a symbol has no CLR type while binding, so the
+    /// reflective path cannot see its interface list at all.
+    /// </summary>
+    /// <remarks>
+    /// A GENERIC bound is compared on the SYMBOLIC arguments, through the same
+    /// walk <c>ClrOverloadResolution</c> uses for the imported-definition side
+    /// of this repair — so <c>class Impl : IDep[Bee]</c> does NOT satisfy a
+    /// bound of <c>IDep[A]</c>, even though both project to the identical
+    /// erased <c>IDep&lt;object&gt;</c>. A NON-generic bound has no arguments
+    /// to disagree about and is answered by the declared-interface walk.
+    /// </remarks>
+    /// <param name="typeArgument">The same-compilation type argument.</param>
+    /// <param name="boundArgument">The bound, as a symbol.</param>
+    /// <param name="boundInterfaceClr">The bound's CLR interface type.</param>
+    /// <returns><see langword="true"/> when the symbol implements the bound.</returns>
+    private static bool SourceSymbolImplementsImportedInterface(
+        TypeSymbol typeArgument,
+        TypeSymbol boundArgument,
+        Type boundInterfaceClr)
+    {
+        Type openDefinition;
+        try
+        {
+            openDefinition = boundInterfaceClr.IsGenericType
+                ? boundInterfaceClr.GetGenericTypeDefinition()
+                : boundInterfaceClr;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        var expected = boundArgument is ImportedTypeSymbol importedBound
+            ? importedBound.TypeArguments
+            : ImmutableArray<TypeSymbol>.Empty;
+
+        foreach (var implemented in EnumerateDeclaredClrInterfaces(typeArgument))
+        {
+            // A NON-generic bound has no arguments to disagree about, so
+            // reaching the interface at all is the whole answer — and reaching
+            // it includes reaching it through a derived one (`IList` gives
+            // `IEnumerable`). This is the `class D : IDisposable` case.
+            if (expected.IsDefaultOrEmpty)
+            {
+                if (implemented.ClrType is { } implementedClr
+                    && ClrTypeUtilities.IsAssignableByName(boundInterfaceClr, implementedClr))
+                {
+                    return true;
+                }
+
+                continue;
+            }
+
+            // A GENERIC bound is decided on the SYMBOLIC arguments, so
+            // `class Impl : IDep[Bee]` does not satisfy a bound of `IDep[A]`
+            // even though both project to the identical erased
+            // `IDep<object>` — the same distinction the imported-definition
+            // half of this repair makes.
+            if (implemented is not ImportedTypeSymbol importedInterface
+                || importedInterface.OpenDefinition is not { } implementedOpen
+                || !string.Equals(
+                    implementedOpen.FullName ?? implementedOpen.Name,
+                    openDefinition.FullName ?? openDefinition.Name,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var actual = importedInterface.TypeArguments;
+            if (actual.IsDefaultOrEmpty || actual.Length != expected.Length)
+            {
+                continue;
+            }
+
+            var allMatch = true;
+            for (var i = 0; i < expected.Length; i++)
+            {
+                if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual[i], expected[i]))
+                {
+                    allMatch = false;
+                    break;
+                }
+            }
+
+            if (allMatch)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the imported CLR interfaces a same-compilation
+    /// symbol declares — directly, through its base chain, and through the
+    /// G#-declared interfaces it implements. Each is a CLOSED symbolic
+    /// construction, so its type arguments still tell two same-compilation
+    /// classes apart after the CLR projection has collapsed both to
+    /// <c>object</c>.
+    /// </summary>
+    /// <param name="symbol">The same-compilation symbol.</param>
+    /// <returns>The CLR interface symbols it declares.</returns>
+    private static IEnumerable<TypeSymbol> EnumerateDeclaredClrInterfaces(TypeSymbol symbol)
+    {
+        if (symbol is StructSymbol aggregate)
+        {
+            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
+            {
+                foreach (var implemented in current.ImplementedClrInterfaces)
+                {
+                    if (implemented != null)
+                    {
+                        yield return implemented;
+                    }
+                }
+
+                foreach (var userInterface in current.Interfaces)
+                {
+                    foreach (var projection in EnumerateInterfaceClrBases(userInterface))
+                    {
+                        yield return projection;
+                    }
+                }
+            }
+        }
+
+        if (symbol is InterfaceSymbol declaredInterface)
+        {
+            foreach (var projection in EnumerateInterfaceClrBases(declaredInterface))
+            {
+                yield return projection;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the imported interfaces a G#-declared interface
+    /// and its base interfaces extend.
+    /// </summary>
+    /// <param name="userInterface">The declared interface.</param>
+    /// <returns>The imported constructions it carries.</returns>
+    private static IEnumerable<TypeSymbol> EnumerateInterfaceClrBases(InterfaceSymbol? userInterface)
+    {
+        if (userInterface == null)
+        {
+            yield break;
+        }
+
+        foreach (var candidate in userInterface.SelfAndAllBaseInterfaces())
+        {
+            foreach (var importedBase in candidate.BaseClrInterfaces)
+            {
+                if (importedBase != null)
+                {
+                    yield return importedBase;
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -7543,6 +7854,15 @@ public sealed class Binder
         if (tp.ClassConstraint != null)
         {
             flags.Add(SymbolDisplay.ToTypeDisplayString(tp.ClassConstraint));
+        }
+
+        // Issue #4043: a dependent bound reads as the NAME of the bounding type
+        // parameter — `TBase`, not whatever it happened to be substituted with
+        // at this call. That is what the author wrote and what C# names in
+        // CS0311, and it stays stable across call sites.
+        if (tp.TypeParameterBound != null)
+        {
+            flags.Add(tp.TypeParameterBound.Name);
         }
 
         if (tp.Constraint == TypeParameterConstraint.Comparable)

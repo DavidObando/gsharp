@@ -134,11 +134,18 @@ public sealed partial class DiagnosticBag
     public void ReportTypeParameterVariancePositionViolation(TextLocation location, string typeParameterName, string declaredVariance, string usedPosition)
     => Report(location, DiagnosticDescriptors.TypeParameterVariancePositionViolation, typeParameterName, declaredVariance, usedPosition);
 
-    /// <summary>Reports a type used as a type-parameter constraint that is neither an interface nor a class (issue #1052 generalised the former sealed-interface restriction; issue #1056 additionally permits base-class constraints, so this now fires only for value types such as a struct or enum).</summary>
+    /// <summary>Reports a type used as a type-parameter constraint that is neither an interface, a class, nor another type parameter (issue #1052 generalised the former sealed-interface restriction; issue #1056 additionally permits base-class constraints; issue #4043 additionally permits another type parameter, so this now fires only for value types such as a struct or enum).</summary>
     /// <param name="location">The text location of the constraint reference.</param>
     /// <param name="typeName">The offending type name.</param>
     public void ReportConstraintNotInterface(TextLocation location, string typeName)
     => Report(location, DiagnosticDescriptors.ConstraintNotInterface, typeName);
+
+    /// <summary>Issue #4043: reports a circular dependent-constraint chain (<c>[T T]</c>, <c>[A B, B A]</c>), mirroring C#'s <c>CS0454</c>.</summary>
+    /// <param name="location">The text location of the constraint reference that closes the cycle.</param>
+    /// <param name="typeParameterName">The type parameter the cycle is reported on.</param>
+    /// <param name="constraintName">The type parameter its bound names.</param>
+    public void ReportCircularConstraintDependency(TextLocation location, string typeParameterName, string constraintName)
+    => Report(location, DiagnosticDescriptors.CircularConstraintDependency, typeParameterName, constraintName);
 
     /// <summary>
     /// Issue #948: a <c>const</c> field must be given an initializer (a

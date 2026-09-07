@@ -36,6 +36,15 @@ internal static class ClrOverloadResolution
     /// </summary>
     private const int ForwardedBoundChainLimit = 32;
 
+    /// <summary>Issue #4041: the shape and the symbol agree.</summary>
+    private const int DependentShapeMatches = 1;
+
+    /// <summary>Issue #4041: the shape and the symbol demonstrably disagree.</summary>
+    private const int DependentShapeDiffers = 0;
+
+    /// <summary>Issue #4041: the symbols cannot settle it; use the CLR comparison.</summary>
+    private const int DependentShapeIndeterminate = -1;
+
     // C# §7.5.3.4 "Better conversion target" — signed integral T1 beats unsigned
     // integral T2 in this map. Used only as a secondary signed/unsigned tie-break
     // when the implicit-conversion direction between T1 and T2 does not resolve
@@ -5075,6 +5084,18 @@ internal static class ClrOverloadResolution
                     continue;
                 }
 
+                // Issue #4041: keep the UNSUBSTITUTED bound. A bound that
+                // mentions another type parameter (`where U : IList<T>`) is
+                // DEPENDENT, and substituting the erased vector into it is
+                // exactly what loses the answer: two distinct same-compilation
+                // classes both project to the `System.Object` placeholder, so
+                // `Coupled[A, List[Bee]]` becomes `Coupled<object, List<object>>`
+                // and `List<object>` honestly does satisfy `IList<object>`. The
+                // symbolic vector still distinguishes `A` from `Bee`, so ask it
+                // first and only fall through to the CLR comparison when it has
+                // no closed answer.
+                var rawConstraint = constraint;
+
                 try
                 {
                     for (var p = 0; p < typeParams.Length; p++)
@@ -5102,6 +5123,29 @@ internal static class ClrOverloadResolution
                 // is a type-BOUND constraint failure, so name the bound that
                 // failed. Callers that only want a yes/no discard it.
                 failedConstraint = constraint;
+
+                // Issue #4041: a DEPENDENT bound over an ERASED vector is
+                // answered on the SYMBOLS, never on the projected `Type[]`.
+                // Three-state on purpose: a definitive no rejects, a definitive
+                // yes accepts, and anything the symbols cannot settle falls
+                // through to the CLR comparison below — never to a rejection,
+                // because a wrong `no` here is a GS0152 on a legal program.
+                if (rawConstraint.ContainsGenericParameters
+                    && AnyDependentPositionIsErased(rawConstraint, typeParams, typeArgSymbols)
+                    && TrySatisfiesDependentBoundSymbolically(
+                        rawConstraint,
+                        typeParams,
+                        typeArgSymbols,
+                        argSymbol,
+                        out var dependentSatisfied))
+                {
+                    if (dependentSatisfied)
+                    {
+                        continue;
+                    }
+
+                    return false;
+                }
 
                 // Issue #2617: a same-compilation type argument is represented by
                 // `object` while imported generic methods are resolved. Check CLR
@@ -5604,6 +5648,623 @@ internal static class ClrOverloadResolution
         catch (Exception ex) when (IsMetadataLoadFailure(ex))
         {
             return typeof(object);
+        }
+    }
+
+    /// <summary>
+    /// Issue #4041: <see langword="true"/> when at least one type-argument
+    /// position that <paramref name="rawConstraint"/> mentions arrived ERASED —
+    /// a same-compilation symbol with no CLR type of its own, or an imported
+    /// construction over one. That is the only situation in which the projected
+    /// <c>Type[]</c> can answer a dependent bound wrongly, so the symbolic path
+    /// below is gated on it and every non-dependent or fully-imported bound
+    /// keeps the pre-#4041 behaviour byte for byte.
+    /// </summary>
+    /// <param name="rawConstraint">The UNSUBSTITUTED declared bound.</param>
+    /// <param name="typeParams">The definition's own generic parameters.</param>
+    /// <param name="typeArgSymbols">The recovered symbolic type arguments.</param>
+    /// <returns><see langword="true"/> when the bound reads an erased position.</returns>
+    private static bool AnyDependentPositionIsErased(
+        Type rawConstraint,
+        Type[] typeParams,
+        ImmutableArray<TypeSymbol?> typeArgSymbols)
+    {
+        if (typeArgSymbols.IsDefaultOrEmpty || typeParams is null)
+        {
+            return false;
+        }
+
+        for (var p = 0; p < typeParams.Length && p < typeArgSymbols.Length; p++)
+        {
+            if (!MentionsGenericParameter(rawConstraint, typeParams[p]))
+            {
+                continue;
+            }
+
+            if (IsErasedForDependentCheck(typeArgSymbols[p]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4041: whether <paramref name="symbol"/> reaches the constraint
+    /// check as a placeholder rather than as itself — a same-compilation type
+    /// (no CLR type of its own) or an imported construction one of whose
+    /// symbolic arguments is such a type.
+    /// </summary>
+    /// <param name="symbol">The recovered symbolic type argument.</param>
+    /// <returns><see langword="true"/> when the CLR projection lost information.</returns>
+    private static bool IsErasedForDependentCheck(TypeSymbol? symbol)
+    {
+        if (symbol is null)
+        {
+            return false;
+        }
+
+        if (symbol.ClrType is null)
+        {
+            return true;
+        }
+
+        if (symbol is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } imported)
+        {
+            foreach (var argument in imported.TypeArguments)
+            {
+                if (IsErasedForDependentCheck(argument))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4041: whether <paramref name="type"/> mentions
+    /// <paramref name="parameter"/> anywhere in its shape.
+    /// </summary>
+    /// <param name="type">The type to inspect.</param>
+    /// <param name="parameter">The generic parameter to look for.</param>
+    /// <returns><see langword="true"/> when the parameter occurs.</returns>
+    private static bool MentionsGenericParameter(Type? type, Type parameter)
+    {
+        if (type is null || parameter is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (type.IsGenericParameter)
+            {
+                return type.IsSameAs(parameter);
+            }
+
+            if (type.HasElementType)
+            {
+                return MentionsGenericParameter(type.GetElementType(), parameter);
+            }
+
+            if (type.IsGenericType)
+            {
+                foreach (var argument in type.GetGenericArguments())
+                {
+                    if (MentionsGenericParameter(argument, parameter))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4041: answers a DEPENDENT bound from the SYMBOLIC vector.
+    /// </summary>
+    /// <remarks>
+    /// <para>The bound is read UNSUBSTITUTED, so <c>where U : IList&lt;T&gt;</c>
+    /// is still <c>IList&lt;T&gt;</c> when it arrives, with <c>T</c> naming the
+    /// definition's own generic parameter. <see cref="MatchDependentShape"/>
+    /// then walks that SHAPE against the type argument's SYMBOL in parallel:
+    /// at <c>IList&lt;&gt;</c> it recovers <c>List[Bee]</c>'s own instantiation
+    /// of <c>IList&lt;&gt;</c> as <c>[Bee]</c>, and at the leaf <c>T</c> it
+    /// compares <c>Bee</c> against the symbol supplied for <c>T</c>, which is
+    /// <c>A</c>. The erased <c>IList&lt;object&gt;</c> vs <c>List&lt;object&gt;</c>
+    /// comparison this replaces could not see that difference at all.</para>
+    /// <para><b>Three-state, and indeterminate wherever it is not sure.</b>
+    /// It returns <see langword="false"/> (meaning "no symbolic answer") rather
+    /// than a verdict whenever the shape reaches a concrete (non-parameter,
+    /// non-generic) position, a mentioned parameter has no recovered symbol,
+    /// the open definition declares a VARIANT parameter — where
+    /// <c>IEnumerable[Derived]</c> legitimately satisfies
+    /// <c>IEnumerable[Base]</c> and identity is the wrong relation — or the open
+    /// definition is not reachable from the argument's symbol at all. Every one
+    /// of those falls back to the pre-#4041 CLR comparison, which is what keeps
+    /// the same-compilation base-chain path (#4032's
+    /// <c>AddScheme[TOptions, THandler]</c> row) green. A wrong "no" here would
+    /// be a GS0152 on a legal program, which is strictly worse than the defect
+    /// being fixed.</para>
+    /// </remarks>
+    /// <param name="rawConstraint">The UNSUBSTITUTED declared bound.</param>
+    /// <param name="typeParams">The definition's own generic parameters.</param>
+    /// <param name="typeArgSymbols">The recovered symbolic type arguments.</param>
+    /// <param name="argSymbol">The symbol supplied for the BOUNDED parameter.</param>
+    /// <param name="satisfied">Set only when the method returns <see langword="true"/>.</param>
+    /// <returns><see langword="true"/> when a symbolic verdict was reached.</returns>
+    private static bool TrySatisfiesDependentBoundSymbolically(
+        Type rawConstraint,
+        Type[] typeParams,
+        ImmutableArray<TypeSymbol?> typeArgSymbols,
+        TypeSymbol? argSymbol,
+        out bool satisfied)
+    {
+        satisfied = false;
+        if (rawConstraint is null || argSymbol is null || typeArgSymbols.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var verdict = MatchDependentShape(
+            rawConstraint,
+            argSymbol,
+            typeParams,
+            typeArgSymbols,
+            atTopOfBound: true,
+            shapePath: new List<string>());
+        if (verdict == DependentShapeIndeterminate)
+        {
+            return false;
+        }
+
+        satisfied = verdict == DependentShapeMatches;
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4041: walks a declared bound's SHAPE — a CLR type that may still
+    /// mention the definition's own generic parameters — against a symbolic
+    /// type in parallel, recursing through generic arguments so a NESTED bound
+    /// such as <c>IList&lt;List&lt;T&gt;&gt;</c> is answered at its leaf rather
+    /// than at its outermost construction.
+    /// </summary>
+    /// <param name="shape">The bound, or a fragment of it.</param>
+    /// <param name="actual">The symbol that fragment must match.</param>
+    /// <param name="typeParams">The definition's own generic parameters.</param>
+    /// <param name="typeArgSymbols">The recovered symbolic type arguments.</param>
+    /// <param name="atTopOfBound">
+    /// Whether this is the bound's outermost position. The relation there is
+    /// ASSIGNABILITY, not the invariant identity that is correct at an argument
+    /// position, so a bare type parameter at the top declines to answer. This
+    /// is load-bearing and was measured: with it removed, the legal
+    /// <c>Chain[ChBase, ChDerived]</c> fails with a false <c>GS0152</c>.
+    /// </param>
+    /// <param name="shapePath">
+    /// The printed forms of the shape fragments on the path from the bound's root to this node.
+    /// Review finding (#4068): the previous form of this method stopped at a
+    /// fixed depth of eight, which silently turned a legal deeply nested bound
+    /// into an indeterminate answer and handed it to the erased comparison —
+    /// the very hole this check exists to close, measured at nine levels.
+    /// Recursion is bounded by CYCLE detection on this path instead, which
+    /// terminates on malformed metadata without capping legal signatures: a
+    /// well-formed shape tree is finite and strictly shrinks at every step.
+    /// </param>
+    /// <returns>One of the three <c>DependentShape*</c> verdicts.</returns>
+    private static int MatchDependentShape(
+        Type? shape,
+        TypeSymbol? actual,
+        Type[] typeParams,
+        ImmutableArray<TypeSymbol?> typeArgSymbols,
+        bool atTopOfBound,
+        List<string> shapePath)
+    {
+        if (shape is null || actual is null)
+        {
+            return DependentShapeIndeterminate;
+        }
+
+        try
+        {
+            // A leaf naming one of the definition's own parameters: compare the
+            // symbol supplied for it against the symbol found here. This is the
+            // whole point — `A` and `Bee` are distinguishable as symbols and
+            // indistinguishable as the `object` both project to.
+            if (shape.IsGenericParameter)
+            {
+                // Identity is the right relation only at an INVARIANT ARGUMENT
+                // position inside a constructed bound. At the TOP of a bound it
+                // is assignability: an imported `where TDerived : TBase` admits
+                // any TDerived that derives from TBase, so comparing the two
+                // arguments for identity would reject `Chain[Base, Derived]`
+                // outright. That is the imported analogue of #4043 and is left
+                // to the CLR comparison, which keeps its pre-#4041 answer.
+                if (atTopOfBound)
+                {
+                    return DependentShapeIndeterminate;
+                }
+
+                var position = IndexOfGenericParameter(typeParams, shape);
+                if (position < 0
+                    || position >= typeArgSymbols.Length
+                    || typeArgSymbols[position] is not { } expected)
+                {
+                    return DependentShapeIndeterminate;
+                }
+
+                return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual, expected)
+                    ? DependentShapeMatches
+                    : DependentShapeDiffers;
+            }
+
+            if (!shape.IsGenericType || !shape.ContainsGenericParameters)
+            {
+                // A closed fragment carries no erased information of its own; the
+                // CLR comparison already answers it correctly.
+                return DependentShapeIndeterminate;
+            }
+
+            var openDefinition = shape.GetGenericTypeDefinition();
+            var shapeArguments = shape.GetGenericArguments();
+            var ownParameters = openDefinition.GetGenericArguments();
+            if (shapeArguments.Length == 0 || shapeArguments.Length != ownParameters.Length)
+            {
+                return DependentShapeIndeterminate;
+            }
+
+            for (var k = 0; k < ownParameters.Length; k++)
+            {
+                // Variance makes identity the wrong relation: `List[Derived]`
+                // DOES satisfy `IEnumerable[Base]`. Leave those to the CLR.
+                if ((ownParameters[k].GenericParameterAttributes
+                    & GenericParameterAttributes.VarianceMask) != GenericParameterAttributes.None)
+                {
+                    return DependentShapeIndeterminate;
+                }
+            }
+
+            if (!TryGetSymbolicInstantiation(actual, openDefinition, out var actualArguments)
+                || actualArguments.Length != shapeArguments.Length)
+            {
+                return DependentShapeIndeterminate;
+            }
+
+            // Review finding (#4068): terminate on an actual cycle rather than
+            // at an arbitrary depth. A repeat along THIS path is the only way
+            // the descent can fail to shrink; a fragment legitimately recurring
+            // at sibling positions (`IDictionary<IList<T>, IList<T>>`) is not a
+            // cycle and must still be compared.
+            // NOT `IsSameAs`: `Type.FullName` is NULL for an OPEN constructed
+            // generic, so that comparison reports every nested `List<...>` as
+            // the same type and fires a false cycle at the first argument —
+            // measured, it collapsed the catchable nesting from seven levels
+            // to one. The shape's printed form is well defined for open types
+            // and distinct per level, so it identifies a genuine repeat.
+            var shapeKey = shape.ToString();
+            foreach (var visited in shapePath)
+            {
+                if (string.Equals(visited, shapeKey, StringComparison.Ordinal))
+                {
+                    return DependentShapeIndeterminate;
+                }
+            }
+
+            shapePath.Add(shapeKey);
+            try
+            {
+                var verdict = DependentShapeMatches;
+                for (var k = 0; k < shapeArguments.Length; k++)
+                {
+                    var inner = MatchDependentShape(
+                        shapeArguments[k],
+                        actualArguments[k],
+                        typeParams,
+                        typeArgSymbols,
+                        atTopOfBound: false,
+                        shapePath);
+                    if (inner == DependentShapeDiffers)
+                    {
+                        return DependentShapeDiffers;
+                    }
+
+                    if (inner == DependentShapeIndeterminate)
+                    {
+                        // Keep looking: another position may still disprove the
+                        // bound outright, which is a stronger answer than "unsure".
+                        verdict = DependentShapeIndeterminate;
+                    }
+                }
+
+                return verdict;
+            }
+            finally
+            {
+                shapePath.RemoveAt(shapePath.Count - 1);
+            }
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return DependentShapeIndeterminate;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4041: the position of <paramref name="parameter"/> in
+    /// <paramref name="typeParams"/>, or <c>-1</c>. Compared by identity in the
+    /// same reflection context rather than by
+    /// <see cref="Type.GenericParameterPosition"/>, so a parameter belonging to
+    /// some OTHER definition is not mistaken for one of these.
+    /// </summary>
+    /// <param name="typeParams">The definition's own generic parameters.</param>
+    /// <param name="parameter">The parameter to locate.</param>
+    /// <returns>The index, or <c>-1</c>.</returns>
+    private static int IndexOfGenericParameter(Type[] typeParams, Type parameter)
+    {
+        if (typeParams is null)
+        {
+            return -1;
+        }
+
+        for (var i = 0; i < typeParams.Length; i++)
+        {
+            if (typeParams[i] is { } candidate && candidate.IsSameAs(parameter))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Issue #4041: the SYMBOLIC type arguments with which
+    /// <paramref name="symbol"/> instantiates <paramref name="openDefinition"/>
+    /// — <c>[Bee]</c> for <c>List[Bee]</c> against <c>IList&lt;&gt;</c>.
+    /// </summary>
+    /// <remarks>
+    /// Walks the OPEN definition's own self / base / interface set so each
+    /// position can be traced back to one of the open definition's parameters
+    /// and then to the symbol's <c>TypeArguments</c>. Reading the CLOSED
+    /// <c>ClrType</c> instead would only re-derive the erased vector this whole
+    /// check exists to avoid. A same-compilation class is followed to its
+    /// imported base first, which is the
+    /// <c>MyHandler : AuthenticationHandler[MyOptions]</c> shape.
+    /// </remarks>
+    /// <param name="symbol">The type argument's symbol.</param>
+    /// <param name="openDefinition">The open generic definition sought.</param>
+    /// <param name="arguments">The recovered symbolic arguments, on success.</param>
+    /// <returns><see langword="true"/> when the instantiation was recovered.</returns>
+    private static bool TryGetSymbolicInstantiation(
+        TypeSymbol symbol,
+        Type openDefinition,
+        out TypeSymbol?[] arguments)
+    {
+        arguments = Array.Empty<TypeSymbol?>();
+
+        // Review finding (#4068): a source type reaches an imported open
+        // definition through EVERY imported projection it carries, not only
+        // through its imported BASE. `class Impl : IDep[Bee]` implements the
+        // imported generic interface DIRECTLY, and reading only
+        // `ImportedBaseType` returned "no symbolic answer" for it — after
+        // which the erased comparison saw `IDep<object>` on both sides and
+        // ACCEPTED `Coupled2[A, Impl]`, which the CLR then refused. That is
+        // this PR's own defect reached by a different route, so every
+        // projection is enumerated here.
+        foreach (var projection in EnumerateImportedProjections(symbol))
+        {
+            if (TryGetSymbolicInstantiationFromImported(projection, openDefinition, out arguments))
+            {
+                return true;
+            }
+        }
+
+        arguments = Array.Empty<TypeSymbol?>();
+        return false;
+    }
+
+    /// <summary>
+    /// Review finding (#4068): every imported construction a symbol carries —
+    /// itself when it is imported, the CLR interfaces a source aggregate
+    /// implements directly, the imported bases of the user interfaces it
+    /// implements, and its own imported base chain. Each is a CLOSED symbolic
+    /// instantiation, so its <c>TypeArguments</c> still distinguish two
+    /// same-compilation classes that the CLR projection collapses.
+    /// </summary>
+    /// <param name="symbol">The symbol whose imported projections are wanted.</param>
+    /// <returns>The imported constructions, nearest first.</returns>
+    private static IEnumerable<ImportedTypeSymbol> EnumerateImportedProjections(TypeSymbol? symbol)
+    {
+        if (symbol is ImportedTypeSymbol self)
+        {
+            yield return self;
+        }
+
+        if (symbol is StructSymbol aggregate)
+        {
+            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
+            {
+                foreach (var implemented in current.ImplementedClrInterfaces)
+                {
+                    if (implemented is ImportedTypeSymbol importedInterface)
+                    {
+                        yield return importedInterface;
+                    }
+                }
+
+                foreach (var userInterface in current.Interfaces)
+                {
+                    foreach (var projection in EnumerateInterfaceProjections(userInterface))
+                    {
+                        yield return projection;
+                    }
+                }
+
+                if (current.ImportedBaseType is ImportedTypeSymbol importedBase)
+                {
+                    yield return importedBase;
+                }
+            }
+        }
+
+        if (symbol is InterfaceSymbol declaredInterface)
+        {
+            foreach (var projection in EnumerateInterfaceProjections(declaredInterface))
+            {
+                yield return projection;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the imported interfaces a G#-declared interface
+    /// and its base interfaces extend.
+    /// </summary>
+    /// <param name="userInterface">The declared interface, or <see langword="null"/>.</param>
+    /// <returns>The imported constructions it carries.</returns>
+    private static IEnumerable<ImportedTypeSymbol> EnumerateInterfaceProjections(InterfaceSymbol? userInterface)
+    {
+        if (userInterface == null)
+        {
+            yield break;
+        }
+
+        foreach (var candidate in userInterface.SelfAndAllBaseInterfaces())
+        {
+            foreach (var importedBase in candidate.BaseClrInterfaces)
+            {
+                if (importedBase is ImportedTypeSymbol projection)
+                {
+                    yield return projection;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Review finding (#4068): the original single-projection walk, now applied
+    /// to each projection <see cref="EnumerateImportedProjections"/> yields.
+    /// </summary>
+    /// <param name="imported">One imported construction.</param>
+    /// <param name="openDefinition">The open generic definition sought.</param>
+    /// <param name="arguments">The recovered symbolic arguments, on success.</param>
+    /// <returns><see langword="true"/> when the instantiation was recovered.</returns>
+    private static bool TryGetSymbolicInstantiationFromImported(
+        ImportedTypeSymbol imported,
+        Type openDefinition,
+        out TypeSymbol?[] arguments)
+    {
+        arguments = Array.Empty<TypeSymbol?>();
+        if (imported.OpenDefinition is not { } symbolOpenDefinition
+            || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var candidate in EnumerateSelfBasesAndInterfaces(symbolOpenDefinition))
+            {
+                if (!candidate.IsGenericType
+                    || !SameOpenDefinitionName(candidate, openDefinition))
+                {
+                    continue;
+                }
+
+                var candidateArguments = candidate.GetGenericArguments();
+                var recovered = new TypeSymbol?[candidateArguments.Length];
+                var complete = true;
+                for (var k = 0; k < candidateArguments.Length; k++)
+                {
+                    var candidateArgument = candidateArguments[k];
+                    if (!candidateArgument.IsGenericParameter
+                        || candidateArgument.DeclaringType is not { } owner
+                        || !SameOpenDefinitionName(owner, symbolOpenDefinition)
+                        || candidateArgument.GenericParameterPosition >= imported.TypeArguments.Length)
+                    {
+                        complete = false;
+                        break;
+                    }
+
+                    recovered[k] = imported.TypeArguments[candidateArgument.GenericParameterPosition];
+                }
+
+                if (complete)
+                {
+                    arguments = recovered;
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4041: the open definition itself, its base chain, and its
+    /// interface set — every place an instantiation of a sought open definition
+    /// can be found.
+    /// </summary>
+    /// <param name="openDefinition">The open generic definition to walk.</param>
+    /// <returns>The candidate types.</returns>
+    private static IEnumerable<Type> EnumerateSelfBasesAndInterfaces(Type openDefinition)
+    {
+        yield return openDefinition;
+
+        for (var current = openDefinition.BaseType; current != null; current = current.BaseType)
+        {
+            yield return current;
+        }
+
+        foreach (var interfaceType in openDefinition.GetInterfaces())
+        {
+            yield return interfaceType;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4041: compares two generic types by their open definition's
+    /// metadata full name, so a definition loaded in one reflection context
+    /// matches the same definition loaded in another.
+    /// </summary>
+    /// <param name="left">One type.</param>
+    /// <param name="right">The other.</param>
+    /// <returns><see langword="true"/> when they name the same open definition.</returns>
+    private static bool SameOpenDefinitionName(Type? left, Type? right)
+    {
+        if (left is null || right is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var leftDefinition = left.IsGenericType && !left.IsGenericTypeDefinition
+                ? left.GetGenericTypeDefinition()
+                : left;
+            var rightDefinition = right.IsGenericType && !right.IsGenericTypeDefinition
+                ? right.GetGenericTypeDefinition()
+                : right;
+            return string.Equals(
+                leftDefinition.FullName ?? leftDefinition.Name,
+                rightDefinition.FullName ?? rightDefinition.Name,
+                StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return false;
         }
     }
 

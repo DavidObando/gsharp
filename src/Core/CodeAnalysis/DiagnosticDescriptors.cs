@@ -68,7 +68,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor TypeParameterVariancePositionViolation = new("GS0150", DiagnosticSeverity.Error, "Type parameter '{0}' declared '{1}' cannot appear in {2} position.");
     internal static readonly DiagnosticDescriptor TypeArgumentInferenceFailed = new("GS0151", DiagnosticSeverity.Error, "Cannot infer type argument '{0}' for generic function '{1}'; supply it explicitly via '[{2}]'.");
     internal static readonly DiagnosticDescriptor TypeArgumentDoesNotSatisfyConstraint = new("GS0152", DiagnosticSeverity.Error, "Type argument '{0}' for type parameter '{1}' does not satisfy the '{2}' constraint.");
-    internal static readonly DiagnosticDescriptor ConstraintNotInterface = new("GS0153", DiagnosticSeverity.Error, "Type '{0}' cannot be used as a type-parameter constraint because it is neither an interface nor a class.");
+    internal static readonly DiagnosticDescriptor ConstraintNotInterface = new("GS0153", DiagnosticSeverity.Error, "Type '{0}' cannot be used as a type-parameter constraint because it is neither an interface, a class, nor a type parameter.");
     internal static readonly DiagnosticDescriptor WrongArgumentType = new("GS0154", DiagnosticSeverity.Error, "Parameter '{0}' requires a value of type '{1}' but was given a value of type '{2}'.");
     internal static readonly DiagnosticDescriptor CannotConvert = new("GS0155", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'.");
     internal static readonly DiagnosticDescriptor CannotConvertImplicitly = new("GS0156", DiagnosticSeverity.Error, "Cannot convert type '{0}' to '{1}'. An explicit conversion exists (are you missing a cast?)");
@@ -488,6 +488,11 @@ internal static class DiagnosticDescriptors
     // position: a base clause, a field type, a local type, an interface list
     // entry and a return type.
     internal static readonly DiagnosticDescriptor TypeParameterDoesNotForwardConstraint = new("GS0580", DiagnosticSeverity.Error, "Type parameter '{0}' does not carry the '{2}' constraint that type parameter '{1}' requires, so this instantiation is not valid for every '{0}'. Forward the constraint onto the declaration of '{0}' (issue #4037; C# spells the same rule CS0314).");
+
+    // Issue #4043: a type parameter may be constrained by ANOTHER type
+    // parameter (`[TBase, TDerived TBase]`, C#'s `where TDerived : TBase`), so
+    // the chain of such bounds must be acyclic. C# spells the same rule CS0454.
+    internal static readonly DiagnosticDescriptor CircularConstraintDependency = new("GS0581", DiagnosticSeverity.Error, "Circular constraint dependency involving '{0}' and '{1}'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

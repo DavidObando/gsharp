@@ -1323,10 +1323,69 @@ internal sealed partial class DeclarationBinder
                 symbol.HasDefaultConstructorConstraint = hasDefaultCtor;
                 symbol.HasUnmanagedConstraint = hasUnmanaged;
             }
+
+            // Issue #4043: a dependent bound can only be checked for cycles once
+            // EVERY parameter in the list has been resolved — while parameter 0
+            // is being bound, parameter 1's own bound is still empty, so
+            // `[A B, B A]` is invisible from inside the loop above.
+            ReportCircularConstraints(syntax, symbols);
         }
         finally
         {
             binderCtx.CurrentTypeParameters = previousTypeParameters;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4043: rejects a circular dependent-constraint chain
+    /// (<c>[T T]</c>, <c>[A B, B A]</c>) with <c>GS0581</c>, mirroring C#'s
+    /// <c>CS0454</c>. A cycle would emit a <c>GenericParamConstraint</c> the CLR
+    /// refuses and would make every constraint walk that follows a
+    /// <see cref="TypeParameterSymbol.TypeParameterBound"/> chain non-terminating,
+    /// so the offending bound is CLEARED as well as reported — binding continues
+    /// against a parameter that simply has no dependent bound.
+    /// </summary>
+    /// <param name="syntax">The type-parameter list, for diagnostic locations.</param>
+    /// <param name="symbols">The resolved type-parameter symbols, in order.</param>
+    private void ReportCircularConstraints(
+        TypeParameterListSyntax syntax,
+        ImmutableArray<TypeParameterSymbol> symbols)
+    {
+        for (var i = 0; i < symbols.Length; i++)
+        {
+            var start = symbols[i];
+            if (start.TypeParameterBound == null)
+            {
+                continue;
+            }
+
+            // Walk the chain from this parameter; a cycle is reported on the
+            // parameter that starts it. A cycle NOT through `start` is reached
+            // from whichever of its own members this loop visits, so bounding
+            // the walk by the list length loses nothing — and a chain that
+            // leaves this list (an enclosing type's parameter) is acyclic by
+            // construction, because the enclosing list was fully resolved and
+            // cycle-checked before this one began.
+            var current = start;
+            for (var steps = 0; steps <= symbols.Length && current.TypeParameterBound != null; steps++)
+            {
+                var next = current.TypeParameterBound;
+                if (ReferenceEquals(next, start))
+                {
+                    var location = i < syntax.Parameters.Count
+                        ? syntax.Parameters[i].Constraint?.Location ?? syntax.Parameters[i].Identifier.Location
+                        : syntax.Location;
+
+                    // Name the pair the way C# does: the parameter the cycle is
+                    // reported on and the one whose bound closes it. For the
+                    // self-referential `[T T]` those coincide.
+                    Diagnostics.ReportCircularConstraintDependency(location, start.Name, current.Name);
+                    start.TypeParameterBound = null;
+                    break;
+                }
+
+                current = next;
+            }
         }
     }
 
@@ -1436,7 +1495,12 @@ internal sealed partial class DeclarationBinder
                 || x.HasUnmanagedConstraint != y.HasUnmanagedConstraint
                 || !TypeSignaturesEquivalent(x.InterfaceConstraint, y.InterfaceConstraint, typeParameterMap)
                 || !TypeSignaturesEquivalent(x.ClrInterfaceConstraint, y.ClrInterfaceConstraint, typeParameterMap)
-                || !TypeSignaturesEquivalent(x.ClassConstraint, y.ClassConstraint, typeParameterMap))
+                || !TypeSignaturesEquivalent(x.ClassConstraint, y.ClassConstraint, typeParameterMap)
+
+                // Issue #4043: the dependent bound is part of the declared
+                // signature too — `partial class P[A, B A]` and
+                // `partial class P[A, B]` are not the same declaration.
+                || !TypeSignaturesEquivalent(x.TypeParameterBound, y.TypeParameterBound, typeParameterMap))
             {
                 return false;
             }
@@ -1530,6 +1594,24 @@ internal sealed partial class DeclarationBinder
         if (resolved.ClrType is { IsClass: true, IsValueType: false })
         {
             symbol.ClassConstraint = resolved;
+            return;
+        }
+
+        // Issue #4043: a DEPENDENT bound — another type parameter, mirroring
+        // C#'s `where TDerived : TBase`. The constraint clause resolves against
+        // the in-flight type-parameter scope published by
+        // `ResolveTypeParameterConstraints`, which also carries the ENCLOSING
+        // type's parameters, so both `[TBase, TDerived TBase]` (siblings) and
+        // `class Box[T] { func Accept[U T](u U) }` (a method parameter bound to
+        // its class's parameter) land here. The CLR already expresses this: a
+        // `GenericParamConstraint` row may point at a TypeSpec naming another
+        // `GenericParam`, which is exactly what Roslyn emits. Cycles
+        // (`[T T]`, `[A B, B A]`) are rejected by `ReportCircularConstraints`
+        // once the whole list is resolved — a per-parameter check cannot see
+        // them, because a later parameter's bound is still empty here.
+        if (resolved is TypeParameterSymbol boundTypeParameter)
+        {
+            symbol.TypeParameterBound = boundTypeParameter;
             return;
         }
 

@@ -3027,8 +3027,36 @@ public sealed class BoundScope
                 return false;
             }
 
-            var xRef = x.ConstraintReferenceType?.Name;
-            var yRef = y.ConstraintReferenceType?.Name;
+            // Review finding (#4068): a DEPENDENT bound is compared POSITIONALLY,
+            // never by name. `ConstraintReferenceType` folds it in with the
+            // interface/base bounds, and those are named by stable type names
+            // while a type PARAMETER's name is arbitrary — so comparing it by
+            // name broke identity in both directions, measured:
+            //   * `Ext[A, B A]` and `Ext[X, Y X]` are one overload spelled
+            //     twice, and were treated as two (no GS0264, then ambiguous at
+            //     the call site) purely because "A" != "X";
+            //   * a bound on a type parameter named `Marker` and a bound on the
+            //     CLASS `Marker` compared EQUAL, reporting a false GS0264 on
+            //     two genuinely distinct overloads.
+            // Ordinal plus owner-kind identifies the bound parameter exactly,
+            // and is what the emitted VAR/MVAR encoding already keys on.
+            if ((x.TypeParameterBound == null) != (y.TypeParameterBound == null))
+            {
+                return false;
+            }
+
+            if (x.TypeParameterBound is { } xBound
+                && y.TypeParameterBound is { } yBound
+                && (xBound.Ordinal != yBound.Ordinal
+                    || xBound.IsMethodTypeParameter != yBound.IsMethodTypeParameter))
+            {
+                return false;
+            }
+
+            // The interface / base-class bounds keep the name comparison they
+            // have always had; only the dependent bound is excluded from it.
+            var xRef = (x.ConstraintInterfaceType ?? x.ClassConstraint)?.Name;
+            var yRef = (y.ConstraintInterfaceType ?? y.ClassConstraint)?.Name;
             if (!string.Equals(xRef, yRef, StringComparison.Ordinal))
             {
                 return false;
@@ -3391,7 +3419,7 @@ public sealed class BoundScope
                 return false;
             }
 
-            if (!Binder.SatisfiesConstraint(arg, tp))
+            if (!Binder.SatisfiesConstraint(arg, tp, substitution))
             {
                 return false;
             }

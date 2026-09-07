@@ -2000,7 +2000,7 @@ internal sealed partial class ExpressionBinder
             foreach (var tp in tps)
             {
                 var typeArg = substitution[tp];
-                if (!Binder.SatisfiesConstraint(typeArg, tp))
+                if (!Binder.SatisfiesConstraint(typeArg, tp, substitution))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, Binder.DescribeConstraint(tp));
                     return new BoundErrorExpression(null);

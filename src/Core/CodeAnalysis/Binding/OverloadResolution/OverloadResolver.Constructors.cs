@@ -279,7 +279,7 @@ internal sealed partial class OverloadResolver
             foreach (var tp in tps)
             {
                 var typeArg = substitution[tp];
-                if (!satisfiesConstraint(typeArg, tp))
+                if (!satisfiesConstraint(typeArg, tp, substitution))
                 {
                     Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, describeConstraint(tp));
                     return new BoundErrorExpression(syntax);
@@ -1753,7 +1753,7 @@ internal sealed partial class OverloadResolver
                 }
 
                 inferredCandidateCount++;
-                if (!tps.All(tp => satisfiesConstraint(candidateSubstitution[tp], tp)))
+                if (!tps.All(tp => satisfiesConstraint(candidateSubstitution[tp], tp, candidateSubstitution)))
                 {
                     constraintFailureSubstitution ??= candidateSubstitution;
                     continue;
@@ -1866,7 +1866,7 @@ internal sealed partial class OverloadResolver
         foreach (var tp in tps)
         {
             var typeArg = substitution[tp];
-            if (!satisfiesConstraint(typeArg, tp))
+            if (!satisfiesConstraint(typeArg, tp, substitution))
             {
                 Diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(constraintLocation, tp.Name, typeArg, describeConstraint(tp));
                 return false;
