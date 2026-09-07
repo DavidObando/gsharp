@@ -234,12 +234,10 @@ public sealed class GSharpFormatterTests
         Assert.Contains("\nvar y = 2\n", applied, StringComparison.Ordinal);
     }
 
-    // ADR-0179 phase 6. Each of the three cases below made gsfmt reject its own
-    // output on the migrated tree, which is invisible in normal use: the
-    // formatter falls soft and hands the caller the unformatted text, so the
-    // symptom is "wrapping did not happen here" rather than a crash. Together
-    // they accounted for 29 of the 3,873 migrated files and 28 of the 29
-    // remaining reducible lines over 300 characters.
+    // ADR-0179 phase 6. These formatter defects made gsfmt reject its own output
+    // on the migrated tree, which is invisible in normal use: the formatter
+    // falls soft and hands the caller the unformatted text, so the symptom is
+    // "wrapping did not happen here" rather than a crash.
     [Fact]
     public void Format_KeepsNullConditionalInvocationTightAgainstItsArgumentList()
     {
@@ -301,6 +299,22 @@ public sealed class GSharpFormatterTests
     [Fact]
     public void Format_KeepsACollectionInitializersFirstElementOnTheBraceLine()
     {
+        string arguments = string.Join(", ", Enumerable.Range(0, 20).Select(index => $"argument{index}"));
+        string input = $"func run(capacity int32) {{\nlet items = List[int32](capacity){{buildElement({arguments})}}\n}}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+
+        // A newline immediately after the brace demotes this single nonliteral
+        // initializer to a call followed by an unrelated block statement.
+        Assert.Contains("){buildElement(", formatted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_BreaksAfterACollectionInitializerBraceWhenUnambiguous()
+    {
         string elements = string.Join(", ", Enumerable.Range(0, 20).Select(index => $"element{index}"));
         string input = $"func run(capacity int32) {{\nlet items = List[int32](capacity){{{elements}}}\n}}\n";
 
@@ -308,11 +322,10 @@ public sealed class GSharpFormatterTests
         string formatted = result.Text!.ToString();
 
         Assert.Empty(result.Diagnostics);
-
-        // Parser.Expressions.Creation.cs:1567 demotes the whole construct to a
-        // call followed by a block statement when the first element moves to a
-        // line of its own, so the wrap must start after that element.
-        Assert.Contains("){element0,", formatted, StringComparison.Ordinal);
+        Assert.Contains("){\n        element0,", formatted, StringComparison.Ordinal);
+        Assert.All(
+            formatted.Split('\n'),
+            line => Assert.True(line.Length <= 120, "Line exceeded the canonical width: " + line));
     }
 
     [Fact]

@@ -835,18 +835,9 @@ public static class GSharpFormatter
                             suppressLeadingBreak: true,
                             groupSegments: false);
 
-                        // `List[T](capacity){first, second}` is a collection
-                        // initializer only while its FIRST element shares the
-                        // brace's line: Parser.Expressions.Creation.cs:1567
-                        // rejects the shape when `Peek(1)` is on a new line, and
-                        // the call then re-parses as a call followed by an
-                        // unrelated block statement. `IsBreakLegalBetween` sees
-                        // two tokens and cannot know which `{` this is, so the
-                        // rule has to be applied here, where the parent node is.
-                        Doc afterOpen = current.Token.Kind == SyntaxKind.OpenBraceToken
-                            && current.Parent is CollectionInitializerExpressionSyntax
-                                ? Doc.Empty
-                                : Doc.SoftLine;
+                        Doc afterOpen = MustKeepFirstCollectionElementOnBraceLine(current)
+                            ? Doc.Empty
+                            : Doc.SoftLine;
                         Doc delimited = close == index + 1
                             ? Doc.Concat(Doc.Text(current.Text), Doc.Text(tokens[close].Text))
                             : Doc.Group(Doc.Concat(
@@ -1131,6 +1122,26 @@ public static class GSharpFormatter
                 or PropertyDeclarationSyntax
                 or EventDeclarationSyntax
                 or BlockExpressionSyntax;
+
+        // A single nonliteral element after an explicit constructor call is
+        // newline-sensitive in LooksLikeCollectionInitializerBrace. Every
+        // other collection shape may use the normal delimiter break.
+        private static bool MustKeepFirstCollectionElementOnBraceLine(LayoutToken token)
+        {
+            if (token.Token.Kind != SyntaxKind.OpenBraceToken
+                || token.Parent is not CollectionInitializerExpressionSyntax initializer
+                || initializer.Target is not CallExpressionSyntax call
+                || call.OpenParenthesisToken.Position == call.CloseParenthesisToken.Position
+                || initializer.Elements.Count != 1)
+            {
+                return false;
+            }
+
+            return initializer.Elements[0] is ExpressionCollectionElementSyntax
+            {
+                Expression: not LiteralExpressionSyntax,
+            };
+        }
 
         private static bool NeedsSpaceBeforeColon(SyntaxNode? parent) =>
             parent is StructDeclarationSyntax
