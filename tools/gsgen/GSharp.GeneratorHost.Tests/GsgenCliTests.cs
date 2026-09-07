@@ -300,10 +300,46 @@ public class GsgenCliTests : IDisposable
         Assert.Contains("ThisAssembly", content);
         Assert.Contains("AssemblyFileVersion", content);
         Assert.Contains("1.2.3.4", content);
+        AssertGeneratedSourceCompiles(content, "OrdinaryForeignFile");
 
         var manifestLines = File.ReadAllLines(manifest).Where(l => l.Length > 0).ToList();
         var manifestEntry = Assert.Single(manifestLines);
         Assert.Equal(Path.GetFullPath(single), Path.GetFullPath(manifestEntry));
+    }
+
+    [Theory]
+    [InlineData(
+        "AssemblyOnly.cs",
+        "using System.Reflection;\n[assembly: AssemblyTitleAttribute(\"Oahu\")]",
+        "System.Reflection.AssemblyTitleAttribute",
+        null)]
+    [InlineData(
+        "ModuleOnly.cs",
+        "using System;\n[module: CLSCompliantAttribute(true)]",
+        null,
+        "System.CLSCompliantAttribute")]
+    public void ForeignCsFile_WithSingleCompilationUnitAttribute_WritesCompilableOutput(
+        string fileName,
+        string source,
+        string expectedAssemblyAttribute,
+        string expectedModuleAttribute)
+    {
+        var outDir = Path.Combine(this.workDir, Path.GetFileNameWithoutExtension(fileName));
+        var gs = this.WriteGs(fileName + ".gs", "package Probe\n\nfunc Placeholder() {\n}\n");
+        var cs = this.WriteCs(fileName, source);
+        var args = new List<string> { $"/gs:{gs}", $"/csfile:{cs}", $"/out:{outDir}" };
+        args.AddRange(RuntimeReferencePaths().Select(p => $"/r:{p}"));
+
+        var stdout = new StringWriter();
+        int exit = GsgenProgram.Run(args.ToArray(), stdout);
+
+        Assert.True(exit == 0, stdout.ToString());
+        string content = File.ReadAllText(Assert.Single(Directory.EnumerateFiles(outDir, "*.g.gs")));
+        AssertGeneratedSourceCompiles(
+            content,
+            Path.GetFileNameWithoutExtension(fileName),
+            expectedAssemblyAttribute,
+            expectedModuleAttribute);
     }
 
     [Fact]
@@ -339,6 +375,10 @@ public class GsgenCliTests : IDisposable
         Assert.Contains("import System.Reflection", content);
         Assert.Contains("@assembly:System.Reflection.AssemblyTitleAttribute(\"Oahu\")", content);
         Assert.Contains("internal class Holder", content);
+        AssertGeneratedSourceCompiles(
+            content,
+            "AttributesAndType",
+            expectedAssemblyAttribute: "System.Reflection.AssemblyTitleAttribute");
     }
 
     [Fact]
@@ -369,29 +409,27 @@ public class GsgenCliTests : IDisposable
         Assert.Contains("@assembly:System.Reflection.AssemblyTitleAttribute(\"Oahu\")", content);
         Assert.Contains("@module:System.CLSCompliantAttribute(true)", content);
 
-        var tree = GsSyntaxTree.Parse(GsSourceText.From(content));
-        Assert.Empty(tree.Diagnostics);
-
-        using var pe = new MemoryStream();
-        var compilation = new GsCompilation(tree) { IsLibrary = true };
-        var emit = compilation.Emit(
-            pe,
-            pdbStream: null,
-            refStream: null,
-            assemblyName: "Issue2815FileAttributes");
-        Assert.True(
-            emit.Success,
-            "generated file should compile: " + string.Join("; ", emit.Diagnostics.Select(d => d.Message)));
-
-        pe.Position = 0;
-        using var peReader = new PEReader(pe, PEStreamOptions.LeaveOpen);
-        MetadataReader metadata = peReader.GetMetadataReader();
-        Assert.Contains(
+        AssertGeneratedSourceCompiles(
+            content,
+            "BothFileAttributes",
             "System.Reflection.AssemblyTitleAttribute",
-            GetAttributeTypeNames(metadata, metadata.GetAssemblyDefinition().GetCustomAttributes()));
-        Assert.Contains(
-            "System.CLSCompliantAttribute",
-            GetAttributeTypeNames(metadata, metadata.GetModuleDefinition().GetCustomAttributes()));
+            "System.CLSCompliantAttribute");
+    }
+
+    [Fact]
+    public void ForeignCsFile_WithNoMembers_WritesNoOutput()
+    {
+        var outDir = Path.Combine(this.workDir, "gen-empty");
+        var gs = this.WriteGs("Input.gs", "package Probe\n\nfunc Placeholder() {\n}\n");
+        var cs = this.WriteCs("Empty.cs", "using System;\n");
+        var args = new List<string> { $"/gs:{gs}", $"/csfile:{cs}", $"/out:{outDir}" };
+        args.AddRange(RuntimeReferencePaths().Select(p => $"/r:{p}"));
+
+        var stdout = new StringWriter();
+        int exit = GsgenProgram.Run(args.ToArray(), stdout);
+
+        Assert.True(exit == 0, stdout.ToString());
+        Assert.Empty(Directory.EnumerateFiles(outDir, "*.g.gs"));
     }
 
     [Fact]
@@ -425,6 +463,44 @@ public class GsgenCliTests : IDisposable
         var path = Path.Combine(this.workDir, name);
         File.WriteAllText(path, source);
         return path;
+    }
+
+    private static void AssertGeneratedSourceCompiles(
+        string content,
+        string assemblyName,
+        string expectedAssemblyAttribute = null,
+        string expectedModuleAttribute = null)
+    {
+        var tree = GsSyntaxTree.Parse(GsSourceText.From(content));
+        Assert.Empty(tree.Diagnostics);
+
+        using var pe = new MemoryStream();
+        var compilation = new GsCompilation(tree) { IsLibrary = true };
+        var emit = compilation.Emit(
+            pe,
+            pdbStream: null,
+            refStream: null,
+            assemblyName: assemblyName);
+        Assert.True(
+            emit.Success,
+            "generated file should compile: " + string.Join("; ", emit.Diagnostics.Select(d => d.Message)));
+
+        pe.Position = 0;
+        using var peReader = new PEReader(pe, PEStreamOptions.LeaveOpen);
+        MetadataReader metadata = peReader.GetMetadataReader();
+        if (expectedAssemblyAttribute != null)
+        {
+            Assert.Contains(
+                expectedAssemblyAttribute,
+                GetAttributeTypeNames(metadata, metadata.GetAssemblyDefinition().GetCustomAttributes()));
+        }
+
+        if (expectedModuleAttribute != null)
+        {
+            Assert.Contains(
+                expectedModuleAttribute,
+                GetAttributeTypeNames(metadata, metadata.GetModuleDefinition().GetCustomAttributes()));
+        }
     }
 
     private static IReadOnlyList<string> RuntimeReferencePaths()

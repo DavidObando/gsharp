@@ -3319,6 +3319,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || !this.IsObliviousCompilation()
                 || this.IsWithinExpressionTreeLambda(use)
                 || this.FindResultLambda(use) is not { } lambda
+                || this.LambdaResultFlowsToNullableSink(lambda)
                 || this.GetLambdaTargetDelegateType(lambda) is not { DelegateInvokeMethod: { } invoke }
                 || invoke.ReturnType is not { IsReferenceType: true }
                 || invoke.ReturnType.NullableAnnotation == NullableAnnotation.Annotated)
@@ -3336,6 +3337,97 @@ public sealed partial class CSharpToGSharpTranslator
 
             return this.IsNullablePromotedValue(use)
                 || this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(use).Symbol);
+        }
+
+        private bool LambdaResultFlowsToNullableSink(AnonymousFunctionExpressionSyntax lambda)
+        {
+            // Issue #4046: a generic selector has no fixed return contract of
+            // its own. When its fluent call chain collapses back to the same
+            // scalar type and that final sink is emitted nullable, preserve nil
+            // for operators such as FirstOrDefault to inspect instead of
+            // throwing at the selector boundary.
+            SyntaxNode current = lambda;
+            if (current.Parent is not ArgumentSyntax argument
+                || argument.Expression != current
+                || argument.Parent?.Parent is not InvocationExpressionSyntax invocation
+                || this.context.SemanticModel.GetOperation(argument)
+                    is not IArgumentOperation { Parameter: { } selectorParameter }
+                || selectorParameter.ContainingSymbol is not IMethodSymbol containingMethod
+                || !ReturnsGenericSelectorResult(
+                    containingMethod.OriginalDefinition,
+                    selectorParameter.Ordinal))
+            {
+                return false;
+            }
+
+            current = invocation;
+            while (true)
+            {
+                if (current.Parent is ParenthesizedExpressionSyntax parenthesized)
+                {
+                    current = parenthesized;
+                    continue;
+                }
+
+                if (current.Parent is MemberAccessExpressionSyntax member
+                    && member.Expression == current
+                    && member.Parent is InvocationExpressionSyntax outerInvocation)
+                {
+                    current = outerInvocation;
+                    continue;
+                }
+
+                break;
+            }
+
+            if (current is not ExpressionSyntax expression)
+            {
+                return false;
+            }
+
+            ISymbol sink = this.ResolveValueSink(expression);
+            ITypeSymbol sinkType = sink switch
+            {
+                IMethodSymbol method => method.ReturnType,
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                _ => null,
+            };
+
+            ITypeSymbol resultType =
+                (this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol)?.ReturnType;
+            return sinkType is { IsReferenceType: true }
+                && SymbolEqualityComparer.Default.Equals(resultType, sinkType)
+                && !this.TargetWillRemainNonNullableReference(sinkType, sink);
+
+            static bool ReturnsGenericSelectorResult(
+                IMethodSymbol genericMethod,
+                int parameterOrdinal)
+            {
+                if (!genericMethod.IsGenericMethod
+                    || parameterOrdinal < 0
+                    || parameterOrdinal >= genericMethod.Parameters.Length
+                    || genericMethod.Parameters[parameterOrdinal].Type
+                        is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
+                    || delegateType.DelegateInvokeMethod?.ReturnType
+                        is not ITypeParameterSymbol resultParameter
+                    || resultParameter.TypeParameterKind != TypeParameterKind.Method
+                    || !SymbolEqualityComparer.Default.Equals(
+                        resultParameter.ContainingSymbol,
+                        genericMethod))
+                {
+                    return false;
+                }
+
+                return SymbolEqualityComparer.Default.Equals(
+                        genericMethod.ReturnType,
+                        resultParameter)
+                    || (genericMethod.ReturnType is INamedTypeSymbol named
+                        && named.TypeArguments.Any(argument =>
+                            SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
+            }
         }
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)

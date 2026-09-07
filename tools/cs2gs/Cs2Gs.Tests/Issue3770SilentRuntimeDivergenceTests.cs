@@ -219,6 +219,39 @@ public sealed class Issue3770SilentRuntimeDivergenceTests
     }
 
     /// <summary>
+    /// Issue #4046: a nullable imported value returned from a selector must not
+    /// be asserted before a later LINQ operator can observe and filter the nil.
+    /// </summary>
+    [Fact]
+    public void NullableLambdaResult_FlowingToNullableSink_DoesNotThrow()
+    {
+        string printed = Translate("""
+            using System.IO;
+            using System.Linq;
+
+            public static class Paths
+            {
+                public static string Find()
+                {
+                    return (new[] { "" }
+                        .Select(value =>
+                        {
+                            return Path.GetDirectoryName(value);
+                        }))
+                        .FirstOrDefault(candidate => candidate != null);
+                }
+            }
+            """, nullableEnabled: false);
+
+        Assert.DoesNotContain("GetDirectoryName(value)!!", printed, StringComparison.Ordinal);
+        string stdout = CompileAndRun(
+            printed,
+            "Console.WriteLine(Paths.Find() ?? \"nil\")");
+
+        Assert.Equal("nil", stdout.Trim());
+    }
+
+    /// <summary>
     /// Once gsc accepts a nilable event-subscription handler, cs2gs must not
     /// reintroduce the old run-time divergence by appending <c>!!</c>.
     /// </summary>
