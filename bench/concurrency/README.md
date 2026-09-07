@@ -29,7 +29,7 @@ errata 12.
 
 | Path | What it is |
 | --- | --- |
-| `gsharp/Bench.gs` | **The G# side.** Eight scenarios in the language itself, three in-process warm-up rounds, one `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
+| `gsharp/Bench.gs` | **The G# side.** Twelve scenarios in the language itself, 120 cheap call-counted warm-up entries, then one measured `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
 | `scenarios.json` | The registry: which G# scenario pairs with which Go row, and what each one measures. |
 | `baseline.json` | The recorded medians, ceilings and Go ratios. Written only by `--update-baseline`, never by hand. |
 | `aot/` | The NativeAOT measurement mode. Compiles no G# and holds no benchmark logic: it borrows the SDK's `PublishAot` pipeline and points ILC at the assembly gsc already emitted, so the AOT and JIT rows run byte-identical IL. |
@@ -39,16 +39,28 @@ errata 12.
 ## Running
 
 ```sh
-# The paired run: builds the G# program, launches both sides several times,
-# reports medians with a bootstrap confidence interval, and checks the gate.
-python3 build/run-concurrency-bench.py --go --aot --check-baseline bench/concurrency/baseline.json
+# The gate uses three whole runs, matching the baseline's interval method.
+for pass in 1 2 3; do
+  python3 build/run-concurrency-bench.py --go --aot \
+    --json "out/concurrency-$pass.json"
+done
+python3 build/run-concurrency-bench.py \
+  --from-json out/concurrency-1.json \
+  --from-json out/concurrency-2.json \
+  --from-json out/concurrency-3.json \
+  --check-baseline bench/concurrency/baseline.json
 
 # Drop --aot while iterating: it adds a NativeAOT publish (minutes) per run.
 # One scenario, fewer launches, while iterating
-python3 build/run-concurrency-bench.py --scenario rendezvous --launches 3
+python3 build/run-concurrency-bench.py --scenario select-ready --launches 3 \
+  --json out/select-ready.json
 
-# Record what was measured. Refuses to loosen a ceiling without a stated reason.
-python3 build/run-concurrency-bench.py --go --update-baseline bench/concurrency/baseline.json
+# Record that same aggregate. Refuses to loosen a ceiling without a reason.
+python3 build/run-concurrency-bench.py \
+  --from-json out/concurrency-1.json \
+  --from-json out/concurrency-2.json \
+  --from-json out/concurrency-3.json \
+  --update-baseline bench/concurrency/baseline.json
 
 # Check the harness still hangs together (this runs on every PR)
 python3 build/verify-concurrency-bench.py --smoke
@@ -71,21 +83,34 @@ any one of them produced a wrong conclusion at least once during the original
 spike:
 
 1. **Warm up, and pin the JIT tier.** Tiered JIT depresses cold CLR numbers by
-   **2–3×**. The harness runs three rounds and only round 3 is reportable — but
-   rounds are not sufficient on their own. The runtime's call-counting delay is
-   100 ms and restarts on every new JIT compilation, so a bench process that
-   keeps first-calling methods can exit before counting ever begins: the
-   scenario's own loop gets promoted by on-stack replacement while every method
-   it calls stays at Tier0. That is a real measurement this harness reported for
-   weeks, and it moved `select-ready` by **3.4×** between launches of an
-   unchanged binary (issue #3901). The runner therefore sets
-   `DOTNET_TC_CallCountingDelayMs=0` for the JIT mode. Do not remove it, and do
-   not substitute `DOTNET_TieredCompilation=0`, which also discards dynamic PGO.
+   **2–3×**. The G# program makes 120 cheap call-counted entries into each
+   selected scenario, waits for promotion to install, then runs one measured
+   round. The runtime's call-counting delay is 100 ms and restarts on every new
+   JIT compilation, so a bench process that keeps first-calling methods can exit
+   before counting ever begins: the scenario's own loop gets promoted by
+   on-stack replacement while every method it calls stays at Tier0. That is a
+   real measurement this harness reported for weeks, and it moved
+   `select-ready` by **3.4×** between launches of an unchanged binary (issue
+   #3901). The runner therefore sets
+   `DOTNET_TieredCompilation=1`, `DOTNET_TieredPGO=1`, and
+   `DOTNET_TC_CallCountingDelayMs=0` for the JIT mode, after removing inherited
+   `DOTNET_*` / `COMPlus_*` tier and JIT overrides. Do not substitute
+   `DOTNET_TieredCompilation=0`, which also discards dynamic PGO.
+   Paired Go launches use their existing three unreported warm-up rounds; a
+   scoped run warms only the matching Go row. The `go-park` memory probe is
+   explicit-only and never runs in those rate warm-ups.
 2. **Release build, both sides.**
 3. **Multiple process launches.** In-process repetition alone understates
-   variance. Report a confidence interval, not a single number.
+   variance. Report a confidence interval, not a single number. JSON retains
+   `launch_samples_ns` for every row; aggregation retains those samples and the
+   per-run medians instead of collapsing the evidence to one statistic.
 4. **Pin and record both toolchains and the hardware class.** The reference
    numbers in ADR-0174 are .NET 10.0.11 / Go 1.27.0, Apple silicon, 18 cores.
+   Every JSON result also records the runner and benchmark-definition hashes,
+   built-artifact hashes, git revision/dirty state, OS/kernel, CPU model and
+   affinity, runtime versions and effective runtime settings,
+   governor/scaling driver or power source, and start/end load and frequency
+   samples. These are observations, not requests to change a host's governor.
 5. **Measure the G# side in both modes.** `--aot` adds a NativeAOT row beside
    the pinned-tier JIT row. Neither is "the" number: the JIT row is what a
    deployed G# program does, the AOT row is what the language does once
@@ -112,6 +137,21 @@ spike:
    recorded ceiling **and** the confidence intervals are disjoint **and** the
    hardware class matches. Any one of those alone produces false failures often
    enough to get the gate switched off, which is the real failure mode.
+8. **Compare only like methodology.** Run JSON carries a comparison key over
+   the scenario scope, modes, launch count/order, warm-up, JIT settings,
+   benchmark definition, host/power state and toolchains. Whole-run aggregation
+   additionally requires identical build hashes. Different keys are rejected;
+   an older baseline without a comparison key is reported but cannot gate until
+   it is re-recorded. A single run whose environment changed remains loadable
+   for diagnosis, but cannot aggregate, update a baseline, or gate. When Go is
+   requested, JIT/AOT/Go launch order rotates on each sample so a warming or
+   drifting host cannot consistently favor one side. The launch count must
+   complete whole rotation cycles; the default six launches balances both the
+   two-mode and three-mode forms.
+   A baseline update and its checks require three full `--go --aot` runs
+   aggregated with `--from-json`, without `--scenario`; a partial or single run
+   may report, but cannot relabel untouched rows or gate with a different
+   interval method.
 
 ## Known limits of the current numbers
 

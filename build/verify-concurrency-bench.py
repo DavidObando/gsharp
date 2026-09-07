@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,6 +42,13 @@ def smoke() -> int:
             failures.append(f"Bench.gs does not know the scenario '{scenario['gsharp']}'")
 
     go_program = (BENCH / "go" / "main.go").read_text()
+    if "GSHARP_BENCH_SCENARIO" not in go_program:
+        failures.append("main.go has no single-scenario selector")
+    if "runtime.GOMAXPROCS(0)" not in go_program:
+        failures.append("main.go does not report effective Go scheduler parallelism")
+    go_all = re.search(r"func all\(\) \{(?P<body>.*?)\n\}", go_program, re.DOTALL)
+    if not go_all or "parkScale()" in go_all["body"]:
+        failures.append("main.go includes the explicit-only park probe in rate runs")
     for scenario in scenarios:
         row = scenario.get("go")
         if row and f'"{row}"' not in go_program:
@@ -68,6 +76,11 @@ def smoke() -> int:
 
     runner = (REPO / "build" / "run-concurrency-bench.py").read_text()
     compile(runner, "run-concurrency-bench.py", "exec")
+    tests = REPO / "build" / "test-concurrency-bench.py"
+    if not tests.exists():
+        failures.append("build/test-concurrency-bench.py is missing")
+    else:
+        subprocess.run([sys.executable, str(tests)], check=True, cwd=REPO)
 
     for failure in failures:
         print(f"error: {failure}", file=sys.stderr)
