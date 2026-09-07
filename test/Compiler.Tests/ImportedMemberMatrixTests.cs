@@ -104,6 +104,41 @@ public class ImportedMemberMatrixTests
                 public static string PickParams<T>(params T[] values)
                     => typeof(T).Name;
             }
+
+            public static class VarianceOverloads
+            {
+                public static string DelegateType<T>(T value, System.Action<T> sink)
+                    => typeof(T).Name;
+
+                public static string DelegateWinner<T>(T value, System.Action<T> sink)
+                    => "generic-delegate:" + typeof(T).Name;
+
+                public static string DelegateWinner(
+                    object value,
+                    System.Delegate sink)
+                    => "object-delegate";
+
+                public static string InterfaceType<T>(
+                    T value,
+                    System.Collections.Generic.IComparer<T> sink)
+                    => typeof(T).Name;
+
+                public static string InterfaceWinner<T>(
+                    T value,
+                    System.Collections.Generic.IComparer<T> sink)
+                    => "generic-interface:" + typeof(T).Name;
+
+                public static string InterfaceWinner(
+                    object value,
+                    object sink)
+                    => "object-interface";
+
+                public static System.Action<object> ObjectAction()
+                    => _ => { };
+
+                public static System.Collections.Generic.IComparer<object> ObjectComparer()
+                    => System.Collections.Generic.Comparer<object>.Default;
+            }
             """;
 
         const string gsSource = """
@@ -141,6 +176,22 @@ public class ImportedMemberMatrixTests
 
             func throughExpandedMixedInference[T](first T, second object) string {
                 return GenericOnly.PickParams(first, second)
+            }
+
+            func throughDelegateUpperBoundType[T DisposableBase](value T) string {
+                return VarianceOverloads.DelegateType(value, VarianceOverloads.ObjectAction())
+            }
+
+            func throughDelegateUpperBoundWinner[T DisposableBase](value T) string {
+                return VarianceOverloads.DelegateWinner(value, VarianceOverloads.ObjectAction())
+            }
+
+            func throughInterfaceUpperBoundType[T DisposableBase](value T) string {
+                return VarianceOverloads.InterfaceType(value, VarianceOverloads.ObjectComparer())
+            }
+
+            func throughInterfaceUpperBoundWinner[T DisposableBase](value T) string {
+                return VarianceOverloads.InterfaceWinner(value, VarianceOverloads.ObjectComparer())
             }
 
             func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
@@ -191,6 +242,10 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughExpandedMixedInference[DisposableBase](
                 DisposableBase(),
                 DisposableBase()))
+            Console.WriteLine(throughDelegateUpperBoundType[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughDelegateUpperBoundWinner[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughInterfaceUpperBoundType[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughInterfaceUpperBoundWinner[DisposableBase](DisposableBase()))
             Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
                 InstanceOverloads(),
                 DisposableBase()))
@@ -211,7 +266,9 @@ public class ImportedMemberMatrixTests
         Assert.Equal(
             $"generic-disposable{Environment.NewLine}generic-disposable{Environment.NewLine}object{Environment.NewLine}"
                 + $"object{Environment.NewLine}Object{Environment.NewLine}object-nested{Environment.NewLine}"
-                + $"Object{Environment.NewLine}"
+                + $"Object{Environment.NewLine}DisposableBase{Environment.NewLine}"
+                + $"generic-delegate:DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
+                + $"generic-interface:DisposableBase{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}Object{Environment.NewLine}",

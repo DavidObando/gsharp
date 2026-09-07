@@ -73,6 +73,13 @@ internal sealed class MemberLookup
     /// </summary>
     private static ConditionalWeakTable<Type, System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>> methodsIncludingSelfAndInterfacesCache = new();
 
+    private enum SymbolicInferenceBoundKind
+    {
+        Exact,
+        Lower,
+        Upper,
+    }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="MemberLookup"/> class.
     /// </summary>
@@ -1563,7 +1570,7 @@ internal sealed class MemberLookup
 
         var arity = openMethod.GetGenericArguments().Length;
         var result = new TypeSymbol?[arity];
-        var genuineObjectBounds = new bool[arity];
+        var genuineObjectFixingBounds = new bool[arity];
 
         var openParams = openMethod.GetParameters();
         var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
@@ -1582,23 +1589,23 @@ internal sealed class MemberLookup
                     symbolicArgTypes[i],
                     openMethod,
                     result,
-                    genuineObjectBounds);
+                    genuineObjectFixingBounds);
             }
 
             for (var i = paramsIndex; i < argumentCount; i++)
             {
                 var tailInference = new TypeSymbol?[arity];
-                var tailObjectBounds = new bool[arity];
+                var tailObjectFixingBounds = new bool[arity];
                 UnifyForMethodTypeArgs(
                     paramsElementType,
                     symbolicArgTypes[i],
                     openMethod,
                     tailInference,
-                    tailObjectBounds);
+                    tailObjectFixingBounds);
                 for (var slot = 0; slot < arity; slot++)
                 {
-                    genuineObjectBounds[slot] |= tailObjectBounds[slot];
-                    if (genuineObjectBounds[slot])
+                    genuineObjectFixingBounds[slot] |= tailObjectFixingBounds[slot];
+                    if (genuineObjectFixingBounds[slot])
                     {
                         result[slot] = TypeSymbol.Object;
                         conflicting[slot] = false;
@@ -1634,13 +1641,13 @@ internal sealed class MemberLookup
                     symbolicArgTypes[i],
                     openMethod,
                     result,
-                    genuineObjectBounds);
+                    genuineObjectFixingBounds);
             }
         }
 
         for (var slot = 0; slot < arity; slot++)
         {
-            if (genuineObjectBounds[slot])
+            if (genuineObjectFixingBounds[slot])
             {
                 result[slot] = TypeSymbol.Object;
             }
@@ -5403,9 +5410,9 @@ internal sealed class MemberLookup
         }
 
         var inferred = new TypeSymbol?[arity];
-        var genuineObjectBounds = new bool[arity];
-        UnifyForMethodTypeArgs(openParameter, argument, openMethod, inferred, genuineObjectBounds);
-        return genuineObjectBounds[typeParameterPosition];
+        var genuineObjectFixingBounds = new bool[arity];
+        UnifyForMethodTypeArgs(openParameter, argument, openMethod, inferred, genuineObjectFixingBounds);
+        return genuineObjectFixingBounds[typeParameterPosition];
     }
 
     internal static bool TryMapConstructedTypeArgumentsThroughHierarchy(
@@ -6773,12 +6780,40 @@ internal sealed class MemberLookup
         }
     }
 
+    private static SymbolicInferenceBoundKind GetNestedInferenceBoundKind(
+        Type openDefinition,
+        int typeArgumentIndex,
+        SymbolicInferenceBoundKind outerKind)
+    {
+        var typeParameters = openDefinition.GetGenericArguments();
+        if ((uint)typeArgumentIndex >= (uint)typeParameters.Length)
+        {
+            return SymbolicInferenceBoundKind.Exact;
+        }
+
+        return (typeParameters[typeArgumentIndex].GenericParameterAttributes & GenericParameterAttributes.VarianceMask) switch
+        {
+            GenericParameterAttributes.Covariant => outerKind,
+            GenericParameterAttributes.Contravariant => ReverseInferenceBoundKind(outerKind),
+            _ => SymbolicInferenceBoundKind.Exact,
+        };
+    }
+
+    private static SymbolicInferenceBoundKind ReverseInferenceBoundKind(SymbolicInferenceBoundKind kind)
+        => kind switch
+        {
+            SymbolicInferenceBoundKind.Lower => SymbolicInferenceBoundKind.Upper,
+            SymbolicInferenceBoundKind.Upper => SymbolicInferenceBoundKind.Lower,
+            _ => SymbolicInferenceBoundKind.Exact,
+        };
+
     private static void UnifyForMethodTypeArgs(
         Type? openClr,
         TypeSymbol? actual,
         MethodInfo openMethod,
         TypeSymbol?[] result,
-        bool[]? genuineObjectBounds = null)
+        bool[]? genuineObjectFixingBounds = null,
+        SymbolicInferenceBoundKind boundKind = SymbolicInferenceBoundKind.Lower)
     {
         if (openClr == null || actual == null)
         {
@@ -6804,13 +6839,17 @@ internal sealed class MemberLookup
                 {
                     var recovered = NormalizeRecoveredNullability(actual);
                     if (IsGenuineObjectType(actual)
-                        && genuineObjectBounds != null
-                        && (uint)pos < (uint)genuineObjectBounds.Length)
+                        && boundKind != SymbolicInferenceBoundKind.Upper
+                        && genuineObjectFixingBounds != null
+                        && (uint)pos < (uint)genuineObjectFixingBounds.Length)
                     {
-                        genuineObjectBounds[pos] = true;
+                        genuineObjectFixingBounds[pos] = true;
                     }
 
-                    result[pos] = MergeInferredTypeArgument(result[pos], recovered);
+                    result[pos] = MergeRecoveredTypeArgument(
+                        result[pos],
+                        recovered,
+                        allowBaseWidening: boundKind != SymbolicInferenceBoundKind.Upper);
                 }
             }
 
@@ -6853,7 +6892,8 @@ internal sealed class MemberLookup
                     actualRectangular.ElementType,
                     openMethod,
                     result,
-                    genuineObjectBounds);
+                    genuineObjectFixingBounds,
+                    boundKind);
             }
 
             return;
@@ -6871,7 +6911,13 @@ internal sealed class MemberLookup
             var actualElement = TryGetElementType(actual);
             if (actualElement != null)
             {
-                UnifyForMethodTypeArgs(openElement, actualElement, openMethod, result, genuineObjectBounds);
+                UnifyForMethodTypeArgs(
+                    openElement,
+                    actualElement,
+                    openMethod,
+                    result,
+                    genuineObjectFixingBounds,
+                    boundKind);
             }
 
             return;
@@ -6882,11 +6928,23 @@ internal sealed class MemberLookup
             var openPointee = openClr.GetElementType();
             if (actual is ByRefTypeSymbol bf)
             {
-                UnifyForMethodTypeArgs(openPointee, bf.PointeeType, openMethod, result, genuineObjectBounds);
+                UnifyForMethodTypeArgs(
+                    openPointee,
+                    bf.PointeeType,
+                    openMethod,
+                    result,
+                    genuineObjectFixingBounds,
+                    SymbolicInferenceBoundKind.Exact);
             }
             else
             {
-                UnifyForMethodTypeArgs(openPointee, actual, openMethod, result, genuineObjectBounds);
+                UnifyForMethodTypeArgs(
+                    openPointee,
+                    actual,
+                    openMethod,
+                    result,
+                    genuineObjectFixingBounds,
+                    SymbolicInferenceBoundKind.Exact);
             }
 
             return;
@@ -6908,7 +6966,8 @@ internal sealed class MemberLookup
                 actual is PointerTypeSymbol actualPointer ? actualPointer.PointeeType : actual,
                 openMethod,
                 result,
-                genuineObjectBounds);
+                genuineObjectFixingBounds,
+                SymbolicInferenceBoundKind.Exact);
             return;
         }
 
@@ -6923,7 +6982,13 @@ internal sealed class MemberLookup
             {
                 for (var i = 0; i < openArgs.Length; i++)
                 {
-                    UnifyForMethodTypeArgs(openArgs[i], tuple.ElementTypes[i], openMethod, result, genuineObjectBounds);
+                    UnifyForMethodTypeArgs(
+                        openArgs[i],
+                        tuple.ElementTypes[i],
+                        openMethod,
+                        result,
+                        genuineObjectFixingBounds,
+                        SymbolicInferenceBoundKind.Exact);
                 }
 
                 return;
@@ -6963,7 +7028,13 @@ internal sealed class MemberLookup
                 && ChannelTypeSymbol.IsChannelClrDefinitionName(openDef.FullName)
                 && ChannelTypeSymbol.TryGetChannelShape(actual, out var channelActualElement, out _, out _))
             {
-                UnifyForMethodTypeArgs(openArgs[0], channelActualElement, openMethod, result, genuineObjectBounds);
+                UnifyForMethodTypeArgs(
+                    openArgs[0],
+                    channelActualElement,
+                    openMethod,
+                    result,
+                    genuineObjectFixingBounds,
+                    GetNestedInferenceBoundKind(openDef, 0, boundKind));
                 return;
             }
 
@@ -7005,7 +7076,8 @@ internal sealed class MemberLookup
                         projectedImp.TypeArguments[j],
                         openMethod,
                         result,
-                        genuineObjectBounds);
+                        genuineObjectFixingBounds,
+                        GetNestedInferenceBoundKind(openDef, j, boundKind));
                 }
 
                 return;
@@ -7031,7 +7103,13 @@ internal sealed class MemberLookup
                 && actual is FunctionTypeSymbol
                 && string.Equals(openDef.FullName, "System.Linq.Expressions.Expression`1", StringComparison.Ordinal))
             {
-                UnifyForMethodTypeArgs(openArgs[0], actual, openMethod, result, genuineObjectBounds);
+                UnifyForMethodTypeArgs(
+                    openArgs[0],
+                    actual,
+                    openMethod,
+                    result,
+                    genuineObjectFixingBounds,
+                    GetNestedInferenceBoundKind(openDef, 0, boundKind));
                 return;
             }
 
@@ -7060,7 +7138,8 @@ internal sealed class MemberLookup
                             namedDelegateFunction.ParameterTypes[j],
                             openMethod,
                             contravariant,
-                            genuineObjectBounds);
+                            genuineObjectFixingBounds,
+                            ReverseInferenceBoundKind(boundKind));
                     }
 
                     MergeContravariantBounds(result, contravariant);
@@ -7073,7 +7152,8 @@ internal sealed class MemberLookup
                             namedDelegateFunction.ReturnType,
                             openMethod,
                             result,
-                            genuineObjectBounds);
+                            genuineObjectFixingBounds,
+                            boundKind);
                     }
                 }
 
@@ -7110,7 +7190,8 @@ internal sealed class MemberLookup
                             fn.ParameterTypes[j],
                             openMethod,
                             contravariant,
-                            genuineObjectBounds);
+                            genuineObjectFixingBounds,
+                            ReverseInferenceBoundKind(boundKind));
                     }
 
                     MergeContravariantBounds(result, contravariant);
@@ -7122,7 +7203,8 @@ internal sealed class MemberLookup
                             fn.ReturnType,
                             openMethod,
                             result,
-                            genuineObjectBounds);
+                            genuineObjectFixingBounds,
+                            boundKind);
                     }
                 }
 
@@ -7137,7 +7219,13 @@ internal sealed class MemberLookup
                 var actualElement = TryGetElementType(actual);
                 if (actualElement != null)
                 {
-                    UnifyForMethodTypeArgs(openArgs[0], actualElement, openMethod, result, genuineObjectBounds);
+                    UnifyForMethodTypeArgs(
+                        openArgs[0],
+                        actualElement,
+                        openMethod,
+                        result,
+                        genuineObjectFixingBounds,
+                        GetNestedInferenceBoundKind(openDef, 0, boundKind));
                     return;
                 }
             }
@@ -7153,7 +7241,13 @@ internal sealed class MemberLookup
                 {
                     for (int j = 0; j < openArgs.Length && j < liftedArgs.Length; j++)
                     {
-                        UnifyForMethodTypeArgs(openArgs[j], liftedArgs[j], openMethod, result, genuineObjectBounds);
+                        UnifyForMethodTypeArgs(
+                            openArgs[j],
+                            liftedArgs[j],
+                            openMethod,
+                            result,
+                            genuineObjectFixingBounds,
+                            GetNestedInferenceBoundKind(openDef, j, boundKind));
                     }
                 }
             }

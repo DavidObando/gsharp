@@ -3508,7 +3508,6 @@ internal static class ClrOverloadResolution
                 declaredType = elementType;
             }
 
-            declaredType = PeelByRef(declaredType) ?? declaredType;
             if (MemberLookup.HasGenuineObjectInferenceBound(
                     openMethod,
                     declaredType,
