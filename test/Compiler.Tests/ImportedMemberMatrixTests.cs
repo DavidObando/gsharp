@@ -115,6 +115,12 @@ public class ImportedMemberMatrixTests
                 return receiver.Take(value)
             }
 
+            func throughConstrainedStatic[
+                TReceiver IStaticOverloads[TReceiver],
+                TValue DisposableBase](value TValue) string {
+                return TReceiver.Take(value)
+            }
+
             async func throughConstrainedStaticAsync[
                 TReceiver IStaticOverloads[TReceiver],
                 TValue DisposableBase](value TValue) string {
@@ -136,6 +142,8 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughConstrainedInstanceObject[InstanceOverloads](
                 InstanceOverloads(),
                 DisposableBase()))
+            Console.WriteLine(throughConstrainedStatic[StaticOverloads, DisposableBase](
+                DisposableBase()))
             Console.WriteLine(throughConstrainedStaticAsync[StaticOverloads, DisposableBase](
                 DisposableBase()).Result)
             Console.WriteLine(throughConstrainedStaticObject[StaticOverloads](
@@ -146,12 +154,13 @@ public class ImportedMemberMatrixTests
             $"generic-disposable{Environment.NewLine}generic-disposable{Environment.NewLine}object{Environment.NewLine}"
                 + $"object{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
-                + $"static-generic{Environment.NewLine}static-object{Environment.NewLine}",
+                + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
+                + $"static-object{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 csSource,
                 gsSource,
                 "Issue4086.CSharp",
-                ignoredErrorScope: "throughConstrainedStaticAsync"));
+                ignoredErrorScope: "throughConstrainedStatic"));
     }
 
     private const string Issue3076CsSource = """
