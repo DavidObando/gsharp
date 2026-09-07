@@ -113,12 +113,37 @@ def command_output(command: list[str]) -> str | None:
     return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
 
 
+def parse_linux_cpu_model(cpuinfo: str, lscpu: str | None) -> str | None:
+    fields = {}
+    for line in cpuinfo.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            fields.setdefault(key.strip().lower(), value.strip())
+    if fields.get("model name"):
+        return fields["model name"]
+
+    if lscpu:
+        for line in lscpu.splitlines():
+            if line.startswith("Model name:"):
+                return line.split(":", 1)[1].strip()
+
+    for key in ("hardware", "processor"):
+        if fields.get(key):
+            return fields[key]
+    arm_id = " ".join(
+        f"{key}={fields[key]}"
+        for key in ("cpu implementer", "cpu architecture", "cpu variant", "cpu part", "cpu revision")
+        if fields.get(key)
+    )
+    return arm_id or None
+
+
 def cpu_model() -> str:
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.exists():
-        for line in cpuinfo.read_text().splitlines():
-            if line.startswith("model name"):
-                return line.split(":", 1)[1].strip()
+        model = parse_linux_cpu_model(cpuinfo.read_text(), command_output(["lscpu"]))
+        if model:
+            return model
 
     if platform.system() == "Darwin":
         model = command_output(["sysctl", "-n", "machdep.cpu.brand_string"])
@@ -131,10 +156,10 @@ def cpu_model() -> str:
     return platform.processor() or "unknown-cpu"
 
 
-def hardware_class() -> str:
+def hardware_class(model: str | None = None) -> str:
     """A stable host key: OS, architecture, logical CPUs and CPU model."""
-    model = re.sub(r"[^A-Za-z0-9]+", "-", cpu_model()).strip("-").lower()
-    return f"{platform.system().lower()}-{platform.machine().lower()}-{os.cpu_count()}-{model}"
+    normalized = re.sub(r"[^A-Za-z0-9]+", "-", model or cpu_model()).strip("-").lower()
+    return f"{platform.system().lower()}-{platform.machine().lower()}-{os.cpu_count()}-{normalized}"
 
 
 def read_distinct(pattern: str) -> list[str]:
@@ -269,6 +294,7 @@ def incomparability_reasons(
     end_environment: dict,
     runtime_versions: dict[str, list[str]],
     processor_counts: dict[str, list[int]],
+    model: str,
 ) -> list[str]:
     reasons = []
     if start_environment["power"] != end_environment["power"]:
@@ -277,6 +303,8 @@ def incomparability_reasons(
         reasons.append("CPU affinity changed while the benchmark was running")
     if not any(start_environment["power"].values()):
         reasons.append("the host exposes no observable power-state identity")
+    if model == "unknown-cpu":
+        reasons.append("the host exposes no identifiable CPU model")
     for mode, counts in processor_counts.items():
         versions = runtime_versions.get(mode, [])
         if not versions:
@@ -307,6 +335,7 @@ def make_fingerprint(
     start_environment: dict,
     end_environment: dict,
 ) -> dict:
+    model = cpu_model()
     comparison = {
         "methodologyVersion": METHODOLOGY_VERSION,
         "wholeRuns": 1,
@@ -322,11 +351,11 @@ def make_fingerprint(
         "launchOrder": "rotating-interleaved" if len(modes) > 1 else "single-mode",
         "modes": modes,
         "host": {
-            "hardwareClass": hardware_class(),
+            "hardwareClass": hardware_class(model),
             "system": platform.system(),
             "release": platform.release(),
             "machine": platform.machine(),
-            "cpuModel": cpu_model(),
+            "cpuModel": model,
             "logicalCpuCount": os.cpu_count(),
             "cpuAffinity": start_environment["cpuAffinity"],
             "reportedProcessorCounts": processor_counts,
@@ -377,6 +406,7 @@ def make_fingerprint(
         end_environment,
         runtime_versions,
         processor_counts,
+        model,
     )
 
     fingerprint = {

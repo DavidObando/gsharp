@@ -319,9 +319,11 @@ class ConcurrencyBenchTests(unittest.TestCase):
             start,
             {"gsharp": ["10.0.11", "10.0.12"]},
             {"gsharp": [2, 4]},
+            "unknown-cpu",
         )
 
         self.assertIn("the host exposes no observable power-state identity", reasons)
+        self.assertIn("the host exposes no identifiable CPU model", reasons)
         self.assertTrue(any("different runtime versions" in reason for reason in reasons))
         self.assertTrue(any("different processor counts" in reason for reason in reasons))
 
@@ -330,6 +332,17 @@ class ConcurrencyBenchTests(unittest.TestCase):
             mock.patch.object(bench, "power_state", return_value=start["power"]),
         ):
             self.assertIsNone(bench.environment_sample()["loadAverage"])
+
+        arm = """
+            processor       : 0
+            CPU implementer : 0x41
+            CPU architecture: 8
+            CPU part        : 0xd0c
+        """
+        self.assertEqual(
+            "Neoverse N1",
+            bench.parse_linux_cpu_model(arm, "Architecture: aarch64\nModel name: Neoverse N1"),
+        )
 
     def test_git_state_distinguishes_clean_from_unavailable(self) -> None:
         clean = mock.Mock(returncode=0, stdout="", stderr="")
