@@ -491,6 +491,22 @@ Cause/fix examples:
 - **GS0254** — `func f() ref int32 { var x = 0; return ref x }`. Fix: do not return references to function locals; consume the value by copy or alias storage that outlives the call.
 - **GS0255** — overriding a base method declared `int32` with a `ref int32` override (or vice versa). Fix: match the base return ref-kind exactly.
 
+## Ref-returning property / indexer diagnostics (GS0578-GS0579)
+
+Issue #3879 (the ADR-0060 amendment) extends the by-ref return from `func` to `prop`: `prop Value ref int32 { get { return ref this.slot } }`, its arrow sugar `prop Value ref int32 -> this.slot`, and the indexer form `prop this[i int32] ref int32 -> this.items[i]`. The getter returns a managed pointer, so a CLR consumer can alias the storage (`ref int slot = ref holder.Value`).
+
+The form is restricted to the **computed, read-only** shapes, and the two diagnostics below enforce that. Everything else about a ref-returning getter -- `return ref <lvalue>` vs a plain `return`, the lvalue rule, and the escape rule -- is the existing GS0248-GS0255 surface above, because the accessor body is bound with the getter as its enclosing function.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0578 | Error | Property `{name}` cannot return by reference here: a 'ref' return needs a concrete getter with a body to name the storage it aliases. |
+| GS0579 | Error | Property `{name}` returns by reference, so it cannot declare a `{set/init}` accessor: a caller writes through the returned reference instead of calling a setter. |
+
+Cause/fix examples:
+
+- **GS0578** -- `prop Slot ref int32` (an auto-property), `prop Slot ref int32 { get }` (a bodiless slot), or the same requirement inside an `interface`. An auto-property's getter only copies out of its compiler-synthesized backing field, and an abstract or interface slot names no storage at all. Fix: give the getter a body on a concrete `class`, `struct`, or `shared` block -- `prop Slot ref int32 { get { return ref this.storage } }` or `prop Slot ref int32 -> this.storage`.
+- **GS0579** -- `prop Value ref int32 { get { return ref slot } set(v) { slot = v } }`. The returned reference already *is* the write path, so a setter is a second, contradictory one (C# spells the same rule CS8147). Fix: drop the `set`/`init` accessor, or drop the `ref` from the declaration.
+
 ## Method-overloading and optional-parameter diagnostics (GS0264–GS0267)
 
 The v0 "one declaration per name" rule, so G# user functions can carry overload sets (differing by parameter types or ref-kinds) and optional parameters with default values. The diagnostics below cover overload-set construction and overload resolution.

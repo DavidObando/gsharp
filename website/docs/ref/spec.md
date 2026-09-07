@@ -587,6 +587,25 @@ G# token: `get => e` or `add => e` remains a syntax error (GS0005). This narrows
 the  rule, which previously rejected every non-block accessor body;
 event accessors (`add`/`remove`/`raise`) still take a block `{ … }` or `;` only.
 
+A property or indexer may declare a **by-ref return** by writing `ref` between
+the member name (or the indexer's `]`) and the type clause — `prop Value ref
+int32 { get { return ref this.slot } }`, `prop Value ref int32 -> this.slot`, or
+`prop this[i int32] ref int32 -> this.items[i]`. The getter is emitted returning
+`T&` (both the PropertyDef signature and `get_Value` carry the by-ref return), so
+a CLR consumer can alias the storage with `ref int x = ref holder.Value`. On the
+arrow form the `ref` on the declaration makes the desugared return a `return ref`
+— there is no `-> ref e` spelling. The form is restricted to **computed,
+read-only** properties: an auto-property, a bodiless `{ get }`, an abstract slot,
+and an interface requirement are all rejected with **GS0578** (none of them names
+storage a reference can point at), and a `set`/`init` accessor alongside `ref` is
+rejected with **GS0579** (the returned reference is already the write path).
+Inside the getter, the existing `ref`-return rules apply unchanged: the body must
+`return ref <lvalue>` (GS0252 for a plain `return`, GS0253 for a non-lvalue,
+GS0254 for a getter-local). A G# *read* of such a member loads through the
+returned pointer and observes the pointee, exactly as a read of an imported
+ref-returning member does; G# itself cannot bind the result as an alias. See
+ADR-0060 §14.
+
 #### Protected accessibility
 
 The `protected` modifier (CIL `family`) makes a member accessible **within its

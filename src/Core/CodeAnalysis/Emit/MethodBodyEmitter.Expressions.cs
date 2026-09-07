@@ -223,6 +223,12 @@ internal sealed partial class MethodBodyEmitter
                 // No erasure-widening is required at the call boundary; the
                 // surrounding code path (assignment, return, argument
                 // conversion) handles any further coercion.
+                //
+                // Issue #3879: except for the by-ref return, which is a
+                // representation difference the call boundary DOES have to
+                // settle — a `ref`-returning function or static property
+                // accessor leaves `T&` where the bound tree says `T`.
+                this.EmitRefReturnDereferenceIfNeeded(call.Function.ReturnRefKind, call.Type);
                 break;
             case BoundImportedCallExpression impCall:
                 this.EmitImportedCallArguments(impCall.Arguments, impCall.ArgumentRefKinds);
@@ -546,6 +552,11 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundUserInstanceCallExpression uic:
                 this.EmitUserInstanceCall(uic);
+
+                // Issue #3879: covers a `ref`-returning instance method AND a
+                // `ref`-returning INDEXER, whose read binds to a call of the
+                // `get_Item` accessor symbol rather than to a property access.
+                this.EmitRefReturnDereferenceIfNeeded(uic.Method.ReturnRefKind, uic.Type);
                 break;
             case BoundBaseInterfaceCallExpression bic:
                 this.EmitBaseInterfaceCall(bic);

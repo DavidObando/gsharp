@@ -4,7 +4,7 @@
 - **Date**: 2026-06-05
 - **Implemented**: 2026-06-05 (PR [#489](https://github.com/DavidObando/gsharp/pull/489))
 - **Phase**: Phase 8 — language ergonomics / CLR-interop surface
-- **Related**: issue #341 (`out` parameters at call sites), issue #342 (`ref` / `in` parameters at call sites); ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`), ADR-0034 (imported CLR interop), ADR-0038 (generic method inference), ADR-0058 (ref-safe-to-escape), ADR-0017 (method virtuality), ADR-0018 (interface defaults), ADR-0021 (generic variance — established `in`/`out` as contextual keywords)
+- **Related**: issue #341 (`out` parameters at call sites), issue #342 (`ref` / `in` parameters at call sites); ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`), ADR-0034 (imported CLR interop), ADR-0038 (generic method inference), ADR-0058 (ref-safe-to-escape), ADR-0017 (method virtuality), ADR-0018 (interface defaults), ADR-0021 (generic variance — established `in`/`out` as contextual keywords); ADR-0051 (property declarations), ADR-0118 (indexer members), ADR-0131 (expression-bodied members) — amended by §14 below (issue #3879)
 
 ## Context
 
@@ -258,6 +258,105 @@ Func-typed parameters expressed via the structural `func(T1, T2) R` clause (ADR-
 - Synthesized IL (async kickoff, iterator state-machines, awaiter plumbing) continues to use `BoundAddressOfExpression` directly. The rewriter passes never go through the keyword-form parser.
 - No existing test should regress. The keyword form is additive parser surface; the bound-tree shape it produces is identical to today's `&x` shape for the call-site case. There are zero existing G# user-defined functions with by-ref parameters (Context §3 — the path is broken on emit), so the new GS0238 prohibition has no compilable corpus to break.
 
+### 14. Amendment (issue #3879): the by-ref return extends to `prop` and to indexers
+
+Issue #490 gave the by-ref return to `func` only. That left C#'s ref-returning
+property and indexer with **no G# spelling at all**, so cs2gs had nowhere to
+translate them into and gapped loudly at the declaration site (#3839 / PR #3878) —
+correct as an interim answer, since the alternative was a member that silently
+returned copies, but a permanent hole in the CLR surface G# claims to be a peer
+producer of.
+
+**Decision: support it, restricted to the computed, read-only forms.**
+
+```gs
+class Holder {
+    private var values []int32 = []int32{40, 41, 42}
+
+    prop First ref int32 { get { return ref values[0] } }   // block form
+    prop Second ref int32 -> values[1]                      // arrow form (ADR-0131)
+    prop this[i int32] ref int32 -> values[i]               // indexer form (ADR-0118)
+}
+```
+
+**Grammar.** The `ref` contextual modifier sits between the member name (or the
+indexer's `]`) and the type clause — exactly where `func F() ref int32` puts it —
+and the parser consumes it only when a type clause can start at the next token, so
+a property literally *named* `ref` (`prop ref int32`) is unaffected. This extends
+ADR-0051 §1's `property_declaration` and ADR-0118's indexer form with one optional
+token:
+
+```
+property_declaration = annotations? accessibility_modifier? "prop"
+                       explicit_interface_clause? identifier "ref"? type_clause property_body?
+indexer_declaration  = annotations? accessibility_modifier? "prop"
+                       explicit_interface_clause? "this" "[" parameters "]" "ref"? type_clause property_body?
+```
+
+**The arrow form is ref-aware, and the `func` arrow is not.** `prop P ref T -> e`
+desugars to `{ get { return ref e } }`, not `{ get { return e } }`. The asymmetry
+with `func` is deliberate and is not an inconsistency: a `func` arrow body *has* a
+`return` in its surface spelling to attach `ref` to (which is why #3878 refuses to
+fold a ref-returning method into the arrow form and keeps
+`{ return ref lvalue }`), whereas a property's arrow has no `return` at all. The
+declaration's own `ref` is therefore the only place the modifier can live, and
+repeating it after the arrow would be pure noise. There is exactly one spelling:
+`-> ref e` does not parse.
+
+**Restrictions, and why each one exists.**
+
+| Rejected shape | Diagnostic | Reason |
+| --- | --- | --- |
+| `prop Slot ref int32` (auto-property) | GS0578 | A by-ref return must name the storage it aliases. An auto-property's getter copies out of a compiler-synthesized backing field, so `ref` would silently alias the *field*. #3878's GS0219 sweep found that the auto-property backing-field path is exactly where by-ref hazards concentrate. |
+| `prop Slot ref int32 { get }` (bodiless) | GS0578 | Same rule: an abstract slot or a read-only auto-property names no storage. |
+| `interface I { prop Slot ref int32 { get } }` | GS0578 | An interface member is a slot, not storage. G# has no ref-kind matching for property slots (GS0255 covers *methods* only), so an implementor could satisfy a `ref` requirement with a copy-returning property and nothing would catch it. Rejected rather than accepted-and-unchecked. A default-bodied interface accessor is rejected for the same reason — an override of it would be unchecked. |
+| a `set` / `init` accessor alongside `ref` | GS0579 | The returned reference *is* the write path; a setter would be a second, contradictory one. C# spells the same rule CS8147. |
+| `prop P ref *int32` | GS0250 (reused) | `ref *T` is redundant — the same rule a ref-returning `func` gets. |
+
+Everything else about a ref-returning getter is the **existing** GS0248–GS0255
+surface, unchanged and un-duplicated: the accessor body is bound with the getter's
+`FunctionSymbol` as its enclosing function, so a plain `return` inside one is
+GS0252, a non-lvalue operand is GS0253, and returning a reference to a getter-local
+is GS0254.
+
+**Symbol and emit.** `PropertySymbol` gains a `ReturnRefKind` (`None` / `Ref`)
+mirroring `FunctionSymbol.ReturnRefKind`, and the getter's accessor
+`FunctionSymbol` carries the same value. `PropertySymbol.Type` stays the **pointee**
+type `T` throughout — the by-ref-ness is a separate bit, not a `ByRefTypeSymbol`
+wrap, exactly as §3 decided for parameters and #490 decided for function returns.
+Both the PropertyDef signature and the `get_P` MethodDef signature encode `T&`:
+ECMA-335 §II.23.2.5 allows `ELEMENT_TYPE_BYREF` in a PropertySig, and the two have
+to agree. Measured, with the getter by-ref and the PropertyDef row left by-value,
+Roslyn does not merely refuse the alias — it refuses the member outright with
+**CS1546** ("Property, indexer, or event `Holder.Property` is not supported by the
+language; try directly calling accessor method `Holder.get_Property()`").
+
+**Consuming a ref return from G#.** #490 deferred this ("a G# caller can't directly
+use a ref-returning function as an lvalue yet"), and the deferral was not free: the
+emitted call site left the raw `T&` on the stack where the bound tree said `T`,
+which is either unverifiable IL or a silently wrong answer (the address printed as
+an `int32`). A property read is far more common than a method-call read, so this
+amendment closes it rather than inheriting it: a call to any G# member whose
+`ReturnRefKind` is `Ref` now loads through the returned pointer at the use site
+(ADR-0056 §1's rule, applied to source members as it already was to imported ones).
+That is a value read, which is all G# can express — the ref-alias binder still
+rejects a call result as an lvalue (the documented #1900 limit), so
+`let ref x = holder.P` remains unavailable and aliasing is a *consumer-side*
+capability, exercised from C#.
+
+**Writing through the reference from G# is not in scope, and fails loudly.** C#
+lets `holder.RefProp = 5` write through the returned reference; G# has no setter
+on a ref property (GS0579 forbids one), so the same source reports **GS0127**
+("'Property' is read-only and cannot be assigned to"). Lowering an assignment to
+`call get_P` + `stind` is a coherent follow-up, but it is a second feature — a
+write-through property assignment, not a by-ref return — and the failure it
+leaves behind is a compile error at the assignment, not a silent copy.
+
+**`ref readonly` is still not in the language.** G# has no read-only by-ref return,
+so cs2gs continues to gap a C# `ref readonly` property or indexer. Rendering one as
+a plain `ref` would hand the caller a writable alias to storage the author declared
+read-only — a different silent behaviour change, not a smaller one.
+
 ## Consequences
 
 **Unlocked:**
@@ -277,7 +376,7 @@ Func-typed parameters expressed via the structural `func(T1, T2) R` clause (ADR-
 
 **Foreclosed:**
 
-- ~~`ref` returns from G# functions (`func foo() ref int32 { return ref x }`). Not addressed in this ADR; remains a follow-up gated on ref-safe-to-escape per ADR-0058.~~ **Implemented in issue #490** — `func foo(ref x int32) ref int32 { return ref x }` is now parsed, bound, emitted (CLR `T&` return), and consumable from C# via reflection. Diagnostics GS0248–GS0255 cover the full surface, override / interface ref-return matching extends GS0240 with a dedicated GS0255, and the function-local escape check rejects `return ref local`.
+- ~~`ref` returns from G# functions (`func foo() ref int32 { return ref x }`). Not addressed in this ADR; remains a follow-up gated on ref-safe-to-escape per ADR-0058.~~ **Implemented in issue #490** — `func foo(ref x int32) ref int32 { return ref x }` is now parsed, bound, emitted (CLR `T&` return), and consumable from C# via reflection. Diagnostics GS0248–GS0255 cover the full surface, override / interface ref-return matching extends GS0240 with a dedicated GS0255, and the function-local escape check rejects `return ref local`. **Extended in issue #3879** — see §14: the by-ref return now also applies to `prop` and to indexer members, restricted to the computed read-only forms (GS0578 / GS0579).
 - `ref` local variables outside the existing `*T` form. Not addressed; users who want a managed-pointer local continue to use `var p *int32 = &x` per ADR-0039.
 - `params` / variadic `ref`/`out`/`in` parameters. Rejected by GS0236 at parse/bind time and not on any roadmap (the CLR has no array-of-byref encoding).
 - Conditional ref-passing (`f(ok ? ref x : ref y)`). The ternary form requires both branches to produce the same lvalue *category*, which is a meaningful escape-analysis question; deferred until there is concrete demand.

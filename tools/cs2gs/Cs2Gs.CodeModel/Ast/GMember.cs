@@ -140,6 +140,12 @@ public sealed class PropertyDeclaration : GMember
     /// Mutually exclusive with any receiver-clause concept (properties have
     /// no receiver clause of their own to begin with).
     /// </param>
+    /// <param name="isRefReturn">
+    /// Whether the declared type carries G#'s <c>ref</c> return modifier
+    /// (<c>prop P ref int32 { get { return ref slot } }</c>, issue #3879 /
+    /// the ADR-0060 amendment) — mapped from a C# ref-returning property or
+    /// indexer (issue #3839).
+    /// </param>
     public PropertyDeclaration(
         string name,
         GTypeReference type,
@@ -150,7 +156,8 @@ public sealed class PropertyDeclaration : GMember
         IReadOnlyList<AttributeUse> attributes = null,
         IReadOnlyList<Parameter> indexerParameters = null,
         GStatement expressionBody = null,
-        GTypeReference explicitInterfaceType = null)
+        GTypeReference explicitInterfaceType = null,
+        bool isRefReturn = false)
     {
         Name = name;
         Type = type;
@@ -162,6 +169,7 @@ public sealed class PropertyDeclaration : GMember
         IndexerParameters = indexerParameters ?? new List<Parameter>();
         ExpressionBody = expressionBody;
         ExplicitInterfaceType = explicitInterfaceType;
+        IsRefReturn = isRefReturn;
     }
 
     /// <summary>Gets the property name.</summary>
@@ -203,6 +211,17 @@ public sealed class PropertyDeclaration : GMember
     /// <see langword="null"/> for an ordinary property.
     /// </summary>
     public GTypeReference ExplicitInterfaceType { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether the declared type carries G#'s
+    /// <c>ref</c> return modifier (issue #3879 / the ADR-0060 amendment):
+    /// <c>prop P ref int32 -&gt; slot</c>. The getter then returns a managed
+    /// pointer, so a CLR consumer can write through
+    /// <c>ref int x = ref holder.P</c>. Restricted by gsc to the computed,
+    /// read-only forms, which is exactly the shape a C# ref-returning
+    /// property/indexer always has.
+    /// </summary>
+    public bool IsRefReturn { get; }
 }
 
 /// <summary>

@@ -2922,6 +2922,79 @@ internal sealed partial class DeclarationBinder
         return RefKind.Ref;
     }
 
+    /// <summary>
+    /// Issue #3879 (ADR-0060 amendment): validates the <c>ref</c> return modifier
+    /// on a property or indexer declaration and yields the resulting ref-kind.
+    /// This is the property-side counterpart of <see cref="ValidateReturnRefKind"/>,
+    /// and deliberately does NOT share its rule set — a property has no
+    /// <c>async</c>/iterator form to reject, and it has two rules of its own.
+    /// <para>
+    /// The by-ref return is restricted to the COMPUTED, read-only forms:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>the getter must have a body, because a by-ref return
+    ///     has to name the storage it aliases. An auto-property's getter copies
+    ///     out of a compiler-synthesized backing field, so <c>ref</c> would alias
+    ///     the field — which is either a lie (the caller thinks it is writing to
+    ///     the property) or a hazard: #3878's GS0219 sweep found the
+    ///     auto-property backing-field path is exactly where by-ref problems
+    ///     concentrate. A bodiless <c>{ get }</c> — an abstract slot or an
+    ///     interface requirement — is rejected for the same reason plus a
+    ///     second: nothing in this declaration says what is aliased.</description></item>
+    ///   <item><description>there must be no <c>set</c> / <c>init</c> accessor,
+    ///     because the returned reference already IS the write path. C# spells
+    ///     this same rule CS8147.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="syntax">The property/indexer declaration.</param>
+    /// <param name="propertyName">The bound property name, used in the diagnostics.</param>
+    /// <param name="propertyType">The bound property type.</param>
+    /// <param name="hasBodiedGetter">Whether a <c>get</c> accessor with a block body is present.</param>
+    /// <param name="writeAccessor">The <c>set</c> / <c>init</c> accessor, or <see langword="null"/> when the property is read-only.</param>
+    /// <returns><see cref="RefKind.Ref"/> when the declaration is a well-formed by-ref property, otherwise <see cref="RefKind.None"/>.</returns>
+    private RefKind ValidatePropertyReturnRefKind(
+        PropertyDeclarationSyntax syntax,
+        string propertyName,
+        TypeSymbol propertyType,
+        bool hasBodiedGetter,
+        PropertyAccessorSyntax? writeAccessor)
+    {
+        if (!syntax.IsRefReturn)
+        {
+            return RefKind.None;
+        }
+
+        var location = syntax.ReturnRefModifier?.Location ?? syntax.Identifier.Location;
+
+        // ADR-0039 §4: `ref *T` is redundant — the same rule (and the same
+        // diagnostic) a ref-returning function gets.
+        if (propertyType is ByRefTypeSymbol)
+        {
+            Diagnostics.ReportRefReturnOfByRefType(location);
+            return RefKind.None;
+        }
+
+        if (!hasBodiedGetter)
+        {
+            Diagnostics.ReportRefPropertyRequiresComputedGetter(location, propertyName);
+            return RefKind.None;
+        }
+
+        // The bare auto-property form (`prop P ref T`, no accessor list) also
+        // implies a setter, but it never reaches here: it has no bodied getter
+        // either, and GS0578 above is the more informative of the two answers.
+        if (writeAccessor != null)
+        {
+            Diagnostics.ReportRefPropertyCannotHaveSetter(
+                writeAccessor.AccessorKeyword.Location,
+                propertyName,
+                writeAccessor.AccessorKeyword.Text ?? "set");
+            return RefKind.None;
+        }
+
+        return RefKind.Ref;
+    }
+
     internal VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)
     {
         return BindVariableDeclaration(identifier, isReadOnly, type, Accessibility.Public);
