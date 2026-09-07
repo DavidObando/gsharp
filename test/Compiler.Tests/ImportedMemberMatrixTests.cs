@@ -84,6 +84,16 @@ public class ImportedMemberMatrixTests
 
                 public static string Pick(object first, object second)
                     => "object";
+
+                public static string PickNested<T>(
+                    T first,
+                    System.Collections.Generic.IEnumerable<T> second)
+                    => "generic-nested";
+
+                public static string PickNested(
+                    object first,
+                    System.Collections.Generic.IEnumerable<object> second)
+                    => "object-nested";
             }
 
             public static class GenericOnly
@@ -99,6 +109,7 @@ public class ImportedMemberMatrixTests
         const string gsSource = """
             package Issue4086.Probe
             import System
+            import System.Collections.Generic
             import System.Threading.Tasks
             import Issue4086.CSharp
 
@@ -120,6 +131,12 @@ public class ImportedMemberMatrixTests
 
             func throughGenericOnlyMixedInference[T](first T, second object) string {
                 return GenericOnly.Pick(first, second)
+            }
+
+            func throughNestedMixedInference[T](
+                first T,
+                second IEnumerable[object]) string {
+                return Overloads.PickNested(first, second)
             }
 
             func throughExpandedMixedInference[T](first T, second object) string {
@@ -168,6 +185,9 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughGenericOnlyMixedInference[DisposableBase](
                 DisposableBase(),
                 DisposableBase()))
+            Console.WriteLine(throughNestedMixedInference[DisposableBase](
+                DisposableBase(),
+                List[object]()))
             Console.WriteLine(throughExpandedMixedInference[DisposableBase](
                 DisposableBase(),
                 DisposableBase()))
@@ -190,7 +210,8 @@ public class ImportedMemberMatrixTests
 
         Assert.Equal(
             $"generic-disposable{Environment.NewLine}generic-disposable{Environment.NewLine}object{Environment.NewLine}"
-                + $"object{Environment.NewLine}Object{Environment.NewLine}Object{Environment.NewLine}"
+                + $"object{Environment.NewLine}Object{Environment.NewLine}object-nested{Environment.NewLine}"
+                + $"Object{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}Object{Environment.NewLine}",

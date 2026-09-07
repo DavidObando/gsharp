@@ -3481,7 +3481,8 @@ internal static class ClrOverloadResolution
         int[]? argumentMapping,
         bool isExpanded)
     {
-        if (symbolicArgTypes == null)
+        if (symbolicArgTypes == null
+            || openCandidate is not MethodInfo openMethod)
         {
             return false;
         }
@@ -3508,15 +3509,11 @@ internal static class ClrOverloadResolution
             }
 
             declaredType = PeelByRef(declaredType) ?? declaredType;
-            if (!declaredType.IsGenericParameter
-                || declaredType.DeclaringMethod == null
-                || declaredType.GenericParameterPosition != methodTypeParameter.GenericParameterPosition)
-            {
-                continue;
-            }
-
-            if (symbolicArgTypes[sourceIndex].ClrType is { } sourceClr
-                && IsSystemObject(sourceClr))
+            if (MemberLookup.HasGenuineObjectInferenceBound(
+                    openMethod,
+                    declaredType,
+                    symbolicArgTypes[sourceIndex],
+                    methodTypeParameter.GenericParameterPosition))
             {
                 return true;
             }
