@@ -1786,30 +1786,45 @@ public sealed class StructSymbol : TypeSymbol
             return type;
         }
 
-        var enclosingArguments = ImmutableArray.CreateBuilder<TypeSymbol>(type.EnclosingTypeArguments.Length);
-        var ownArguments = ImmutableArray.CreateBuilder<TypeSymbol>(type.TypeArguments.Length);
-        var changed = false;
+        // Issue #3940: an open nested-generic reference carries only its own
+        // arguments. Seed its enclosing parameters too, but retain that vector
+        // only when this substitution actually closes one of them.
+        var enclosingSource = type.EnclosingTypeArguments;
+        if (enclosingSource.IsDefaultOrEmpty)
+        {
+            var enclosingParameters = CollectEnclosingTypeParameters(type);
+            var sourceBuilder = ImmutableArray.CreateBuilder<TypeSymbol>(enclosingParameters.Length);
+            sourceBuilder.AddRange(enclosingParameters);
+            enclosingSource = sourceBuilder.MoveToImmutable();
+        }
 
-        foreach (var argument in type.EnclosingTypeArguments)
+        var enclosingArguments = ImmutableArray.CreateBuilder<TypeSymbol>(enclosingSource.Length);
+        var ownArguments = ImmutableArray.CreateBuilder<TypeSymbol>(type.TypeArguments.Length);
+        var enclosingChanged = false;
+        var ownChanged = false;
+
+        foreach (var argument in enclosingSource)
         {
             var substituted = substituteOne(argument);
-            changed |= !ReferenceEquals(substituted, argument);
+            enclosingChanged |= !ReferenceEquals(substituted, argument);
             enclosingArguments.Add(substituted);
         }
 
         foreach (var argument in type.TypeArguments)
         {
             var substituted = substituteOne(argument);
-            changed |= !ReferenceEquals(substituted, argument);
+            ownChanged |= !ReferenceEquals(substituted, argument);
             ownArguments.Add(substituted);
         }
 
-        if (!changed)
+        if (!enclosingChanged && !ownChanged)
         {
             return type;
         }
 
-        var substitutedEnclosing = enclosingArguments.MoveToImmutable();
+        var substitutedEnclosing = enclosingChanged
+            ? enclosingArguments.MoveToImmutable()
+            : type.EnclosingTypeArguments;
         var substitutedOwn = ownArguments.MoveToImmutable();
         return !substitutedEnclosing.IsDefaultOrEmpty
             ? ConstructNestedGeneric(definition, substitutedEnclosing, substitutedOwn, mapClrType)
