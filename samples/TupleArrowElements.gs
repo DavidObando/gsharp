@@ -40,5 +40,5 @@ let (square, n) = mixed
 Console.WriteLine(square(n))
 
 // The ADR-0137 parenthesized-nullable function type keeps its meaning.
-var maybe((int32) -> int32)?= nil
+var maybe((int32) -> int32)? = nil
 Console.WriteLine(maybe == nil)
