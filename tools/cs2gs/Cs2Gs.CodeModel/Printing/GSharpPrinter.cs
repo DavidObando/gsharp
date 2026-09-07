@@ -2137,7 +2137,7 @@ public static class GSharpPrinter
                 sb.Append($"({RenderType(property.ExplicitInterfaceType)}) ");
             }
 
-            sb.Append($"this[{RenderParameterList(property.IndexerParameters)}] {RenderType(property.Type)}");
+            sb.Append($"this[{RenderParameterList(property.IndexerParameters)}] {RenderPropertyReturnPrefix(property)}{RenderType(property.Type)}");
         }
         else
         {
@@ -2149,7 +2149,7 @@ public static class GSharpPrinter
                 sb.Append($"({RenderType(property.ExplicitInterfaceType)}) ");
             }
 
-            sb.Append($"{property.Name} {RenderType(property.Type)}");
+            sb.Append($"{property.Name} {RenderPropertyReturnPrefix(property)}{RenderType(property.Type)}");
         }
 
         if (property.ExpressionBody != null)
@@ -2196,6 +2196,14 @@ public static class GSharpPrinter
         sb.Append('}');
         return sb.ToString();
     }
+
+    // Issue #3879 (ADR-0060 amendment): the `ref` return modifier sits between
+    // the property/indexer name and its type — `prop P ref int32`,
+    // `prop this[i int32] ref int32` — exactly where `func F() ref int32` puts
+    // it. gsc's parser consumes it only when a type clause can start at the next
+    // token, so the modifier never collides with a property NAMED `ref`.
+    private static string RenderPropertyReturnPrefix(PropertyDeclaration property)
+        => property.IsRefReturn ? "ref " : string.Empty;
 
     private static string RenderAccessor(PropertyAccessor accessor, int indent)
     {

@@ -189,20 +189,37 @@ public sealed partial class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
 
-            // Issue #3839: a C# `ref`/`ref readonly` INDEXER has no canonical G#
-            // form either — G#'s by-ref return is a `func` feature (issue #490 /
-            // ADR-0060) and `prop this[...] ref T` is not in the grammar.
-            // Emitting `prop this[...] T` compiles and silently returns a copy,
-            // so writes through the reference vanish. cs2gs already gaps at the
-            // USE site of such an indexer (#1987); the DECLARATION site was the
-            // hole that let the copy-returning form through.
-            if (symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly))
+            // Issue #3879 (ADR-0060 amendment): a C# `ref` INDEXER now has a
+            // canonical G# form — `prop this[i int32] ref T { get { return ref
+            // lvalue } }` and its arrow sugar. See the twin comment in
+            // TranslateProperty for why `ref readonly` still gaps.
+            bool isRefReturnIndexer = symbol != null && symbol.ReturnsByRef;
+
+            // Issue #3879: the twin of the abstract/interface gap in
+            // TranslateProperty — gsc's by-ref form is concrete-only, so an
+            // abstract or interface-declared `ref` indexer must gap HERE rather
+            // than be emitted and refused later by gsc's GS0578.
+            if (symbol != null
+                && symbol.ReturnsByRef
+                && !symbol.ReturnsByRefReadonly
+                && (symbol.IsAbstract || symbol.ContainingType?.TypeKind == TypeKind.Interface))
             {
-                string refIndexerMessage =
-                    "ref-returning indexer has no canonical G# form: G#'s by-ref return (issue #490 / ADR-0060) is a " +
-                    "`func` feature and `prop this[...]` has no `ref` return spelling. Emitting it as an ordinary " +
-                    "indexer would silently return a copy and drop the aliasing (issue #3839).";
-                this.context.ReportUnsupported(node, refIndexerMessage);
+                string abstractRefIndexerMessage =
+                    "ref-returning indexer is abstract or declared on an interface, which has no G# form: G#'s by-ref " +
+                    "property (issue #3879, ADR-0060 §14) is a concrete, computed-getter form only, because a slot " +
+                    "names nothing to alias and an implementor could satisfy a `ref` requirement with a copy-returning " +
+                    "indexer unchecked. A concrete `ref` indexer translates.";
+                this.context.ReportUnsupported(node, abstractRefIndexerMessage);
+                isRefReturnIndexer = false;
+            }
+
+            if (symbol != null && symbol.ReturnsByRefReadonly)
+            {
+                string refReadonlyIndexerMessage =
+                    "ref-returning indexer is `ref readonly`, which has no G# form: G#'s by-ref return (issue #490 / " +
+                    "ADR-0060, extended to `prop` by issue #3879) has no read-only variant, so emitting it would hand " +
+                    "the caller a writable alias to read-only storage. A plain `ref` indexer translates (issue #3839).";
+                this.context.ReportUnsupported(node, refReadonlyIndexerMessage);
             }
 
             // ADR-0149 (issue #944 follow-up): G# interfaces can now declare an
@@ -287,7 +304,8 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #1278 / ADR-0131: a C# expression-bodied indexer
             // (`public T this[int i] => expr;`) renders as the idiomatic G#
             // indexer-level arrow `prop this[i T] U -> expr`.
-            GStatement arrowBody = TryFoldComputedPropertyArrow(node.ExpressionBody, accessors);
+            GStatement arrowBody = TryFoldComputedPropertyArrow(
+                node.ExpressionBody, accessors, allowRefReturn: isRefReturnIndexer);
             if (arrowBody != null)
             {
                 accessors = new List<PropertyAccessor>();
@@ -316,7 +334,8 @@ public sealed partial class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(node.AttributeLists),
                 indexerParameters: indexParameters,
                 expressionBody: arrowBody,
-                explicitInterfaceType: explicitInterfaceIndexerType);
+                explicitInterfaceType: explicitInterfaceIndexerType,
+                isRefReturn: isRefReturnIndexer);
 
             return (property, isStatic);
         }
@@ -976,11 +995,20 @@ public sealed partial class CSharpToGSharpTranslator
             bool variadic = symbol.IsParams
                 && (symbol.Type is IArrayTypeSymbol || IsSupportedParamsCollectionType(symbol.Type));
             ITypeSymbol parameterType = symbol.Type;
+            ITypeSymbol variadicElementType =
+                variadic && symbol.Type is IArrayTypeSymbol paramsArray
+                    ? paramsArray.ElementType
+                    : null;
+            bool variadicElementNestedInArrayType = false;
             if (variadic && parameterType is IArrayTypeSymbol arrayType
                 && arrayType.ElementType is not IArrayTypeSymbol
                 && !IsSupportedParamsCollectionType(arrayType.ElementType))
             {
                 parameterType = arrayType.ElementType;
+            }
+            else if (variadicElementType != null)
+            {
+                variadicElementNestedInArrayType = true;
             }
 
             // An array params whose ELEMENT is itself carrier-shaped (e.g.
@@ -996,11 +1024,19 @@ public sealed partial class CSharpToGSharpTranslator
 
             GTypeReference type = this.typeMapper.Map(parameterType, this.context, symbol.Locations.FirstOrDefault());
 
-            // Issue #1072: a non-nullable reference/array parameter that is
-            // null-checked or null-assigned in the method body is really nullable;
-            // render it `T?` so the `== nil` guard type-checks (variadic params are
-            // never null-compared as a whole, so they are excluded).
-            if (!variadic && promoteNullability)
+            // Issue #1072/#3888: promote the declaration position that actually
+            // receives null. Ordinary parameters use their carrier symbol; a
+            // variadic array uses the separately tracked expanded-ELEMENT
+            // evidence, never nullable evidence about the array itself.
+            if (promoteNullability && variadicElementType != null)
+            {
+                type = this.PromoteParamsElementIfUsedAsNullable(
+                    type,
+                    symbol,
+                    variadicElementType,
+                    variadicElementNestedInArrayType);
+            }
+            else if (!variadic && promoteNullability)
             {
                 type = this.PromoteIfUsedAsNullable(type, symbol);
             }
@@ -1759,7 +1795,7 @@ public sealed partial class CSharpToGSharpTranslator
         // statements (parameter shadows, hoisted temporaries, a bare `throw`
         // expression, or an `unsafe { }` wrap) do not fold and keep their block
         // body so the emitted G# stays correct.
-        private static GStatement TryFoldArrowBody(BlockStatement block)
+        private static GStatement TryFoldArrowBody(BlockStatement block, bool allowRefReturn = false)
         {
             if (block == null || block.IsUnsafe || block.Statements.Count != 1)
             {
@@ -1769,14 +1805,21 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement only = block.Statements[0];
             return only switch
             {
-                // Issue #3839: a ref return is NOT foldable. G#'s arrow form has
-                // no `-> ref lvalue` spelling (issue #490 / ADR-0060 gives the
-                // by-ref return only the block form `func F(...) ref T { return
-                // ref lvalue }`), so folding one drops the `ref` from the
-                // returned expression and gsc rejects the member with GS0252
-                // ("returns by reference; use 'return ref <lvalue>'"). Keep the
-                // block body, which prints the aliasing return verbatim.
-                ReturnStatement refReturn when refReturn.IsRef => null,
+                // Issue #3839: a ref return is NOT foldable on a `func`. G#'s
+                // function arrow form has no `-> ref lvalue` spelling (issue #490
+                // / ADR-0060 gives the by-ref return only the block form
+                // `func F(...) ref T { return ref lvalue }`), so folding one
+                // drops the `ref` from the returned expression and gsc rejects
+                // the member with GS0252 ("returns by reference; use 'return ref
+                // <lvalue>'"). Keep the block body, which prints the aliasing
+                // return verbatim.
+                //
+                // Issue #3879: a `prop`/indexer arrow IS ref-aware — the whole
+                // point of `prop P ref T -> lvalue` is that gsc desugars it to
+                // `{ get { return ref lvalue } }`, a property having no `return`
+                // of its own for the `ref` to attach to. Only the property and
+                // indexer callers pass `allowRefReturn: true`.
+                ReturnStatement refReturn when refReturn.IsRef && !allowRefReturn => null,
                 ReturnStatement r when r.Expression != null => r,
                 ExpressionStatement => only,
                 AssignmentStatement => only,

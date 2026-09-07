@@ -14,7 +14,10 @@ namespace Cs2Gs.Pipeline;
 /// <summary>Creates the non-source portion of an exact repository mirror.</summary>
 internal static class RepositoryMirror
 {
-    internal static IReadOnlyList<string> Prepare(string sourceRoot, string destinationRoot)
+    internal static IReadOnlyList<string> Prepare(
+        string sourceRoot,
+        string destinationRoot,
+        IReadOnlyDictionary<string, string> generatedProjectPaths = null)
     {
         string source = Path.GetFullPath(sourceRoot);
         string destination = Path.GetFullPath(destinationRoot);
@@ -37,7 +40,12 @@ internal static class RepositoryMirror
 
             string target = Path.Combine(destination, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(target));
-            CopyFile(Path.Combine(source, relativePath), target);
+            CopyFile(
+                Path.Combine(source, relativePath),
+                target,
+                source,
+                destination,
+                generatedProjectPaths);
         }
 
         return files;
@@ -335,18 +343,52 @@ internal static class RepositoryMirror
         }
     }
 
-    private static void CopyFile(string source, string destination)
+    private static void CopyFile(
+        string source,
+        string destination,
+        string sourceRoot,
+        string destinationRoot,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
     {
         string fileName = Path.GetFileName(source);
+        string extension = Path.GetExtension(source);
+        string content = null;
+        bool changed = false;
         if (fileName.Equals("Directory.Build.props", StringComparison.OrdinalIgnoreCase) ||
             fileName.Equals("Directory.Packages.props", StringComparison.OrdinalIgnoreCase))
         {
-            string content = File.ReadAllText(source);
+            content = File.ReadAllText(source);
             if (NerdbankGitVersioningPolicy.TryBumpProjectXml(content, out string bumped))
             {
-                File.WriteAllText(destination, bumped);
+                content = bumped;
+                changed = true;
+            }
+        }
+
+        if ((extension.Equals(".props", StringComparison.OrdinalIgnoreCase) ||
+            extension.Equals(".targets", StringComparison.OrdinalIgnoreCase)) &&
+            generatedProjectPaths is not null &&
+            generatedProjectPaths.Count != 0)
+        {
+            content ??= File.ReadAllText(source);
+            XDocument document = XDocument.Parse(content, LoadOptions.PreserveWhitespace);
+            if (GSharpProjectTransformer.RewriteProjectItemPaths(
+                document,
+                Path.GetDirectoryName(source),
+                Path.GetDirectoryName(destination),
+                sourceRoot,
+                destinationRoot,
+                generatedProjectPaths))
+            {
+                document.Save(destination, SaveOptions.DisableFormatting);
                 return;
             }
+        }
+
+        if (changed)
+        {
+            File.WriteAllText(destination, content);
+            return;
         }
 
         File.Copy(source, destination);

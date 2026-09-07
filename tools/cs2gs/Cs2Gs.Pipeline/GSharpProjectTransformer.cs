@@ -153,6 +153,89 @@ internal static class GSharpProjectTransformer
         return resolved;
     }
 
+    internal static bool RewriteProjectItemPaths(
+        XDocument document,
+        string sourceFileDirectory,
+        string destinationFileDirectory,
+        string sourceRoot,
+        string destinationRoot,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        IReadOnlySet<string> repositoryRootExpressions = FindRepositoryRootExpressions(
+            document,
+            sourceFileDirectory,
+            sourceRoot);
+        bool changed = false;
+        foreach (XElement itemGroup in ElementsNamed(document, "ItemGroup"))
+        {
+            foreach (XElement item in itemGroup.Elements())
+            {
+                XAttribute include = AttributeNamed(item, "Include");
+                if (include is null || string.IsNullOrWhiteSpace(include.Value))
+                {
+                    continue;
+                }
+
+                string rewritten = RewriteProjectPathList(
+                    include.Value,
+                    sourceFileDirectory,
+                    destinationFileDirectory,
+                    generatedProjectPaths,
+                    sourceRoot,
+                    destinationRoot,
+                    repositoryRootExpressions);
+                if (!string.Equals(rewritten, include.Value, StringComparison.Ordinal))
+                {
+                    include.Value = rewritten;
+                    changed = true;
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    private static IReadOnlySet<string> FindRepositoryRootExpressions(
+        XDocument document,
+        string sourceFileDirectory,
+        string sourceRoot)
+    {
+        var expressions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (XElement propertyGroup in ElementsNamed(document, "PropertyGroup"))
+        {
+            foreach (XElement property in propertyGroup.Elements())
+            {
+                string value = property.Value.Trim();
+                const string anchor = "$(MSBuildThisFileDirectory)";
+                if (property.HasElements ||
+                    !value.StartsWith(anchor, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string remainder = value.Substring(anchor.Length);
+                if (remainder.Contains("$(", StringComparison.Ordinal) ||
+                    remainder.Contains("@(", StringComparison.Ordinal) ||
+                    remainder.Contains('*'))
+                {
+                    continue;
+                }
+
+                string resolved = Path.GetFullPath(
+                    Path.Combine(sourceFileDirectory, NormalizeDirectorySeparators(remainder)));
+                if (string.Equals(
+                    Path.TrimEndingDirectorySeparator(resolved),
+                    Path.TrimEndingDirectorySeparator(sourceRoot),
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    expressions.Add("$(" + property.Name.LocalName + ")");
+                }
+            }
+        }
+
+        return expressions;
+    }
+
     private static void AddSourceSdkDefaults(XDocument document, string sourceSdk)
     {
         bool isWeb = HasSdk(sourceSdk, "Microsoft.NET.Sdk.Web");
@@ -309,7 +392,10 @@ internal static class GSharpProjectTransformer
         string value,
         string sourceProjectDirectory,
         string destinationProjectDirectory,
-        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        string sourceRoot = null,
+        string destinationRoot = null,
+        IReadOnlySet<string> repositoryRootExpressions = null)
     {
         if (value.IndexOf(".csproj", StringComparison.OrdinalIgnoreCase) < 0)
         {
@@ -325,6 +411,9 @@ internal static class GSharpProjectTransformer
                 sourceProjectDirectory,
                 destinationProjectDirectory,
                 generatedProjectPaths,
+                sourceRoot,
+                destinationRoot,
+                repositoryRootExpressions,
                 out string mapped))
             {
                 specs[i] = mapped;
@@ -336,15 +425,19 @@ internal static class GSharpProjectTransformer
     }
 
     // Maps one path spec to its generated counterpart, preserving the leading
-    // MSBuild directory expression (the only two that can be expanded without
-    // evaluating the project) and any surrounding whitespace. Returns false —
-    // leaving the spec untouched — for anything that cannot be resolved
-    // statically or that is not part of the migration set.
+    // MSBuild directory expression and any surrounding whitespace. Project
+    // transforms recognize only the two expressions that can be resolved from
+    // their location. Shared item files may additionally match an expression's
+    // literal suffix against the repository-rooted migration map. Returns false
+    // for anything unresolved or outside the migration set.
     private static bool TryMapProjectPathSpec(
         string spec,
         string sourceProjectDirectory,
         string destinationProjectDirectory,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
+        string sourceRoot,
+        string destinationRoot,
+        IReadOnlySet<string> repositoryRootExpressions,
         out string mapped)
     {
         mapped = null;
@@ -365,6 +458,7 @@ internal static class GSharpProjectTransformer
 
         string prefix = string.Empty;
         string remainder = value;
+        bool rootRelativeExpression = false;
         if (value.StartsWith("$(", StringComparison.Ordinal))
         {
             int close = value.IndexOf(')');
@@ -374,9 +468,22 @@ internal static class GSharpProjectTransformer
             }
 
             prefix = value.Substring(0, close + 1);
-            if (!IsAnchorExpression(prefix))
+            if (prefix.Equals("$(MSBuildProjectDirectory)", StringComparison.OrdinalIgnoreCase)
+                && sourceRoot is not null)
             {
                 return false;
+            }
+
+            if (!IsAnchorExpression(prefix))
+            {
+                if (string.IsNullOrEmpty(sourceRoot) ||
+                    string.IsNullOrEmpty(destinationRoot) ||
+                    repositoryRootExpressions?.Contains(prefix) != true)
+                {
+                    return false;
+                }
+
+                rootRelativeExpression = true;
             }
 
             remainder = value.Substring(close + 1).TrimStart('/', '\\');
@@ -393,10 +500,20 @@ internal static class GSharpProjectTransformer
         }
 
         string sourceReferencePath = Path.GetFullPath(
-            Path.Combine(sourceProjectDirectory, NormalizeDirectorySeparators(remainder)));
+            Path.Combine(
+                rootRelativeExpression ? sourceRoot : sourceProjectDirectory,
+                NormalizeDirectorySeparators(remainder)));
         if (!generatedProjectPaths.TryGetValue(sourceReferencePath, out string generatedProjectPath))
         {
             return false;
+        }
+
+        if (rootRelativeExpression)
+        {
+            string generatedRelative = Path.GetRelativePath(destinationRoot, generatedProjectPath)
+                .Replace('\\', '/');
+            mapped = leading + prefix + "/" + generatedRelative + trailing;
+            return true;
         }
 
         string relative = Path.GetRelativePath(
