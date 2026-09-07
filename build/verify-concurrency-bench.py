@@ -82,6 +82,12 @@ def smoke() -> int:
     else:
         subprocess.run([sys.executable, str(tests)], check=True, cwd=REPO)
 
+    workflow = (REPO / ".github" / "workflows" / "concurrency-bench.yml").read_text()
+    if "set -o pipefail" not in workflow:
+        failures.append("concurrency workflow can mask aggregation failures through tee")
+    if "--allow-incomparable-aggregate" not in workflow:
+        failures.append("concurrency workflow cannot aggregate hosted-runner report-only evidence")
+
     for failure in failures:
         print(f"error: {failure}", file=sys.stderr)
 

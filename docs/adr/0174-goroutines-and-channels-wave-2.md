@@ -3350,9 +3350,11 @@ implementation had to refine it.
     range-of-run-medians interval. A scoped paired run
     selects and warms the matching Go row rather than running Go's whole suite;
     a row with no honest Go counterpart omits Go. A host that exposes no
-    power-state identity is explicitly report-only. The existing `gsharp`,
-    `gsharp_aot`, `go` and `hardwareClass` JSON fields remain unchanged for
-    dashboard consumers.
+    power-state identity is explicitly report-only. The hosted nightly may
+    aggregate those runs only with an explicit report-only flag, preserving
+    diagnostics without making the result baseline-comparable. The existing
+    `gsharp`, `gsharp_aot`, `go` and `hardwareClass` JSON fields remain
+    unchanged for dashboard consumers.
 
 ## Addendum A — The ten patterns, three ways
 

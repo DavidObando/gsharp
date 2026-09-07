@@ -154,6 +154,12 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertNotEqual(fingerprint["comparisonKey"], aggregated["comparisonKey"])
         self.assertEqual([fingerprint["runId"], "second-run"], aggregated["sourceRunIds"])
 
+        second_fingerprint["comparable"] = False
+        second_fingerprint["incomparabilityReasons"] = ["power state changed"]
+        mixed = bench.aggregate_fingerprint([fingerprint, second_fingerprint])
+        self.assertFalse(mixed["comparable"])
+        self.assertEqual(["power state changed"], mixed["incomparabilityReasons"])
+
         preserved = {
             "select-ready": {
                 "median_ns": 72.0,
@@ -207,15 +213,31 @@ class ConcurrencyBenchTests(unittest.TestCase):
             **common,
             "aggregationKey": "same",
             "fingerprint": {
+                "runId": "incomparable-1",
                 "comparable": False,
                 "incomparabilityReasons": ["power state changed"],
             },
         }
         first.write_text(json.dumps(incomparable))
-        second.write_text(json.dumps(incomparable))
+        second_incomparable = {
+            **second_run,
+            "aggregationKey": "same",
+            "fingerprint": {
+                "runId": "incomparable-2",
+                "comparable": False,
+                "incomparabilityReasons": ["power state changed"],
+            },
+        }
+        second.write_text(json.dumps(second_incomparable))
         bench.load_runs([str(first)])
         with self.assertRaisesRegex(SystemExit, "power state changed"):
             bench.load_runs([str(first), str(second)])
+        gsharp, _, _, _, metadata = bench.load_runs(
+            [str(first), str(second)],
+            allow_incomparable=True,
+        )
+        self.assertEqual(2, len(gsharp))
+        self.assertEqual(2, len(metadata["sourceFingerprints"]))
 
         aggregate_payload = {
             **common,
