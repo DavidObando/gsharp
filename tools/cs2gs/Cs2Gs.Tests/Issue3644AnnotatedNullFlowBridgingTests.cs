@@ -146,6 +146,66 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #4046: an inferred LINQ result that ultimately flows into a
+    /// promoted nullable sink must keep nullable elements alive long enough for
+    /// a later operator to inspect them. Asserting the selector result throws
+    /// before <c>FirstOrDefault(candidate =&gt; candidate != null)</c> can filter
+    /// the null.
+    /// </summary>
+    [Fact]
+    public void RuntimeLambdaResult_FlowingToPromotedNullableSink_StaysBare()
+    {
+        string printed = TranslateOblivious(@"
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+
+namespace Demo
+{
+    public static class Paths
+    {
+        public static void Find(IEnumerable<string> values, out string result)
+        {
+            result = (values
+                .Select(value => Path.GetDirectoryName(value)))
+                .FirstOrDefault(candidate => candidate != null);
+        }
+    }
+}");
+
+        Assert.Contains("out result string?", printed);
+        Assert.DoesNotContain("GetDirectoryName(value)!!", printed);
+    }
+
+    /// <summary>
+    /// Precision guard: a fixed delegate return contract remains non-null even
+    /// when the invocation result later flows into a promoted nullable sink.
+    /// Only generic selector-result positions receive issue #4046's exemption.
+    /// </summary>
+    [Fact]
+    public void RuntimeLambdaResult_FixedDelegateContract_StillAssertsNonNull()
+    {
+        string printed = TranslateOblivious(@"
+using System;
+using System.IO;
+
+namespace Demo
+{
+    public static class Paths
+    {
+        public static string Apply(Func<string, string> selector) => selector("""");
+
+        public static string Find()
+        {
+            return Apply(value => Path.GetDirectoryName(value));
+        }
+    }
+}");
+
+        Assert.Contains("GetDirectoryName(value)!!", printed);
+    }
+
+    /// <summary>
     /// Precision guard: a non-nullable value in the expanded params tail grows
     /// no assertion.
     /// </summary>
