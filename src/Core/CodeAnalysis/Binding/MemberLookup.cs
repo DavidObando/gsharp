@@ -1649,24 +1649,6 @@ internal sealed class MemberLookup
         return result;
     }
 
-    internal static bool HasGenuineObjectInferenceBound(
-        MethodInfo openMethod,
-        Type openParameter,
-        TypeSymbol argument,
-        int typeParameterPosition)
-    {
-        var arity = openMethod.GetGenericArguments().Length;
-        if ((uint)typeParameterPosition >= (uint)arity)
-        {
-            return false;
-        }
-
-        var inferred = new TypeSymbol?[arity];
-        var genuineObjectBounds = new bool[arity];
-        UnifyForMethodTypeArgs(openParameter, argument, openMethod, inferred, genuineObjectBounds);
-        return genuineObjectBounds[typeParameterPosition];
-    }
-
     /// <summary>
     /// Issue #833 (sibling to #794 on the call-site argument side): when the
     /// imported generic method's open return type <em>contains</em> a method
@@ -5407,6 +5389,24 @@ internal sealed class MemberLookup
 
     internal static TypeSymbol? MergeInferredTypeArgument(TypeSymbol? existing, TypeSymbol? incoming)
         => MergeRecoveredTypeArgument(existing, incoming);
+
+    internal static bool HasGenuineObjectInferenceBound(
+        MethodInfo openMethod,
+        Type openParameter,
+        TypeSymbol argument,
+        int typeParameterPosition)
+    {
+        var arity = openMethod.GetGenericArguments().Length;
+        if ((uint)typeParameterPosition >= (uint)arity)
+        {
+            return false;
+        }
+
+        var inferred = new TypeSymbol?[arity];
+        var genuineObjectBounds = new bool[arity];
+        UnifyForMethodTypeArgs(openParameter, argument, openMethod, inferred, genuineObjectBounds);
+        return genuineObjectBounds[typeParameterPosition];
+    }
 
     internal static bool TryMapConstructedTypeArgumentsThroughHierarchy(
         ImportedTypeSymbol source,
