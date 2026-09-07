@@ -435,6 +435,13 @@ def aggregate_fingerprint(fingerprints: list[dict]) -> dict | None:
     comparison["intervalMethod"] = "range-of-run-medians"
     fingerprint.pop("runId", None)
     fingerprint["sourceRunIds"] = [item["runId"] for item in fingerprints]
+    reasons = sorted({
+        reason
+        for item in fingerprints
+        for reason in item.get("incomparabilityReasons", [])
+    })
+    fingerprint["comparable"] = all(item.get("comparable", True) for item in fingerprints)
+    fingerprint["incomparabilityReasons"] = reasons
     fingerprint["comparisonKey"] = stable_key(comparison)
     fingerprint["aggregationKey"] = stable_key({
         "comparison": comparison,

@@ -154,6 +154,12 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertNotEqual(fingerprint["comparisonKey"], aggregated["comparisonKey"])
         self.assertEqual([fingerprint["runId"], "second-run"], aggregated["sourceRunIds"])
 
+        second_fingerprint["comparable"] = False
+        second_fingerprint["incomparabilityReasons"] = ["power state changed"]
+        mixed = bench.aggregate_fingerprint([fingerprint, second_fingerprint])
+        self.assertFalse(mixed["comparable"])
+        self.assertEqual(["power state changed"], mixed["incomparabilityReasons"])
+
         preserved = {
             "select-ready": {
                 "median_ns": 72.0,
