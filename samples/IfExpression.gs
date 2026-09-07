@@ -83,7 +83,7 @@ Console
 //    through one arm and a fresh nullable string flows through the other,
 //    so both arms share the same nullable type.
 func ChooseLabel(opt string?) string? {
-    let fallback string?= nil
+    let fallback string? = nil
     return if opt != nil {
         opt
     } else {

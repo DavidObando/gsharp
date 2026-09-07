@@ -549,6 +549,7 @@ public static class GSharpFormatter
         private readonly List<LayoutToken> tokens;
         private readonly Dictionary<int, int> matchingDelimiters = new();
         private readonly Dictionary<int, int> breaksBefore = new();
+        private readonly Dictionary<string, bool> fusionCache = new(StringComparer.Ordinal);
 
         public LayoutBuilder(SyntaxTree tree)
         {
@@ -800,7 +801,7 @@ public static class GSharpFormatter
                 }
                 else if (previous is not null)
                 {
-                    segment.Add(InlineSeparator(previous, current));
+                    segment.Add(Separator(previous, current));
                 }
 
                 if (matchingDelimiters.TryGetValue(index, out int close) && close < end)
@@ -833,11 +834,24 @@ public static class GSharpFormatter
                             close,
                             suppressLeadingBreak: true,
                             groupSegments: false);
+
+                        // `List[T](capacity){first, second}` is a collection
+                        // initializer only while its FIRST element shares the
+                        // brace's line: Parser.Expressions.Creation.cs:1567
+                        // rejects the shape when `Peek(1)` is on a new line, and
+                        // the call then re-parses as a call followed by an
+                        // unrelated block statement. `IsBreakLegalBetween` sees
+                        // two tokens and cannot know which `{` this is, so the
+                        // rule has to be applied here, where the parent node is.
+                        Doc afterOpen = current.Token.Kind == SyntaxKind.OpenBraceToken
+                            && current.Parent is CollectionInitializerExpressionSyntax
+                                ? Doc.Empty
+                                : Doc.SoftLine;
                         Doc delimited = close == index + 1
                             ? Doc.Concat(Doc.Text(current.Text), Doc.Text(tokens[close].Text))
                             : Doc.Group(Doc.Concat(
                                 Doc.Text(current.Text),
-                                Doc.Nest(4, Doc.Concat(Doc.SoftLine, inner)),
+                                Doc.Nest(4, Doc.Concat(afterOpen, inner)),
                                 Doc.SoftLine,
                                 Doc.Text(tokens[close].Text)));
                         segment.Add(delimited);
@@ -930,6 +944,49 @@ public static class GSharpFormatter
                 or SyntaxKind.DotToken
                 or SyntaxKind.QuestionDotToken;
 
+        /// <summary>
+        /// Applies the spacing rule for a token boundary, then re-checks that
+        /// the result cannot be re-lexed into a different token stream.
+        /// </summary>
+        private Doc Separator(LayoutToken previous, LayoutToken current)
+        {
+            Doc separator = InlineSeparator(previous, current);
+            return ReferenceEquals(separator, Doc.Empty) && WouldFuse(previous.Text, current.Text)
+                ? Doc.Text(" ")
+                : separator;
+        }
+
+        // Two tokens the spacing rules want flush against each other must still
+        // lex back as those two tokens. `! !on` — a double logical negation the
+        // C# corpus produces — collapsed to `!!on`, which is the null-assertion
+        // operator: a different program, and a violation of the token-stream
+        // invariant that ADR-0179 D4 makes the whole design rest on.
+        //
+        // Rather than enumerate the lexer's multi-character operators here and
+        // go stale the next time one is added, ask the lexer. The pairs that
+        // reach this check are few and highly repetitive within one document,
+        // so the answers are memoised per format call.
+        private bool WouldFuse(string left, string right)
+        {
+            if (left.Length == 0 || right.Length == 0)
+            {
+                return false;
+            }
+
+            var key = left + "\0" + right;
+            if (fusionCache.TryGetValue(key, out bool cached))
+            {
+                return cached;
+            }
+
+            ImmutableArray<SyntaxToken> relexed = SyntaxTree.ParseTokens(left + right);
+            bool fuses = relexed.Length < 2
+                || !string.Equals(relexed[0].Text, left, StringComparison.Ordinal)
+                || !string.Equals(relexed[1].Text, right, StringComparison.Ordinal);
+            fusionCache[key] = fuses;
+            return fuses;
+        }
+
         private static Doc InlineSeparator(LayoutToken previous, LayoutToken current)
         {
             SyntaxKind left = previous.Token.Kind;
@@ -971,6 +1028,18 @@ public static class GSharpFormatter
                 && left is SyntaxKind.IdentifierToken
                     or SyntaxKind.CloseParenthesisToken
                     or SyntaxKind.CloseSquareBracketToken)
+            {
+                return Doc.Empty;
+            }
+
+            // `callee?(args)` (null-conditional invocation) and `int32?(n)`
+            // (nullable conversion call) both hang a `?` off the argument list,
+            // and the token alone cannot tell them from the `?:` conditional
+            // operator — `CallExpressionSyntax.NullableQuestionToken` can. A
+            // space here turns `x?(y)` into `x ? (y)` and the parser then looks
+            // for the `:` that never comes, which is precisely how the formatter
+            // was rejecting its own output on 28 migrated files.
+            if (right == SyntaxKind.OpenParenthesisToken && IsCallNullableMarker(previous))
             {
                 return Doc.Empty;
             }
@@ -1031,7 +1100,18 @@ public static class GSharpFormatter
                 return Doc.Empty;
             }
 
-            if (IsNullableMarker(previous) || IsNullableMarker(current))
+            // A nullable `?` never takes a space before it, and takes one after
+            // it only at the END of the type clause it belongs to. The marker is
+            // a suffix in `string?` but an infix in `[]?int32`, so "no space on
+            // either side" and "no space before, always one after" are both
+            // wrong; what actually holds is that no space appears INSIDE a type
+            // clause. Suppressing the space unconditionally produced
+            // `let root XElement?= XDocument.Parse(…)` — `?=` re-lexes as one
+            // token, the file stopped parsing, and D4's round-trip check then
+            // discarded the whole file's layout, which is how 15 migrated files
+            // silently kept the printer's wrapping.
+            if (IsNullableMarker(current)
+                || (IsNullableMarker(previous) && current.Parent is TypeClauseSyntax))
             {
                 return Doc.Empty;
             }
@@ -1061,7 +1141,8 @@ public static class GSharpFormatter
             token.Token.Kind is SyntaxKind.BangBangToken
                 or SyntaxKind.PlusPlusToken
                 or SyntaxKind.MinusMinusToken
-            || (token.Token.Kind == SyntaxKind.QuestionToken && IsNullableMarker(token));
+            || (token.Token.Kind == SyntaxKind.QuestionToken
+                && (IsNullableMarker(token) || IsCallNullableMarker(token)));
 
         private static bool IsPrefix(LayoutToken token)
         {
@@ -1082,6 +1163,18 @@ public static class GSharpFormatter
         private static bool IsNullableMarker(LayoutToken token) =>
             token.Token.Kind == SyntaxKind.QuestionToken
             && token.Parent is TypeClauseSyntax;
+
+        // The `?` of `callee?(args)` (null-conditional invocation) and of
+        // `int32?(n)` (nullable conversion call). Token kind alone cannot
+        // separate these from the `?:` conditional operator — only the owning
+        // node can, and `CallExpressionSyntax.NullableQuestionToken` is the
+        // node that owns them. Both sides of this `?` must stay tight: `x ?(y)`
+        // and `x? (y)` each re-parse as a conditional expression whose `:` is
+        // missing, which is how gsfmt was rejecting its own output on 28 files
+        // of the migrated tree and silently keeping the printer's layout.
+        private static bool IsCallNullableMarker(LayoutToken token) =>
+            token.Token.Kind == SyntaxKind.QuestionToken
+            && token.Parent is CallExpressionSyntax;
 
         private static void FlushSegment(List<Doc> completed, List<Doc> segment, bool group)
         {

@@ -41,7 +41,7 @@ let s string = default (string)
 Console.WriteLine(s == nil) // True
 
 // `default(T?)` for nullable value types — `nil`.
-let n int32?= default (int32?)
+let n int32? = default (int32?)
 Console.WriteLine(n == nil) // True
 
 // Bare `default` in a let with an explicit type clause.

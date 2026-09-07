@@ -234,6 +234,87 @@ public sealed class GSharpFormatterTests
         Assert.Contains("\nvar y = 2\n", applied, StringComparison.Ordinal);
     }
 
+    // ADR-0179 phase 6. Each of the three cases below made gsfmt reject its own
+    // output on the migrated tree, which is invisible in normal use: the
+    // formatter falls soft and hands the caller the unformatted text, so the
+    // symptom is "wrapping did not happen here" rather than a crash. Together
+    // they accounted for 29 of the 3,873 migrated files and 28 of the 29
+    // remaining reducible lines over 300 characters.
+    [Fact]
+    public void Format_KeepsNullConditionalInvocationTightAgainstItsArgumentList()
+    {
+        const string input = "func run(onBound ((int32) -> void)?) {\nonBound?(1)\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("onBound?(1)", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsNullableConversionCallTightAgainstItsArgumentList()
+    {
+        const string input = "func run(n int32) {\nlet widened = int32?(n)\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("int32?(n)", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_SpacesANullableTypeMarkerAwayFromAFollowingEquals()
+    {
+        const string input = "func run() {\nlet root string?=nil\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("let root string? = nil", result.Text!.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("string?=", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsTheNullableSliceMarkerTightAgainstItsElementType()
+    {
+        // `[]?int32` puts the marker INSIDE the type clause, so the rule cannot
+        // simply be "always space after a nullable `?`".
+        const string input = "func run(values []?int32) {\nlet first = values?[0]\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("[]?int32", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsDoubleLogicalNegationFromFusingIntoNullAssertion()
+    {
+        const string input = "func run() {\nlet on = true\nlet doubled = ! !on\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("let doubled = ! !on", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsACollectionInitializersFirstElementOnTheBraceLine()
+    {
+        string elements = string.Join(", ", Enumerable.Range(0, 20).Select(index => $"element{index}"));
+        string input = $"func run(capacity int32) {{\nlet items = List[int32](capacity){{{elements}}}\n}}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+
+        // Parser.Expressions.Creation.cs:1567 demotes the whole construct to a
+        // call followed by a block statement when the first element moves to a
+        // line of its own, so the wrap must start after that element.
+        Assert.Contains("){element0,", formatted, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Samples_RoundTripAndRemainIdempotent()
     {

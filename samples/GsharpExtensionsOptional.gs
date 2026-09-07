@@ -21,7 +21,7 @@ import System
 
 // --- Reference-typed nullables (T : class) -----------------------------------
 
-let name string?= "ada"
+let name string? = "ada"
 
 // Map: lift a pure function over the present value.
 let upper = name
@@ -45,7 +45,7 @@ let firstChar = upper
 Console.WriteLine(firstChar ?? "<absent>")
 
 // OrElse: project to a non-nullable fallback.
-let absent string?= nil
+let absent string? = nil
 Console.WriteLine(absent.OrElse("default"))
 
 // OrCompute: lazily compute the fallback only when absent.
@@ -92,7 +92,7 @@ Console.WriteLine(name.OrThrow("name was missing"))
 // Issue #752 / ADR-0084 L3: `??` is now the canonical fallback shape; the
 // `OrCompute` helper remains for the deferred-default case.
 
-let count int32?= 7
+let count int32? = 7
 let doubled = count
     .Map(
     func (n int32) int32 {
@@ -101,7 +101,7 @@ let doubled = count
 )
 Console.WriteLine(doubled ?? -1)
 
-let none int32?= nil
+let none int32? = nil
 Console.WriteLine(none ?? -1)
 
 let positive = count

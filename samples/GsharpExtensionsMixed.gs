@@ -70,8 +70,8 @@ let byInitial = words
     }
 )
 
-let presentHit string?= tryLookup(byInitial, "a")
-let absentHit string?= tryLookup(byInitial, "z")
+let presentHit string? = tryLookup(byInitial, "a")
+let absentHit string? = tryLookup(byInitial, "z")
 Console.WriteLine(presentHit.OrElse("<missing>"))
 Console
     .WriteLine(
