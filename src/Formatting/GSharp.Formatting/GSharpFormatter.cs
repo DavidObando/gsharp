@@ -545,17 +545,23 @@ public static class GSharpFormatter
 
     private sealed class LayoutBuilder
     {
+        // Three links is the point at which a member chain reads better broken
+        // than kept on one line; below it, breaking only strands the receiver.
+        private const int MemberChainBreakThreshold = 3;
+
         private readonly SyntaxTree tree;
         private readonly List<LayoutToken> tokens;
         private readonly Dictionary<int, int> matchingDelimiters = new();
         private readonly Dictionary<int, int> breaksBefore = new();
         private readonly Dictionary<string, bool> fusionCache = new(StringComparer.Ordinal);
+        private readonly Dictionary<int, int> memberChainLengths = new();
 
         public LayoutBuilder(SyntaxTree tree)
         {
             this.tree = tree;
             tokens = BindTrivia(tree);
             BuildDelimiterMap();
+            BuildMemberChains();
             BuildLineBoundaries();
         }
 
@@ -782,26 +788,62 @@ public static class GSharpFormatter
             && node is not PackageSyntax
             && node is not ImportSyntax;
 
-        private Doc BuildRange(int start, int end, bool suppressLeadingBreak, bool groupSegments)
+        private Doc BuildRange(
+            int start,
+            int end,
+            bool suppressLeadingBreak,
+            bool groupSegments,
+            bool groupElements = false)
         {
             var completed = new List<Doc>();
             var segment = new List<Doc>();
             LayoutToken? previous = null;
+            bool separatorAlreadyEmitted = false;
             int index = start;
 
             while (index < end)
             {
                 LayoutToken current = tokens[index];
-                int breakCount = GetBreakCount(previous, current, suppressLeadingBreak && index == start);
+                int breakCount = separatorAlreadyEmitted
+                    ? 0
+                    : GetBreakCount(previous, current, suppressLeadingBreak && index == start);
                 if (breakCount > 0)
                 {
                     FlushSegment(completed, segment, groupSegments);
                     AddHardLines(completed, breakCount);
                     previous = null;
                 }
-                else if (previous is not null)
+                else if (previous is not null && !separatorAlreadyEmitted)
                 {
-                    segment.Add(Separator(previous, current));
+                    segment.Add(Separator(previous, current, index));
+                }
+
+                separatorAlreadyEmitted = false;
+
+                // One group per list element, with the comma's own break OUTSIDE
+                // it. Wadler's rule is that a group breaks its own lines, not its
+                // children's, so without this every `.`-chain and `+`-chain inside
+                // every argument broke the moment the argument list did — the
+                // receiver-per-line shape the migrated tree was full of. Splitting
+                // here re-asks "does THIS element fit?" per element, which is the
+                // entire reason to have the algebra rather than hand-written
+                // break rules.
+                //
+                // A trailing comma (`{a, b, }`) is not an element boundary: what
+                // follows it is the closing delimiter, and a break there leaves a
+                // stray space or a blank line in front of the brace.
+                if (groupElements
+                    && current.Token.Kind == SyntaxKind.CommaToken
+                    && index + 1 < end
+                    && !matchingDelimiters.ContainsKey(index))
+                {
+                    segment.Add(Doc.Text(current.Text));
+                    FlushSegment(completed, segment, group: true);
+                    completed.Add(Doc.Line);
+                    previous = current;
+                    separatorAlreadyEmitted = true;
+                    index++;
+                    continue;
                 }
 
                 if (matchingDelimiters.TryGetValue(index, out int close) && close < end)
@@ -833,7 +875,8 @@ public static class GSharpFormatter
                             index + 1,
                             close,
                             suppressLeadingBreak: true,
-                            groupSegments: false);
+                            groupSegments: true,
+                            groupElements: true);
 
                         Doc afterOpen = MustKeepFirstCollectionElementOnBraceLine(current)
                             ? Doc.Empty
@@ -868,7 +911,7 @@ public static class GSharpFormatter
                 index++;
             }
 
-            FlushSegment(completed, segment, groupSegments);
+            FlushSegment(completed, segment, groupSegments || groupElements);
             return Doc.Concat(completed);
         }
 
@@ -904,8 +947,22 @@ public static class GSharpFormatter
                 return 0;
             }
 
-            if (IsContinuationBoundary(previous.Token.Kind, current.Token.Kind)
-                && SyntaxFacts.IsBreakLegalBetween(previous.Token, current.Token))
+            // At a continuation boundary the LAYOUT owns the break, so the
+            // author's newline is dropped and the enclosing group re-derives it.
+            // Keeping it emits a hard break at the enclosing indent instead,
+            // losing the +4 the group would have used — and that is what made
+            // gsfmt non-idempotent on its OWN output: a line it had wrapped with
+            // a continuation indent came back without one on the next pass, on
+            // 111 of the 3,873 migrated files.
+            //
+            // `SyntaxFacts.IsBreakLegalBetween` is deliberately not consulted
+            // here. It refuses a break before `(`, `{` and `*` because after an
+            // EXPRESSION those spell a call, an object initializer and a
+            // dereference statement; a two-token predicate cannot see that the
+            // token on the left is a comma or a binary operator, which no
+            // expression can end with. Joining across a continuation boundary is
+            // unconditionally safe, and D4's round-trip check is the backstop.
+            if (IsContinuationBoundary(previous, current))
             {
                 return 0;
             }
@@ -921,6 +978,22 @@ public static class GSharpFormatter
 
             return current.NewlinesBefore;
         }
+
+        private static bool IsContinuationBoundary(LayoutToken left, LayoutToken right) =>
+            IsPatternCombinator(left) || IsContinuationBoundary(left.Token.Kind, right.Token.Kind);
+
+        // `case A or B or C:` — G# spells pattern disjunction and conjunction as
+        // the contextual identifiers `or` and `and` rather than as operator
+        // tokens, so the layout cannot recognise them by `SyntaxKind` the way it
+        // recognises `&&` and `||`. `BinaryPatternSyntax` is the node that owns
+        // the combinator, and the long `SyntaxKind.X or SyntaxKind.Y or …` arms
+        // the translated parser is full of are the last construct in the phase-6
+        // inventory with no break point at all.
+        private static bool IsPatternCombinator(LayoutToken token) =>
+            token.Token.Kind == SyntaxKind.IdentifierToken
+            && token.Parent is BinaryPatternSyntax
+            && (string.Equals(token.Token.Text, "or", StringComparison.Ordinal)
+                || string.Equals(token.Token.Text, "and", StringComparison.Ordinal));
 
         private static bool IsContinuationBoundary(SyntaxKind previous, SyntaxKind current) =>
             previous is SyntaxKind.OpenParenthesisToken
@@ -939,9 +1012,9 @@ public static class GSharpFormatter
         /// Applies the spacing rule for a token boundary, then re-checks that
         /// the result cannot be re-lexed into a different token stream.
         /// </summary>
-        private Doc Separator(LayoutToken previous, LayoutToken current)
+        private Doc Separator(LayoutToken previous, LayoutToken current, int currentIndex)
         {
-            Doc separator = InlineSeparator(previous, current);
+            Doc separator = InlineSeparator(previous, current, currentIndex);
             return ReferenceEquals(separator, Doc.Empty) && WouldFuse(previous.Text, current.Text)
                 ? Doc.Text(" ")
                 : separator;
@@ -978,7 +1051,60 @@ public static class GSharpFormatter
             return fuses;
         }
 
-        private static Doc InlineSeparator(LayoutToken previous, LayoutToken current)
+        // Records, for every `.`/`?.` token, how many links its member chain has.
+        // The layout only offers a break inside a chain long enough to be worth
+        // reading vertically. `Console.WriteLine(...)` is one link, and breaking
+        // it stranded the receiver on a line of its own every time an argument
+        // contained a block. Three links is the threshold prettier uses, for the
+        // same reason; the fresh phase-6 inventory also found member chains had
+        // all but stopped causing long lines, so breaking short ones buys little.
+        private void BuildMemberChains()
+        {
+            for (int i = 0; i < tokens.Count; i++)
+            {
+                if (tokens[i].Token.Kind is not (SyntaxKind.DotToken or SyntaxKind.QuestionDotToken)
+                    || memberChainLengths.ContainsKey(i))
+                {
+                    continue;
+                }
+
+                var chain = new List<int>();
+                int index = i;
+                while (index < tokens.Count
+                    && tokens[index].Token.Kind is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken)
+                {
+                    chain.Add(index);
+                    index++;
+
+                    // Step over the member name and any call, index or
+                    // type-argument brackets hanging off it; the next link, if
+                    // there is one, starts after those.
+                    if (index < tokens.Count && !IsDelimiterOpen(tokens[index].Token.Kind))
+                    {
+                        index++;
+                    }
+
+                    while (index < tokens.Count
+                        && matchingDelimiters.TryGetValue(index, out int close))
+                    {
+                        index = close + 1;
+                    }
+                }
+
+                foreach (int dot in chain)
+                {
+                    memberChainLengths[dot] = chain.Count;
+                }
+            }
+        }
+
+        private static bool IsDelimiterOpen(SyntaxKind kind) =>
+            kind is SyntaxKind.OpenParenthesisToken
+                or SyntaxKind.OpenSquareBracketToken
+                or SyntaxKind.QuestionOpenBracketToken
+                or SyntaxKind.OpenBraceToken;
+
+        private Doc InlineSeparator(LayoutToken previous, LayoutToken current, int currentIndex)
         {
             SyntaxKind left = previous.Token.Kind;
             SyntaxKind right = current.Token.Kind;
@@ -990,14 +1116,18 @@ public static class GSharpFormatter
 
             if (left is SyntaxKind.PlusToken
                 or SyntaxKind.AmpersandAmpersandToken
-                or SyntaxKind.PipePipeToken)
+                or SyntaxKind.PipePipeToken
+                || IsPatternCombinator(previous))
             {
                 return Doc.Nest(4, Doc.Line);
             }
 
             if (right is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken)
             {
-                return Doc.Nest(4, Doc.SoftLine);
+                return memberChainLengths.TryGetValue(currentIndex, out int links)
+                    && links >= MemberChainBreakThreshold
+                        ? Doc.Nest(4, Doc.SoftLine)
+                        : Doc.Empty;
             }
 
             if (left is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken
@@ -1015,8 +1145,12 @@ public static class GSharpFormatter
                 return Doc.Empty;
             }
 
+            // `default(T)` is one operator with a parenthesised operand, not a
+            // keyword followed by a parenthesised expression, and that is how it
+            // is spelled everywhere else in the repo.
             if (right == SyntaxKind.OpenParenthesisToken
                 && left is SyntaxKind.IdentifierToken
+                    or SyntaxKind.DefaultKeyword
                     or SyntaxKind.CloseParenthesisToken
                     or SyntaxKind.CloseSquareBracketToken)
             {

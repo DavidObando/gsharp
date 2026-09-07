@@ -25,8 +25,7 @@ list.Add(6)
 
 // CountBy groups by the key selector; the optional comparer argument is
 // omitted, so it must resolve to the trailing-optional overload.
-var counts = list
-    .CountBy(
+var counts = list.CountBy(
     func (x int32) int32 {
         return x % 2
     }

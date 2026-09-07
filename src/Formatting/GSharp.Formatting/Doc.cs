@@ -175,7 +175,16 @@ internal abstract class Doc
                         nest.Document));
                     break;
                 case GroupDoc group:
-                    pending.Push(new RenderItem(item.Indentation, RenderMode.Flat, group.Document));
+                    // Inherit the mode instead of forcing flat. The item under
+                    // test arrives flat and stays flat all the way down, which
+                    // is what "does this group fit on one line" means; the items
+                    // that follow it arrive in break mode, so measuring stops at
+                    // the first line break they are still free to take. Forcing
+                    // them flat measured the whole remaining statement instead,
+                    // and a short leading group — `List[GStatement]` in front of
+                    // a long argument list — was broken apart because something
+                    // far to its right did not fit.
+                    pending.Push(new RenderItem(item.Indentation, item.Mode, group.Document));
                     break;
             }
         }

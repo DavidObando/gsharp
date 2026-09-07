@@ -30,8 +30,7 @@ func tryLookup(dict map[string, string], key string) string? {
 // Build an infinite powers-of-two sequence with Iterate, take a window, and
 // pick the first one whose sum exceeds a threshold via Optional helpers.
 
-let geom = Sequences
-    .Iterate(
+let geom = Sequences.Iterate(
     1,
     func (n int32) int32 {
         return n * 2
@@ -48,8 +47,7 @@ let firstHeavyTrio = geom
 )
     .FirstOrNil()
 
-let heavySumText = firstHeavyTrio
-    .Map(
+let heavySumText = firstHeavyTrio.Map(
     func (w IList[int32]) string {
         return sumOf(w).ToString()
     }
@@ -60,8 +58,7 @@ Console.WriteLine("first heavy trio sum: " + heavySumText.OrElse("<absent>"))
 // Optional helpers (OrElse for the happy path, OrCompute for lazy default).
 
 let words = Sequences.Of("alpha", "bravo", "charlie", "delta")
-let byInitial = words
-    .ToMap(
+let byInitial = words.ToMap(
     func (s string) string {
         return s.Substring(0, 1)
     },
@@ -73,10 +70,8 @@ let byInitial = words
 let presentHit string? = tryLookup(byInitial, "a")
 let absentHit string? = tryLookup(byInitial, "z")
 Console.WriteLine(presentHit.OrElse("<missing>"))
-Console
-    .WriteLine(
-    absentHit
-        .OrCompute(
+Console.WriteLine(
+    absentHit.OrCompute(
         func () string {
             return "<computed default>"
         }

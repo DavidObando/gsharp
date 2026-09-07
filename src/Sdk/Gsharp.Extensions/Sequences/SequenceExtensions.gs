@@ -479,7 +479,7 @@ func IndexedIterator[T](source IEnumerable[T]) IEnumerable[(int32, T)] {
 
 func PairwiseIterator[T](source IEnumerable[T]) IEnumerable[(T, T)] {
     var hasPrevious = false
-    var previous T = default (T)
+    var previous T = default(T)
     for item in source {
         if hasPrevious {
             yield(previous, item)
