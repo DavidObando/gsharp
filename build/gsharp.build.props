@@ -84,6 +84,12 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <HighEntropyVA>true</HighEntropyVA>
     <Deterministic>true</Deterministic>
+    <!-- Validate test documentation without publishing test-only XML files.
+         The suppressed IDs are the measured pre-existing test backlog from
+         issue #3860; CS1572 and CS1573 intentionally remain build-breaking. -->
+    <GenerateDocumentationFile Condition="'$(IsTestProject)' == 'true'">true</GenerateDocumentationFile>
+    <CopyDocumentationFileToOutputDirectory Condition="'$(IsTestProject)' == 'true'">false</CopyDocumentationFileToOutputDirectory>
+    <NoWarn Condition="'$(IsTestProject)' == 'true'">$(NoWarn);CS0419;CS1570;CS1574;CS1580;CS1591;CS1734</NoWarn>
     <DocumentationFile Condition="'$(IsTestProject)' != 'true'">$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
   </PropertyGroup>
 
