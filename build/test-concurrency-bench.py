@@ -44,6 +44,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "DOTNET_TIEREDCOMPILATION": "0",
             "COMPlus_TC_CallCountingDelayMs": "999",
             "COMPlus_JitStress": "2",
+            "COMPLUS_READYTORUN": "0",
         }
 
         configured, removed = bench.clean_runtime_environment(original, pinned=True)
@@ -57,6 +58,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual("0", removed["DOTNET_TIEREDCOMPILATION"])
         self.assertEqual("999", removed["COMPlus_TC_CallCountingDelayMs"])
         self.assertEqual("2", removed["COMPlus_JitStress"])
+        self.assertEqual("0", removed["COMPLUS_READYTORUN"])
         self.assertEqual("0", original["DOTNET_TIEREDCOMPILATION"])
 
     def test_raw_launch_samples_survive_summary_and_aggregation(self) -> None:
@@ -107,7 +109,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 launches=7,
                 scenario="select-ready",
                 modes=["gsharp", "go"],
-                runtime_versions={"gsharp": ["10.0.11"]},
+                runtime_versions={"gsharp": ["10.0.11"], "go": ["go1.27"]},
                 processor_counts={"gsharp": [2], "go": [2]},
                 runtime_environment={
                     **bench.PINNED_TIER_ENV,
@@ -121,6 +123,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertTrue(fingerprint["comparable"])
         self.assertEqual("tiered-pgo-steady-state", fingerprint["comparison"]["jitMode"])
         self.assertEqual(["10.0.11"], fingerprint["comparison"]["toolchains"]["dotnetRuntime"])
+        self.assertEqual(["go1.27"], fingerprint["comparison"]["toolchains"]["go"])
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
@@ -133,6 +136,17 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(2, aggregated["comparison"]["wholeRuns"])
         self.assertEqual("range-of-run-medians", aggregated["comparison"]["intervalMethod"])
         self.assertNotEqual(fingerprint["comparisonKey"], aggregated["comparisonKey"])
+
+        preserved = {
+            "select-ready": {
+                "median_ns": 72.0,
+                "ci95_ns": [70.0, 74.0],
+                "samples": 21,
+                "runs": 3,
+                "run_medians_ns": [70.0, 72.0, 74.0],
+            }
+        }
+        self.assertIs(preserved, bench.combine_loaded_runs([preserved]))
 
     def test_json_aggregation_rejects_different_build_or_methodology_keys(self) -> None:
         common = {
@@ -250,6 +264,13 @@ class ConcurrencyBenchTests(unittest.TestCase):
 
         self.assertIn("the host exposes no observable power-state identity", reasons)
         self.assertTrue(any("different processor counts" in reason for reason in reasons))
+
+    def test_each_launch_must_emit_its_expected_rows(self) -> None:
+        spec = {"name": "gsharp", "expectedRows": {"buf64", "select-ready"}}
+        bench.validate_rows(spec, {"buf64": 1.0, "select-ready": 2.0})
+
+        with self.assertRaisesRegex(SystemExit, "missing=\\['select-ready'\\]"):
+            bench.validate_rows(spec, {"buf64": 1.0})
 
     def test_dashboard_accepts_additive_result_schema(self) -> None:
         results = SCRATCH / "results.json"

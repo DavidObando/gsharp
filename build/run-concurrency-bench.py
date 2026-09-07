@@ -87,6 +87,8 @@ RUNTIME_SETTING_PREFIXES = (
     "COMPLUS_OSR_",
     "DOTNET_JIT",
     "COMPLUS_JIT",
+    "DOTNET_READYTORUN",
+    "COMPLUS_READYTORUN",
 )
 JSON_SCHEMA_VERSION = 2
 METHODOLOGY_VERSION = 2
@@ -258,11 +260,11 @@ def incomparability_reasons(
         reasons.append("power state changed while the benchmark was running")
     if start_environment["cpuAffinity"] != end_environment["cpuAffinity"]:
         reasons.append("CPU affinity changed while the benchmark was running")
-    if not runtime_versions.get("gsharp"):
-        reasons.append("the benchmark did not report its CoreCLR runtime version")
     if not any(start_environment["power"].values()):
         reasons.append("the host exposes no observable power-state identity")
     for mode, counts in processor_counts.items():
+        if not runtime_versions.get(mode):
+            reasons.append(f"{mode} did not report its runtime version")
         if not counts:
             reasons.append(f"{mode} did not report its processor count")
         elif len(counts) > 1:
@@ -314,7 +316,7 @@ def make_fingerprint(
         "toolchains": {
             "dotnetSdk": command_output(["dotnet", "--version"]),
             "dotnetRuntime": runtime_versions.get("gsharp", []),
-            "go": command_output(["go", "version"]) if go_binary else None,
+            "go": runtime_versions.get("go", []) if go_binary else None,
         },
         "runtimeEnvironment": {
             key: value
@@ -453,6 +455,16 @@ def build_go(out: Path) -> Path | None:
     return binary
 
 
+def validate_rows(spec: dict, rows: dict[str, float]) -> None:
+    missing = spec["expectedRows"] - rows.keys()
+    unexpected = rows.keys() - spec["expectedRows"]
+    if missing or (unexpected and not spec.get("allowExtraRows", False)):
+        raise SystemExit(
+            f"{spec['name']} benchmark emitted the wrong rows; "
+            f"missing={sorted(missing)}, unexpected={sorted(unexpected)}"
+        )
+
+
 def run_once(spec: dict) -> tuple[dict[str, float], dict | None]:
     result = subprocess.run(
         spec["command"],
@@ -482,6 +494,7 @@ def run_once(spec: dict) -> tuple[dict[str, float], dict | None]:
             runtime = {"version": go_header["version"], "cores": int(go_header["cores"])}
     if not rows:
         raise SystemExit(f"{spec['name']} benchmark produced no result rows:\n{result.stdout}")
+    validate_rows(spec, rows)
     return rows, runtime
 
 
@@ -572,6 +585,10 @@ def aggregate(results: list[dict]) -> dict[str, dict]:
         }
 
     return combined
+
+
+def combine_loaded_runs(results: list[dict]) -> dict:
+    return results[0] if len(results) == 1 else aggregate(results)
 
 
 def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str | None, dict]:
@@ -834,7 +851,8 @@ def main() -> int:
     if args.launches < 1:
         parser.error("--launches must be at least 1")
 
-    scenarios = load_scenarios()
+    registry = load_scenarios()
+    scenarios = registry
     if args.scenario:
         scenarios = [s for s in scenarios if s["name"] == args.scenario]
         if not scenarios:
@@ -851,9 +869,9 @@ def main() -> int:
     source_fingerprints = []
     if args.from_json:
         gsharp_runs, aot_runs, go_runs, recorded_class, metadata = load_runs(args.from_json)
-        measured = aggregate(gsharp_runs)
-        measured_aot = aggregate(aot_runs)
-        go_measured = aggregate(go_runs)
+        measured = combine_loaded_runs(gsharp_runs)
+        measured_aot = combine_loaded_runs(aot_runs)
+        go_measured = combine_loaded_runs(go_runs)
         source_fingerprints = metadata["fingerprints"]
         fingerprint = (
             aggregate_fingerprint(source_fingerprints)
@@ -862,7 +880,8 @@ def main() -> int:
         )
         environment = metadata["environments"]
         launch_order = metadata["launchOrders"]
-        provenance = f"{len(gsharp_runs)} run(s) aggregated"
+        represented_runs = fingerprint.get("comparison", {}).get("wholeRuns") if fingerprint else None
+        provenance = f"{represented_runs or len(gsharp_runs)} run(s) represented"
     else:
         gsc = Path(args.gsc)
         extensions = Path(args.extensions)
@@ -878,6 +897,7 @@ def main() -> int:
                 "cwd": out,
                 "env": jit_env,
                 "pattern": ROW,
+                "expectedRows": {requested} if requested else {scenario["gsharp"] for scenario in registry},
             }
         ]
 
@@ -894,6 +914,7 @@ def main() -> int:
                     "cwd": out,
                     "env": aot_env,
                     "pattern": ROW,
+                    "expectedRows": {requested} if requested else {scenario["gsharp"] for scenario in registry},
                 }
             )
         else:
@@ -912,6 +933,17 @@ def main() -> int:
                     "cwd": BENCH / "go",
                     "env": go_env,
                     "pattern": GO_ROW,
+                    "expectedRows": {go_row} if go_row else {
+                        "go-buf64",
+                        "go-chunk64",
+                        "go-chunk1k",
+                        "go-compute",
+                        "go-pingpong",
+                        "go-closed",
+                        "go-spawn",
+                        "go-select2",
+                    },
+                    "allowExtraRows": not bool(go_row),
                 }
             )
 
