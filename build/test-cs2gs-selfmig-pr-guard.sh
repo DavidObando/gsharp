@@ -97,6 +97,52 @@ linked_path=$(printf 'test/Shared/GoldenFile.cs\0' | "$control" relevant-paths)
 config_path=$(printf '.editorconfig\0' | "$control" relevant-paths)
 [[ "$config_path" == .editorconfig ]]
 
+workflow="$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+scope_root="$test_root/scope"
+scope_script="$scope_root/scope.sh"
+mkdir -p "$scope_root/build" "$scope_root/tmp"
+awk '
+  $0 == "      - name: Detect changes that can affect the guard" { found = 1; next }
+  found && $0 == "        run: |" { in_run = 1; next }
+  in_run && $0 ~ /^      - name:/ { exit }
+  in_run { sub(/^          /, ""); print }
+' "$workflow" > "$scope_script"
+grep -q 'git diff --no-renames --name-only -z' "$scope_script"
+
+cat > "$fake_bin/git" <<'EOF'
+#!/usr/bin/env bash
+printf 'docs/only.md\0'
+exit "${FAKE_DIFF_EXIT:?}"
+EOF
+chmod +x "$fake_bin/git"
+
+cat > "$scope_root/build/cs2gs-pr-guard-control.sh" <<'EOF'
+#!/usr/bin/env bash
+cat >/dev/null
+exit "${FAKE_HELPER_EXIT:?}"
+EOF
+chmod +x "$scope_root/build/cs2gs-pr-guard-control.sh"
+
+run_scope_case() {
+  local name=$1 diff_exit=$2 helper_exit=$3 expected=$4
+  local output="$scope_root/$name.output"
+  (
+    cd "$scope_root"
+    PATH="$fake_bin:$PATH" \
+      GITHUB_EVENT_NAME=pull_request \
+      BASE_SHA=base HEAD_SHA=head RUNNER_TEMP="$scope_root/tmp" \
+      GITHUB_OUTPUT="$output" \
+      FAKE_DIFF_EXIT="$diff_exit" FAKE_HELPER_EXIT="$helper_exit" \
+      bash "$scope_script"
+  )
+  grep -qx "run=$expected" "$output"
+}
+
+run_scope_case irrelevant 0 1 false
+run_scope_case relevant 0 0 true
+run_scope_case diff-failure 128 1 true
+run_scope_case helper-failure 0 2 true
+
 timeout_cause=$(printf '%s' \
   '[{"message":"The job has exceeded the maximum execution time of 1h30m0s"},'\
 '{"message":"The operation was canceled."}]' |
@@ -113,14 +159,12 @@ unknown_cause=$(printf '%s' '[{"message":"The operation was canceled."}]' |
   "$control" cancellation)
 [[ "$unknown_cause" == unknown ]]
 
-grep -qx '    timeout-minutes: 90' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
-grep -qx '    concurrency:' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
-grep -qx '    name: hot-core cancellation cause' "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+grep -qx '    timeout-minutes: 90' "$workflow"
+grep -qx '    concurrency:' "$workflow"
+grep -qx '    name: hot-core cancellation cause' "$workflow"
 grep -q '::notice title=Hot-core guard superseded::' \
-  "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+  "$workflow"
 grep -qx '          if-no-files-found: ignore' \
-  "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
-grep -q 'git diff --no-renames --name-only -z' \
-  "$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+  "$workflow"
 
 echo "selfmig PR guard regressions PASSED."

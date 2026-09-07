@@ -115,19 +115,35 @@ jobs:
           # migrated tree is restored as NuGet packages that carry it.
           fetch-depth: 0
 
+      - name: Test PR guard control and failure propagation
+        run: ./build/test-cs2gs-selfmig-pr-guard.sh
+
       - name: Detect changes that can affect the guard
         id: scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] ||
-             ./build/cs2gs-pr-guard-control.sh relevant-paths \
-               < <(git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA"); then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
+          run_guard=true
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ]]; then
+            changed_paths="$RUNNER_TEMP/cs2gs-pr-guard-paths"
+            if git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"; then
+              if ./build/cs2gs-pr-guard-control.sh relevant-paths < "$changed_paths"; then
+                :
+              else
+                helper_status=$?
+                if (( helper_status == 1 )); then
+                  run_guard=false
+                else
+                  echo "::warning title=Path classification failed::Classifier exited $helper_status; running guard."
+                fi
+              fi
+            else
+              diff_status=$?
+              echo "::warning title=PR diff failed::git diff exited $diff_status; running guard."
+            fi
           fi
+          echo "run=$run_guard" >> "$GITHUB_OUTPUT"
 
       - name: Report unaffected change
         if: steps.scope.outputs.run != 'true'
@@ -153,10 +169,6 @@ jobs:
       - name: Restore .NET local tools
         if: steps.scope.outputs.run == 'true'
         run: dotnet tool restore
-
-      - name: Test PR guard failure propagation
-        if: steps.scope.outputs.run == 'true'
-        run: ./build/test-cs2gs-selfmig-pr-guard.sh
 
       # The script builds the solution itself (which repacks the
       # Gsharp.NET.Sdk nupkg the compile stage consumes) and then migrates.
