@@ -46,6 +46,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "COMPlus_JitStress": "2",
             "COMPLUS_READYTORUN": "0",
             "DOTNET_ALTJIT": "clrjit_unstable",
+            "GSHARP_BENCH_SCENARIO": "closed-recv",
         }
 
         configured, removed = bench.clean_runtime_environment(original, pinned=True)
@@ -56,6 +57,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         })
         self.assertNotIn("COMPlus_TC_CallCountingDelayMs", configured)
         self.assertNotIn("COMPlus_JitStress", configured)
+        self.assertNotIn("GSHARP_BENCH_SCENARIO", configured)
         self.assertEqual("0", removed["DOTNET_TIEREDCOMPILATION"])
         self.assertEqual("999", removed["COMPlus_TC_CallCountingDelayMs"])
         self.assertEqual("2", removed["COMPlus_JitStress"])
@@ -85,6 +87,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "Gsharp.Extensions.dll": "extensions-hash",
             "Gsharp.Runtime.Channels.dll": "runtime-hash",
             "Bench": "aot-hash",
+            "BenchAot.csproj": "aot-project-hash",
             "baseline": "go-hash",
         }
 
@@ -135,6 +138,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
+        self.assertEqual("aot-project-hash", fingerprint["comparison"]["aotProjectSha256"])
         self.assertFalse(fingerprint["build"]["gitDirty"])
         self.assertEqual("1", fingerprint["comparison"]["runtimeEnvironment"]["COMPLUS_GCSERVER"])
         self.assertNotEqual(fingerprint["comparisonKey"], fingerprint["aggregationKey"])
@@ -342,6 +346,10 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(
             "Neoverse N1",
             bench.parse_linux_cpu_model(arm, "Architecture: aarch64\nModel name: Neoverse N1"),
+        )
+        self.assertEqual(
+            "cpu implementer=0x41 cpu architecture=8 cpu part=0xd0c",
+            bench.parse_linux_cpu_model(arm, None),
         )
 
     def test_git_state_distinguishes_clean_from_unavailable(self) -> None:

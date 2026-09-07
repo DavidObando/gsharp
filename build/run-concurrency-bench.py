@@ -127,15 +127,17 @@ def parse_linux_cpu_model(cpuinfo: str, lscpu: str | None) -> str | None:
             if line.startswith("Model name:"):
                 return line.split(":", 1)[1].strip()
 
-    for key in ("hardware", "processor"):
-        if fields.get(key):
-            return fields[key]
+    if fields.get("hardware"):
+        return fields["hardware"]
     arm_id = " ".join(
         f"{key}={fields[key]}"
         for key in ("cpu implementer", "cpu architecture", "cpu variant", "cpu part", "cpu revision")
         if fields.get(key)
     )
-    return arm_id or None
+    if arm_id:
+        return arm_id
+    processor = fields.get("processor")
+    return processor if processor and not processor.isdigit() else None
 
 
 def cpu_model() -> str:
@@ -225,6 +227,7 @@ def environment_sample() -> dict:
 def clean_runtime_environment(base: dict[str, str], pinned: bool) -> tuple[dict[str, str], dict[str, str]]:
     """Remove ambient JIT overrides, then install the benchmark's intended tier."""
     env = dict(base)
+    env.pop("GSHARP_BENCH_SCENARIO", None)
     removed = {}
     for key in list(env):
         if key.upper().startswith(RUNTIME_SETTING_PREFIXES):
@@ -342,6 +345,7 @@ def make_fingerprint(
         "intervalMethod": "bootstrap-launch-median",
         "runnerSha256": sha256(Path(__file__)),
         "benchmarkDefinitionSha256": definition_hash(),
+        "aotProjectSha256": sha256(BENCH / "aot" / "BenchAot.csproj") if aot_binary else None,
         "jitMode": "tiered-pgo-steady-state",
         "jitEnvironment": PINNED_TIER_ENV,
         "warmup": warmup_configuration(),
@@ -1028,6 +1032,7 @@ def main() -> int:
         go_binary = build_go(out) if args.go and (not args.scenario or go_row) else None
         if go_binary:
             go_env = dict(os.environ)
+            go_env.pop("GSHARP_BENCH_SCENARIO", None)
             if go_row:
                 go_env["GSHARP_BENCH_SCENARIO"] = go_row
             specs.append(
