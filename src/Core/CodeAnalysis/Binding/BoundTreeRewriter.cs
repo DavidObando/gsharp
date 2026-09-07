@@ -696,7 +696,8 @@ public abstract class BoundTreeRewriter
                 builder.MoveToImmutable(),
                 node.ArgumentRefKinds,
                 node.ReturnType,
-                node.ConstrainedInterfaceType!);
+                node.ConstrainedInterfaceType!,
+                node.TypeArgumentSymbols);
     }
 
     /// <summary>

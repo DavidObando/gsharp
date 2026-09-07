@@ -801,7 +801,13 @@ internal static class ClrOverloadResolution
     /// Tests a deferred open literal against the parameter inferred from other
     /// arguments, such as a tuple containing <c>nil</c>.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null)
+    /// <param name="symbolicArgTypes">
+    /// Issue #4086: optional source-level argument types, aligned with
+    /// <paramref name="argTypes"/>. They distinguish an inferred method
+    /// type-parameter slot from a genuine <see cref="object"/> parameter after
+    /// both have erased to <see cref="object"/> for reflection.
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
@@ -830,7 +836,7 @@ internal static class ClrOverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, deferredInferenceArgs, functionLiteralArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, openLiteralArgumentCheck);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, deferredInferenceArgs, functionLiteralArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, openLiteralArgumentCheck, symbolicArgTypes);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -854,7 +860,7 @@ internal static class ClrOverloadResolution
 
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, deferredInferenceArgs, openLiteralArgumentCheck);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, deferredInferenceArgs, openLiteralArgumentCheck, symbolicArgTypes);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -2863,7 +2869,7 @@ internal static class ClrOverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null)
         where T : MethodBase
     {
         {
@@ -3229,6 +3235,12 @@ internal static class ClrOverloadResolution
                 }
 
                 var conv = ClassifyImplicit(paramTypes[i], argTypes[i], supplementaryInterfaceCheck);
+                conv = RefineErasedTypeParameterConversion(
+                    conv,
+                    symbolicArgTypes != null && i < symbolicArgTypes.Count ? symbolicArgTypes[i] : null,
+                    rawCandidate,
+                    paramIndex,
+                    expandedParamsElement: false);
 
                 // Issue #3989: the CLR comparison just above ranks the ERASED
                 // argument, where an element with no CLR identity is
@@ -3382,6 +3394,56 @@ internal static class ClrOverloadResolution
         }
     }
 
+    /// <summary>
+    /// Issue #4086: an in-scope type parameter is represented by
+    /// <see cref="object"/> during CLR overload resolution. Preserve the
+    /// identity conversion to an inferred method type-parameter slot, but do
+    /// not let a genuinely declared <see cref="object"/> parameter inherit that
+    /// erased identity; that conversion is a reference conversion for a
+    /// reference-constrained parameter and boxing otherwise.
+    /// </summary>
+    private static ImplicitConversionKind RefineErasedTypeParameterConversion(
+        ImplicitConversionKind conversion,
+        TypeSymbol? sourceSymbol,
+        MethodBase rawCandidate,
+        int parameterIndex,
+        bool expandedParamsElement)
+    {
+        if (conversion != ImplicitConversionKind.Identity
+            || sourceSymbol is not TypeParameterSymbol sourceTypeParameter
+            || rawCandidate == null)
+        {
+            return conversion;
+        }
+
+        var openCandidate = rawCandidate is MethodInfo { IsGenericMethod: true } generic
+            ? generic.GetGenericMethodDefinition()
+            : rawCandidate;
+        var parameters = openCandidate.GetParameters();
+        if ((uint)parameterIndex >= (uint)parameters.Length)
+        {
+            return conversion;
+        }
+
+        var declaredParameter = parameters[parameterIndex].ParameterType;
+        if (expandedParamsElement
+            && IsParamsArrayParameter(parameters[parameterIndex])
+            && declaredParameter.GetElementType() is { } elementType)
+        {
+            declaredParameter = elementType;
+        }
+
+        declaredParameter = PeelByRef(declaredParameter) ?? declaredParameter;
+        if (!IsSystemObject(declaredParameter))
+        {
+            return conversion;
+        }
+
+        return sourceTypeParameter.HasReferenceTypeConstraint || sourceTypeParameter.ClassConstraint != null
+            ? ImplicitConversionKind.Reference
+            : ImplicitConversionKind.Boxing;
+    }
+
     private static bool IsMethodGroupSignatureCompatible(
         (Type[] Parameters, Type Return)? signature,
         IReadOnlyList<Type> delegateParameters,
@@ -3421,7 +3483,7 @@ internal static class ClrOverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -3648,6 +3710,12 @@ internal static class ClrOverloadResolution
             target = paramTypeRewrite?.Invoke(target) ?? target;
             paramTypes[i] = target;
             var conv = ClassifyImplicit(target, argTypes[i], supplementaryInterfaceCheck);
+            conv = RefineErasedTypeParameterConversion(
+                conv,
+                symbolicArgTypes != null && i < symbolicArgTypes.Count ? symbolicArgTypes[i] : null,
+                rawCandidate,
+                slot,
+                expandedParamsElement: slot == paramsIndex);
 
             // Issue #3989: the same second opinion the normal-form loop takes.
             // A `params object[]` slot is the common shape here, and it is a
@@ -5211,6 +5279,17 @@ internal static class ClrOverloadResolution
                     && interfaceSymbol.ClrType == null)
                 {
                     if (ErasedSymbolSatisfiesInterfaceConstraint(interfaceSymbol, constraint))
+                    {
+                        continue;
+                    }
+
+                    // Issue #4086 depends on #4070's narrow applicability
+                    // prerequisite: a caller type parameter's class bound can
+                    // prove this non-dependent interface constraint. Reuse the
+                    // generic-type path's existing proof instead of copying it.
+                    if (interfaceSymbol is TypeParameterSymbol typeParameter
+                        && !rawConstraint.ContainsGenericParameters
+                        && TypeParameterSatisfiesClrBound(typeParameter, constraint))
                     {
                         continue;
                     }

@@ -54,6 +54,7 @@ public sealed class BoundConstrainedStaticCallExpression : BoundCallOperationExp
     /// <param name="argumentRefKinds">Per-argument ref-kind annotations (default all-None).</param>
     /// <param name="returnType">The call-site return type.</param>
     /// <param name="constrainedInterfaceType">The (possibly constructed generic) imported interface type that parents the emitted <c>MemberRef</c>.</param>
+    /// <param name="typeArgumentSymbols">Recovered symbolic generic-method arguments used to reify the emitted MethodSpec.</param>
     public BoundConstrainedStaticCallExpression(
         SyntaxNode? syntax,
         TypeParameterSymbol typeParameter,
@@ -61,7 +62,8 @@ public sealed class BoundConstrainedStaticCallExpression : BoundCallOperationExp
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> argumentRefKinds,
         TypeSymbol returnType,
-        TypeSymbol constrainedInterfaceType)
+        TypeSymbol constrainedInterfaceType,
+        ImmutableArray<TypeSymbol?> typeArgumentSymbols = default)
         : base(syntax)
     {
         TypeParameter = typeParameter;
@@ -70,6 +72,7 @@ public sealed class BoundConstrainedStaticCallExpression : BoundCallOperationExp
         ArgumentRefKinds = argumentRefKinds.IsDefault ? default : argumentRefKinds;
         ReturnType = returnType;
         ConstrainedInterfaceType = constrainedInterfaceType;
+        TypeArgumentSymbols = typeArgumentSymbols.IsDefault ? default : typeArgumentSymbols;
     }
 
     /// <inheritdoc/>
@@ -107,6 +110,9 @@ public sealed class BoundConstrainedStaticCallExpression : BoundCallOperationExp
 
     /// <summary>Gets the per-argument ref-kind annotations for the <see cref="ClrMethod"/> shape. May be default (all-None).</summary>
     public ImmutableArray<RefKind> ArgumentRefKinds { get; }
+
+    /// <summary>Gets the recovered symbolic generic-method arguments for the imported CLR slot.</summary>
+    public ImmutableArray<TypeSymbol?> TypeArgumentSymbols { get; }
 
     /// <summary>Gets the call-site (post-substitution) return type, or <c>null</c> to fall back to <see cref="InterfaceMethod"/>.<see cref="FunctionSymbol.Type"/>.</summary>
     public TypeSymbol ReturnType { get; }

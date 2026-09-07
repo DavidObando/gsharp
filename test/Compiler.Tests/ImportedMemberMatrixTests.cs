@@ -13,6 +13,95 @@ namespace GSharp.Compiler.Tests;
 
 public class ImportedMemberMatrixTests
 {
+    // PR #4088 owns #4070's broad applicability matrix. This keeps only the
+    // prerequisite needed by #4086's exact repro, then covers ranking through
+    // ordinary static and constrained-instance dispatch.
+    [Fact]
+    public void Issue4086_InferredTypeParameterIdentityBeatsObjectErasure()
+    {
+        const string csSource = """
+            namespace Issue4086.CSharp;
+
+            public class DisposableBase : System.IDisposable
+            {
+                public void Dispose()
+                {
+                }
+            }
+
+            public interface IInstanceOverloads
+            {
+                string Take<T>(T value) where T : System.IDisposable;
+                string Take(object value);
+            }
+
+            public sealed class InstanceOverloads : IInstanceOverloads
+            {
+                public string Take<T>(T value)
+                    where T : System.IDisposable
+                    => "instance-generic";
+
+                public string Take(object value)
+                    => "instance-object";
+            }
+
+            public static class Overloads
+            {
+                public static string Take<T>(T value)
+                    where T : System.IDisposable
+                    => "generic-disposable";
+
+                public static string Take(object value)
+                    => "object";
+            }
+            """;
+
+        const string gsSource = """
+            package Issue4086.Probe
+            import System
+            import Issue4086.CSharp
+
+            func throughClassBound[T DisposableBase](value T) string {
+                return Overloads.Take(value)
+            }
+
+            func throughInterface[T IDisposable](value T) string {
+                return Overloads.Take(value)
+            }
+
+            func throughObject(value object) string {
+                return Overloads.Take(value)
+            }
+
+            func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
+                receiver TReceiver,
+                value TValue) string {
+                return receiver.Take(value)
+            }
+
+            func throughConstrainedInstanceObject[TReceiver IInstanceOverloads](
+                receiver TReceiver,
+                value object) string {
+                return receiver.Take(value)
+            }
+
+            Console.WriteLine(throughClassBound[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughInterface[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughObject(DisposableBase()))
+            Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
+                InstanceOverloads(),
+                DisposableBase()))
+            Console.WriteLine(throughConstrainedInstanceObject[InstanceOverloads](
+                InstanceOverloads(),
+                DisposableBase()))
+            """;
+
+        Assert.Equal(
+            $"generic-disposable{Environment.NewLine}generic-disposable{Environment.NewLine}object{Environment.NewLine}"
+                + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(csSource, gsSource, "Issue4086.CSharp"));
+    }
+
     private const string Issue3076CsSource = """
         namespace Issue3076.CSharp
         {

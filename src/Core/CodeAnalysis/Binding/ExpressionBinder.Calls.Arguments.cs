@@ -1500,7 +1500,8 @@ internal sealed partial class ExpressionBinder
             deferredInferenceArgs: BuildOpenLiteralInferenceFlags(arguments),
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
-            openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments));
+            openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments),
+            symbolicArgTypes: inheritedSymbolicArgs);
 
         switch (resolution.Outcome)
         {
@@ -1976,7 +1977,8 @@ internal sealed partial class ExpressionBinder
                 functionLiteralArgumentCheck: functionLiteralArgumentCheck,
                 explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                 explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1),
-                openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1));
+                openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1),
+                symbolicArgTypes: extensionSymbolicArgs);
 
         var resolution = ResolveExtensionCandidates();
 
@@ -3748,6 +3750,16 @@ internal sealed partial class ExpressionBinder
         // treats them as applicable to an IFormattable/FormattableString (or
         // handler) parameter, just like every other CLR-call Resolve site.
         var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length);
+        var symbolicArgTypes = MemberLookup.BuildSymbolicArgTypeVector(
+            null,
+            ImmutableArray.CreateRange(arguments.Select(argument => argument.Type)));
+        Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverTypeArgSymbols =
+            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                default,
+                symbolicArgTypes,
+                isExpanded,
+                argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -3755,12 +3767,14 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+            recoverTypeArgSymbols: recoverTypeArgSymbols,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            symbolicArgTypes: symbolicArgTypes);
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3772,12 +3786,17 @@ internal sealed partial class ExpressionBinder
         }
 
         var parameters = method.GetParameters();
+        var symbolicMethodTypeArgs = recoverTypeArgSymbols(method, resolution.IsExpanded);
 
         // Return type: a return that names the constraint type-variable is
         // recovered by projecting through the constructed constraint;
         // a concrete return (e.g. IComparable.CompareTo -> int32) falls back to
         // the direct CLR mapping.
-        var returnType = MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
+        var returnType = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(
+                method,
+                symbolicMethodTypeArgs,
+                constraintType)
+            ?? MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
         var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(
             constraintType,
             method);
@@ -3800,11 +3819,22 @@ internal sealed partial class ExpressionBinder
         // unchanged.
         arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, resolution.ParameterMapping);
 
-        // Order positionally for named arguments; deliberately skip the CLR
-        // boxing/conversion pass — the emitted MemberRef parameter is the
-        // interface type-variable `!0` (== the reified `!!T`), so a `T`-typed
-        // argument must be passed unboxed.
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
+        // Non-generic constrained slots stay on the established unconverted
+        // path: the emitted MemberRef parameter is the interface type-variable
+        // `!0` (== the reified `!!T`). A generic method needs its recovered
+        // method arguments during conversion too, so `Take<U>(U)` reifies U as
+        // the caller's T and does not box it to the reflection-time `object`.
+        var convertedArguments = method.IsGenericMethod
+            ? conversions.BindClrParameterConversions(
+                arguments,
+                parameters,
+                ce,
+                resolution.ParameterMapping,
+                method: method,
+                receiverType: constraintType,
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs)
+            : arguments;
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, resolution.ParameterMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundImportedInstanceCallExpression(
@@ -3814,7 +3844,7 @@ internal sealed partial class ExpressionBinder
             returnType,
             orderedArgs,
             refKinds,
-            default,
+            symbolicMethodTypeArgs,
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: declaringConstraint);
         return true;

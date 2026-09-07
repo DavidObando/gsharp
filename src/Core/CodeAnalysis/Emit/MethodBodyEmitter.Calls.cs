@@ -608,7 +608,10 @@ internal sealed partial class MethodBodyEmitter
         // the imported-instance CLR constrained-call path (issue #943).
         if (call.ClrMethod is { } clrMethod)
         {
-            var clrSlotHandle = this.outer.memberRefs.GetMethodEntityHandle(clrMethod, call.ConstrainedInterfaceType);
+            var clrSlotHandle = this.outer.memberRefs.GetMethodEntityHandle(
+                clrMethod,
+                call.TypeArgumentSymbols,
+                call.ConstrainedInterfaceType);
             this.il.OpCode(ILOpCode.Constrained);
             this.il.Token(typeParamToken);
             this.il.OpCode(ILOpCode.Call);

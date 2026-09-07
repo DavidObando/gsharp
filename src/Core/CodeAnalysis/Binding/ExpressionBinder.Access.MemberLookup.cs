@@ -4095,6 +4095,15 @@ internal sealed partial class ExpressionBinder
         }
 
         var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(callSyntax.Arguments, arguments.Length);
+        var symbolicArgTypes = MemberLookup.BuildSymbolicArgTypeVector(
+            null,
+            ImmutableArray.CreateRange(arguments.Select(argument => argument.Type)));
+        Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverTypeArgSymbols =
+            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                default,
+                symbolicArgTypes,
+                isExpanded);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -4102,12 +4111,14 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
             null,
+            recoverTypeArgSymbols: recoverTypeArgSymbols,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            symbolicArgTypes: symbolicArgTypes);
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
             || resolution.Best is not { } method)
         {
@@ -4115,16 +4126,31 @@ internal sealed partial class ExpressionBinder
         }
 
         var parameters = method.GetParameters();
+        var symbolicMethodTypeArgs = recoverTypeArgSymbols(method, resolution.IsExpanded);
 
         // Return type: a return that names the constraint type-variable is
         // recovered by projecting through the constructed constraint,
         // mirroring TryBindConstrainedClrCall's instance-call handling.
-        var returnType = MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
+        var returnType = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(
+                method,
+                symbolicMethodTypeArgs,
+                constraintType)
+            ?? MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
         var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(constraintType, method);
 
         arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, resolution.ParameterMapping);
 
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
+        var convertedArguments = method.IsGenericMethod
+            ? conversions.BindClrParameterConversions(
+                arguments,
+                parameters,
+                callSyntax,
+                resolution.ParameterMapping,
+                method: method,
+                receiverType: constraintType,
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs)
+            : arguments;
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, resolution.ParameterMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundConstrainedStaticCallExpression(
@@ -4134,7 +4160,8 @@ internal sealed partial class ExpressionBinder
             orderedArgs,
             refKinds,
             returnType,
-            declaringConstraint);
+            declaringConstraint,
+            symbolicMethodTypeArgs);
         return true;
     }
 
