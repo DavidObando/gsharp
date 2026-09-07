@@ -621,12 +621,13 @@ public partial class Parser
         }
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var returnRefModifier = ParseOptionalPropertyReturnRefModifier();
         var type = ParseDeclarationTypeClauseBeforeArrowBody(isProperty: true);
 
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-            var accessors = ParsePropertyAccessors();
+            var accessors = ParsePropertyAccessors(isRefReturn: returnRefModifier != null);
             var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
             return new PropertyDeclarationSyntax(
                 syntaxTree,
@@ -639,6 +640,7 @@ public partial class Parser
                 openBrace,
                 accessors,
                 closeBrace)
+                .WithReturnRefModifier(returnRefModifier)
                 .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
@@ -647,7 +649,12 @@ public partial class Parser
             // Issue #1278 / ADR-0131: an expression-bodied read-only property
             // `prop Name T -> expr`. Desugar into a single get-only accessor
             // whose body returns the expression (`{ get { return expr } }`).
-            var (synthOpenBrace, getAccessor, synthCloseBrace) = SynthesizeArrowGetAccessorList();
+            // Issue #3879: when the declaration carries `ref`, the synthesized
+            // return is a `return ref <lvalue>` — the arrow form is the
+            // idiomatic spelling of a ref-returning property, and the getter
+            // that comes out of it must not return a copy.
+            var (synthOpenBrace, getAccessor, synthCloseBrace) =
+                SynthesizeArrowGetAccessorList(asRefReturn: returnRefModifier != null);
             return new PropertyDeclarationSyntax(
                 syntaxTree,
                 accessibilityModifier,
@@ -659,6 +666,7 @@ public partial class Parser
                 synthOpenBrace,
                 ImmutableArray.Create(getAccessor),
                 synthCloseBrace)
+                .WithReturnRefModifier(returnRefModifier)
                 .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
@@ -674,7 +682,26 @@ public partial class Parser
             openBraceToken: null,
             accessors: ImmutableArray<PropertyAccessorSyntax>.Empty,
             closeBraceToken: null)
+            .WithReturnRefModifier(returnRefModifier)
             .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
+    }
+
+    // Issue #3879 (ADR-0060 amendment): the optional `ref` contextual modifier
+    // preceding a property's or indexer's type clause —
+    // `prop Value ref int32 { get { return ref this.slot } }`. Recognized with
+    // exactly the same lookahead as the `func` return-type form
+    // (ParseFunctionDeclaration): `ref` is consumed only when a type clause can
+    // start at the next token, so a property literally NAMED `ref`
+    // (`prop ref int32`) is unaffected — that name is consumed as the
+    // identifier before this runs.
+    private SyntaxToken? ParseOptionalPropertyReturnRefModifier()
+    {
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref" && CanStartTypeClause(Peek(1)))
+        {
+            return NextToken();
+        }
+
+        return null;
     }
 
     // ADR-0118: parse the indexer member form `prop this[<params>] T { get; set }`.
@@ -690,6 +717,7 @@ public partial class Parser
         var openBracket = MatchToken(SyntaxKind.OpenSquareBracketToken);
         var parameters = ParseIndexerParameterList();
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
+        var returnRefModifier = ParseOptionalPropertyReturnRefModifier();
         var type = ParseDeclarationTypeClauseBeforeArrowBody(isProperty: true);
 
         SyntaxToken? openBrace = null;
@@ -698,14 +726,17 @@ public partial class Parser
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
             openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-            accessors = ParsePropertyAccessors();
+            accessors = ParsePropertyAccessors(isRefReturn: returnRefModifier != null);
             closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
         }
         else if (Current.Kind == SyntaxKind.RightArrowToken)
         {
             // Issue #1278 / ADR-0131: an expression-bodied read-only indexer
             // `prop this[i T] U -> expr`, desugared into a get-only accessor.
-            (openBrace, var getAccessor, closeBrace) = SynthesizeArrowGetAccessorList();
+            // Issue #3879: `prop this[i T] ref U -> expr` desugars to
+            // `{ get { return ref expr } }`.
+            (openBrace, var getAccessor, closeBrace) =
+                SynthesizeArrowGetAccessorList(asRefReturn: returnRefModifier != null);
             accessors = ImmutableArray.Create(getAccessor);
         }
 
@@ -720,6 +751,7 @@ public partial class Parser
             openBrace,
             accessors,
             closeBrace)
+            .WithReturnRefModifier(returnRefModifier)
             .WithIndexer(thisKeyword, openBracket, parameters, closeBracket);
     }
 
@@ -847,7 +879,12 @@ public partial class Parser
         return accessors.ToImmutable();
     }
 
-    private ImmutableArray<PropertyAccessorSyntax> ParsePropertyAccessors()
+    // Issue #3879: `isRefReturn` propagates the declaration's `ref` modifier
+    // into the ADR-0131 arrow accessor form, so `prop P ref int32 { get -> slot }`
+    // desugars to `{ get { return ref slot } }` exactly as the whole-member arrow
+    // (`prop P ref int32 -> slot`) does. The BLOCK accessor form is untouched:
+    // there the user writes `return ref <lvalue>` themselves.
+    private ImmutableArray<PropertyAccessorSyntax> ParsePropertyAccessors(bool isRefReturn = false)
     {
         var accessors = ImmutableArray.CreateBuilder<PropertyAccessorSyntax>();
 
@@ -900,7 +937,10 @@ public partial class Parser
                     // the `set(name)` value parameter). Note: G# uses the `->`
                     // arrow, never the C# fat arrow `=>`, which remains a
                     // syntax error below.
-                    body = ParseArrowExpressionBody(asReturn: accessorKeyword.Text == "get");
+                    var accessorIsGetter = accessorKeyword.Text == "get";
+                    body = ParseArrowExpressionBody(
+                        asReturn: accessorIsGetter,
+                        asRefReturn: accessorIsGetter && isRefReturn);
                 }
                 else if (Current.Kind == SyntaxKind.SemicolonToken)
                 {
@@ -1025,7 +1065,7 @@ public partial class Parser
         return identifier.Text is "Task" or "ValueTask";
     }
 
-    private BlockStatementSyntax ParseArrowExpressionBody(bool asReturn)
+    private BlockStatementSyntax ParseArrowExpressionBody(bool asReturn, bool asRefReturn = false)
     {
         var arrowToken = MatchToken(SyntaxKind.RightArrowToken);
         var arrowPosition = arrowToken.Position;
@@ -1039,7 +1079,16 @@ public partial class Parser
         if (asReturn)
         {
             var returnKeyword = new SyntaxToken(syntaxTree, SyntaxKind.ReturnKeyword, arrowPosition, "return", null);
-            statement = new ReturnStatementSyntax(syntaxTree, returnKeyword, expression);
+
+            // Issue #3879: on a `ref`-returning property/indexer the arrow body
+            // desugars to `return ref <expr>`, not `return <expr>` — the `ref`
+            // is already on the declaration (`prop P ref int32 -> slot`), so
+            // repeating it after the arrow would be noise, and desugaring it
+            // away would produce a copy-returning getter that GS0252 rejects.
+            var refKeyword = asRefReturn
+                ? new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "ref", null)
+                : (SyntaxToken?)null;
+            statement = new ReturnStatementSyntax(syntaxTree, returnKeyword, refKeyword, expression);
         }
         else
         {
@@ -1058,10 +1107,13 @@ public partial class Parser
     // Produces the equivalent of `{ get { return expr } }`: a single get-only
     // accessor whose block body returns the expression, plus synthetic braces
     // for the enclosing accessor list anchored at the arrow's position.
-    private (SyntaxToken OpenBrace, PropertyAccessorSyntax GetAccessor, SyntaxToken CloseBrace) SynthesizeArrowGetAccessorList()
+    // Issue #3879: `asRefReturn` produces `{ get { return ref expr } }` for a
+    // `ref`-returning property/indexer.
+    private (SyntaxToken OpenBrace, PropertyAccessorSyntax GetAccessor, SyntaxToken CloseBrace) SynthesizeArrowGetAccessorList(
+        bool asRefReturn = false)
     {
         var arrowPosition = Current.Position;
-        var body = ParseArrowExpressionBody(asReturn: true);
+        var body = ParseArrowExpressionBody(asReturn: true, asRefReturn: asRefReturn);
 
         var getKeyword = new SyntaxToken(syntaxTree, SyntaxKind.IdentifierToken, arrowPosition, "get", null);
         var getAccessor = new PropertyAccessorSyntax(

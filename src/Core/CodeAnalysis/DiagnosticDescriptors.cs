@@ -474,10 +474,16 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor AwaitInsideLockBody = new("GS0575", DiagnosticSeverity.Error, "Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (ADR-0174 D4; C# spells the same rule CS1996).");
     internal static readonly DiagnosticDescriptor ExplicitInterfaceMemberNotOnTypeSurface = new("GS0577", DiagnosticSeverity.Error, "Type '{0}' has no member '{1}' of its own. '{1}' is declared by the interface '{2}', which '{0}' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead (issue #4013).");
 
+    // Issue #3879 (ADR-0060 amendment): `ref`-returning properties and indexers
+    // are restricted to the COMPUTED, read-only forms. Both rules below are
+    // declaration-shape rules, reported where the property is bound.
+    internal static readonly DiagnosticDescriptor RefPropertyRequiresComputedGetter = new("GS0578", DiagnosticSeverity.Error, "Property '{0}' cannot return by reference here: a 'ref' return needs a concrete getter with a body to name the storage it aliases. An auto-property's getter only copies out of its backing field, and an abstract or interface slot names no storage at all. Write 'prop {0} ref T {{ get {{ return ref <lvalue> }} }}' or 'prop {0} ref T -> <lvalue>' on a class, struct, or shared block (issue #3879).");
+    internal static readonly DiagnosticDescriptor RefPropertyCannotHaveSetter = new("GS0579", DiagnosticSeverity.Error, "Property '{0}' returns by reference, so it cannot declare a '{1}' accessor: a caller writes through the returned reference instead of calling a setter. Drop the '{1}' accessor, or drop the 'ref' from the declaration (issue #3879).");
+
     // Issue #4043: a type parameter may be constrained by ANOTHER type
     // parameter (`[TBase, TDerived TBase]`, C#'s `where TDerived : TBase`), so
     // the chain of such bounds must be acyclic. C# spells the same rule CS0454.
-    internal static readonly DiagnosticDescriptor CircularConstraintDependency = new("GS0579", DiagnosticSeverity.Error, "Circular constraint dependency involving '{0}' and '{1}'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.");
+    internal static readonly DiagnosticDescriptor CircularConstraintDependency = new("GS0581", DiagnosticSeverity.Error, "Circular constraint dependency involving '{0}' and '{1}'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

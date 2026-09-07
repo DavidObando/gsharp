@@ -174,7 +174,7 @@ reported as [GS9305](#analyzer-host-diagnostics-gs9300gs9319-reserved).
 | GS0182 | Error | Method is overridable; `override` required. | Redefining an `open` method without the `override` keyword. |
 | GS0183 | Error | No matching open base method for `override`. | `override` keyword present but no base class defines a matching open method. |
 | GS0184 | Error | Cannot override a non-open base method. | `override` targets a method that was not declared `open`. |
-| GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. |
+| GS0185 | Error | Override signature mismatch. | An `override` method has different parameter types or return type than the base. Also an `override` property whose by-ref return does not match the base slot's (issue #3879): `ref` may only override `ref`, and by-value only by-value. |
 | GS0186 | Error | _(historical — removed)_ Interface method may not have a body. | Default-interface methods are now supported (see GS0318–GS0321). |
 | GS0187 | Error | Class or struct does not implement interface method. | A class or struct claims to implement an interface but a required method is absent. |
 | GS0188 | Error | Class or struct cannot implement a sealed interface from a different package. | A class or struct implements a `sealed interface` defined outside its package. |
@@ -502,6 +502,22 @@ Cause/fix examples:
 - **GS0253** — `return ref (a + b)` or `return ref Foo()`. Fix: alias an addressable expression first (`let ref t = arr[i]; return ref t`) or restructure to return a pointer to durable storage.
 - **GS0254** — `func f() ref int32 { var x = 0; return ref x }`. Fix: do not return references to function locals; consume the value by copy or alias storage that outlives the call.
 - **GS0255** — overriding a base method declared `int32` with a `ref int32` override (or vice versa). Fix: match the base return ref-kind exactly.
+
+## Ref-returning property / indexer diagnostics (GS0578-GS0579)
+
+Issue #3879 (the ADR-0060 amendment) extends the by-ref return from `func` to `prop`: `prop Value ref int32 { get { return ref this.slot } }`, its arrow sugar `prop Value ref int32 -> this.slot`, and the indexer form `prop this[i int32] ref int32 -> this.items[i]`. The getter returns a managed pointer, so a CLR consumer can alias the storage (`ref int slot = ref holder.Value`).
+
+The form is restricted to the **computed, read-only** shapes, and the two diagnostics below enforce that. Everything else about a ref-returning getter -- `return ref <lvalue>` vs a plain `return`, the lvalue rule, and the escape rule -- is the existing GS0248-GS0255 surface above, because the accessor body is bound with the getter as its enclosing function.
+
+| Code | Severity | Message |
+|------|----------|---------|
+| GS0578 | Error | Property `{name}` cannot return by reference here: a 'ref' return needs a concrete getter with a body to name the storage it aliases. |
+| GS0579 | Error | Property `{name}` returns by reference, so it cannot declare a `{set/init}` accessor: a caller writes through the returned reference instead of calling a setter. |
+
+Cause/fix examples:
+
+- **GS0578** -- `prop Slot ref int32` (an auto-property), `prop Slot ref int32 { get }` (a bodiless slot), or the same requirement inside an `interface`. An auto-property's getter only copies out of its compiler-synthesized backing field, and an abstract or interface slot names no storage at all. Fix: give the getter a body on a concrete `class`, `struct`, or `shared` block -- `prop Slot ref int32 { get { return ref this.storage } }` or `prop Slot ref int32 -> this.storage`.
+- **GS0579** -- `prop Value ref int32 { get { return ref slot } set(v) { slot = v } }`. The returned reference already *is* the write path, so a setter is a second, contradictory one (C# spells the same rule CS8147). Fix: drop the `set`/`init` accessor, or drop the `ref` from the declaration.
 
 ## Method-overloading and optional-parameter diagnostics (GS0264–GS0267)
 
@@ -882,7 +898,7 @@ is not a spelling gsc accepts today (GS0157).
 | GS0575 | Error | `Cannot 'await' in the body of a 'lock' statement: the monitor is thread-affine and reentrant, so a continuation that resumes on another thread would exit a lock it does not hold. Move the awaited work outside the 'lock' (ADR-0174 D4; C# spells the same rule CS1996).` | `lock o { v = await answer() }` |
 | GS0576 | Error | `Cannot 'await' inside a 'go' operand: the spawn takes the call, and an await nested in its arguments has no place to suspend. Bind the awaited value to a local first, then 'go' the call that uses it (ADR-0174 D5).` | `go consume(await fetch())` |
 | GS0577 | Error | `Type '<type>' has no member '<member>' of its own. '<member>' is declared by the interface '<interface>', which '<type>' implements explicitly, so it is not part of the type's own surface. Reach it through an interface-typed receiver instead (issue #4013).` | `map[string, int32]{}.Contains("k")` — `Contains` on `Dictionary<K, V>` is an explicit `ICollection<KeyValuePair<K, V>>` / `IDictionary` implementation |
-| GS0579 | Error | `Circular constraint dependency involving '<type-parameter>' and '<type-parameter>'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.` | `class Cyc[A B, B A]` — `A` is constrained by `B`, which is constrained by `A` (C# spells the same rule CS0454) |
+| GS0581 | Error | `Circular constraint dependency involving '<type-parameter>' and '<type-parameter>'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.` | `class Cyc[A B, B A]` — `A` is constrained by `B`, which is constrained by `A` (C# spells the same rule CS0454) |
 | GS0558 | Warning | `'<name>' is a suspending function; called from a function that neither suspends nor is 'async', it blocks the calling thread until it completes (ADR-0174 D4). Make the caller a 'suspend func' or an 'async func', or accept the block at a root such as the entry point.` | `suspend func take(ch chan[int32]) int32 { return <-ch }` then `func f(ch chan[int32]) int32 { return take(ch) }` |
 | GS0556 | Error | `A select arm's 'when' guard must be a 'bool'; '<type>' is not (ADR-0174 D8).` | `select { case <-ch when 1 { } }` |
 | GS0557 | Error | `'case cancelled' observes the ambient context, and there is none here; put the select inside a 'scope', or take a 'ctx Context' parameter (ADR-0174 D8).` | `select { case cancelled { } case <-ch { } }` written outside any `scope` |

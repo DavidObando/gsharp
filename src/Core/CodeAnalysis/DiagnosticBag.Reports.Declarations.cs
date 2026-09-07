@@ -1017,6 +1017,30 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.IndexerRequiresAccessorBody);
 
     /// <summary>
+    /// Reports GS0578 — issue #3879 (ADR-0060 amendment): a <c>ref</c>-returning
+    /// property or indexer was declared without a bodied getter (an
+    /// auto-property, a bare <c>{ get }</c>, or an abstract/interface slot).
+    /// A by-ref return has to name the storage it aliases, and only a computed
+    /// getter can do that.
+    /// </summary>
+    /// <param name="location">The source location of the property declaration.</param>
+    /// <param name="propertyName">The property name (or <c>this[…]</c> for an indexer).</param>
+    public void ReportRefPropertyRequiresComputedGetter(TextLocation location, string propertyName)
+    => Report(location, DiagnosticDescriptors.RefPropertyRequiresComputedGetter, propertyName);
+
+    /// <summary>
+    /// Reports GS0579 — issue #3879 (ADR-0060 amendment): a <c>ref</c>-returning
+    /// property or indexer declared a <c>set</c> or <c>init</c> accessor. The
+    /// returned reference IS the write path, so a setter would be a second,
+    /// contradictory one (C# spells the same rule CS8147).
+    /// </summary>
+    /// <param name="location">The source location of the offending accessor.</param>
+    /// <param name="propertyName">The property name (or <c>this[…]</c> for an indexer).</param>
+    /// <param name="accessorKeyword">The offending accessor keyword — <c>set</c> or <c>init</c>.</param>
+    public void ReportRefPropertyCannotHaveSetter(TextLocation location, string propertyName, string accessorKeyword)
+    => Report(location, DiagnosticDescriptors.RefPropertyCannotHaveSetter, propertyName, accessorKeyword);
+
+    /// <summary>
     /// Issue #1017: GS0393 — a user-defined conversion operator
     /// (<c>func operator implicit/explicit (x T) U</c>) must declare exactly one
     /// parameter (the source operand) passed by value.

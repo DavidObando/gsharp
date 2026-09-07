@@ -5,6 +5,7 @@
 using System;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -183,14 +184,18 @@ namespace Corpus.Issue1987
     }
 
     [Fact]
-    public void ElementAccess_OnRefReturningIndexer_StaysLoudGap()
+    public void ElementAccess_OnRefReturningIndexer_NoLongerGaps()
     {
-        // Issue #1987: `list[i]` where the indexer is a user-defined
-        // ref-returning indexer (`ref T this[int i]`) has no canonical G#
-        // form — G# has no ref-returning indexer, so lowering to a plain
-        // index expression would drop the ref-aliasing semantics entirely.
-        // This must gap precisely here rather than emit a call-under-index
-        // that gsc later rejects with a generic compile error.
+        // Issue #1987 gapped `list[i]` against a user-defined ref-returning
+        // indexer (`ref T this[int i]`) because G# had no ref-returning indexer
+        // at all, so a plain index expression would have dropped the aliasing.
+        // Issue #3879 (the ADR-0060 amendment) added the declaration form
+        // `prop this[i T] ref U`, and gsc's emitter loads through the returned
+        // managed pointer at the read — so a plain index expression is now the
+        // correct lowering, with the same read semantics C# gives it. The
+        // DECLARATION is what carries the aliasing; the read is a value read
+        // either way (G# cannot bind a call result as an alias — see the
+        // RefAliasingCallResult gap below, which is the #1900 limit itself).
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 namespace Corpus.Issue1987
@@ -216,9 +221,47 @@ namespace Corpus.Issue1987
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+    }
+
+    [Fact]
+    public void ElementAccess_OnRefReadonlyReturningIndexer_StaysLoudGap()
+    {
+        // The half of #1987 that #3879 did NOT close, and the reason the test
+        // above is not simply a deletion. G# has no read-only by-ref return, so
+        // a `ref readonly` indexer's DECLARATION still gaps — which means an
+        // element access through one would name a member that was never
+        // emitted, and the read has to gap with it.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", @"
+namespace Corpus.Issue1987
+{
+    public class RefReadonlyIndexable
+    {
+        private int[] data = new int[4];
+
+        public ref readonly int this[int i] => ref this.data[i];
+    }
+
+    public class Holder
+    {
+        public int Read(RefReadonlyIndexable list, int i)
+        {
+            return list[i];
+        }
+    }
+}
+") });
+
+        Assert.True(project.BoundWithoutErrors);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
         Assert.Contains(
             context.Diagnostics,
-            d => d.Message.Contains("ref-returning indexer", StringComparison.Ordinal));
+            d => d.Message.Contains("ref readonly", StringComparison.Ordinal));
     }
 
     [Fact]

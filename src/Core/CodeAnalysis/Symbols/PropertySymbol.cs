@@ -203,6 +203,22 @@ public sealed class PropertySymbol : Symbol
     public System.Collections.Immutable.ImmutableArray<ParameterSymbol> Parameters { get; init; }
         = System.Collections.Immutable.ImmutableArray<ParameterSymbol>.Empty;
 
+    /// <summary>
+    /// Gets or sets the by-reference mode of this property's (or indexer's)
+    /// GETTER return value — issue #3879, the ADR-0060 amendment that extends
+    /// the by-ref return from <c>func</c> to <c>prop</c>. <see cref="Binding.RefKind.Ref"/>
+    /// means the property was declared <c>prop P ref T</c>: the PropertyDef
+    /// signature and the <c>get_P</c> MethodDef signature both encode
+    /// <c>T&amp;</c>, so a CLR consumer can alias the storage
+    /// (<c>ref int slot = ref holder.P</c>). Only <see cref="Binding.RefKind.None"/>
+    /// and <see cref="Binding.RefKind.Ref"/> are valid here, mirroring
+    /// <see cref="FunctionSymbol.ReturnRefKind"/>. <see cref="Type"/> stays the
+    /// POINTEE type <c>T</c> throughout, exactly as it does for a ref-returning
+    /// function — the by-ref-ness is a separate bit, not a
+    /// <see cref="ByRefTypeSymbol"/> wrap.
+    /// </summary>
+    public Binding.RefKind ReturnRefKind { get; set; } = Binding.RefKind.None;
+
     /// <summary>Gets or sets the getter accessor body syntax (for computed properties). Null for auto-properties.</summary>
     public Syntax.BlockStatementSyntax? GetterBodySyntax { get; set; }
 
