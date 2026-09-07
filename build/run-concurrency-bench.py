@@ -45,6 +45,7 @@ methodology/build keys; baseline gating requires a matching comparison key.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -67,6 +68,7 @@ ROW = re.compile(
     r"(?: ms (?P<elapsed_ms>[0-9]+(?:\.[0-9]+)?))?$")
 GO_ROW = re.compile(r"^\[(?P<name>[^\]]+?)\s*\]\s+[0-9.]+ ms\s+(?P<value>[0-9.]+) ns/op$")
 RUNTIME_ROW = re.compile(r"^runtime (?P<version>\S+) cores (?P<cores>[0-9]+)$")
+GO_RUNTIME_ROW = re.compile(r"^go=(?P<version>\S+) cores=(?P<cores>[0-9]+)$")
 
 # Pinning the tiering delay is normative, not a tuning knob; see the module
 # docstring. Without it the reported number depends on whether a 100 ms timer
@@ -88,6 +90,7 @@ RUNTIME_SETTING_PREFIXES = (
 )
 JSON_SCHEMA_VERSION = 2
 METHODOLOGY_VERSION = 2
+BASELINE_RUNS = 3
 
 
 def load_scenarios() -> list[dict]:
@@ -244,6 +247,29 @@ def gsc_informational_version(gsc: Path) -> str | None:
     return package.split("/", 1)[1] if package else None
 
 
+def incomparability_reasons(
+    start_environment: dict,
+    end_environment: dict,
+    runtime_versions: dict[str, list[str]],
+    processor_counts: dict[str, list[int]],
+) -> list[str]:
+    reasons = []
+    if start_environment["power"] != end_environment["power"]:
+        reasons.append("power state changed while the benchmark was running")
+    if start_environment["cpuAffinity"] != end_environment["cpuAffinity"]:
+        reasons.append("CPU affinity changed while the benchmark was running")
+    if not runtime_versions.get("gsharp"):
+        reasons.append("the benchmark did not report its CoreCLR runtime version")
+    if not any(start_environment["power"].values()):
+        reasons.append("the host exposes no observable power-state identity")
+    for mode, counts in processor_counts.items():
+        if not counts:
+            reasons.append(f"{mode} did not report its processor count")
+        elif len(counts) > 1:
+            reasons.append(f"{mode} reported different processor counts across launches: {counts}")
+    return reasons
+
+
 def make_fingerprint(
     *,
     gsc: Path,
@@ -255,6 +281,7 @@ def make_fingerprint(
     scenario: str | None,
     modes: list[str],
     runtime_versions: dict[str, list[str]],
+    processor_counts: dict[str, list[int]],
     runtime_environment: dict[str, str],
     removed_runtime_settings: dict[str, str],
     start_environment: dict,
@@ -262,6 +289,8 @@ def make_fingerprint(
 ) -> dict:
     comparison = {
         "methodologyVersion": METHODOLOGY_VERSION,
+        "wholeRuns": 1,
+        "intervalMethod": "bootstrap-launch-median",
         "runnerSha256": sha256(Path(__file__)),
         "benchmarkDefinitionSha256": definition_hash(),
         "jitMode": "tiered-pgo-steady-state",
@@ -279,6 +308,7 @@ def make_fingerprint(
             "cpuModel": cpu_model(),
             "logicalCpuCount": os.cpu_count(),
             "cpuAffinity": start_environment["cpuAffinity"],
+            "reportedProcessorCounts": processor_counts,
         },
         "power": start_environment["power"],
         "toolchains": {
@@ -300,6 +330,8 @@ def make_fingerprint(
                 "GOARM64",
                 "GOFLAGS",
                 "GOEXPERIMENT",
+                "GOGC",
+                "GOMEMLIMIT",
                 "CGO_ENABLED",
             )
         } if go_binary else None,
@@ -317,13 +349,12 @@ def make_fingerprint(
             "go": sha256(go_binary) if go_binary else None,
         },
     }
-    reasons = []
-    if start_environment["power"] != end_environment["power"]:
-        reasons.append("power state changed while the benchmark was running")
-    if start_environment["cpuAffinity"] != end_environment["cpuAffinity"]:
-        reasons.append("CPU affinity changed while the benchmark was running")
-    if not runtime_versions.get("gsharp"):
-        reasons.append("the benchmark did not report its CoreCLR runtime version")
+    reasons = incomparability_reasons(
+        start_environment,
+        end_environment,
+        runtime_versions,
+        processor_counts,
+    )
 
     fingerprint = {
         "comparison": comparison,
@@ -334,6 +365,21 @@ def make_fingerprint(
     }
     fingerprint["comparisonKey"] = stable_key(comparison)
     fingerprint["aggregationKey"] = stable_key({"comparison": comparison, "build": build})
+    return fingerprint
+
+
+def aggregate_fingerprint(fingerprints: list[dict]) -> dict | None:
+    if not fingerprints:
+        return None
+    fingerprint = copy.deepcopy(fingerprints[0])
+    comparison = fingerprint["comparison"]
+    comparison["wholeRuns"] = len(fingerprints)
+    comparison["intervalMethod"] = "range-of-run-medians"
+    fingerprint["comparisonKey"] = stable_key(comparison)
+    fingerprint["aggregationKey"] = stable_key({
+        "comparison": comparison,
+        "build": fingerprint["build"],
+    })
     return fingerprint
 
 
@@ -407,7 +453,7 @@ def build_go(out: Path) -> Path | None:
     return binary
 
 
-def run_once(spec: dict) -> tuple[dict[str, float], str | None]:
+def run_once(spec: dict) -> tuple[dict[str, float], dict | None]:
     result = subprocess.run(
         spec["command"],
         capture_output=True,
@@ -430,16 +476,23 @@ def run_once(spec: dict) -> tuple[dict[str, float], str | None]:
             rows[match["name"]] = float(match["value"])
         header = RUNTIME_ROW.match(line)
         if header:
-            runtime = header["version"]
+            runtime = {"version": header["version"], "cores": int(header["cores"])}
+        go_header = GO_RUNTIME_ROW.match(line)
+        if go_header:
+            runtime = {"version": go_header["version"], "cores": int(go_header["cores"])}
     if not rows:
         raise SystemExit(f"{spec['name']} benchmark produced no result rows:\n{result.stdout}")
     return rows, runtime
 
 
-def measure_modes(specs: list[dict], launches: int) -> tuple[dict[str, dict[str, list[float]]], dict[str, list[str]], list[list[str]]]:
+def measure_modes(
+    specs: list[dict],
+    launches: int,
+) -> tuple[dict[str, dict[str, list[float]]], dict[str, list[str]], dict[str, list[int]], list[list[str]]]:
     """Rotate launch order so a drifting host does not consistently favor one runtime."""
     samples = {spec["name"]: {} for spec in specs}
     runtime_versions = {spec["name"]: [] for spec in specs}
+    processor_counts = {spec["name"]: [] for spec in specs}
     orders = []
     for launch in range(launches):
         ordered = specs[launch % len(specs):] + specs[:launch % len(specs)]
@@ -448,9 +501,12 @@ def measure_modes(specs: list[dict], launches: int) -> tuple[dict[str, dict[str,
             rows, runtime = run_once(spec)
             for name, value in rows.items():
                 samples[spec["name"]].setdefault(name, []).append(value)
-            if runtime and runtime not in runtime_versions[spec["name"]]:
-                runtime_versions[spec["name"]].append(runtime)
-    return samples, runtime_versions, orders
+            if runtime:
+                if runtime["version"] not in runtime_versions[spec["name"]]:
+                    runtime_versions[spec["name"]].append(runtime["version"])
+                if runtime["cores"] not in processor_counts[spec["name"]]:
+                    processor_counts[spec["name"]].append(runtime["cores"])
+    return samples, runtime_versions, processor_counts, orders
 
 
 def bootstrap_ci95(values: list[float], iterations: int = 2000) -> list[float] | None:
@@ -528,6 +584,12 @@ def load_runs(paths: list[str]) -> tuple[list[dict], list[dict], list[dict], str
         payload = json.loads(Path(path).read_text())
         recorded_class = payload.get("hardwareClass") or recorded_class
         fingerprint = payload.get("fingerprint")
+        if (
+            len(paths) > 1
+            and fingerprint
+            and fingerprint.get("comparison", {}).get("wholeRuns", 1) != 1
+        ):
+            raise SystemExit(f"refusing to re-aggregate already aggregated run '{path}'")
         key = payload.get("aggregationKey")
         if key is None:
             if len(paths) > 1:
@@ -726,6 +788,8 @@ def complete_baseline_fingerprint(fingerprint: dict) -> bool:
     return (
         comparison["scenario"] == "all"
         and comparison["modes"] == ["gsharp", "gsharp_aot", "go"]
+        and comparison["wholeRuns"] == BASELINE_RUNS
+        and comparison["intervalMethod"] == "range-of-run-medians"
     )
 
 
@@ -791,7 +855,11 @@ def main() -> int:
         measured_aot = aggregate(aot_runs)
         go_measured = aggregate(go_runs)
         source_fingerprints = metadata["fingerprints"]
-        fingerprint = source_fingerprints[0] if source_fingerprints else None
+        fingerprint = (
+            aggregate_fingerprint(source_fingerprints)
+            if len(args.from_json) > 1
+            else source_fingerprints[0] if source_fingerprints else None
+        )
         environment = metadata["environments"]
         launch_order = metadata["launchOrders"]
         provenance = f"{len(gsharp_runs)} run(s) aggregated"
@@ -831,20 +899,24 @@ def main() -> int:
         else:
             removed_aot = {}
 
-        go_binary = build_go(out) if args.go else None
+        go_row = scenarios[0].get("go") if args.scenario else None
+        go_binary = build_go(out) if args.go and (not args.scenario or go_row) else None
         if go_binary:
+            go_env = dict(os.environ)
+            if go_row:
+                go_env["GSHARP_BENCH_SCENARIO"] = go_row
             specs.append(
                 {
                     "name": "go",
                     "command": [str(go_binary)],
                     "cwd": BENCH / "go",
-                    "env": dict(os.environ),
+                    "env": go_env,
                     "pattern": GO_ROW,
                 }
             )
 
         start_environment = environment_sample()
-        raw_samples, runtime_versions, launch_order = measure_modes(specs, args.launches)
+        raw_samples, runtime_versions, processor_counts, launch_order = measure_modes(specs, args.launches)
         measured = summarize(raw_samples["gsharp"])
         measured_aot = summarize(raw_samples.get("gsharp_aot", {}))
         go_measured = summarize(raw_samples.get("go", {}))
@@ -860,6 +932,7 @@ def main() -> int:
             scenario=args.scenario,
             modes=[spec["name"] for spec in specs],
             runtime_versions=runtime_versions,
+            processor_counts=processor_counts,
             runtime_environment=jit_env,
             removed_runtime_settings={**removed_jit, **removed_aot},
             start_environment=start_environment,

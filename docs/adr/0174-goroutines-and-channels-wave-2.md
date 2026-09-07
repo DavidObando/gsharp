@@ -3335,7 +3335,8 @@ implementation had to refine it.
 
     Comparability is explicit rather than inferred. A comparison key covers the
     methodology, scenario scope, measured modes, launch count/order, warm-up,
-    JIT settings, benchmark definition, host/power identity and toolchains.
+    whole-run count and interval method, JIT settings, benchmark definition,
+    host/power identity, runtime-reported processor counts and toolchains.
     Aggregating whole runs additionally requires identical build hashes. A
     mismatch is rejected; an older baseline without the key reports but cannot
     gate until it is re-recorded on its named machine. Raw launch samples and
@@ -3344,9 +3345,13 @@ implementation had to refine it.
     are measured together, preventing a warming or drifting host from always
     favoring the same runtime. Since the baseline carries one global comparison
     identity, only a complete JIT + NativeAOT + Go suite may update it; partial
-    runs remain valid for reporting and checks. The existing `gsharp`,
-    `gsharp_aot`, `go` and `hardwareClass` JSON fields remain unchanged for
-    dashboard consumers.
+    runs remain valid for reporting. Recording and checking use the same
+    three-run aggregate and range-of-run-medians interval. A scoped paired run
+    selects the matching Go row rather than running Go's whole suite; a row with
+    no honest Go counterpart omits Go. A host that exposes no power-state
+    identity is explicitly report-only. The existing `gsharp`, `gsharp_aot`,
+    `go` and `hardwareClass` JSON fields remain unchanged for dashboard
+    consumers.
 
 ## Addendum A — The ten patterns, three ways
 

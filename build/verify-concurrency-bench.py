@@ -42,6 +42,8 @@ def smoke() -> int:
             failures.append(f"Bench.gs does not know the scenario '{scenario['gsharp']}'")
 
     go_program = (BENCH / "go" / "main.go").read_text()
+    if "GSHARP_BENCH_SCENARIO" not in go_program:
+        failures.append("main.go has no single-scenario selector")
     for scenario in scenarios:
         row = scenario.get("go")
         if row and f'"{row}"' not in go_program:

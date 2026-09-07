@@ -39,17 +39,27 @@ errata 12.
 ## Running
 
 ```sh
-# The paired run: builds the G# program, launches both sides several times,
-# reports medians with a bootstrap confidence interval, and checks the gate.
-python3 build/run-concurrency-bench.py --go --aot --check-baseline bench/concurrency/baseline.json
+# The gate uses three whole runs, matching the baseline's interval method.
+for pass in 1 2 3; do
+  python3 build/run-concurrency-bench.py --go --aot \
+    --json "out/concurrency-$pass.json"
+done
+python3 build/run-concurrency-bench.py \
+  --from-json out/concurrency-1.json \
+  --from-json out/concurrency-2.json \
+  --from-json out/concurrency-3.json \
+  --check-baseline bench/concurrency/baseline.json
 
 # Drop --aot while iterating: it adds a NativeAOT publish (minutes) per run.
 # One scenario, fewer launches, while iterating
 python3 build/run-concurrency-bench.py --scenario select-ready --launches 3 \
   --json out/select-ready.json
 
-# Record what was measured. Refuses to loosen a ceiling without a stated reason.
-python3 build/run-concurrency-bench.py --go --aot \
+# Record that same aggregate. Refuses to loosen a ceiling without a reason.
+python3 build/run-concurrency-bench.py \
+  --from-json out/concurrency-1.json \
+  --from-json out/concurrency-2.json \
+  --from-json out/concurrency-3.json \
   --update-baseline bench/concurrency/baseline.json
 
 # Check the harness still hangs together (this runs on every PR)
@@ -132,9 +142,10 @@ spike:
    for diagnosis, but cannot aggregate, update a baseline, or gate. When Go is
    requested, JIT/AOT/Go launch order rotates on each sample so a warming or
    drifting host cannot consistently favor one side.
-   A baseline update requires the full `--go --aot` suite without `--scenario`;
-   a partial run may report or check, but cannot relabel untouched rows with its
-   narrower comparison key.
+   A baseline update and its checks require three full `--go --aot` runs
+   aggregated with `--from-json`, without `--scenario`; a partial or single run
+   may report, but cannot relabel untouched rows or gate with a different
+   interval method.
 
 ## Known limits of the current numbers
 

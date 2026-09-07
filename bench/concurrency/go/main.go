@@ -17,14 +17,14 @@ import (
 // from. A ratio between two rows measured over different durations is not a
 // comparison of the two runtimes.
 const (
-	N          = 2_000_000  // buf64
-	NPingPong  = 1_000_000  // 2 hand-offs per iteration: 2M hand-offs, matching G#'s rendezvous
-	NClosed    = 25_000_000 // closed receive is nanoseconds; it needs the count to be measurable
-	NSpawn     = 750_000
-	NSelect    = 2_000_000
-	NChunk64   = 32_000_000
-	NChunk1k   = 75_000_000
-	NPark      = 200_000 // park-scale is a memory probe, not a rate
+	N         = 2_000_000  // buf64
+	NPingPong = 1_000_000  // 2 hand-offs per iteration: 2M hand-offs, matching G#'s rendezvous
+	NClosed   = 25_000_000 // closed receive is nanoseconds; it needs the count to be measurable
+	NSpawn    = 750_000
+	NSelect   = 2_000_000
+	NChunk64  = 32_000_000
+	NChunk1k  = 75_000_000
+	NPark     = 200_000 // park-scale is a memory probe, not a rate
 )
 
 // quiet suppresses report output during warm-up rounds. The runner parses the
@@ -254,6 +254,7 @@ func main() {
 	// measurable: compare -warmup=0 against -warmup=3.
 	warmup := flag.Int("warmup", 0, "unreported rounds to run before the reported one")
 	flag.Parse()
+	requested := os.Getenv("GSHARP_BENCH_SCENARIO")
 
 	fmt.Printf("go=%s cores=%d\n\n", runtime.Version(), runtime.NumCPU())
 
@@ -261,12 +262,43 @@ func main() {
 		quiet = true
 		stdout := os.Stdout
 		os.Stdout, _ = os.Open(os.DevNull)
-		all()
+		run(requested)
 		os.Stdout = stdout
 		quiet = false
 	}
 
-	all()
+	run(requested)
+}
+
+func run(name string) {
+	if name == "" {
+		all()
+		return
+	}
+
+	switch name {
+	case "go-buf64":
+		throughput()
+	case "go-chunk64":
+		chunked()
+	case "go-chunk1k":
+		chunked1k()
+	case "go-compute":
+		computeStage()
+	case "go-pingpong":
+		pingpong()
+	case "go-closed":
+		closedRecv()
+	case "go-spawn":
+		spawn()
+	case "go-select2":
+		selectCost()
+	case "go-park":
+		parkScale()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown benchmark scenario %q\n", name)
+		os.Exit(2)
+	}
 }
 
 func all() {

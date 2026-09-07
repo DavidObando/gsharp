@@ -108,6 +108,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 scenario="select-ready",
                 modes=["gsharp", "go"],
                 runtime_versions={"gsharp": ["10.0.11"]},
+                processor_counts={"gsharp": [2], "go": [2]},
                 runtime_environment={
                     **bench.PINNED_TIER_ENV,
                     "COMPLUS_GCSERVER": "1",
@@ -125,6 +126,13 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
         self.assertEqual("1", fingerprint["comparison"]["runtimeEnvironment"]["COMPLUS_GCSERVER"])
         self.assertNotEqual(fingerprint["comparisonKey"], fingerprint["aggregationKey"])
+        self.assertEqual(1, fingerprint["comparison"]["wholeRuns"])
+        self.assertEqual("bootstrap-launch-median", fingerprint["comparison"]["intervalMethod"])
+
+        aggregated = bench.aggregate_fingerprint([fingerprint, fingerprint])
+        self.assertEqual(2, aggregated["comparison"]["wholeRuns"])
+        self.assertEqual("range-of-run-medians", aggregated["comparison"]["intervalMethod"])
+        self.assertNotEqual(fingerprint["comparisonKey"], aggregated["comparisonKey"])
 
     def test_json_aggregation_rejects_different_build_or_methodology_keys(self) -> None:
         common = {
@@ -199,8 +207,18 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertIn("report-only", output.getvalue())
 
     def test_baseline_update_requires_all_scenarios_and_modes(self) -> None:
-        full = {"comparison": {"scenario": "all", "modes": ["gsharp", "gsharp_aot", "go"]}}
-        partial = {"comparison": {"scenario": "select-ready", "modes": ["gsharp"]}}
+        full = {"comparison": {
+            "scenario": "all",
+            "modes": ["gsharp", "gsharp_aot", "go"],
+            "wholeRuns": 3,
+            "intervalMethod": "range-of-run-medians",
+        }}
+        partial = {"comparison": {
+            "scenario": "select-ready",
+            "modes": ["gsharp"],
+            "wholeRuns": 1,
+            "intervalMethod": "bootstrap-launch-median",
+        }}
 
         self.assertTrue(bench.complete_baseline_fingerprint(full))
         self.assertFalse(bench.complete_baseline_fingerprint(partial))
@@ -216,6 +234,22 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 {"paired": {}},
                 {"go-paired": {}},
             ))
+
+    def test_missing_power_or_changing_processor_count_marks_run_incomparable(self) -> None:
+        start = {
+            "cpuAffinity": [0, 1],
+            "power": {"governors": [], "scalingDrivers": [], "powerSource": None},
+        }
+
+        reasons = bench.incomparability_reasons(
+            start,
+            start,
+            {"gsharp": ["10.0.11"]},
+            {"gsharp": [2, 4]},
+        )
+
+        self.assertIn("the host exposes no observable power-state identity", reasons)
+        self.assertTrue(any("different processor counts" in reason for reason in reasons))
 
     def test_dashboard_accepts_additive_result_schema(self) -> None:
         results = SCRATCH / "results.json"
