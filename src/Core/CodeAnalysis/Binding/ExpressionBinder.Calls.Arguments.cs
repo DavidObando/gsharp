@@ -3785,6 +3785,18 @@ internal sealed partial class ExpressionBinder
             constraintType,
             method);
 
+        var downstreamMapping = resolution.IsExpanded
+            ? default
+            : resolution.ParameterMapping;
+        if (resolution.IsExpanded)
+        {
+            arguments = overloads.ExpandParamsArguments(
+                arguments,
+                parameters,
+                ce,
+                parameterMapping: resolution.ParameterMapping);
+        }
+
         // Issue #1852: re-lower each interpolated-string argument whose
         // resolved parameter is IFormattable/FormattableString-shaped to
         // FormattableStringFactory.Create(...) — mirroring
@@ -3801,17 +3813,17 @@ internal sealed partial class ExpressionBinder
         // other argument (and the overload choice itself, unaffected unless a
         // candidate's applicability actually depended on the flag) is
         // unchanged.
-        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, resolution.ParameterMapping);
+        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, downstreamMapping);
         arguments = ApplyUserDefinedImplicitClrArgumentConversions(
             arguments,
             parameters,
-            resolution.ParameterMapping);
+            downstreamMapping);
 
         // Order positionally for named arguments; deliberately skip the CLR
         // boxing/conversion pass — the emitted MemberRef parameter is the
         // interface type-variable `!0` (== the reified `!!T`), so a `T`-typed
         // argument must be passed unboxed.
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundImportedInstanceCallExpression(

@@ -94,6 +94,8 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
 
             public static double Params(params double[] values) => values.Sum();
 
+            public static double WithLambda(double value, Func<double, double> map) => map(value);
+
             public static string Ambiguous(string value) => "string";
 
             public static string Ambiguous(DateTime value) => "date";
@@ -121,22 +123,30 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         public interface IConstrainedTarget
         {
             double ConstrainedValue(double value);
+
+            double ConstrainedParams(params double[] values);
         }
 
         public sealed class ConstrainedTarget : IConstrainedTarget
         {
             public double ConstrainedValue(double value) => value;
+
+            public double ConstrainedParams(params double[] values) => values.Sum();
         }
 
         public interface IStaticConstrainedTarget<TSelf>
             where TSelf : IStaticConstrainedTarget<TSelf>
         {
             static abstract double ConstrainedStaticValue(double value);
+
+            static abstract double ConstrainedStaticParams(params double[] values);
         }
 
         public sealed class StaticConstrainedTarget : IStaticConstrainedTarget<StaticConstrainedTarget>
         {
             public static double ConstrainedStaticValue(double value) => value;
+
+            public static double ConstrainedStaticParams(params double[] values) => values.Sum();
         }
 
         public readonly struct Fahrenheit
@@ -210,6 +220,17 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
 
         yield return new object[]
         {
+            "conversion-beside-a-deferred-lambda",
+            """
+            Console.WriteLine(ConversionTargets.WithLambda(
+                Celsius{ Degrees: 6.75 },
+                x -> x + 1.0))
+            """,
+            new[] { "7.75" },
+        };
+
+        yield return new object[]
+        {
             "imported-conversion-control",
             """
             Console.WriteLine(ConversionTargets.StaticValue(Fahrenheit(7.5)))
@@ -267,23 +288,38 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
                 return target.ConstrainedValue(value)
             }
 
+            func CallConstrainedParams[T IConstrainedTarget](target T, first Celsius, second Celsius) float64 {
+                return target.ConstrainedParams(first, second)
+            }
+
             func CallStaticConstrained[T IStaticConstrainedTarget[T]](value Celsius) float64 {
                 return T.ConstrainedStaticValue(value)
+            }
+
+            func CallStaticConstrainedParams[T IStaticConstrainedTarget[T]](first Celsius, second Celsius) float64 {
+                return T.ConstrainedStaticParams(first, second)
             }
 
             Console.WriteLine(CallConstrained(
                 ConstrainedTarget(),
                 Celsius{ Degrees: 5.75 }))
+            Console.WriteLine(CallConstrainedParams(
+                ConstrainedTarget(),
+                Celsius{ Degrees: 1.25 },
+                Celsius{ Degrees: 2.75 }))
             Console.WriteLine(CallStaticConstrained[StaticConstrainedTarget](
                 Celsius{ Degrees: 6.25 }))
+            Console.WriteLine(CallStaticConstrainedParams[StaticConstrainedTarget](
+                Celsius{ Degrees: 2.5 },
+                Celsius{ Degrees: 3.5 }))
             """;
 
         RunAndExpect(
             "constrained-instance-and-static-methods",
             Body,
-            new[] { "5.75", "6.25" },
+            new[] { "5.75", "4", "6.25", "6" },
             IlVerifier.KnownIssues.StaticVirtualInterface,
-            @"<Program>\.CallStaticConstrained$");
+            @"<Program>\.CallStaticConstrained(Params)?$");
     }
 
     [Theory]

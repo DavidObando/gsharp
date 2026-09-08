@@ -1486,7 +1486,10 @@ internal sealed partial class ExpressionBinder
                 argTypes,
                 explicitTypeArgs,
                 scope.References.MapClrTypeToReferences,
-                argumentNames: deferredArgumentNames);
+                argumentNames: deferredArgumentNames,
+                symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(
+                    boundArgs,
+                    argumentOffset: offset));
             if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
                 || resolution.Best is not { } probeMethod)
             {
