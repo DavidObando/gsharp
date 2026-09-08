@@ -450,7 +450,7 @@ public class ImportedMemberMatrixTests
                 csSource,
                 gsSource,
                 "Issue4086.CSharp",
-                ignoredErrorScope: "throughConstrainedStatic"));
+                ignoredErrorScope: "through(?:Expanded)?ConstrainedStatic"));
     }
 
     private const string Issue3076CsSource = """
