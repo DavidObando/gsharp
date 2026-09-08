@@ -79,9 +79,9 @@ cs2gs_find_translated_sources() {
   shift
   find "$tree" \
     \( -type d \( \
-      -iname bin -o \
-      -iname obj -o \
-      -iname TestResults \
+      -name '[Bb][Ii][Nn]' -o \
+      -name '[Oo][Bb][Jj]' -o \
+      -name '[Tt][Ee][Ss][Tt][Rr][Ee][Ss][Uu][Ll][Tt][Ss]' \
     \) -prune \) -o \
     \( -type f -name '*.gs' "$@" \)
 }
