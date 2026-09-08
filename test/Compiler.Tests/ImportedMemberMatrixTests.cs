@@ -161,6 +161,27 @@ public class ImportedMemberMatrixTests
                     TIn value,
                     params System.Func<TIn, TOut>[] converters)
                     => converters[0](value);
+
+                public static TOut EscapedConvert<TIn, TOut>(
+                    TIn value,
+                    System.Func<TIn, TOut> @func)
+                    => @func(value);
+
+                public static TOut EscapedConvertParams<TIn, TOut>(
+                    TIn value,
+                    params System.Func<TIn, TOut>[] @func)
+                    => @func[0](value);
+
+                public static string EvaluationOrder<T>(
+                    T value,
+                    params object[] items)
+                    => value + ":" + string.Join(",", items);
+
+                public static string FormattableOrder(
+                    int value,
+                    System.FormattableString item,
+                    params object[] rest)
+                    => item.Format + ":" + item.GetArgument(0) + ":" + value + ":" + rest[0];
             }
 
             public static class ExtensionOverloads
@@ -407,6 +428,35 @@ public class ImportedMemberMatrixTests
                 return result.Kind()
             }
 
+            func throughEscapedNamedFixedMethodGroupOutputValue() string {
+                var result Base = MethodGroupOutputInference.EscapedConvert(
+                    func_: symbolicOutputConvert,
+                    value: Derived())
+                return result.Kind()
+            }
+
+            func throughEscapedNamedExpandedMethodGroupOutputValue() string {
+                var result Base = MethodGroupOutputInference.EscapedConvertParams(
+                    func_: symbolicOutputConvert,
+                    value: Derived())
+                return result.Kind()
+            }
+
+            func firstExpandedNamedArgument() string {
+                Console.Write("first|")
+                return "first"
+            }
+
+            func secondExpandedNamedArgument() int32 {
+                Console.Write("second|")
+                return 2
+            }
+
+            func interpolatedExpandedNamedArgument() int32 {
+                Console.Write("format|")
+                return 7
+            }
+
             func throughExpandedStaticMethodGroup() string {
                 return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
             }
@@ -531,6 +581,15 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughNamedFixedMethodGroupOutputValue())
             Console.WriteLine(throughNamedExpandedMethodGroupOutputValue())
             Console.WriteLine(throughNamedExpandedMultiMethodGroupOutputValue())
+            Console.WriteLine(throughEscapedNamedFixedMethodGroupOutputValue())
+            Console.WriteLine(throughEscapedNamedExpandedMethodGroupOutputValue())
+            Console.WriteLine(MethodGroupOutputInference.EvaluationOrder(
+                items: firstExpandedNamedArgument(),
+                value: secondExpandedNamedArgument()))
+            Console.WriteLine(MethodGroupOutputInference.FormattableOrder(
+                rest: firstExpandedNamedArgument(),
+                item: $"item={interpolatedExpandedNamedArgument()}",
+                value: secondExpandedNamedArgument()))
             Console.WriteLine(throughExpandedStaticMethodGroup())
             Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughExpandedInheritedMethodGroup(DerivedInstanceOverloads()))
@@ -575,6 +634,9 @@ public class ImportedMemberMatrixTests
                 + $"Derived:Base{Environment.NewLine}"
                 + $"same-compilation-Base{Environment.NewLine}same-compilation-Base{Environment.NewLine}"
                 + $"same-compilation-Base{Environment.NewLine}"
+                + $"same-compilation-Base{Environment.NewLine}same-compilation-Base{Environment.NewLine}"
+                + $"first|second|2:first{Environment.NewLine}"
+                + $"first|format|second|item={{0}}:7:2:first{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}"

@@ -1242,23 +1242,26 @@ internal sealed partial class ExpressionBinder
                 isExpanded,
                 argumentNames)
             : default;
+        var effectiveParameterMapping = parameterMapping;
+        if (effectiveParameterMapping.IsDefault
+            && ClrOverloadResolution.TryBuildNamedArgumentReordering(
+                openMethod,
+                symbolicArgs.Length,
+                argumentNames,
+                isExpanded,
+                out var namedMapping))
+        {
+            effectiveParameterMapping = ImmutableArray.Create(namedMapping);
+        }
+
         ImmutableArray<TypeSymbol>.Builder? refined = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var slot = i + receiverArgCount;
-            var parameterIndex = !parameterMapping.IsDefault
-                && slot < parameterMapping.Length
-                    ? parameterMapping[slot]
+            var parameterIndex = !effectiveParameterMapping.IsDefault
+                && slot < effectiveParameterMapping.Length
+                    ? effectiveParameterMapping[slot]
                     : slot;
-            if (parameterMapping.IsDefault
-                && argumentNames != null
-                && slot < argumentNames.Count
-                && argumentNames[slot] is { Length: > 0 } argumentName)
-            {
-                parameterIndex = Array.FindIndex(
-                    parameters,
-                    parameter => string.Equals(parameter.Name, argumentName, StringComparison.Ordinal));
-            }
 
             parameterIndex = isExpanded
                 && paramsIndex >= 0
@@ -1502,21 +1505,34 @@ internal sealed partial class ExpressionBinder
         SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
         System.Reflection.ParameterInfo[] parameters,
         ImmutableArray<int> parameterMapping = default,
-        int receiverArgCount = 0)
+        int receiverArgCount = 0,
+        bool isExpanded = false)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         var limit = Math.Min(arguments.Length, argumentSyntax.Count + receiverArgCount);
+        var paramsIndex = parameters.Length - 1;
         for (var i = receiverArgCount; i < limit; i++)
         {
-            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            var paramIndex = parameterMapping.IsDefault
+                ? isExpanded && i >= paramsIndex ? paramsIndex : i
+                : parameterMapping[i];
             if (paramIndex >= parameters.Length)
             {
                 continue;
             }
 
             var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount]);
+            var targetType = parameters[paramIndex].ParameterType;
+            if (isExpanded
+                && paramIndex == paramsIndex
+                && ClrOverloadResolution.IsParamsArrayParameter(parameters[paramIndex])
+                && targetType.GetElementType() is { } elementType)
+            {
+                targetType = elementType;
+            }
+
             if (argSyntax is InterpolatedStringExpressionSyntax interpolated
-                && ClrOverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
+                && ClrOverloadResolution.IsFormattableStringTarget(targetType))
             {
                 builder ??= arguments.ToBuilder();
                 builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: null);

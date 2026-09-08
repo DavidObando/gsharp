@@ -1581,14 +1581,6 @@ internal sealed partial class ExpressionBinder
                     ?? MapClrMethodReturnType(best);
                 var inheritedParameters = best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
-                var inheritedExpandedArgs = resolution.IsExpanded
-                    ? overloads.ExpandParamsArguments(
-                        arguments,
-                        inheritedParameters,
-                        ce,
-                        parameterMapping: inheritedMapping,
-                        symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall)
-                    : arguments;
                 var inheritedDownstreamMapping = resolution.IsExpanded ? default : inheritedMapping;
 
                 // Issue #1638: shared CLR call-argument-construction pipeline
@@ -1599,10 +1591,10 @@ internal sealed partial class ExpressionBinder
                 // parameter of an inherited (base-class) member was never
                 // re-lowered to FormattableStringFactory.Create(...).
                 var inheritedConvertedArgs = BuildResolvedClrCallArguments(
-                    inheritedExpandedArgs,
+                    arguments,
                     ce.Arguments,
                     inheritedParameters,
-                    inheritedDownstreamMapping,
+                    inheritedMapping,
                     receiver,
                     ce.Location,
                     ce,
@@ -1611,7 +1603,8 @@ internal sealed partial class ExpressionBinder
                     out var inheritedUpdatedReceiver,
                     method: best,
                     symbolicMethodTypeArgs: inheritedTypeArgSymbolsForCall,
-                    receiverType: receiver.Type);
+                    receiverType: receiver.Type,
+                    isExpanded: resolution.IsExpanded);
                 var inheritedArguments = OverloadResolver.BuildOrderedCallArguments(inheritedConvertedArgs, inheritedDownstreamMapping, inheritedParameters);
                 var refKinds = ComputeArgumentRefKinds(inheritedParameters);
                 overloads.ValidateRefArguments(inheritedArguments, refKinds, methodName, ce.Location);
@@ -2092,26 +2085,7 @@ internal sealed partial class ExpressionBinder
         allArguments.AddRange(arguments);
         var bound = allArguments.MoveToImmutable();
 
-        // Issue #506: when overload resolution selected the expanded form of a
-        // `params T[]` extension method (e.g. `MyEnumerable.Concat(this src,
-        // params string[] tail)` called with positional tail args), pack the
-        // trailing positional arguments into a synthesised slice/array first.
-        // The receiver occupies parameter slot 0; the params slot is always
-        // the last parameter, so it never collides with the receiver. Named
-        // arguments against an expanded-form extension already carry a
-        // receiver-prefixed mapping from overload resolution.
         var parameters = best.GetParameters();
-        if (resolution.IsExpanded)
-        {
-            bound = overloads.ExpandParamsArguments(
-                bound,
-                parameters,
-                ce,
-                receiverArgCount: 1,
-                parameterMapping: resolution.ParameterMapping,
-                symbolicMethodTypeArgs: extensionTypeArgSymbolsForCall);
-        }
-
         var downstreamMapping = resolution.IsExpanded ? default : resolution.ParameterMapping;
 
         // Issue #1638: shared CLR call-argument-construction pipeline
@@ -2139,7 +2113,7 @@ internal sealed partial class ExpressionBinder
             bound,
             ce.Arguments,
             parameters,
-            downstreamMapping,
+            resolution.ParameterMapping,
             receiver,
             ce.Location,
             ce,
@@ -2149,7 +2123,8 @@ internal sealed partial class ExpressionBinder
             method: best,
             symbolicMethodTypeArgs: extensionTypeArgSymbolsForCall,
             receiverType: receiver.Type,
-            receiverArgCount: 1);
+            receiverArgCount: 1,
+            isExpanded: resolution.IsExpanded);
         if (extensionUpdatedReceiver != null && extensionUpdatedReceiver != receiver)
         {
             bound = bound.SetItem(0, extensionUpdatedReceiver);
@@ -2382,9 +2357,29 @@ internal sealed partial class ExpressionBinder
         bool hasConversionReceiverTypeOverride = false,
         TypeSymbol? conversionReceiverType = null,
         int receiverArgCount = 0,
-        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null)
+        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null,
+        bool isExpanded = false)
     {
-        var rebound = RebindFormattableInterpolationArguments(arguments, argumentSyntax, parameters, parameterMapping, receiverArgCount);
+        var expandedMapping = isExpanded ? parameterMapping : default;
+        var rebound = RebindFormattableInterpolationArguments(
+            arguments,
+            argumentSyntax,
+            parameters,
+            parameterMapping,
+            receiverArgCount,
+            isExpanded);
+        if (isExpanded)
+        {
+            rebound = overloads.ExpandParamsArguments(
+                rebound,
+                parameters,
+                call,
+                receiverArgCount,
+                parameterMapping,
+                symbolicMethodTypeArgs);
+            parameterMapping = default;
+        }
+
         var handlerArgs = ApplyInterpolatedStringHandlers(parameters, rebound, receiver, location, parameterMapping, out preludeStatements, out updatedReceiver);
         var delegateArgs = delegateRebindMode == ClrCallDelegateRebindMode.Full
             ? RebindFunctionLiteralDelegateArguments(
@@ -2401,7 +2396,7 @@ internal sealed partial class ExpressionBinder
             ? default
             : ImmutableArray.CreateRange<TypeSymbol?>(
                 symbolicMethodTypeArgs.Select(symbol => symbol ?? TypeSymbol.Error));
-        return conversions.BindClrParameterConversions(
+        var converted = conversions.BindClrParameterConversions(
             delegateArgs,
             parameters,
             call,
@@ -2411,6 +2406,12 @@ internal sealed partial class ExpressionBinder
             effectiveConversionReceiverType,
             conversionSymbolicMethodTypeArgs,
             parameterTypeOverrides);
+        return isExpanded
+            ? OverloadResolver.PreserveExpandedArgumentEvaluationOrder(
+                converted,
+                expandedMapping,
+                receiverArgCount)
+            : converted;
     }
 
     private ImmutableArray<BoundExpression> RebindFunctionLiteralDelegateArguments(
@@ -3826,6 +3827,12 @@ internal sealed partial class ExpressionBinder
             method);
 
         var downstreamMapping = resolution.ParameterMapping;
+        arguments = RebindFormattableInterpolationArguments(
+            arguments,
+            ce.Arguments,
+            parameters,
+            downstreamMapping,
+            isExpanded: resolution.IsExpanded);
         if (resolution.IsExpanded)
         {
             arguments = overloads.ExpandParamsArguments(
@@ -3837,11 +3844,9 @@ internal sealed partial class ExpressionBinder
             downstreamMapping = default;
         }
 
-        // Issue #1852: re-lower each interpolated-string argument whose
-        // resolved parameter is IFormattable/FormattableString-shaped to
-        // FormattableStringFactory.Create(...) — mirroring
-        // RebindFormattableInterpolationArguments, the same step every other
-        // CLR-call path runs — WITHOUT routing through the rest of
+        // Issue #1852: interpolated-string arguments are re-lowered above
+        // before params expansion keeps source syntax and source slots aligned,
+        // WITHOUT routing through the rest of
         // BuildResolvedClrCallArguments (ApplyInterpolatedStringHandlers,
         // delegate rebind, BindClrParameterConversions). This path
         // deliberately skips the CLR boxing/conversion pass below (see the
@@ -3853,8 +3858,6 @@ internal sealed partial class ExpressionBinder
         // other argument (and the overload choice itself, unaffected unless a
         // candidate's applicability actually depended on the flag) is
         // unchanged.
-        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, downstreamMapping);
-
         // Non-generic constrained slots stay on the established unconverted
         // path: the emitted MemberRef parameter is the interface type-variable
         // `!0` (== the reified `!!T`). A generic method needs its recovered
@@ -3871,6 +3874,13 @@ internal sealed partial class ExpressionBinder
                 symbolicMethodTypeArgs: symbolicMethodTypeArgs)
             : arguments;
         var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, downstreamMapping, parameters);
+        if (resolution.IsExpanded)
+        {
+            orderedArgs = OverloadResolver.PreserveExpandedArgumentEvaluationOrder(
+                orderedArgs,
+                resolution.ParameterMapping);
+        }
+
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundImportedInstanceCallExpression(

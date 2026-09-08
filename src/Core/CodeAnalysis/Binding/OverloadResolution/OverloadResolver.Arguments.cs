@@ -145,6 +145,105 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
+    /// Preserves lexical evaluation order after named params expansion has
+    /// packed several source arguments into one parameter-ordered array slot.
+    /// </summary>
+    internal static ImmutableArray<BoundExpression> PreserveExpandedArgumentEvaluationOrder(
+        ImmutableArray<BoundExpression> parameterOrderedArguments,
+        ImmutableArray<int> sourceToParameterMapping,
+        int receiverArgCount = 0)
+    {
+        if (sourceToParameterMapping.IsDefaultOrEmpty
+            || parameterOrderedArguments.IsDefaultOrEmpty)
+        {
+            return parameterOrderedArguments;
+        }
+
+        var paramsIndex = parameterOrderedArguments.Length - 1;
+        if (parameterOrderedArguments[paramsIndex] is not BoundArrayCreationExpression paramsArray)
+        {
+            return parameterOrderedArguments;
+        }
+
+        var fixedSlots = new HashSet<int>();
+        var paramsElementIndex = 0;
+        for (var sourceIndex = receiverArgCount; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
+        {
+            var parameterIndex = sourceToParameterMapping[sourceIndex];
+            if (parameterIndex == paramsIndex)
+            {
+                if (paramsElementIndex >= paramsArray.Elements.Length)
+                {
+                    return parameterOrderedArguments;
+                }
+
+                paramsElementIndex++;
+                continue;
+            }
+
+            if (parameterIndex < receiverArgCount
+                || parameterIndex >= paramsIndex
+                || !fixedSlots.Add(parameterIndex)
+                || parameterOrderedArguments[parameterIndex] is BoundAddressOfExpression or BoundConditionalAddressExpression)
+            {
+                return parameterOrderedArguments;
+            }
+        }
+
+        var replacements = parameterOrderedArguments.ToArray();
+        var paramsElements = paramsArray.Elements.ToBuilder();
+        var evaluations = ImmutableArray.CreateBuilder<BoundStatement>();
+        paramsElementIndex = 0;
+        for (var sourceIndex = receiverArgCount; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
+        {
+            var parameterIndex = sourceToParameterMapping[sourceIndex];
+            var argument = parameterIndex == paramsIndex
+                ? paramsElements[paramsElementIndex]
+                : replacements[parameterIndex];
+            if (StatementBinder.IsNilLiteral(argument))
+            {
+                if (parameterIndex == paramsIndex)
+                {
+                    paramsElementIndex++;
+                }
+
+                continue;
+            }
+
+            var temp = new LocalVariableSymbol(
+                $"<>expandedNamedArg{sourceIndex}",
+                isReadOnly: true,
+                argument.Type);
+            evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
+            var replacement = new BoundVariableExpression(argument.Syntax, temp);
+            if (parameterIndex == paramsIndex)
+            {
+                paramsElements[paramsElementIndex++] = replacement;
+            }
+            else
+            {
+                replacements[parameterIndex] = replacement;
+            }
+        }
+
+        if (evaluations.Count == 0)
+        {
+            return parameterOrderedArguments;
+        }
+
+        replacements[paramsIndex] = new BoundArrayCreationExpression(
+            paramsArray.Syntax,
+            paramsArray.ContainerType,
+            paramsElements.ToImmutable());
+        var carrier = Math.Min(receiverArgCount, replacements.Length - 1);
+        replacements[carrier] = new BoundBlockExpression(
+            parameterOrderedArguments[carrier].Syntax,
+            evaluations.ToImmutable(),
+            replacements[carrier]);
+        return ImmutableArray.Create(replacements);
+    }
+
+    /// <summary>
     /// Issue #3747: resolves the ELEMENT type of an imported <c>params T[]</c>
     /// parameter with the declaration's <c>[Nullable]</c> metadata applied.
     /// <para>

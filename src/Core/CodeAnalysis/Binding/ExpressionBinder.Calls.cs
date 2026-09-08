@@ -2096,14 +2096,7 @@ internal sealed partial class ExpressionBinder
             openGenericDefinition,
             symbolicTypeArgs);
         var ctorRefKinds = ComputeArgumentRefKinds(ctorParameters);
-        var ctorExpandedArgs = ctorIsExpanded
-            ? overloads.ExpandParamsArguments(ctorRawArgs, ctorParameters, syntax, parameterMapping: ctorMapping)
-            : ctorRawArgs;
 
-        // Issue #506 follow-up: when expanded form fires (with or without
-        // named arguments), the expander emits the arguments already in
-        // parameter order with optional slots filled — downstream reorderers
-        // therefore consume an identity mapping.
         var ctorDownstreamMapping = ctorIsExpanded ? default : ctorMapping;
         Dictionary<int, TypeSymbol>? ctorParameterTypeOverrides = null;
         if (symbolicCtorDelegateTargets.Count > 0)
@@ -2111,9 +2104,9 @@ internal sealed partial class ExpressionBinder
             ctorParameterTypeOverrides = new Dictionary<int, TypeSymbol>();
             foreach (var pair in symbolicCtorDelegateTargets)
             {
-                var parameterIndex = ctorDownstreamMapping.IsDefault
+                var parameterIndex = ctorMapping.IsDefault
                     ? pair.Key
-                    : ctorDownstreamMapping[pair.Key];
+                    : ctorMapping[pair.Key];
                 ctorParameterTypeOverrides[parameterIndex] = pair.Value;
             }
         }
@@ -2159,17 +2152,18 @@ internal sealed partial class ExpressionBinder
         // ctor is void-ized/adapted the same way an instance/static call's
         // argument is, instead of skipping straight to boxing conversions.
         var ctorConvertedArgs = BuildResolvedClrCallArguments(
-            ctorExpandedArgs,
+            ctorRawArgs,
             syntax.Arguments,
             ctorParameters,
-            ctorDownstreamMapping,
+            ctorMapping,
             receiver: null,
             syntax.Location,
             syntax,
             ClrCallDelegateRebindMode.Full,
             out var ctorHandlerPrelude,
             out _,
-            parameterTypeOverrides: ctorParameterTypeOverrides);
+            parameterTypeOverrides: ctorParameterTypeOverrides,
+            isExpanded: ctorIsExpanded);
         var ctorArgs = OverloadResolver.BuildOrderedCallArguments(ctorConvertedArgs, ctorDownstreamMapping, ctorParameters);
         if (!ctorRefKinds.IsDefault)
         {
