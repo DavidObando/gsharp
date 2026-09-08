@@ -126,6 +126,13 @@ def evaluate(baseline: dict, run: dict) -> tuple[int, list[str]]:
                 f"GATE: app '{app_id}' is listed in greenApps but is not fully green."
             )
 
+    for app_id in sorted(green_set):
+        if app_id not in by_id:
+            errors.append(
+                f"GATE: greenApps app '{app_id}' is missing from the run; "
+                "remove it only as an explicit corpus re-baseline."
+            )
+
     for app_id, floor in sorted(floors.items()):
         if floor not in STAGE_ORDER or app_id in green_set:
             continue

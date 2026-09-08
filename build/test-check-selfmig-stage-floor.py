@@ -157,6 +157,14 @@ class StageFloorTests(unittest.TestCase):
         self.assertEqual(1, status)
         self.assertIn("listed in greenApps but is not fully green", "\n".join(lines))
 
+    def test_missing_green_app_fails_closed(self) -> None:
+        status, lines = ratchet.evaluate(
+            {"greenApps": ["missing"], "stageFloor": {}},
+            {"apps": []},
+        )
+        self.assertEqual(1, status)
+        self.assertIn("greenApps app 'missing' is missing from the run", "\n".join(lines))
+
 
 if __name__ == "__main__":
     unittest.main()
