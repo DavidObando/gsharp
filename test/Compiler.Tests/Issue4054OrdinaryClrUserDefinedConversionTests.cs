@@ -140,6 +140,8 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             static abstract double ConstrainedStaticValue(double value);
 
             static abstract double ConstrainedStaticParams(params double[] values);
+
+            static abstract double ConstrainedStaticNamed(string first, double second);
         }
 
         public sealed class StaticConstrainedTarget : IStaticConstrainedTarget<StaticConstrainedTarget>
@@ -147,6 +149,8 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public static double ConstrainedStaticValue(double value) => value;
 
             public static double ConstrainedStaticParams(params double[] values) => values.Sum();
+
+            public static double ConstrainedStaticNamed(string first, double second) => second;
         }
 
         public readonly struct Fahrenheit
@@ -300,6 +304,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
                 return T.ConstrainedStaticParams(first, second)
             }
 
+            func CallStaticConstrainedNamed[T IStaticConstrainedTarget[T]](value Celsius) float64 {
+                return T.ConstrainedStaticNamed(second: value, first: "named")
+            }
+
             Console.WriteLine(CallConstrained(
                 ConstrainedTarget(),
                 Celsius{ Degrees: 5.75 }))
@@ -312,14 +320,16 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             Console.WriteLine(CallStaticConstrainedParams[StaticConstrainedTarget](
                 Celsius{ Degrees: 2.5 },
                 Celsius{ Degrees: 3.5 }))
+            Console.WriteLine(CallStaticConstrainedNamed[StaticConstrainedTarget](
+                Celsius{ Degrees: 6.5 }))
             """;
 
         RunAndExpect(
             "constrained-instance-and-static-methods",
             Body,
-            new[] { "5.75", "4", "6.25", "6" },
+            new[] { "5.75", "4", "6.25", "6", "6.5" },
             IlVerifier.KnownIssues.StaticVirtualInterface,
-            @"<Program>\.CallStaticConstrained(Params)?$");
+            @"<Program>\.CallStaticConstrained(Params|Named)?$");
     }
 
     [Theory]

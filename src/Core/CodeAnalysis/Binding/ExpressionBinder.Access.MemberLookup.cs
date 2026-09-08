@@ -4131,10 +4131,20 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        if (!overloads.TryAnalyzeCallArgumentLayout(
+                callSyntax.Arguments,
+                out _,
+                out var argumentNames))
+        {
+            result = new BoundErrorExpression(callSyntax);
+            return true;
+        }
+
         var boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(callSyntax.Arguments.Count);
         for (var i = 0; i < callSyntax.Arguments.Count; i++)
         {
-            boundArgs.Add(BindExpression(callSyntax.Arguments[i]));
+            boundArgs.Add(BindExpression(
+                OverloadResolver.UnwrapNamedArgumentValue(callSyntax.Arguments[i])));
         }
 
         var arguments = boundArgs.MoveToImmutable();
@@ -4160,7 +4170,7 @@ internal sealed partial class ExpressionBinder
             null,
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
-            null,
+            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
