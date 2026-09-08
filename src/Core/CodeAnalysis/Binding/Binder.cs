@@ -27,13 +27,6 @@ public sealed class Binder
 {
 #pragma warning disable SA1202 // 'internal' members should appear before 'private' members — kept in original positions during PR-B-8 extraction to minimize diff churn.
     /// <summary>
-    /// Issue #4067: the longest chain of forwarded type-parameter bounds the
-    /// implication walk follows. A cycle is already rejected at declaration by
-    /// <c>GS0581</c>; this bounds a malformed symbol graph as well.
-    /// </summary>
-    private const int ForwardedConstraintChainLimit = 32;
-
-    /// <summary>
     /// Targets permitted on a function declaration (member or free):
     /// <c>method</c> by default; <c>return</c> via use-site qualifier.
     /// </summary>
@@ -5856,28 +5849,42 @@ public sealed class Binder
     /// Issue #4067: <paramref name="argument"/> and every type parameter its
     /// own bounds prove it to be an instance of — through a dependent bound
     /// (<c>[U SchemeOptions, T U]</c>) or through a type-parameter-valued class
-    /// constraint. Bounded and cycle-safe: a cycle is already rejected at
-    /// declaration by <c>GS0581</c>, and the visited set keeps a malformed
-    /// symbol from hanging the binder anyway.
+    /// constraint. Cycle-safe and TOTAL: a cycle is already rejected at
+    /// declaration by <c>GS0581</c>, and the visited set terminates the walk on
+    /// a malformed symbol graph anyway.
     /// </summary>
     /// <remarks>
-    /// Issue #4084 made this <see langword="internal"/>: the IMPORTED twin of
-    /// #4067's rule, <c>ClrOverloadResolution.TypeParameterSatisfiesClrBound</c>,
-    /// asks the same "which parameters does this one stand for" question and
-    /// had a second, narrower walk that read only <c>ClassConstraint</c>. This
-    /// is a pure symbol walk with no <c>Type</c> dependency, so both sides can
-    /// share it — and a dependent bound now forwards on both.
+    /// <para>Issue #4084 made this <see langword="internal"/>: the IMPORTED
+    /// twin of #4067's rule,
+    /// <c>ClrOverloadResolution.TypeParameterSatisfiesClrBound</c>, asks the
+    /// same "which parameters does this one stand for" question and had a
+    /// second, narrower walk that read only <c>ClassConstraint</c>. This is a
+    /// pure symbol walk with no <c>Type</c> dependency, so both sides can
+    /// share it — and a dependent bound now forwards on both.</para>
+    /// <para><b>Review finding (#4084): the 32-element cap is gone.</b> It was
+    /// belt-and-braces on top of the visited set, and it was LOSSY: a chain of
+    /// 40 dependent bounds ending in a class or interface bound was truncated
+    /// and the bound reported unforwarded. Measured on this branch's parent
+    /// <c>b4478875</c> and before this removal — a 40-link chain reported
+    /// <c>GS0159</c> at an imported generic method and <c>GS0580</c> at an
+    /// imported generic type, while the 5-link control bound. The cap was
+    /// never needed: <see cref="AddForwardedParameter"/> refuses a parameter
+    /// already in the set, so the walk visits each DISTINCT parameter at most
+    /// once and terminates on any graph, cyclic or not. The membership test is
+    /// a <see cref="HashSet{T}"/> on reference identity so removing the bound
+    /// does not turn the walk quadratic.</para>
     /// </remarks>
     /// <param name="argument">The type parameter to walk from.</param>
     /// <returns>The chain, argument first.</returns>
     internal static List<TypeParameterSymbol> EnumerateForwardedParameterChain(TypeParameterSymbol argument)
     {
         var chain = new List<TypeParameterSymbol> { argument };
-        for (var i = 0; i < chain.Count && chain.Count < ForwardedConstraintChainLimit; i++)
+        var visited = new HashSet<TypeParameterSymbol>(ReferenceEqualityComparer.Instance) { argument };
+        for (var i = 0; i < chain.Count; i++)
         {
             var current = chain[i];
-            AddForwardedParameter(chain, current.TypeParameterBound);
-            AddForwardedParameter(chain, current.ClassConstraint as TypeParameterSymbol);
+            AddForwardedParameter(chain, visited, current.TypeParameterBound);
+            AddForwardedParameter(chain, visited, current.ClassConstraint as TypeParameterSymbol);
         }
 
         return chain;
@@ -5887,21 +5894,22 @@ public sealed class Binder
     /// Issue #4067: appends <paramref name="candidate"/> to
     /// <paramref name="chain"/> when it is present and not already there.
     /// </summary>
+    /// <remarks>
+    /// This deduplication is what makes
+    /// <see cref="EnumerateForwardedParameterChain"/> total, so it is the only
+    /// termination guarantee the walk has and must not be weakened.
+    /// </remarks>
     /// <param name="chain">The chain being built.</param>
+    /// <param name="visited">The parameters already in the chain.</param>
     /// <param name="candidate">The parameter to append, if any.</param>
-    private static void AddForwardedParameter(List<TypeParameterSymbol> chain, TypeParameterSymbol? candidate)
+    private static void AddForwardedParameter(
+        List<TypeParameterSymbol> chain,
+        HashSet<TypeParameterSymbol> visited,
+        TypeParameterSymbol? candidate)
     {
-        if (candidate == null)
+        if (candidate == null || !visited.Add(candidate))
         {
             return;
-        }
-
-        foreach (var seen in chain)
-        {
-            if (ReferenceEquals(seen, candidate))
-            {
-                return;
-            }
         }
 
         chain.Add(candidate);
@@ -7572,9 +7580,7 @@ public sealed class Binder
                 // constrained parameter itself, and the argument is what it
                 // stands for here — the same substitution the reflective half
                 // performs.
-                var expectedArgument = tp != null && ReferenceEquals(expected[i], tp)
-                    ? typeArgument
-                    : expected[i];
+                var expectedArgument = SubstituteSelfReference(expected[i], tp, typeArgument);
                 if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual[i], expectedArgument))
                 {
                     allMatch = false;
@@ -8192,6 +8198,7 @@ public sealed class Binder
                 constraintArgs,
                 constraintClrArgs,
                 tp,
+                typeArgument,
                 typeArgClr))
             {
                 return true;
@@ -8219,6 +8226,7 @@ public sealed class Binder
         ImmutableArray<TypeSymbol> constraintArgs,
         Type[] constraintClrArgs,
         TypeParameterSymbol? tp,
+        TypeSymbol? typeArgument,
         Type typeArgClr)
     {
         var expectedCount = !constraintArgs.IsDefaultOrEmpty
@@ -8234,10 +8242,19 @@ public sealed class Binder
             // A self-referential constraint argument (the constrained parameter
             // itself) is expected to be the type argument; any other argument is
             // matched against its own resolved CLR type.
+            //
+            // Review finding (#4124): the self-reference may be NESTED —
+            // `[T IComparable[List[T]]]` — so the substitution is recursive
+            // rather than a whole-argument identity test. Measured before this
+            // change: `class C : IComparable[List[C]]` was refused with
+            // `GS0152` on both halves of this predicate, while the flat
+            // `[T IComparable[T]]` bound. `SubstituteSelfReference` is the SAME
+            // helper the symbolic half calls, so the two halves keep answering
+            // the same question.
             var expectedName = !constraintArgs.IsDefaultOrEmpty
                 ? (constraintArgs[i] is TypeParameterSymbol cArgTp && ReferenceEquals(cArgTp, tp)
                     ? typeArgClr.FullName
-                    : constraintArgs[i].ClrType?.FullName)
+                    : SubstituteSelfReference(constraintArgs[i], tp, typeArgument).ClrType?.FullName)
                 : constraintClrArgs[i].FullName;
 
             if (expectedName == null
@@ -8248,6 +8265,60 @@ public sealed class Binder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Review finding (#4124): replaces every occurrence of the constrained
+    /// parameter <paramref name="tp"/> inside <paramref name="expected"/> with
+    /// the type argument it stands for, at ANY depth.
+    /// </summary>
+    /// <remarks>
+    /// <para>The flat shape <c>[T IComparable[T]]</c> was closed by comparing
+    /// the whole argument against <paramref name="tp"/>. That misses the
+    /// NESTED shape <c>[T IComparable[List[T]]]</c>, where the argument is
+    /// <c>List[T]</c> and never equals <paramref name="tp"/> — so
+    /// <c>class C : IComparable[List[C]]</c> was refused with <c>GS0152</c>,
+    /// the same false-rejection class #4124 is about, one level down.
+    /// Measured red on this branch's parent <c>b4478875</c> AND on both halves
+    /// of this predicate before this change.</para>
+    /// <para>Both halves call this, deliberately: the reflective half compares
+    /// CLR full names and the symbolic half compares symbols, but they must
+    /// agree on WHAT the expected argument is, or a type answers one way with
+    /// a CLR type and the other way without. On any failure to construct the
+    /// substituted type — a cross-reflection-context
+    /// <c>MakeGenericType</c> is the realistic one — the pre-existing
+    /// unsubstituted argument is returned, which is exactly the behaviour
+    /// before this change.</para>
+    /// </remarks>
+    /// <param name="expected">The constraint's declared type argument.</param>
+    /// <param name="tp">The constrained parameter, or <see langword="null"/>.</param>
+    /// <param name="typeArgument">The argument it stands for, or <see langword="null"/>.</param>
+    /// <returns>The argument with the self-reference substituted.</returns>
+    private static TypeSymbol SubstituteSelfReference(
+        TypeSymbol expected,
+        TypeParameterSymbol? tp,
+        TypeSymbol? typeArgument)
+    {
+        if (tp == null || typeArgument == null || !TypeSymbol.ContainsTypeParameter(expected))
+        {
+            return expected;
+        }
+
+        if (ReferenceEquals(expected, tp))
+        {
+            return typeArgument;
+        }
+
+        try
+        {
+            return SubstituteType(
+                expected,
+                new Dictionary<TypeParameterSymbol, TypeSymbol> { [tp] = typeArgument });
+        }
+        catch (Exception)
+        {
+            return expected;
+        }
     }
 
     internal static bool IsComparable(TypeSymbol type)

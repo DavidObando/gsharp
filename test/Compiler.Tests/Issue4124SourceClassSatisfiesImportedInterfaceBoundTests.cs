@@ -410,13 +410,33 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
     /// The blast-radius row named by the issue: <c>SatisfiesConstraint</c> also
     /// gates extension-method candidate unification in
     /// <c>BoundScope.TryUnifyAndCheckConstraints</c>, where widening acceptance
-    /// can newly ADMIT a candidate. Measured rather than reasoned about — the
-    /// constrained extension is now reached for a source class that implements
-    /// the interface, and the unconstrained sibling still wins for one that
-    /// does not.
+    /// newly ADMITS a candidate — so the fallback here carries the SAME invoked
+    /// name and genuinely competes with it.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Review finding, and it overturned an earlier claim of mine.</b>
+    /// The first version of this row used a differently-named fallback
+    /// (<c>DescribeAny</c>), which proves the constrained candidate is
+    /// REACHABLE but can never observe a moved winner, because the two names
+    /// never compete. Re-measured with a same-named fallback and a rebuilt
+    /// compiler on each side, a winner DOES move:</para>
+    /// <list type="table">
+    /// <item><description><c>D().Describe()</c> over
+    /// <c>Describe[T IDisposable](T)</c> + <c>Describe(object)</c> —
+    /// <c>csc</c> <c>disposable</c>; parent <c>b4478875</c> <c>object</c>;
+    /// here <c>disposable</c>. The constrained candidate was not applicable on
+    /// the parent, so the boxing one won by default; now both are applicable
+    /// and the more specific one wins. The move is TOWARD <c>csc</c> — the
+    /// same divergence class as #4086 — and was verified by compiling and
+    /// running the C# equivalent.</description></item>
+    /// <item><description><c>E().Describe()</c>, where <c>E</c> does NOT
+    /// implement the interface — parent <c>any</c>; here <c>any</c>. The
+    /// constrained candidate stays inapplicable, so nothing moves. This is the
+    /// row that proves the widening is not indiscriminate.</description></item>
+    /// </list>
+    /// </remarks>
     [Fact]
-    public void AConstrainedExtensionIsReachedForASourceClass()
+    public void AConstrainedExtensionIsReachedAndTheMoreSpecificOneWins()
     {
         const string Source = """
             package P
@@ -427,6 +447,21 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
                 }
             }
 
+            func (value T) Describe[T IDisposable]() string {
+                return "disposable"
+            }
+
+            func (value object) Describe() string {
+                return "object"
+            }
+
+            Console.WriteLine(D().Describe())
+            """;
+
+        const string ReceiverFailsConstraint = """
+            package P
+            import System
+
             class E {
             }
 
@@ -434,29 +469,34 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
                 return "disposable"
             }
 
-            func (value U) DescribeAny[U]() string {
+            func (value U) Describe[U]() string {
                 return "any"
             }
 
-            Console.WriteLine(D().Describe())
-            Console.WriteLine(D().DescribeAny())
-            Console.WriteLine(E().DescribeAny())
+            Console.WriteLine(E().Describe())
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4124_ext_").FullName;
         try
         {
-            var appPath = Path.Combine(tempDir, "Ext.dll");
-            var appLog = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
+            foreach (var (name, source, expected) in new[]
+            {
+                ("Specific", Source, "disposable"),
+                ("FallbackWins", ReceiverFailsConstraint, "any"),
+            })
+            {
+                var appPath = Path.Combine(tempDir, name + ".dll");
+                var appLog = Compile(tempDir, name + ".gs", source, appPath, "/target:exe");
 
-            Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
-            Assert.True(File.Exists(appPath), $"the extension shapes must compile. Log:\n{appLog}");
+                Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
+                Assert.True(File.Exists(appPath), $"'{name}' must compile. Log:\n{appLog}");
 
-            IlVerifier.Verify(appPath, Array.Empty<string>());
+                IlVerifier.Verify(appPath, Array.Empty<string>());
 
-            var (exit, output) = RunDotnet(appPath);
-            Assert.True(exit == 0, $"the program must run. Exit {exit}:\n{output}");
-            Assert.Equal(new[] { "disposable", "any", "any" }, SplitLines(output));
+                var (exit, output) = RunDotnet(appPath);
+                Assert.True(exit == 0, $"'{name}' must run. Exit {exit}:\n{output}");
+                Assert.Equal(expected, output.Trim());
+            }
         }
         finally
         {
@@ -465,27 +505,21 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
     }
 
     /// <summary>
-    /// The other half of the blast-radius question, and the one monotonicity
-    /// does NOT settle by itself: once a constrained candidate becomes
-    /// applicable, which one WINS? Measured on the parent and here, and
-    /// nothing moves.
+    /// The rankings that do NOT move, measured on the parent and here. These
+    /// bound the claim the row above makes: exactly one winner moves, and it
+    /// moves toward <c>csc</c>.
     /// </summary>
     /// <remarks>
-    /// <para><c>TryUnifyAndCheckConstraints</c> scores specificity from the
-    /// <c>struct</c>/<c>class</c> flags only — an interface bound contributes
-    /// 0 — so two same-name extensions that both survive would tie. Measured:
+    /// <c>TryUnifyAndCheckConstraints</c> scores specificity from the
+    /// <c>struct</c>/<c>class</c> flags only, so an interface bound is worth 0
+    /// and two same-name GENERIC extensions that both survive TIE. Measured:
     /// the pair below reported <c>GS0266</c> (ambiguous) on the parent AND
-    /// here, so no program that compiled before stops compiling; the
-    /// widening changed which candidates are applicable, not the ranking. The
+    /// here, so no program that compiled before stops compiling. The
     /// free-function pair <c>f[T IDisposable](T)</c> / <c>f(object)</c> picks
-    /// the generic one on the parent AND here.</para>
-    /// <para>The DIFFERENT-name shape is the actual red row and lives in
-    /// <see cref="AConstrainedExtensionIsReachedForASourceClass"/>: there the
-    /// constrained candidate was skipped entirely on the parent, so the call
-    /// reported <c>GS0159</c> and now binds.</para>
+    /// the generic one on the parent AND here.
     /// </remarks>
     [Fact]
-    public void NoOverloadWinnerMoves()
+    public void TheRankingsThatDoNotMove()
     {
         const string AmbiguousExtensions = """
             package P
@@ -531,7 +565,7 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
         try
         {
             // Ambiguous on the parent and ambiguous here — an interface bound
-            // is worth 0 specificity, so the two same-name extensions tie
+            // is worth 0 specificity, so two same-name GENERIC extensions tie
             // whether or not the constrained one is applicable.
             var ambiguousPath = Path.Combine(tempDir, "Ambiguous.dll");
             var ambiguousLog = Compile(
@@ -539,7 +573,7 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
             Assert.DoesNotContain("GS9998", ambiguousLog, StringComparison.Ordinal);
             Assert.False(
                 File.Exists(ambiguousPath),
-                $"the same-name extension pair must stay ambiguous. Log:\n{ambiguousLog}");
+                $"the same-name generic extension pair must stay ambiguous. Log:\n{ambiguousLog}");
             var occurrences = ambiguousLog.Split("GS0266", StringSplitOptions.None).Length - 1;
             Assert.True(
                 occurrences == 1,
@@ -562,6 +596,100 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
         }
     }
 
+    /// <summary>
+    /// Review finding: the self-reference in a generic interface bound may be
+    /// NESTED — <c>[T IComparable[List[T]]]</c> — and the substitution is
+    /// recursive, on BOTH halves of the predicate.
+    /// </summary>
+    /// <remarks>
+    /// <para>The flat shape was closed by comparing the whole argument against
+    /// the constrained parameter, which misses <c>List[T]</c>. Measured on this
+    /// branch's parent <c>b4478875</c> AND on the first version of this change:
+    /// <c>class C : IComparable[List[C]]</c> against
+    /// <c>[T IComparable[List[T]]]</c> reported <c>GS0152</c>, the same
+    /// false-rejection class as the issue, one level down.</para>
+    /// <para>BOTH halves were red, and both are rows here: the SYMBOLIC half
+    /// (a same-compilation argument, which has no CLR type) and the REFLECTIVE
+    /// half (an imported argument, which has one). Fixing only one would have
+    /// broken the parity this predicate's two halves are supposed to keep —
+    /// they must agree on WHAT the expected argument is.</para>
+    /// </remarks>
+    [Fact]
+    public void ANestedSelfReferenceIsSubstitutedOnBothHalves()
+    {
+        const string SourceArgument = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            class C : IComparable[List[C]] {
+                public func CompareTo(other List[C]?) int32 {
+                    return 0
+                }
+            }
+
+            func take[T IComparable[List[T]]]() string {
+                return "nested-ok"
+            }
+
+            Console.WriteLine(take[C]())
+            """;
+
+        // The NEGATIVE: the nesting must still be COMPARED, not merely walked
+        // through. `IComparable[List[Other]]` is not `IComparable[List[C2]]`.
+        const string WrongNestedArgument = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            class Other {
+            }
+
+            class C2 : IComparable[List[C2]] {
+                public func CompareTo(other List[C2]?) int32 {
+                    return 0
+                }
+            }
+
+            func take[T IComparable[List[Other]]]() string {
+                return "nested-ok"
+            }
+
+            Console.WriteLine(take[C2]())
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4124_nested_").FullName;
+        try
+        {
+            var okPath = Path.Combine(tempDir, "Nested.dll");
+            var okLog = Compile(tempDir, "Nested.gs", SourceArgument, okPath, "/target:exe");
+            Assert.DoesNotContain("GS9998", okLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS0152", okLog, StringComparison.Ordinal);
+            Assert.True(File.Exists(okPath), $"the nested self-reference must bind. Log:\n{okLog}");
+
+            IlVerifier.Verify(okPath, Array.Empty<string>());
+
+            var (exit, output) = RunDotnet(okPath);
+            Assert.True(exit == 0, $"the nested self-reference must run. Exit {exit}:\n{output}");
+            Assert.Equal("nested-ok", output.Trim());
+
+            var wrongPath = Path.Combine(tempDir, "Wrong.dll");
+            var wrongLog = Compile(tempDir, "Wrong.gs", WrongNestedArgument, wrongPath, "/target:exe");
+            Assert.DoesNotContain("GS9998", wrongLog, StringComparison.Ordinal);
+            Assert.False(
+                File.Exists(wrongPath),
+                $"a nested argument that does not match must still be refused. Log:\n{wrongLog}");
+            var occurrences = wrongLog.Split("GS0152", StringSplitOptions.None).Length - 1;
+            Assert.True(
+                occurrences == 1,
+                $"the wrong nested argument must report GS0152 exactly once, saw {occurrences}. "
+                    + $"Log:\n{wrongLog}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
     private static string[] SplitLines(string output)
         => output
             .Split('\n')

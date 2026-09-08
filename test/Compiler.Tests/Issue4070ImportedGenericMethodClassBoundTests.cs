@@ -834,7 +834,7 @@ public class Issue4070ImportedGenericMethodClassBoundTests
     /// <c>TDerived : TBase : DisposableBase : IDisposable</c> holds in every
     /// instantiation.</para>
     /// <para><b>The repair.</b> Both askers now walk
-    /// <see cref="GSharp.CodeAnalysis.Binding.Binder.EnumerateForwardedParameterChain"/>
+    /// <see cref="GSharp.Core.CodeAnalysis.Binding.Binder.EnumerateForwardedParameterChain"/>
     /// — #4067's existing symbol walk, made <c>internal</c> — instead of each
     /// carrying its own narrower chain that read only <c>ClassConstraint</c>.
     /// It follows <c>TypeParameterBound</c> as well, and terminates on a
@@ -931,6 +931,137 @@ public class Issue4070ImportedGenericMethodClassBoundTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// Review finding (#4084): a LONG dependent chain is followed to its end.
+    /// The shared walk carried a 32-element cap on top of its visited set, so
+    /// a 40-link chain was TRUNCATED and its terminal bound reported
+    /// unforwarded.
+    /// </summary>
+    /// <remarks>
+    /// <para>The cap was belt-and-braces that turned out to be lossy, and it
+    /// was load-bearing on a path it had not been on before: consolidating
+    /// both askers onto <c>Binder.EnumerateForwardedParameterChain</c> gave
+    /// the imported generic paths that walk's limit. Measured on this branch's
+    /// parent <c>b4478875</c> and before the removal — a 40-link chain
+    /// reported <c>GS0159</c> at an imported generic method (both the
+    /// base-class and the interface bound) and <c>GS0580</c> at an imported
+    /// generic type, while the 5-link control bound in all three.</para>
+    /// <para>The cap was never needed for termination:
+    /// <c>AddForwardedParameter</c> refuses a parameter already in the set, so
+    /// the walk visits each DISTINCT parameter at most once and terminates on
+    /// any graph, cyclic or not. A cycle is separately rejected at declaration
+    /// by <c>GS0581</c>. The membership test is now a hash set on reference
+    /// identity, so removing the bound does not make the walk quadratic.</para>
+    /// <para>All three shapes are rows, at 40 links — comfortably past the old
+    /// 32 — with the 5-link control beside them so a regression that broke
+    /// SHORT chains would be caught too.</para>
+    /// </remarks>
+    [Fact]
+    public void ALongDependentChainIsFollowedToItsEnd()
+    {
+        const int Links = 40;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4070_chain_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+
+            foreach (var links in new[] { 5, Links })
+            {
+                foreach (var (name, source, expected) in new[]
+                {
+                    ("MethodClassBound", DependentChainMethod(links, "SchemeOptions", "NeedsScheme"), "scheme-ok"),
+                    ("MethodInterfaceBound", DependentChainMethod(links, "DisposableBase", "NeedsDisposable"), "method-ok"),
+                    ("TypeConstruction", DependentChainType(links), "s"),
+                })
+                {
+                    var caseName = name + links;
+                    var path = Path.Combine(tempDir, caseName + ".dll");
+                    var log = Compile(
+                        tempDir, caseName + ".gs", source, path, "/target:exe", "/reference:" + libPath);
+
+                    Assert.DoesNotContain("GS9998", log, StringComparison.Ordinal);
+                    Assert.DoesNotContain("GS0159", log, StringComparison.Ordinal);
+                    Assert.DoesNotContain("GS0580", log, StringComparison.Ordinal);
+                    Assert.True(
+                        File.Exists(path),
+                        $"a {links}-link dependent chain must bind at '{name}'. Log:\n{log}");
+
+                    IlVerifier.Verify(path, new[] { libPath });
+
+                    var (exit, output) = RunDotnet(path);
+                    Assert.True(exit == 0, $"'{caseName}' must run. Exit {exit}:\n{output}");
+                    Assert.Equal(expected, output.Trim());
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Builds <c>func callIt[T0 root, T1 T0, … Tn Tn-1]()</c> calling the
+    /// named imported probe with the LAST parameter, so the bound is only
+    /// reachable by walking the whole chain.
+    /// </summary>
+    /// <param name="links">The number of dependent links after the root.</param>
+    /// <param name="rootBound">The root parameter's class bound.</param>
+    /// <param name="probe">The imported probe to call.</param>
+    /// <returns>The G# source.</returns>
+    private static string DependentChainMethod(int links, string rootBound, string probe)
+    {
+        var parameters = new StringBuilder("T0 ").Append(rootBound);
+        var arguments = new StringBuilder(rootBound);
+        for (var i = 1; i <= links; i++)
+        {
+            parameters.Append(", T").Append(i).Append(" T").Append(i - 1);
+            arguments.Append(", ").Append(rootBound);
+        }
+
+        return $$"""
+            package P
+            import System
+            import HelperLib2
+
+            func callIt[{{parameters}}]() string {
+                return Probes.{{probe}}[T{{links}}]()
+            }
+
+            Console.WriteLine(callIt[{{arguments}}]())
+            """;
+    }
+
+    /// <summary>
+    /// The generic-TYPE spelling of <see cref="DependentChainMethod"/>: the
+    /// chain's last parameter is the argument of an imported constrained
+    /// generic type.
+    /// </summary>
+    /// <param name="links">The number of dependent links after the root.</param>
+    /// <returns>The G# source.</returns>
+    private static string DependentChainType(int links)
+    {
+        var parameters = new StringBuilder("T0 SchemeOptions");
+        var arguments = new StringBuilder("SchemeOptions");
+        for (var i = 1; i <= links; i++)
+        {
+            parameters.Append(", T").Append(i).Append(" T").Append(i - 1);
+            arguments.Append(", SchemeOptions");
+        }
+
+        return $$"""
+            package P
+            import System
+            import HelperLib2
+
+            class Fwd[{{parameters}}] : SchemeConstrained[T{{links}}] {
+            }
+
+            Console.WriteLine(Fwd[{{arguments}}]().Tag)
+            """;
     }
 
     /// <summary>
