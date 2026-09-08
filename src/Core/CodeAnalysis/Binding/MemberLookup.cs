@@ -6746,7 +6746,7 @@ internal sealed class MemberLookup
                 for (var i = 1; i < exact.Count; i++)
                 {
                     if (!DeclarationBinder.TypeSignaturesEquivalent(fixedType, exact[i])
-                        && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fixedType, exact[i]))
+                        && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fixedType!, exact[i]))
                     {
                         fixedType = SymbolicInferenceConflict;
                         break;

@@ -3091,6 +3091,7 @@ internal static class ClrOverloadResolution
                 }
 
                 Type[]? typeArgs = null;
+
                 // CLR inference remains authoritative for ordinary arguments;
                 // symbolic-first closure is only needed for withheld arguments.
                 var useRecoveredInference = HasDeferredInferenceArgument(deferredInferenceArgs)
