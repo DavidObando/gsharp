@@ -3266,6 +3266,7 @@ internal static class ClrOverloadResolution
                 // constructed generic class — `List[T].Add`, `Dictionary[K,
                 // V].TryGetValue` — on the hot path.
                 if (conv != ImplicitConversionKind.None
+                    && conv != ImplicitConversionKind.UserDefinedImplicit
                     && erasedArgumentMismatchCheck != null
                     && erasedArgumentMismatchCheck(i, paramTypes[i])
                     && (!IsErasedGenericParameterSlot(rawCandidate, paramIndex, explicitTypeArgIsGenuine)
@@ -3672,6 +3673,7 @@ internal static class ClrOverloadResolution
             // genuine `object` element rather than an erased one, so the top-
             // level-`object` narrowing inside the callback keeps it applicable.
             if (conv != ImplicitConversionKind.None
+                && conv != ImplicitConversionKind.UserDefinedImplicit
                 && erasedArgumentMismatchCheck != null
                 && erasedArgumentMismatchCheck(i, target)
                 && !IsErasedGenericParameterSlot(rawCandidate, slot, explicitTypeArgIsGenuine))

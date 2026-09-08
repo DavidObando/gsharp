@@ -68,7 +68,7 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         class LocalTarget : BaseTarget {
         }
 
-        class LocalRankSource : ILeft, IRight {
+        struct LocalRankSource : ILeft, IRight {
         }
 
         func operator implicit(value LocalRankSource) LeftImplementation {
@@ -90,6 +90,14 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
 
         func operator implicit(value CrossCastSource) IDisposable {
             return DisposableValue()
+        }
+
+        struct GenericSource {
+            var Text string
+        }
+
+        func operator implicit(value GenericSource) GenericBox[object] {
+            return GenericBox[object](value.Text)
         }
 
         """;
@@ -135,6 +143,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public static string StandardRank(IRight value) => "right";
 
             public static string InterfaceValue(IDisposable value) => value.GetType().Name;
+
+            public static string ParamsDisposable(params IDisposable[] values) => values[0].GetType().Name;
+
+            public static string GenericTarget(GenericBox<object> value) => value.Value?.ToString() ?? string.Empty;
 
             public static string Ambiguous(string value) => "string";
 
@@ -217,7 +229,7 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         {
         }
 
-        public sealed class ImportedRankSource : ILeft, IRight
+        public readonly struct ImportedRankSource : ILeft, IRight
         {
         }
 
@@ -231,6 +243,18 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public void Dispose()
             {
             }
+        }
+
+        public sealed class GenericBox<T>
+        {
+            public GenericBox(T value) => Value = value;
+
+            public T Value { get; }
+        }
+
+        public static class GenericStatic<T>
+        {
+            public static string InterfaceValue(IDisposable value) => value.GetType().Name;
         }
 
         public readonly struct Fahrenheit
@@ -328,6 +352,26 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             "an-implicit-operator-beats-an-explicit-reference-cross-cast",
             """
             Console.WriteLine(ConversionTargets.InterfaceValue(CrossCastSource()))
+            Console.WriteLine(ConversionTargets.ParamsDisposable(CrossCastSource()))
+            """,
+            new[] { "DisposableValue", "DisposableValue" },
+        };
+
+        yield return new object[]
+        {
+            "a-user-conversion-survives-the-erased-mismatch-check",
+            """
+            Console.WriteLine(ConversionTargets.GenericTarget(
+                GenericSource{ Text: "generic-target" }))
+            """,
+            new[] { "generic-target" },
+        };
+
+        yield return new object[]
+        {
+            "a-symbolic-generic-static-receiver-applies-the-operator",
+            """
+            Console.WriteLine(GenericStatic[Celsius].InterfaceValue(CrossCastSource()))
             """,
             new[] { "DisposableValue" },
         };
@@ -388,7 +432,7 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         {
             "same-compilation-standard-conversions-keep-imported-precedence",
             """
-            Console.WriteLine(ConversionTargets.StandardRank(LocalRankSource()))
+            Console.WriteLine(ConversionTargets.StandardRank(LocalRankSource{}))
             """,
             "GS0160",
         };

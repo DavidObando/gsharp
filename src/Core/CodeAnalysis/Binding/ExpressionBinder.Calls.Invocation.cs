@@ -955,7 +955,12 @@ internal sealed partial class ExpressionBinder
             }
 
             var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
-            convertedArgs.Add(conversions.BindConversion(argLoc, argument, symbolicParamType));
+            var conversion = Conversion.Classify(argument.Type, symbolicParamType);
+            convertedArgs.Add(
+                conversion.IsExplicit
+                    && conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, symbolicParamType, out var implicitArg)
+                        ? implicitArg
+                        : conversions.BindConversion(argLoc, argument, symbolicParamType));
         }
 
         var symbolicReturn = MemberLookup.MapOpenClrTypeToSymbolic(openMethod.ReturnType, openDef, symbolicArgs);

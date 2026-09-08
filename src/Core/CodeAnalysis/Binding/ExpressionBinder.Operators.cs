@@ -3381,6 +3381,19 @@ internal sealed partial class ExpressionBinder
         IReadOnlyList<BoundExpression>? boundArguments,
         int argumentOffset = 0)
     {
+        static bool DeclaresImplicitOperator(TypeSymbol type)
+        {
+            while (type is NullableTypeSymbol nullable)
+            {
+                type = nullable.UnderlyingType;
+            }
+
+            return type is StructSymbol owner
+                && owner.StaticMethods.Any(method =>
+                    string.Equals(method.Name, "op_Implicit", StringComparison.Ordinal)
+                    && method.Parameters.Length == 1);
+        }
+
         if (boundArguments == null)
         {
             return null;
@@ -3400,14 +3413,14 @@ internal sealed partial class ExpressionBinder
             var sourceType = boundArguments[argIndex].Type;
             if (sourceType == null
                 || sourceType.ClrType != null
-                || !TypeSymbol.ContainsSameCompilationUserType(sourceType))
+                || !TypeSymbol.ContainsSameCompilationUserType(sourceType)
+                || !DeclaresImplicitOperator(sourceType))
             {
                 return null;
             }
 
             var targetType = TypeSymbol.FromClrType(clrParameterType);
-            if (targetType == null
-                || !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType))
+            if (targetType == null)
             {
                 return null;
             }
@@ -3427,11 +3440,15 @@ internal sealed partial class ExpressionBinder
                     : ClrOverloadResolution.ImplicitConversionKind.Reference;
             }
 
+            var hasUserDefined = ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType);
+
             // Lifted symbolic operators are not yet materialized by CLR
             // argument lowering, so they must remain inapplicable here.
-            return sourceType is NullableTypeSymbol && targetType is NullableTypeSymbol
+            return sourceType is NullableTypeSymbol && targetType is NullableTypeSymbol && hasUserDefined
                 ? ClrOverloadResolution.ImplicitConversionKind.None
-                : ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit;
+                : hasUserDefined
+                    ? ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
+                    : ClrOverloadResolution.ImplicitConversionKind.None;
         };
     }
 

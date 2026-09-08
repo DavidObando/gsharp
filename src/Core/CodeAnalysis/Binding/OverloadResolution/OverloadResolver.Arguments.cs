@@ -193,7 +193,14 @@ internal sealed partial class OverloadResolver
             return arg;
         }
 
-        if (Conversion.Classify(arg.Type, elementTypeSymbol).Exists)
+        var conversion = Conversion.Classify(arg.Type, elementTypeSymbol);
+        if (conversion.IsExplicit
+            && conversions.TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var implicitArg))
+        {
+            return implicitArg;
+        }
+
+        if (conversion.Exists)
         {
             var conversionSyntaxIndex = sourceIndex - receiverArgCount;
             TextLocation location;
