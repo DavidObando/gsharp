@@ -238,7 +238,7 @@ func (source IEnumerable[T]) FirstOrNil[T struct]() T? {
 /// @returns the last element wrapped as `T?`, or `nil` when empty.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
 func (source IEnumerable[T]) LastOrNil[T class]() T? {
-    var result T?= nil
+    var result T? = nil
     for item in source {
         result = item
     }
@@ -263,7 +263,7 @@ func (source IEnumerable[T]) LastOrNil[T class]() T? {
 /// @returns the last element wrapped as `T?`, or `nil` when empty.
 @MethodImpl(MethodImplOptions.AggressiveInlining)
 func (source IEnumerable[T]) LastOrNil[T struct]() T? {
-    var result T?= nil
+    var result T? = nil
     for item in source {
         result = item
     }
@@ -479,7 +479,7 @@ func IndexedIterator[T](source IEnumerable[T]) IEnumerable[(int32, T)] {
 
 func PairwiseIterator[T](source IEnumerable[T]) IEnumerable[(T, T)] {
     var hasPrevious = false
-    var previous T = default (T)
+    var previous T = default(T)
     for item in source {
         if hasPrevious {
             yield(previous, item)

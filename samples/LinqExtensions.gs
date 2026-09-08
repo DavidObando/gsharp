@@ -20,8 +20,7 @@ list.Add(5)
 list.Add(6)
 
 // Single generic extension method, type inferred from the receiver.
-var evens = list
-    .Where(
+var evens = list.Where(
     func (x int32) bool {
         return x % 2 == 0
     }
@@ -31,8 +30,7 @@ for v in evens {
 }
 
 // Chained generic extension methods: Where -> Select.
-var doubledEvens = list
-    .Where(
+var doubledEvens = list.Where(
     func (x int32) bool {
         return x % 2 == 0
     }
@@ -47,10 +45,8 @@ for v in doubledEvens {
 }
 
 // Terminal aggregate extension methods.
-Console
-    .WriteLine(
-    list
-        .Where(
+Console.WriteLine(
+    list.Where(
         func (x int32) bool {
             return x > 3
         }

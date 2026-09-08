@@ -779,11 +779,28 @@ public sealed class SdkCompileRunner
         return SdkPackageId + "/" + sdk.Value.Version;
     }
 
+    /// <summary>
+    /// Returns the bounded stage-4 budget for one mirrored test project.
+    /// Compiler.Tests compiles G# snippets inside its tests and its measured
+    /// validation cost exceeds the default budget; other apps keep the tighter
+    /// timeout so hangs still fail promptly.
+    /// </summary>
+    /// <param name="appId">The repository-relative app id.</param>
+    /// <returns>The deterministic per-app test budget.</returns>
+    internal static TimeSpan MirroredTestRunTimeoutFor(string appId) =>
+        string.Equals(
+            appId,
+            "test/Compiler.Tests/Compiler.Tests.csproj",
+            StringComparison.Ordinal)
+                ? TimeSpan.FromMinutes(90)
+                : MirroredTestRunTimeout;
+
     internal static ProcessRunResult TestMirroredProject(
         string generatedProjectPath,
         string artifactDirectory,
         string config,
-        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        TimeSpan timeout)
     {
         string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath));
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
@@ -812,7 +829,7 @@ public sealed class SdkCompileRunner
                     "-p:Cs2GsArtifactRoot=" + artifactDirectory,
                 },
                 projectDirectory,
-                TimeSpan.FromMinutes(10),
+                timeout,
                 IsolatedNugetEnvironment(artifactDirectory));
         }
         finally

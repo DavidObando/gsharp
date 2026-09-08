@@ -234,6 +234,100 @@ public sealed class GSharpFormatterTests
         Assert.Contains("\nvar y = 2\n", applied, StringComparison.Ordinal);
     }
 
+    // ADR-0179 phase 6. These formatter defects made gsfmt reject its own output
+    // on the migrated tree, which is invisible in normal use: the formatter
+    // falls soft and hands the caller the unformatted text, so the symptom is
+    // "wrapping did not happen here" rather than a crash.
+    [Fact]
+    public void Format_KeepsNullConditionalInvocationTightAgainstItsArgumentList()
+    {
+        const string input = "func run(onBound ((int32) -> void)?) {\nonBound?(1)\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("onBound?(1)", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsNullableConversionCallTightAgainstItsArgumentList()
+    {
+        const string input = "func run(n int32) {\nlet widened = int32?(n)\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("int32?(n)", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_SpacesANullableTypeMarkerAwayFromAFollowingEquals()
+    {
+        const string input = "func run() {\nlet root string?=nil\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("let root string? = nil", result.Text!.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("string?=", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsTheNullableSliceMarkerTightAgainstItsElementType()
+    {
+        // `[]?int32` puts the marker INSIDE the type clause, so the rule cannot
+        // simply be "always space after a nullable `?`".
+        const string input = "func run(values []?int32) {\nlet first = values?[0]\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("[]?int32", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsDoubleLogicalNegationFromFusingIntoNullAssertion()
+    {
+        const string input = "func run() {\nlet on = true\nlet doubled = ! !on\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("let doubled = ! !on", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_KeepsACollectionInitializersFirstElementOnTheBraceLine()
+    {
+        string arguments = string.Join(", ", Enumerable.Range(0, 20).Select(index => $"argument{index}"));
+        string input = $"func run(capacity int32) {{\nlet items = List[int32](capacity){{buildElement({arguments})}}\n}}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+
+        // A newline immediately after the brace demotes this single nonliteral
+        // initializer to a call followed by an unrelated block statement.
+        Assert.Contains("){buildElement(", formatted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_BreaksAfterACollectionInitializerBraceWhenUnambiguous()
+    {
+        string elements = string.Join(", ", Enumerable.Range(0, 20).Select(index => $"element{index}"));
+        string input = $"func run(capacity int32) {{\nlet items = List[int32](capacity){{{elements}}}\n}}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("){\n        element0,", formatted, StringComparison.Ordinal);
+        Assert.All(
+            formatted.Split('\n'),
+            line => Assert.True(line.Length <= 120, "Line exceeded the canonical width: " + line));
+    }
+
     [Fact]
     public void Samples_RoundTripAndRemainIdempotent()
     {

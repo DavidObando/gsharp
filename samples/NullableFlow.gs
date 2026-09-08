@@ -7,7 +7,7 @@ package GSharp.Samples.NullableFlow
 
 import System
 
-let opt string?= "hello"
+let opt string? = "hello"
 switch opt {
     case s is string {
         Console.WriteLine(opt.Length)
@@ -17,7 +17,7 @@ switch opt {
     }
 }
 
-let s string?= "world"
+let s string? = "world"
 if !String.IsNullOrEmpty(s) {
     Console.WriteLine(s.Length)
 }

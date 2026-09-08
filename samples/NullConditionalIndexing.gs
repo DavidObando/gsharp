@@ -37,12 +37,12 @@ func main() {
 
     // 2. CLR Dictionary receiver — exercises the BoundClrIndexExpression
     // path that backs `?[]` over user-defined indexers.
-    var d Dictionary[string, int32]?= Dictionary[string, int32]()
+    var d Dictionary[string, int32]? = Dictionary[string, int32]()
     d.Add("k", 42)
     var hit = d?["k"]
     Console.WriteLine(hit)
 
-    var d2 Dictionary[string, int32]?= nil
+    var d2 Dictionary[string, int32]? = nil
     var miss = d2?["k"]
     if miss == nil {
         Console.WriteLine("nil-map")

@@ -5,6 +5,8 @@
 # tools/cs2gs/selfmig-baseline.json:
 #
 #   - greenFloor:            minimum fully-green apps (run fails below it)
+#   - greenApps:             identities that must remain fully green
+#   - stageFloor:            furthest attempted stage for each red app
 #   - syntheticLabelCeiling: max __switchExit/__iteratorExit/__gotoCase/
 #                            __patternGuardEnd occurrences in migrated output
 #   - liftedLocalCeiling:    max __local_ lifted-helper occurrences

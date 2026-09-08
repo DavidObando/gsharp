@@ -25,7 +25,7 @@ class Sequences {
         // `(T, T)` element type — the issue's `Pairwise` spelling.
         func Pairwise[T](source IEnumerable[T]) sequence[(T, T)] {
             var first = true
-            var prev T = default (T)
+            var prev T = default(T)
             for v in source {
                 if !first {
                     yield(prev, v)

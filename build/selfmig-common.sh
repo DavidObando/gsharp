@@ -6,7 +6,8 @@
 #   - the --exclude set (it defines the DISCOVERED app set, so every stage of
 #     the sharded pipeline has to pass the identical list; see below),
 #   - the readability metric definitions,
-#   - the baseline threshold evaluation and its output format.
+#   - the baseline threshold and per-app stage-floor evaluation and its output
+#     format.
 #
 # Sourced, never executed. Callers set `repo_root` before sourcing.
 
@@ -229,6 +230,19 @@ selfmig_apply_baseline() {
         echo "$regressed" | sed 's/^/  - /' >&2
         status=1
       fi
+    fi
+  fi
+
+  # Issue #4058: greenApps protects identities only after they are fully green.
+  # stageFloor protects the red tail by recording the furthest stage each app
+  # has ATTEMPTED. Both "passed" and "failed" mean reached; "skipped" and
+  # "not-applicable" do not. The checker also fails closed on malformed or
+  # missing stage rows, reports forward movement without auto-editing the
+  # baseline, and requires a removed app to be deliberately re-baselined.
+  if [[ -n "$run_json" && -f "$run_json" ]]; then
+    if ! python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-selfmig-stage-floor.py" \
+      --baseline "$baseline" --run "$run_json"; then
+      status=1
     fi
   fi
 

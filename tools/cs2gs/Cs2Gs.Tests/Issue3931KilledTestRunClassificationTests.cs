@@ -77,6 +77,19 @@ public sealed class Issue3931KilledTestRunClassificationTests
         Assert.DoesNotContain(outcome.Artifacts, a => a.Diagnostic.Id == "LIBRARY-TESTS-TIMED-OUT");
     }
 
+    [Fact]
+    public void CompilerTestsGetsACompleteButStillBoundedParityBudget()
+    {
+        Assert.Equal(
+            TimeSpan.FromMinutes(90),
+            SdkCompileRunner.MirroredTestRunTimeoutFor(
+                "test/Compiler.Tests/Compiler.Tests.csproj"));
+        Assert.Equal(
+            TimeSpan.FromMinutes(10),
+            SdkCompileRunner.MirroredTestRunTimeoutFor(
+                "test/Core.Tests/Core.Tests.csproj"));
+    }
+
     private static StageExecutionContext Context()
     {
         string dir = Path.Combine(

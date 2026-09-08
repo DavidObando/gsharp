@@ -955,7 +955,12 @@ internal sealed partial class ExpressionBinder
             }
 
             var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
-            convertedArgs.Add(conversions.BindConversion(argLoc, argument, symbolicParamType));
+            var conversion = Conversion.Classify(argument.Type, symbolicParamType);
+            convertedArgs.Add(
+                conversion.IsExplicit
+                    && conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, symbolicParamType, out var implicitArg)
+                        ? implicitArg
+                        : conversions.BindConversion(argLoc, argument, symbolicParamType));
         }
 
         var symbolicReturn = MemberLookup.MapOpenClrTypeToSymbolic(openMethod.ReturnType, openDef, symbolicArgs);
@@ -1486,7 +1491,10 @@ internal sealed partial class ExpressionBinder
                 argTypes,
                 explicitTypeArgs,
                 scope.References.MapClrTypeToReferences,
-                argumentNames: deferredArgumentNames);
+                argumentNames: deferredArgumentNames,
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
+                    boundArgs,
+                    argumentOffset: offset));
             if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
                 || resolution.Best is not { } probeMethod)
             {
@@ -3864,7 +3872,8 @@ internal sealed partial class ExpressionBinder
                     methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
                     explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                     explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
-                    symbolicArgTypes: preResolutionSymbolicArgs);
+                    symbolicArgTypes: preResolutionSymbolicArgs,
+                    symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
 
                 // Issue #3745: a user-declared class argument erases to
                 // `System.Object`, which gives an imported generic method no
@@ -3901,7 +3910,8 @@ internal sealed partial class ExpressionBinder
                             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
                             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
-                            symbolicArgTypes: preResolutionSymbolicArgs);
+                            symbolicArgTypes: preResolutionSymbolicArgs,
+                            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
                         if (projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
                         {
                             resolution = projectedResolution;

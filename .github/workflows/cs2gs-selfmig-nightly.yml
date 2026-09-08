@@ -2,10 +2,11 @@ name: cs2gs-selfmig-nightly
 
 # Issue #3501 Track C: the repo self-migration gate. Migrates the entire
 # GSharp repository C# → G# nightly and enforces the ratcheting baseline in
-# tools/cs2gs/selfmig-baseline.json — a green-count floor plus readability
-# ceilings (synthetic labels, __local_ lifts, >300-char lines, !! assertions)
-# over the migrated output. Track A/B improvements tighten the baseline in the
-# same PR, so the migration goal ratchets instead of drifting.
+# tools/cs2gs/selfmig-baseline.json — a green-count floor, green app identities,
+# per-red-app attempted-stage floors, and readability ceilings (synthetic
+# labels, __local_ lifts, >300-char lines, !! assertions) over the migrated
+# output. Track A/B improvements tighten the baseline in the same PR, so the
+# migration goal ratchets instead of drifting.
 #
 # Issue #3668: the gate outgrew a single job. Once a cascade clears, apps stop
 # short-circuiting at translate and start paying for compile + ILVerify +

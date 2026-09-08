@@ -59,4 +59,93 @@ fi
 grep -Fq 'lines>300(raw)=1 reducible' <<< "$output"
 grep -Fq 'GATE: reducible raw >300-char line count 1 exceeded ceiling 0.' <<< "$output"
 
+python3 "$repo_root/build/test-check-selfmig-stage-floor.py"
+
+cat > "$scratch/stage-baseline.json" <<'JSON'
+{
+  "greenFloor": 0,
+  "syntheticLabelCeiling": 1,
+  "liftedLocalCeiling": 1,
+  "longLineCeiling": 1,
+  "nullAssertionCeiling": 1,
+  "greenApps": [],
+  "stageFloor": {
+    "test/Red.Tests/Red.Tests.csproj": "test-parity"
+  }
+}
+JSON
+cat > "$scratch/stage-run.json" <<'JSON'
+{
+  "apps": [
+    {
+      "appId": "test/Red.Tests/Red.Tests.csproj",
+      "succeeded": false,
+      "unverified": false,
+      "stages": [
+        {"stage": "translate", "status": "passed"},
+        {"stage": "compile", "status": "failed"},
+        {"stage": "ilverify", "status": "skipped"},
+        {"stage": "test-parity", "status": "skipped"}
+      ]
+    }
+  ]
+}
+JSON
+if output=$(TMPDIR="$scratch" selfmig_apply_baseline \
+  "$scratch/stage-baseline.json" 0 1 "$scratch/stage-run.json" 2>&1); then
+  echo "expected a stage-floor regression to fail the integrated gate" >&2
+  exit 1
+fi
+grep -Fq "regressed below stage floor 'test-parity': reached 'compile'" <<< "$output"
+
+measurement_tree="$scratch/measurement-tree"
+artifact="$measurement_tree/out/bin/Release/Cs2Gs.Tests/issue-2231-e2e/guid/Snippet.gs"
+source_file="$measurement_tree/out/scratch/Translated.gs"
+mkdir -p "$(dirname "$artifact")" "$(dirname "$source_file")"
+python3 - "$artifact" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    "goto __patternGuardEnd0\n"
+    "__patternGuardEnd0:\n"
+    "let __local_0 = value!!\n"
+    + "let reducible = " + " + ".join(["x"] * 90) + "\n",
+    encoding="utf-8",
+)
+PY
+for generated in \
+  "$measurement_tree/out/BiN/Release/App/Snippet.gs" \
+  "$measurement_tree/out/OBJ/Release/App/Snippet.gs" \
+  "$measurement_tree/out/TeStReSuLtS/App/Snippet.gs"
+do
+  mkdir -p "$(dirname "$generated")"
+  cp "$artifact" "$generated"
+done
+
+selfmig_measure "$measurement_tree"
+[[ "$labels $lifts $long_lines $long_lines_atomic $bangs" == "0 0 0 0 0" ]]
+
+report=$(TMPDIR="$scratch" cs2gs_counter_report "$measurement_tree" "artifact exclusion")
+grep -Fq '| `.gs` files | 0 | 0 |' <<< "$report"
+grep -Fq '| `!!` null assertions | 0 | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (reducible) | n/a | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (total) | n/a | 0 |' <<< "$report"
+grep -Fq '| synthetic `__` identifiers | 0 | 0 |' <<< "$report"
+
+cp "$artifact" "$source_file"
+selfmig_measure "$measurement_tree"
+[[ "$labels $lifts $long_lines $long_lines_atomic $bangs" == "2 1 1 0 1" ]]
+
+report=$(TMPDIR="$scratch" cs2gs_counter_report "$measurement_tree" "artifact exclusion")
+grep -Fq '| `.gs` files | 1 | 1 |' <<< "$report"
+grep -Fq '| `__patternGuardEnd` | 2 | 2 |' <<< "$report"
+grep -Fq '| `__local_` | 1 | 1 |' <<< "$report"
+grep -Fq '| `!!` null assertions | 1 | 1 |' <<< "$report"
+grep -Fq '| lines >300 chars (reducible) | n/a | 1 |' <<< "$report"
+grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (total) | n/a | 1 |' <<< "$report"
+grep -Fq '| synthetic `__` identifiers | 3 | 3 |' <<< "$report"
+
 echo "cs2gs counter contract tests passed"

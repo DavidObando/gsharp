@@ -21,11 +21,10 @@ import System
 
 // --- Reference-typed nullables (T : class) -----------------------------------
 
-let name string?= "ada"
+let name string? = "ada"
 
 // Map: lift a pure function over the present value.
-let upper = name
-    .Map(
+let upper = name.Map(
     func (s string) string {
         return s.ToUpper()
     }
@@ -33,8 +32,7 @@ let upper = name
 Console.WriteLine(upper ?? "<absent>")
 
 // FlatMap: chain a function that itself returns T?.
-let firstChar = upper
-    .FlatMap(
+let firstChar = upper.FlatMap(
     func (s string) string? {
         if s.Length > 0 {
             return s.Substring(0, 1)
@@ -45,14 +43,12 @@ let firstChar = upper
 Console.WriteLine(firstChar ?? "<absent>")
 
 // OrElse: project to a non-nullable fallback.
-let absent string?= nil
+let absent string? = nil
 Console.WriteLine(absent.OrElse("default"))
 
 // OrCompute: lazily compute the fallback only when absent.
-Console
-    .WriteLine(
-    absent
-        .OrCompute(
+Console.WriteLine(
+    absent.OrCompute(
         func () string {
             return "computed"
         }
@@ -60,8 +56,7 @@ Console
 )
 
 // Filter: drop the value when it fails the predicate.
-let short = name
-    .Filter(
+let short = name.Filter(
     func (s string) bool {
         return s.Length <= 2
     }
@@ -69,15 +64,13 @@ let short = name
 Console.WriteLine(short ?? "<filtered out>")
 
 // IfPresent: side-effect only when present.
-name
-    .IfPresent(
+name.IfPresent(
     func (s string) {
         Console.WriteLine("present: " + s)
     }
 )
 
-absent
-    .IfPresent(
+absent.IfPresent(
     func (s string) {
         Console.WriteLine("(this should not print)")
     }
@@ -92,28 +85,25 @@ Console.WriteLine(name.OrThrow("name was missing"))
 // Issue #752 / ADR-0084 L3: `??` is now the canonical fallback shape; the
 // `OrCompute` helper remains for the deferred-default case.
 
-let count int32?= 7
-let doubled = count
-    .Map(
+let count int32? = 7
+let doubled = count.Map(
     func (n int32) int32 {
         return n * 2
     }
 )
 Console.WriteLine(doubled ?? -1)
 
-let none int32?= nil
+let none int32? = nil
 Console.WriteLine(none ?? -1)
 
-let positive = count
-    .Filter(
+let positive = count.Filter(
     func (n int32) bool {
         return n > 0
     }
 )
 Console.WriteLine(positive ?? -1)
 
-count
-    .IfPresent(
+count.IfPresent(
     func (n int32) {
         Console.WriteLine("count present: " + n.ToString())
     }

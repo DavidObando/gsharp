@@ -1507,7 +1507,8 @@ internal sealed partial class ExpressionBinder
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
             openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments),
-            symbolicArgTypes: inheritedSymbolicArgs);
+            symbolicArgTypes: inheritedSymbolicArgs,
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
 
         switch (resolution.Outcome)
         {
@@ -1986,7 +1987,8 @@ internal sealed partial class ExpressionBinder
                 explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                 explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1),
                 openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1),
-                symbolicArgTypes: extensionSymbolicArgs);
+                symbolicArgTypes: extensionSymbolicArgs,
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments, argumentOffset: 1));
 
         var resolution = ResolveExtensionCandidates();
 
@@ -3807,7 +3809,19 @@ internal sealed partial class ExpressionBinder
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
-            symbolicArgTypes: symbolicArgTypes);
+            symbolicArgTypes: symbolicArgTypes,
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverload(
+                ce.Location,
+                methodName,
+                resolution.Ambiguous.Length,
+                resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+            result = new BoundErrorExpression(ce);
+            return true;
+        }
+
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3843,12 +3857,20 @@ internal sealed partial class ExpressionBinder
             isExpanded: resolution.IsExpanded);
         if (resolution.IsExpanded)
         {
+            var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameters.Length - 1);
+            var symbolicParamsElement = symbolicParamsType is SliceTypeSymbol symbolicParams
+                ? symbolicParams.ElementType
+                : null;
             arguments = overloads.ExpandParamsArguments(
                 arguments,
                 parameters,
                 ce,
                 parameterMapping: downstreamMapping,
-                symbolicMethodTypeArgs: symbolicMethodTypeArgs);
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs,
+                paramsElementTypeOverride: symbolicParamsElement);
             downstreamMapping = default;
         }
 
@@ -3866,12 +3888,19 @@ internal sealed partial class ExpressionBinder
         // other argument (and the overload choice itself, unaffected unless a
         // candidate's applicability actually depended on the flag) is
         // unchanged.
+        arguments = ApplySymbolicClrArgumentConversions(
+            arguments,
+            parameters,
+            downstreamMapping,
+            method,
+            constraintType);
+
         // Non-generic constrained slots stay on the established unconverted
         // path: the emitted MemberRef parameter is the interface type-variable
         // `!0` (== the reified `!!T`). A generic method needs its recovered
         // method arguments during conversion too, so `Take<U>(U)` reifies U as
         // the caller's T and does not box it to the reflection-time `object`.
-        var convertedArguments = method.IsGenericMethod
+        arguments = method.IsGenericMethod
             ? conversions.BindClrParameterConversions(
                 arguments,
                 parameters,
@@ -3881,7 +3910,7 @@ internal sealed partial class ExpressionBinder
                 receiverType: constraintType,
                 symbolicMethodTypeArgs: symbolicMethodTypeArgs)
             : arguments;
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, downstreamMapping, parameters);
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         if (resolution.IsExpanded)
         {
             orderedArgs = OverloadResolver.PreserveExpandedArgumentEvaluationOrder(
@@ -3902,6 +3931,59 @@ internal sealed partial class ExpressionBinder
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: declaringConstraint);
         return true;
+    }
+
+    private ImmutableArray<BoundExpression> ApplySymbolicClrArgumentConversions(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping,
+        MethodInfo method,
+        TypeSymbol constraintType)
+    {
+        ImmutableArray<BoundExpression>.Builder? builder = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var parameterIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (parameterIndex >= parameters.Length
+                || parameters[parameterIndex].ParameterType.IsByRef)
+            {
+                continue;
+            }
+
+            var argument = arguments[i];
+            var targetType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameterIndex);
+            if (argument.Type is not { } sourceType
+                || sourceType.ClrType != null
+                || !TypeSymbol.ContainsSameCompilationUserType(sourceType)
+                || targetType == null
+                || targetType == TypeSymbol.Error
+                || TypeSymbol.ContainsTypeParameter(targetType))
+            {
+                continue;
+            }
+
+            var conversion = Conversion.Classify(sourceType, targetType);
+            BoundExpression converted;
+            if (conversion.IsImplicit && !conversion.IsStructuralProjection)
+            {
+                converted = conversions.BindConversion(
+                    argument.Syntax?.Location ?? default,
+                    argument,
+                    targetType);
+            }
+            else if (!conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out converted))
+            {
+                continue;
+            }
+
+            builder ??= arguments.ToBuilder();
+            builder[i] = converted;
+        }
+
+        return builder?.MoveToImmutable() ?? arguments;
     }
 
     /// <summary>
@@ -3980,6 +4062,17 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             null,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverload(
+                ce.Location,
+                methodName,
+                resolution.Ambiguous.Length,
+                resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+            result = new BoundErrorExpression(ce);
+            return true;
+        }
+
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;

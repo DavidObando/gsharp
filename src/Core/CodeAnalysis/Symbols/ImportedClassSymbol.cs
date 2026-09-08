@@ -458,7 +458,8 @@ public sealed class ImportedClassSymbol : Symbol
             methodGroupArgumentCheck: ExpressionBinder.MakeMethodGroupArgumentCheck(arguments),
             deferredInferenceArgs: deferredInferenceArgs,
             openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(arguments),
-            symbolicArgTypes: symbolicArgVector);
+            symbolicArgTypes: symbolicArgVector,
+            symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(arguments));
 
         switch (result.Outcome)
         {

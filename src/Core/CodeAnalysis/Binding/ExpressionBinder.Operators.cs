@@ -15,6 +15,7 @@ using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -3366,6 +3367,92 @@ internal sealed partial class ExpressionBinder
             return IsImplicitConstantNarrowingArgument(
                 boundArguments[argIndex],
                 TypeSymbol.FromClrType(effectiveParameterType));
+        };
+    }
+
+    // Issue #4054: a same-compilation type has no CLR identity while binding,
+    // so its overload-resolution argument is an erasure surrogate (usually
+    // object). Keep the real symbol available only for the narrow question the
+    // CLR classifier cannot answer: whether this candidate parameter is reached
+    // through an implicit user conversion. Imported arguments stay entirely on
+    // the established CLR path, and an erased argument with no such conversion
+    // gains no applicability.
+    internal static Func<int, System.Type, ClrOverloadResolution.ImplicitConversionKind?>? MakeSymbolicArgumentConversionClassifier(
+        IReadOnlyList<BoundExpression>? boundArguments,
+        int argumentOffset = 0)
+    {
+        static bool DeclaresImplicitOperator(TypeSymbol type)
+        {
+            while (type is NullableTypeSymbol nullable)
+            {
+                type = nullable.UnderlyingType;
+            }
+
+            return type is StructSymbol owner
+                && owner.StaticMethods.Any(method =>
+                    string.Equals(method.Name, "op_Implicit", StringComparison.Ordinal)
+                    && method.Parameters.Length == 1);
+        }
+
+        if (boundArguments == null)
+        {
+            return null;
+        }
+
+        return (index, clrParameterType) =>
+        {
+            var argIndex = index - argumentOffset;
+            if (argIndex < 0
+                || argIndex >= boundArguments.Count
+                || clrParameterType == null
+                || clrParameterType.IsByRef)
+            {
+                return null;
+            }
+
+            var sourceType = boundArguments[argIndex].Type;
+            if (sourceType == null
+                || sourceType.ClrType != null
+                || !TypeSymbol.ContainsSameCompilationUserType(sourceType)
+                || !DeclaresImplicitOperator(sourceType))
+            {
+                return null;
+            }
+
+            var targetType = TypeSymbol.FromClrType(clrParameterType);
+            if (targetType == null)
+            {
+                return null;
+            }
+
+            var standard = Conversion.ClassifyNonStructural(sourceType, targetType);
+            if (standard.IsIdentity)
+            {
+                return ClrOverloadResolution.ImplicitConversionKind.Identity;
+            }
+
+            if (standard.IsImplicit)
+            {
+                return sourceType is StructSymbol { IsClass: false }
+                        or EnumSymbol
+                        or NullableTypeSymbol
+                    ? ClrOverloadResolution.ImplicitConversionKind.Boxing
+                    : ClrOverloadResolution.ImplicitConversionKind.Reference;
+            }
+
+            var hasUserDefined = ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType);
+
+            // Lifted symbolic operators are not yet materialized by CLR
+            // argument lowering, so they must remain inapplicable here.
+            return sourceType is NullableTypeSymbol sourceNullable
+                && targetType is NullableTypeSymbol targetNullable
+                && NullableLifting.IsAnyValueTypeNullable(sourceNullable)
+                && NullableLifting.IsAnyValueTypeNullable(targetNullable)
+                && hasUserDefined
+                ? ClrOverloadResolution.ImplicitConversionKind.None
+                : hasUserDefined
+                    ? ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
+                    : ClrOverloadResolution.ImplicitConversionKind.None;
         };
     }
 
