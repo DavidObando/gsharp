@@ -132,6 +132,19 @@ public class ImportedMemberMatrixTests
                     => typeof(T).Name;
             }
 
+            public static class MethodGroupOutputInference
+            {
+                public static string Choose<TIn, TOut>(
+                    TIn value,
+                    System.Func<TIn, TOut> converter)
+                    => typeof(TIn).Name + ":" + typeof(TOut).Name;
+
+                public static string ChooseParams<TIn, TOut>(
+                    TIn value,
+                    params System.Func<TIn, TOut>[] converters)
+                    => typeof(TIn).Name + ":" + typeof(TOut).Name;
+            }
+
             public static class ExtensionOverloads
             {
                 public static string ChooseExtensionParams<T>(
@@ -302,6 +315,22 @@ public class ImportedMemberMatrixTests
                 return Derived()
             }
 
+            func outputInferenceConvert(value object) Base {
+                return Base()
+            }
+
+            func outputInferenceConvert(value int32) Derived {
+                return Derived()
+            }
+
+            func throughFixedMethodGroupOutputInference() string {
+                return MethodGroupOutputInference.Choose(Derived(), outputInferenceConvert)
+            }
+
+            func throughExpandedMethodGroupOutputInference() string {
+                return MethodGroupOutputInference.ChooseParams(Derived(), outputInferenceConvert)
+            }
+
             func throughExpandedStaticMethodGroup() string {
                 return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
             }
@@ -401,6 +430,8 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughInvariantExpandedConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughExpandedInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughFixedMethodGroupOutputInference())
+            Console.WriteLine(throughExpandedMethodGroupOutputInference())
             Console.WriteLine(throughExpandedStaticMethodGroup())
             Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughExpandedInheritedMethodGroup(DerivedInstanceOverloads()))
@@ -438,6 +469,7 @@ public class ImportedMemberMatrixTests
                 + $"DerivedDisposable{Environment.NewLine}DerivedDisposable{Environment.NewLine}"
                 + $"object-invariant{Environment.NewLine}object-invariant-params{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
+                + $"Derived:Base{Environment.NewLine}Derived:Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}"
@@ -451,6 +483,29 @@ public class ImportedMemberMatrixTests
                 gsSource,
                 "Issue4086.CSharp",
                 ignoredErrorScope: "through(?:Expanded)?ConstrainedStatic(?:Async)?"));
+
+        const string incompatibleSource = """
+            package Issue4086.Incompatible
+            import Issue4086.CSharp
+
+            open class Base {
+            }
+
+            class Derived : Base {
+            }
+
+            func incompatibleConvert(value int32) Base {
+                return Base()
+            }
+
+            MethodGroupOutputInference.Choose(Derived(), incompatibleConvert)
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(
+            csSource,
+            incompatibleSource,
+            "Issue4086.CSharp");
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Contains("GS0159", StringComparison.Ordinal));
     }
 
     private const string Issue3076CsSource = """

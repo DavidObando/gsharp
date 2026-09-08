@@ -2055,23 +2055,33 @@ internal static class ClrOverloadResolution
         }
 
         var inferred = new Dictionary<string, Type>(bounds, StringComparer.Ordinal);
-        for (var i = 0; i < delegateParameters.Length; i++)
+        if (inputsClosed)
         {
-            if (!UnifyForInference(delegateParameters[i], signature.Value.Parameters[i], inferred))
+            // Method-group input types select and validate the candidate; only
+            // its return type contributes output-inference bounds.
+            for (var i = 0; i < closedInputs.Length; i++)
             {
-                // Issue #3501 A5: a VARIANT method group is a valid delegate
-                // conversion — the method may take a broader parameter type
-                // than the delegate (contravariance). When the delegate
-                // parameter closes to a concrete type the method parameter
-                // can accept, the position simply contributes no inference
-                // bounds; the later conversion check enforces the real
-                // compatibility (explicit type arguments already accepted
-                // exactly these method groups).
-                if (!TryCloseInferredType(delegateParameters[i], inferred, out var closedParameter)
-                    || closedParameter is null
-                    || !IsVariantAssignable(target: signature.Value.Parameters[i], source: closedParameter))
+                if (ClassifyImplicit(signature.Value.Parameters[i], closedInputs[i])
+                    == ImplicitConversionKind.None)
                 {
                     return false;
+                }
+            }
+        }
+        else
+        {
+            // Issue #3766: preserve the single-candidate fallback for a
+            // delegate whose input types cannot be fixed from other arguments.
+            for (var i = 0; i < delegateParameters.Length; i++)
+            {
+                if (!UnifyForInference(delegateParameters[i], signature.Value.Parameters[i], inferred))
+                {
+                    if (!TryCloseInferredType(delegateParameters[i], inferred, out var closedParameter)
+                        || closedParameter is null
+                        || !IsVariantAssignable(target: signature.Value.Parameters[i], source: closedParameter))
+                    {
+                        return false;
+                    }
                 }
             }
         }
