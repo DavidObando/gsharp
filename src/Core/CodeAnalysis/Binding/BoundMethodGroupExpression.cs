@@ -96,6 +96,12 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     public ImmutableArray<TypeSymbol> MethodTypeArguments { get; }
 
     /// <summary>
+    /// Gets a value indicating whether contextual conversion supplied
+    /// the delegate/function target represented by this resolved group.
+    /// </summary>
+    public bool HasTargetDelegateType { get; init; }
+
+    /// <summary>
     /// Gets a value indicating whether the delegate must capture the BASE
     /// implementation non-virtually (issue #3501: <c>base.M</c> used as a
     /// method group — <c>ldftn</c> even though the method is open/override,

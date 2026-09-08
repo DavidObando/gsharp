@@ -157,7 +157,14 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax rightPart,
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
-        => receiver != null && receiver.Type == TypeSymbol.Error
+        => receiver != null
+            && (receiver is BoundMethodGroupExpression or BoundClrMethodGroupExpression)
+            && !MethodGroupDiagnostics.HasDelegateTarget(receiver)
+            ? MethodGroupDiagnostics.ReportRequiresTarget(
+                Diagnostics,
+                receiver,
+                receiverSyntax?.Location ?? rightPart.Location)
+            : receiver != null && receiver.Type == TypeSymbol.Error
             ? Diagnostics.SuppressMemberLookupCascadeIn(
                 () => BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart))
             : BindAccessorStepCore(receiver, classSymbol, rightPart, receiverSyntax, receiverStart);

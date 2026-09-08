@@ -30,7 +30,7 @@ public sealed class Issue2731NaturalMethodGroupInterpolationTests
         var result = compilation.Emit(output);
 
         Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0218");
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0582");
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
     }
 
@@ -49,7 +49,7 @@ public sealed class Issue2731NaturalMethodGroupInterpolationTests
         var result = compilation.Emit(output);
 
         Assert.False(result.Success);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0218");
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0582");
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS9998");
     }
 }

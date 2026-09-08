@@ -449,6 +449,26 @@ internal sealed class ConversionClassifier
             }
         }
 
+        // An error target already has its own declaration/type diagnostic.
+        // Leave targetless inference to the declaration binder's dedicated
+        // GS0582 path instead of cascading here.
+        if (type == TypeSymbol.Error
+            && expression is BoundMethodGroupExpression or BoundClrMethodGroupExpression)
+        {
+            return new BoundErrorExpression(expression.Syntax);
+        }
+
+        if (expression is BoundMethodGroupExpression userGroupWithoutDelegateTarget
+            && type is not FunctionTypeSymbol
+            && type is not DelegateTypeSymbol
+            && !MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(type, out _))
+        {
+            return MethodGroupDiagnostics.ReportRequiresTarget(
+                Diagnostics,
+                userGroupWithoutDelegateTarget,
+                diagnosticLocation);
+        }
+
         var methodGroupReceiver = expression switch
         {
             BoundMethodGroupExpression userGroup => userGroup.Receiver,
@@ -540,6 +560,17 @@ internal sealed class ConversionClassifier
         if (expression is BoundMethodGroupExpression resolvedUserMethodGroup &&
             !MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out _))
         {
+            resolvedUserMethodGroup = new BoundMethodGroupExpression(
+                resolvedUserMethodGroup.Syntax,
+                resolvedUserMethodGroup.Receiver,
+                Invariant.Required(resolvedUserMethodGroup.Function, "a resolved method group has a function"),
+                Invariant.Required(resolvedUserMethodGroup.FunctionType, "a resolved method group has a function type"),
+                resolvedUserMethodGroup.StaticOwnerType,
+                resolvedUserMethodGroup.MethodTypeArguments)
+            {
+                ForceNonVirtualDispatch = resolvedUserMethodGroup.ForceNonVirtualDispatch,
+                HasTargetDelegateType = true,
+            };
             expression = this.createUserExtensionMethodGroupAdapter(resolvedUserMethodGroup);
         }
 
@@ -2177,18 +2208,10 @@ internal sealed class ConversionClassifier
         var delegateClr = targetType?.ClrType;
         if (delegateClr == null || !ClrTypeUtilities.IsDelegateType(delegateClr))
         {
-            // A non-delegate target (e.g. `var x int32 = Console.WriteLine`) or
-            // an already-errored target: report unless the target itself is an
-            // error type (which already produced a diagnostic).
-            if (targetType != null && targetType != TypeSymbol.Error)
-            {
-                Diagnostics.ReportCannotConvertMethodGroup(
-                    diagnosticLocation,
-                    group.MethodName,
-                    Invariant.Required(targetType, "method-group conversion has a target type"));
-            }
-
-            return new BoundErrorExpression(null);
+            return MethodGroupDiagnostics.ReportRequiresTarget(
+                Diagnostics,
+                group,
+                diagnosticLocation);
         }
 
         // Issue #3752 (#3705, family 3): the direct `Invoke` probe is the fast
@@ -2380,15 +2403,10 @@ internal sealed class ConversionClassifier
         }
         else
         {
-            if (targetType != null && targetType != TypeSymbol.Error)
-            {
-                Diagnostics.ReportCannotConvertMethodGroup(
-                    diagnosticLocation,
-                    groupName,
-                    Invariant.Required(targetType, "method-group conversion has a target type"));
-            }
-
-            return new BoundErrorExpression(null);
+            return MethodGroupDiagnostics.ReportRequiresTarget(
+                Diagnostics,
+                group,
+                diagnosticLocation);
         }
 
         var targetParameterRefKinds = GetMethodGroupTargetRefKinds(
@@ -2515,7 +2533,11 @@ internal sealed class ConversionClassifier
             pick,
             pickFnType,
             pickOwner,
-            pickMethodTypeArguments);
+            pickMethodTypeArguments)
+        {
+            ForceNonVirtualDispatch = group.ForceNonVirtualDispatch,
+            HasTargetDelegateType = true,
+        };
         BoundExpression resolvedValue =
             MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
                 ? resolvedGroup

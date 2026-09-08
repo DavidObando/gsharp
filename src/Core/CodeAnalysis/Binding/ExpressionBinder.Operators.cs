@@ -1931,6 +1931,17 @@ internal sealed partial class ExpressionBinder
         // `int32? ?? int64` → `int64`); reference upcasts need no IL conversion
         // because they are representation-preserving.
         if (boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce
+            && boundRight is BoundMethodGroupExpression or BoundClrMethodGroupExpression)
+        {
+            // Issue #4065: even when the natural method-group type is already
+            // identical to the coalesce result, the left delegate operand is
+            // the contextual target that makes the right group a value.
+            boundRight = conversions.BindConversion(
+                syntax.Right.Location,
+                boundRight,
+                boundOperator.Type);
+        }
+        else if (boundOperator.Kind == BoundBinaryOperatorKind.NullCoalesce
             && boundRight.Type != boundOperator.Type
             && boundRight.Type != TypeSymbol.Never)
         {

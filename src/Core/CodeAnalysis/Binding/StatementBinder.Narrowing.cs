@@ -1611,7 +1611,25 @@ internal sealed partial class StatementBinder
                 }
 
                 variableType = type ?? preDeclaredSelf?.Type ?? initializer.Type;
-                convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
+                if (syntax.TypeClause != null
+                    && (type == null || type == TypeSymbol.Error))
+                {
+                    convertedInitializer = new BoundErrorExpression(initializer.Syntax);
+                    variableType = TypeSymbol.Error;
+                }
+                else if (syntax.TypeClause == null
+                    && MethodGroupDiagnostics.RequiresTarget(initializer))
+                {
+                    convertedInitializer = MethodGroupDiagnostics.ReportRequiresTarget(
+                        Diagnostics,
+                        initializer,
+                        syntax.Initializer.Location);
+                    variableType = TypeSymbol.Error;
+                }
+                else
+                {
+                    convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
+                }
 
                 // Issue #2016: a NON-generic named local function (`let`/`var`/`const
                 // Name = func (...) ... {...}`, no `[T, ...]` of its own — the sibling

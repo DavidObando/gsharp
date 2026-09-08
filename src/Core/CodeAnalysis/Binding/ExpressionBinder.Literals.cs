@@ -962,13 +962,14 @@ internal sealed partial class ExpressionBinder
                     Invariant.Required(naturalType, "a natural CLR method group has a function type"));
             }
 
-            Diagnostics.ReportCannotConvertMethodGroup(location, clrGroup.MethodName, TypeSymbol.Error);
-            return new BoundErrorExpression(null);
+            return MethodGroupDiagnostics.ReportRequiresTarget(Diagnostics, clrGroup, location);
         }
 
-        if (expression is BoundMethodGroupExpression { FunctionType: null } userGroup)
+        if (expression is BoundMethodGroupExpression userGroup)
         {
-            if (TryGetNaturalUserMethodGroupType(userGroup, out var naturalType))
+            var naturalType = userGroup.FunctionType;
+            if (naturalType != null
+                || TryGetNaturalUserMethodGroupType(userGroup, out naturalType))
             {
                 return conversions.BindConversion(
                     location,
@@ -976,11 +977,7 @@ internal sealed partial class ExpressionBinder
                     Invariant.Required(naturalType, "a natural user method group has a function type"));
             }
 
-            Diagnostics.ReportCannotConvertMethodGroup(
-                location,
-                userGroup.Function?.Name ?? "<method group>",
-                TypeSymbol.Error);
-            return new BoundErrorExpression(null);
+            return MethodGroupDiagnostics.ReportRequiresTarget(Diagnostics, userGroup, location);
         }
 
         return expression;
