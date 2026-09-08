@@ -4706,10 +4706,9 @@ internal sealed class MemberLookup
         int parameterIndex)
     {
         var closedParameter = closedIndexer.GetIndexParameters()[parameterIndex];
-        if (GetImportedTypeSymbol(targetType) is ImportedTypeSymbol importedInterface
-            && importedInterface.ClrType?.IsInterface == true
+        if (GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported
             && TryGetSymbolicDeclaringContext(
-                importedInterface,
+                imported,
                 closedIndexer.DeclaringType,
                 out var openDefinition,
                 out var declaringTypeArguments)
@@ -4719,24 +4718,14 @@ internal sealed class MemberLookup
             var openParameters = openIndexer?.GetIndexParameters();
             if (openParameters != null && parameterIndex < openParameters.Length)
             {
-                return MapOpenClrTypeToSymbolic(
-                    openParameters[parameterIndex].ParameterType,
-                    openDefinition,
-                    declaringTypeArguments);
-            }
-        }
-        else if (targetType is ImportedTypeSymbol imported
-            && imported.OpenDefinition is Type importedOpenDefinition
-            && !imported.TypeArguments.IsDefaultOrEmpty)
-        {
-            var openIndexer = FindOpenIndexerDefinition(importedOpenDefinition, closedIndexer);
-            var openParameters = openIndexer?.GetIndexParameters();
-            if (openParameters != null && parameterIndex < openParameters.Length)
-            {
-                return SubstituteOpenIndexerType(
-                    imported,
-                    openParameters[parameterIndex].ParameterType,
-                    closedParameter.ParameterType);
+                var openParameter = openParameters[parameterIndex];
+                return NullableFlagsBuilder.MergeDeclarationNullability(
+                    MapOpenClrTypeToSymbolic(
+                        openParameter.ParameterType,
+                        openDefinition,
+                        declaringTypeArguments),
+                    openParameter.ParameterType,
+                    ClrNullability.ReadNullableFlags(openParameter, openIndexer));
             }
         }
 
@@ -4781,8 +4770,14 @@ internal sealed class MemberLookup
             var openProperty = FindOpenIndexerDefinition(openDefinition, closedProperty);
             if (openProperty != null)
             {
+                var openPropertyType = openProperty.PropertyType;
+                var projectionType = openPropertyType.IsByRef
+                    ? Invariant.Required(
+                        openPropertyType.GetElementType(),
+                        "a by-ref property has an element type")
+                    : openPropertyType;
                 var mapped = MapOpenClrTypeToSymbolic(
-                    openProperty.PropertyType,
+                    projectionType,
                     openDefinition,
                     declaringTypeArguments);
 
@@ -4820,8 +4815,8 @@ internal sealed class MemberLookup
                 // the open property type mentions a parameter at all, and let
                 // the merge keep deciding concrete positions.
                 if (!projectOnlyWhenSymbolicallyRequired
-                    || openProperty.PropertyType.IsGenericParameter
-                    || openProperty.PropertyType.ContainsGenericParameters)
+                    || projectionType.IsGenericParameter
+                    || projectionType.ContainsGenericParameters)
                 {
                     // Issue #3705 (family 2): this branch returned the
                     // receiver-substituted type RAW, exactly as
@@ -4836,10 +4831,13 @@ internal sealed class MemberLookup
                     var declarationFlags = ClrNullability.ReadNullableFlags(
                         openProperty,
                         openProperty.DeclaringType);
-                    return NullableFlagsBuilder.MergeDeclarationNullability(
+                    var result = NullableFlagsBuilder.MergeDeclarationNullability(
                         mapped,
-                        openProperty.PropertyType,
+                        projectionType,
                         declarationFlags);
+                    return openPropertyType.IsByRef
+                        ? ByRefTypeSymbol.Get(result)
+                        : result;
                 }
             }
         }
@@ -4860,21 +4858,6 @@ internal sealed class MemberLookup
         const BindingFlags AllFields = BindingFlags.Public | BindingFlags.NonPublic
             | BindingFlags.Instance | BindingFlags.Static;
         var imported = GetProjectionReceiverImportedType(targetType);
-        var receiverClr = imported?.ClrType;
-        if (targetType is NullabilityAnnotatedTypeSymbol annotated
-            && receiverClr != null
-            && receiverClr.IsGenericType
-            && !receiverClr.IsGenericTypeDefinition)
-        {
-            var receiverArguments = receiverClr.GetGenericArguments()
-                .Select((_, index) => annotated.GetTypeArgumentSymbol(index))
-                .ToImmutableArray();
-            imported = ImportedTypeSymbol.GetConstructed(
-                receiverClr,
-                receiverClr.GetGenericTypeDefinition(),
-                receiverArguments);
-        }
-
         if (imported != null
             && TryGetSymbolicDeclaringContext(
                 imported,
@@ -5214,15 +5197,40 @@ internal sealed class MemberLookup
     /// existing symbolic-projection machinery substitute the real arguments,
     /// exactly as it already does when the receiver IS the imported type.
     /// </para>
+    /// <para>
+    /// Issue #4066: a <see cref="NullabilityAnnotatedTypeSymbol"/> receiver
+    /// carries the per-argument nullable flags that its imported base cannot
+    /// represent. Rebuild the same symbolic construction the field path used
+    /// to build locally, so every member kind projects through one faithful
+    /// receiver instead of the erased closed CLR type.
+    /// </para>
     /// </summary>
     /// <param name="type">The receiver type a member was reflected through.</param>
     /// <returns>The imported type carrying the symbolic arguments, or <see langword="null"/>.</returns>
     internal static ImportedTypeSymbol? GetProjectionReceiverImportedType(TypeSymbol type)
-        => GetImportedTypeSymbol(type)
+    {
+        var imported = GetImportedTypeSymbol(type);
+        var receiverClr = imported?.ClrType;
+        if (type is NullabilityAnnotatedTypeSymbol annotated
+            && receiverClr != null
+            && receiverClr.IsGenericType
+            && !receiverClr.IsGenericTypeDefinition)
+        {
+            var receiverArguments = receiverClr.GetGenericArguments()
+                .Select((_, index) => annotated.GetTypeArgumentSymbol(index))
+                .ToImmutableArray();
+            return ImportedTypeSymbol.GetConstructed(
+                receiverClr,
+                imported?.OpenDefinition ?? receiverClr.GetGenericTypeDefinition(),
+                receiverArguments);
+        }
+
+        return imported
             ?? TryGetClosedMapProjectionView(type)
             ?? (type is StructSymbol userClass
                 ? TypeMemberModel.GetNearestImportedBase(userClass) as ImportedTypeSymbol
                 : null);
+    }
 
     /// <summary>
     /// Issue #4033: the <c>Dictionary[K, V]</c> view of a CLOSED
