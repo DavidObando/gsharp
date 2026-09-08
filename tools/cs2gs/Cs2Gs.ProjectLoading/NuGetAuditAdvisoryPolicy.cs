@@ -86,7 +86,8 @@ public static class NuGetAuditAdvisoryPolicy
     /// any genuine workspace failure, and for a mixed/multiline message that
     /// carries even one non-advisory line.
     /// </returns>
-    public static bool IsBenignAdvisory(string message)
+#nullable enable annotations
+    public static bool IsBenignAdvisory(string? message)
     {
         if (string.IsNullOrWhiteSpace(message))
         {

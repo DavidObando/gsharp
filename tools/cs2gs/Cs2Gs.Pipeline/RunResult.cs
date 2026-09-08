@@ -91,7 +91,8 @@ public sealed class AppResult
     /// <summary>Gets or sets the category of the first failing stage, or null when green.</summary>
     [JsonPropertyName("failureCategory")]
     [JsonPropertyOrder(3)]
-    public string FailureCategory { get; set; }
+#nullable enable annotations
+    public string? FailureCategory { get; set; }
 
     /// <summary>Gets or sets the per-stage results, in execution order.</summary>
     [JsonPropertyName("stages")]

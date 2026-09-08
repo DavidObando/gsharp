@@ -385,7 +385,8 @@ public sealed class AppReport
     /// <summary>Gets or sets the first failing stage's category, or null when green.</summary>
     [JsonPropertyName("failureCategory")]
     [JsonPropertyOrder(3)]
-    public string FailureCategory { get; set; }
+#nullable enable annotations
+    public string? FailureCategory { get; set; }
 
     /// <summary>Gets or sets the per-stage statuses, in execution order.</summary>
     [JsonPropertyName("stages")]

@@ -46,7 +46,7 @@ namespace Cs2Gs.Pipeline;
 /// Runs only after a green stage-3 (it short-circuits with the rest), so L2/L3
 /// — which stop at stage 1 today — never reach it until they translate.
 /// </summary>
-public sealed class TestParityStage : IMigrationStage
+public sealed partial class TestParityStage : IMigrationStage
 {
     private readonly GsharpTestProjectRunner libraryRunner;
 
@@ -95,21 +95,6 @@ public sealed class TestParityStage : IMigrationStage
         // or a library with no `.Tests` baseline): nothing to verify.
         this.Note(context, "no parity oracle (no stdout golden and no .Tests baseline); nothing to verify.");
         return StageOutcome.Passed();
-    }
-
-    /// <summary>
-    /// Issue #2867: detects the VSTest run summary that only ever appears once
-    /// the test project has built and its tests have actually executed.
-    /// </summary>
-    /// <param name="output">The captured <c>dotnet test</c> output.</param>
-    /// <returns><see langword="true"/> when a test run completed.</returns>
-    internal static bool CompletedTestRun(string output)
-    {
-        return !string.IsNullOrEmpty(output)
-            && Regex.IsMatch(
-                output,
-                @"^\s*(Passed|Failed)!\s+-\s+Failed:",
-                RegexOptions.Multiline | RegexOptions.CultureInvariant);
     }
 
     /// <summary>

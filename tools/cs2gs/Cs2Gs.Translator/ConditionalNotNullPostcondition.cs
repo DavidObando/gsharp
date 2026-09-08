@@ -61,10 +61,11 @@ internal static class ConditionalNotNullPostcondition
     /// </param>
     /// <param name="forwarded">Receives the named argument.</param>
     /// <returns>Whether a forwarded argument was found.</returns>
+#nullable enable annotations
     public static bool TryGetForwardedArgument(
         ExpressionSyntax expression,
-        Func<ExpressionSyntax, ISymbol> getSymbol,
-        out ExpressionSyntax forwarded)
+        Func<ExpressionSyntax, ISymbol?> getSymbol,
+        out ExpressionSyntax? forwarded)
     {
         forwarded = null;
         if (expression is not InvocationExpressionSyntax invocation || getSymbol == null)
@@ -102,7 +103,7 @@ internal static class ConditionalNotNullPostcondition
     private static IReadOnlyList<string> NamedParameters(IMethodSymbol method)
     {
         IMethodSymbol definition = (method.ReducedFrom ?? method).OriginalDefinition;
-        List<string> names = null;
+        List<string>? names = null;
         foreach (AttributeData attribute in definition.GetReturnTypeAttributes())
         {
             if (attribute.AttributeClass?.Name != AttributeName
@@ -117,14 +118,19 @@ internal static class ConditionalNotNullPostcondition
             }
         }
 
-        return (IReadOnlyList<string>)names ?? Array.Empty<string>();
+        if (names is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        return names;
     }
 
     // The argument expression bound to the parameter called <paramref
     // name="name"/>, honouring named arguments. Returns null when the
     // parameter is not supplied (an omitted optional argument defaults to
     // null far more often than not, so absence must never narrow).
-    private static ExpressionSyntax ArgumentFor(
+    private static ExpressionSyntax? ArgumentFor(
         InvocationExpressionSyntax invocation,
         IMethodSymbol method,
         string name)

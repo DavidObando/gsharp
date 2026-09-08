@@ -1075,11 +1075,20 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (targetExpr is DeclarationExpressionSyntax declaration)
                 {
-                    values.Add(this.LowerDeconstructionDeclaration(
+                    GExpression declaredValue = this.LowerDeconstructionDeclaration(
                         declaration.Designation,
                         tempRead,
                         forceRealTemps,
-                        statements));
+                        statements);
+                    if (declaredValue is not null)
+                    {
+                        values.Add(declaredValue);
+                    }
+                    else
+                    {
+                        values.Add(null);
+                    }
+
                     continue;
                 }
 
@@ -1108,7 +1117,8 @@ public sealed partial class CSharpToGSharpTranslator
             return values;
         }
 
-        private GExpression LowerDeconstructionDeclaration(
+#nullable enable annotations
+        private GExpression? LowerDeconstructionDeclaration(
             VariableDesignationSyntax designation,
             GExpression value,
             bool preserveValue,
@@ -1153,11 +1163,19 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                values.Add(this.LowerDeconstructionDeclaration(
+                GExpression declaredValue = this.LowerDeconstructionDeclaration(
                     parenthesized.Variables[i],
                     new IdentifierExpression(temps[i]),
                     preserveValue,
-                    statements));
+                    statements);
+                if (declaredValue is not null)
+                {
+                    values.Add(declaredValue);
+                }
+                else
+                {
+                    values.Add(null);
+                }
             }
 
             return preserveValue ? new TupleLiteralExpression(values) : null;

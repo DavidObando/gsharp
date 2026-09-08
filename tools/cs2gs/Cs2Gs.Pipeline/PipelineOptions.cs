@@ -30,7 +30,8 @@ public sealed class PipelineOptions
     /// the pipeline discovers <c>out/bin/&lt;Config&gt;/Compiler/gsc.dll</c> by
     /// walking up from the working directory.
     /// </summary>
-    public string GscPath { get; set; }
+#nullable enable annotations
+    public string? GscPath { get; set; }
 
     /// <summary>
     /// Gets or sets the explicit <c>gsgen.dll</c> path (issue #2215), forwarded
@@ -39,19 +40,19 @@ public sealed class PipelineOptions
     /// <c>out/bin/&lt;Config&gt;/Gsgen.Cli/gsgen.dll</c> the same way it
     /// discovers <see cref="GscPath"/>.
     /// </summary>
-    public string GsgenPath { get; set; }
+    public string? GsgenPath { get; set; }
 
     /// <summary>
     /// Gets or sets the destination repository in repository layout, or the
     /// runs-root directory in diagnostic layout.
     /// </summary>
-    public string OutputRoot { get; set; }
+    public string? OutputRoot { get; set; }
 
     /// <summary>
     /// Gets or sets the runs-root used for logs, triage records, reports, and
     /// build intermediates in repository layout. Ignored in diagnostic layout.
     /// </summary>
-    public string ArtifactRoot { get; set; }
+    public string? ArtifactRoot { get; set; }
 
     /// <summary>
     /// Gets or sets the output layout. Programmatic pipeline callers retain
@@ -60,7 +61,7 @@ public sealed class PipelineOptions
     public MigrationOutputLayout OutputLayout { get; set; } = MigrationOutputLayout.DiagnosticRun;
 
     /// <summary>Gets or sets the source directory being migrated.</summary>
-    public string SourceRoot { get; set; }
+    public string? SourceRoot { get; set; }
 
     /// <summary>
     /// Gets repository-relative app-id prefixes excluded from repository
@@ -114,28 +115,28 @@ public sealed class PipelineOptions
     /// reports green. <see langword="null"/> is treated as
     /// <see cref="TestParityAllowList.Empty"/> — every failure fails the app.
     /// </summary>
-    public TestParityAllowList TestParityAllowList { get; set; }
+    public TestParityAllowList? TestParityAllowList { get; set; }
 
     /// <summary>
     /// Gets or sets the canonical source-project to generated-project mapping
     /// established before migration starts.
     /// </summary>
-    internal IReadOnlyDictionary<string, string> GeneratedProjectPaths { get; set; }
+    internal IReadOnlyDictionary<string, string>? GeneratedProjectPaths { get; set; }
 
     /// <summary>Gets or sets the inventoried checked-in C# source paths.</summary>
-    internal IReadOnlyCollection<string> RepositorySourceFiles { get; set; }
+    internal IReadOnlyCollection<string>? RepositorySourceFiles { get; set; }
 
     /// <summary>Gets or sets repository source paths and their emitted G# text.</summary>
-    internal IDictionary<string, string> RepositoryTranslations { get; set; }
+    internal IDictionary<string, string>? RepositoryTranslations { get; set; }
 
     /// <summary>Gets or sets source projects loaded once for repository-wide analysis.</summary>
-    internal IReadOnlyDictionary<string, LoadedCSharpProject> RepositoryLoadedProjects { get; set; }
+    internal IReadOnlyDictionary<string, LoadedCSharpProject>? RepositoryLoadedProjects { get; set; }
 
     /// <summary>Gets or sets the pinned SDK moniker used by repository project transforms.</summary>
-    internal string RepositorySdkMoniker { get; set; }
+    internal string? RepositorySdkMoniker { get; set; }
 
     /// <summary>Gets or sets extra G# files required when one C# file declares multiple namespaces.</summary>
-    internal ISet<string> RepositoryAdditionalFiles { get; set; }
+    internal ISet<string>? RepositoryAdditionalFiles { get; set; }
 
     /// <summary>
     /// Gets or sets the absolute project paths that another app in this run
@@ -146,5 +147,5 @@ public sealed class PipelineOptions
     /// flattening would erase it from the migrated assembly (GS0157 at every
     /// cross-project use site).
     /// </summary>
-    internal IReadOnlyCollection<string> ProjectsReferencedByOtherApps { get; set; }
+    internal IReadOnlyCollection<string>? ProjectsReferencedByOtherApps { get; set; }
 }

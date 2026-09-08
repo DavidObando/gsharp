@@ -1242,7 +1242,8 @@ public sealed class SdkCompileRunner
     private static void AppendDeclaredItems(StringBuilder sb, IReadOnlyList<DeclaredProjectItem> items)
     {
         foreach (IGrouping<string, DeclaredProjectItem> group in
-            (items ?? Array.Empty<DeclaredProjectItem>()).GroupBy(item => item.ItemGroupCondition))
+            (items ?? Array.Empty<DeclaredProjectItem>())
+                .GroupBy(item => item.ItemGroupCondition ?? string.Empty))
         {
             sb.Append('\n');
             sb.Append("  <ItemGroup");
