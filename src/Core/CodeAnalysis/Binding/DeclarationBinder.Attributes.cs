@@ -918,7 +918,8 @@ internal sealed partial class DeclarationBinder
                 if (bindTypeOfExpression(typeOfSyntax) is BoundTypeOfExpression bt &&
                     bt.OperandType is { } operandType &&
                     (operandType.ClrType is not null ||
-                     operandType is StructSymbol or InterfaceSymbol or EnumSymbol or DelegateTypeSymbol))
+                     operandType is StructSymbol or InterfaceSymbol or EnumSymbol or DelegateTypeSymbol) &&
+                    CanSerializeAttributeTypeOperand(operandType))
                 {
                     // Issue #4073: a constructed generic over a same-compilation
                     // type ALWAYS has a non-null `ClrType` — the erased close is
@@ -1031,6 +1032,36 @@ internal sealed partial class DeclarationBinder
     /// <returns><c>true</c> when the CLR projection is a surrogate.</returns>
     private static bool AttributeTypeArgumentIsErased(TypeSymbol type)
         => type.ClrType is null || TypeSymbol.ContainsSameCompilationUserType(type);
+
+    /// <summary>
+    /// Issue #4095: returns <see langword="true"/> when a <c>typeof</c> operand
+    /// names a type the custom-attribute blob can describe, so an operand whose
+    /// identity still depends on an in-scope type parameter is rejected as a
+    /// non-constant argument (<c>GS0202</c>) rather than approximated.
+    /// </summary>
+    /// <remarks>
+    /// <para>Once the serializer writes the ENCLOSING argument vector of a
+    /// nested type, an operand such as <c>Outer[T].Inner</c> inside a generic
+    /// declaration would serialize the type parameter itself, and no such name
+    /// resolves. Before #4095 the same operand silently took the CLR path and
+    /// wrote the ERASED close, which is a different closed type from the one the
+    /// source names — a wrong answer rather than a rejected one.</para>
+    /// <para>An UNBOUND generic DEFINITION stays legal and is admitted before
+    /// the type-parameter test runs: <c>typeof(Box[_])</c> and
+    /// <c>typeof(Outer[_].Inner)</c> denote the open definition, which
+    /// ECMA-335 II.23.3 describes and reflection reifies. Their type parameters
+    /// are the definition's own, not an argument borrowed from an enclosing
+    /// scope.</para>
+    /// <para>Nothing else is filtered here. Every shape the serializer already
+    /// described before #4095 — a slice, an array, a nilable, a construction
+    /// over a same-compilation type — keeps the path it had, which is what the
+    /// <c>Issue4073GenericAttributeTypeArgumentTests</c> rows pin.</para>
+    /// </remarks>
+    /// <param name="type">The bound <c>typeof</c> operand.</param>
+    /// <returns><c>true</c> when the operand can be serialized.</returns>
+    private static bool CanSerializeAttributeTypeOperand(TypeSymbol type)
+        => TypeSymbol.IsUnboundGenericDefinition(type)
+            || !TypeSymbol.ContainsTypeParameter(type);
 
     private bool TryBindAttributeArrayArgument(
         ArrayCreationExpressionSyntax syntax,

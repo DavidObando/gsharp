@@ -1411,9 +1411,24 @@ internal sealed class CustomAttributeEncoder
                     (openDefinition.FullName ?? openDefinition.Name) + this.BuildArgumentList(imported.TypeArguments),
                     openDefinition.Assembly.FullName ?? openDefinition.Assembly.GetName().Name ?? this.CompilationAssemblyName());
 
-            case StructSymbol { ClrType: null } structType when !structType.TypeArguments.IsDefaultOrEmpty:
+            // Issue #4095: a type nested in a GENERIC OUTER carries the
+            // encloser's vector on `EnclosingTypeArguments` and leaves
+            // `TypeArguments` holding only what the nested level declares, so
+            // matching on `TypeArguments` alone missed `Outer[Status].Inner`
+            // entirely and it fell through to the bare open name
+            // `P.Outer`1+Inner`. That name RESOLVES — to `Outer<T>+Inner` —
+            // so nothing threw and the attribute simply carried a different
+            // type from the one the source wrote. The instantiation the CLR
+            // wants is the FLATTENED enclosing-then-own vector, matching the
+            // GenericParam rows `TypeDefEmitter` copies down each nesting
+            // level (ADR-0087 §3 R1).
+            case StructSymbol { ClrType: null } structType
+                when !structType.EnclosingTypeArguments.IsDefaultOrEmpty
+                    || !structType.TypeArguments.IsDefaultOrEmpty:
                 return (
-                    GetMetadataTypeName(structType.Definition) + this.BuildArgumentList(structType.TypeArguments),
+                    GetMetadataTypeName(structType.Definition)
+                        + this.BuildArgumentList(
+                            Flatten(structType.EnclosingTypeArguments, structType.TypeArguments)),
                     this.CompilationAssemblyName());
 
             case InterfaceSymbol { ClrType: null } interfaceType when !interfaceType.TypeArguments.IsDefaultOrEmpty:
@@ -1436,6 +1451,20 @@ internal sealed class CustomAttributeEncoder
                 return (
                     GetMetadataTypeName(delegateType.Definition ?? delegateType)
                         + this.BuildArgumentList(delegateType.TypeArguments),
+                    this.CompilationAssemblyName());
+
+            // Issue #4095, review feedback: a nested ENUM reaches emit through
+            // `EnumSymbol.ConstructNested`, which records the same flattened
+            // enclosing vector a nested struct gets. An enum declares no
+            // parameters of its own, so the vector IS
+            // `EnclosingTypeArguments`. Without this arm
+            // `typeof(Outer[Status].Kind)` fell into the scalar group below and
+            // wrote the open `P.Outer`1+Kind`.
+            case EnumSymbol { ClrType: null } enumType
+                when !enumType.EnclosingTypeArguments.IsDefaultOrEmpty:
+                return (
+                    GetMetadataTypeName(enumType.Definition ?? enumType)
+                        + this.BuildArgumentList(enumType.EnclosingTypeArguments),
                     this.CompilationAssemblyName());
 
             case StructSymbol { ClrType: null }:
@@ -1508,6 +1537,22 @@ internal sealed class CustomAttributeEncoder
     private static (string Name, string Assembly) AppendNameSuffix((string Name, string Assembly) parts, string suffix)
         => (parts.Name + suffix, parts.Assembly);
 
+    /// <summary>
+    /// Issue #4095: joins a nested type's enclosing vector to its own, in the
+    /// order the emitted GenericParam rows declare them, tolerating either side
+    /// being an uninitialized <see cref="ImmutableArray{T}"/>.
+    /// </summary>
+    /// <param name="enclosing">Arguments supplied by the containing types.</param>
+    /// <param name="own">Arguments declared by the nested type itself.</param>
+    /// <returns>The flattened instantiation vector.</returns>
+    private static ImmutableArray<TypeSymbol> Flatten(
+        ImmutableArray<TypeSymbol> enclosing,
+        ImmutableArray<TypeSymbol> own)
+    {
+        var head = enclosing.IsDefault ? ImmutableArray<TypeSymbol>.Empty : enclosing;
+        return own.IsDefaultOrEmpty ? head : head.AddRange(own);
+    }
+
     internal static string GetMetadataTypeName(TypeSymbol type)
     {
         string packageName;
@@ -1518,7 +1563,20 @@ internal sealed class CustomAttributeEncoder
             case StructSymbol structType:
                 packageName = structType.PackageName;
                 containingType = structType.ContainingType;
-                arity = structType.TypeParameters.Length;
+
+                // ADR-0087 §3 R1 / issue #2916: a nested TypeDef's backtick
+                // suffix counts only the parameters DECLARED at that level,
+                // while its GenericParam rows carry the flattened
+                // enclosing-plus-own vector that `TypeParameters` holds. Issue
+                // #4095: reading the flattened length here named
+                // `Outer[Status].Inner` as `P.Outer`1+Inner`1`, which the
+                // emitted metadata does not declare, so the attribute could no
+                // longer be decoded at all. This is the same expression
+                // `TypeDefEmitter.EmitStructTypeDefinition` uses to choose the
+                // name, so the two cannot drift again.
+                arity = structType.Declaration == null
+                    ? structType.TypeParameters.Length
+                    : structType.Declaration.TypeParameterList?.Parameters.Count ?? 0;
                 break;
             case InterfaceSymbol interfaceType:
                 packageName = interfaceType.PackageName;
