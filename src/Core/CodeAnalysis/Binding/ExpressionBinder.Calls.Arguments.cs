@@ -3801,11 +3801,19 @@ internal sealed partial class ExpressionBinder
             : resolution.ParameterMapping;
         if (resolution.IsExpanded)
         {
+            var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameters.Length - 1);
+            var symbolicParamsElement = symbolicParamsType is SliceTypeSymbol symbolicParams
+                ? symbolicParams.ElementType
+                : null;
             arguments = overloads.ExpandParamsArguments(
                 arguments,
                 parameters,
                 ce,
-                parameterMapping: resolution.ParameterMapping);
+                parameterMapping: resolution.ParameterMapping,
+                paramsElementTypeOverride: symbolicParamsElement);
         }
 
         // Issue #1852: re-lower each interpolated-string argument whose

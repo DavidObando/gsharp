@@ -4208,11 +4208,19 @@ internal sealed partial class ExpressionBinder
             : resolution.ParameterMapping;
         if (resolution.IsExpanded)
         {
+            var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameters.Length - 1);
+            var symbolicParamsElement = symbolicParamsType is SliceTypeSymbol symbolicParams
+                ? symbolicParams.ElementType
+                : null;
             arguments = overloads.ExpandParamsArguments(
                 arguments,
                 parameters,
                 callSyntax,
-                parameterMapping: resolution.ParameterMapping);
+                parameterMapping: resolution.ParameterMapping,
+                paramsElementTypeOverride: symbolicParamsElement);
         }
 
         arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, downstreamMapping);

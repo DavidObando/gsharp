@@ -236,11 +236,15 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         public interface IConsumer<T>
         {
             int Consume(T value);
+
+            int ConsumeMany(params T[] values);
         }
 
         public interface IStaticConsumer<T>
         {
             static abstract int Consume(T value);
+
+            static abstract int ConsumeMany(params T[] values);
         }
 
         public interface ILeft
@@ -538,6 +542,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
                 return target.Consume(value)
             }
 
+            func CallGenericConsumerParams[T IConsumer[Celsius]](target T, first Celsius, second Celsius) int32 {
+                return target.ConsumeMany(first, second)
+            }
+
             func CallStaticConstrained[T IStaticConstrainedTarget[T]](value Celsius) float64 {
                 return T.ConstrainedStaticValue(value)
             }
@@ -552,6 +560,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
 
             func CallStaticGenericConsumer[T IStaticConsumer[Celsius]](value Celsius) int32 {
                 return T.Consume(value)
+            }
+
+            func CallStaticGenericConsumerParams[T IStaticConsumer[Celsius]](first Celsius, second Celsius) int32 {
+                return T.ConsumeMany(first, second)
             }
 
             Console.WriteLine(CallConstrained(
@@ -584,7 +596,7 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             Body,
             new[] { "5.75", "4", "107", "LocalRankSource", "DisposableValue", "6.25", "6", "6.5" },
             IlVerifier.KnownIssues.StaticVirtualInterface,
-            @"<Program>\.(CallStaticConstrained(Params|Named)?|CallStaticGenericConsumer)$");
+            @"<Program>\.(CallStaticConstrained(Params|Named)?|CallStaticGenericConsumer(Params)?)$");
     }
 
     [Theory]
