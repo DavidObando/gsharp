@@ -1388,6 +1388,7 @@ internal sealed partial class ExpressionBinder
         // matches the single argument by assignability).
         // Issue #209: when the target carries inner-position nullable flags,
         // use them to type the element correctly (e.g., `list[0]` on `List<string?>` → `string?`).
+        var clrIndexerOutcome = ClrIndexerResolutionOutcome.NoneFound;
         if (target.Type is TypeParameterSymbol tpIndexTarget)
         {
             var clrIndexConstraint = tpIndexTarget.ClrInterfaceConstraint;
@@ -1395,12 +1396,13 @@ internal sealed partial class ExpressionBinder
             if (clrIndexConstraint != null && clrConstraintType != null)
             {
                 var idxArgs = ImmutableArray.Create(BoundIndexArg());
-                if (this.memberLookup.TryResolveClrIndexer(
+                var outcome = this.memberLookup.TryResolveClrIndexer(
                     clrIndexConstraint,
                     clrConstraintType,
                     idxArgs,
                     out var idxProp,
-                    out var resolvedIdxArgs))
+                    out var resolvedIdxArgs);
+                if (outcome == ClrIndexerResolutionOutcome.Resolved)
                 {
                     if (ClrMemberVisibility.GetVisibleGetter(idxProp!, CanAccessInternalsOf(idxProp!.DeclaringType)) == null)
                     {
@@ -1427,6 +1429,8 @@ internal sealed partial class ExpressionBinder
                             tpIndexTarget,
                             declaringInterface));
                 }
+
+                clrIndexerOutcome = outcome;
             }
         }
 
@@ -1435,7 +1439,13 @@ internal sealed partial class ExpressionBinder
         if (annotIdx != null && clrAnnotIdx != null)
         {
             var idxArgsAnnot = ImmutableArray.Create(BoundIndexArg());
-            if (this.memberLookup.TryResolveClrIndexer(target.Type, clrAnnotIdx, idxArgsAnnot, out var idxPropAnnot, out var resolvedIdxArgsAnnot))
+            var outcome = this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                clrAnnotIdx,
+                idxArgsAnnot,
+                out var idxPropAnnot,
+                out var resolvedIdxArgsAnnot);
+            if (outcome == ClrIndexerResolutionOutcome.Resolved)
             {
                 // A successful CLR indexer resolution establishes a non-null property.
                 if (ClrMemberVisibility.GetVisibleGetter(idxPropAnnot!, CanAccessInternalsOf(idxPropAnnot!.DeclaringType)) == null)
@@ -1452,6 +1462,8 @@ internal sealed partial class ExpressionBinder
                     indexSyntax.Location);
                 return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxPropAnnot, convertedIdxArgsAnnot, elemTypeAnnot));
             }
+
+            clrIndexerOutcome = outcome;
         }
 
         var clrTarget = target.Type.ClrType;
@@ -1459,7 +1471,13 @@ internal sealed partial class ExpressionBinder
             && clrTarget != null)
         {
             var idxArgs = ImmutableArray.Create(BoundIndexArg());
-            if (this.memberLookup.TryResolveClrIndexer(target.Type, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
+            var outcome = this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                clrTarget,
+                idxArgs,
+                out var idxProp,
+                out var resolvedIdxArgs);
+            if (outcome == ClrIndexerResolutionOutcome.Resolved)
             {
                 // A successful CLR indexer resolution establishes a non-null property.
                 if (ClrMemberVisibility.GetVisibleGetter(idxProp!, CanAccessInternalsOf(idxProp!.DeclaringType)) == null)
@@ -1478,6 +1496,8 @@ internal sealed partial class ExpressionBinder
                     indexSyntax.Location);
                 return ConversionClassifier.AutoDereferenceRefReturn(new BoundClrIndexExpression(null, target, idxProp, convertedIdxArgs, elementType));
             }
+
+            clrIndexerOutcome = outcome;
         }
 
         // ADR-0118 / issue #944: index access on a user-defined type that
@@ -1542,7 +1562,8 @@ internal sealed partial class ExpressionBinder
                 elementType);
         }
 
-        if (target.Type != TypeSymbol.Error)
+        if (!ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location)
+            && target.Type != TypeSymbol.Error)
         {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
         }
@@ -2132,6 +2153,7 @@ internal sealed partial class ExpressionBinder
         // Phase 4 exit: CLR indexer write on an imported reference type
         // (e.g. `d["k"] = 1` on Dictionary[string, int]).
         // Issue #209: honour inner-position nullable flags when present.
+        var clrIndexerOutcome = ClrIndexerResolutionOutcome.NoneFound;
         if (targetType is TypeParameterSymbol tpIndexTarget)
         {
             var clrIndexConstraint = tpIndexTarget.ClrInterfaceConstraint;
@@ -2139,12 +2161,13 @@ internal sealed partial class ExpressionBinder
             if (clrIndexConstraint != null && clrConstraintType != null)
             {
                 var idxArgs = ImmutableArray.Create(BindIndexValue());
-                if (this.memberLookup.TryResolveClrIndexer(
+                var outcome = this.memberLookup.TryResolveClrIndexer(
                     clrIndexConstraint,
                     clrConstraintType,
                     idxArgs,
                     out var idxProp,
-                    out var resolvedIdxArgs))
+                    out var resolvedIdxArgs);
+                if (outcome == ClrIndexerResolutionOutcome.Resolved)
                 {
                     if (ClrMemberVisibility.GetVisibleSetter(idxProp!, CanAccessInternalsOf(idxProp!.DeclaringType)) == null)
                     {
@@ -2170,12 +2193,20 @@ internal sealed partial class ExpressionBinder
                         tpIndexTarget,
                         declaringInterface);
                 }
+
+                clrIndexerOutcome = outcome;
             }
         }
         else if (targetType is NullabilityAnnotatedTypeSymbol annotWr && targetType.ClrType is System.Type clrAnnotWr)
         {
             var idxArgsAnnotWr = ImmutableArray.Create(BindIndexValue());
-            if (this.memberLookup.TryResolveClrIndexer(targetType, clrAnnotWr, idxArgsAnnotWr, out var idxPropAnnotWr, out var resolvedIdxArgsAnnotWr))
+            var outcome = this.memberLookup.TryResolveClrIndexer(
+                targetType,
+                clrAnnotWr,
+                idxArgsAnnotWr,
+                out var idxPropAnnotWr,
+                out var resolvedIdxArgsAnnotWr);
+            if (outcome == ClrIndexerResolutionOutcome.Resolved)
             {
                 // A successful CLR indexer resolution establishes a non-null property.
                 if (ClrMemberVisibility.GetVisibleSetter(idxPropAnnotWr!, CanAccessInternalsOf(idxPropAnnotWr!.DeclaringType)) == null)
@@ -2199,11 +2230,19 @@ internal sealed partial class ExpressionBinder
                     constrainedReceiverTypeParameter: null,
                     constrainedInterfaceType: null);
             }
+
+            clrIndexerOutcome = outcome;
         }
         else if ((targetType is ImportedTypeSymbol || targetType is StructSymbol) && targetType.ClrType is System.Type clrTarget)
         {
             var idxArgs = ImmutableArray.Create(BindIndexValue());
-            if (this.memberLookup.TryResolveClrIndexer(targetType, clrTarget, idxArgs, out var idxProp, out var resolvedIdxArgs))
+            var outcome = this.memberLookup.TryResolveClrIndexer(
+                targetType,
+                clrTarget,
+                idxArgs,
+                out var idxProp,
+                out var resolvedIdxArgs);
+            if (outcome == ClrIndexerResolutionOutcome.Resolved)
             {
                 // A successful CLR indexer resolution establishes a non-null property.
                 var convertedIdxArgs = BindClrIndexerArguments(
@@ -2272,6 +2311,8 @@ internal sealed partial class ExpressionBinder
                     constrainedReceiverTypeParameter: null,
                     constrainedInterfaceType: null);
             }
+
+            clrIndexerOutcome = outcome;
         }
 
         // ADR-0118 / issue #944: index assignment on a user-defined type that
@@ -2335,12 +2376,30 @@ internal sealed partial class ExpressionBinder
                 elementType);
         }
 
-        if (targetType != TypeSymbol.Error)
+        if (!ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location)
+            && targetType != TypeSymbol.Error)
         {
             Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
         }
 
         return new BoundErrorExpression(null);
+    }
+
+    private bool ReportClrIndexerResolutionFailure(
+        ClrIndexerResolutionOutcome outcome,
+        TextLocation location)
+    {
+        switch (outcome)
+        {
+            case ClrIndexerResolutionOutcome.NoneApplicable:
+                Diagnostics.ReportNoApplicableOverload(location, "this[]");
+                return true;
+            case ClrIndexerResolutionOutcome.Ambiguous:
+                Diagnostics.ReportAmbiguousOverloadResolution(location, "this[]");
+                return true;
+            default:
+                return false;
+        }
     }
 
     private ImmutableArray<BoundExpression> BindClrIndexerArguments(
