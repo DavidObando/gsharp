@@ -265,9 +265,16 @@ public sealed class TestParityStage : IMigrationStage
     /// </summary>
     /// <param name="context">The stage context.</param>
     /// <param name="result">The captured <c>dotnet test</c> result.</param>
+    /// <param name="budget">
+    /// Issue #3501: the budget the run was ACTUALLY given, threaded through
+    /// from <see cref="RunMirroredTestProject"/> so the timeout diagnostic
+    /// quotes the number the killed process was held to rather than a second
+    /// opinion computed after the fact. <see langword="null"/> (the shape unit
+    /// tests use) recomputes it from the same inputs, which is the same value.
+    /// </param>
     /// <returns>The stage outcome.</returns>
     internal StageOutcome EvaluateMirroredTestRun(
-        StageExecutionContext context, ProcessRunResult result)
+        StageExecutionContext context, ProcessRunResult result, TimeSpan? budget = null)
     {
         this.Note(context, result.Output ?? string.Empty);
         TestParityAllowList allowList = context.Options.TestParityAllowList ?? TestParityAllowList.Empty;
@@ -319,7 +326,12 @@ public sealed class TestParityStage : IMigrationStage
         // the timeout for what it is, ahead of both other classifications.
         if (result.TimedOut)
         {
-            TimeSpan timeout = SdkCompileRunner.MirroredTestRunTimeoutFor(context.App.Id);
+            // Issue #3501: the budget is per-app now, so the diagnostic must
+            // name THIS app's budget. #3931's whole point was that the message
+            // says which number was exceeded; a message quoting a global
+            // constant the run was never held to would be worse than the
+            // nameless timeout it replaced.
+            TimeSpan timeout = budget ?? MirroredTestRunBudgetFor(context);
             return StageOutcome.Failed(new[]
             {
                 context.Triage.TestParityLibraryTestRunTimedOut(
@@ -509,17 +521,38 @@ public sealed class TestParityStage : IMigrationStage
         !string.IsNullOrEmpty(context.App.TestsBaselinePath) &&
         File.Exists(context.App.TestsBaselinePath);
 
+    /// <summary>
+    /// Issue #3501: this app's mirrored-test budget, derived from the number of
+    /// <c>[Fact]</c> methods its C# original declares. A single expression so
+    /// the budget the run is given and the budget a killed run reports can
+    /// never be computed two different ways.
+    /// </summary>
+    /// <param name="context">The stage context.</param>
+    /// <returns>The wall-clock budget for this app's mirrored test run.</returns>
+    private static TimeSpan MirroredTestRunBudgetFor(StageExecutionContext context) =>
+        SdkCompileRunner.MirroredTestRunTimeoutFor(CountCSharpFactMethods(context));
+
     private StageOutcome RunMirroredTestProject(StageExecutionContext context)
     {
         string generatedProject =
             context.Options.GeneratedProjectPaths[Path.GetFullPath(context.App.ProjectPath)];
+
+        // Issue #3501: record the sizing as well as the verdict. A budget that
+        // is no longer a constant has to be visible in the run log, or the next
+        // reader of a timeout cannot tell whether the app was starved or stuck.
+        int declaredTests = CountCSharpFactMethods(context);
+        TimeSpan budget = SdkCompileRunner.MirroredTestRunTimeoutFor(declaredTests);
+        string budgetNote = $"mirrored test run budget: {budget} for {declaredTests} declared " +
+            "[Fact] method(s) in the C# original (#3501).";
+        this.Note(context, budgetNote);
+
         ProcessRunResult result = SdkCompileRunner.TestMirroredProject(
             generatedProject,
             context.ArtifactDir,
             context.Options.Config,
             context.Options.GeneratedProjectPaths,
-            SdkCompileRunner.MirroredTestRunTimeoutFor(context.App.Id));
-        return this.EvaluateMirroredTestRun(context, result);
+            budget);
+        return this.EvaluateMirroredTestRun(context, result, budget);
     }
 
     private static bool IsTestProject(string projectPath)
