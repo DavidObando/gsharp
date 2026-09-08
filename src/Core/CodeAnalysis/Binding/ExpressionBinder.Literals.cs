@@ -3016,17 +3016,25 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<int> parameterMapping = default,
         bool isExpanded = false)
     {
-        return ApplyInterpolatedStringHandlers(parameters, arguments, receiver, location, parameterMapping, isExpanded, out _, out _);
+        return ApplyInterpolatedStringHandlers(
+            parameters,
+            arguments,
+            receiver,
+            location,
+            parameterMapping,
+            isExpanded,
+            out _,
+            out _);
     }
 
     /// <summary>
-    /// Issue #377 sub-items 1 + 2: extended overload that, in addition to
-    /// rewriting handler-targeted interpolations, captures forwarded sibling
-    /// arguments and the receiver into local temps so they are evaluated
-    /// exactly once (matches C# §11.18.1). Returns the captured prelude
-    /// statements through <paramref name="preludeStatements"/> and the
-    /// (possibly substituted) receiver through <paramref name="updatedReceiver"/>.
-    /// Callers wrap the produced call expression in a
+    /// Issue #377 sub-items 1 + 2: extended overload that rewrites
+    /// handler-targeted interpolations and captures a separate instance
+    /// receiver exactly once (matches C# §11.18.1). Source arguments and
+    /// synthesized extension receivers are captured later in lexical order.
+    /// Returns receiver capture statements through
+    /// <paramref name="preludeStatements"/> and the substituted receiver
+    /// through <paramref name="updatedReceiver"/>. Callers wrap the call in a
     /// <see cref="BoundBlockExpression"/> when the prelude is non-empty.
     /// </summary>
     private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
@@ -3124,16 +3132,16 @@ internal sealed partial class ExpressionBinder
             return arguments;
         }
 
-        // Pass 2 (issue #377 sub-item 2): capture each forwarded source into
-        // a shared local so the parent argument slot AND the handler
-        // constructor reuse the same value. Side-effect-free expressions
-        // (literals, locals, parameters) are not captured.
+        // Pass 2 (issue #377 sub-item 2): capture a separate instance
+        // receiver. Forwarded call arguments, including a synthesized
+        // extension receiver, are captured later with all source arguments
+        // in lexical order.
         argBuilder = arguments.ToBuilder();
         var preludeBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
         var capturedReceiver = receiver;
         var receiverCaptured = false;
 
-        // sourceIndex -> captured BoundVariableExpression. -1 represents the receiver.
+        // -1 represents a separate instance receiver.
         var captures = new System.Collections.Generic.Dictionary<int, BoundExpression>();
 
         foreach (var (_, _, handler) in handlerSlots)
@@ -3141,50 +3149,22 @@ internal sealed partial class ExpressionBinder
             for (var k = 0; k < handler.ForwardedSourceIndices.Length; k++)
             {
                 var srcIndex = handler.ForwardedSourceIndices[k];
-                if (srcIndex < 0)
+                if (srcIndex >= 0 || receiverCaptured)
                 {
-                    if (receiverCaptured)
-                    {
-                        continue;
-                    }
+                    continue;
+                }
 
-                    if (receiver == null || IsSideEffectFreeForHandlerCapture(receiver))
-                    {
-                        receiverCaptured = true;
-                        continue;
-                    }
-
-                    var (recvLocal, recvDecl) = CreateHandlerForwardCapture(receiver, "$handlerRecv", location);
-                    preludeBuilder.Add(recvDecl);
-                    capturedReceiver = recvLocal;
-                    captures[-1] = recvLocal;
+                if (receiver == null || IsSideEffectFreeForHandlerCapture(receiver))
+                {
                     receiverCaptured = true;
+                    continue;
                 }
-                else
-                {
-                    // Expanded named calls capture every source argument
-                    // together later, preserving lexical order.
-                    if (isExpanded && !parameterMapping.IsDefaultOrEmpty)
-                    {
-                        continue;
-                    }
 
-                    if (captures.ContainsKey(srcIndex))
-                    {
-                        continue;
-                    }
-
-                    var srcArg = argBuilder[srcIndex];
-                    if (IsSideEffectFreeForHandlerCapture(srcArg))
-                    {
-                        continue;
-                    }
-
-                    var (local, decl) = CreateHandlerForwardCapture(srcArg, "$handlerArg" + srcIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), location);
-                    preludeBuilder.Add(decl);
-                    argBuilder[srcIndex] = local;
-                    captures[srcIndex] = local;
-                }
+                var (recvLocal, recvDecl) = CreateHandlerForwardCapture(receiver, "$handlerRecv", location);
+                preludeBuilder.Add(recvDecl);
+                capturedReceiver = recvLocal;
+                captures[-1] = recvLocal;
+                receiverCaptured = true;
             }
         }
 

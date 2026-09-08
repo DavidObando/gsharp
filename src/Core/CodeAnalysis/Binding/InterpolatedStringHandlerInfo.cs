@@ -97,6 +97,17 @@ public sealed class InterpolatedStringHandlerInfo
     public InterpolatedStringHandlerInfo WithForwardedArguments(ImmutableArray<BoundExpression> forwardedArguments)
         => new(HandlerClrType, HandlerType, Constructor, forwardedArguments, HasTrailingOutBool, ForwardedSourceIndices, HandlerRefKind);
 
+    internal InterpolatedStringHandlerInfo WithCapturedForwardedArguments(
+        ImmutableArray<BoundExpression> forwardedArguments)
+        => new(
+            HandlerClrType,
+            HandlerType,
+            Constructor,
+            forwardedArguments,
+            HasTrailingOutBool,
+            ImmutableArray<int>.Empty,
+            HandlerRefKind);
+
     /// <summary>
     /// Determines whether <paramref name="type"/> is attributed
     /// <c>[InterpolatedStringHandler]</c>. Uses <see cref="CustomAttributeData"/>

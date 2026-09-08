@@ -195,6 +195,15 @@ public class ImportedMemberMatrixTests
                         builder.Append(':');
                     }
 
+                    public ForwardingMatrixHandler(
+                        int literalLength,
+                        int formattedCount,
+                        InstanceOverloads receiver,
+                        string prefix)
+                        : this(literalLength, formattedCount, prefix)
+                    {
+                    }
+
                     public void AppendLiteral(string value)
                         => builder.Append(value);
 
@@ -275,6 +284,15 @@ public class ImportedMemberMatrixTests
                     T value,
                     params System.Func<T>[] factories)
                     => typeof(T).Name;
+
+                public static string ForwardedHandlerExtension(
+                    this InstanceOverloads receiver,
+                    int first,
+                    string prefix,
+                    [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument("receiver", "prefix")]
+                    MethodGroupOutputInference.ForwardingMatrixHandler handler,
+                    params object[] rest)
+                    => first + ":" + handler + ":" + string.Join(",", rest);
             }
 
             public static class VarianceOverloads
@@ -561,6 +579,11 @@ public class ImportedMemberMatrixTests
                 return 3
             }
 
+            func extensionHandlerReceiver() InstanceOverloads {
+                Console.Write("receiver|")
+                return InstanceOverloads()
+            }
+
             func throughExpandedStaticMethodGroup() string {
                 return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
             }
@@ -708,6 +731,21 @@ public class ImportedMemberMatrixTests
                 prefix: forwardedHandlerArgument(),
                 handler: "hole=${handlerHoleArgument()}",
                 rest: "tail"))
+            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
+                nonForwardedHandlerArgument(),
+                forwardedHandlerArgument(),
+                "hole=${handlerHoleArgument()}",
+                "tail"))
+            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
+                nonForwardedHandlerArgument(),
+                forwardedHandlerArgument(),
+                "hole=${handlerHoleArgument()}",
+                []object{"tail"}))
+            Console.WriteLine(extensionHandlerReceiver().ForwardedHandlerExtension(
+                rest: "tail",
+                first: nonForwardedHandlerArgument(),
+                prefix: forwardedHandlerArgument(),
+                handler: "hole=${handlerHoleArgument()}"))
             let refValues = []int32{2}
             Console.WriteLine(MethodGroupOutputInference.RefEvaluationOrder(
                 items: firstExpandedNamedArgument(),
@@ -764,6 +802,9 @@ public class ImportedMemberMatrixTests
                 + $"3:first=7,second=8{Environment.NewLine}"
                 + $"first|second|2:named=first{Environment.NewLine}"
                 + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
+                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
+                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
+                + $"receiver|first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
                 + $"first|ref|12:first{Environment.NewLine}12{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
