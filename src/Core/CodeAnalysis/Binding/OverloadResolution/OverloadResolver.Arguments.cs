@@ -37,6 +37,7 @@ internal sealed partial class OverloadResolver
     /// <param name="receiverArgCount">The number of leading argument slots reserved for a synthesised receiver (0 for plain calls, 1 for imported extension calls).</param>
     /// <param name="parameterMapping">Issue #506 follow-up: when non-default, the source-order mapping from each input argument to its parameter slot, as produced by overload resolution for calls combining named arguments with expanded <c>params</c> form. Causes the expander to emit arguments already in parameter order with optional slots filled by their defaults.</param>
     /// <param name="symbolicMethodTypeArgs">The real symbolic method type arguments when reflection used erased placeholders to close the selected generic method.</param>
+    /// <param name="paramsElementTypeOverride">The reified params element type when a constrained generic receiver's reflected array element is erased.</param>
     /// <returns>An argument list of length <paramref name="parameters"/>.Length whose final element is the packed array.</returns>
     public ImmutableArray<BoundExpression> ExpandParamsArguments(
         ImmutableArray<BoundExpression> arguments,
@@ -44,14 +45,15 @@ internal sealed partial class OverloadResolver
         CallExpressionSyntax callSyntax,
         int receiverArgCount = 0,
         ImmutableArray<int> parameterMapping = default,
-        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default)
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
+        TypeSymbol? paramsElementTypeOverride = null)
     {
         var paramsIndex = parameters.Length - 1;
         var paramArrayType = parameters[paramsIndex].ParameterType;
         var elementClrType = paramArrayType.GetElementType();
-        var elementTypeSymbol = elementClrType == null
+        var elementTypeSymbol = paramsElementTypeOverride ?? (elementClrType == null
             ? TypeSymbol.Object
-            : GetParamsElementTypeSymbol(parameters[paramsIndex], elementClrType);
+            : GetParamsElementTypeSymbol(parameters[paramsIndex], elementClrType));
         if (!symbolicMethodTypeArgs.IsDefaultOrEmpty
             && parameters[paramsIndex].Member is MethodInfo method
             && method.IsGenericMethod)
@@ -193,7 +195,14 @@ internal sealed partial class OverloadResolver
             return arg;
         }
 
-        if (Conversion.Classify(arg.Type, elementTypeSymbol).Exists)
+        var conversion = Conversion.Classify(arg.Type, elementTypeSymbol);
+        if (conversion.IsExplicit
+            && conversions.TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var implicitArg))
+        {
+            return implicitArg;
+        }
+
+        if (conversion.Exists)
         {
             var conversionSyntaxIndex = sourceIndex - receiverArgCount;
             TextLocation location;

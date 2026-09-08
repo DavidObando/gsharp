@@ -4131,10 +4131,20 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        if (!overloads.TryAnalyzeCallArgumentLayout(
+                callSyntax.Arguments,
+                out _,
+                out var argumentNames))
+        {
+            result = new BoundErrorExpression(callSyntax);
+            return true;
+        }
+
         var boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(callSyntax.Arguments.Count);
         for (var i = 0; i < callSyntax.Arguments.Count; i++)
         {
-            boundArgs.Add(BindExpression(callSyntax.Arguments[i]));
+            boundArgs.Add(BindExpression(
+                OverloadResolver.UnwrapNamedArgumentValue(callSyntax.Arguments[i])));
         }
 
         var arguments = boundArgs.MoveToImmutable();
@@ -4160,13 +4170,25 @@ internal sealed partial class ExpressionBinder
             null,
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
-            null,
+            argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverload(
+                callSyntax.Location,
+                methodName,
+                resolution.Ambiguous.Length,
+                resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+            result = new BoundErrorExpression(callSyntax);
+            return true;
+        }
+
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
             || resolution.Best is not { } method)
         {
@@ -4181,9 +4203,35 @@ internal sealed partial class ExpressionBinder
         var returnType = MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
         var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(constraintType, method);
 
-        arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, resolution.ParameterMapping);
+        var downstreamMapping = resolution.IsExpanded
+            ? default
+            : resolution.ParameterMapping;
+        if (resolution.IsExpanded)
+        {
+            var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameters.Length - 1);
+            var symbolicParamsElement = symbolicParamsType is SliceTypeSymbol symbolicParams
+                ? symbolicParams.ElementType
+                : null;
+            arguments = overloads.ExpandParamsArguments(
+                arguments,
+                parameters,
+                callSyntax,
+                parameterMapping: resolution.ParameterMapping,
+                paramsElementTypeOverride: symbolicParamsElement);
+        }
 
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
+        arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, downstreamMapping);
+        arguments = ApplySymbolicClrArgumentConversions(
+            arguments,
+            parameters,
+            downstreamMapping,
+            method,
+            constraintType);
+
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundConstrainedStaticCallExpression(

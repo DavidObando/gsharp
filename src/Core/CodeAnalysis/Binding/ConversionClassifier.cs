@@ -1340,6 +1340,7 @@ internal sealed class ConversionClassifier
                     // Invoke signature, the same way it already does for a
                     // user-defined generic function's method-group argument.
                     var isMethodGroupTarget = argument is BoundMethodGroupExpression or BoundClrMethodGroupExpression;
+                    var parameterConversion = Conversion.Classify(argument.Type, targetType);
                     if (substituted != null
                         && TypeSymbol.ContainsNullLiteralType(argument.Type)
                         && argument is BoundTupleLiteralExpression
@@ -1352,7 +1353,13 @@ internal sealed class ConversionClassifier
                         rebound = BindContextualOpenLiteral(location, argument, targetType);
                     }
                     else if (argument.Type != targetType
-                        && (Conversion.Classify(argument.Type, targetType).Exists || isExpressionTreeLiteralTarget || isMethodGroupTarget)
+                        && parameterConversion.IsExplicit
+                        && TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var implicitArg))
+                    {
+                        rebound = implicitArg;
+                    }
+                    else if (argument.Type != targetType
+                        && (parameterConversion.Exists || isExpressionTreeLiteralTarget || isMethodGroupTarget)
                         && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
                         && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
                     {
@@ -1366,7 +1373,6 @@ internal sealed class ConversionClassifier
                         var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
                             ? call.Arguments[sourceIndex].Location
                             : call?.Location ?? default;
-                        var parameterConversion = Conversion.Classify(argument.Type, targetType);
 
                         // Issue #4012: `allowExplicit: true` is this path's
                         // standing leniency — a CLR argument slot accepts a

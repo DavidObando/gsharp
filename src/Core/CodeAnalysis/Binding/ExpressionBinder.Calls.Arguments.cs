@@ -1500,7 +1500,8 @@ internal sealed partial class ExpressionBinder
             deferredInferenceArgs: BuildOpenLiteralInferenceFlags(arguments),
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
-            openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments));
+            openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments),
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
 
         switch (resolution.Outcome)
         {
@@ -1976,7 +1977,8 @@ internal sealed partial class ExpressionBinder
                 functionLiteralArgumentCheck: functionLiteralArgumentCheck,
                 explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                 explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1),
-                openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1));
+                openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1),
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments, argumentOffset: 1));
 
         var resolution = ResolveExtensionCandidates();
 
@@ -3760,7 +3762,19 @@ internal sealed partial class ExpressionBinder
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverload(
+                ce.Location,
+                methodName,
+                resolution.Ambiguous.Length,
+                resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+            result = new BoundErrorExpression(ce);
+            return true;
+        }
+
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3782,6 +3796,26 @@ internal sealed partial class ExpressionBinder
             constraintType,
             method);
 
+        var downstreamMapping = resolution.IsExpanded
+            ? default
+            : resolution.ParameterMapping;
+        if (resolution.IsExpanded)
+        {
+            var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameters.Length - 1);
+            var symbolicParamsElement = symbolicParamsType is SliceTypeSymbol symbolicParams
+                ? symbolicParams.ElementType
+                : null;
+            arguments = overloads.ExpandParamsArguments(
+                arguments,
+                parameters,
+                ce,
+                parameterMapping: resolution.ParameterMapping,
+                paramsElementTypeOverride: symbolicParamsElement);
+        }
+
         // Issue #1852: re-lower each interpolated-string argument whose
         // resolved parameter is IFormattable/FormattableString-shaped to
         // FormattableStringFactory.Create(...) — mirroring
@@ -3798,13 +3832,19 @@ internal sealed partial class ExpressionBinder
         // other argument (and the overload choice itself, unaffected unless a
         // candidate's applicability actually depended on the flag) is
         // unchanged.
-        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, resolution.ParameterMapping);
+        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, downstreamMapping);
+        arguments = ApplySymbolicClrArgumentConversions(
+            arguments,
+            parameters,
+            downstreamMapping,
+            method,
+            constraintType);
 
         // Order positionally for named arguments; deliberately skip the CLR
         // boxing/conversion pass — the emitted MemberRef parameter is the
         // interface type-variable `!0` (== the reified `!!T`), so a `T`-typed
         // argument must be passed unboxed.
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundImportedInstanceCallExpression(
@@ -3818,6 +3858,59 @@ internal sealed partial class ExpressionBinder
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: declaringConstraint);
         return true;
+    }
+
+    private ImmutableArray<BoundExpression> ApplySymbolicClrArgumentConversions(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping,
+        MethodInfo method,
+        TypeSymbol constraintType)
+    {
+        ImmutableArray<BoundExpression>.Builder? builder = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var parameterIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (parameterIndex >= parameters.Length
+                || parameters[parameterIndex].ParameterType.IsByRef)
+            {
+                continue;
+            }
+
+            var argument = arguments[i];
+            var targetType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameterIndex);
+            if (argument.Type is not { } sourceType
+                || sourceType.ClrType != null
+                || !TypeSymbol.ContainsSameCompilationUserType(sourceType)
+                || targetType == null
+                || targetType == TypeSymbol.Error
+                || TypeSymbol.ContainsTypeParameter(targetType))
+            {
+                continue;
+            }
+
+            var conversion = Conversion.Classify(sourceType, targetType);
+            BoundExpression converted;
+            if (conversion.IsImplicit && !conversion.IsStructuralProjection)
+            {
+                converted = conversions.BindConversion(
+                    argument.Syntax?.Location ?? default,
+                    argument,
+                    targetType);
+            }
+            else if (!conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out converted))
+            {
+                continue;
+            }
+
+            builder ??= arguments.ToBuilder();
+            builder[i] = converted;
+        }
+
+        return builder?.MoveToImmutable() ?? arguments;
     }
 
     /// <summary>
@@ -3896,6 +3989,17 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             null,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverload(
+                ce.Location,
+                methodName,
+                resolution.Ambiguous.Length,
+                resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+            result = new BoundErrorExpression(ce);
+            return true;
+        }
+
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
