@@ -1143,7 +1143,8 @@ internal sealed partial class ExpressionBinder
         MethodInfo resolved,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<TypeSymbol> symbolicArgs,
-        int receiverArgCount)
+        int receiverArgCount,
+        bool isExpanded = false)
     {
         if (symbolicArgs.IsDefaultOrEmpty || arguments.IsDefaultOrEmpty)
         {
@@ -1151,11 +1152,18 @@ internal sealed partial class ExpressionBinder
         }
 
         var parameters = resolved.GetParameters();
+        var paramsIndex = parameters.Length - 1;
         ImmutableArray<TypeSymbol>.Builder? refined = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var slot = i + receiverArgCount;
-            if (slot >= symbolicArgs.Length || slot >= parameters.Length)
+            var parameterIndex = isExpanded
+                && paramsIndex >= 0
+                && slot >= paramsIndex
+                && ClrOverloadResolution.IsParamsArrayParameter(parameters[paramsIndex])
+                    ? paramsIndex
+                    : slot;
+            if (slot >= symbolicArgs.Length || parameterIndex >= parameters.Length)
             {
                 continue;
             }
@@ -1176,7 +1184,15 @@ internal sealed partial class ExpressionBinder
             // whenever the closed delegate is a `TypeBuilderInstantiation`,
             // which is exactly what closing `Converter`/`Func` over a
             // MetadataLoadContext type argument produces.
-            if (!ClrLoadContext.TryGetDelegateSignature(parameters[slot].ParameterType, out var delegateParameters, out _)
+            var parameterType = parameters[parameterIndex].ParameterType;
+            if (isExpanded
+                && parameterIndex == paramsIndex
+                && parameterType.GetElementType() is { } elementType)
+            {
+                parameterType = elementType;
+            }
+
+            if (!ClrLoadContext.TryGetDelegateSignature(parameterType, out var delegateParameters, out _)
                 || !TryGetSymbolicUserMethodGroupType(group, out var symbolicGroupType, delegateParameters.Length))
             {
                 continue;

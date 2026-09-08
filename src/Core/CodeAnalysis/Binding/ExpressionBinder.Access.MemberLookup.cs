@@ -4106,7 +4106,8 @@ internal sealed partial class ExpressionBinder
                     closed,
                     arguments,
                     symbolicArgTypes,
-                    receiverArgCount: 0),
+                    receiverArgCount: 0,
+                    isExpanded: isExpanded),
                 isExpanded);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,

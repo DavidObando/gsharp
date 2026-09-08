@@ -860,7 +860,7 @@ internal static class ClrOverloadResolution
 
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, methodGroupArgumentCheck, deferredInferenceArgs, openLiteralArgumentCheck, symbolicArgTypes);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, deferredInferenceArgs, openLiteralArgumentCheck, symbolicArgTypes);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -3538,7 +3538,7 @@ internal static class ClrOverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -3618,8 +3618,8 @@ internal static class ClrOverloadResolution
 
             Type[]? typeArgs = null;
 
-            // Expanded inference has no method-group output callback. Do not
-            // let a partial symbolic vector fabricate a closed candidate.
+            // Let a deferred method group contribute output bounds below before
+            // a partial symbolic vector can close the candidate.
             var useRecoveredInference = !HasDeferredMethodGroupArgument(
                     argTypes.Count,
                     methodGroupArgumentCheck)
@@ -3634,6 +3634,8 @@ internal static class ClrOverloadResolution
                     argTypes,
                     argumentNames,
                     deferredInferenceArgs,
+                    methodGroupInference,
+                    methodGroupArgumentCheck,
                     out typeArgs))
             {
                 return;
@@ -3863,6 +3865,8 @@ internal static class ClrOverloadResolution
         IReadOnlyList<Type?> argTypes,
         IReadOnlyList<string?>? argumentNames,
         IReadOnlyList<bool>? deferredInferenceArgs,
+        Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference,
+        Func<int, bool>? methodGroupArgumentCheck,
         [NotNullWhen(true)] out Type[]? typeArgs)
     {
         typeArgs = null;
@@ -3889,6 +3893,28 @@ internal static class ClrOverloadResolution
         var typeParams = openMethod.GetGenericArguments();
         var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
 
+        bool TryGetTargetType(int argumentIndex, [NotNullWhen(true)] out Type? targetType)
+        {
+            var name = hasNamed ? names[argumentIndex] : null;
+            if (name == null)
+            {
+                targetType = argumentIndex < paramsIndex
+                    ? parameters[argumentIndex].ParameterType
+                    : elementType;
+                return true;
+            }
+
+            var parameterIndex = FindParameterIndex(parameters, name);
+            if (parameterIndex < 0 || parameterIndex == paramsIndex)
+            {
+                targetType = null;
+                return false;
+            }
+
+            targetType = parameters[parameterIndex].ParameterType;
+            return true;
+        }
+
         for (var i = 0; i < argTypes.Count; i++)
         {
             if (argTypes[i] == null
@@ -3899,28 +3925,29 @@ internal static class ClrOverloadResolution
                 continue;
             }
 
-            var name = hasNamed ? names[i] : null;
-            Type targetType;
-            if (name == null)
+            if (!TryGetTargetType(i, out var targetType))
             {
-                targetType = i < paramsIndex
-                    ? parameters[i].ParameterType
-                    : elementType;
-            }
-            else
-            {
-                var paramIdx = FindParameterIndex(parameters, name);
-                if (paramIdx < 0 || paramIdx == paramsIndex)
-                {
-                    return false;
-                }
-
-                targetType = parameters[paramIdx].ParameterType;
+                return false;
             }
 
             if (!UnifyForInference(targetType, argTypes[i], bounds))
             {
                 return false;
+            }
+        }
+
+        if (methodGroupInference != null && methodGroupArgumentCheck != null)
+        {
+            for (var i = 0; i < argTypes.Count; i++)
+            {
+                if (methodGroupArgumentCheck(i))
+                {
+                    if (!TryGetTargetType(i, out var targetType)
+                        || !TryInferMethodGroupArgument(targetType, i, bounds, methodGroupInference))
+                    {
+                        return false;
+                    }
+                }
             }
         }
 

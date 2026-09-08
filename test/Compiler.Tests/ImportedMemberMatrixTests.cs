@@ -39,6 +39,7 @@ public class ImportedMemberMatrixTests
                 string Take<T>(T value) where T : System.IDisposable;
                 string Take(object value);
                 string Choose<T>(T value, System.Func<T> factory);
+                string ChooseParams<T>(T value, params System.Func<T>[] factories);
             }
 
             public sealed class InstanceOverloads : IInstanceOverloads
@@ -51,6 +52,9 @@ public class ImportedMemberMatrixTests
                     => "instance-object";
 
                 public string Choose<T>(T value, System.Func<T> factory)
+                    => typeof(T).Name;
+
+                public string ChooseParams<T>(T value, params System.Func<T>[] factories)
                     => typeof(T).Name;
             }
 
@@ -260,6 +264,10 @@ public class ImportedMemberMatrixTests
                 return receiver.Choose(DerivedDisposable(), methodGroupFactory)
             }
 
+            func throughExpandedInstanceMethodGroup(receiver InstanceOverloads) string {
+                return receiver.ChooseParams(DerivedDisposable(), methodGroupFactory)
+            }
+
             func throughConstrainedInstanceMethodGroup[TReceiver IInstanceOverloads](
                 receiver TReceiver) string {
                 return receiver.Choose(DerivedDisposable(), methodGroupFactory)
@@ -332,6 +340,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughInvariantConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughInvariantExpandedConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughExpandedInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughConstrainedInstanceMethodGroup[InstanceOverloads](
                 InstanceOverloads()))
             Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
@@ -362,6 +371,7 @@ public class ImportedMemberMatrixTests
                 + $"DerivedDisposable{Environment.NewLine}DerivedDisposable{Environment.NewLine}"
                 + $"object-invariant{Environment.NewLine}object-invariant-params{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}Object{Environment.NewLine}"

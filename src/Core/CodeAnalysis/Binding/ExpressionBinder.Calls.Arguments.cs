@@ -1483,7 +1483,8 @@ internal sealed partial class ExpressionBinder
                     closed,
                     arguments,
                     inheritedSymbolicArgs,
-                    receiverArgCount: 0),
+                    receiverArgCount: 0,
+                    isExpanded: isExpanded),
                 isExpanded,
                 argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
@@ -1558,7 +1559,8 @@ internal sealed partial class ExpressionBinder
                     best,
                     arguments,
                     inheritedSymbolicArgs,
-                    receiverArgCount: 0);
+                    receiverArgCount: 0,
+                    isExpanded: resolution.IsExpanded);
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     best,
                     typeArgSymbols,
@@ -1958,7 +1960,8 @@ internal sealed partial class ExpressionBinder
                     closed,
                     arguments,
                     extensionSymbolicArgs,
-                    receiverArgCount: 1),
+                    receiverArgCount: 1,
+                    isExpanded: isExpanded),
                 isExpanded,
                 extensionArgumentNames);
         Func<int, bool> functionLiteralArgumentCheck = argumentIndex =>
@@ -2061,7 +2064,8 @@ internal sealed partial class ExpressionBinder
             best,
             arguments,
             extensionSymbolicArgs,
-            receiverArgCount: 1);
+            receiverArgCount: 1,
+            isExpanded: resolution.IsExpanded);
         var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
             best,
             typeArgSymbols,
@@ -3769,7 +3773,8 @@ internal sealed partial class ExpressionBinder
                     closed,
                     arguments,
                     symbolicArgTypes,
-                    receiverArgCount: 0),
+                    receiverArgCount: 0,
+                    isExpanded: isExpanded),
                 isExpanded,
                 argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
