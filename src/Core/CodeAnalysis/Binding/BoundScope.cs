@@ -86,10 +86,13 @@ public sealed class BoundScope
     private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>? richAnonymousClassMap;
 
     // Issues #4089/#4090: the declaration-phase queue of G#-declared generic
-    // TYPE-CLAUSE constraint checks, and the latch that says the queue has been
-    // drained. Both live on the ROOT scope of the chain (like
-    // richAnonymousClassMap above) because every binder in a compilation shares
-    // that root, while each binder has its own BinderContext.
+    // TYPE-CLAUSE constraint checks, and the latch that says a check must be
+    // queued rather than answered where it is written. Both live on the ROOT
+    // scope of the chain (like richAnonymousClassMap above) because every
+    // binder in ONE binding pass shares that root, while each binder has its
+    // own BinderContext and its own DiagnosticBag. `BindProgram` derives a
+    // fresh chain for member bodies, which is exactly why the latch defaults to
+    // "answer in place" — see IsDeferringUserGenericConstraintChecks.
     private List<Binder.PendingUserGenericConstraintCheck>? pendingUserGenericConstraintChecks;
 
     private bool deferUserGenericConstraintChecks;

@@ -67,18 +67,26 @@ namespace GSharp.Compiler.Tests;
 /// <c>ReportUnsatisfiedUserGenericTypeArgument</c> over the same
 /// <c>SatisfiesConstraint</c> every other site already used (CS0311, which G#
 /// has always spelled <c>GS0152</c>). No new diagnostic id was taken.</para>
-/// <para><b>A prerequisite false rejection, found by measurement and fixed
-/// here.</b> Widening <c>SatisfiesConstraint</c>'s reach to every type clause
-/// exposed that its <c>ClrInterfaceConstraint</c> arm still used the bare
-/// reflective probe: a SAME-COMPILATION class has no CLR type while binding, so
-/// <c>class D : IDisposable</c> did not satisfy <c>[TD IDisposable]</c>. That is
-/// measurable on <c>main</c> at the CONSTRUCTOR spelling
-/// <c>GsDisposable[DisposableSource]()</c>, which this change does not touch —
-/// filed as <b>#4136</b> and fixed here by routing the arm through
-/// <c>BoundCarriesClrInterface</c>, the same walk #4068 and #4092 gave the
-/// dependent-bound and forwarding arms. Both spellings are green rows below.
-/// Shipping #4090 without it would have converted a latent false accept into a
-/// false rejection on legal code, which is the worse direction.</para>
+/// <para><b>Two prerequisite false rejections, found by measurement and fixed
+/// here.</b> <c>SatisfiesConstraint</c>'s predicates read reflective CLR
+/// metadata that a SAME-COMPILATION symbol does not yet have, so widening the
+/// predicate's reach to every type clause turned two latent false ACCEPTS into
+/// false REJECTIONS — the worse direction, and the reason both are repaired in
+/// this change rather than deferred.</para>
+/// <para><b>#4136</b>: the <c>ClrInterfaceConstraint</c> arm used the bare
+/// reflective probe, so <c>class D : IDisposable</c> did not satisfy
+/// <c>[TD IDisposable]</c>. Routed through <c>BoundCarriesClrInterface</c>, the
+/// same walk #4068 and #4092 gave the dependent-bound and forwarding arms.
+/// <b>#4139</b>: <c>IsNonNullableValueTypeForConstraint</c> fell through to the
+/// CLR probe for an <c>EnumSymbol</c>, so a source <c>enum Color</c> did not
+/// satisfy <c>struct</c> — which is how it was found, because
+/// <c>Issue2390NullableSameCompilationEnumBoxingEmitTests</c>'
+/// <c>class Source2390 : ISource2390[Color2390]</c> went red the moment #4090's
+/// enforcement reached it. Both are measurable on <c>main</c> at the
+/// CONSTRUCTOR spelling (<c>GsDisposable[DisposableSource]()</c>,
+/// <c>GsStruct[Color]()</c>), a path this change does not touch, which is what
+/// makes them pre-existing rather than introduced. Every spelling of both is a
+/// green row below.</para>
 /// <para><b>The flush boundary was traced, not chosen.</b> The flush sits after
 /// <c>ExpandStructInterfaceClosures</c>. The binding constraint is the
 /// interface-members loop above it. The worry was the closure: an interface
@@ -135,6 +143,17 @@ public class Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests
 
         open class GsStruct[TS struct] {
             public var Tag string = "s"
+        }
+
+        open class GsUnmanaged[TU unmanaged] {
+            public var Tag string = "u"
+        }
+
+        // #4139: a SAME-COMPILATION enum, which has no CLR type while binding.
+        enum Color { Red, Green, Blue }
+
+        interface IEnumSource[TE struct] {
+            func Find() TE?;
         }
 
         // A DEPENDENT bound: `TB`'s bound names the definition's own `TA`.
@@ -629,6 +648,41 @@ public class Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests
             Console.WriteLine(Uses().Tag)
             """,
             new[] { "e" },
+        };
+
+        // PREREQUISITE FIX (#4139), type-clause spelling: a SAME-COMPILATION
+        // enum is a non-nullable value type, so it satisfies `struct` — and
+        // `unmanaged`, which the `struct` check gates. Without this the very
+        // first fixture #4090's enforcement touched
+        // (Issue2390NullableSameCompilationEnumBoxingEmitTests) went red.
+        yield return new object[]
+        {
+            "a-source-enum-satisfies-a-struct-constraint",
+            """
+            class Uses {
+                public var S GsStruct[Color]
+                public var U GsUnmanaged[Color]
+            }
+
+            Console.WriteLine(GsStruct[Color]().Tag + GsUnmanaged[Color]().Tag)
+            """,
+            new[] { "su" },
+        };
+
+        // ... and at a G#-declared generic INTERFACE implementation, which is
+        // the shape #2390's own fixture writes.
+        yield return new object[]
+        {
+            "a-source-enum-satisfies-a-struct-constraint-at-an-interface-implementation",
+            """
+            class Source : IEnumSource[Color] {
+                func Find() Color? -> Color.Blue
+            }
+
+            let s IEnumSource[Color] = Source{}
+            Console.WriteLine(s.Find())
+            """,
+            new[] { "Blue" },
         };
 
         // PREREQUISITE FIX, CONSTRUCTOR spelling — the witness that proves the

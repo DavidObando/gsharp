@@ -5697,8 +5697,10 @@ public sealed class Binder
     /// #2519 CRTP shell lifecycle, and moving it is a far larger change than
     /// the rule needs. Queuing costs one list per compilation and answers with
     /// exactly the same code. Once <see cref="FlushPendingUserGenericConstraintChecks"/>
-    /// has run, later constructions (method bodies, deferred initializers,
-    /// interactive submissions) are answered in place.</para>
+    /// has run, later constructions — member bodies, which <c>BindProgram</c>
+    /// binds through a freshly derived scope chain, and any subsequent
+    /// interactive submission — are answered in place. The deferred base and
+    /// field initialisers bind BEFORE the flush and so ride the queue.</para>
     /// </remarks>
     /// <param name="declaredParameters">The definition's own type parameters.</param>
     /// <param name="typeArgs">The symbolic arguments, in declaration order.</param>
@@ -8162,6 +8164,19 @@ public sealed class Binder
         if (type is StructSymbol structSym)
         {
             return !structSym.IsClass;
+        }
+
+        // Issue #4139: a SAME-COMPILATION enum is a non-nullable value type and
+        // always satisfies `struct` — ECMA-335 II.14.3, and `csc` agrees. It
+        // has no CLR type while binding, so without this arm it fell through to
+        // the reflective probe below and was reported as a violation on a legal
+        // program (`interface ISource[T struct]` implemented over a source
+        // `enum Color`). The IMPORTED spelling has always worked, through the
+        // probe; this is the same answer one substrate over, and it is the same
+        // shape as #4136 in the sibling interface arm.
+        if (type is EnumSymbol)
+        {
+            return true;
         }
 
         if (type.ClrType is { } primitiveClr)
