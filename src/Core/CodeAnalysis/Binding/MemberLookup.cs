@@ -73,13 +73,6 @@ internal sealed class MemberLookup
     /// </summary>
     private static ConditionalWeakTable<Type, System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>> methodsIncludingSelfAndInterfacesCache = new();
 
-    private enum SymbolicInferenceBoundKind
-    {
-        Exact,
-        Lower,
-        Upper,
-    }
-
     /// <summary>
     /// Initializes a new instance of the <see cref="MemberLookup"/> class.
     /// </summary>
@@ -89,6 +82,13 @@ internal sealed class MemberLookup
     public MemberLookup(BinderContext binderCtx)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
+    }
+
+    private enum SymbolicInferenceBoundKind
+    {
+        Exact,
+        Lower,
+        Upper,
     }
 
     // ----- CLR-side type walks -----
