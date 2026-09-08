@@ -3762,7 +3762,8 @@ internal sealed partial class ExpressionBinder
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3801,6 +3802,10 @@ internal sealed partial class ExpressionBinder
         // candidate's applicability actually depended on the flag) is
         // unchanged.
         arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, resolution.ParameterMapping);
+        arguments = ApplyUserDefinedImplicitClrArgumentConversions(
+            arguments,
+            parameters,
+            resolution.ParameterMapping);
 
         // Order positionally for named arguments; deliberately skip the CLR
         // boxing/conversion pass — the emitted MemberRef parameter is the
@@ -3820,6 +3825,38 @@ internal sealed partial class ExpressionBinder
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: declaringConstraint);
         return true;
+    }
+
+    private ImmutableArray<BoundExpression> ApplyUserDefinedImplicitClrArgumentConversions(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping)
+    {
+        ImmutableArray<BoundExpression>.Builder? builder = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var parameterIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (parameterIndex >= parameters.Length
+                || parameters[parameterIndex].ParameterType.IsByRef)
+            {
+                continue;
+            }
+
+            var argument = arguments[i];
+            var targetType = TypeSymbol.FromClrType(parameters[parameterIndex].ParameterType);
+            if (argument.Type == null
+                || targetType == null
+                || Conversion.Classify(argument.Type, targetType).Exists
+                || !conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var converted))
+            {
+                continue;
+            }
+
+            builder ??= arguments.ToBuilder();
+            builder[i] = converted;
+        }
+
+        return builder?.MoveToImmutable() ?? arguments;
     }
 
     /// <summary>

@@ -4166,7 +4166,8 @@ internal sealed partial class ExpressionBinder
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
-            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments));
+            methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
             || resolution.Best is not { } method)
         {
@@ -4182,6 +4183,10 @@ internal sealed partial class ExpressionBinder
         var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(constraintType, method);
 
         arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, resolution.ParameterMapping);
+        arguments = ApplyUserDefinedImplicitClrArgumentConversions(
+            arguments,
+            parameters,
+            resolution.ParameterMapping);
 
         var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, resolution.ParameterMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);

@@ -65,6 +65,9 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             return value.Value
         }
 
+        class LocalTarget : BaseTarget {
+        }
+
         """;
 
     private const string LibrarySource = """
@@ -105,6 +108,37 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public string Text(string value) => value;
         }
 
+        public class BaseTarget
+        {
+            public double Inherited(double value) => value;
+        }
+
+        public static class TargetExtensions
+        {
+            public static double ExtensionValue(this InstanceTarget target, double value) => value;
+        }
+
+        public interface IConstrainedTarget
+        {
+            double ConstrainedValue(double value);
+        }
+
+        public sealed class ConstrainedTarget : IConstrainedTarget
+        {
+            public double ConstrainedValue(double value) => value;
+        }
+
+        public interface IStaticConstrainedTarget<TSelf>
+            where TSelf : IStaticConstrainedTarget<TSelf>
+        {
+            static abstract double ConstrainedStaticValue(double value);
+        }
+
+        public sealed class StaticConstrainedTarget : IStaticConstrainedTarget<StaticConstrainedTarget>
+        {
+            public static double ConstrainedStaticValue(double value) => value;
+        }
+
         public readonly struct Fahrenheit
         {
             public Fahrenheit(double degrees) => Degrees = degrees;
@@ -138,6 +172,18 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             Console.WriteLine(target.Text(Label{ Text: "ready" }))
             """,
             new[] { "4.5", "ready" },
+        };
+
+        yield return new object[]
+        {
+            "inherited-and-extension-methods",
+            """
+            let inherited = LocalTarget()
+            let extended = InstanceTarget()
+            Console.WriteLine(inherited.Inherited(Celsius{ Degrees: 4.75 }))
+            Console.WriteLine(extended.ExtensionValue(Celsius{ Degrees: 5.25 }))
+            """,
+            new[] { "4.75", "5.25" },
         };
 
         yield return new object[]
@@ -213,6 +259,33 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         string[] expectedLines)
         => RunAndExpect(name, body, expectedLines);
 
+    [Fact]
+    public void AUserDefinedImplicitConversionParticipatesInConstrainedClrDispatch()
+    {
+        const string Body = """
+            func CallConstrained[T IConstrainedTarget](target T, value Celsius) float64 {
+                return target.ConstrainedValue(value)
+            }
+
+            func CallStaticConstrained[T IStaticConstrainedTarget[T]](value Celsius) float64 {
+                return T.ConstrainedStaticValue(value)
+            }
+
+            Console.WriteLine(CallConstrained(
+                ConstrainedTarget(),
+                Celsius{ Degrees: 5.75 }))
+            Console.WriteLine(CallStaticConstrained[StaticConstrainedTarget](
+                Celsius{ Degrees: 6.25 }))
+            """;
+
+        RunAndExpect(
+            "constrained-instance-and-static-methods",
+            Body,
+            new[] { "5.75", "6.25" },
+            IlVerifier.KnownIssues.StaticVirtualInterface,
+            @"<Program>\.CallStaticConstrained$");
+    }
+
     [Theory]
     [MemberData(nameof(RejectedCalls))]
     public void AnInvalidOrdinaryClrCallRemainsRejected(
@@ -243,7 +316,12 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         }
     }
 
-    private static void RunAndExpect(string name, string body, string[] expectedLines)
+    private static void RunAndExpect(
+        string name,
+        string body,
+        string[] expectedLines,
+        IEnumerable<string> ignoredIlVerifyErrors = null,
+        string ignoredIlVerifyScope = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_4054_").FullName;
         try
@@ -261,7 +339,11 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
             Assert.True(File.Exists(appPath), $"'{name}' must compile. Log:\n{appLog}");
 
-            IlVerifier.Verify(appPath, new[] { libPath });
+            IlVerifier.Verify(
+                appPath,
+                new[] { libPath },
+                ignoredIlVerifyErrors,
+                ignoredIlVerifyScope);
 
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"'{name}' must run to completion. Exit {exit}:\n{output}");
