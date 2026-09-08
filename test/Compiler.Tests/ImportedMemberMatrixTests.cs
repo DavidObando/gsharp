@@ -13,6 +13,880 @@ namespace GSharp.Compiler.Tests;
 
 public class ImportedMemberMatrixTests
 {
+    private const string Issue4086CsSource = """
+        namespace Issue4086.CSharp;
+
+        public class DisposableBase : System.IDisposable
+        {
+            public void Dispose()
+            {
+            }
+        }
+
+        public sealed class DerivedDisposable : DisposableBase
+        {
+        }
+
+        public class Base
+        {
+        }
+
+        public sealed class Derived : Base
+        {
+        }
+
+        public interface IInstanceOverloads
+        {
+            string Take<T>(T value) where T : System.IDisposable;
+            string Take(object value);
+            string Choose<T>(T value, System.Func<T> factory);
+            string ChooseParams<T>(T value, params System.Func<T>[] factories);
+        }
+
+        public class InstanceOverloads : IInstanceOverloads
+        {
+            public string Take<T>(T value)
+                where T : System.IDisposable
+                => "instance-generic";
+
+            public string Take(object value)
+                => "instance-object";
+
+            public string Choose<T>(T value, System.Func<T> factory)
+                => typeof(T).Name;
+
+            public string ChooseParams<T>(T value, params System.Func<T>[] factories)
+                => typeof(T).Name;
+        }
+
+        public sealed class DerivedInstanceOverloads : InstanceOverloads
+        {
+        }
+
+        public interface IStaticOverloads<TSelf>
+            where TSelf : IStaticOverloads<TSelf>
+        {
+            static abstract string Take<T>(T value)
+                where T : System.IDisposable;
+
+            static abstract string Take(object value);
+
+            static abstract string Pick<T>(T first, T second);
+            static abstract string Choose<T>(T value, System.Func<T> factory);
+            static abstract string ChooseParams<T>(T value, params System.Func<T>[] factories);
+        }
+
+        public sealed class StaticOverloads : IStaticOverloads<StaticOverloads>
+        {
+            public static string Take<T>(T value)
+                where T : System.IDisposable
+                => "static-generic";
+
+            public static string Take(object value)
+                => "static-object";
+
+            public static string Pick<T>(T first, T second)
+                => typeof(T).Name;
+
+            public static string Choose<T>(T value, System.Func<T> factory)
+                => typeof(T).Name;
+
+            public static string ChooseParams<T>(T value, params System.Func<T>[] factories)
+                => typeof(T).Name;
+        }
+
+        public static class Overloads
+        {
+            public static string Take<T>(T value)
+                where T : System.IDisposable
+                => "generic-disposable";
+
+            public static string Take(object value)
+                => "object";
+
+            public static string Pick<T>(T first, T second)
+                => "generic";
+
+            public static string Pick(object first, object second)
+                => "object";
+
+            public static string PickNested<T>(
+                T first,
+                System.Collections.Generic.IEnumerable<T> second)
+                => "generic-nested";
+
+            public static string PickNested(
+                object first,
+                System.Collections.Generic.IEnumerable<object> second)
+                => "object-nested";
+        }
+
+        public static class GenericOnly
+        {
+            public static string Pick<T>(T first, T second)
+                => typeof(T).Name;
+
+            public static string PickParams<T>(params T[] values)
+                => typeof(T).Name;
+
+            public static string ChooseParams<T>(T value, params System.Func<T>[] factories)
+                => typeof(T).Name;
+        }
+
+        public static class MethodGroupOutputInference
+        {
+            public static string Choose<TIn, TOut>(
+                TIn value,
+                System.Func<TIn, TOut> converter)
+                => typeof(TIn).Name + ":" + typeof(TOut).Name;
+
+            public static string ChooseParams<TIn, TOut>(
+                TIn value,
+                params System.Func<TIn, TOut>[] converters)
+                => typeof(TIn).Name + ":" + typeof(TOut).Name;
+
+            public static TOut Convert<TIn, TOut>(
+                TIn value,
+                System.Func<TIn, TOut> converter)
+                => converter(value);
+
+            public static TOut ConvertParams<TIn, TOut>(
+                TIn value,
+                params System.Func<TIn, TOut>[] converters)
+                => converters[0](value);
+
+            // Used only by the #4134 pinned row: a reordered NAMED argument
+            // into a `params` slot, and the `ref` lvalue variant.
+            public static string EvaluationOrder<T>(T value, params object[] items)
+                => value + ":" + string.Join(",", items);
+
+            public static string RefEvaluationOrder(ref int value, params object[] items)
+            {
+                value += 10;
+                return value + ":" + string.Join(",", items);
+            }
+        }
+
+        public static class ExtensionOverloads
+        {
+            public static string ChooseExtensionParams<T>(
+                this InstanceOverloads receiver,
+                T value,
+                params System.Func<T>[] factories)
+                => typeof(T).Name;
+        }
+
+        public static class VarianceOverloads
+        {
+            public static string DelegateType<T>(T value, System.Action<T> sink)
+                => typeof(T).Name;
+
+            public static string DelegateWinner<T>(T value, System.Action<T> sink)
+                => "generic-delegate:" + typeof(T).Name;
+
+            public static string DelegateWinner(
+                object value,
+                System.Delegate sink)
+                => "object-delegate";
+
+            public static string InterfaceType<T>(
+                T value,
+                System.Collections.Generic.IComparer<T> sink)
+                => typeof(T).Name;
+
+            public static string InterfaceWinner<T>(
+                T value,
+                System.Collections.Generic.IComparer<T> sink)
+                => "generic-interface:" + typeof(T).Name;
+
+            public static string InterfaceWinner(
+                object value,
+                object sink)
+                => "object-interface";
+
+            public static System.Action<object> ObjectAction()
+                => _ => { };
+
+            public static System.Collections.Generic.IComparer<object> ObjectComparer()
+                => System.Collections.Generic.Comparer<object>.Default;
+
+            public static System.Action<DisposableBase> BaseAction()
+                => _ => { };
+
+            public static System.Action<DerivedDisposable> DerivedAction()
+                => _ => { };
+
+            public static System.Action<Base> InferenceBaseAction()
+                => _ => { };
+
+            public static System.Action<Derived> InferenceDerivedAction()
+                => _ => { };
+
+            public static string UpperType<T>(
+                System.Action<T> first,
+                System.Action<T> second)
+                => typeof(T).Name;
+
+            public static string UpperParams<T>(params System.Action<T>[] sinks)
+                => typeof(T).Name;
+
+            public static string InvariantWinner<T>(
+                System.Collections.Generic.List<T> first,
+                System.Collections.Generic.List<T> second)
+                => "generic-invariant";
+
+            public static string InvariantWinner(
+                System.Collections.Generic.List<object> first,
+                object second)
+                => "object-invariant";
+
+            public static string InvariantParams<T>(
+                params System.Collections.Generic.List<T>[] values)
+                => "generic-invariant-params";
+
+            public static string InvariantParams(
+                System.Collections.Generic.List<object> first,
+                params object[] rest)
+                => "object-invariant-params";
+        }
+        """;
+
+    private const string Issue4086GsDeclarations = """
+        package Issue4086.Probe
+        import System
+        import System.Collections.Generic
+        import System.Threading.Tasks
+        import Issue4086.CSharp
+
+        open class Base {
+            public func Kind() string {
+                return "same-compilation-Base"
+            }
+        }
+
+        class Derived : Base {
+        }
+
+        func throughClassBound[T DisposableBase](value T) string {
+            return Overloads.Take(value)
+        }
+
+        func throughInterface[T IDisposable](value T) string {
+            return Overloads.Take(value)
+        }
+
+        func throughObject(value object) string {
+            return Overloads.Take(value)
+        }
+
+        func throughMixedInference[T](first T, second object) string {
+            return Overloads.Pick(first, second)
+        }
+
+        func throughGenericOnlyMixedInference[T](first T, second object) string {
+            return GenericOnly.Pick(first, second)
+        }
+
+        func throughDefaultInference[T](value T) string {
+            return GenericOnly.Pick(value, default)
+        }
+
+        func throughNestedMixedInference[T](
+            first T,
+            second IEnumerable[object]) string {
+            return Overloads.PickNested(first, second)
+        }
+
+        func throughExpandedMixedInference[T](first T, second object) string {
+            return GenericOnly.PickParams(first, second)
+        }
+
+        func throughDelegateUpperBoundType[T DisposableBase](value T) string {
+            return VarianceOverloads.DelegateType(value, VarianceOverloads.ObjectAction())
+        }
+
+        func throughDelegateUpperBoundWinner[T DisposableBase](value T) string {
+            return VarianceOverloads.DelegateWinner(value, VarianceOverloads.ObjectAction())
+        }
+
+        func throughInterfaceUpperBoundType[T DisposableBase](value T) string {
+            return VarianceOverloads.InterfaceType(value, VarianceOverloads.ObjectComparer())
+        }
+
+        func throughInterfaceUpperBoundWinner[T DisposableBase](value T) string {
+            return VarianceOverloads.InterfaceWinner(value, VarianceOverloads.ObjectComparer())
+        }
+
+        func throughInvariantConflict[T](value List[T]) string {
+            return VarianceOverloads.InvariantWinner(List[object](), value)
+        }
+
+        func throughInvariantExpandedConflict[T](value List[T]) string {
+            return VarianceOverloads.InvariantParams(List[object](), value)
+        }
+
+        func methodGroupFactory() DisposableBase {
+            return DisposableBase()
+        }
+
+        func methodGroupFactory(value int32) DerivedDisposable {
+            return DerivedDisposable()
+        }
+
+        func throughInstanceMethodGroup(receiver InstanceOverloads) string {
+            return receiver.Choose(DerivedDisposable(), methodGroupFactory)
+        }
+
+        func throughExpandedInstanceMethodGroup(receiver InstanceOverloads) string {
+            return receiver.ChooseParams(DerivedDisposable(), methodGroupFactory)
+        }
+
+        func expandedSymbolicFactory() Base {
+            return Base()
+        }
+
+        func expandedSymbolicFactory(value int32) Derived {
+            return Derived()
+        }
+
+        func outputInferenceConvert(value object) Issue4086.CSharp.Base {
+            return Issue4086.CSharp.Base()
+        }
+
+        func outputInferenceConvert(value int32) Issue4086.CSharp.Derived {
+            return Issue4086.CSharp.Derived()
+        }
+
+        func throughFixedMethodGroupOutputInference() string {
+            return MethodGroupOutputInference.Choose(
+                Issue4086.CSharp.Derived(),
+                outputInferenceConvert)
+        }
+
+        func throughExpandedMethodGroupOutputInference() string {
+            return MethodGroupOutputInference.ChooseParams(
+                Issue4086.CSharp.Derived(),
+                outputInferenceConvert)
+        }
+
+        func throughNamedFixedMethodGroupOutputInference() string {
+            return MethodGroupOutputInference.Choose(
+                converter: outputInferenceConvert,
+                value: Issue4086.CSharp.Derived())
+        }
+
+        func throughNamedExpandedMethodGroupOutputInference() string {
+            return MethodGroupOutputInference.ChooseParams(
+                converters: outputInferenceConvert,
+                value: Issue4086.CSharp.Derived())
+        }
+
+        func symbolicOutputConvert(value object) Base {
+            return Base()
+        }
+
+        func symbolicOutputConvert(value int32) Derived {
+            return Derived()
+        }
+
+        func throughNamedFixedMethodGroupOutputValue() string {
+            var result Base = MethodGroupOutputInference.Convert(
+                converter: symbolicOutputConvert,
+                value: Derived())
+            return result.Kind()
+        }
+
+        func throughNamedExpandedMethodGroupOutputValue() string {
+            var result Base = MethodGroupOutputInference.ConvertParams(
+                converters: symbolicOutputConvert,
+                value: Derived())
+            return result.Kind()
+        }
+
+        func throughNamedExpandedMultiMethodGroupOutputValue() string {
+            var result Base = MethodGroupOutputInference.ConvertParams(
+                value: Derived(),
+                symbolicOutputConvert,
+                symbolicOutputConvert)
+            return result.Kind()
+        }
+
+        func throughExpandedStaticMethodGroup() string {
+            return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
+        }
+
+        func throughExpandedSymbolicInstanceMethodGroup(receiver InstanceOverloads) string {
+            return receiver.ChooseParams(Derived(), expandedSymbolicFactory)
+        }
+
+        func throughExpandedInheritedMethodGroup(receiver DerivedInstanceOverloads) string {
+            return receiver.ChooseParams(Derived(), expandedSymbolicFactory)
+        }
+
+        func throughExpandedExtensionMethodGroup(receiver InstanceOverloads) string {
+            return receiver.ChooseExtensionParams(Derived(), expandedSymbolicFactory)
+        }
+
+        func throughConstrainedInstanceMethodGroup[TReceiver IInstanceOverloads](
+            receiver TReceiver) string {
+            return receiver.Choose(DerivedDisposable(), methodGroupFactory)
+        }
+
+        func throughExpandedConstrainedInstanceMethodGroup[TReceiver IInstanceOverloads](
+            receiver TReceiver) string {
+            return receiver.ChooseParams(Derived(), expandedSymbolicFactory)
+        }
+
+        func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
+            receiver TReceiver,
+            value TValue) string {
+            return receiver.Take(value)
+        }
+
+        func throughConstrainedInstanceObject[TReceiver IInstanceOverloads](
+            receiver TReceiver,
+            value object) string {
+            return receiver.Take(value)
+        }
+
+        """;
+
+    /// <summary>
+    /// The static-abstract-interface declarations, kept apart from the
+    /// shared prelude: every program that contains them needs the two
+    /// established static-virtual-interface ILVerify suppressions, so only
+    /// the fact that exercises them pays that cost and every other fact
+    /// verifies with no suppression at all.
+    /// </summary>
+    private const string Issue4086GsConstrainedStaticDeclarations = """
+        func throughConstrainedStatic[
+            TReceiver IStaticOverloads[TReceiver],
+            TValue DisposableBase](value TValue) string {
+            return TReceiver.Take(value)
+        }
+
+        async func throughConstrainedStaticAsync[TValue DisposableBase](value TValue) string {
+            return StaticOverloads.Take(await Task.FromResult[TValue](value))
+        }
+
+        func throughConstrainedStaticObject[TReceiver IStaticOverloads[TReceiver]](
+            value object) string {
+            return TReceiver.Take(value)
+        }
+
+        func throughConstrainedStaticMixedInference[
+            TReceiver IStaticOverloads[TReceiver],
+            TValue](first TValue, second object) string {
+            return TReceiver.Pick(first, second)
+        }
+
+        func throughConstrainedStaticMethodGroup[
+            TReceiver IStaticOverloads[TReceiver]]() string {
+            return TReceiver.Choose(DerivedDisposable(), methodGroupFactory)
+        }
+
+        func throughExpandedConstrainedStaticMethodGroup[
+            TReceiver IStaticOverloads[TReceiver]]() string {
+            return TReceiver.ChooseParams(Derived(), expandedSymbolicFactory)
+        }
+
+        func throughNamedConstrainedStaticMethodGroup[
+            TReceiver IStaticOverloads[TReceiver]]() string {
+            return TReceiver.Choose(
+                factory: methodGroupFactory,
+                value: DerivedDisposable())
+        }
+
+        func throughNamedExpandedConstrainedStaticMethodGroup[
+            TReceiver IStaticOverloads[TReceiver]]() string {
+            return TReceiver.ChooseParams(
+                factories: expandedSymbolicFactory,
+                value: Derived())
+        }
+
+        """;
+
+    /// <summary>
+    /// Issue #4086's own row. A caller type parameter erases to
+    /// <see cref="object"/> for reflection, so <c>Take&lt;T&gt;(T) where T :
+    /// IDisposable</c> and <c>Take(object)</c> both looked like identity
+    /// conversions and the non-generic one won the specificity tie-break.
+    /// <c>csc</c> picks the constrained generic for both spellings; so does
+    /// G# now. Measured against a compiled and run C# twin, not reasoned about.
+    /// </summary>
+    [Fact]
+    public void Issue4086_TheInferredAndExplicitSpellingsBothPickTheConstrainedGeneric()
+    {
+        const string drivers = """
+            Console.WriteLine(throughClassBound[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughInterface[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughObject(DisposableBase()))
+            """;
+
+        Assert.Equal(
+                $"generic-disposable{Environment.NewLine}"
+                + $"generic-disposable{Environment.NewLine}"
+                + $"object{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                Issue4086GsDeclarations + "\n" + drivers,
+                "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// The other half of #4086, and the reason the fix is not "prefer the
+    /// generic candidate": an argument that is GENUINELY <see cref="object"/>,
+    /// or a mixed vector where CLR inference fixes the method slot to
+    /// <see cref="object"/>, must still select the non-generic overload.
+    /// Covers direct, nested-generic, defaulted and expanded-params shapes.
+    /// </summary>
+    [Fact]
+    public void Issue4086_AGenuineObjectArgumentStillPicksTheNonGenericOverload()
+    {
+        const string drivers = """
+            Console.WriteLine(throughMixedInference[DisposableBase](DisposableBase(), DisposableBase()))
+            Console.WriteLine(throughGenericOnlyMixedInference[DisposableBase](
+                DisposableBase(),
+                DisposableBase()))
+            Console.WriteLine(throughDefaultInference[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughNestedMixedInference[DisposableBase](
+                DisposableBase(),
+                List[object]()))
+            Console.WriteLine(throughExpandedMixedInference[DisposableBase](
+                DisposableBase(),
+                DisposableBase()))
+            """;
+
+        Assert.Equal(
+                $"object{Environment.NewLine}"
+                + $"Object{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}"
+                + $"object-nested{Environment.NewLine}"
+                + $"Object{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                Issue4086GsDeclarations + "\n" + drivers,
+                "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// KNOWN-WRONG, pinned so it is measured rather than described, and named
+    /// for the issue that owns it: issue #4133.
+    /// </summary>
+    /// <remarks>
+    /// <para><c>csc</c> lets a contravariant <c>Action&lt;object&gt;</c> /
+    /// <c>IComparer&lt;object&gt;</c> argument RAISE the inferred type
+    /// argument to <c>object</c> and prints <c>Object</c>,
+    /// <c>generic-delegate:Object</c>, <c>Object</c>,
+    /// <c>generic-interface:Object</c> — compiled and run, not reasoned
+    /// about. G# fixes the argument from the first argument's declared type
+    /// and never lets the delegate raise it.</para>
+    /// <para>This is PRE-EXISTING and unchanged by #4086's fix: measured
+    /// identical on the parent and here. It is asserted on the CURRENT
+    /// (divergent) answer so whoever fixes #4133 gets a failing row rather
+    /// than silence. The winner does not move — only the inferred type
+    /// argument — which is why it is a different defect from #4086.</para>
+    /// </remarks>
+    [Fact]
+    public void Issue4133_AContravariantDelegateOrInterfaceArgumentDoesNotRaiseTheInferredArgument()
+    {
+        const string drivers = """
+            Console.WriteLine(throughDelegateUpperBoundType[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughDelegateUpperBoundWinner[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughInterfaceUpperBoundType[DisposableBase](DisposableBase()))
+            Console.WriteLine(throughInterfaceUpperBoundWinner[DisposableBase](DisposableBase()))
+            """;
+
+        Assert.Equal(
+                $"DisposableBase{Environment.NewLine}"
+                + $"generic-delegate:DisposableBase{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}"
+                + $"generic-interface:DisposableBase{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                Issue4086GsDeclarations + "\n" + drivers,
+                "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// Order-independence of the symbolic bound sets: two
+    /// <c>Action&lt;T&gt;</c> arguments over a base and a derived type fix the
+    /// same argument whichever order they are written in, in both the fixed
+    /// and the expanded-params spelling. On the parent the whole shape
+    /// reported <c>GS0159</c>; <c>csc</c> accepts it and prints these values.
+    /// </summary>
+    [Fact]
+    public void Issue4086_DelegateUpperBoundsFixTheSameArgumentInEitherArgumentOrder()
+    {
+        const string drivers = """
+            Console.WriteLine(VarianceOverloads.UpperType(
+                VarianceOverloads.BaseAction(),
+                VarianceOverloads.DerivedAction()))
+            Console.WriteLine(VarianceOverloads.UpperType(
+                VarianceOverloads.DerivedAction(),
+                VarianceOverloads.BaseAction()))
+            Console.WriteLine(VarianceOverloads.UpperParams(
+                VarianceOverloads.InferenceBaseAction(),
+                VarianceOverloads.InferenceDerivedAction()))
+            Console.WriteLine(VarianceOverloads.UpperParams(
+                VarianceOverloads.InferenceDerivedAction(),
+                VarianceOverloads.InferenceBaseAction()))
+            """;
+
+        Assert.Equal(
+                $"DerivedDisposable{Environment.NewLine}"
+                + $"DerivedDisposable{Environment.NewLine}"
+                + $"Derived{Environment.NewLine}"
+                + $"Derived{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                Issue4086GsDeclarations + "\n" + drivers,
+                "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// <c>List&lt;T&gt;</c> is invariant, so <c>List&lt;object&gt;</c> and
+    /// <c>List&lt;T&gt;</c> cannot both fix one method slot; the non-generic
+    /// candidate wins, in the fixed and expanded spellings alike. On the
+    /// parent the fixed spelling picked the GENERIC candidate and the expanded
+    /// one reported <c>GS0155</c>; <c>csc</c> prints these two values.
+    /// </summary>
+    [Fact]
+    public void Issue4086_AnInvariantConflictSelectsTheNonGenericOverload()
+    {
+        const string drivers = """
+            Console.WriteLine(throughInvariantConflict[DisposableBase](List[DisposableBase]()))
+            Console.WriteLine(throughInvariantExpandedConflict[DisposableBase](List[DisposableBase]()))
+            """;
+
+        Assert.Equal(
+                $"object-invariant{Environment.NewLine}"
+                + $"object-invariant-params{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                Issue4086GsDeclarations + "\n" + drivers,
+                "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// A method group argument contributes its RETURN type as output evidence
+    /// for a method type parameter that appears nowhere else. Covers instance,
+    /// static, inherited, extension and same-compilation receivers; fixed,
+    /// expanded-params and named spellings; an escaped CLR parameter name
+    /// (<c>@func</c> → <c>func_</c>); and a same-compilation
+    /// <c>Derived</c> input with a <c>Base</c> return, which proves the
+    /// recovered call type reaches MethodSpec emission.
+    /// </summary>
+    /// <remarks>
+    /// This is the shape a reviewer flagged on #4108: an OVERLOADED
+    /// zero-argument group returning the base type must fix the parameter to
+    /// the base, not to the argument's derived type. Measured on the parent —
+    /// <c>receiver.ChooseParams(value, methodGroup)</c> was an internal
+    /// compiler error there (<c>GS9998: Invariant violated:
+    /// 'methodGroup.FunctionType' was null</c>).
+    /// </remarks>
+    [Fact]
+    public void Issue4086_MethodGroupOutputInferenceFixesTheOutputTypeParameter()
+    {
+        const string drivers = """
+            Console.WriteLine(throughInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughExpandedInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughFixedMethodGroupOutputInference())
+            Console.WriteLine(throughExpandedMethodGroupOutputInference())
+            Console.WriteLine(throughNamedFixedMethodGroupOutputInference())
+            Console.WriteLine(throughNamedExpandedMethodGroupOutputInference())
+            Console.WriteLine(throughNamedFixedMethodGroupOutputValue())
+            Console.WriteLine(throughNamedExpandedMethodGroupOutputValue())
+            Console.WriteLine(throughNamedExpandedMultiMethodGroupOutputValue())
+            Console.WriteLine(throughExpandedStaticMethodGroup())
+            Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughExpandedInheritedMethodGroup(DerivedInstanceOverloads()))
+            Console.WriteLine(throughExpandedExtensionMethodGroup(InstanceOverloads()))
+            """;
+
+        Assert.Equal(
+                $"DisposableBase{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}"
+                + $"Derived:Base{Environment.NewLine}"
+                + $"Derived:Base{Environment.NewLine}"
+                + $"Derived:Base{Environment.NewLine}"
+                + $"Derived:Base{Environment.NewLine}"
+                + $"same-compilation-Base{Environment.NewLine}"
+                + $"same-compilation-Base{Environment.NewLine}"
+                + $"same-compilation-Base{Environment.NewLine}"
+                + $"Base{Environment.NewLine}"
+                + $"Base{Environment.NewLine}"
+                + $"Base{Environment.NewLine}"
+                + $"Base{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                Issue4086GsDeclarations + "\n" + drivers,
+                "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// The dispatch paths a reviewer flagged on #4108 as still erasing the
+    /// argument: an imported call through a TYPE-PARAMETER receiver, both the
+    /// instance form and the static-abstract-interface form, including one
+    /// that spills through an <c>await</c>. Measured on the parent, both
+    /// picked the boxing <c>Take(object)</c> AND emitted IL the verifier
+    /// rejects with <c>[StackUnexpected] [found value 'T'][expected ref
+    /// 'object']</c>; here they pick the constrained generic and that error is
+    /// gone.
+    /// </summary>
+    /// <remarks>
+    /// The genuine-<see cref="object"/> and mixed-inference controls sit in
+    /// the same fact so a fix that simply prefers the generic candidate cannot
+    /// pass. ILVerify runs strictly over everything except these
+    /// static-virtual-interface functions, where the two established
+    /// <see cref="IlVerifier.KnownIssues.StaticVirtualInterface"/> codes are
+    /// tolerated; the rest of the assembly is verified with no suppression.
+    /// </remarks>
+    [Fact]
+    public void Issue4086_ConstrainedInstanceAndStaticDispatchKeepTheSymbolicArgument()
+    {
+        const string drivers = """
+            Console.WriteLine(throughConstrainedInstanceMethodGroup[InstanceOverloads](
+                InstanceOverloads()))
+            Console.WriteLine(throughExpandedConstrainedInstanceMethodGroup[InstanceOverloads](
+                InstanceOverloads()))
+            Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
+                InstanceOverloads(),
+                DisposableBase()))
+            Console.WriteLine(throughConstrainedInstanceObject[InstanceOverloads](
+                InstanceOverloads(),
+                DisposableBase()))
+            Console.WriteLine(throughConstrainedStatic[StaticOverloads, DisposableBase](
+                DisposableBase()))
+            Console.WriteLine(throughConstrainedStaticAsync[DisposableBase](DisposableBase()).Result)
+            Console.WriteLine(throughConstrainedStaticObject[StaticOverloads](
+                DisposableBase()))
+            Console.WriteLine(throughConstrainedStaticMixedInference[StaticOverloads, DisposableBase](
+                DisposableBase(),
+                DisposableBase()))
+            Console.WriteLine(throughConstrainedStaticMethodGroup[StaticOverloads]())
+            Console.WriteLine(throughExpandedConstrainedStaticMethodGroup[StaticOverloads]())
+            Console.WriteLine(throughNamedConstrainedStaticMethodGroup[StaticOverloads]())
+            Console.WriteLine(throughNamedExpandedConstrainedStaticMethodGroup[StaticOverloads]())
+            """;
+
+        Assert.Equal(
+                $"DisposableBase{Environment.NewLine}"
+                + $"Base{Environment.NewLine}"
+                + $"instance-generic{Environment.NewLine}"
+                + $"instance-object{Environment.NewLine}"
+                + $"static-generic{Environment.NewLine}"
+                + $"static-generic{Environment.NewLine}"
+                + $"static-object{Environment.NewLine}"
+                + $"Object{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}"
+                + $"Base{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}"
+                + $"Base{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                Issue4086GsDeclarations
+                    + "\n" + Issue4086GsConstrainedStaticDeclarations
+                    + "\n" + drivers,
+                "Issue4086.CSharp",
+                ignoredErrorScope: "through(?:Named)?(?:Expanded)?ConstrainedStatic(?:Async)?"));
+    }
+
+    /// <summary>
+    /// The negative control for method-group output inference: a group whose
+    /// only candidate takes an incompatible INPUT is not applicable, and the
+    /// call is rejected rather than silently bound to the wrong candidate.
+    /// </summary>
+    [Fact]
+    public void Issue4086_AnIncompatibleMethodGroupInputIsRejected()
+    {
+        const string incompatibleSource = """
+            package Issue4086.Incompatible
+            import Issue4086.CSharp
+
+            func incompatibleConvert(value int32) Issue4086.CSharp.Base {
+                return Issue4086.CSharp.Base()
+            }
+
+            MethodGroupOutputInference.Choose(
+                Issue4086.CSharp.Derived(),
+                incompatibleConvert)
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(
+            Issue4086CsSource,
+            incompatibleSource,
+            "Issue4086.CSharp");
+
+        // Count, not presence (ADR-0154). The helper returns raw compiler
+        // output lines, so count the DIAGNOSTIC lines: exactly one, and it is
+        // the GS0159 for the one rejected call. A follow-on cascade or a
+        // second report of the same call would break this row.
+        Assert.Equal(
+            1,
+            diagnostics.Count(d => d.Contains(": error GS", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            diagnostics.Count(d => d.Contains("error GS0159: Cannot find function Choose.", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// KNOWN-WRONG, pinned rather than left silent, and owned by issue #4134.
+    /// </summary>
+    /// <remarks>
+    /// <para>The named-argument mapping this change needs for its own named
+    /// method-group rows also makes a reordered NAMED argument into a
+    /// <c>params</c> slot BIND, which the parent rejected outright with
+    /// <c>GS0159</c>. It binds with the wrong EVALUATION ORDER: C# evaluates
+    /// arguments in source order regardless of the parameter order they are
+    /// reordered into, so <c>csc</c> prints <c>first|second|</c> and
+    /// <c>first|ref|</c> — compiled and run — while this prints
+    /// <c>second|first|</c> and <c>ref|first|</c>.</para>
+    /// <para>No existing program changes: the parent did not compile this at
+    /// all. The reordering repair is #4134's subject and lives in the
+    /// follow-up PR, which flips this row. Asserted on the CURRENT (wrong)
+    /// order so that flip is visible.</para>
+    /// </remarks>
+    [Fact]
+    public void Issue4134_AReorderedNamedArgumentIntoAParamsSlotBindsInTheWrongEvaluationOrder()
+    {
+        const string source = """
+            package Issue4134.Order
+            import System
+            import Issue4086.CSharp
+
+            func firstArgument() string {
+                Console.Write("first|")
+                return "first"
+            }
+
+            func secondArgument() int32 {
+                Console.Write("second|")
+                return 2
+            }
+
+            func refIndex() int32 {
+                Console.Write("ref|")
+                return 0
+            }
+
+            Console.WriteLine(MethodGroupOutputInference.EvaluationOrder(
+                items: firstArgument(),
+                value: secondArgument()))
+            let refValues = []int32{2}
+            Console.WriteLine(MethodGroupOutputInference.RefEvaluationOrder(
+                items: firstArgument(),
+                value: ref refValues[refIndex()]))
+            Console.WriteLine(refValues[0])
+            """;
+
+        Assert.Equal(
+            $"second|first|2:first{Environment.NewLine}"
+                + $"ref|first|12:first{Environment.NewLine}"
+                + $"12{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(Issue4086CsSource, source, "Issue4086.CSharp"));
+    }
+
     private const string Issue3076CsSource = """
         namespace Issue3076.CSharp
         {
@@ -1127,14 +2001,18 @@ public class ImportedMemberMatrixTests
         Assert.Equal($"yes{Environment.NewLine}", CompileAndRun(source));
     }
 
-    private static string CompileAndRunWithSiblingCs(string csSource, string gSource, string siblingName)
+    internal static string CompileAndRunWithSiblingCs(
+        string csSource,
+        string gSource,
+        string siblingName,
+        string ignoredErrorScope = null)
     {
         var workDir = CreateWorkDir("imported_member_matrix_");
         try
         {
             var siblingDll = BuildCsLibrary(workDir, csSource, siblingName);
             File.Copy(siblingDll, Path.Combine(workDir, Path.GetFileName(siblingDll)), overwrite: true);
-            return CompileAndRun(gSource, new[] { siblingDll }, workDir);
+            return CompileAndRun(gSource, new[] { siblingDll }, workDir, ignoredErrorScope);
         }
         finally
         {
@@ -1276,7 +2154,11 @@ public class ImportedMemberMatrixTests
         }
     }
 
-    private static string CompileAndRun(string source, IReadOnlyCollection<string> references, string workDir)
+    private static string CompileAndRun(
+        string source,
+        IReadOnlyCollection<string> references,
+        string workDir,
+        string ignoredErrorScope = null)
     {
         var srcPath = Path.Combine(workDir, "test.gs");
         var outPath = Path.Combine(workDir, "test.dll");
@@ -1286,7 +2168,18 @@ public class ImportedMemberMatrixTests
         var (exitCode, diagnostics) = RunCompiler(args);
         Assert.True(exitCode == 0, diagnostics);
 
-        IlVerifier.Verify(outPath, additionalReferences: references);
+        IlVerifier.Verify(
+            outPath,
+            additionalReferences: references,
+            // Only the two established static-virtual-interface codes are
+            // tolerated, and only inside the scoped methods. The
+            // `Unsatisfied*ParentInst` pair that used to sit here was removed
+            // and the suite re-run: nothing needed it, so it was dead
+            // suppression rather than hidden debt.
+            ignoredErrorCodes: ignoredErrorScope is null
+                ? null
+                : IlVerifier.KnownIssues.StaticVirtualInterface,
+            ignoredErrorScope: ignoredErrorScope);
 
         var runtimeConfig = Path.ChangeExtension(outPath, ".runtimeconfig.json");
         if (!File.Exists(runtimeConfig))

@@ -79,7 +79,9 @@ namespace GSharp.Compiler.Tests;
 /// argument removes a non-generic sibling from the candidate set entirely, so
 /// there was nothing to flip) and now binds; the INFERRED spelling picks the
 /// boxing <c>Take(object)</c> both before and after, which diverges from
-/// <c>csc</c> and is filed as #4086. The <c>.gs</c> corpus was swept before and
+/// <c>csc</c> and was filed as #4086 — since CLOSED, so the inferred row now
+/// asserts <c>generic-disposable</c> beside the explicit one. The <c>.gs</c>
+/// corpus was swept before and
 /// after with a rebuilt compiler — 197 files, 170 of which emit an assembly
 /// under the sweep's reference set — and the two per-file manifests (emit
 /// status plus the multiset of diagnostic ids) are IDENTICAL. The four test
@@ -106,7 +108,8 @@ namespace GSharp.Compiler.Tests;
 /// <c>Take(object)</c> where <c>csc</c> picks the constrained
 /// <c>Take&lt;T&gt;(T)</c> — measured identical before and after this change,
 /// so it is surfaced by the blast-radius measurement rather than caused by it.
-/// Filed as #4086.</para>
+/// Filed as #4086, and CLOSED by the erased-type-parameter identity fix; the
+/// row below now asserts the same answer for both spellings.</para>
 /// </remarks>
 public class Issue4070ImportedGenericMethodClassBoundTests
 {
@@ -351,8 +354,8 @@ public class Issue4070ImportedGenericMethodClassBoundTests
         // is newly accepted, but it does not by itself say which candidate
         // WINS once a constrained one becomes applicable, so that was measured
         // rather than reasoned about — see
-        // TheConstrainedOverloadIsReachedAndTheInferredSpellingIsUnmoved for
-        // the full before/after table. On the parent this EXPLICIT spelling
+        // TheConstrainedOverloadIsReachedAndBothSpellingsAgree for the full
+        // before/after table. On the parent this EXPLICIT spelling
         // reported `GS0159: Cannot find function Take.` — an explicit type
         // argument removes the non-generic `Take(object)` from the candidate
         // set entirely, so there was no winner to flip — and it now picks
@@ -862,35 +865,34 @@ public class Issue4070ImportedGenericMethodClassBoundTests
     }
 
     /// <summary>
-    /// The overload question, measured rather than reasoned about: the
-    /// EXPLICIT spelling is newly reachable and picks the constrained generic
-    /// candidate (which is what <c>csc</c> picks), while the INFERRED spelling
-    /// picks the boxing <c>Take(object)</c> — before AND after, so this change
-    /// moves no winner.
+    /// The overload question, measured rather than reasoned about: BOTH
+    /// spellings of one call now pick the constrained generic candidate, which
+    /// is what <c>csc</c> picks for both (issue #4086).
     /// </summary>
     /// <remarks>
     /// <para>Monotonicity says no program the CLR refuses is newly accepted; it
     /// does not by itself say which candidate wins once a constrained one
     /// becomes applicable, and that is the one risk a monotone widening of an
-    /// overload-resolution filter genuinely carries. Measured on the parent
-    /// with a rebuilt compiler:</para>
+    /// overload-resolution filter genuinely carries. Measured with rebuilt
+    /// compilers at each step:</para>
     /// <list type="table">
     /// <item><description><c>Take[T](v)</c> explicit — <c>csc</c>
-    /// <c>generic-disposable</c>; parent <c>GS0159</c>; here
+    /// <c>generic-disposable</c>; before #4070 <c>GS0159</c>; since #4070
     /// <c>generic-disposable</c>. An explicit type argument removes the
     /// non-generic <c>Take(object)</c> from the candidate set entirely, so
-    /// there was no winner to flip — this is the same "cannot find function"
-    /// repair as every other row.</description></item>
+    /// there was no winner to flip.</description></item>
     /// <item><description><c>Take(v)</c> inferred — <c>csc</c>
-    /// <c>generic-disposable</c>; parent <c>object</c>; here <c>object</c>.
-    /// Unmoved by this change, and a pre-existing divergence from <c>csc</c>
-    /// filed as #4086.</description></item>
+    /// <c>generic-disposable</c>; before this change <c>object</c>, because
+    /// the caller's <c>T</c> erased to <c>System.Object</c> and both
+    /// candidates then looked like identity conversions; here
+    /// <c>generic-disposable</c>. This is the row #4086 filed, and flipping it
+    /// is the acceptance test for that issue.</description></item>
     /// </list>
-    /// <para>The inferred row asserts the CURRENT (wrong) answer so whoever
-    /// fixes #4086 gets a failing row rather than silence.</para>
+    /// <para>The two spellings of one call now agree with each other and with
+    /// <c>csc</c>, which is exactly what #4086 asked for.</para>
     /// </remarks>
     [Fact]
-    public void TheConstrainedOverloadIsReachedAndTheInferredSpellingIsUnmoved()
+    public void TheConstrainedOverloadIsReachedAndBothSpellingsAgree()
     {
         const string Explicit = """
             package P
@@ -938,8 +940,9 @@ public class Issue4070ImportedGenericMethodClassBoundTests
             var (inferredExit, inferredOutput) = RunDotnet(inferredPath);
             Assert.True(inferredExit == 0, $"the inferred spelling must run. Exit {inferredExit}:\n{inferredOutput}");
             Assert.Equal(
-                "object",
+                "generic-disposable",
                 inferredOutput.Trim());
+            Assert.Equal(explicitOutput.Trim(), inferredOutput.Trim());
         }
         finally
         {

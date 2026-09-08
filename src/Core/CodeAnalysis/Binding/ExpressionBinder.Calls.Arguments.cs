@@ -1479,7 +1479,13 @@ internal sealed partial class ExpressionBinder
             (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 typeArgSymbols,
-                inheritedSymbolicArgs,
+                RefineSymbolicArgsForMethodGroups(
+                    closed,
+                    arguments,
+                    inheritedSymbolicArgs,
+                    receiverArgCount: 0,
+                    isExpanded: isExpanded,
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
                 isExpanded,
                 argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
@@ -1501,6 +1507,7 @@ internal sealed partial class ExpressionBinder
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
             openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments),
+            symbolicArgTypes: inheritedSymbolicArgs,
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
 
         switch (resolution.Outcome)
@@ -1554,7 +1561,10 @@ internal sealed partial class ExpressionBinder
                     best,
                     arguments,
                     inheritedSymbolicArgs,
-                    receiverArgCount: 0);
+                    receiverArgCount: 0,
+                    isExpanded: resolution.IsExpanded,
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    parameterMapping: resolution.ParameterMapping);
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     best,
                     typeArgSymbols,
@@ -1950,7 +1960,13 @@ internal sealed partial class ExpressionBinder
             (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 typeArgSymbols,
-                extensionSymbolicArgs,
+                RefineSymbolicArgsForMethodGroups(
+                    closed,
+                    arguments,
+                    extensionSymbolicArgs,
+                    receiverArgCount: 1,
+                    isExpanded: isExpanded,
+                    argumentNames: extensionArgumentNames),
                 isExpanded,
                 extensionArgumentNames);
         Func<int, bool> functionLiteralArgumentCheck = argumentIndex =>
@@ -1978,6 +1994,7 @@ internal sealed partial class ExpressionBinder
                 explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                 explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1),
                 openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1),
+                symbolicArgTypes: extensionSymbolicArgs,
                 symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments, argumentOffset: 1));
 
         var resolution = ResolveExtensionCandidates();
@@ -2053,7 +2070,10 @@ internal sealed partial class ExpressionBinder
             best,
             arguments,
             extensionSymbolicArgs,
-            receiverArgCount: 1);
+            receiverArgCount: 1,
+            isExpanded: resolution.IsExpanded,
+            argumentNames: extensionArgumentNames,
+            parameterMapping: resolution.ParameterMapping);
         var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
             best,
             typeArgSymbols,
@@ -3750,6 +3770,22 @@ internal sealed partial class ExpressionBinder
         // treats them as applicable to an IFormattable/FormattableString (or
         // handler) parameter, just like every other CLR-call Resolve site.
         var interpolatedStringArgs = ComputeInterpolatedStringArgFlags(ce.Arguments, arguments.Length);
+        var symbolicArgTypes = MemberLookup.BuildSymbolicArgTypeVector(
+            null,
+            ImmutableArray.CreateRange(arguments.Select(argument => argument.Type)));
+        Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverTypeArgSymbols =
+            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
+                closed,
+                default,
+                RefineSymbolicArgsForMethodGroups(
+                    closed,
+                    arguments,
+                    symbolicArgTypes,
+                    receiverArgCount: 0,
+                    isExpanded: isExpanded,
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
+                isExpanded,
+                argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -3757,12 +3793,14 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+            recoverTypeArgSymbols: recoverTypeArgSymbols,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
             erasedArgumentMismatchCheck: MakeErasedArgumentMismatchCheck(arguments),
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
+            symbolicArgTypes: symbolicArgTypes,
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
         if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
         {
@@ -3786,19 +3824,22 @@ internal sealed partial class ExpressionBinder
         }
 
         var parameters = method.GetParameters();
+        var symbolicMethodTypeArgs = recoverTypeArgSymbols(method, resolution.IsExpanded);
 
         // Return type: a return that names the constraint type-variable is
         // recovered by projecting through the constructed constraint;
         // a concrete return (e.g. IComparable.CompareTo -> int32) falls back to
         // the direct CLR mapping.
-        var returnType = MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
+        var returnType = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(
+                method,
+                symbolicMethodTypeArgs,
+                constraintType)
+            ?? MemberLookup.GetClrMethodReturnTypeSymbol(constraintType, method);
         var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(
             constraintType,
             method);
 
-        var downstreamMapping = resolution.IsExpanded
-            ? default
-            : resolution.ParameterMapping;
+        var downstreamMapping = resolution.ParameterMapping;
         if (resolution.IsExpanded)
         {
             var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
@@ -3812,8 +3853,10 @@ internal sealed partial class ExpressionBinder
                 arguments,
                 parameters,
                 ce,
-                parameterMapping: resolution.ParameterMapping,
+                parameterMapping: downstreamMapping,
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs,
                 paramsElementTypeOverride: symbolicParamsElement);
+            downstreamMapping = default;
         }
 
         // Issue #1852: re-lower each interpolated-string argument whose
@@ -3833,6 +3876,7 @@ internal sealed partial class ExpressionBinder
         // candidate's applicability actually depended on the flag) is
         // unchanged.
         arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, downstreamMapping);
+
         arguments = ApplySymbolicClrArgumentConversions(
             arguments,
             parameters,
@@ -3840,11 +3884,22 @@ internal sealed partial class ExpressionBinder
             method,
             constraintType);
 
-        // Order positionally for named arguments; deliberately skip the CLR
-        // boxing/conversion pass — the emitted MemberRef parameter is the
-        // interface type-variable `!0` (== the reified `!!T`), so a `T`-typed
-        // argument must be passed unboxed.
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
+        // Non-generic constrained slots stay on the established unconverted
+        // path: the emitted MemberRef parameter is the interface type-variable
+        // `!0` (== the reified `!!T`). A generic method needs its recovered
+        // method arguments during conversion too, so `Take<U>(U)` reifies U as
+        // the caller's T and does not box it to the reflection-time `object`.
+        var convertedArguments = method.IsGenericMethod
+            ? conversions.BindClrParameterConversions(
+                arguments,
+                parameters,
+                ce,
+                downstreamMapping,
+                method: method,
+                receiverType: constraintType,
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs)
+            : arguments;
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, downstreamMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundImportedInstanceCallExpression(
@@ -3854,12 +3909,20 @@ internal sealed partial class ExpressionBinder
             returnType,
             orderedArgs,
             refKinds,
-            default,
+            symbolicMethodTypeArgs,
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: declaringConstraint);
         return true;
     }
 
+    /// <summary>
+    /// Issue #4054: a constrained CLR dispatch through a type-parameter
+    /// receiver still has to apply the USER-DEFINED implicit conversion a
+    /// same-compilation argument needs to reach the parameter type. Without
+    /// it the argument is pushed unconverted and the emitted call does not
+    /// verify — <c>[StackUnexpected] [found value 'P.Celsius'][expected
+    /// Double]</c> and three sibling shapes, measured.
+    /// </summary>
     private ImmutableArray<BoundExpression> ApplySymbolicClrArgumentConversions(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,

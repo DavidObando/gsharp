@@ -90,6 +90,7 @@ internal sealed class LambdaEnclosingTypeParameterCollector : BoundTreeWalker
                 break;
             case BoundConstrainedStaticCallExpression constrainedStaticCall:
                 TypeSymbol.CollectReferencedTypeParameters(constrainedStaticCall.TypeParameter, this.sink);
+                this.CheckNullableTypeArguments(constrainedStaticCall.TypeArgumentSymbols);
                 break;
         }
 

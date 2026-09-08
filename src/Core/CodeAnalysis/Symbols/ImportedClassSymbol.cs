@@ -204,9 +204,9 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="typeArgSymbols">Explicit type-argument symbols in source order, or default.</param>
     /// <param name="projectTypeArgument">Projects an inferred type argument onto the reference load context, or <see langword="null"/>.</param>
     /// <param name="argumentNames">Per-source-argument names parallel to <paramref name="arguments"/>.</param>
-    /// <param name="refineSymbolicMethodGroupArgs">Issue #3712: given the selected method and the pre-resolution symbolic argument vector, returns the vector with each user method-group slot replaced by the symbolic function type the winning overload's delegate parameter selects. <see langword="null"/> leaves the vector unrefined.</param>
+    /// <param name="refineSymbolicMethodGroupArgs">Issue #3712: given the selected method, expanded-form flag, and pre-resolution symbolic argument vector, returns the vector with each user method-group slot replaced by the symbolic function type the winning overload's delegate parameter selects. <see langword="null"/> leaves the vector unrefined.</param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, out bool isExpanded, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<string>? argumentNames = null, Func<MethodInfo, ImmutableArray<TypeSymbol>, ImmutableArray<TypeSymbol>>? refineSymbolicMethodGroupArgs = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, out bool isExpanded, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<string>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>, ImmutableArray<TypeSymbol>>? refineSymbolicMethodGroupArgs = null)
     {
         function = null;
         parameterMapping = default;
@@ -438,7 +438,7 @@ public sealed class ImportedClassSymbol : Symbol
                 return MemberLookup.BuildSymbolicMethodTypeArgs(
                     closed,
                     typeArgSymbols,
-                    refineSymbolicMethodGroupArgs?.Invoke(closed, symbolicArgVector) ?? symbolicArgVector,
+                    refineSymbolicMethodGroupArgs?.Invoke(closed, isExpanded, symbolicArgVector) ?? symbolicArgVector,
                     isExpanded,
                     argumentNames);
             },
@@ -455,8 +455,10 @@ public sealed class ImportedClassSymbol : Symbol
                 {
                     return Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable");
                 }),
+            methodGroupArgumentCheck: ExpressionBinder.MakeMethodGroupArgumentCheck(arguments),
             deferredInferenceArgs: deferredInferenceArgs,
             openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(arguments),
+            symbolicArgTypes: symbolicArgVector,
             symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(arguments));
 
         switch (result.Outcome)
@@ -492,8 +494,9 @@ public sealed class ImportedClassSymbol : Symbol
                     var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                         bestMethod,
                         typeArgSymbols,
-                        refineSymbolicMethodGroupArgs?.Invoke(bestMethod, symbolicArgVector) ?? symbolicArgVector,
-                        result.IsExpanded);
+                        refineSymbolicMethodGroupArgs?.Invoke(bestMethod, result.IsExpanded, symbolicArgVector) ?? symbolicArgVector,
+                        result.IsExpanded,
+                        argumentNames);
                     returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(bestMethod, symbolicMethodTypeArgs, receiverType: null);
                 }
 

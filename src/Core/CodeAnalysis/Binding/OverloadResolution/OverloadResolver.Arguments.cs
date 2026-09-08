@@ -190,6 +190,17 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private BoundExpression ConvertParamsElement(BoundExpression arg, TypeSymbol elementTypeSymbol, CallExpressionSyntax callSyntax, int sourceIndex, int receiverArgCount)
     {
+        var conversionSyntaxIndex = sourceIndex - receiverArgCount;
+        var location = callSyntax != null
+            && conversionSyntaxIndex >= 0
+            && conversionSyntaxIndex < callSyntax.Arguments.Count
+                ? callSyntax.Arguments[conversionSyntaxIndex].Location
+                : callSyntax?.Location ?? default;
+        if (ClrOverloadResolution.IsMethodGroupArgument(arg))
+        {
+            return conversions.BindConversion(location, arg, elementTypeSymbol);
+        }
+
         if (arg.Type == null || arg.Type == TypeSymbol.Error || arg.Type == elementTypeSymbol)
         {
             return arg;
@@ -204,19 +215,6 @@ internal sealed partial class OverloadResolver
 
         if (conversion.Exists)
         {
-            var conversionSyntaxIndex = sourceIndex - receiverArgCount;
-            TextLocation location;
-            if (callSyntax != null
-                && conversionSyntaxIndex >= 0
-                && conversionSyntaxIndex < callSyntax.Arguments.Count)
-            {
-                location = callSyntax.Arguments[conversionSyntaxIndex].Location;
-            }
-            else
-            {
-                location = callSyntax?.Location ?? default;
-            }
-
             return conversions.BindConversion(location, arg, elementTypeSymbol, allowExplicit: true);
         }
 
@@ -225,13 +223,7 @@ internal sealed partial class OverloadResolver
             return udc;
         }
 
-        var diagnosticIndex = sourceIndex - receiverArgCount;
-        var diagnosticLocation = callSyntax != null
-            && diagnosticIndex >= 0
-            && diagnosticIndex < callSyntax.Arguments.Count
-                ? callSyntax.Arguments[diagnosticIndex].Location
-                : callSyntax?.Location ?? default;
-        return conversions.BindConversion(diagnosticLocation, arg, elementTypeSymbol);
+        return conversions.BindConversion(location, arg, elementTypeSymbol);
     }
 
     /// <summary>

@@ -1420,7 +1420,8 @@ public static class SpillSequenceSpiller
                     args.ToImmutable(),
                     call.ArgumentRefKinds,
                     call.ReturnType,
-                    call.ConstrainedInterfaceType!);
+                    call.ConstrainedInterfaceType!,
+                    call.TypeArgumentSymbols);
             return new BoundSpillSequenceExpression(
                 null,
                 locals.ToImmutable(),
