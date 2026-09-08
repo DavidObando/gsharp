@@ -1568,7 +1568,19 @@ internal sealed class MemberLookup
         MethodInfo openMethod,
         ImmutableArray<TypeSymbol?> symbolicArgTypes,
         bool isExpanded = false)
+        => InferSymbolicMethodTypeArgumentsCore(
+            openMethod,
+            symbolicArgTypes,
+            isExpanded,
+            out _);
+
+    private static TypeSymbol?[] InferSymbolicMethodTypeArgumentsCore(
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol?> symbolicArgTypes,
+        bool isExpanded,
+        out bool requiresRecoveredInference)
     {
+        requiresRecoveredInference = false;
         if (openMethod == null || !openMethod.IsGenericMethodDefinition)
         {
             return Array.Empty<TypeSymbol?>();
@@ -1617,7 +1629,7 @@ internal sealed class MemberLookup
             }
         }
 
-        return FixSymbolicMethodTypeArguments(bounds);
+        return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference);
     }
 
     /// <summary>
@@ -1785,6 +1797,7 @@ internal sealed class MemberLookup
         }
 
         TypeSymbol?[] inferred;
+        var requiresRecoveredInference = false;
         if (!symbolicArgTypes.IsDefault && symbolicArgTypes.Length > 0)
         {
             var nullableSymbolicArgTypes = ImmutableArray.CreateBuilder<TypeSymbol?>(symbolicArgTypes.Length);
@@ -1822,10 +1835,11 @@ internal sealed class MemberLookup
                 orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
             }
 
-            inferred = InferSymbolicMethodTypeArguments(
+            inferred = InferSymbolicMethodTypeArgumentsCore(
                 openMethod,
                 orderedSymbolicArgTypes,
-                isExpanded);
+                isExpanded,
+                out requiresRecoveredInference);
         }
         else
         {
@@ -1835,6 +1849,7 @@ internal sealed class MemberLookup
         // Explicit list takes precedence at each slot when present.
         if (!explicitTypeArgSymbols.IsDefaultOrEmpty)
         {
+            requiresRecoveredInference = false;
             for (int i = 0; i < arity && i < explicitTypeArgSymbols.Length; i++)
             {
                 if (explicitTypeArgSymbols[i] != null)
@@ -1844,8 +1859,7 @@ internal sealed class MemberLookup
             }
         }
 
-        var closedTypeArguments = closed.GetGenericArguments();
-        var anySymbolic = false;
+        var anySymbolic = requiresRecoveredInference;
         for (int i = 0; i < inferred.Length; i++)
         {
             // Issue #833: an in-scope type parameter requires the symbolic
@@ -1871,9 +1885,6 @@ internal sealed class MemberLookup
                     || TypeSymbol.RequiresSymbolicProjection(inferredType)
                     || TypeSymbol.ContainsNamedTupleElements(inferredType)
                     || TypeSymbol.ContainsSourceArrayShape(inferredType)
-                    || (i < closedTypeArguments.Length
-                        && inferredType.ClrType is { } inferredClr
-                        && !ClrTypeUtilities.AreSame(inferredClr, closedTypeArguments[i]))
                     || symbolicArgTypes.Any(
                         symbolic => symbolic != null
                             && TypeSymbol.ContainsNullLiteralType(symbolic))))
@@ -6714,14 +6725,18 @@ internal sealed class MemberLookup
         return null;
     }
 
-    private static TypeSymbol?[] FixSymbolicMethodTypeArguments(SymbolicInferenceBounds bounds)
+    private static TypeSymbol?[] FixSymbolicMethodTypeArguments(
+        SymbolicInferenceBounds bounds,
+        out bool requiresRecoveredInference)
     {
+        requiresRecoveredInference = false;
         var result = new TypeSymbol?[bounds.Arity];
         for (var slot = 0; slot < bounds.Arity; slot++)
         {
             var exact = bounds.Exact[slot];
             var lower = bounds.Lower[slot];
             var upper = bounds.Upper[slot];
+            requiresRecoveredInference |= HasDistinctSymbolicInferenceBounds(exact, lower, upper);
 
             TypeSymbol? fixedType;
             if (exact is { Count: > 0 })
@@ -6763,6 +6778,35 @@ internal sealed class MemberLookup
         }
 
         return result;
+    }
+
+    private static bool HasDistinctSymbolicInferenceBounds(
+        IReadOnlyList<TypeSymbol>? exact,
+        IReadOnlyList<TypeSymbol>? lower,
+        IReadOnlyList<TypeSymbol>? upper)
+    {
+        TypeSymbol? first = null;
+        foreach (var bounds in new[] { exact, lower, upper })
+        {
+            if (bounds == null)
+            {
+                continue;
+            }
+
+            foreach (var bound in bounds)
+            {
+                if (first == null)
+                {
+                    first = bound;
+                }
+                else if (!DeclarationBinder.TypeSignaturesEquivalent(first, bound))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static TypeSymbol? FindSymbolicInferenceCandidate(
