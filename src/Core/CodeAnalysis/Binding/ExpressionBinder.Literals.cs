@@ -3069,7 +3069,11 @@ internal sealed partial class ExpressionBinder
             var parameterType = parameter.ParameterType;
             if (isExpanded &&
                 paramIndex == parameters.Length - 1 &&
-                parameter.GetCustomAttribute<ParamArrayAttribute>() is not null &&
+                parameter.GetCustomAttributesData().Any(attribute =>
+                    string.Equals(
+                        attribute.AttributeType.FullName,
+                        "System.ParamArrayAttribute",
+                        StringComparison.Ordinal)) &&
                 parameterType.IsArray)
             {
                 parameterType = Invariant.Required(
