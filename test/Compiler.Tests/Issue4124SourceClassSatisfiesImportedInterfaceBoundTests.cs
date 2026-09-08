@@ -67,6 +67,19 @@ namespace GSharp.Compiler.Tests;
 /// expected vector stayed <c>[T]</c> and never matched <c>[Cmp]</c>. Giving
 /// the symbolic walk the same substitution is parity between the two halves of
 /// one predicate, not a second feature.</para>
+/// <para><b>The consolidation was load-bearing within days.</b> Issue #4136
+/// was filed independently against this very site while #4089/#4090 were being
+/// closed — a same-compilation class failing an imported interface constraint
+/// at a CONSTRUCTOR — and its stated fix was "route the arm through
+/// <c>BoundCarriesClrInterface</c>", which is the fifth copy. Because the
+/// fallback moved INTO the leaf instead, #4136's repro is answered here with
+/// no additional code: measured <c>2 × GS0152</c> on this branch's parent
+/// <c>b4478875</c> and <c>de</c> on this branch. It is a row below. Its
+/// sibling #4139 is NOT closed here and is NOT the same defect — that one is
+/// <c>IsNonNullableValueTypeForConstraint</c> missing an <c>EnumSymbol</c> arm
+/// for the <c>struct</c>/<c>unmanaged</c> constraints, a different predicate
+/// that never consults the interface walk. Measured red on the parent AND on
+/// this branch (<c>2 × GS0152</c> both), and left where it belongs.</para>
 /// </remarks>
 public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
 {
@@ -186,9 +199,48 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
             new[] { "took-cmp" },
         };
 
+        // Issue #4136, filed independently against the SAME site while #4089/
+        // #4090 were being closed, and closed by this change without a second
+        // repair — which is the point of consolidating at the leaf rather than
+        // patching a fourth caller. Its repro verbatim: a source class that
+        // implements the imported interface DIRECTLY, and one that inherits it
+        // from an IMPORTED base (`ArrayList` carries `IEnumerable`). Measured
+        // `2 x GS0152` on this branch's parent `b4478875` and `de` here.
+        yield return new object[]
+        {
+            "issue-4136-a-direct-implementation-and-an-imported-base-at-a-constructor",
+            """
+            package P
+            import System
+            import System.Collections
+
+            open class GsDisposable[TD IDisposable] {
+                public var Tag string = "d"
+            }
+
+            open class GsEnumerable[TE IEnumerable] {
+                public var Tag string = "e"
+            }
+
+            class DisposableSource : IDisposable {
+                public func Dispose() {
+                }
+            }
+
+            class EnumerableSource : ArrayList {
+            }
+
+            let a = GsDisposable[DisposableSource]()
+            let b = GsEnumerable[EnumerableSource]()
+            Console.WriteLine(a.Tag + b.Tag)
+            """,
+            new[] { "de" },
+        };
+
         // A CONTROL, green before and after: an IMPORTED type argument has a
         // CLR type, so the reflective half answers it and the new fallback is
-        // never consulted.
+        // never consulted. This is the control #4136's "Expected" section
+        // names.
         yield return new object[]
         {
             "an-imported-type-argument-is-still-answered-reflectively",
