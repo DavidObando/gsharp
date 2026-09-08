@@ -3784,6 +3784,26 @@ internal static class ClrOverloadResolution
 
             target = paramTypeRewrite?.Invoke(target) ?? target;
             paramTypes[i] = target;
+
+            if (argTypes[i] is null
+                && methodGroupInference != null
+                && methodGroupArgumentCheck?.Invoke(i) == true)
+            {
+                if (!ClrLoadContext.TryGetDelegateSignature(target, out var delegateParameters, out var delegateReturn)
+                    || !IsMethodGroupSignatureCompatible(
+                        methodGroupInference(i, delegateParameters),
+                        delegateParameters,
+                        delegateReturn))
+                {
+                    return;
+                }
+
+                conversions[i] = delegateRefKindArgumentCheck?.Invoke(i, target) == false
+                    ? ImplicitConversionKind.DelegateRefKindMismatch
+                    : ImplicitConversionKind.Identity;
+                continue;
+            }
+
             var conv = ClassifyImplicit(target, argTypes[i], supplementaryInterfaceCheck);
             conv = RefineErasedTypeParameterConversion(
                 conv,
@@ -3918,6 +3938,7 @@ internal static class ClrOverloadResolution
         for (var i = 0; i < argTypes.Count; i++)
         {
             if (argTypes[i] == null
+                || methodGroupArgumentCheck?.Invoke(i) == true
                 || (deferredInferenceArgs != null
                     && i < deferredInferenceArgs.Count
                     && deferredInferenceArgs[i]))
@@ -3942,11 +3963,12 @@ internal static class ClrOverloadResolution
             {
                 if (methodGroupArgumentCheck(i))
                 {
-                    if (!TryGetTargetType(i, out var targetType)
-                        || !TryInferMethodGroupArgument(targetType, i, bounds, methodGroupInference))
+                    if (!TryGetTargetType(i, out var targetType))
                     {
                         return false;
                     }
+
+                    TryInferMethodGroupArgument(targetType, i, bounds, methodGroupInference);
                 }
             }
         }

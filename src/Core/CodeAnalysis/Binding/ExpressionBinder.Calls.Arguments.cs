@@ -3818,6 +3818,18 @@ internal sealed partial class ExpressionBinder
             constraintType,
             method);
 
+        var downstreamMapping = resolution.ParameterMapping;
+        if (resolution.IsExpanded)
+        {
+            arguments = overloads.ExpandParamsArguments(
+                arguments,
+                parameters,
+                ce,
+                parameterMapping: downstreamMapping,
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs);
+            downstreamMapping = default;
+        }
+
         // Issue #1852: re-lower each interpolated-string argument whose
         // resolved parameter is IFormattable/FormattableString-shaped to
         // FormattableStringFactory.Create(...) — mirroring
@@ -3834,7 +3846,7 @@ internal sealed partial class ExpressionBinder
         // other argument (and the overload choice itself, unaffected unless a
         // candidate's applicability actually depended on the flag) is
         // unchanged.
-        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, resolution.ParameterMapping);
+        arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, downstreamMapping);
 
         // Non-generic constrained slots stay on the established unconverted
         // path: the emitted MemberRef parameter is the interface type-variable
@@ -3846,12 +3858,12 @@ internal sealed partial class ExpressionBinder
                 arguments,
                 parameters,
                 ce,
-                resolution.ParameterMapping,
+                downstreamMapping,
                 method: method,
                 receiverType: constraintType,
                 symbolicMethodTypeArgs: symbolicMethodTypeArgs)
             : arguments;
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, resolution.ParameterMapping, parameters);
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, downstreamMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundImportedInstanceCallExpression(

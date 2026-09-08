@@ -455,6 +455,7 @@ public sealed class ImportedClassSymbol : Symbol
                 {
                     return Invariant.Required(ProjectMethodGroupType(type), "an imported method-group type must be projectable");
                 }),
+            methodGroupArgumentCheck: ExpressionBinder.MakeMethodGroupArgumentCheck(arguments),
             deferredInferenceArgs: deferredInferenceArgs,
             openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(arguments),
             symbolicArgTypes: symbolicArgVector);

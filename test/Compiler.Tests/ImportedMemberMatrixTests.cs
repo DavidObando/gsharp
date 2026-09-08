@@ -42,7 +42,7 @@ public class ImportedMemberMatrixTests
                 string ChooseParams<T>(T value, params System.Func<T>[] factories);
             }
 
-            public sealed class InstanceOverloads : IInstanceOverloads
+            public class InstanceOverloads : IInstanceOverloads
             {
                 public string Take<T>(T value)
                     where T : System.IDisposable
@@ -58,6 +58,10 @@ public class ImportedMemberMatrixTests
                     => typeof(T).Name;
             }
 
+            public sealed class DerivedInstanceOverloads : InstanceOverloads
+            {
+            }
+
             public interface IStaticOverloads<TSelf>
                 where TSelf : IStaticOverloads<TSelf>
             {
@@ -68,6 +72,7 @@ public class ImportedMemberMatrixTests
 
                 static abstract string Pick<T>(T first, T second);
                 static abstract string Choose<T>(T value, System.Func<T> factory);
+                static abstract string ChooseParams<T>(T value, params System.Func<T>[] factories);
             }
 
             public sealed class StaticOverloads : IStaticOverloads<StaticOverloads>
@@ -83,6 +88,9 @@ public class ImportedMemberMatrixTests
                     => typeof(T).Name;
 
                 public static string Choose<T>(T value, System.Func<T> factory)
+                    => typeof(T).Name;
+
+                public static string ChooseParams<T>(T value, params System.Func<T>[] factories)
                     => typeof(T).Name;
             }
 
@@ -118,6 +126,18 @@ public class ImportedMemberMatrixTests
                     => typeof(T).Name;
 
                 public static string PickParams<T>(params T[] values)
+                    => typeof(T).Name;
+
+                public static string ChooseParams<T>(T value, params System.Func<T>[] factories)
+                    => typeof(T).Name;
+            }
+
+            public static class ExtensionOverloads
+            {
+                public static string ChooseExtensionParams<T>(
+                    this InstanceOverloads receiver,
+                    T value,
+                    params System.Func<T>[] factories)
                     => typeof(T).Name;
             }
 
@@ -194,6 +214,12 @@ public class ImportedMemberMatrixTests
             import System.Threading.Tasks
             import Issue4086.CSharp
 
+            open class Base {
+            }
+
+            class Derived : Base {
+            }
+
             func throughClassBound[T DisposableBase](value T) string {
                 return Overloads.Take(value)
             }
@@ -268,9 +294,38 @@ public class ImportedMemberMatrixTests
                 return receiver.ChooseParams(DerivedDisposable(), methodGroupFactory)
             }
 
+            func expandedSymbolicFactory() Base {
+                return Base()
+            }
+
+            func expandedSymbolicFactory(value int32) Derived {
+                return Derived()
+            }
+
+            func throughExpandedStaticMethodGroup() string {
+                return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
+            }
+
+            func throughExpandedSymbolicInstanceMethodGroup(receiver InstanceOverloads) string {
+                return receiver.ChooseParams(Derived(), expandedSymbolicFactory)
+            }
+
+            func throughExpandedInheritedMethodGroup(receiver DerivedInstanceOverloads) string {
+                return receiver.ChooseParams(Derived(), expandedSymbolicFactory)
+            }
+
+            func throughExpandedExtensionMethodGroup(receiver InstanceOverloads) string {
+                return receiver.ChooseExtensionParams(Derived(), expandedSymbolicFactory)
+            }
+
             func throughConstrainedInstanceMethodGroup[TReceiver IInstanceOverloads](
                 receiver TReceiver) string {
                 return receiver.Choose(DerivedDisposable(), methodGroupFactory)
+            }
+
+            func throughExpandedConstrainedInstanceMethodGroup[TReceiver IInstanceOverloads](
+                receiver TReceiver) string {
+                return receiver.ChooseParams(Derived(), expandedSymbolicFactory)
             }
 
             func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
@@ -313,6 +368,11 @@ public class ImportedMemberMatrixTests
                 return TReceiver.Choose(DerivedDisposable(), methodGroupFactory)
             }
 
+            func throughExpandedConstrainedStaticMethodGroup[
+                TReceiver IStaticOverloads[TReceiver]]() string {
+                return TReceiver.ChooseParams(Derived(), expandedSymbolicFactory)
+            }
+
             Console.WriteLine(throughClassBound[DisposableBase](DisposableBase()))
             Console.WriteLine(throughInterface[DisposableBase](DisposableBase()))
             Console.WriteLine(throughObject(DisposableBase()))
@@ -341,7 +401,13 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughInvariantExpandedConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughExpandedInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughExpandedStaticMethodGroup())
+            Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughExpandedInheritedMethodGroup(DerivedInstanceOverloads()))
+            Console.WriteLine(throughExpandedExtensionMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughConstrainedInstanceMethodGroup[InstanceOverloads](
+                InstanceOverloads()))
+            Console.WriteLine(throughExpandedConstrainedInstanceMethodGroup[InstanceOverloads](
                 InstanceOverloads()))
             Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
                 InstanceOverloads(),
@@ -359,6 +425,7 @@ public class ImportedMemberMatrixTests
                 DisposableBase(),
                 DisposableBase()))
             Console.WriteLine(throughConstrainedStaticMethodGroup[StaticOverloads]())
+            Console.WriteLine(throughExpandedConstrainedStaticMethodGroup[StaticOverloads]())
             """;
 
         Assert.Equal(
@@ -371,11 +438,14 @@ public class ImportedMemberMatrixTests
                 + $"DerivedDisposable{Environment.NewLine}DerivedDisposable{Environment.NewLine}"
                 + $"object-invariant{Environment.NewLine}object-invariant-params{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
+                + $"Base{Environment.NewLine}Base{Environment.NewLine}"
+                + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}"
+                + $"Base{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}Object{Environment.NewLine}"
-                + $"DisposableBase{Environment.NewLine}",
+                + $"DisposableBase{Environment.NewLine}Base{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 csSource,
                 gsSource,
