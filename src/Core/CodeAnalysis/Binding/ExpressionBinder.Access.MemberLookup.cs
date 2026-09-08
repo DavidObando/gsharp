@@ -4102,7 +4102,11 @@ internal sealed partial class ExpressionBinder
             (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 default,
-                symbolicArgTypes,
+                RefineSymbolicArgsForMethodGroups(
+                    closed,
+                    arguments,
+                    symbolicArgTypes,
+                    receiverArgCount: 0),
                 isExpanded);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,

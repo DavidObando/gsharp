@@ -1479,7 +1479,11 @@ internal sealed partial class ExpressionBinder
             (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 typeArgSymbols,
-                inheritedSymbolicArgs,
+                RefineSymbolicArgsForMethodGroups(
+                    closed,
+                    arguments,
+                    inheritedSymbolicArgs,
+                    receiverArgCount: 0),
                 isExpanded,
                 argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
@@ -1950,7 +1954,11 @@ internal sealed partial class ExpressionBinder
             (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 typeArgSymbols,
-                extensionSymbolicArgs,
+                RefineSymbolicArgsForMethodGroups(
+                    closed,
+                    arguments,
+                    extensionSymbolicArgs,
+                    receiverArgCount: 1),
                 isExpanded,
                 extensionArgumentNames);
         Func<int, bool> functionLiteralArgumentCheck = argumentIndex =>
@@ -3757,7 +3765,11 @@ internal sealed partial class ExpressionBinder
             (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
                 closed,
                 default,
-                symbolicArgTypes,
+                RefineSymbolicArgsForMethodGroups(
+                    closed,
+                    arguments,
+                    symbolicArgTypes,
+                    receiverArgCount: 0),
                 isExpanded,
                 argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(

@@ -3091,11 +3091,14 @@ internal static class ClrOverloadResolution
                 }
 
                 Type[]? typeArgs = null;
-                var useRecoveredInference = TryRecoverErasedTypeArguments(
-                    mi,
-                    symbolicTypeArgs,
-                    projectTypeArgument,
-                    out typeArgs);
+                var useRecoveredInference = !HasDeferredMethodGroupArgument(
+                        argTypes.Count,
+                        methodGroupArgumentCheck)
+                    && TryRecoverErasedTypeArguments(
+                        mi,
+                        symbolicTypeArgs,
+                        projectTypeArgument,
+                        out typeArgs);
                 if (!useRecoveredInference
                     && !TryInferTypeArguments(mi, inferenceArgTypes, out typeArgs, inferenceMethodGroup))
                 {
@@ -3476,6 +3479,26 @@ internal static class ClrOverloadResolution
         => !typeArguments.IsDefaultOrEmpty
             && typeArguments.Any(MemberLookup.IsSymbolicInferenceConflict);
 
+    private static bool HasDeferredMethodGroupArgument(
+        int argumentCount,
+        Func<int, bool>? methodGroupArgumentCheck)
+    {
+        if (methodGroupArgumentCheck == null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < argumentCount; i++)
+        {
+            if (methodGroupArgumentCheck(i))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsMethodGroupSignatureCompatible(
         (Type[] Parameters, Type Return)? signature,
         IReadOnlyList<Type> delegateParameters,
@@ -3594,11 +3617,14 @@ internal static class ClrOverloadResolution
             }
 
             Type[]? typeArgs = null;
-            var useRecoveredInference = TryRecoverErasedTypeArguments(
-                mi,
-                symbolicTypeArgs,
-                projectTypeArgument,
-                out typeArgs);
+            var useRecoveredInference = !HasDeferredMethodGroupArgument(
+                    argTypes.Count,
+                    methodGroupArgumentCheck)
+                && TryRecoverErasedTypeArguments(
+                    mi,
+                    symbolicTypeArgs,
+                    projectTypeArgument,
+                    out typeArgs);
             if (!useRecoveredInference
                 && !TryInferTypeArgumentsForExpandedParams(
                     mi,

@@ -38,6 +38,7 @@ public class ImportedMemberMatrixTests
             {
                 string Take<T>(T value) where T : System.IDisposable;
                 string Take(object value);
+                string Choose<T>(T value, System.Func<T> factory);
             }
 
             public sealed class InstanceOverloads : IInstanceOverloads
@@ -48,6 +49,9 @@ public class ImportedMemberMatrixTests
 
                 public string Take(object value)
                     => "instance-object";
+
+                public string Choose<T>(T value, System.Func<T> factory)
+                    => typeof(T).Name;
             }
 
             public interface IStaticOverloads<TSelf>
@@ -59,6 +63,7 @@ public class ImportedMemberMatrixTests
                 static abstract string Take(object value);
 
                 static abstract string Pick<T>(T first, T second);
+                static abstract string Choose<T>(T value, System.Func<T> factory);
             }
 
             public sealed class StaticOverloads : IStaticOverloads<StaticOverloads>
@@ -71,6 +76,9 @@ public class ImportedMemberMatrixTests
                     => "static-object";
 
                 public static string Pick<T>(T first, T second)
+                    => typeof(T).Name;
+
+                public static string Choose<T>(T value, System.Func<T> factory)
                     => typeof(T).Name;
             }
 
@@ -240,6 +248,23 @@ public class ImportedMemberMatrixTests
                 return VarianceOverloads.InvariantParams(List[object](), value)
             }
 
+            func methodGroupFactory() DisposableBase {
+                return DisposableBase()
+            }
+
+            func methodGroupFactory(value int32) DerivedDisposable {
+                return DerivedDisposable()
+            }
+
+            func throughInstanceMethodGroup(receiver InstanceOverloads) string {
+                return receiver.Choose(DerivedDisposable(), methodGroupFactory)
+            }
+
+            func throughConstrainedInstanceMethodGroup[TReceiver IInstanceOverloads](
+                receiver TReceiver) string {
+                return receiver.Choose(DerivedDisposable(), methodGroupFactory)
+            }
+
             func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
                 receiver TReceiver,
                 value TValue) string {
@@ -275,6 +300,11 @@ public class ImportedMemberMatrixTests
                 return TReceiver.Pick(first, second)
             }
 
+            func throughConstrainedStaticMethodGroup[
+                TReceiver IStaticOverloads[TReceiver]]() string {
+                return TReceiver.Choose(DerivedDisposable(), methodGroupFactory)
+            }
+
             Console.WriteLine(throughClassBound[DisposableBase](DisposableBase()))
             Console.WriteLine(throughInterface[DisposableBase](DisposableBase()))
             Console.WriteLine(throughObject(DisposableBase()))
@@ -301,6 +331,9 @@ public class ImportedMemberMatrixTests
                 VarianceOverloads.BaseAction()))
             Console.WriteLine(throughInvariantConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughInvariantExpandedConflict[DisposableBase](List[DisposableBase]()))
+            Console.WriteLine(throughInstanceMethodGroup(InstanceOverloads()))
+            Console.WriteLine(throughConstrainedInstanceMethodGroup[InstanceOverloads](
+                InstanceOverloads()))
             Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
                 InstanceOverloads(),
                 DisposableBase()))
@@ -316,6 +349,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughConstrainedStaticMixedInference[StaticOverloads, DisposableBase](
                 DisposableBase(),
                 DisposableBase()))
+            Console.WriteLine(throughConstrainedStaticMethodGroup[StaticOverloads]())
             """;
 
         Assert.Equal(
@@ -327,9 +361,11 @@ public class ImportedMemberMatrixTests
                 + $"generic-interface:DisposableBase{Environment.NewLine}"
                 + $"DerivedDisposable{Environment.NewLine}DerivedDisposable{Environment.NewLine}"
                 + $"object-invariant{Environment.NewLine}object-invariant-params{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
-                + $"static-object{Environment.NewLine}Object{Environment.NewLine}",
+                + $"static-object{Environment.NewLine}Object{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 csSource,
                 gsSource,
