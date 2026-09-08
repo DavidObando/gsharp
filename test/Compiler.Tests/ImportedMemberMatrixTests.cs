@@ -95,6 +95,24 @@ public class ImportedMemberMatrixTests
                 => typeof(T).Name;
         }
 
+        public interface IAsyncStaticOverloads
+        {
+            static abstract string Take<T>(T value)
+                where T : System.IDisposable;
+
+            static abstract string Take(object value);
+        }
+
+        public sealed class AsyncStaticOverloads : IAsyncStaticOverloads
+        {
+            public static string Take<T>(T value)
+                where T : System.IDisposable
+                => "async-static-generic";
+
+            public static string Take(object value)
+                => "async-static-object";
+        }
+
         public static class Overloads
         {
             public static string Take<T>(T value)
@@ -135,6 +153,60 @@ public class ImportedMemberMatrixTests
 
         public static class MethodGroupOutputInference
         {
+            [System.Runtime.CompilerServices.InterpolatedStringHandler]
+            public struct MatrixHandler
+            {
+                private System.Text.StringBuilder builder;
+
+                public MatrixHandler(int literalLength, int formattedCount)
+                {
+                    builder = new System.Text.StringBuilder(literalLength);
+                }
+
+                public void AppendLiteral(string value)
+                    => builder.Append(value);
+
+                public void AppendFormatted<T>(T value)
+                    => builder.Append(value);
+
+                public override string ToString()
+                    => builder.ToString();
+            }
+
+            [System.Runtime.CompilerServices.InterpolatedStringHandler]
+            public struct ForwardingMatrixHandler
+            {
+                private System.Text.StringBuilder builder;
+
+                public ForwardingMatrixHandler(
+                    int literalLength,
+                    int formattedCount,
+                    string prefix)
+                {
+                    builder = new System.Text.StringBuilder(literalLength + prefix.Length + 1);
+                    builder.Append(prefix);
+                    builder.Append(':');
+                }
+
+                public ForwardingMatrixHandler(
+                    int literalLength,
+                    int formattedCount,
+                    InstanceOverloads receiver,
+                    string prefix)
+                    : this(literalLength, formattedCount, prefix)
+                {
+                }
+
+                public void AppendLiteral(string value)
+                    => builder.Append(value);
+
+                public void AppendFormatted<T>(T value)
+                    => builder.Append(value);
+
+                public override string ToString()
+                    => builder.ToString();
+            }
+
             public static string Choose<TIn, TOut>(
                 TIn value,
                 System.Func<TIn, TOut> converter)
@@ -155,12 +227,43 @@ public class ImportedMemberMatrixTests
                 params System.Func<TIn, TOut>[] converters)
                 => converters[0](value);
 
-            // Used only by the #4134 pinned row: a reordered NAMED argument
-            // into a `params` slot, and the `ref` lvalue variant.
-            public static string EvaluationOrder<T>(T value, params object[] items)
+            public static TOut EscapedConvert<TIn, TOut>(
+                TIn value,
+                System.Func<TIn, TOut> @func)
+                => @func(value);
+
+            public static TOut EscapedConvertParams<TIn, TOut>(
+                TIn value,
+                params System.Func<TIn, TOut>[] @func)
+                => @func[0](value);
+
+            public static string EvaluationOrder<T>(
+                T value,
+                params object[] items)
                 => value + ":" + string.Join(",", items);
 
-            public static string RefEvaluationOrder(ref int value, params object[] items)
+            public static string FormattableOrder(
+                int value,
+                System.FormattableString item,
+                params object[] rest)
+                => item.Format + ":" + item.GetArgument(0) + ":" + value + ":" + rest[0];
+
+            public static string HandlerParams(
+                int value,
+                params MatrixHandler[] handlers)
+                => value + ":" + string.Join(",", handlers);
+
+            public static string ForwardedHandlerOrder(
+                int first,
+                string prefix,
+                [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument("prefix")]
+                ForwardingMatrixHandler handler,
+                params object[] rest)
+                => first + ":" + handler + ":" + string.Join(",", rest);
+
+            public static string RefEvaluationOrder(
+                ref int value,
+                params object[] items)
             {
                 value += 10;
                 return value + ":" + string.Join(",", items);
@@ -174,6 +277,15 @@ public class ImportedMemberMatrixTests
                 T value,
                 params System.Func<T>[] factories)
                 => typeof(T).Name;
+
+            public static string ForwardedHandlerExtension(
+                this InstanceOverloads receiver,
+                int first,
+                string prefix,
+                [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument("receiver", "prefix")]
+                MethodGroupOutputInference.ForwardingMatrixHandler handler,
+                params object[] rest)
+                => first + ":" + handler + ":" + string.Join(",", rest);
         }
 
         public static class VarianceOverloads
@@ -411,6 +523,60 @@ public class ImportedMemberMatrixTests
             return result.Kind()
         }
 
+        func throughEscapedNamedFixedMethodGroupOutputValue() string {
+            var result Base = MethodGroupOutputInference.EscapedConvert(
+                func_: symbolicOutputConvert,
+                value: Derived())
+            return result.Kind()
+        }
+
+        func throughEscapedNamedExpandedMethodGroupOutputValue() string {
+            var result Base = MethodGroupOutputInference.EscapedConvertParams(
+                func_: symbolicOutputConvert,
+                value: Derived())
+            return result.Kind()
+        }
+
+        func firstExpandedNamedArgument() string {
+            Console.Write("first|")
+            return "first"
+        }
+
+        func secondExpandedNamedArgument() int32 {
+            Console.Write("second|")
+            return 2
+        }
+
+        func interpolatedExpandedNamedArgument() int32 {
+            Console.Write("format|")
+            return 7
+        }
+
+        func refExpandedNamedArgument() int32 {
+            Console.Write("ref|")
+            return 0
+        }
+
+        func nonForwardedHandlerArgument() int32 {
+            Console.Write("first|")
+            return 1
+        }
+
+        func forwardedHandlerArgument() string {
+            Console.Write("prefix|")
+            return "p"
+        }
+
+        func handlerHoleArgument() int32 {
+            Console.Write("handler|")
+            return 3
+        }
+
+        func extensionHandlerReceiver() InstanceOverloads {
+            Console.Write("receiver|")
+            return InstanceOverloads()
+        }
+
         func throughExpandedStaticMethodGroup() string {
             return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
         }
@@ -448,7 +614,6 @@ public class ImportedMemberMatrixTests
             value object) string {
             return receiver.Take(value)
         }
-
         """;
 
     /// <summary>
@@ -465,8 +630,10 @@ public class ImportedMemberMatrixTests
             return TReceiver.Take(value)
         }
 
-        async func throughConstrainedStaticAsync[TValue DisposableBase](value TValue) string {
-            return StaticOverloads.Take(await Task.FromResult[TValue](value))
+        async func throughConstrainedStaticAsync[
+            TReceiver IAsyncStaticOverloads,
+            TValue DisposableBase](value TValue) string {
+            return TReceiver.Take(await Task.FromResult[TValue](value))
         }
 
         func throughConstrainedStaticObject[TReceiver IStaticOverloads[TReceiver]](
@@ -503,7 +670,6 @@ public class ImportedMemberMatrixTests
                 factories: expandedSymbolicFactory,
                 value: Derived())
         }
-
         """;
 
     /// <summary>
@@ -758,7 +924,8 @@ public class ImportedMemberMatrixTests
                 DisposableBase()))
             Console.WriteLine(throughConstrainedStatic[StaticOverloads, DisposableBase](
                 DisposableBase()))
-            Console.WriteLine(throughConstrainedStaticAsync[DisposableBase](DisposableBase()).Result)
+            Console.WriteLine(throughConstrainedStaticAsync[AsyncStaticOverloads, DisposableBase](
+                DisposableBase()).Result)
             Console.WriteLine(throughConstrainedStaticObject[StaticOverloads](
                 DisposableBase()))
             Console.WriteLine(throughConstrainedStaticMixedInference[StaticOverloads, DisposableBase](
@@ -776,7 +943,7 @@ public class ImportedMemberMatrixTests
                 + $"instance-generic{Environment.NewLine}"
                 + $"instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}"
-                + $"static-generic{Environment.NewLine}"
+                + $"async-static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}"
                 + $"Object{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}"
@@ -831,24 +998,22 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
-    /// KNOWN-WRONG, pinned rather than left silent, and owned by issue #4134.
+    /// <summary>
+    /// Issue #4134's acceptance row for reordered NAMED arguments into a
+    /// <c>params</c> slot: they must evaluate in SOURCE order, not in the
+    /// parameter order they are reordered into, and a <c>ref</c> lvalue must
+    /// still write back.
     /// </summary>
     /// <remarks>
-    /// <para>The named-argument mapping this change needs for its own named
-    /// method-group rows also makes a reordered NAMED argument into a
-    /// <c>params</c> slot BIND, which the parent rejected outright with
-    /// <c>GS0159</c>. It binds with the wrong EVALUATION ORDER: C# evaluates
-    /// arguments in source order regardless of the parameter order they are
-    /// reordered into, so <c>csc</c> prints <c>first|second|</c> and
-    /// <c>first|ref|</c> — compiled and run — while this prints
-    /// <c>second|first|</c> and <c>ref|first|</c>.</para>
-    /// <para>No existing program changes: the parent did not compile this at
-    /// all. The reordering repair is #4134's subject and lives in the
-    /// follow-up PR, which flips this row. Asserted on the CURRENT (wrong)
-    /// order so that flip is visible.</para>
+    /// Measured against a compiled and run C# twin: <c>csc</c> prints
+    /// <c>first|second|</c> and <c>first|ref|</c>. The parent of this PR (the
+    /// #4086 fix alone) BOUND these calls — <c>main</c> rejected them with
+    /// <c>GS0159</c> — but evaluated them in parameter order,
+    /// <c>second|first|</c> and <c>ref|first|</c>, and pinned that as a
+    /// known-wrong row. This is that row flipped.
     /// </remarks>
     [Fact]
-    public void Issue4134_AReorderedNamedArgumentIntoAParamsSlotBindsInTheWrongEvaluationOrder()
+    public void Issue4134_AReorderedNamedArgumentIntoAParamsSlotEvaluatesInSourceOrder()
     {
         const string source = """
             package Issue4134.Order
@@ -881,10 +1046,190 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-            $"second|first|2:first{Environment.NewLine}"
-                + $"ref|first|12:first{Environment.NewLine}"
+            $"first|second|2:first{Environment.NewLine}"
+                + $"first|ref|12:first{Environment.NewLine}"
                 + $"12{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue4086CsSource, source, "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// Issue #4134: an interpolated string bound to a <c>params</c> array of
+    /// interpolated-string HANDLERS, positionally and through a reordered
+    /// named argument. Neither spelling bound at all before this change
+    /// (<c>GS0159</c>); <c>csc</c> compiles and runs both.
+    /// </summary>
+    [Fact]
+    public void Issue4134_AParamsArrayOfInterpolatedStringHandlersBindsPositionallyAndByName()
+    {
+        const string source = """
+            package Issue4134.HandlerParams
+            import System
+            import Issue4086.CSharp
+
+            func firstArgument() string {
+                Console.Write("first|")
+                return "first"
+            }
+
+            func secondArgument() int32 {
+                Console.Write("second|")
+                return 2
+            }
+
+            Console.WriteLine(MethodGroupOutputInference.HandlerParams(
+                3,
+                "first=${7}",
+                "second=${8}"))
+            Console.WriteLine(MethodGroupOutputInference.HandlerParams(
+                handlers: "named=${firstArgument()}",
+                value: secondArgument()))
+            """;
+
+        Assert.Equal(
+            $"3:first=7,second=8{Environment.NewLine}"
+                + $"first|second|2:named=first{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(Issue4086CsSource, source, "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// Issue #4134: a handler parameter carrying
+    /// <c>InterpolatedStringHandlerArgument</c> forwards an EARLIER argument
+    /// into the handler's constructor. All three spellings must evaluate in
+    /// source order — <c>first|prefix|handler|</c> — and the synthesized
+    /// extension receiver must be evaluated exactly ONCE.
+    /// </summary>
+    [Fact]
+    public void Issue4134_AForwardedInterpolatedStringHandlerEvaluatesInSourceOrder()
+    {
+        const string source = """
+            package Issue4134.Forwarding
+            import System
+            import Issue4086.CSharp
+
+            func nonForwarded() int32 {
+                Console.Write("first|")
+                return 1
+            }
+
+            func forwarded() string {
+                Console.Write("prefix|")
+                return "p"
+            }
+
+            func hole() int32 {
+                Console.Write("handler|")
+                return 3
+            }
+
+            func receiver() InstanceOverloads {
+                Console.Write("receiver|")
+                return InstanceOverloads()
+            }
+
+            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
+                first: nonForwarded(),
+                prefix: forwarded(),
+                handler: "hole=${hole()}",
+                rest: "tail"))
+            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
+                nonForwarded(),
+                forwarded(),
+                "hole=${hole()}",
+                "tail"))
+            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
+                nonForwarded(),
+                forwarded(),
+                "hole=${hole()}",
+                []object{"tail"}))
+            Console.WriteLine(receiver().ForwardedHandlerExtension(
+                rest: "tail",
+                first: nonForwarded(),
+                prefix: forwarded(),
+                handler: "hole=${hole()}"))
+            """;
+
+        Assert.Equal(
+            $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
+                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
+                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
+                + $"receiver|first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(Issue4086CsSource, source, "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// Issue #4134: a named <c>FormattableString</c> in a reordered expanded
+    /// call keeps its own lexical position — <c>first|format|second|</c> —
+    /// and still lowers to <c>FormattableStringFactory.Create</c>.
+    /// </summary>
+    [Fact]
+    public void Issue4134_ANamedFormattableStringInAReorderedExpandedCallKeepsItsPosition()
+    {
+        const string source = """
+            package Issue4134.Formattable
+            import System
+            import Issue4086.CSharp
+
+            func firstArgument() string {
+                Console.Write("first|")
+                return "first"
+            }
+
+            func secondArgument() int32 {
+                Console.Write("second|")
+                return 2
+            }
+
+            func holeArgument() int32 {
+                Console.Write("format|")
+                return 7
+            }
+
+            Console.WriteLine(MethodGroupOutputInference.FormattableOrder(
+                rest: firstArgument(),
+                item: "item=${holeArgument()}",
+                value: secondArgument()))
+            """;
+
+        Assert.Equal(
+            $"first|format|second|item={{0}}:7:2:first{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(Issue4086CsSource, source, "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// Issue #4134, the CS8950 rule: a handler-forwarded argument that occurs
+    /// AT OR AFTER the handler expression is rejected, and rejected with a
+    /// message that names the rule rather than the parent's
+    /// <c>GS0159 Cannot find function</c>.
+    /// </summary>
+    [Fact]
+    public void Issue4134_AHandlerForwardedArgumentAfterTheHandlerIsRejected()
+    {
+        const string source = """
+            package Issue4134.ForwardReference
+            import Issue4086.CSharp
+
+            MethodGroupOutputInference.ForwardedHandlerOrder(
+                handler: "bad=${1}",
+                prefix: "p",
+                first: 1,
+                rest: "tail")
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(
+            Issue4086CsSource,
+            source,
+            "Issue4086.CSharp");
+
+        // Count, not presence: exactly one diagnostic line, and it is the
+        // forward-reference rule naming the parameter it could not forward.
+        Assert.Equal(
+            1,
+            diagnostics.Count(d => d.Contains(": error GS", StringComparison.Ordinal)));
+        Assert.Equal(
+            1,
+            diagnostics.Count(d =>
+                d.Contains("GS0221", StringComparison.Ordinal)
+                && d.Contains("preceding argument", StringComparison.Ordinal)));
     }
 
     private const string Issue3076CsSource = """

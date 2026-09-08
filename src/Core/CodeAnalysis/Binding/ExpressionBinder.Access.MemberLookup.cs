@@ -4267,6 +4267,12 @@ internal sealed partial class ExpressionBinder
         var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(constraintType, method);
 
         var downstreamMapping = resolution.ParameterMapping;
+        arguments = RebindFormattableInterpolationArguments(
+            arguments,
+            callSyntax.Arguments,
+            parameters,
+            downstreamMapping,
+            isExpanded: resolution.IsExpanded);
         if (resolution.IsExpanded)
         {
             var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
@@ -4286,16 +4292,13 @@ internal sealed partial class ExpressionBinder
             downstreamMapping = default;
         }
 
-        arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, downstreamMapping);
-
         arguments = ApplySymbolicClrArgumentConversions(
             arguments,
             parameters,
             downstreamMapping,
             method,
             constraintType);
-
-        var convertedArguments = method.IsGenericMethod
+        arguments = method.IsGenericMethod
             ? conversions.BindClrParameterConversions(
                 arguments,
                 parameters,
@@ -4305,7 +4308,14 @@ internal sealed partial class ExpressionBinder
                 receiverType: constraintType,
                 symbolicMethodTypeArgs: symbolicMethodTypeArgs)
             : arguments;
-        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(convertedArguments, downstreamMapping, parameters);
+        var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
+        if (resolution.IsExpanded)
+        {
+            orderedArgs = OverloadResolver.PreserveExpandedArgumentEvaluationOrder(
+                orderedArgs,
+                resolution.ParameterMapping);
+        }
+
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundConstrainedStaticCallExpression(
