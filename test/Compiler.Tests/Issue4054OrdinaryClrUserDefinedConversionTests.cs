@@ -233,6 +233,16 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public static string ConstrainedStaticAmbiguous(DateTime value) => "date";
         }
 
+        public interface IConsumer<T>
+        {
+            int Consume(T value);
+        }
+
+        public interface IStaticConsumer<T>
+        {
+            static abstract int Consume(T value);
+        }
+
         public interface ILeft
         {
         }
@@ -524,6 +534,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
                 return target.ConstrainedDisposable(value)
             }
 
+            func CallGenericConsumer[T IConsumer[Celsius]](target T, value Celsius) int32 {
+                return target.Consume(value)
+            }
+
             func CallStaticConstrained[T IStaticConstrainedTarget[T]](value Celsius) float64 {
                 return T.ConstrainedStaticValue(value)
             }
@@ -534,6 +548,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
 
             func CallStaticConstrainedNamed[T IStaticConstrainedTarget[T]](value Celsius) float64 {
                 return T.ConstrainedStaticNamed(second: value, first: "named")
+            }
+
+            func CallStaticGenericConsumer[T IStaticConsumer[Celsius]](value Celsius) int32 {
+                return T.Consume(value)
             }
 
             Console.WriteLine(CallConstrained(
@@ -566,7 +584,7 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             Body,
             new[] { "5.75", "4", "107", "LocalRankSource", "DisposableValue", "6.25", "6", "6.5" },
             IlVerifier.KnownIssues.StaticVirtualInterface,
-            @"<Program>\.CallStaticConstrained(Params|Named)?$");
+            @"<Program>\.(CallStaticConstrained(Params|Named)?|CallStaticGenericConsumer)$");
     }
 
     [Theory]

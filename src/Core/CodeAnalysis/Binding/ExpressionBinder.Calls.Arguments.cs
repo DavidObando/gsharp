@@ -3828,7 +3828,9 @@ internal sealed partial class ExpressionBinder
         arguments = ApplySymbolicClrArgumentConversions(
             arguments,
             parameters,
-            downstreamMapping);
+            downstreamMapping,
+            method,
+            constraintType);
 
         // Order positionally for named arguments; deliberately skip the CLR
         // boxing/conversion pass — the emitted MemberRef parameter is the
@@ -3853,25 +3855,31 @@ internal sealed partial class ExpressionBinder
     private ImmutableArray<BoundExpression> ApplySymbolicClrArgumentConversions(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
-        ImmutableArray<int> parameterMapping)
+        ImmutableArray<int> parameterMapping,
+        MethodInfo method,
+        TypeSymbol constraintType)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var parameterIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             if (parameterIndex >= parameters.Length
-                || parameters[parameterIndex].ParameterType.IsByRef
-                || parameters[parameterIndex].ParameterType.ContainsGenericParameters)
+                || parameters[parameterIndex].ParameterType.IsByRef)
             {
                 continue;
             }
 
             var argument = arguments[i];
-            var targetType = TypeSymbol.FromClrType(parameters[parameterIndex].ParameterType);
+            var targetType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameterIndex);
             if (argument.Type is not { } sourceType
                 || sourceType.ClrType != null
                 || !TypeSymbol.ContainsSameCompilationUserType(sourceType)
-                || targetType == null)
+                || targetType == null
+                || targetType == TypeSymbol.Error
+                || TypeSymbol.ContainsTypeParameter(targetType))
             {
                 continue;
             }

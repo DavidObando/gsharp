@@ -4219,7 +4219,9 @@ internal sealed partial class ExpressionBinder
         arguments = ApplySymbolicClrArgumentConversions(
             arguments,
             parameters,
-            downstreamMapping);
+            downstreamMapping,
+            method,
+            constraintType);
 
         var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         var refKinds = ComputeArgumentRefKinds(parameters);
