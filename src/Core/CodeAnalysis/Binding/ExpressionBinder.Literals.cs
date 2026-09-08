@@ -1115,6 +1115,78 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
+    private bool TryGetSymbolicUserMethodGroupType(
+        BoundMethodGroupExpression group,
+        ImmutableArray<TypeSymbol> expectedParameterTypes,
+        [NotNullWhen(true)] out FunctionTypeSymbol? naturalType)
+    {
+        naturalType = null;
+        FunctionSymbol? selected = null;
+        for (var pass = 0; pass < 2 && selected == null; pass++)
+        {
+            var allowVariance = pass == 1;
+            foreach (var candidate in group.Candidates)
+            {
+                if (candidate.IsGeneric)
+                {
+                    continue;
+                }
+
+                var offset = candidate.IsExtension && group.Receiver != null ? 1 : 0;
+                if (candidate.Parameters.Length - offset != expectedParameterTypes.Length)
+                {
+                    continue;
+                }
+
+                var compatible = true;
+                for (var i = 0; i < expectedParameterTypes.Length; i++)
+                {
+                    var candidateParameter = candidate.Parameters[i + offset];
+                    var expectedParameter = expectedParameterTypes[i];
+                    if (candidateParameter.RefKind != RefKind.None
+                        || (!DeclarationBinder.TypeSignaturesEquivalent(expectedParameter, candidateParameter.Type)
+                            && (!allowVariance
+                                || !Conversion.ClassifyNonStructural(
+                                    expectedParameter,
+                                    candidateParameter.Type).IsImplicit)))
+                    {
+                        compatible = false;
+                        break;
+                    }
+                }
+
+                if (!compatible)
+                {
+                    continue;
+                }
+
+                if (selected != null)
+                {
+                    return false;
+                }
+
+                selected = candidate;
+            }
+        }
+
+        if (selected == null)
+        {
+            return false;
+        }
+
+        var selectedOffset = selected.IsExtension && group.Receiver != null ? 1 : 0;
+        var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(selected.Parameters.Length - selectedOffset);
+        for (var i = selectedOffset; i < selected.Parameters.Length; i++)
+        {
+            parameterTypes.Add(selected.Parameters[i].Type);
+        }
+
+        naturalType = FunctionTypeSymbol.Get(
+            parameterTypes.MoveToImmutable(),
+            MethodGroupObservableReturnType(selected));
+        return true;
+    }
+
     /// <summary>
     /// Issue #3712: refines a pre-resolution symbolic argument vector once the
     /// winning CLR overload is known, replacing each user method-group slot that
@@ -1154,6 +1226,17 @@ internal sealed partial class ExpressionBinder
 
         var parameters = resolved.GetParameters();
         var paramsIndex = parameters.Length - 1;
+        var openMethod = resolved.IsGenericMethod
+            ? resolved.GetGenericMethodDefinition()
+            : resolved;
+        var openParameters = openMethod.GetParameters();
+        var partialMethodTypeArgs = resolved.IsGenericMethod
+            ? MemberLookup.BuildSymbolicMethodTypeArgs(
+                resolved,
+                default,
+                symbolicArgs,
+                isExpanded)
+            : default;
         ImmutableArray<TypeSymbol>.Builder? refined = null;
         for (var i = 0; i < arguments.Length; i++)
         {
@@ -1193,8 +1276,45 @@ internal sealed partial class ExpressionBinder
                 parameterType = elementType;
             }
 
-            if (!ClrLoadContext.TryGetDelegateSignature(parameterType, out var delegateParameters, out _)
-                || !TryGetSymbolicUserMethodGroupType(group, out var symbolicGroupType, delegateParameters.Length))
+            var targetParameterTypes = default(ImmutableArray<TypeSymbol>);
+            if (!partialMethodTypeArgs.IsDefaultOrEmpty
+                && parameterIndex < openParameters.Length)
+            {
+                var openParameterType = openParameters[parameterIndex].ParameterType;
+                if (isExpanded
+                    && parameterIndex == paramsIndex
+                    && openParameterType.GetElementType() is { } openElementType)
+                {
+                    openParameterType = openElementType;
+                }
+
+                var symbolicTarget = MemberLookup.MapOpenClrTypeToSymbolic(
+                    openParameterType,
+                    openDefinition: null,
+                    typeArguments: default,
+                    openMethodDefinition: resolved.IsGenericMethod ? openMethod : null,
+                    methodTypeArguments: partialMethodTypeArgs);
+                if (MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    symbolicTarget,
+                    out var targetFunctionType))
+                {
+                    targetParameterTypes = targetFunctionType.ParameterTypes;
+                }
+            }
+
+            if (!ClrLoadContext.TryGetDelegateSignature(parameterType, out var delegateParameters, out _))
+            {
+                continue;
+            }
+
+            FunctionTypeSymbol? symbolicGroupType;
+            var recovered = !targetParameterTypes.IsDefault
+                ? TryGetSymbolicUserMethodGroupType(group, targetParameterTypes, out symbolicGroupType)
+                : TryGetSymbolicUserMethodGroupType(
+                    group,
+                    out symbolicGroupType,
+                    delegateParameters.Length);
+            if (!recovered)
             {
                 continue;
             }
