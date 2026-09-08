@@ -227,6 +227,16 @@ public sealed class InterpolatedStringHandlerInfo
             ImmutableArray<int>.Empty,
             HandlerRefKind);
 
+    internal InterpolatedStringHandlerInfo WithHandlerRefKind(RefKind handlerRefKind)
+        => new(
+            HandlerClrType,
+            HandlerType,
+            Constructor,
+            ForwardedArguments,
+            HasTrailingOutBool,
+            ForwardedSourceIndices,
+            handlerRefKind);
+
     internal static InterpolatedStringHandlerInfo? TryCreate(
         System.Type handlerClrType,
         ParameterInfo parameter,

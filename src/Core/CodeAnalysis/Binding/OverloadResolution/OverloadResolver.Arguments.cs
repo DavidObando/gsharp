@@ -230,6 +230,7 @@ internal sealed partial class OverloadResolver
                 ? paramsElements[paramsElementIndex]
                 : replacements[parameterIndex];
             argument = RewriteHandlerForwardedArguments(argument, sourceCaptures);
+            argument = PrepareHandlerCapture(argument, out var addressCapturedValue);
             if (StatementBinder.IsNilLiteral(argument))
             {
                 if (parameterIndex == paramsIndex)
@@ -248,7 +249,13 @@ internal sealed partial class OverloadResolver
             BoundExpression tempLoad = new BoundVariableExpression(argument.Syntax, temp);
             sourceCaptures[sourceIndex] = tempLoad;
             var replacement = tempLoad;
-            if (argument.Type is ByRefTypeSymbol)
+            if (addressCapturedValue)
+            {
+                replacement = new BoundAddressOfExpression(
+                    argument.Syntax,
+                    replacement);
+            }
+            else if (argument.Type is ByRefTypeSymbol)
             {
                 replacement = new BoundAddressOfExpression(
                     argument.Syntax,
@@ -331,6 +338,25 @@ internal sealed partial class OverloadResolver
         }
 
         return false;
+    }
+
+    private static BoundExpression PrepareHandlerCapture(
+        BoundExpression argument,
+        out bool addressCapturedValue)
+    {
+        addressCapturedValue = false;
+        if (argument is not BoundInterpolatedStringExpression
+            {
+                Handler: { HandlerRefKind: not RefKind.None } handler,
+            } interpolated)
+        {
+            return argument;
+        }
+
+        addressCapturedValue = true;
+        return interpolated.Update(
+            interpolated.Parts,
+            handler.WithHandlerRefKind(RefKind.None));
     }
 
     private static BoundExpression RewriteHandlerForwardedArguments(
@@ -1089,6 +1115,7 @@ internal sealed partial class OverloadResolver
             argument = RewriteHandlerForwardedArguments(
                 argument,
                 sourceCaptures);
+            argument = PrepareHandlerCapture(argument, out var addressCapturedValue);
             if (StatementBinder.IsNilLiteral(argument))
             {
                 // A nil literal has no evaluation to preserve. Capturing it
@@ -1106,7 +1133,13 @@ internal sealed partial class OverloadResolver
             BoundExpression tempLoad = new BoundVariableExpression(argument.Syntax, temp);
             sourceCaptures[sourceIndex] = tempLoad;
             BoundExpression replacement = tempLoad;
-            if (argument.Type is ByRefTypeSymbol)
+            if (addressCapturedValue)
+            {
+                replacement = new BoundAddressOfExpression(
+                    argument.Syntax,
+                    replacement);
+            }
+            else if (argument.Type is ByRefTypeSymbol)
             {
                 replacement = new BoundAddressOfExpression(
                     argument.Syntax,
