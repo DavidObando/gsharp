@@ -1394,6 +1394,15 @@ internal sealed class CustomAttributeEncoder
                     ? this.BuildNullableParts(underlying)
                     : this.GetSerializedTypeParts(underlying);
 
+            // Issue #4098: a G# STRUCTURAL type. Deliberately ahead of every
+            // ClrType-consulting arm and deliberately UNGATED: see
+            // TryGetStructuralTypeParts for why `{ ClrType: null }` would be
+            // the wrong guard.
+            case MapTypeSymbol or TupleTypeSymbol or FunctionTypeSymbol or ChannelTypeSymbol
+                or SequenceTypeSymbol or AsyncSequenceTypeSymbol
+                when this.TryGetStructuralTypeParts(type, out var structuralParts):
+                return structuralParts;
+
             case SliceTypeSymbol slice:
                 return AppendNameSuffix(this.GetSerializedTypeParts(slice.ElementType), "[]");
 
@@ -1496,6 +1505,198 @@ internal sealed class CustomAttributeEncoder
         // Defensive: every reference set that can compile a nilable value type
         // carries the core library, so this is unreachable in practice.
         return ("System.Nullable`1" + suffix, innerAssembly);
+    }
+
+    /// <summary>
+    /// Issue #4098: serialises a G# STRUCTURAL type — <c>map</c>, tuple,
+    /// <c>func</c>, <c>chan</c>, <c>sequence</c> — as the BCL type it projects
+    /// onto, closed over its components SYMBOLICALLY.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>What was wrong.</b> Each structural symbol computes its own
+    /// <c>ClrType</c> by closing an open BCL definition over its components. A
+    /// same-compilation component has none while binding, so the structural
+    /// symbol's <c>ClrType</c> came out null and the switch fell through to
+    /// <c>GetMetadataTypeName</c>'s <c>default:</c> arm — bare
+    /// <c>type.Name</c>, which for these kinds is the G# DISPLAY spelling
+    /// (<c>map[string,Status]</c>, <c>(Status) -&gt; bool</c>, <c>chan</c>),
+    /// qualified to the compilation's own assembly. Nothing can decode
+    /// that.</para>
+    /// <para><b>Why there is no <c>{ ClrType: null }</c> guard.</b> The obvious
+    /// spelling of these arms — gate on a null <c>ClrType</c>, the way the
+    /// <c>StructSymbol</c>/<c>InterfaceSymbol</c> arms do — would leave a
+    /// quieter half of the same defect in place.
+    /// <c>map[string, List[Status]]</c> has a component whose <c>ClrType</c> is
+    /// NON-null: <c>List&lt;object&gt;</c>, closed over the erasure surrogate.
+    /// So <c>MapTypeSymbol.MakeClrType</c> succeeds, and the <c>ClrType</c>
+    /// fallback below wrote
+    /// <c>Dictionary`2[[String],[List`1[[System.Int32]]]]</c> — a name that
+    /// RESOLVES, to the wrong type. Measured, not reasoned. The sibling
+    /// wrapper arms (slice, array, rectangular, nullable) already recurse
+    /// symbolically without such a guard for exactly this reason; these follow
+    /// them.</para>
+    /// <para><b>Where the projection decisions come from.</b> Each is taken
+    /// from the symbol that already owns it rather than restated here:
+    /// <see cref="ChannelTypeSymbol.OpenClrDefinition"/> for the channel
+    /// direction and
+    /// <see cref="SequenceTypeSymbol.TryGetEnumerableInterfaceShape"/> for the
+    /// sync/async sequence split. The open definition is then resolved through
+    /// the COMPILATION's reference set, not the emitting host's, so the
+    /// assembly named is the one the emitted assembly actually references —
+    /// the same shape as <see cref="BuildNullableParts"/>.</para>
+    /// <para><b>What it declines.</b> A <c>func</c> above the shipped
+    /// <c>Func</c>/<c>Action</c> arities has no spelling at all, and neither
+    /// does a zero-element tuple. Those return <see langword="false"/> and fall
+    /// through to the pre-existing behaviour rather than inventing a name;
+    /// their <c>ClrType</c> is null for the same reason, so they are already
+    /// emit-limited everywhere else.</para>
+    /// </remarks>
+    /// <param name="type">The structural type symbol.</param>
+    /// <param name="parts">The serialised name and assembly parts.</param>
+    /// <returns>Whether a BCL projection exists for this shape.</returns>
+    private bool TryGetStructuralTypeParts(TypeSymbol type, out (string Name, string Assembly) parts)
+    {
+        switch (type)
+        {
+            case MapTypeSymbol map:
+                return this.TryCloseOpenDefinition(
+                    "System.Collections.Generic.Dictionary`2",
+                    new[] { this.GetSerializedTypeParts(map.KeyType), this.GetSerializedTypeParts(map.ValueType) },
+                    out parts);
+
+            case ChannelTypeSymbol channel:
+                return this.TryCloseOpenDefinition(
+                    ChannelTypeSymbol.OpenClrDefinition(channel.Direction) is { FullName: { } channelName }
+                        ? channelName
+                        : "System.Threading.Channels.Channel`1",
+                    new[] { this.GetSerializedTypeParts(channel.ElementType) },
+                    out parts);
+
+            case SequenceTypeSymbol or AsyncSequenceTypeSymbol
+                when SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type, out var openSequence, out var element)
+                    && openSequence is { FullName: { } sequenceName }:
+                return this.TryCloseOpenDefinition(
+                    sequenceName,
+                    new[] { this.GetSerializedTypeParts(element) },
+                    out parts);
+
+            case TupleTypeSymbol tuple:
+                return this.TryGetTupleParts(tuple.ElementTypes, out parts);
+
+            case FunctionTypeSymbol function:
+                return this.TryGetFunctionParts(function, out parts);
+        }
+
+        parts = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Serialises a tuple as the <c>System.ValueTuple`N</c> family, nesting the
+    /// tail into <c>TRest</c> above arity 7 exactly as
+    /// <c>TupleTypeSymbol</c>'s CLR builder does.
+    /// </summary>
+    /// <param name="elements">The element types.</param>
+    /// <param name="parts">The serialised name and assembly parts.</param>
+    /// <returns>Whether the tuple has a <c>ValueTuple</c> spelling.</returns>
+    private bool TryGetTupleParts(ImmutableArray<TypeSymbol> elements, out (string Name, string Assembly) parts)
+    {
+        if (elements.IsDefaultOrEmpty)
+        {
+            parts = default;
+            return false;
+        }
+
+        if (elements.Length <= 7)
+        {
+            return this.TryCloseOpenDefinition(
+                "System.ValueTuple`" + elements.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                elements.Select(this.GetSerializedTypeParts).ToArray(),
+                out parts);
+        }
+
+        if (!this.TryGetTupleParts(ImmutableArray.CreateRange(elements.Skip(7)), out var rest))
+        {
+            parts = default;
+            return false;
+        }
+
+        var arguments = elements.Take(7).Select(this.GetSerializedTypeParts).Append(rest).ToArray();
+        return this.TryCloseOpenDefinition("System.ValueTuple`8", arguments, out parts);
+    }
+
+    /// <summary>
+    /// Serialises a <c>func</c> type as <c>System.Action`N</c> (void return) or
+    /// <c>System.Func`N+1</c>, using the same void rule
+    /// <c>FunctionTypeSymbol</c>'s CLR builder applies.
+    /// </summary>
+    /// <param name="function">The function type.</param>
+    /// <param name="parts">The serialised name and assembly parts.</param>
+    /// <returns>Whether a shipped delegate shape exists for this arity.</returns>
+    private bool TryGetFunctionParts(FunctionTypeSymbol function, out (string Name, string Assembly) parts)
+    {
+        const int MaxDelegateArity = 16;
+        var parameterCount = function.ParameterTypes.Length;
+        if (parameterCount > MaxDelegateArity)
+        {
+            parts = default;
+            return false;
+        }
+
+        var arguments = function.ParameterTypes.Select(this.GetSerializedTypeParts).ToList();
+        if (FunctionTypeSymbol.IsVoidReturn(function.ReturnType))
+        {
+            // `System.Action` is not generic, so it takes no argument list.
+            return parameterCount == 0
+                ? this.TryCloseOpenDefinition("System.Action", Array.Empty<(string, string)>(), out parts)
+                : this.TryCloseOpenDefinition(
+                    "System.Action`" + parameterCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    arguments,
+                    out parts);
+        }
+
+        arguments.Add(this.GetSerializedTypeParts(function.ReturnType));
+        return this.TryCloseOpenDefinition(
+            "System.Func`" + arguments.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            arguments,
+            out parts);
+    }
+
+    /// <summary>
+    /// Resolves an open BCL definition through the COMPILATION's reference set
+    /// and closes it over already-serialised argument parts.
+    /// </summary>
+    /// <remarks>
+    /// The host's own <c>typeof(Dictionary&lt;,&gt;)</c> is deliberately not
+    /// used: the name written into the blob must be the one the emitted
+    /// assembly references. Never <c>MakeGenericType</c> — a same-compilation
+    /// argument has no CLR type to close over, which is the whole reason this
+    /// serialiser exists.
+    /// </remarks>
+    /// <param name="openDefinitionName">The open definition's full metadata name.</param>
+    /// <param name="argumentParts">The serialised arguments, empty for a non-generic definition.</param>
+    /// <param name="parts">The serialised name and assembly parts.</param>
+    /// <returns>Whether the reference set declares the definition.</returns>
+    private bool TryCloseOpenDefinition(
+        string openDefinitionName,
+        IReadOnlyCollection<(string Name, string Assembly)> argumentParts,
+        out (string Name, string Assembly) parts)
+    {
+        if (!this.emitCtx.References.TryResolveType(openDefinitionName, requireExternalVisibility: false, out var open)
+            || open is null)
+        {
+            parts = default;
+            return false;
+        }
+
+        var suffix = argumentParts.Count == 0
+            ? string.Empty
+            : "[" + string.Join(",", argumentParts.Select(part => "[" + part.Name + ", " + part.Assembly + "]")) + "]";
+
+        parts = (
+            (open.FullName ?? openDefinitionName) + suffix,
+            open.Assembly.FullName ?? open.Assembly.GetName().Name ?? this.CompilationAssemblyName());
+        return true;
     }
 
     /// <summary>Gets the identity of the assembly being emitted.</summary>
