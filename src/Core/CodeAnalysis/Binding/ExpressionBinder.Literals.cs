@@ -1138,6 +1138,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="arguments">The bound user arguments, in source order.</param>
     /// <param name="symbolicArgs">The pre-resolution symbolic vector, receiver-first when <paramref name="receiverArgCount"/> is 1.</param>
     /// <param name="receiverArgCount">Number of leading receiver slots in <paramref name="symbolicArgs"/>.</param>
+    /// <param name="isExpanded">Whether trailing arguments target a params-array element.</param>
     /// <returns>The refined vector, or <paramref name="symbolicArgs"/> when nothing changed.</returns>
     private ImmutableArray<TypeSymbol> RefineSymbolicArgsForMethodGroups(
         MethodInfo resolved,
