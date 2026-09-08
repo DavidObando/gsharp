@@ -2,6 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
+using System.Collections.Generic;
+
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
 /// <summary>
@@ -91,6 +94,90 @@ public sealed class TypeParameterSymbol : TypeSymbol
     /// <c>ImportedMemberRefFactory.GetElementTypeToken</c>.</para>
     /// </summary>
     public TypeParameterSymbol? TypeParameterBound { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this parameter's DEPENDENT bound chain
+    /// proves it is a reference type in every instantiation (issue #4062) —
+    /// <c>[TBase class, TDerived TBase]</c>, or a longer chain, whose ROOT
+    /// carries <c>class</c> or a base-class bound. C# propagates a bounding
+    /// parameter's special constraints to the bounded one, so <c>csc</c>
+    /// accepts <c>TDerived x = null;</c> there; before this, G# reported
+    /// <c>GS0155</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Deliberately a SEPARATE question from
+    /// <see cref="HasReferenceTypeConstraint"/> / <see cref="ClassConstraint"/>
+    /// rather than a widening of either slot. Roughly forty consumers read
+    /// <c>ClassConstraint != null</c> as "this parameter is a reference type"
+    /// AND as "this is the type it derives from" — the second reading drives
+    /// boxing and <c>callvirt</c> decisions in the emitter, and a dependent
+    /// bound supplies no such type. Merging the slots is #4027's defect shape;
+    /// this property answers only the reference-ness half, and exactly one
+    /// consumer reads it (<c>Conversion.IsNilAssignableWithoutNullableWrapper</c>).</para>
+    /// <para>Terminated by VISITED-SYMBOL cycle detection, not by a depth
+    /// limit (review of PR #4088). A semantic depth cap answers "no" for a
+    /// chain that is merely long — <c>[T0 class, T1 T0, … T33 T32]</c> proves
+    /// <c>T33</c> is a reference type after 33 hops, and a 32-hop cap would
+    /// report <c>GS0155</c> on it — so the only thing that may stop the walk
+    /// is actually revisiting a parameter. #4043 already rejects and CLEARS a
+    /// cyclic bound (<c>GS0581</c>,
+    /// <c>DeclarationBinder.Functions.cs</c>), so this set is belt-and-braces
+    /// for a chain reached before that clearing.</para>
+    /// <para>The set is keyed on REFERENCE identity, which is well-defined for
+    /// an open type parameter and needs no name at all. That is deliberate:
+    /// PR #4068's first attempt at the same replacement keyed on
+    /// <c>ClrTypeUtilities.IsSameAs</c>, whose <c>Type.FullName</c> is
+    /// <see langword="null"/> for an open constructed generic, so every nested
+    /// <c>List&lt;…&gt;</c> compared equal and a FALSE cycle fired at the first
+    /// argument — strictly worse than the cap it replaced while looking like a
+    /// fix. A <see cref="TypeParameterSymbol"/> is a single binder-allocated
+    /// instance per declared parameter, so identity is exactly the right key
+    /// and no name is consulted. This is the same idiom
+    /// <c>Binder.SatisfiesClassConstraint</c> adopted for #4091/#4102 — a
+    /// DIFFERENT question (does this argument satisfy one named base class,
+    /// following <c>ClassConstraint ?? TypeParameterBound</c>) reached
+    /// independently, so the two walks stay separate but agree on how a chain
+    /// is terminated.</para>
+    /// </remarks>
+    public bool DependentBoundProvesReferenceType
+    {
+        get
+        {
+            var bound = TypeParameterBound;
+            if (bound == null)
+            {
+                return false;
+            }
+
+            // Allocated only once a chain is actually being walked, and only
+            // grown past the first hop — the overwhelmingly common shape is
+            // `[TBase class, TDerived TBase]`, one hop, which answers before
+            // the set is ever added to twice.
+            HashSet<TypeParameterSymbol>? visited = null;
+            while (bound != null)
+            {
+                if (bound.HasReferenceTypeConstraint || bound.ClassConstraint != null)
+                {
+                    return true;
+                }
+
+                visited ??= new HashSet<TypeParameterSymbol>(ReferenceEqualityComparer.Instance);
+                if (!visited.Add(bound))
+                {
+                    // Revisited: the chain is cyclic. #4043 reports GS0581 for
+                    // this and clears the bound; answering "no" here is the
+                    // conservative direction — `nil` stays refused rather than
+                    // being admitted on the strength of a chain that has no
+                    // root.
+                    return false;
+                }
+
+                bound = bound.TypeParameterBound;
+            }
+
+            return false;
+        }
+    }
 
     /// <summary>
     /// Gets the single interface bound carried by this type parameter, if any —
