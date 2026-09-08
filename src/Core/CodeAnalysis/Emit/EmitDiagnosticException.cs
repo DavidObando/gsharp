@@ -109,16 +109,25 @@ internal sealed class EmitDiagnosticException : Exception
 
     /// <summary>
     /// Throws a failure that surfaces as <c>GS0584</c>: a user-defined
-    /// attribute whose constructor the arguments DO match, but one of whose
-    /// parameter types the attribute-blob writer cannot encode.
+    /// attribute one of whose constructor parameters is not a valid attribute
+    /// parameter type.
     /// </summary>
     /// <remarks>
-    /// Issue #4097's sibling cause, and a different one: the program is legal
-    /// and the arguments are right, but a same-compilation parameter type has
-    /// no <c>ClrType</c> while the blob is built, so the row was dropped in
-    /// silence. Reported in the spirit of GS0466 — a construct that is not
-    /// implemented yet says so instead of vanishing. Supporting the shape
-    /// properly is filed as issue #4135.
+    /// <para>Issue #4097's sibling cause. The row used to be dropped in
+    /// silence; this is the last line that stops it vanishing.</para>
+    /// <para>Its population was MEASURED rather than assumed, over a probe
+    /// comparing gsc against csc on the same shapes: every shape that reaches
+    /// here is one C# rejects as CS0181 — a same-compilation class, interface,
+    /// delegate, or a structural type. There is no legal-but-unencodable
+    /// residue, so this does NOT claim an encoder limit. The one shape that
+    /// looked like one, a same-compilation enum parameter, is encoded through
+    /// its underlying primitive instead (issue #4135); the Oahu corpus carries
+    /// it, and reporting it here took four of that corpus's apps red.</para>
+    /// <para>Emit is the wrong PLACE for this check — it belongs on the
+    /// attribute's declaration, once, the way csc reports CS0181 — but G# has
+    /// no such bind-time rule today, so these programs reach emit unchecked.
+    /// Filed as issue #4143; when it lands this becomes unreachable and can
+    /// retire.</para>
     /// </remarks>
     /// <param name="anchor">The annotation, or <c>null</c>.</param>
     /// <param name="parameterName">The offending constructor parameter.</param>

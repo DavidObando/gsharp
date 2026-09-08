@@ -687,11 +687,12 @@ internal sealed class CustomAttributeEncoder
                 out var unsupportedParameter))
         {
             // Issue #4097: both failure modes used to drop the row silently.
-            // They are genuinely different and must not share one message: an
-            // unencodable PARAMETER type means the arguments were right and the
-            // encoder is not there yet (GS0584, in the spirit of GS0466), while
-            // anything else means no constructor accepts what was written
-            // (GS0583).
+            // They are genuinely different and must not share one message. An
+            // invalid PARAMETER type means the attribute DECLARATION is
+            // ill-formed — measured: every shape that reaches here is one csc
+            // rejects as CS0181 — so the arguments are not what to talk about
+            // (GS0584). Anything else means no constructor accepts what was
+            // written (GS0583).
             if (unsupportedParameter is { } offending)
             {
                 EmitDiagnosticException.ThrowAttributeConstructorParameterTypeNotSupported(
