@@ -1574,64 +1574,6 @@ internal sealed class MemberLookup
             isExpanded,
             out _);
 
-    private static TypeSymbol?[] InferSymbolicMethodTypeArgumentsCore(
-        MethodInfo openMethod,
-        ImmutableArray<TypeSymbol?> symbolicArgTypes,
-        bool isExpanded,
-        out bool requiresRecoveredInference)
-    {
-        requiresRecoveredInference = false;
-        if (openMethod == null || !openMethod.IsGenericMethodDefinition)
-        {
-            return Array.Empty<TypeSymbol?>();
-        }
-
-        var arity = openMethod.GetGenericArguments().Length;
-        var bounds = new SymbolicInferenceBounds(arity);
-
-        var openParams = openMethod.GetParameters();
-        var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
-        if (isExpanded
-            && openParams.Length > 0
-            && ClrOverloadResolution.IsParamsArrayParameter(openParams[^1])
-            && openParams[^1].ParameterType.GetElementType() is Type paramsElementType)
-        {
-            var paramsIndex = openParams.Length - 1;
-            var fixedPairs = Math.Min(paramsIndex, argumentCount);
-            for (var i = 0; i < fixedPairs; i++)
-            {
-                UnifyForMethodTypeArgs(
-                    openParams[i].ParameterType,
-                    symbolicArgTypes[i],
-                    openMethod,
-                    bounds);
-            }
-
-            for (var i = paramsIndex; i < argumentCount; i++)
-            {
-                UnifyForMethodTypeArgs(
-                    paramsElementType,
-                    symbolicArgTypes[i],
-                    openMethod,
-                    bounds);
-            }
-        }
-        else
-        {
-            var pairs = Math.Min(openParams.Length, argumentCount);
-            for (var i = 0; i < pairs; i++)
-            {
-                UnifyForMethodTypeArgs(
-                    openParams[i].ParameterType,
-                    symbolicArgTypes[i],
-                    openMethod,
-                    bounds);
-            }
-        }
-
-        return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference);
-    }
-
     /// <summary>
     /// Issue #833 (sibling to #794 on the call-site argument side): when the
     /// imported generic method's open return type <em>contains</em> a method
@@ -6723,6 +6665,64 @@ internal sealed class MemberLookup
         }
 
         return null;
+    }
+
+    private static TypeSymbol?[] InferSymbolicMethodTypeArgumentsCore(
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol?> symbolicArgTypes,
+        bool isExpanded,
+        out bool requiresRecoveredInference)
+    {
+        requiresRecoveredInference = false;
+        if (openMethod == null || !openMethod.IsGenericMethodDefinition)
+        {
+            return Array.Empty<TypeSymbol?>();
+        }
+
+        var arity = openMethod.GetGenericArguments().Length;
+        var bounds = new SymbolicInferenceBounds(arity);
+
+        var openParams = openMethod.GetParameters();
+        var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
+        if (isExpanded
+            && openParams.Length > 0
+            && ClrOverloadResolution.IsParamsArrayParameter(openParams[^1])
+            && openParams[^1].ParameterType.GetElementType() is Type paramsElementType)
+        {
+            var paramsIndex = openParams.Length - 1;
+            var fixedPairs = Math.Min(paramsIndex, argumentCount);
+            for (var i = 0; i < fixedPairs; i++)
+            {
+                UnifyForMethodTypeArgs(
+                    openParams[i].ParameterType,
+                    symbolicArgTypes[i],
+                    openMethod,
+                    bounds);
+            }
+
+            for (var i = paramsIndex; i < argumentCount; i++)
+            {
+                UnifyForMethodTypeArgs(
+                    paramsElementType,
+                    symbolicArgTypes[i],
+                    openMethod,
+                    bounds);
+            }
+        }
+        else
+        {
+            var pairs = Math.Min(openParams.Length, argumentCount);
+            for (var i = 0; i < pairs; i++)
+            {
+                UnifyForMethodTypeArgs(
+                    openParams[i].ParameterType,
+                    symbolicArgTypes[i],
+                    openMethod,
+                    bounds);
+            }
+        }
+
+        return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference);
     }
 
     private static TypeSymbol?[] FixSymbolicMethodTypeArguments(
