@@ -28,19 +28,17 @@ def reached_stage(app: dict) -> tuple[str | None, str | None]:
         )
 
     reached = None
-    stopped = False
+    failed = False
     for stage_name, stage in zip(STAGE_ORDER, stages):
         status = stage.get("status")
         if status not in VALID_STATUSES:
             return None, f"stage '{stage_name}' has unknown status {status!r}"
         if status in ATTEMPTED_STATUSES:
-            if stopped:
-                return None, f"stage '{stage_name}' was attempted after the pipeline stopped"
+            if failed:
+                return None, f"stage '{stage_name}' was attempted after an earlier failure"
             reached = stage_name
             if status == "failed":
-                stopped = True
-        else:
-            stopped = True
+                failed = True
 
     return reached, None
 
@@ -123,6 +121,10 @@ def evaluate(baseline: dict, run: dict) -> tuple[int, list[str]]:
 
         reached[app_id] = current
         green[app_id] = succeeded and not unverified
+        if app_id in green_set and not green[app_id]:
+            errors.append(
+                f"GATE: app '{app_id}' is listed in greenApps but is not fully green."
+            )
 
     for app_id, floor in sorted(floors.items()):
         if floor not in STAGE_ORDER or app_id in green_set:

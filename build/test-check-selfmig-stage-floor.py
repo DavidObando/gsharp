@@ -93,6 +93,14 @@ class StageFloorTests(unittest.TestCase):
                 self.assertEqual(1, status)
                 self.assertIn("reached 'translate'", output)
 
+    def test_skipped_stage_does_not_stop_later_stages(self) -> None:
+        status, output = self.evaluate(
+            "compile",
+            app("red", "passed", "skipped", "passed", "failed"),
+        )
+        self.assertEqual(0, status)
+        self.assertIn("red: compile -> test-parity", output)
+
     def test_missing_stage_row_fails_closed(self) -> None:
         current = app("red", "passed", "failed", "skipped", "skipped")
         current["stages"].pop()
@@ -131,6 +139,23 @@ class StageFloorTests(unittest.TestCase):
         )
         self.assertEqual(1, status)
         self.assertIn("both greenApps and stageFloor", "\n".join(lines))
+
+    def test_unverified_green_app_fails_the_identity_ratchet(self) -> None:
+        current = app(
+            "green",
+            "passed",
+            "skipped",
+            "passed",
+            "passed",
+            succeeded=True,
+            unverified=True,
+        )
+        status, lines = ratchet.evaluate(
+            {"greenApps": ["green"], "stageFloor": {}},
+            {"apps": [current]},
+        )
+        self.assertEqual(1, status)
+        self.assertIn("listed in greenApps but is not fully green", "\n".join(lines))
 
 
 if __name__ == "__main__":
