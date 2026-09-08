@@ -188,6 +188,7 @@ internal sealed partial class OverloadResolver
 
         var fixedSlots = new HashSet<int>();
         var paramsElementIndex = 0;
+
         // Source slot zero may be a synthesized extension receiver. Keep it
         // in the same capture map used by handler-forwarded arguments.
         for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
@@ -949,12 +950,12 @@ internal sealed partial class OverloadResolver
         {
             // No named-argument reordering required — preserve the existing
             // trailing-optional behaviour.
-            var ordered = ConversionClassifier.AppendOmittedOptionalArguments(
+            var orderedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
                 suppliedArguments,
                 parameters);
-            if (!HasHandlerSourceForwarding(ordered))
+            if (!HasHandlerSourceForwarding(orderedArguments))
             {
-                return ordered;
+                return orderedArguments;
             }
 
             var positionalMapping = ImmutableArray.CreateBuilder<int>(
@@ -965,7 +966,7 @@ internal sealed partial class OverloadResolver
             }
 
             return PreserveMappedArgumentEvaluationOrder(
-                ordered,
+                orderedArguments,
                 positionalMapping.MoveToImmutable());
         }
 
