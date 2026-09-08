@@ -202,6 +202,10 @@ public class ImportedMemberMatrixTests
                 return GenericOnly.Pick(first, second)
             }
 
+            func throughDefaultInference[T](value T) string {
+                return GenericOnly.Pick(value, default)
+            }
+
             func throughNestedMixedInference[T](
                 first T,
                 second IEnumerable[object]) string {
@@ -278,6 +282,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughGenericOnlyMixedInference[DisposableBase](
                 DisposableBase(),
                 DisposableBase()))
+            Console.WriteLine(throughDefaultInference[DisposableBase](DisposableBase()))
             Console.WriteLine(throughNestedMixedInference[DisposableBase](
                 DisposableBase(),
                 List[object]()))
@@ -315,7 +320,8 @@ public class ImportedMemberMatrixTests
 
         Assert.Equal(
             $"generic-disposable{Environment.NewLine}generic-disposable{Environment.NewLine}object{Environment.NewLine}"
-                + $"object{Environment.NewLine}Object{Environment.NewLine}object-nested{Environment.NewLine}"
+                + $"object{Environment.NewLine}Object{Environment.NewLine}DisposableBase{Environment.NewLine}"
+                + $"object-nested{Environment.NewLine}"
                 + $"Object{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"generic-delegate:DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"generic-interface:DisposableBase{Environment.NewLine}"

@@ -3474,7 +3474,7 @@ internal static class ClrOverloadResolution
 
     private static bool HasSymbolicInferenceConflict(ImmutableArray<TypeSymbol?> typeArguments)
         => !typeArguments.IsDefaultOrEmpty
-            && typeArguments.Any(type => ReferenceEquals(type, TypeSymbol.Error));
+            && typeArguments.Any(MemberLookup.IsSymbolicInferenceConflict);
 
     private static bool IsMethodGroupSignatureCompatible(
         (Type[] Parameters, Type Return)? signature,
@@ -5031,7 +5031,7 @@ internal static class ClrOverloadResolution
         if (openMethod is null
             || recoveredSymbols.IsDefaultOrEmpty
             || recoveredSymbols.Length != openMethod.GetGenericArguments().Length
-            || recoveredSymbols.Any(static symbol => symbol is null || ReferenceEquals(symbol, TypeSymbol.Error)))
+            || recoveredSymbols.Any(static symbol => symbol is null || MemberLookup.IsSymbolicInferenceConflict(symbol)))
         {
             return false;
         }

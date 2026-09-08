@@ -61,6 +61,8 @@ internal sealed class MemberLookup
     private const string ExplicitInterfaceCandidatesCacheKeySuffix = "\0explicitiface";
 
     private static readonly ConditionalWeakTable<MethodInfo, MethodInfo> OpenMethodsByMappedMethod = new();
+    private static readonly TypeSymbol SymbolicInferenceConflict =
+        TypeSymbol.FromClrType(typeof(SymbolicInferenceConflictMarker));
     private readonly BinderContext binderCtx;
 
     /// <summary>
@@ -1553,7 +1555,9 @@ internal sealed class MemberLookup
     /// some slot is still missing the corresponding entry is <see langword="null"/>
     /// — callers must treat <see langword="null"/> as "no symbolic
     /// override; fall back to the closed-CLR projection". A conflicting or
-    /// unfixable bound set is represented by <see cref="TypeSymbol.Error"/>.
+    /// unfixable bound set uses a private sentinel distinct from
+    /// <see cref="TypeSymbol.Error"/>, which is also the unresolved type of
+    /// target-typed literals and deferred arguments.
     /// </summary>
     /// <param name="openMethod">The open generic method definition.</param>
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver included as slot 0 for extension methods).</param>
@@ -1862,7 +1866,7 @@ internal sealed class MemberLookup
             // The named-tuple clause above is why the tuple spelling of the
             // same program already worked, which is how the gate was located.
             if (inferred[i] is { } inferredType
-                && (ReferenceEquals(inferredType, TypeSymbol.Error)
+                && (IsSymbolicInferenceConflict(inferredType)
                     || TypeSymbol.RequiresSymbolicProjection(inferredType)
                     || TypeSymbol.ContainsNamedTupleElements(inferredType)
                     || TypeSymbol.ContainsSourceArrayShape(inferredType)
@@ -5361,6 +5365,9 @@ internal sealed class MemberLookup
     internal static TypeSymbol? MergeInferredTypeArgument(TypeSymbol? existing, TypeSymbol? incoming)
         => MergeRecoveredTypeArgument(existing, incoming);
 
+    internal static bool IsSymbolicInferenceConflict(TypeSymbol? type)
+        => ReferenceEquals(type, SymbolicInferenceConflict);
+
     internal static bool TryMapConstructedTypeArgumentsThroughHierarchy(
         ImportedTypeSymbol source,
         Type targetOpenDefinition,
@@ -6723,7 +6730,7 @@ internal sealed class MemberLookup
                 {
                     if (!DeclarationBinder.TypeSignaturesEquivalent(fixedType, exact[i]))
                     {
-                        fixedType = TypeSymbol.Error;
+                        fixedType = SymbolicInferenceConflict;
                         break;
                     }
 
@@ -6744,10 +6751,10 @@ internal sealed class MemberLookup
             }
 
             if (fixedType == null
-                || ReferenceEquals(fixedType, TypeSymbol.Error)
+                || IsSymbolicInferenceConflict(fixedType)
                 || !SatisfiesSymbolicInferenceBounds(fixedType, lower, upper))
             {
-                result[slot] = TypeSymbol.Error;
+                result[slot] = SymbolicInferenceConflict;
                 continue;
             }
 
@@ -6854,6 +6861,11 @@ internal sealed class MemberLookup
         SymbolicInferenceBoundKind boundKind = SymbolicInferenceBoundKind.Lower)
     {
         if (openClr == null || actual == null)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(actual, TypeSymbol.Error))
         {
             return;
         }
@@ -8055,5 +8067,9 @@ internal sealed class MemberLookup
             };
             (slots[position] ??= new List<TypeSymbol>()).Add(type);
         }
+    }
+
+    private sealed class SymbolicInferenceConflictMarker
+    {
     }
 }
