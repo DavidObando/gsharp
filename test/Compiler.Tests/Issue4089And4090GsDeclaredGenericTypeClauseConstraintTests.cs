@@ -73,19 +73,22 @@ namespace GSharp.Compiler.Tests;
 /// predicate's reach to every type clause turned two latent false ACCEPTS into
 /// false REJECTIONS — the worse direction, and the reason both are repaired in
 /// this change rather than deferred.</para>
-/// <para><b>#4136 — and it turned out to be a DUPLICATE, which is worth
-/// recording rather than quietly dropping.</b> The <c>ClrInterfaceConstraint</c>
-/// arm used the bare reflective probe, so <c>class D : IDisposable</c> did not
-/// satisfy <c>[TD IDisposable]</c>. That is #4124, which PR #4138 fixes at the
-/// shared leaf: it splits the reflective body out of
-/// <c>SatisfiesClrInterfaceConstraint</c> and wraps EVERY exit of it with the
-/// symbolic walk, deleting <c>BoundCarriesClrInterface</c> and the two
-/// caller-side copies. This arm already called
+/// <para><b>One of the two turned out to be a DUPLICATE, and that is worth
+/// recording rather than quietly dropping.</b> The
+/// <c>ClrInterfaceConstraint</c> arm used the bare reflective probe, so
+/// <c>class D : IDisposable</c> did not satisfy <c>[TD IDisposable]</c>. That
+/// is #4124, which PR #4138 fixes at the shared leaf — the reflective body
+/// split out of <c>SatisfiesClrInterfaceConstraint</c>, the symbolic walk
+/// wrapping EVERY exit, and <c>BoundCarriesClrInterface</c> plus the two
+/// caller-side copies DELETED. This arm already called
 /// <c>SatisfiesClrInterfaceConstraint</c>, so on that base it inherits the
-/// repair for free and the interim one-line routing here is dropped on the
-/// rebase. The rows stay: they are the TYPE-CLAUSE spelling, which is a
-/// position #4090 newly brings under the predicate and which #4124's own repro
-/// does not cover.</para>
+/// repair without any routing at all. Filed from this site as #4136 and closed
+/// as a duplicate; the interim one-line repair has been dropped from this
+/// branch, and its three rows withdrawn until #4138 lands (see the note in
+/// <see cref="AcceptedConstructions"/>, which records what removing it
+/// measured). The lesson is the consolidation one: #4136's own proposed fix
+/// was a FIFTH copy of those three lines, and #4138 made the fifth occurrence
+/// unexpressible instead of writing it.</para>
 /// <para><b>#4139</b>, by contrast, is not covered by #4138 — measured, its
 /// diff touches none of <c>IsNonNullableValueTypeForConstraint</c>,
 /// <c>IsUnmanagedTypeForConstraint</c> or <c>EnumSymbol</c>.
@@ -97,8 +100,12 @@ namespace GSharp.Compiler.Tests;
 /// enforcement reached it. Both are measurable on <c>main</c> at the
 /// CONSTRUCTOR spelling (<c>GsDisposable[DisposableSource]()</c>,
 /// <c>GsStruct[Color]()</c>), a path this change does not touch, which is what
-/// makes them pre-existing rather than introduced. Every spelling of both is a
-/// green row below.</para>
+/// makes them pre-existing rather than introduced. #4139 is nonetheless a true
+/// PREREQUISITE of this change rather than a user-visible failure it merely
+/// happened upon: its <c>class Source2390 : ISource2390[Color2390]</c> witness
+/// is green whether or not the interface arm is repaired, and goes red only
+/// once #4090 makes the type clause ask <see cref="SatisfiesConstraint"/> at
+/// all.</para>
 /// <para><b>The flush boundary was traced, not chosen.</b> The flush sits after
 /// <c>ExpandStructInterfaceClosures</c>. The binding constraint is the
 /// interface-members loop above it. The worry was the closure: an interface
@@ -633,34 +640,26 @@ public class Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests
             new[] { "l" },
         };
 
-        // PREREQUISITE FIX, type-clause spelling: a SAME-COMPILATION class has
-        // no CLR type while binding, so the bare reflective probe answered "no"
-        // for `class D : IDisposable` at `[TD IDisposable]`.
-        yield return new object[]
-        {
-            "a-source-class-satisfies-the-imported-interface-it-implements",
-            """
-            class Uses : GsDisposable[DisposableSource] {
-            }
-
-            Console.WriteLine(Uses().Tag)
-            """,
-            new[] { "d" },
-        };
-
-        // PREREQUISITE FIX, imported-base arm: the interface arrives through an
-        // IMPORTED base class, which a source class holds in its own slot.
-        yield return new object[]
-        {
-            "a-source-class-satisfies-the-interface-its-imported-base-carries",
-            """
-            class Uses : GsEnumerable[EnumerableSource] {
-            }
-
-            Console.WriteLine(Uses().Tag)
-            """,
-            new[] { "e" },
-        };
+        // WITHDRAWN, and the reason is measured rather than asserted. Three
+        // rows lived here — `class Uses : GsDisposable[DisposableSource]`,
+        // `class Uses : GsEnumerable[EnumerableSource]`, and the CONSTRUCTOR
+        // spelling of the first — covering a SAME-COMPILATION class at an
+        // IMPORTED interface bound. That defect is #4124, and PR #4138 repairs
+        // it at the shared leaf: it splits the reflective body out of
+        // `SatisfiesClrInterfaceConstraint`, wraps every exit with the symbolic
+        // walk, and DELETES `BoundCarriesClrInterface` plus the two
+        // caller-side copies. #4136 was filed for the same thing from this
+        // site's `GS0152` witness and is closed as a duplicate; its proposed
+        // fix would have been a FIFTH copy of the fallback #4138 removed.
+        //
+        // Dropping the interim one-line repair from this branch turns exactly
+        // these three rows red and NOTHING else — 28/31, with all fourteen
+        // refusals unchanged — so the interface widening neither loosens nor
+        // tightens anything this fixture asserts. They return on the rebase
+        // onto merged #4138, where the TYPE-CLAUSE spelling is the part worth
+        // keeping: #4124's own repro is a generic method call and a
+        // constructor, and the type clause is the position #4090 newly brings
+        // under the predicate.
 
         // PREREQUISITE FIX (#4139), type-clause spelling: a SAME-COMPILATION
         // enum is a non-nullable value type, so it satisfies `struct` — and
@@ -697,20 +696,6 @@ public class Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests
             new[] { "Blue" },
         };
 
-        // PREREQUISITE FIX, CONSTRUCTOR spelling — the witness that proves the
-        // defect was PRE-EXISTING rather than introduced here. This path
-        // (`OverloadResolver.Constructors`) is untouched by this change and
-        // reported a false GS0152 on `main`.
-        yield return new object[]
-        {
-            "the-constructor-spelling-of-a-source-class-carrying-an-imported-interface",
-            """
-            let a = GsDisposable[DisposableSource]()
-            let b = GsEnumerable[EnumerableSource]()
-            Console.WriteLine(a.Tag + b.Tag)
-            """,
-            new[] { "de" },
-        };
     }
 
     /// <summary>
