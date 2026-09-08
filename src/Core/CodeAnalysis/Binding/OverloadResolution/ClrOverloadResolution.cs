@@ -1302,12 +1302,14 @@ internal static class ClrOverloadResolution
             {
                 if (argTypes[i] is null)
                 {
-                    TryInferSingleCandidateMethodGroupInputs(
-                        parameters[i].ParameterType,
-                        i,
-                        bounds,
-                        methodGroupInference);
-                    TryInferMethodGroupArgument(parameters[i].ParameterType, i, bounds, methodGroupInference);
+                    if (!TryInferSingleCandidateMethodGroupArgument(
+                            parameters[i].ParameterType,
+                            i,
+                            bounds,
+                            methodGroupInference))
+                    {
+                        TryInferMethodGroupArgument(parameters[i].ParameterType, i, bounds, methodGroupInference);
+                    }
                 }
             }
         }
@@ -2087,13 +2089,13 @@ internal static class ClrOverloadResolution
         return true;
     }
 
-    private static bool TryInferSingleCandidateMethodGroupInputs(
+    private static bool TryInferSingleCandidateMethodGroupArgument(
         Type delegateType,
         int argumentIndex,
         Dictionary<string, Type> bounds,
         Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?> methodGroupInference)
     {
-        if (!ClrLoadContext.TryGetDelegateSignature(delegateType, out var delegateParameters, out _))
+        if (!ClrLoadContext.TryGetDelegateSignature(delegateType, out var delegateParameters, out var delegateReturn))
         {
             return false;
         }
@@ -2111,14 +2113,15 @@ internal static class ClrOverloadResolution
 
         if (!hasOpenInput)
         {
-            return true;
+            return false;
         }
 
         // Issue #3766: preserve single-candidate input inference only for
         // delegate inputs that could not be fixed from other arguments.
         var signature = methodGroupInference(argumentIndex, delegateParameters);
         if (!signature.HasValue
-            || signature.Value.Parameters.Length != delegateParameters.Length)
+            || signature.Value.Parameters.Length != delegateParameters.Length
+            || signature.Value.Return is null)
         {
             return false;
         }
@@ -2143,13 +2146,41 @@ internal static class ClrOverloadResolution
             }
         }
 
+        var outputBounds = new Dictionary<string, Type>(inferred, StringComparer.Ordinal);
+        if (!TryInferMethodGroupReturn(delegateReturn, signature.Value.Return, outputBounds))
+        {
+            return false;
+        }
+
         bounds.Clear();
-        foreach (var pair in inferred)
+        foreach (var pair in outputBounds)
         {
             bounds.Add(pair.Key, pair.Value);
         }
 
         return true;
+    }
+
+    private static bool TryInferMethodGroupReturn(
+        Type delegateReturn,
+        Type methodReturn,
+        Dictionary<string, Type> inferred)
+    {
+        if (string.Equals(methodReturn.FullName, "System.Void", StringComparison.Ordinal)
+            && !string.Equals(delegateReturn.FullName, "System.Void", StringComparison.Ordinal)
+            && delegateReturn.ContainsGenericParameters)
+        {
+            return false;
+        }
+
+        if (UnifyForInference(delegateReturn, methodReturn, inferred))
+        {
+            return true;
+        }
+
+        return TryCloseInferredType(delegateReturn, inferred, out var closedReturn)
+            && closedReturn is not null
+            && IsVariantAssignable(target: closedReturn, source: methodReturn);
     }
 
     private static bool IsSafeArrayInterfaceVariance(Type target, Type source)
@@ -4065,12 +4096,14 @@ internal static class ClrOverloadResolution
                         return false;
                     }
 
-                    TryInferSingleCandidateMethodGroupInputs(
-                        targetType,
-                        i,
-                        bounds,
-                        methodGroupInference);
-                    TryInferMethodGroupArgument(targetType, i, bounds, methodGroupInference);
+                    if (!TryInferSingleCandidateMethodGroupArgument(
+                            targetType,
+                            i,
+                            bounds,
+                            methodGroupInference))
+                    {
+                        TryInferMethodGroupArgument(targetType, i, bounds, methodGroupInference);
+                    }
                 }
             }
         }
