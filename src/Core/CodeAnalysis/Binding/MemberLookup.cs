@@ -16,6 +16,22 @@ using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
+/// <summary>Result of resolving an imported CLR indexer overload set.</summary>
+internal enum ClrIndexerResolutionOutcome
+{
+    /// <summary>The receiver exposes no visible CLR indexers.</summary>
+    NoneFound,
+
+    /// <summary>Visible indexers exist, but none accepts the arguments.</summary>
+    NoneApplicable,
+
+    /// <summary>Multiple applicable indexers are equally good.</summary>
+    Ambiguous,
+
+    /// <summary>A unique best indexer was selected.</summary>
+    Resolved,
+}
+
 /// <summary>
 /// PR-B-2: the binder-facing facade for "given a type T and a member name N,
 /// return the candidates". Delegates low-level CLR member walks (including
@@ -4220,8 +4236,8 @@ internal sealed class MemberLookup
     /// <param name="boundArguments">The pre-bound index argument expressions.</param>
     /// <param name="indexer">The matching <see cref="PropertyInfo"/>, on success.</param>
     /// <param name="resolvedArguments">The arguments in parameter order, including omitted optional defaults.</param>
-    /// <returns><see langword="true"/> when a matching indexer is found.</returns>
-    public bool TryResolveClrIndexer(
+    /// <returns>The result of indexer overload resolution.</returns>
+    public ClrIndexerResolutionOutcome TryResolveClrIndexer(
         TypeSymbol targetType,
         Type clrTarget,
         ImmutableArray<BoundExpression> boundArguments,
@@ -4232,6 +4248,11 @@ internal sealed class MemberLookup
         resolvedArguments = default;
 
         var properties = CollectVisibleClrIndexers(targetType, clrTarget);
+        if (properties.Length == 0)
+        {
+            return ClrIndexerResolutionOutcome.NoneFound;
+        }
+
         var hasSymbolicArgument = false;
         foreach (var argument in boundArguments)
         {
@@ -4272,7 +4293,7 @@ internal sealed class MemberLookup
                 {
                     var parameterType = GetIndexerParameterTypeSymbol(targetType, property, i);
                     parameterTypes.Add(parameterType);
-                    var conversion = ClassifySymbolicIndexerConversion(boundArguments[i].Type, parameterType);
+                    var conversion = ClassifySymbolicIndexerConversion(boundArguments[i], parameterType);
                     if (!conversion.IsImplicit)
                     {
                         candidateApplicable = false;
@@ -4319,18 +4340,18 @@ internal sealed class MemberLookup
                     resolvedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
                         boundArguments,
                         indexer.GetIndexParameters());
-                    return true;
+                    return ClrIndexerResolutionOutcome.Resolved;
                 }
 
                 // Do not retry a genuine symbolic ambiguity against the
                 // object-erased CLR shape: doing so can incorrectly prefer an
                 // object overload over a more specific symbolic interface.
-                return false;
+                return ClrIndexerResolutionOutcome.Ambiguous;
             }
 
             if (hasSetOnlyIndexer)
             {
-                return false;
+                return ClrIndexerResolutionOutcome.NoneApplicable;
             }
         }
 
@@ -4360,16 +4381,21 @@ internal sealed class MemberLookup
             }
         }
 
-        var resolution = ClrOverloadResolution.Resolve<MethodInfo>(getterMethods, argTypes);
+        var resolution = ClrOverloadResolution.Resolve<MethodInfo>(
+            getterMethods,
+            argTypes,
+            constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(boundArguments));
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
-            return false;
+            return resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous
+                ? ClrIndexerResolutionOutcome.Ambiguous
+                : ClrIndexerResolutionOutcome.NoneApplicable;
         }
 
         var best = resolution.Best;
         if (best == null)
         {
-            return false;
+            return ClrIndexerResolutionOutcome.NoneApplicable;
         }
 
         foreach (var property in properties)
@@ -4383,14 +4409,14 @@ internal sealed class MemberLookup
 
         if (indexer is null)
         {
-            return false;
+            return ClrIndexerResolutionOutcome.NoneApplicable;
         }
 
         resolvedArguments = OverloadResolver.BuildOrderedCallArguments(
             boundArguments,
             resolution.ParameterMapping,
             best.GetParameters());
-        return true;
+        return ClrIndexerResolutionOutcome.Resolved;
     }
 
     /// <summary>
@@ -5760,9 +5786,8 @@ internal sealed class MemberLookup
         var hasBetterConversion = false;
         for (var i = 0; i < arguments.Length; i++)
         {
-            var source = arguments[i].Type;
-            var candidateConversion = ClassifySymbolicIndexerConversion(source, candidate[i]);
-            var otherConversion = ClassifySymbolicIndexerConversion(source, other[i]);
+            var candidateConversion = ClassifySymbolicIndexerConversion(arguments[i], candidate[i]);
+            var otherConversion = ClassifySymbolicIndexerConversion(arguments[i], other[i]);
             if (candidateConversion.IsIdentity != otherConversion.IsIdentity)
             {
                 if (!candidateConversion.IsIdentity)
@@ -5790,6 +5815,17 @@ internal sealed class MemberLookup
         }
 
         return hasBetterConversion;
+    }
+
+    private static (bool IsImplicit, bool IsIdentity) ClassifySymbolicIndexerConversion(
+        BoundExpression source,
+        TypeSymbol target)
+    {
+        var conversion = ClassifySymbolicIndexerConversion(source.Type, target);
+        return !conversion.IsImplicit
+            && ExpressionBinder.IsImplicitConstantNarrowingArgument(source, target)
+                ? (true, false)
+                : conversion;
     }
 
     private static (bool IsImplicit, bool IsIdentity) ClassifySymbolicIndexerConversion(

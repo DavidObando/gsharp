@@ -717,9 +717,7 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
     [Theory]
     [InlineData("func Bad(value IGetDerived) { value[0] = 1 }")]
     [InlineData("func Bad(value ISetDerived) int32 -> value[0]")]
-    [InlineData("func Bad(value IAmbiguous) string -> value[\"key\"]")]
-    [InlineData("func Bad(value IDiamondAmbiguous) string -> value[\"key\"]")]
-    public void HiddenAccessorAvailabilityAndUnrelatedAmbiguity_ReportGS0116(string declaration)
+    public void HiddenAccessorAvailability_ReportsGS0116(string declaration)
     {
         var source = $$"""
             package Issue2525.Errors
@@ -731,6 +729,23 @@ public sealed class Issue2525ImportedIndexerHidingEmitTests
         using var result = Compile(source, "library", expectSuccess: false);
         Assert.Contains("GS0116", result.Diagnostics, StringComparison.Ordinal);
         Assert.Contains("not indexable", result.Diagnostics, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("func Bad(value IAmbiguous) string -> value[\"key\"]")]
+    [InlineData("func Bad(value IDiamondAmbiguous) string -> value[\"key\"]")]
+    public void UnrelatedIndexerAmbiguity_ReportsGS0266(string declaration)
+    {
+        var source = $$"""
+            package Issue2525.Errors
+            import Issue2525.Contracts
+
+            {{declaration}}
+            """;
+
+        using var result = Compile(source, "library", expectSuccess: false);
+        Assert.Contains("GS0266", result.Diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS0116", result.Diagnostics, StringComparison.Ordinal);
     }
 
     [Fact]
