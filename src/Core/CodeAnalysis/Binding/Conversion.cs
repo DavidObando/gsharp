@@ -2321,7 +2321,22 @@ public sealed class Conversion
     {
         return type is InterfaceSymbol
             || type is StructSymbol { IsClass: true }
-            || IsReferenceConstrainedTypeParameter(type);
+            || IsReferenceConstrainedTypeParameter(type)
+
+            // Issue #4062: a DEPENDENT bound propagates the bounding
+            // parameter's `class` constraint — `[TBase class, TDerived TBase]`
+            // proves `TDerived` is a reference type in every instantiation
+            // exactly as `[TDerived class]` would, and `csc` accepts `null` at
+            // it. Only the reference-ness question is answered here:
+            // `IsReferenceConstrainedTypeParameter` (which also drives
+            // `IsReferenceLikeTarget`'s conversion arms, where `ClassConstraint`
+            // additionally names the type to box or upcast TO) is deliberately
+            // left alone, so this widens `nil` acceptance and nothing else. The
+            // IL is unaffected: `ConversionClassifier` already lowers `nil` at
+            // ANY bare type-parameter target to a `BoundDefaultExpression`
+            // (`ldloca; initobj; ldloc`), which is #4027's verifiable shape
+            // rather than a bare `ldnull`.
+            || type is TypeParameterSymbol { DependentBoundProvesReferenceType: true };
     }
 
     /// <summary>
