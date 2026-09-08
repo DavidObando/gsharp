@@ -231,6 +231,14 @@ internal sealed partial class ExpressionBinder
                     break;
                 }
 
+                if (accessor.LeftPart is ObjectCreationExpressionSyntax { Target: CallExpressionSyntax nestedObjectCall } nestedObjectCreation)
+                {
+                    terminalCall = nestedObjectCall;
+                    terminalObjectCreation = nestedObjectCreation;
+                    trailingAccess = accessor.RightPart;
+                    break;
+                }
+
                 return false;
             }
 

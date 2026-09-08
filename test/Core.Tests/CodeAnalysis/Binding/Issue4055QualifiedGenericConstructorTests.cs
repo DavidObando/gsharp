@@ -49,7 +49,7 @@ public sealed class Issue4055QualifiedGenericConstructorTests
     }
 
     [Fact]
-    public void NestedGenericTypeArguments_Execute()
+    public void NestedGenericTypeArguments_Executes()
     {
         var result = EmittedOracle.Evaluate(
             """
@@ -80,6 +80,21 @@ public sealed class Issue4055QualifiedGenericConstructorTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal($"ok{System.Environment.NewLine}", result.Output);
+    }
+
+    [Fact]
+    public void QualifiedGenericObjectInitializerReceiver_Executes()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            package P
+            import System
+
+            Console.WriteLine(System.Collections.Generic.KeyValuePair[int32, string](){}.Key)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal($"0{System.Environment.NewLine}", result.Output);
     }
 
     [Fact]
