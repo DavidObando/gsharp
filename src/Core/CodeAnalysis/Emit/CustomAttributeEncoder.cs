@@ -1285,7 +1285,21 @@ internal sealed class CustomAttributeEncoder
         // parameters supplies fewer arguments than it has slots, and the blob
         // needs one entry per slot. That is the normal form, never the expanded
         // one, so it short-circuits the params-array reasoning below.
-        var defaulted = positional.Length < ctorParams.Length;
+        //
+        // The `TrailingParametersAreOptional` half is NOT redundant, and the
+        // first version of this fix omitted it. "Fewer arguments than slots" is
+        // ALSO true of a params tail absorbing zero trailing elements —
+        // `@MemberData("ShapeAreas")` at
+        // `MemberDataAttribute(string, params object[])` supplies one argument
+        // for two slots. Without the guard that took the direct path, and since
+        // a params array is not `IsOptional` (measured), nothing filled the
+        // slot: the blob got `nil` where the expanded form writes an EMPTY
+        // ARRAY. Well-formed blob, wrong content — it compiled, IL-verified,
+        // and xunit then found a theory with no data rows, reporting one
+        // dataless test instead of three cases. Caught by the cs2gs corpus
+        // gate, which is the only gate that runs the migrated tests.
+        var defaulted = positional.Length < ctorParams.Length
+            && TrailingParametersAreOptional(ctorParams, positional.Length);
         var direct = defaulted
             || !lastIsArray
             || (positional.Length == ctorParams.Length

@@ -129,6 +129,36 @@ public class Issue4097AttributeConstructorNotFoundTests
             public string Format { get; }
         }
 
+        // The xunit shapes the cs2gs corpus actually uses. `MemberDataLike` is
+        // the one that regressed: one required parameter plus a params tail
+        // absorbing ZERO trailing elements, so fewer arguments are supplied
+        // than there are slots — which is also true of a genuinely optional
+        // tail, and is why the two must be told apart.
+        [AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+        public class MemberDataLikeAttribute : Attribute
+        {
+            public MemberDataLikeAttribute(string memberName, params object[] parameters)
+            {
+                MemberName = memberName;
+                Parameters = parameters;
+            }
+
+            public string MemberName { get; }
+
+            public object[] Parameters { get; }
+        }
+
+        [AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+        public class InlineDataLikeAttribute : Attribute
+        {
+            public InlineDataLikeAttribute(params object[] data)
+            {
+                Data = data;
+            }
+
+            public object[] Data { get; }
+        }
+
         [AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
         public class OptionalsAttribute : Attribute
         {
@@ -280,6 +310,34 @@ public class Issue4097AttributeConstructorNotFoundTests
             "OmittedTrailingOptionals",
             "@Optionals(1)",
             new[] { "OptionalsAttribute" },
+        };
+
+        // Issue #4097, caught by the cs2gs corpus gate: a params tail absorbing
+        // ZERO trailing elements supplies fewer arguments than there are slots,
+        // exactly as an omitted optional does. Conflating the two wrote `nil`
+        // into the array slot instead of an empty array, and xunit stopped
+        // seeing any data rows for the theory.
+        yield return new object[]
+        {
+            "ParamsTailAbsorbingNothing",
+            "@MemberDataLike(\"ShapeAreas\")",
+            new[] { "MemberDataLikeAttribute" },
+        };
+
+        // The same constructor with elements to absorb: the expanded form.
+        yield return new object[]
+        {
+            "ParamsTailAbsorbingElements",
+            "@MemberDataLike(\"Cases\", 1, 2)",
+            new[] { "MemberDataLikeAttribute" },
+        };
+
+        // A bare params constructor, the `[InlineData(...)]` shape.
+        yield return new object[]
+        {
+            "BareParamsConstructor",
+            "@InlineDataLike(1, \"small\")",
+            new[] { "InlineDataLikeAttribute" },
         };
 
         // Supplying an optional explicitly must keep the exact-arity path.
@@ -515,6 +573,57 @@ public class Issue4097AttributeConstructorNotFoundTests
             Assert.Equal(
                 new object[] { "P.Status", null },
                 ConstructorArguments(appPath, libPath, "Converted"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The regression the cs2gs corpus caught: a params tail that absorbs
+    /// nothing must be written as an EMPTY ARRAY, not as <c>nil</c>.
+    /// </summary>
+    /// <remarks>
+    /// Asserting the attribute merely lands is not enough — it landed before
+    /// too. The blob was well-formed and said the wrong thing, which is why
+    /// compile and ilverify both passed and only running the migrated tests
+    /// exposed it. So the array itself is read back out of the metadata.
+    /// </remarks>
+    [Fact]
+    public void AParamsTailAbsorbingNothing_IsWrittenAsAnEmptyArray()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4097_params_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var source = Preamble
+                + "@MemberDataLike(\"ShapeAreas\")\nclass Empty {\n}\n\n"
+                + "@MemberDataLike(\"Cases\", 1, 2)\nclass Filled {\n}\n\n"
+                + "Console.WriteLine(\"ok\")\n";
+            var log = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
+
+            Assert.Empty(ErrorIds(log));
+            Assert.True(File.Exists(appPath), $"the sample must compile. Log:\n{log}");
+
+            IlVerifier.Verify(appPath, new[] { libPath });
+
+            // Two slots: the name, then the params array. The array must be
+            // present and EMPTY — `nil` here is what broke theory discovery.
+            var empty = ConstructorArguments(appPath, libPath, "Empty");
+            Assert.Equal(2, empty.Length);
+            Assert.Equal("ShapeAreas", empty[0]);
+            Assert.NotNull(empty[1]);
+            Assert.Empty((IEnumerable<CustomAttributeTypedArgument>)empty[1]);
+
+            // And the expanded form still packs its elements.
+            var filled = ConstructorArguments(appPath, libPath, "Filled");
+            Assert.Equal(2, filled.Length);
+            Assert.Equal("Cases", filled[0]);
+            Assert.Equal(
+                new object[] { 1, 2 },
+                ((IEnumerable<CustomAttributeTypedArgument>)filled[1]).Select(a => a.Value).ToArray());
         }
         finally
         {
