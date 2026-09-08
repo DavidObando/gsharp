@@ -1484,7 +1484,8 @@ internal sealed partial class ExpressionBinder
                     arguments,
                     inheritedSymbolicArgs,
                     receiverArgCount: 0,
-                    isExpanded: isExpanded),
+                    isExpanded: isExpanded,
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
                 isExpanded,
                 argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(
@@ -1560,7 +1561,9 @@ internal sealed partial class ExpressionBinder
                     arguments,
                     inheritedSymbolicArgs,
                     receiverArgCount: 0,
-                    isExpanded: resolution.IsExpanded);
+                    isExpanded: resolution.IsExpanded,
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    parameterMapping: resolution.ParameterMapping);
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     best,
                     typeArgSymbols,
@@ -1961,7 +1964,8 @@ internal sealed partial class ExpressionBinder
                     arguments,
                     extensionSymbolicArgs,
                     receiverArgCount: 1,
-                    isExpanded: isExpanded),
+                    isExpanded: isExpanded,
+                    argumentNames: extensionArgumentNames),
                 isExpanded,
                 extensionArgumentNames);
         Func<int, bool> functionLiteralArgumentCheck = argumentIndex =>
@@ -2065,7 +2069,9 @@ internal sealed partial class ExpressionBinder
             arguments,
             extensionSymbolicArgs,
             receiverArgCount: 1,
-            isExpanded: resolution.IsExpanded);
+            isExpanded: resolution.IsExpanded,
+            argumentNames: extensionArgumentNames,
+            parameterMapping: resolution.ParameterMapping);
         var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
             best,
             typeArgSymbols,
@@ -3774,7 +3780,8 @@ internal sealed partial class ExpressionBinder
                     arguments,
                     symbolicArgTypes,
                     receiverArgCount: 0,
-                    isExpanded: isExpanded),
+                    isExpanded: isExpanded,
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
                 isExpanded,
                 argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
         var resolution = ClrOverloadResolution.Resolve(

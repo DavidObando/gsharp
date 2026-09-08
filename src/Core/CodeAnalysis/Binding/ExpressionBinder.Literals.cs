@@ -1211,13 +1211,17 @@ internal sealed partial class ExpressionBinder
     /// <param name="symbolicArgs">The pre-resolution symbolic vector, receiver-first when <paramref name="receiverArgCount"/> is 1.</param>
     /// <param name="receiverArgCount">Number of leading receiver slots in <paramref name="symbolicArgs"/>.</param>
     /// <param name="isExpanded">Whether trailing arguments target a params-array element.</param>
+    /// <param name="argumentNames">Optional source-slot argument names.</param>
+    /// <param name="parameterMapping">Optional resolved source-slot to parameter-position mapping.</param>
     /// <returns>The refined vector, or <paramref name="symbolicArgs"/> when nothing changed.</returns>
     private ImmutableArray<TypeSymbol> RefineSymbolicArgsForMethodGroups(
         MethodInfo resolved,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<TypeSymbol> symbolicArgs,
         int receiverArgCount,
-        bool isExpanded = false)
+        bool isExpanded = false,
+        IReadOnlyList<string?>? argumentNames = null,
+        ImmutableArray<int> parameterMapping = default)
     {
         if (symbolicArgs.IsDefaultOrEmpty || arguments.IsDefaultOrEmpty)
         {
@@ -1235,19 +1239,34 @@ internal sealed partial class ExpressionBinder
                 resolved,
                 default,
                 symbolicArgs,
-                isExpanded)
+                isExpanded,
+                argumentNames)
             : default;
         ImmutableArray<TypeSymbol>.Builder? refined = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var slot = i + receiverArgCount;
-            var parameterIndex = isExpanded
+            var parameterIndex = !parameterMapping.IsDefault
+                && slot < parameterMapping.Length
+                    ? parameterMapping[slot]
+                    : slot;
+            if (parameterMapping.IsDefault
+                && argumentNames != null
+                && slot < argumentNames.Count
+                && argumentNames[slot] is { Length: > 0 } argumentName)
+            {
+                parameterIndex = Array.FindIndex(
+                    parameters,
+                    parameter => string.Equals(parameter.Name, argumentName, StringComparison.Ordinal));
+            }
+
+            parameterIndex = isExpanded
                 && paramsIndex >= 0
-                && slot >= paramsIndex
+                && parameterIndex >= paramsIndex
                 && ClrOverloadResolution.IsParamsArrayParameter(parameters[paramsIndex])
                     ? paramsIndex
-                    : slot;
-            if (slot >= symbolicArgs.Length || parameterIndex >= parameters.Length)
+                    : parameterIndex;
+            if (slot >= symbolicArgs.Length || parameterIndex < 0 || parameterIndex >= parameters.Length)
             {
                 continue;
             }

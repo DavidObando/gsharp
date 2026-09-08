@@ -352,6 +352,12 @@ public class ImportedMemberMatrixTests
                     outputInferenceConvert)
             }
 
+            func throughNamedFixedMethodGroupOutputInference() string {
+                return MethodGroupOutputInference.Choose(
+                    converter: outputInferenceConvert,
+                    value: Issue4086.CSharp.Derived())
+            }
+
             func throughExpandedStaticMethodGroup() string {
                 return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
             }
@@ -457,6 +463,7 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughExpandedInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughFixedMethodGroupOutputInference())
             Console.WriteLine(throughExpandedMethodGroupOutputInference())
+            Console.WriteLine(throughNamedFixedMethodGroupOutputInference())
             Console.WriteLine(throughExpandedStaticMethodGroup())
             Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughExpandedInheritedMethodGroup(DerivedInstanceOverloads()))
@@ -495,6 +502,7 @@ public class ImportedMemberMatrixTests
                 + $"object-invariant{Environment.NewLine}object-invariant-params{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"Derived:Base{Environment.NewLine}Derived:Base{Environment.NewLine}"
+                + $"Derived:Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}"

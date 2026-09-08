@@ -3034,7 +3034,7 @@ internal sealed partial class ExpressionBinder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames, (closed, isExpanded, vector) => RefineSymbolicArgsForMethodGroups(closed, arguments, vector, receiverArgCount: 0, isExpanded: isExpanded)))
+            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames, (closed, isExpanded, vector) => RefineSymbolicArgsForMethodGroups(closed, arguments, vector, receiverArgCount: 0, isExpanded: isExpanded, argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!)))
             {
                 // Issue #1538: now that the imported static overload is chosen,
                 // re-bind any inline `out var`/`out let`/`out _` placeholders
@@ -3087,7 +3087,9 @@ internal sealed partial class ExpressionBinder
                     arguments,
                     staticSymbolicArgs,
                     receiverArgCount: 0,
-                    isExpanded: staticIsExpanded);
+                    isExpanded: staticIsExpanded,
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    parameterMapping: staticMapping);
                 var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     staticFn.Method,
                     typeArgSymbols,
@@ -3848,7 +3850,8 @@ internal sealed partial class ExpressionBinder
                             arguments,
                             preResolutionSymbolicArgs,
                             receiverArgCount: 0,
-                            isExpanded: isExpanded),
+                            isExpanded: isExpanded,
+                            argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
                         isExpanded,
                         argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                 var resolution = ClrOverloadResolution.Resolve(
@@ -3981,7 +3984,9 @@ internal sealed partial class ExpressionBinder
                             arguments,
                             instSymbolicArgs,
                             receiverArgCount: 0,
-                            isExpanded: resolution.IsExpanded);
+                            isExpanded: resolution.IsExpanded,
+                            argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                            parameterMapping: resolution.ParameterMapping);
                         var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                             method,
                             typeArgSymbols,
