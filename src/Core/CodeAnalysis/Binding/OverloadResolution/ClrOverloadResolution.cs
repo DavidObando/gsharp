@@ -3617,6 +3617,7 @@ internal static class ClrOverloadResolution
             }
 
             Type[]? typeArgs = null;
+
             // Expanded inference has no method-group output callback. Do not
             // let a partial symbolic vector fabricate a closed candidate.
             var useRecoveredInference = !HasDeferredMethodGroupArgument(
