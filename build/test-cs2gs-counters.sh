@@ -75,12 +75,25 @@ pathlib.Path(sys.argv[1]).write_text(
     encoding="utf-8",
 )
 PY
-mkdir -p "$measurement_tree/src/App/bin/Release" "$measurement_tree/src/App/obj/Release"
-cp "$artifact" "$measurement_tree/src/App/bin/Release/Snippet.gs"
-cp "$artifact" "$measurement_tree/src/App/obj/Release/Snippet.gs"
+for generated in \
+  "$measurement_tree/out/BiN/Release/App/Snippet.gs" \
+  "$measurement_tree/out/OBJ/Release/App/Snippet.gs" \
+  "$measurement_tree/out/TeStReSuLtS/App/Snippet.gs"
+do
+  mkdir -p "$(dirname "$generated")"
+  cp "$artifact" "$generated"
+done
 
 selfmig_measure "$measurement_tree"
 [[ "$labels $lifts $long_lines $long_lines_atomic $bangs" == "0 0 0 0 0" ]]
+
+report=$(TMPDIR="$scratch" cs2gs_counter_report "$measurement_tree" "artifact exclusion")
+grep -Fq '| `.gs` files | 0 | 0 |' <<< "$report"
+grep -Fq '| `!!` null assertions | 0 | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (reducible) | n/a | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (total) | n/a | 0 |' <<< "$report"
+grep -Fq '| synthetic `__` identifiers | 0 | 0 |' <<< "$report"
 
 cp "$artifact" "$source_file"
 selfmig_measure "$measurement_tree"
@@ -92,5 +105,8 @@ grep -Fq '| `__patternGuardEnd` | 2 | 2 |' <<< "$report"
 grep -Fq '| `__local_` | 1 | 1 |' <<< "$report"
 grep -Fq '| `!!` null assertions | 1 | 1 |' <<< "$report"
 grep -Fq '| lines >300 chars (reducible) | n/a | 1 |' <<< "$report"
+grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 0 |' <<< "$report"
+grep -Fq '| lines >300 chars (total) | n/a | 1 |' <<< "$report"
+grep -Fq '| synthetic `__` identifiers | 3 | 3 |' <<< "$report"
 
 echo "cs2gs counter contract tests passed"
