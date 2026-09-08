@@ -5753,6 +5753,14 @@ public sealed class Binder
     /// later point is kept anyway — it is the first place at which every
     /// declaration-phase structure this predicate can read is final — and both
     /// shapes are pinned as green rows so moving either boundary is caught.</para>
+    /// <para>The queue is DRAINED before the first check is answered, not
+    /// cleared after the last. The deferral only works while the queue is a
+    /// faithful record of what has yet to be asked, so it must be left empty on
+    /// every path: were a check to throw, a clear-afterwards would strand the
+    /// remaining items in the root scope and they would be answered later
+    /// against whatever declaration happened to trigger the next flush. This is
+    /// the error-path counterpart of the two speculative rollback sites in
+    /// <c>ResolvePartialTypeParameterConstraints</c>.</para>
     /// </remarks>
     /// <param name="scope">Any scope in the compilation's chain.</param>
     internal static void FlushPendingUserGenericConstraintChecks(BoundScope scope)
@@ -5760,14 +5768,21 @@ public sealed class Binder
         var pending = scope.GetPendingUserGenericConstraintChecks();
 
         // Clear the latch FIRST: anything the reports themselves bind is
-        // answered in place rather than appended to the list being walked.
+        // answered in place rather than re-queued behind a flush that has
+        // already begun.
         scope.SetDeferUserGenericConstraintChecks(false);
-        foreach (var check in pending)
+
+        // Then DRAIN before answering anything. Emptying the queue up front
+        // rather than after the loop is what makes the flush exception-safe:
+        // if a check throws, the queue is already empty, so no stale work item
+        // survives to be answered later against an unrelated declaration.
+        var draining = pending.ToArray();
+        pending.Clear();
+
+        foreach (var check in draining)
         {
             RunUserGenericTypeClauseConstraintCheck(check);
         }
-
-        pending.Clear();
     }
 
     /// <summary>

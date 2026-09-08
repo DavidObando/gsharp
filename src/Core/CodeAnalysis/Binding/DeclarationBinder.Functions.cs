@@ -1410,6 +1410,20 @@ internal sealed partial class DeclarationBinder
         // still be reported at flush time.
         var pendingConstraintChecks = binderCtx.RootScope.GetPendingUserGenericConstraintChecks();
 
+        // Both speculative binds below roll back identically, so the rollback
+        // lives in one place. Two copies of a predicate in one method is how
+        // #4124 started.
+        void RollbackSpeculativeBind(int diagnosticCount, int pendingCheckCount)
+        {
+            Diagnostics.TruncateTo(diagnosticCount);
+            if (pendingConstraintChecks.Count > pendingCheckCount)
+            {
+                pendingConstraintChecks.RemoveRange(
+                    pendingCheckCount,
+                    pendingConstraintChecks.Count - pendingCheckCount);
+            }
+        }
+
         // Issue #3336: bind every matching header through its own file imports.
         var successfulBindings =
             new List<(int PartIndex, TypeParameterListSyntax Syntax, ImmutableArray<TypeParameterSymbol> Symbols)>();
@@ -1428,13 +1442,7 @@ internal sealed partial class DeclarationBinder
             }
             finally
             {
-                Diagnostics.TruncateTo(diagnosticCount);
-                if (pendingConstraintChecks.Count > pendingCheckCount)
-                {
-                    pendingConstraintChecks.RemoveRange(
-                        pendingCheckCount,
-                        pendingConstraintChecks.Count - pendingCheckCount);
-                }
+                RollbackSpeculativeBind(diagnosticCount, pendingCheckCount);
             }
 
             diagnosticsByPart.Add(candidateDiagnostics);
@@ -1456,13 +1464,7 @@ internal sealed partial class DeclarationBinder
             }
             finally
             {
-                Diagnostics.TruncateTo(diagnosticCount);
-                if (pendingConstraintChecks.Count > pendingCheckCount)
-                {
-                    pendingConstraintChecks.RemoveRange(
-                        pendingCheckCount,
-                        pendingConstraintChecks.Count - pendingCheckCount);
-                }
+                RollbackSpeculativeBind(diagnosticCount, pendingCheckCount);
             }
 
             foreach (var candidateDiagnostics in diagnosticsByPart)
