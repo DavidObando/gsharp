@@ -345,10 +345,8 @@ internal sealed partial class OverloadResolver
         out bool addressCapturedValue)
     {
         addressCapturedValue = false;
-        if (argument is not BoundInterpolatedStringExpression
-            {
-                Handler: { HandlerRefKind: not RefKind.None } handler,
-            } interpolated)
+        if (argument is not BoundInterpolatedStringExpression interpolated ||
+            interpolated.Handler is not { HandlerRefKind: not RefKind.None } handler)
         {
             return argument;
         }
