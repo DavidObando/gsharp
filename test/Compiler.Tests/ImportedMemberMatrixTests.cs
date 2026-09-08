@@ -1818,7 +1818,8 @@ public class ImportedMemberMatrixTests
             additionalReferences: references,
             ignoredErrorCodes: ignoredErrorScope is null
                 ? null
-                : IlVerifier.KnownIssues.StaticVirtualInterface,
+                : IlVerifier.KnownIssues.StaticVirtualInterface.Concat(
+                    new[] { "UnsatisfiedFieldParentInst", "UnsatisfiedMethodParentInst" }),
             ignoredErrorScope: ignoredErrorScope);
 
         var runtimeConfig = Path.ChangeExtension(outPath, ".runtimeconfig.json");

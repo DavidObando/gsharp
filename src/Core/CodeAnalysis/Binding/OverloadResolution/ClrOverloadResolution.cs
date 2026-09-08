@@ -2035,7 +2035,8 @@ internal static class ClrOverloadResolution
             closedInputs[i] = closedInput;
         }
 
-        var signature = methodGroupInference(argumentIndex, closedInputs);
+        var signature = methodGroupInference(argumentIndex, closedInputs)
+            ?? methodGroupInference(argumentIndex, delegateParameters);
         if (!signature.HasValue
             || signature.Value.Parameters.Length != delegateParameters.Length
             || signature.Value.Return is null)
