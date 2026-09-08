@@ -494,7 +494,8 @@ public sealed class ImportedClassSymbol : Symbol
                         bestMethod,
                         typeArgSymbols,
                         refineSymbolicMethodGroupArgs?.Invoke(bestMethod, result.IsExpanded, symbolicArgVector) ?? symbolicArgVector,
-                        result.IsExpanded);
+                        result.IsExpanded,
+                        argumentNames);
                     returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(bestMethod, symbolicMethodTypeArgs, receiverType: null);
                 }
 

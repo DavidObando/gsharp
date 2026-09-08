@@ -1767,15 +1767,43 @@ internal sealed class MemberLookup
                     openMethod,
                     orderedSymbolicArgTypes.Length,
                     argumentNames,
+                    isExpanded,
                     out var sourceToParameter))
             {
-                var byParameter = new TypeSymbol?[openMethod.GetParameters().Length];
-                for (var source = 0; source < orderedSymbolicArgTypes.Length && source < sourceToParameter.Length; source++)
+                var parameterCount = openMethod.GetParameters().Length;
+                if (isExpanded
+                    && parameterCount > 0
+                    && ClrOverloadResolution.IsParamsArrayParameter(openMethod.GetParameters()[^1]))
                 {
-                    byParameter[sourceToParameter[source]] = orderedSymbolicArgTypes[source];
-                }
+                    var paramsIndex = parameterCount - 1;
+                    var expandedCount = sourceToParameter.Count(parameter => parameter == paramsIndex);
+                    var byParameter = new TypeSymbol?[paramsIndex + expandedCount];
+                    var expandedSlot = paramsIndex;
+                    for (var source = 0; source < orderedSymbolicArgTypes.Length && source < sourceToParameter.Length; source++)
+                    {
+                        var parameter = sourceToParameter[source];
+                        if (parameter == paramsIndex)
+                        {
+                            byParameter[expandedSlot++] = orderedSymbolicArgTypes[source];
+                        }
+                        else
+                        {
+                            byParameter[parameter] = orderedSymbolicArgTypes[source];
+                        }
+                    }
 
-                orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+                    orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+                }
+                else
+                {
+                    var byParameter = new TypeSymbol?[parameterCount];
+                    for (var source = 0; source < orderedSymbolicArgTypes.Length && source < sourceToParameter.Length; source++)
+                    {
+                        byParameter[sourceToParameter[source]] = orderedSymbolicArgTypes[source];
+                    }
+
+                    orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+                }
             }
 
             inferred = InferSymbolicMethodTypeArgumentsCore(

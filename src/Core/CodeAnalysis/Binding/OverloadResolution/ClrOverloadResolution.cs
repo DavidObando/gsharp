@@ -1558,6 +1558,30 @@ internal static class ClrOverloadResolution
         int argCount,
         IReadOnlyList<string?>? argumentNames,
         [NotNullWhen(true)] out int[]? mapping)
+        => TryBuildNamedArgumentReordering(
+            openMethod,
+            argCount,
+            argumentNames,
+            isExpanded: false,
+            out mapping);
+
+    /// <summary>
+    /// Builds the source-to-parameter mapping for symbolic inference, retaining
+    /// every expanded params argument as a source slot mapped to the params
+    /// parameter.
+    /// </summary>
+    /// <param name="openMethod">The candidate whose parameters the names bind against.</param>
+    /// <param name="argCount">The number of source arguments.</param>
+    /// <param name="argumentNames">The per-source-index names; null entries are positional.</param>
+    /// <param name="isExpanded">Whether trailing scalar arguments bind to the params element.</param>
+    /// <param name="mapping">The source-index to parameter-position mapping.</param>
+    /// <returns>True when a reordering mapping was produced.</returns>
+    internal static bool TryBuildNamedArgumentReordering(
+        MethodInfo openMethod,
+        int argCount,
+        IReadOnlyList<string?>? argumentNames,
+        bool isExpanded,
+        [NotNullWhen(true)] out int[]? mapping)
     {
         mapping = null;
         if (openMethod == null || argumentNames == null || !HasAnyNamedArgument(argumentNames))
@@ -1565,7 +1589,12 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        return TryBuildNamedArgumentMapping(openMethod.GetParameters(), argCount, argumentNames, out mapping);
+        return TryBuildNamedArgumentMapping(
+            openMethod.GetParameters(),
+            argCount,
+            argumentNames,
+            isExpanded,
+            out mapping);
     }
 
     /// <summary>
@@ -3857,41 +3886,25 @@ internal static class ClrOverloadResolution
         var names = argumentNames ?? Array.Empty<string?>();
         var hasNamed = HasAnyNamedArgument(names);
         var mapping = new int[argTypes.Count];
-        var filled = new bool[parameters.Length];
-        for (var i = 0; i < argTypes.Count; i++)
+        if (hasNamed)
         {
-            var name = hasNamed ? names[i] : null;
-            int paramIdx;
-            if (name == null)
-            {
-                paramIdx = i < paramsIndex ? i : paramsIndex;
-            }
-            else
-            {
-                paramIdx = FindParameterIndex(parameters, name);
-                if (paramIdx < 0 || paramIdx == paramsIndex)
-                {
-                    return;
-                }
-            }
-
-            if (paramIdx != paramsIndex && filled[paramIdx])
+            if (!TryBuildNamedArgumentMapping(
+                    parameters,
+                    argTypes.Count,
+                    names,
+                    isExpanded: true,
+                    out var namedMapping))
             {
                 return;
             }
 
-            mapping[i] = paramIdx;
-            filled[paramIdx] = true;
+            mapping = namedMapping;
         }
-
-        // Every non-params fixed slot left empty must be optional. The params
-        // slot is virtually optional in expanded form (zero trailing args
-        // allocates an empty array).
-        for (var i = 0; i < paramsIndex; i++)
+        else
         {
-            if (!filled[i] && !IsOptionalParameter(parameters[i]))
+            for (var i = 0; i < argTypes.Count; i++)
             {
-                return;
+                mapping[i] = i < paramsIndex ? i : paramsIndex;
             }
         }
 
@@ -4040,26 +4053,25 @@ internal static class ClrOverloadResolution
         var hasNamed = HasAnyNamedArgument(names);
         var typeParams = openMethod.GetGenericArguments();
         var bounds = new Dictionary<string, Type>(StringComparer.Ordinal);
+        int[]? mapping = null;
+        if (hasNamed
+            && !TryBuildNamedArgumentMapping(
+                parameters,
+                argTypes.Count,
+                names,
+                isExpanded: true,
+                out mapping))
+        {
+            return false;
+        }
 
         bool TryGetTargetType(int argumentIndex, [NotNullWhen(true)] out Type? targetType)
         {
-            var name = hasNamed ? names[argumentIndex] : null;
-            if (name == null)
-            {
-                targetType = argumentIndex < paramsIndex
-                    ? parameters[argumentIndex].ParameterType
-                    : elementType;
-                return true;
-            }
-
-            var parameterIndex = FindParameterIndex(parameters, name);
-            if (parameterIndex < 0 || parameterIndex == paramsIndex)
-            {
-                targetType = null;
-                return false;
-            }
-
-            targetType = parameters[parameterIndex].ParameterType;
+            var parameterIndex = mapping?[argumentIndex]
+                ?? (argumentIndex < paramsIndex ? argumentIndex : paramsIndex);
+            targetType = parameterIndex == paramsIndex
+                ? elementType
+                : parameters[parameterIndex].ParameterType;
             return true;
         }
 
@@ -4153,15 +4165,35 @@ internal static class ClrOverloadResolution
     /// (unknown name, duplicate slot, or required slot left unfilled).
     /// </summary>
     private static bool TryBuildNamedArgumentMapping(ParameterInfo[] parameters, int argCount, IReadOnlyList<string?> argumentNames, [NotNullWhen(true)] out int[]? mapping)
+        => TryBuildNamedArgumentMapping(
+            parameters,
+            argCount,
+            argumentNames,
+            isExpanded: false,
+            out mapping);
+
+    private static bool TryBuildNamedArgumentMapping(
+        ParameterInfo[] parameters,
+        int argCount,
+        IReadOnlyList<string?> argumentNames,
+        bool isExpanded,
+        [NotNullWhen(true)] out int[]? mapping)
     {
         mapping = null;
-        if (argCount > parameters.Length)
+        var paramsIndex = isExpanded
+            && parameters.Length > 0
+            && IsParamsArrayParameter(parameters[^1])
+                ? parameters.Length - 1
+                : -1;
+        if (argumentNames.Count < argCount
+            || (argCount > parameters.Length && paramsIndex < 0))
         {
             return false;
         }
 
         var result = new int[argCount];
         var filled = new bool[parameters.Length];
+        var paramsFilledByName = false;
 
         // Positional arguments bind to their source index. Named arguments bind
         // by parameter name; a later positional is legal only when that natural
@@ -4170,23 +4202,33 @@ internal static class ClrOverloadResolution
         {
             var name = argumentNames[i];
             var paramIndex = name == null
-                ? i
+                ? paramsIndex >= 0 && i >= paramsIndex
+                    ? paramsIndex
+                    : i
                 : FindParameterIndex(parameters, name);
+            var repeatedExpandedArgument = paramsIndex >= 0
+                && paramIndex == paramsIndex
+                && name == null
+                && i >= paramsIndex
+                && !paramsFilledByName;
             if (paramIndex < 0 ||
                 paramIndex >= parameters.Length ||
-                filled[paramIndex])
+                (filled[paramIndex] && !repeatedExpandedArgument))
             {
                 return false;
             }
 
             result[i] = paramIndex;
             filled[paramIndex] = true;
+            paramsFilledByName |= paramIndex == paramsIndex && name != null;
         }
 
         // Every unfilled parameter must be optional.
         for (var i = 0; i < parameters.Length; i++)
         {
-            if (!filled[i] && !IsOptionalParameter(parameters[i]))
+            if (!filled[i]
+                && i != paramsIndex
+                && !IsOptionalParameter(parameters[i]))
             {
                 return false;
             }

@@ -4072,10 +4072,22 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        if (!overloads.TryAnalyzeCallArgumentLayout(
+                callSyntax.Arguments,
+                out _,
+                out var argumentNames))
+        {
+            return false;
+        }
+
+        var clrArgumentNames = argumentNames.IsDefault
+            ? null
+            : (IReadOnlyList<string?>)argumentNames;
         var boundArgs = ImmutableArray.CreateBuilder<BoundExpression>(callSyntax.Arguments.Count);
         for (var i = 0; i < callSyntax.Arguments.Count; i++)
         {
-            boundArgs.Add(BindExpression(callSyntax.Arguments[i]));
+            boundArgs.Add(BindExpression(
+                OverloadResolver.UnwrapNamedArgumentValue(callSyntax.Arguments[i])));
         }
 
         var arguments = boundArgs.MoveToImmutable();
@@ -4107,15 +4119,17 @@ internal sealed partial class ExpressionBinder
                     arguments,
                     symbolicArgTypes,
                     receiverArgCount: 0,
-                    isExpanded: isExpanded),
-                isExpanded);
+                    isExpanded: isExpanded,
+                    argumentNames: clrArgumentNames),
+                isExpanded,
+                clrArgumentNames);
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
             null,
             scope.References.MapClrTypeToReferences,
             interpolatedStringArgs,
-            null,
+            clrArgumentNames,
             recoverTypeArgSymbols: recoverTypeArgSymbols,
             constantNarrowingArgumentCheck: MakeConstantNarrowingArgumentCheck(arguments),
             structuralProjectionArgumentCheck: MakeStructuralProjectionArgumentCheck(arguments),
@@ -4131,7 +4145,19 @@ internal sealed partial class ExpressionBinder
         }
 
         var parameters = method.GetParameters();
-        var symbolicMethodTypeArgs = recoverTypeArgSymbols(method, resolution.IsExpanded);
+        var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+            method,
+            default,
+            RefineSymbolicArgsForMethodGroups(
+                method,
+                arguments,
+                symbolicArgTypes,
+                receiverArgCount: 0,
+                isExpanded: resolution.IsExpanded,
+                argumentNames: clrArgumentNames,
+                parameterMapping: resolution.ParameterMapping),
+            resolution.IsExpanded,
+            clrArgumentNames);
 
         // Return type: a return that names the constraint type-variable is
         // recovered by projecting through the constructed constraint,

@@ -151,6 +151,16 @@ public class ImportedMemberMatrixTests
                     TIn value,
                     params System.Func<TIn, TOut>[] converters)
                     => typeof(TIn).Name + ":" + typeof(TOut).Name;
+
+                public static TOut Convert<TIn, TOut>(
+                    TIn value,
+                    System.Func<TIn, TOut> converter)
+                    => converter(value);
+
+                public static TOut ConvertParams<TIn, TOut>(
+                    TIn value,
+                    params System.Func<TIn, TOut>[] converters)
+                    => converters[0](value);
             }
 
             public static class ExtensionOverloads
@@ -245,6 +255,9 @@ public class ImportedMemberMatrixTests
             import Issue4086.CSharp
 
             open class Base {
+                public func Kind() string {
+                    return "same-compilation-Base"
+                }
             }
 
             class Derived : Base {
@@ -358,6 +371,42 @@ public class ImportedMemberMatrixTests
                     value: Issue4086.CSharp.Derived())
             }
 
+            func throughNamedExpandedMethodGroupOutputInference() string {
+                return MethodGroupOutputInference.ChooseParams(
+                    converters: outputInferenceConvert,
+                    value: Issue4086.CSharp.Derived())
+            }
+
+            func symbolicOutputConvert(value object) Base {
+                return Base()
+            }
+
+            func symbolicOutputConvert(value int32) Derived {
+                return Derived()
+            }
+
+            func throughNamedFixedMethodGroupOutputValue() string {
+                var result Base = MethodGroupOutputInference.Convert(
+                    converter: symbolicOutputConvert,
+                    value: Derived())
+                return result.Kind()
+            }
+
+            func throughNamedExpandedMethodGroupOutputValue() string {
+                var result Base = MethodGroupOutputInference.ConvertParams(
+                    converters: symbolicOutputConvert,
+                    value: Derived())
+                return result.Kind()
+            }
+
+            func throughNamedExpandedMultiMethodGroupOutputValue() string {
+                var result Base = MethodGroupOutputInference.ConvertParams(
+                    value: Derived(),
+                    symbolicOutputConvert,
+                    symbolicOutputConvert)
+                return result.Kind()
+            }
+
             func throughExpandedStaticMethodGroup() string {
                 return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
             }
@@ -427,6 +476,20 @@ public class ImportedMemberMatrixTests
                 return TReceiver.ChooseParams(Derived(), expandedSymbolicFactory)
             }
 
+            func throughNamedConstrainedStaticMethodGroup[
+                TReceiver IStaticOverloads[TReceiver]]() string {
+                return TReceiver.Choose(
+                    factory: methodGroupFactory,
+                    value: DerivedDisposable())
+            }
+
+            func throughNamedExpandedConstrainedStaticMethodGroup[
+                TReceiver IStaticOverloads[TReceiver]]() string {
+                return TReceiver.ChooseParams(
+                    factories: expandedSymbolicFactory,
+                    value: Derived())
+            }
+
             Console.WriteLine(throughClassBound[DisposableBase](DisposableBase()))
             Console.WriteLine(throughInterface[DisposableBase](DisposableBase()))
             Console.WriteLine(throughObject(DisposableBase()))
@@ -464,6 +527,10 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughFixedMethodGroupOutputInference())
             Console.WriteLine(throughExpandedMethodGroupOutputInference())
             Console.WriteLine(throughNamedFixedMethodGroupOutputInference())
+            Console.WriteLine(throughNamedExpandedMethodGroupOutputInference())
+            Console.WriteLine(throughNamedFixedMethodGroupOutputValue())
+            Console.WriteLine(throughNamedExpandedMethodGroupOutputValue())
+            Console.WriteLine(throughNamedExpandedMultiMethodGroupOutputValue())
             Console.WriteLine(throughExpandedStaticMethodGroup())
             Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughExpandedInheritedMethodGroup(DerivedInstanceOverloads()))
@@ -488,6 +555,8 @@ public class ImportedMemberMatrixTests
                 DisposableBase()))
             Console.WriteLine(throughConstrainedStaticMethodGroup[StaticOverloads]())
             Console.WriteLine(throughExpandedConstrainedStaticMethodGroup[StaticOverloads]())
+            Console.WriteLine(throughNamedConstrainedStaticMethodGroup[StaticOverloads]())
+            Console.WriteLine(throughNamedExpandedConstrainedStaticMethodGroup[StaticOverloads]())
             """;
 
         Assert.Equal(
@@ -503,6 +572,9 @@ public class ImportedMemberMatrixTests
                 + $"DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"Derived:Base{Environment.NewLine}Derived:Base{Environment.NewLine}"
                 + $"Derived:Base{Environment.NewLine}"
+                + $"Derived:Base{Environment.NewLine}"
+                + $"same-compilation-Base{Environment.NewLine}same-compilation-Base{Environment.NewLine}"
+                + $"same-compilation-Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}"
@@ -510,12 +582,13 @@ public class ImportedMemberMatrixTests
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}Object{Environment.NewLine}"
+                + $"DisposableBase{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}Base{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 csSource,
                 gsSource,
                 "Issue4086.CSharp",
-                ignoredErrorScope: "through(?:Expanded)?ConstrainedStatic(?:Async)?"));
+                ignoredErrorScope: "through(?:Named)?(?:Expanded)?ConstrainedStatic(?:Async)?"));
 
         const string incompatibleSource = """
             package Issue4086.Incompatible
