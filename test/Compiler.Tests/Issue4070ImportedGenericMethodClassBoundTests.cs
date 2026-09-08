@@ -153,6 +153,15 @@ public class Issue4070ImportedGenericMethodClassBoundTests
             public string Tag { get; set; } = "i";
         }
 
+        // Issue #4083/#4084: the BASE-CLASS twin of `DisposableConstrained`,
+        // so the dependent bound can be asked of a class bound at a generic
+        // TYPE as well as at a generic method.
+        public class SchemeConstrained<T>
+            where T : SchemeOptions
+        {
+            public string Tag { get; set; } = "s";
+        }
+
         // A SELF-REFERENTIAL interface bound. `IEquatable<T>` mentions the
         // definition's own parameter, so it cannot be answered on the erased
         // vector — both `IEquatable<T>` and a same-compilation
@@ -673,6 +682,60 @@ public class Issue4070ImportedGenericMethodClassBoundTests
             Console.WriteLine(callIt[MarkerBase]())
             """,
         };
+
+        // Issue #4083's negatives. An UNBOUND parameter proves nothing, so the
+        // new base-class arm must not admit it.
+        yield return new object[]
+        {
+            "an-unbound-parameter-does-not-forward-a-base-class-constraint",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            func callIt[T]() string {
+                return Probes.NeedsScheme[T]()
+            }
+
+            Console.WriteLine(callIt[SchemeOptions]())
+            """,
+        };
+
+        // A class bound that is not the base class the definition asks for.
+        yield return new object[]
+        {
+            "a-class-bound-that-is-the-wrong-base-class",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            func callIt[T DisposableBase]() string {
+                return Probes.NeedsScheme[T]()
+            }
+
+            Console.WriteLine(callIt[DisposableBase]())
+            """,
+        };
+
+        // Issue #4084's negative. A dependent bound forwards the bounding
+        // parameter's constraints and NOTHING ELSE, so a chain that ends in a
+        // class implementing the wrong interface is still refused.
+        yield return new object[]
+        {
+            "a-dependent-bound-whose-chain-does-not-reach-the-interface",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            func callIt[TBase MarkerBase, TDerived TBase]() string {
+                return Probes.NeedsDisposable[TDerived]()
+            }
+
+            Console.WriteLine(callIt[MarkerBase, MarkerBase]())
+            """,
+        };
     }
 
     /// <summary>
@@ -751,26 +814,40 @@ public class Issue4070ImportedGenericMethodClassBoundTests
     }
 
     /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described
-    /// (issue #4084): a DEPENDENT bound
-    /// (<c>[TBase DisposableBase, TDerived TBase]</c>) forwards the interface
-    /// just as a direct class bound does, and <c>csc</c> accepts the C#
-    /// equivalent — but NEITHER of the two walks reads
-    /// <c>TypeParameterSymbol.TypeParameterBound</c>, so the generic-TYPE path
-    /// refuses it too.
+    /// Issue #4084, CLOSED: a DEPENDENT bound
+    /// (<c>[TBase DisposableBase, TDerived TBase]</c>) forwards the bounding
+    /// parameter's whole constraint set, so <c>TDerived</c> carries
+    /// <c>IDisposable</c> and <c>SchemeOptions</c> just as <c>TBase</c> does —
+    /// on the generic-METHOD path and the generic-TYPE path alike.
     /// </summary>
     /// <remarks>
-    /// <para>Closing it means teaching both walks a new slot, which is new
-    /// behaviour on the checker every imported generic method call flows
-    /// through and is beyond what #4070 filed. The row asserts the CURRENT
-    /// behaviour on BOTH paths — <c>GS0159</c> at the method and #4037's
-    /// <c>GS0580</c> at the type, each exactly once, measured rather than
-    /// inferred from the source — so whoever fixes it gets a red row pointing
-    /// at the exact programs rather than silence, and the DIRECT-bound
-    /// spelling is green beside it as the thing any fix must not break.</para>
+    /// <para><b>What was measured on the parent</b> (<c>origin/main</c> @
+    /// <c>26df552b</c>, rebuilt <c>gsc</c>): the method spelling reported
+    /// <c>GS0159 Cannot find function NeedsDisposable.</c> — FILTERED out of
+    /// overload resolution — while the type spelling reported #4037's
+    /// <c>GS0580</c>, so the two paths gave two DIFFERENT wrong answers to one
+    /// question. <c>csc</c> accepts both:
+    /// <c>TDerived : TBase : DisposableBase : IDisposable</c> holds in every
+    /// instantiation.</para>
+    /// <para><b>The repair.</b> Both askers now walk
+    /// <see cref="GSharp.CodeAnalysis.Binding.Binder.EnumerateForwardedParameterChain"/>
+    /// — #4067's existing symbol walk, made <c>internal</c> — instead of each
+    /// carrying its own narrower chain that read only <c>ClassConstraint</c>.
+    /// It follows <c>TypeParameterBound</c> as well, and terminates on a
+    /// visited set rather than a depth limit.</para>
+    /// <para><b>The base-class half is here too.</b> #4084's table calls the
+    /// base-class-through-a-dependent-bound cell closed by #4102, and that is
+    /// true of the G#-DECLARED generic <c>SatisfiesClassConstraint</c> serves.
+    /// The IMPORTED generic type goes through
+    /// <c>ClrOverloadResolution</c> instead, and was measured STILL red on the
+    /// parent — <c>class Fwd[TBase SchemeOptions, TDerived TBase] :
+    /// SchemeConstrained[TDerived]</c> reported <c>GS0580</c>. It is a row
+    /// here, and a correction is posted on the issue.</para>
+    /// <para>The DIRECT-bound spelling stays green beside them as the thing
+    /// this must not break.</para>
     /// </remarks>
     [Fact]
-    public void ADependentBoundStillDoesNotForwardTheInterface()
+    public void ADependentBoundForwardsTheBoundingParametersConstraints()
     {
         const string Dependent = """
             package P
@@ -792,7 +869,18 @@ public class Issue4070ImportedGenericMethodClassBoundTests
             class Forwarded[TBase DisposableBase, TDerived TBase] : DisposableConstrained[TDerived] {
             }
 
-            Console.WriteLine("x")
+            Console.WriteLine(Forwarded[DisposableBase, DisposableBase]().Tag)
+            """;
+
+        const string DependentBaseClassAtAType = """
+            package P
+            import System
+            import HelperLib2
+
+            class Forwarded[TBase SchemeOptions, TDerived TBase] : SchemeConstrained[TDerived] {
+            }
+
+            Console.WriteLine(Forwarded[SchemeOptions, SchemeOptions]().Tag)
             """;
 
         const string Direct = """
@@ -812,51 +900,28 @@ public class Issue4070ImportedGenericMethodClassBoundTests
         {
             var libPath = CompileCSharpLibrary(tempDir);
 
-            var dependentPath = Path.Combine(tempDir, "Dependent.dll");
-            var dependentLog = Compile(
-                tempDir, "Dependent.gs", Dependent, dependentPath, "/target:exe", "/reference:" + libPath);
-            Assert.DoesNotContain("GS9998", dependentLog, StringComparison.Ordinal);
-            Assert.False(
-                File.Exists(dependentPath),
-                "the dependent-bound gap is still open, so this must still be refused. If it now compiles, "
-                    + $"the gap is closed — move this into NowBinding. Log:\n{dependentLog}");
+            foreach (var (name, source, expected) in new[]
+            {
+                ("Dependent", Dependent, "method-ok"),
+                ("DependentAtAType", DependentAtAType, "i"),
+                ("DependentBaseClassAtAType", DependentBaseClassAtAType, "s"),
+                ("Direct", Direct, "method-ok"),
+            })
+            {
+                var path = Path.Combine(tempDir, name + ".dll");
+                var log = Compile(tempDir, name + ".gs", source, path, "/target:exe", "/reference:" + libPath);
 
-            var occurrences = dependentLog.Split("GS0159", StringSplitOptions.None).Length - 1;
-            Assert.True(
-                occurrences == 1,
-                $"the dependent-bound shape must report GS0159 exactly once, saw {occurrences}. "
-                    + $"Log:\n{dependentLog}");
+                Assert.DoesNotContain("GS9998", log, StringComparison.Ordinal);
+                Assert.DoesNotContain("GS0159", log, StringComparison.Ordinal);
+                Assert.DoesNotContain("GS0580", log, StringComparison.Ordinal);
+                Assert.True(File.Exists(path), $"'{name}' must compile. Log:\n{log}");
 
-            // The GENERIC-TYPE path has the same blind spot — measured here
-            // rather than inferred from the source, because #4084's body
-            // claims it. #4037's rule DOES fire, so this one is diagnosed
-            // rather than filtered: GS0580, not GS0159.
-            var typePath = Path.Combine(tempDir, "DependentAtAType.dll");
-            var typeLog = Compile(
-                tempDir, "DependentAtAType.gs", DependentAtAType, typePath, "/target:exe", "/reference:" + libPath);
-            Assert.DoesNotContain("GS9998", typeLog, StringComparison.Ordinal);
-            Assert.False(
-                File.Exists(typePath),
-                $"the dependent bound at a generic TYPE must still be refused. Log:\n{typeLog}");
+                IlVerifier.Verify(path, new[] { libPath });
 
-            var typeOccurrences = typeLog.Split("GS0580", StringSplitOptions.None).Length - 1;
-            Assert.True(
-                typeOccurrences == 1,
-                $"the dependent bound at a generic TYPE must report GS0580 exactly once, saw "
-                    + $"{typeOccurrences}. Log:\n{typeLog}");
-
-            // The DIRECT spelling of the same question is what this change
-            // fixed, and it is what any later fix must not break.
-            var directPath = Path.Combine(tempDir, "Direct.dll");
-            var directLog = Compile(
-                tempDir, "Direct.gs", Direct, directPath, "/target:exe", "/reference:" + libPath);
-            Assert.True(File.Exists(directPath), $"the direct spelling must compile. Log:\n{directLog}");
-
-            IlVerifier.Verify(directPath, new[] { libPath });
-
-            var (exit, output) = RunDotnet(directPath);
-            Assert.True(exit == 0, $"the direct spelling must run. Exit {exit}:\n{output}");
-            Assert.Equal("method-ok", output.Trim());
+                var (exit, output) = RunDotnet(path);
+                Assert.True(exit == 0, $"'{name}' must run. Exit {exit}:\n{output}");
+                Assert.Equal(expected, output.Trim());
+            }
         }
         finally
         {
@@ -951,26 +1016,41 @@ public class Issue4070ImportedGenericMethodClassBoundTests
     }
 
     /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described
-    /// (issue #4083): a BASE-CLASS constraint at an imported generic method
-    /// (<c>where T : SchemeOptions</c>) is not forwarded by a type parameter
-    /// carrying that very bound, in either the imported or the
-    /// same-compilation spelling. <c>csc</c> accepts both.
+    /// Issue #4083, CLOSED: a BASE-CLASS constraint at an imported generic
+    /// method (<c>where T : SchemeOptions</c>) is forwarded by a type
+    /// parameter carrying that very bound, in the imported spelling, the
+    /// same-compilation spelling, and through a dependent bound.
     /// </summary>
     /// <remarks>
-    /// <para>The same failure mode one bound-kind over — the candidate is
-    /// FILTERED, so the author sees <c>GS0159</c> — but a different arm of the
-    /// loop: the non-interface FALLTHROUGH, which every base-class and special
-    /// constraint of every imported generic method takes, rather than the
-    /// <c>constraint.IsInterface</c> branch this change touches. Widening it is
-    /// a strictly larger blast radius and wants its own corpus sweep, so it is
-    /// filed rather than ridden along.</para>
-    /// <para>The row asserts the CURRENT behaviour and keeps the INTERFACE
-    /// spelling green beside it, so a later fix sees exactly which programs
-    /// change and which must not.</para>
+    /// <para><b>What was measured on the parent</b> (<c>origin/main</c> @
+    /// <c>26df552b</c>): all three reported <c>GS0159 Cannot find function
+    /// NeedsScheme.</c> The failure mode is #4070's, one bound-kind over, but
+    /// a different arm of the loop — the non-interface FALLTHROUGH, which
+    /// every base-class constraint of every imported generic method takes. A
+    /// <c>TypeParameterSymbol</c> argument matched none of the symbolic arms,
+    /// so the erased <c>System.Object</c> placeholder was asked whether it
+    /// derives from <c>SchemeOptions</c>, said no, and the candidate was
+    /// silently FILTERED — the author saw "cannot find function" where the
+    /// real answer was "the constraint is satisfied". <c>csc</c> accepts all
+    /// three.</para>
+    /// <para><b>The repair is #4070's, symmetrically.</b> The generic-TYPE
+    /// construction path has walked the parameter's own class chain since
+    /// #4037; that walk is now
+    /// <c>TypeParameterSatisfiesClrClassBound</c> and the method path calls
+    /// the SAME one. It is deliberately NOT a call to its parent
+    /// <c>TypeParameterSatisfiesClrBound</c>, whose <c>object</c>/
+    /// <c>ValueType</c> early-out would be a false ACCEPT here: on this path a
+    /// <c>System.ValueType</c> bound is the metadata shadow of
+    /// <c>where T : struct</c>, settled by the special-constraint arms
+    /// before the type-bound loop is reached.</para>
+    /// <para>The new arm carries #4070's guard — the UNSUBSTITUTED bound must
+    /// mention no type parameter — so a CRTP base bound
+    /// (<c>where T : Base&lt;T&gt;</c>) cannot be "proved" on the erased
+    /// vector. The INTERFACE spelling stays green beside these as the thing
+    /// this must not break.</para>
     /// </remarks>
     [Fact]
-    public void AClassBoundDoesNotYetForwardABaseClassConstraint()
+    public void AClassBoundForwardsABaseClassConstraintAtAGenericMethod()
     {
         const string ImportedBound = """
             package P
@@ -999,6 +1079,18 @@ public class Issue4070ImportedGenericMethodClassBoundTests
             Console.WriteLine(callIt[MyScheme]())
             """;
 
+        const string DependentBound = """
+            package P
+            import System
+            import HelperLib2
+
+            func callIt[U SchemeOptions, T U]() string {
+                return Probes.NeedsScheme[T]()
+            }
+
+            Console.WriteLine(callIt[SchemeOptions, SchemeOptions]())
+            """;
+
         const string InterfaceSpelling = """
             package P
             import System
@@ -1016,41 +1108,27 @@ public class Issue4070ImportedGenericMethodClassBoundTests
         {
             var libPath = CompileCSharpLibrary(tempDir);
 
-            foreach (var (name, source) in new[]
+            foreach (var (name, source, expected) in new[]
             {
-                ("ImportedBound", ImportedBound),
-                ("SameCompilationBound", SameCompilationBound),
+                ("ImportedBound", ImportedBound, "scheme-ok"),
+                ("SameCompilationBound", SameCompilationBound, "scheme-ok"),
+                ("DependentBound", DependentBound, "scheme-ok"),
+                ("InterfaceSpelling", InterfaceSpelling, "method-ok"),
             })
             {
                 var path = Path.Combine(tempDir, name + ".dll");
                 var log = Compile(tempDir, name + ".gs", source, path, "/target:exe", "/reference:" + libPath);
 
                 Assert.DoesNotContain("GS9998", log, StringComparison.Ordinal);
-                Assert.False(
-                    File.Exists(path),
-                    $"the base-class gap (#4083) is still open, so '{name}' must still be refused. If it now "
-                        + $"compiles, the gap is closed — move it into NowBinding. Log:\n{log}");
+                Assert.DoesNotContain("GS0159", log, StringComparison.Ordinal);
+                Assert.True(File.Exists(path), $"'{name}' must compile. Log:\n{log}");
 
-                var occurrences = log.Split("GS0159", StringSplitOptions.None).Length - 1;
-                Assert.True(
-                    occurrences == 1,
-                    $"'{name}' must report GS0159 exactly once, saw {occurrences}. Log:\n{log}");
+                IlVerifier.Verify(path, new[] { libPath });
+
+                var (exit, output) = RunDotnet(path);
+                Assert.True(exit == 0, $"'{name}' must run. Exit {exit}:\n{output}");
+                Assert.Equal(expected, output.Trim());
             }
-
-            // The INTERFACE spelling of the same question is what this change
-            // fixed, and it is what any later fix must not break.
-            var interfacePath = Path.Combine(tempDir, "Interface.dll");
-            var interfaceLog = Compile(
-                tempDir, "Interface.gs", InterfaceSpelling, interfacePath, "/target:exe", "/reference:" + libPath);
-            Assert.True(
-                File.Exists(interfacePath),
-                $"the interface spelling must compile. Log:\n{interfaceLog}");
-
-            IlVerifier.Verify(interfacePath, new[] { libPath });
-
-            var (exit, output) = RunDotnet(interfacePath);
-            Assert.True(exit == 0, $"the interface spelling must run. Exit {exit}:\n{output}");
-            Assert.Equal("method-ok", output.Trim());
         }
         finally
         {

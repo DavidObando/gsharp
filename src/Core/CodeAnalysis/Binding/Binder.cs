@@ -5841,57 +5841,15 @@ public sealed class Binder
 
         if (declared.ClrInterfaceConstraint is { } clrInterfaceBound
             && !TypeSymbol.ContainsTypeParameter(clrInterfaceBound)
-            && !AnyBound(parameters, candidate => BoundCarriesClrInterface(candidate, clrInterfaceBound, declared)))
+            && !AnyBound(
+                parameters,
+                candidate => SatisfiesClrInterfaceConstraint(candidate, clrInterfaceBound, declared)))
         {
             failedConstraint = SymbolDisplay.ToTypeDisplayString(clrInterfaceBound);
             return false;
         }
 
         return true;
-    }
-
-    /// <summary>
-    /// Issue #4067 (review): whether <paramref name="candidate"/> carries the
-    /// IMPORTED interface <paramref name="clrInterfaceBound"/>, asking the
-    /// SYMBOL when the reflective answer is unavailable.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>The defect this closes, measured on the reviewed commit.</b>
-    /// <c>SatisfiesClrInterfaceConstraint</c> reads
-    /// <c>typeArgument.ClrType.GetInterfaces()</c>, and a SAME-COMPILATION
-    /// class has no CLR type while binding — so for <c>class D : IDisposable</c>
-    /// it returned <see langword="false"/> without ever reading <c>D</c>'s
-    /// interface list, and <c>class Fwd[T D] : GsDisposable[T]</c> over
-    /// <c>GsDisposable[TD IDisposable]</c> reported <c>GS0580</c> on a program
-    /// <c>csc</c> and the CLR both accept. A false rejection is the worse
-    /// direction of this rule's two failure modes.</para>
-    /// <para><b>Reused, not reimplemented.</b> This is the SAME defect #4061
-    /// fixed for the imported class-chain walk and #4068 fixed for the
-    /// dependent-bound path, and #4068's repair —
-    /// <see cref="SourceSymbolImplementsImportedInterface"/> — is the walk this
-    /// calls, so all three arms now bottom out in one place and a future
-    /// widening lands everywhere at once. It is only consulted when the
-    /// candidate has NO CLR type, which is exactly the case the reflective
-    /// path cannot see, so nothing the reflective path already answers
-    /// changes.</para>
-    /// </remarks>
-    /// <param name="candidate">The bound being tested.</param>
-    /// <param name="clrInterfaceBound">The imported interface the definition requires.</param>
-    /// <param name="declared">The definition's parameter (for CLR self-substitution).</param>
-    /// <returns><see langword="true"/> when the candidate carries the interface.</returns>
-    private static bool BoundCarriesClrInterface(
-        TypeSymbol candidate,
-        TypeSymbol clrInterfaceBound,
-        TypeParameterSymbol declared)
-    {
-        if (SatisfiesClrInterfaceConstraint(candidate, clrInterfaceBound, declared))
-        {
-            return true;
-        }
-
-        return candidate is { ClrType: null }
-            && clrInterfaceBound.ClrType is { IsInterface: true } boundInterfaceClr
-            && SourceSymbolImplementsImportedInterface(candidate, clrInterfaceBound, boundInterfaceClr);
     }
 
     /// <summary>
@@ -5902,9 +5860,17 @@ public sealed class Binder
     /// declaration by <c>GS0581</c>, and the visited set keeps a malformed
     /// symbol from hanging the binder anyway.
     /// </summary>
+    /// <remarks>
+    /// Issue #4084 made this <see langword="internal"/>: the IMPORTED twin of
+    /// #4067's rule, <c>ClrOverloadResolution.TypeParameterSatisfiesClrBound</c>,
+    /// asks the same "which parameters does this one stand for" question and
+    /// had a second, narrower walk that read only <c>ClassConstraint</c>. This
+    /// is a pure symbol walk with no <c>Type</c> dependency, so both sides can
+    /// share it — and a dependent bound now forwards on both.
+    /// </remarks>
     /// <param name="argument">The type parameter to walk from.</param>
     /// <returns>The chain, argument first.</returns>
-    private static List<TypeParameterSymbol> EnumerateForwardedParameterChain(TypeParameterSymbol argument)
+    internal static List<TypeParameterSymbol> EnumerateForwardedParameterChain(TypeParameterSymbol argument)
     {
         var chain = new List<TypeParameterSymbol> { argument };
         for (var i = 0; i < chain.Count && chain.Count < ForwardedConstraintChainLimit; i++)
@@ -7485,21 +7451,17 @@ public sealed class Binder
                 || TypeSymbol.ContainsTypeParameter(typeArgument);
         }
 
-        if (boundArgument.ClrType is { IsInterface: true } boundInterfaceClr)
+        if (boundArgument.ClrType is { IsInterface: true })
         {
-            if (SatisfiesClrInterfaceConstraint(typeArgument, boundArgument, tp))
-            {
-                return true;
-            }
-
             // Review finding (#4068): a SAME-COMPILATION class or struct that
             // implements the bound interface directly has no CLR type of its
-            // own, so `SatisfiesClrInterfaceConstraint` returned false without
-            // ever reading the symbol's declared interfaces — rejecting
+            // own, so the reflective walk returned false without ever reading
+            // the symbol's declared interfaces — rejecting
             // `Take[IDisposable, D]` for `class D : IDisposable`, which is a
-            // GS0152 on a legal program. Ask the symbol.
-            if (typeArgument.ClrType is null
-                && SourceSymbolImplementsImportedInterface(typeArgument, boundArgument, boundInterfaceClr))
+            // GS0152 on a legal program. Issue #4124 moved that symbolic
+            // fallback INTO `SatisfiesClrInterfaceConstraint`, so this arm no
+            // longer carries its own copy.
+            if (SatisfiesClrInterfaceConstraint(typeArgument, boundArgument, tp))
             {
                 return true;
             }
@@ -7534,11 +7496,20 @@ public sealed class Binder
     /// <param name="typeArgument">The same-compilation type argument.</param>
     /// <param name="boundArgument">The bound, as a symbol.</param>
     /// <param name="boundInterfaceClr">The bound's CLR interface type.</param>
+    /// <param name="tp">Issue #4124: the constrained parameter, for a
+    /// SELF-REFERENTIAL bound. <c>[T IComparable[T]]</c> carries the
+    /// constrained parameter as its own argument, so the expected vector is
+    /// <c>[T]</c> and a <c>class Cmp : IComparable[Cmp]</c> would never match
+    /// it symbolically. The reflective half already substitutes the argument
+    /// for <c>tp</c> (<c>GenericConstraintArgumentsMatch</c>); this does the
+    /// same so the two halves answer the same question. <see langword="null"/>
+    /// from a caller that has no such symbol.</param>
     /// <returns><see langword="true"/> when the symbol implements the bound.</returns>
     private static bool SourceSymbolImplementsImportedInterface(
         TypeSymbol typeArgument,
         TypeSymbol boundArgument,
-        Type boundInterfaceClr)
+        Type boundInterfaceClr,
+        TypeParameterSymbol? tp)
     {
         Type openDefinition;
         try
@@ -7597,7 +7568,14 @@ public sealed class Binder
             var allMatch = true;
             for (var i = 0; i < expected.Length; i++)
             {
-                if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual[i], expected[i]))
+                // Issue #4124: a self-referential position names the
+                // constrained parameter itself, and the argument is what it
+                // stands for here — the same substitution the reflective half
+                // performs.
+                var expectedArgument = tp != null && ReferenceEquals(expected[i], tp)
+                    ? typeArgument
+                    : expected[i];
+                if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual[i], expectedArgument))
                 {
                     allMatch = false;
                     break;
@@ -8113,7 +8091,47 @@ public sealed class Binder
     /// <param name="constraint">The CLR interface constraint type.</param>
     /// <param name="tp">The constrained type parameter (for self-substitution).</param>
     /// <returns><see langword="true"/> when the constraint is satisfied.</returns>
+    /// <remarks>
+    /// Issue #4124: the reflective answer below is the WHOLE answer only for a
+    /// type argument that HAS a CLR type. A same-compilation class has none
+    /// while binding, so <c>class D : IDisposable</c> was reported as failing
+    /// <c>[T IDisposable]</c> — a false rejection of ordinary code. The symbol
+    /// knows its own interface list, so the wrapper asks it when reflection
+    /// cannot. See <see cref="SourceSymbolImplementsImportedInterface"/> for
+    /// the walk and the type-safety of its generic arm.
+    /// </remarks>
     internal static bool SatisfiesClrInterfaceConstraint(TypeSymbol typeArgument, TypeSymbol constraint, TypeParameterSymbol? tp)
+    {
+        if (SatisfiesClrInterfaceConstraintReflectively(typeArgument, constraint, tp))
+        {
+            return true;
+        }
+
+        // Issue #4124: the SAME blindness #4061, #4068 and #4092 each repaired
+        // at the site that happened to hit it. Consolidated here, at the leaf
+        // all three of the symbolic askers bottom out in, so a fifth site
+        // cannot appear. Only consulted when the argument has NO CLR type,
+        // which is exactly the case the reflective walk cannot see, so nothing
+        // that walk already answers changes.
+        return typeArgument is { ClrType: null }
+            && constraint.ClrType is { IsInterface: true } constraintInterfaceClr
+            && SourceSymbolImplementsImportedInterface(typeArgument, constraint, constraintInterfaceClr, tp);
+    }
+
+    /// <summary>
+    /// The reflective half of <see cref="SatisfiesClrInterfaceConstraint"/>:
+    /// the answer <c>typeArgument.ClrType.GetInterfaces()</c> gives. Split out
+    /// by issue #4124 so the symbolic fallback wraps EVERY exit of it rather
+    /// than being bolted onto one caller at a time.
+    /// </summary>
+    /// <param name="typeArgument">The supplied type argument.</param>
+    /// <param name="constraint">The CLR interface constraint type.</param>
+    /// <param name="tp">The constrained type parameter (for self-substitution).</param>
+    /// <returns><see langword="true"/> when reflection proves the constraint.</returns>
+    private static bool SatisfiesClrInterfaceConstraintReflectively(
+        TypeSymbol typeArgument,
+        TypeSymbol constraint,
+        TypeParameterSymbol? tp)
     {
         // Constraint propagation: another type parameter constrained to the same
         // interface trivially satisfies the constraint.

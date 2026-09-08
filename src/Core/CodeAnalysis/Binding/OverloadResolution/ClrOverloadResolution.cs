@@ -1955,46 +1955,85 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        if (constraint.IsInterface)
-        {
-            return TypeParameterSatisfiesClrInterfaceBound(argument, constraint);
-        }
+        return constraint.IsInterface
+            ? TypeParameterSatisfiesClrInterfaceBound(argument, constraint)
+            : TypeParameterSatisfiesClrClassBound(argument, constraint);
+    }
 
-        // A base-class bound: walk this parameter's own class-constraint chain.
-        // The depth bound terminates a cycle in a chain of forwarded bounds.
-        TypeSymbol? current = argument.ClassConstraint;
-        for (var depth = 0; current != null && depth < ForwardedBoundChainLimit; depth++)
+    /// <summary>
+    /// Issue #4037 / issue #4083: whether a type parameter's own bounds imply
+    /// the imported BASE-CLASS bound <paramref name="constraint"/>, by walking
+    /// the class bound of every parameter it stands for.
+    /// </summary>
+    /// <remarks>
+    /// <para>Extracted from <see cref="TypeParameterSatisfiesClrBound"/> by
+    /// issue #4083 so the generic-METHOD path can call it too. It is the exact
+    /// base-class analogue of what #4070 did for the interface half:
+    /// <c>Probes.NeedsScheme[T]()</c> inside <c>func callIt[T SchemeOptions]()</c>
+    /// reported <c>GS0159 Cannot find function</c> because the candidate was
+    /// silently FILTERED out, while <c>class Fwd[T SchemeOptions] :
+    /// SchemeConstrained[T]</c> bound. <c>csc</c> accepts both.</para>
+    /// <para>Called WITHOUT <see cref="TypeParameterSatisfiesClrBound"/>'s
+    /// <c>object</c>/<c>ValueType</c> early-out, which is why it is a separate
+    /// method rather than a call to its parent: on the method path a
+    /// <c>System.ValueType</c> bound is the metadata shadow of
+    /// <c>where T : struct</c>, and that is settled by the special-constraint
+    /// arms before this loop is reached — accepting it here on a
+    /// reference-constrained parameter would be a false ACCEPT the CLR then
+    /// refuses.</para>
+    /// <para>Issue #4084: the chain is
+    /// <see cref="Binder.EnumerateForwardedParameterChain"/>, which follows
+    /// <c>TypeParameterBound</c> as well as a type-parameter-valued
+    /// <c>ClassConstraint</c>, so <c>[U SchemeOptions, T U]</c> forwards
+    /// <c>U</c>'s bound onto <c>T</c>. It terminates on a visited set rather
+    /// than a depth limit.</para>
+    /// </remarks>
+    /// <param name="argument">The type parameter written as the type argument.</param>
+    /// <param name="constraint">The imported base-class bound the definition declares.</param>
+    /// <returns><see langword="true"/> when the base-class bound is forwarded.</returns>
+    private static bool TypeParameterSatisfiesClrClassBound(TypeParameterSymbol argument, Type constraint)
+    {
+        foreach (var parameter in Binder.EnumerateForwardedParameterChain(argument))
         {
-            if (current.ClrType is Type clr)
+            if (ClassBoundReachesImportedType(parameter.ClassConstraint, constraint))
             {
-                try
-                {
-                    if (ClrTypeUtilities.IsAssignableByName(constraint, clr))
-                    {
-                        return true;
-                    }
-                }
-                catch (Exception ex) when (IsMetadataLoadFailure(ex))
-                {
-                    return true;
-                }
+                return true;
             }
 
-            switch (current)
+            if (parameter.ClassConstraint is StructSymbol userClass
+                && UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(userClass, constraint))
             {
-                case StructSymbol userClass:
-                    return UserReferenceTypeErasedSymbolSatisfiesBaseConstraint(userClass, constraint);
-
-                case TypeParameterSymbol nested:
-                    current = nested.ClassConstraint;
-                    continue;
-
-                default:
-                    return false;
+                return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Issues #4037/#4083/#4084: whether a NON-parameter class bound has a CLR
+    /// representation that is name-assignable to <paramref name="constraint"/>.
+    /// A type-parameter-valued bound answers <see langword="false"/> here — the
+    /// caller's chain already visits it in its own right.
+    /// </summary>
+    /// <param name="bound">The class bound, if any.</param>
+    /// <param name="constraint">The CLR bound the definition declares.</param>
+    /// <returns><see langword="true"/> when the bound reaches the constraint.</returns>
+    private static bool ClassBoundReachesImportedType(TypeSymbol? bound, Type constraint)
+    {
+        if (bound is null or TypeParameterSymbol || bound.ClrType is not Type boundClr)
+        {
+            return false;
+        }
+
+        try
+        {
+            return ClrTypeUtilities.IsAssignableByName(constraint, boundClr);
+        }
+        catch (Exception ex) when (IsMetadataLoadFailure(ex))
+        {
+            return true;
+        }
     }
 
     /// <summary>
@@ -2034,55 +2073,42 @@ internal static class ClrOverloadResolution
     /// <returns><see langword="true"/> when the interface bound is forwarded.</returns>
     private static bool TypeParameterSatisfiesClrInterfaceBound(TypeParameterSymbol argument, Type constraint)
     {
-        if (ErasedSymbolSatisfiesInterfaceConstraint(argument, constraint))
+        // Issue #4084: the chain is every parameter this one PROVABLY stands
+        // for — through a dependent bound (`[TBase DisposableBase, TDerived
+        // TBase]`) as well as through a type-parameter-valued class
+        // constraint. The former was the gap: both askers read only
+        // `ClassConstraint`, so `TDerived` did not forward `TBase`'s
+        // `IDisposable` and the two paths gave DIFFERENT wrong answers for
+        // the same program — `GS0159` at a generic method, `GS0580` at a
+        // generic type. `csc` accepts both, because
+        // `TDerived : TBase : DisposableBase : IDisposable` holds in every
+        // instantiation.
+        foreach (var parameter in Binder.EnumerateForwardedParameterChain(argument))
         {
-            return true;
-        }
-
-        // Issue #4037 (review): a CLASS bound implies every interface that
-        // class implements — `[T DisposableOptions]` forwards
-        // `where T : IDisposable` when `DisposableOptions : IDisposable`,
-        // and `csc` accepts exactly that (measured; the first version of
-        // this rule reported GS0580 on it, which is a FALSE rejection of
-        // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
-        // type-parameter arm reads only the interface bounds, so the class
-        // chain has to be walked here.
-        TypeSymbol? bound = argument.ClassConstraint;
-        for (var depth = 0; bound != null && depth < ForwardedBoundChainLimit; depth++)
-        {
-            if (bound.ClrType is Type boundClr)
+            if (ErasedSymbolSatisfiesInterfaceConstraint(parameter, constraint))
             {
-                try
-                {
-                    if (ClrTypeUtilities.IsAssignableByName(constraint, boundClr))
-                    {
-                        return true;
-                    }
-                }
-                catch (Exception ex) when (IsMetadataLoadFailure(ex))
-                {
-                    return true;
-                }
+                return true;
             }
 
-            switch (bound)
+            // Issue #4037 (review): a CLASS bound implies every interface that
+            // class implements — `[T DisposableOptions]` forwards
+            // `where T : IDisposable` when `DisposableOptions : IDisposable`,
+            // and `csc` accepts exactly that (measured; the first version of
+            // this rule reported GS0580 on it, which is a FALSE rejection of
+            // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
+            // type-parameter arm reads only the interface bounds, so the class
+            // bound has to be walked here.
+            if (ClassBoundReachesImportedType(parameter.ClassConstraint, constraint))
             {
-                case StructSymbol userClassBound:
-                    // A same-compilation class bound: its own interface
-                    // list and imported base chain answer this.
-                    return ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint);
+                return true;
+            }
 
-                case TypeParameterSymbol nestedBound:
-                    if (ErasedSymbolSatisfiesInterfaceConstraint(nestedBound, constraint))
-                    {
-                        return true;
-                    }
-
-                    bound = nestedBound.ClassConstraint;
-                    continue;
-
-                default:
-                    return false;
+            // A same-compilation class bound: its own interface list and
+            // imported base chain answer this.
+            if (parameter.ClassConstraint is StructSymbol userClassBound
+                && ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint))
+            {
+                return true;
             }
         }
 
@@ -5741,6 +5767,38 @@ internal static class ClrOverloadResolution
                     }
 
                     return false;
+                }
+
+                // Issue #4083: a TYPE PARAMETER type argument erases to the
+                // same `System.Object` placeholder, and for a BASE-CLASS bound
+                // none of the arms above match it — so `IsAssignableByName`
+                // below was asked whether `object` derives from
+                // `SchemeOptions`, said no, and the candidate was silently
+                // FILTERED out of overload resolution. The author saw
+                // `GS0159 Cannot find function NeedsScheme.` rather than a
+                // constraint message, on a program `csc` accepts:
+                // `Probes.NeedsScheme[T]()` inside
+                // `func callIt[T SchemeOptions]()` forwards
+                // `where T : SchemeOptions` in every instantiation. This is
+                // #4070's repair one bound-kind over — the generic-TYPE
+                // construction path has walked the parameter's own class
+                // chain since #4037, and this calls the SAME walk.
+                //
+                // Monotone in the satisfaction direction: it only turns a
+                // `false` into a `true`, never the reverse, so no program the
+                // CLR refuses becomes acceptable.
+                //
+                // Guarded on the UNSUBSTITUTED bound mentioning no type
+                // parameter, the same skip #4031/#4041 apply and #4070 paid
+                // for on the interface half: `where T : Base<T>` and a
+                // same-compilation `Base<Gs>` both project to `Base<object>`,
+                // so the walk would "prove" an implication that does not hold.
+                if (argSymbol is TypeParameterSymbol { ClrType: null } erasedBoundedParameter
+                    && !constraint.IsInterface
+                    && !rawConstraint.ContainsGenericParameters
+                    && TypeParameterSatisfiesClrClassBound(erasedBoundedParameter, constraint))
+                {
+                    continue;
                 }
 
                 try
