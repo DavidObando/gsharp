@@ -96,6 +96,8 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
 
             public static double WithLambda(double value, Func<double, double> map) => map(value);
 
+            public static double? NullableValue(double? value) => value;
+
             public static string Ambiguous(string value) => "string";
 
             public static string Ambiguous(DateTime value) => "date";
@@ -271,6 +273,16 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             "an-explicit-only-operator-does-not-make-a-call-applicable",
             """
             Console.WriteLine(ConversionTargets.StaticValue(ExplicitOnly{ Value: 2.5 }))
+            """,
+            "GS0159",
+        };
+
+        yield return new object[]
+        {
+            "a-lifted-operator-is-not-admitted-before-lowering-supports-it",
+            """
+            let value Celsius? = Celsius{ Degrees: 2.5 }
+            Console.WriteLine(ConversionTargets.NullableValue(value))
             """,
             "GS0159",
         };

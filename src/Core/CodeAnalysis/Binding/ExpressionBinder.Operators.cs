@@ -3404,8 +3404,11 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
+            // Lifted symbolic operators are not yet materialized by CLR
+            // argument lowering, so they must remain inapplicable here.
             var targetType = TypeSymbol.FromClrType(clrParameterType);
             return targetType != null
+                && !(sourceType is NullableTypeSymbol && targetType is NullableTypeSymbol)
                 && ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType);
         };
     }
