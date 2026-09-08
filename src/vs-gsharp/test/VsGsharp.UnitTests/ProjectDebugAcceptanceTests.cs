@@ -33,6 +33,15 @@ public sealed class ProjectDebugAcceptanceTests
         Assert.True(File.Exists(Path.Combine(
             fixtureRoot,
             RequiredString(manifest.RootElement, "driver"))));
+        XDocument fixtureProps = XDocument.Load(Path.Combine(
+            fixtureRoot,
+            "Directory.Build.props"));
+        Assert.Equal("true", Property(fixtureProps, "DisableFastUpToDateCheck"));
+        string driver = File.ReadAllText(Path.Combine(
+            fixtureRoot,
+            RequiredString(manifest.RootElement, "driver")));
+        Assert.Contains("$PSVersionTable.PSEdition -eq 'Core'", driver);
+        Assert.DoesNotContain("$dte.Solution.IsOpen", driver);
 
         JsonElement[] projects = manifest.RootElement.GetProperty("projects")
             .EnumerateArray().ToArray();
@@ -171,6 +180,8 @@ public sealed class ProjectDebugAcceptanceTests
         string root = FindRepositoryRoot();
         string sdkRoot = Path.Combine(root, "src", "Sdk", "Gsharp.NET.Sdk");
         XDocument sdkTargets = XDocument.Load(Path.Combine(sdkRoot, "Sdk", "Sdk.targets"));
+        XDocument sdkProps = XDocument.Load(Path.Combine(sdkRoot, "Sdk", "Sdk.props"));
+        Assert.Equal("true", Property(sdkProps, "DisableFastUpToDateCheck"));
         string[] capabilities = sdkTargets.Descendants()
             .Where(element => element.Name.LocalName == "ProjectCapability")
             .Select(element => (string?)element.Attribute("Include") ?? string.Empty)

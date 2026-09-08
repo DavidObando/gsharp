@@ -15,6 +15,7 @@ if (-not (Test-Path -LiteralPath $vswhere)) {
 $installationPath = (& $vswhere -latest -products * -property installationPath).Trim()
 $instanceId = (& $vswhere -latest -products * -property instanceId).Trim()
 $resolvedVsix = (Resolve-Path -LiteralPath $VsixPath).Path
+$extensionId = 'GSharp-VisualStudio'
 if (-not $installationPath -or -not $instanceId) {
     throw 'No Visual Studio instance was found.'
 }
@@ -92,7 +93,7 @@ $installed = Get-Item -Path $profilePattern -ErrorAction SilentlyContinue |
     Get-ChildItem -Filter extension.vsixmanifest -Recurse -File -ErrorAction SilentlyContinue |
     Where-Object {
         try {
-            ([xml](Get-Content -LiteralPath $_.FullName)).PackageManifest.Metadata.Identity.Id -eq 'GSharp.VisualStudio'
+            ([xml](Get-Content -LiteralPath $_.FullName)).PackageManifest.Metadata.Identity.Id -eq $extensionId
         }
         catch {
             $false
@@ -101,7 +102,7 @@ $installed = Get-Item -Path $profilePattern -ErrorAction SilentlyContinue |
     Select-Object -First 1
 
 if ($installed) {
-    & $installer /quiet /shutdownprocesses "/instanceIds:$instanceId" "/rootSuffix:$RootSuffix" /uninstall:GSharp.VisualStudio
+    & $installer /quiet /shutdownprocesses "/instanceIds:$instanceId" "/rootSuffix:$RootSuffix" "/uninstall:$extensionId"
     if ($LASTEXITCODE -ne 0) {
         throw "VSIX uninstall failed with exit code $LASTEXITCODE."
     }
@@ -127,7 +128,8 @@ Start-Sleep -Seconds 30
 $null = $discovery.CloseMainWindow()
 if (-not $discovery.WaitForExit(60000)) {
     Stop-Process -Id $discovery.Id
-    throw 'Visual Studio extension discovery did not close within one minute.'
+    Wait-Process -Id $discovery.Id -Timeout 30 -ErrorAction SilentlyContinue
+    Write-Warning 'Visual Studio extension discovery required a forced shutdown.'
 }
 
 Write-Host "Installed '$resolvedVsix' into root suffix '$RootSuffix'."

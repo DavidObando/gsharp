@@ -9,6 +9,7 @@
     <DefaultLanguageSourceExtension>.gs</DefaultLanguageSourceExtension>
     <EnableDefaultCompileItems Condition=" '$(EnableDefaultCompileItems)' == '' ">true</EnableDefaultCompileItems>
     <EnableDefaultItems Condition=" '$(EnableDefaultItems)' == '' ">true</EnableDefaultItems>
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
 
     <!-- gsc emits a metadata-only sibling assembly via /refout:. Enable the
          SDK's reference-assembly pipeline so consumers get refint/ and ref/

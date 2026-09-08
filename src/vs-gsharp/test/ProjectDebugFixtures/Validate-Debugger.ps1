@@ -3,11 +3,29 @@ param(
     [Parameter(Mandatory)]
     [int]$VisualStudioProcessId,
 
-    [int]$TimeoutSeconds = 60
+    [int]$TimeoutSeconds = 60,
+
+    [string]$ProtocolTracePath = (Join-Path $PSScriptRoot '..\artifacts\vs2026-lsp-protocol.log')
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($PSVersionTable.PSEdition -eq 'Core') {
+    & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
+        -NoLogo `
+        -NoProfile `
+        -ExecutionPolicy Bypass `
+        -File $PSCommandPath `
+        -VisualStudioProcessId $VisualStudioProcessId `
+        -TimeoutSeconds $TimeoutSeconds `
+        -ProtocolTracePath $ProtocolTracePath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Debugger validation failed with exit code $LASTEXITCODE."
+    }
+
+    return
+}
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $installationPath = (& $vswhere -latest -products * -property installationPath).Trim()
@@ -74,6 +92,67 @@ public static class RunningVisualStudio
         return (EnvDTE.DTE)value;
     }
 
+    public static bool IsSolutionLoaded(object dte, int expectedProjectCount)
+    {
+        EnvDTE.Solution solution = Dte(dte).Solution;
+        return solution != null && solution.Projects.Count >= expectedProjectCount;
+    }
+
+    public static int GetProjectCount(object dte)
+    {
+        EnvDTE.Solution solution = Dte(dte).Solution;
+        return solution == null ? 0 : solution.Projects.Count;
+    }
+
+    public static int BuildSolution(object dte)
+    {
+        EnvDTE.Solution solution = Dte(dte).Solution;
+        EnvDTE.SolutionBuild build = solution.SolutionBuild;
+        build.Clean(true);
+        System.Threading.Thread.Sleep(2000);
+        int failedBuilds = 0;
+        foreach (EnvDTE.SolutionContext context in build.ActiveConfiguration.SolutionContexts)
+        {
+            if (context.ShouldBuild)
+            {
+                build.BuildProject(
+                    context.ConfigurationName,
+                    context.ProjectName,
+                    true);
+                failedBuilds += build.LastBuildInfo;
+            }
+        }
+
+        return failedBuilds;
+    }
+
+    public static string GetBuildContexts(object dte)
+    {
+        EnvDTE.SolutionConfiguration configuration =
+            Dte(dte).Solution.SolutionBuild.ActiveConfiguration;
+        var contexts = new System.Text.StringBuilder();
+        foreach (EnvDTE.SolutionContext context in configuration.SolutionContexts)
+        {
+            contexts.AppendLine(
+                context.ProjectName + "|" +
+                context.ConfigurationName + "|" +
+                context.PlatformName + "|build=" +
+                context.ShouldBuild);
+        }
+
+        return contexts.ToString();
+    }
+
+    public static string GetOutputPaneText(object dte, string paneName)
+    {
+        EnvDTE.OutputWindow output = (EnvDTE.OutputWindow)Dte(dte)
+            .Windows.Item(EnvDTE.Constants.vsWindowKindOutput).Object;
+        EnvDTE.OutputWindowPane pane = output.OutputWindowPanes.Item(paneName);
+        EnvDTE.TextDocument document = (EnvDTE.TextDocument)pane.TextDocument;
+        EnvDTE.EditPoint start = document.StartPoint.CreateEditPoint();
+        return start.GetText(document.EndPoint);
+    }
+
     public static void DeleteAllBreakpoints(object dte)
     {
         EnvDTE.Breakpoints breakpoints = Dte(dte).Debugger.Breakpoints;
@@ -138,9 +217,40 @@ public static class RunningVisualStudio
         return selection.ActivePoint.Line;
     }
 
+    public static void OpenFileAt(object dteObject, string path, int line, int column)
+    {
+        EnvDTE.DTE dte = Dte(dteObject);
+        EnvDTE.Window window = dte.ItemOperations.OpenFile(path);
+        window.Activate();
+        EnvDTE.TextSelection selection = (EnvDTE.TextSelection)dte.ActiveDocument.Selection;
+        selection.MoveToLineAndOffset(line, column, false);
+    }
+
+    public static string GetActiveDocumentPath(object dteObject)
+    {
+        return Dte(dteObject).ActiveDocument.FullName;
+    }
+
+    public static void ExecuteCommand(object dteObject, string command)
+    {
+        EnvDTE.DTE dte = Dte(dteObject);
+        EnvDTE.Command commandInfo = dte.Commands.Item(command);
+        if (!commandInfo.IsAvailable)
+        {
+            throw new InvalidOperationException(command + " is not available.");
+        }
+
+        dte.ExecuteCommand(command);
+    }
+
     public static void TerminateAll(object dte)
     {
         Dte(dte).Debugger.TerminateAll();
+    }
+
+    public static void Continue(object dte)
+    {
+        Dte(dte).Debugger.Go(false);
     }
 
     public static void AttachToProcess(object dteObject, int processId)
@@ -161,6 +271,50 @@ public static class RunningVisualStudio
     public static void DetachAll(object dte)
     {
         Dte(dte).Debugger.DetachAll();
+    }
+}
+
+[ComImport]
+[Guid("00000016-0000-0000-C000-000000000046")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IOleMessageFilter
+{
+    [PreserveSig]
+    int HandleInComingCall(int callType, IntPtr taskCaller, int tickCount, IntPtr interfaceInfo);
+
+    [PreserveSig]
+    int RetryRejectedCall(IntPtr taskCallee, int tickCount, int rejectType);
+
+    [PreserveSig]
+    int MessagePending(IntPtr taskCallee, int tickCount, int pendingType);
+}
+
+public sealed class OleMessageFilter : IOleMessageFilter
+{
+    [DllImport("ole32.dll")]
+    private static extern int CoRegisterMessageFilter(
+        IOleMessageFilter newFilter,
+        out IOleMessageFilter oldFilter);
+
+    public static void Register()
+    {
+        IOleMessageFilter oldFilter;
+        CoRegisterMessageFilter(new OleMessageFilter(), out oldFilter);
+    }
+
+    public int HandleInComingCall(int callType, IntPtr taskCaller, int tickCount, IntPtr interfaceInfo)
+    {
+        return 0;
+    }
+
+    public int RetryRejectedCall(IntPtr taskCallee, int tickCount, int rejectType)
+    {
+        return rejectType == 2 && tickCount < 60000 ? 100 : -1;
+    }
+
+    public int MessagePending(IntPtr taskCallee, int tickCount, int pendingType)
+    {
+        return 2;
     }
 }
 '@
@@ -203,16 +357,78 @@ function Invoke-ComRetry([scriptblock]$Operation, [string]$Description) {
     throw "Timed out waiting to $Description."
 }
 
+function Read-SharedText([string]$Path) {
+    $stream = [IO.FileStream]::new(
+        $Path,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::ReadWrite)
+    try {
+        $reader = [IO.StreamReader]::new($stream)
+        try {
+            return $reader.ReadToEnd()
+        }
+        finally {
+            $reader.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
+[OleMessageFilter]::Register()
 $dte = [RunningVisualStudio]::GetDte($VisualStudioProcessId)
 $webProcess = $null
 try {
-Wait-Until { $dte.Solution.IsOpen -and $dte.Solution.Projects.Count -eq 4 } 'the fixture solution'
+Write-Host "DTE project count: $([RunningVisualStudio]::GetProjectCount($dte))"
+Wait-Until {
+    [RunningVisualStudio]::IsSolutionLoaded($dte, 4)
+} 'the fixture solution'
+$consoleProjectUniqueName = [RunningVisualStudio]::SetStartupProject($dte, 'Console')
+Write-Host "Build contexts:`n$([RunningVisualStudio]::GetBuildContexts($dte))"
+$failedBuilds = [RunningVisualStudio]::BuildSolution($dte)
+Write-Host "Build output:`n$([RunningVisualStudio]::GetOutputPaneText($dte, 'Build'))"
+if ($failedBuilds -ne 0) {
+    throw "Visual Studio solution build reported $failedBuilds failed project(s)."
+}
+
+$source = Join-Path $PSScriptRoot 'Console\Program.gs'
+$definitionSource = Join-Path $PSScriptRoot 'Library\Greeter.gs'
+$traceOffset = if (Test-Path -LiteralPath $ProtocolTracePath) {
+    (Read-SharedText $ProtocolTracePath).Length
+} else {
+    0
+}
+$greeterUse = Select-String -LiteralPath $source -SimpleMatch 'Greeter("debugger")'
+$greeterColumn = $greeterUse.Line.IndexOf('Greeter', [StringComparison]::Ordinal) + 1
+[RunningVisualStudio]::OpenFileAt($dte, $source, $greeterUse.LineNumber, $greeterColumn)
+Wait-Until {
+    if (-not (Test-Path -LiteralPath $ProtocolTracePath)) {
+        return $false
+    }
+
+    $trace = Read-SharedText $ProtocolTracePath
+    $trace.Length -gt $traceOffset -and
+    $trace.Substring([Math]::Min($traceOffset, $trace.Length)).Contains('textDocument/semanticTokens')
+} 'live semantic highlighting'
+[RunningVisualStudio]::ExecuteCommand($dte, 'Edit.GoToDefinition')
+Wait-Until {
+    [string]::Equals(
+        [RunningVisualStudio]::GetActiveDocumentPath($dte),
+        $definitionSource,
+        [StringComparison]::OrdinalIgnoreCase)
+} 'Go To Definition to open Greeter.gs'
+Wait-Until {
+    (Read-SharedText $ProtocolTracePath).Contains('textDocument/definition')
+} 'the live definition request'
+[RunningVisualStudio]::OpenFileAt($dte, $source, 1, 1)
+
 if ([RunningVisualStudio]::GetDebuggerMode($dte) -ne 1) {
     [RunningVisualStudio]::TerminateAll($dte)
     Wait-Until { [RunningVisualStudio]::GetDebuggerMode($dte) -eq 1 } 'the previous debugger session to stop'
 }
 
-$consoleProjectUniqueName = [RunningVisualStudio]::SetStartupProject($dte, 'Console')
 $existingConsoleIds = @(Get-Process -Name Console -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty Id)
 $dte.ExecuteCommand('Debug.StartWithoutDebugging')
@@ -221,7 +437,6 @@ Wait-Until {
         Where-Object Id -notin $existingConsoleIds).Count -gt 0
 } 'Start Without Debugging to launch Console'
 
-$source = Join-Path $PSScriptRoot 'Console\Program.gs'
 $line = (Select-String -LiteralPath $source -SimpleMatch 'BREAKPOINT:console-locals').LineNumber
 [RunningVisualStudio]::DeleteAllBreakpoints($dte)
 [RunningVisualStudio]::AddBreakpoint($dte, $source, $line)
@@ -243,7 +458,7 @@ Wait-Until { [RunningVisualStudio]::GetDebuggerMode($dte) -eq 2 } 'Step Over to 
 $afterStepOverLine = Invoke-ComRetry {
     [RunningVisualStudio]::GetActiveLine($dte)
 } 'read the Step Over source line'
-[RunningVisualStudio]::TerminateAll($dte)
+[RunningVisualStudio]::Continue($dte)
 Wait-Until { [RunningVisualStudio]::GetDebuggerMode($dte) -eq 1 } 'the first debugger session to stop'
 [RunningVisualStudio]::DeleteAllBreakpoints($dte)
 
@@ -263,7 +478,7 @@ if ($stepIntoFunction -notmatch 'StepTarget') {
     throw "Step Into stopped in '$stepIntoFunction' at line $afterStepIntoLine after Step Over reached line $afterStepOverLine."
 }
 
-[RunningVisualStudio]::TerminateAll($dte)
+[RunningVisualStudio]::Continue($dte)
 Wait-Until { [RunningVisualStudio]::GetDebuggerMode($dte) -eq 1 } 'the debugger to stop'
 [RunningVisualStudio]::DeleteAllBreakpoints($dte)
 
@@ -288,7 +503,7 @@ if ($actualCatchLine -ne $exceptionCatchLine) {
     throw "The handled exception stopped at line $actualCatchLine instead of catch line $exceptionCatchLine."
 }
 
-[RunningVisualStudio]::TerminateAll($dte)
+[RunningVisualStudio]::Continue($dte)
 Wait-Until { [RunningVisualStudio]::GetDebuggerMode($dte) -eq 1 } 'the exception debugger session to stop'
 [RunningVisualStudio]::DeleteAllBreakpoints($dte)
 
@@ -329,6 +544,9 @@ $validationResult = [pscustomobject]@{
     Breakpoint = "$source`:$line"
     Input = $input
     Result = $result
+    Build = 'passed'
+    SemanticHighlighting = 'passed'
+    GoToDefinition = 'passed'
     StartWithoutDebugging = 'passed'
     F5 = 'passed'
     StepOver = "passed (line $afterStepOverLine)"
