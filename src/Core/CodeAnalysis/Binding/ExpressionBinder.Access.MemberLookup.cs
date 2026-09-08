@@ -403,7 +403,8 @@ internal sealed partial class ExpressionBinder
 
                     return new BoundClrPropertyAccessExpression(null, null, staticMember, staticType);
                 }
-                else if (receiver != null && receiver.Type is StructSymbol structSym)
+                else if (receiver != null
+                    && TryGetUserInstanceMemberReceiverType(receiver, out var structSym))
                 {
                     // ADR-0112 A3: this-first base-chain instance field walk via
                     // the canonical member-resolution layer, surfacing the
@@ -943,6 +944,23 @@ internal sealed partial class ExpressionBinder
                 || receiver is BoundClrPropertyAccessExpression);
     }
 
+    private static bool TryGetUserInstanceMemberReceiverType(
+        BoundExpression receiver,
+        [NotNullWhen(true)] out StructSymbol? receiverType)
+    {
+        receiverType = receiver.Type as StructSymbol;
+        if (receiverType != null)
+        {
+            return true;
+        }
+
+        receiverType = receiver is BoundClrPropertyAccessExpression
+            && receiver.Type is NullableTypeSymbol { UnderlyingType: StructSymbol { IsClass: true } symbolic }
+                ? symbolic
+                : null;
+        return receiverType != null;
+    }
+
     /// <summary>
     /// Issue #3311: resolves the effective receiver type used for CLR
     /// instance-member lookup. A receiver with a loadable
@@ -1461,7 +1479,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var elemTypeAnnot = annotIdx.GetTypeArgumentSymbolForClrType(idxPropAnnot.PropertyType);
+                var elemTypeAnnot = MemberLookup.GetClrPropertyTypeSymbol(target.Type, idxPropAnnot);
                 var convertedIdxArgsAnnot = BindClrIndexerArguments(
                     target.Type,
                     idxPropAnnot,
@@ -2222,7 +2240,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var valueTypeAnnotWr = annotWr.GetTypeArgumentSymbolForClrType(idxPropAnnotWr.PropertyType);
+                var valueTypeAnnotWr = MemberLookup.GetClrPropertyTypeSymbol(targetType, idxPropAnnotWr);
                 var boundValueAnnotWr = BindValue(valueTypeAnnotWr);
                 var convertedIdxArgsAnnotWr = BindClrIndexerArguments(
                     targetType,

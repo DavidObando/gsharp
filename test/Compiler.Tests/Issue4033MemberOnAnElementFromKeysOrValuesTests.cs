@@ -81,14 +81,10 @@ namespace GSharp.Compiler.Tests;
 /// nullable-enabled C# assembly both surfaced a <c>string?</c> element from
 /// <c>.Values</c>, because both read the same placeholder byte — while both
 /// dictionaries' own indexer and <c>for k, v</c> already surfaced <c>string</c>.
-/// So the fix does not lose information the compiler had; it makes
-/// <c>.Values</c> agree with the two paths that were already right. Recovering
-/// a genuinely-annotated imported value's <c>string?</c> on any of the three
-/// paths is a separate, pre-existing gap —
-/// <c>GetProjectionReceiverImportedType</c> unwraps a
-/// <c>NullabilityAnnotatedTypeSymbol</c> to its bare base, discarding the
-/// per-position flags that <c>GetClrFieldTypeSymbol</c> alone rebuilds — and it
-/// is measured, filed, and untouched here.</para>
+/// Issue #4066 subsequently made that agreement faithful: the projection
+/// receiver is rebuilt with the annotation wrapper's per-argument flags, so
+/// the annotated dictionary surfaces <c>string?</c> on every path while the
+/// non-annotated dictionary surfaces <c>string</c>.</para>
 /// <para><b>Out of scope, measured and reported.</b> The issue notes "a missing
 /// diagnostic underneath". Measured, the residual <c>GS9998</c> is a METHOD
 /// GROUP in value position: <c>l.Count</c> on a <c>List[int32]?</c> binds
@@ -379,10 +375,8 @@ public class Issue4033MemberOnAnElementFromKeysOrValuesTests
         // non-annotated `NonNullValues()` alike, because it was reading the
         // declaration's placeholder rather than the annotation. Its apparent
         // correctness here was a coincidence, not a faithful reading. So this
-        // row pins the AGREEMENT the fix establishes across the three paths,
-        // NOT a claim that the `?` survives: recovering a genuinely-annotated
-        // imported value's `string?` on any of them is a separate,
-        // pre-existing gap, measured and filed, and untouched here.
+        // Issue #4066 makes the agreement faithful: each path is `string?`, so
+        // the value is narrowed before its property is read.
         yield return new object[]
         {
             "an-imported-nullable-value-dictionary-agrees-across-its-three-paths",
@@ -393,13 +387,20 @@ public class Issue4033MemberOnAnElementFromKeysOrValuesTests
 
             func main2() {
                 var g = Factory.NullableValues()
-                Console.WriteLine(g["a"].Length.ToString())
+                let indexed = g["a"]
+                if indexed != nil {
+                    Console.WriteLine(indexed.Length.ToString())
+                }
                 for k, v in g {
-                    Console.WriteLine(v.Length.ToString())
+                    if v != nil {
+                        Console.WriteLine(v.Length.ToString())
+                    }
                 }
 
                 for v in g.Values {
-                    Console.WriteLine(v.Length.ToString())
+                    if v != nil {
+                        Console.WriteLine(v.Length.ToString())
+                    }
                 }
             }
 

@@ -699,9 +699,9 @@ public sealed class TestParityStage : IMigrationStage
         string projectPath,
         CancellationToken cancellationToken)
     {
-        LoadedCSharpProject project = await CSharpProjectLoader
+        LoadedCSharpProject project = (await CSharpProjectLoader
             .LoadProjectAsync(projectPath, cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false))!;
 
         // Issue #1742: same load-failure gate as TranslateStage, scoped to the
         // MSBuild workspace load failure signal (not every C# semantic error —

@@ -280,23 +280,47 @@ internal sealed partial class StatementBinder
                     valueType = annotated.GetTypeArgumentSymbolForClrType(
                         Invariant.Required(annotated.ClrType.GetElementType(), "a single-dimensional CLR array has an element type"));
                 }
-                else if (MemberLookup.TryGetClrDictionaryTypes(annotated.ClrType, out var aDKey, out var aDVal))
+                else if (MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol projected
+                    && MemberLookup.TryGetClrDictionaryTypes(
+                        Invariant.Required(
+                            projected.OpenDefinition ?? projected.ClrType,
+                            "an imported projection receiver has a CLR type"),
+                        out var aDKey,
+                        out var aDVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
-                    keyType = annotated.GetTypeArgumentSymbolForClrType(aDKey);
-                    valueType = annotated.GetTypeArgumentSymbolForClrType(aDVal);
+                    keyType = MemberLookup.MapOpenClrTypeToSymbolic(
+                        Invariant.Required(aDKey, "a dictionary has a key type"),
+                        projected);
+                    valueType = MemberLookup.MapOpenClrTypeToSymbolic(
+                        Invariant.Required(aDVal, "a dictionary has a value type"),
+                        projected);
                 }
-                else if (MemberLookup.TryGetClrEnumerableElementType(annotated.ClrType, out var aElemType))
+                else if (MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol enumerable
+                    && MemberLookup.TryGetClrEnumerableElementType(
+                        Invariant.Required(
+                            enumerable.OpenDefinition ?? enumerable.ClrType,
+                            "an imported projection receiver has a CLR type"),
+                        out var aElemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
                     keyType = TypeSymbol.Int32;
-                    valueType = annotated.GetTypeArgumentSymbolForClrType(aElemType);
+                    valueType = MemberLookup.MapOpenClrTypeToSymbolic(
+                        Invariant.Required(aElemType, "an enumerable has an element type"),
+                        enumerable);
                 }
-                else if (MemberLookup.TryGetClrPatternEnumerableElementType(annotated.ClrType, out var aPatternElemType))
+                else if (MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol pattern
+                    && MemberLookup.TryGetClrPatternEnumerableElementType(
+                        Invariant.Required(
+                            pattern.OpenDefinition ?? pattern.ClrType,
+                            "an imported projection receiver has a CLR type"),
+                        out var aPatternElemType))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
                     keyType = TypeSymbol.Int32;
-                    valueType = TypeSymbol.FromClrType(aPatternElemType);
+                    valueType = MemberLookup.MapOpenClrTypeToSymbolic(
+                        Invariant.Required(aPatternElemType, "a pattern enumerable has an element type"),
+                        pattern);
                 }
                 else
                 {

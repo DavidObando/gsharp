@@ -150,6 +150,95 @@ public class ClrNullabilityTests
         Assert.Same(TypeSymbol.String, nullableElem.UnderlyingType);
     }
 
+    [Theory]
+    [InlineData(nameof(Sample.GetNullableSurface), true)]
+    [InlineData(nameof(Sample.GetNonNullSurface), false)]
+    public void ImportedGenericReceiver_ProjectsArgumentNullabilityAcrossMembers(
+        string factoryName,
+        bool expectedNullable)
+    {
+        var factory = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
+            typeof(Sample).GetMethod(factoryName));
+        var receiver = ClrNullability.GetReturnTypeSymbol(factory);
+        var receiverClr = Assert.IsAssignableFrom<Type>(receiver.ClrType);
+        var property = Assert.IsAssignableFrom<System.Reflection.PropertyInfo>(
+            receiverClr.GetProperty(nameof(GenericSurface<string>.Property)));
+        var field = Assert.IsAssignableFrom<System.Reflection.FieldInfo>(
+            receiverClr.GetField(nameof(GenericSurface<string>.Field)));
+        var get = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
+            receiverClr.GetMethod(nameof(GenericSurface<string>.Get)));
+        var set = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
+            receiverClr.GetMethod(nameof(GenericSurface<string>.Set)));
+        var tryGet = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
+            receiverClr.GetMethod(nameof(GenericSurface<string>.TryGet)));
+        var indexer = Assert.IsAssignableFrom<System.Reflection.PropertyInfo>(
+            receiverClr.GetProperty("Item"));
+
+        AssertStringNullability(
+            MemberLookup.GetClrPropertyTypeSymbol(receiver, property),
+            expectedNullable);
+        AssertStringNullability(
+            MemberLookup.GetClrFieldTypeSymbol(receiver, field),
+            expectedNullable);
+        AssertStringNullability(
+            MemberLookup.GetClrMethodReturnTypeSymbol(receiver, get),
+            expectedNullable);
+        AssertStringNullability(
+            MemberLookup.GetClrMethodParameterTypeSymbol(receiver, set, 0),
+            expectedNullable);
+        AssertStringNullability(
+            Assert.IsType<ByRefTypeSymbol>(
+                MemberLookup.GetClrMethodParameterTypeSymbol(receiver, tryGet, 0))
+                .PointeeType,
+            expectedNullable);
+        AssertStringNullability(
+            MemberLookup.GetClrPropertyTypeSymbol(receiver, indexer),
+            expectedNullable);
+        Assert.Same(
+            TypeSymbol.Int32,
+            MemberLookup.GetIndexerParameterTypeSymbol(receiver, indexer, 0));
+    }
+
+    [Theory]
+    [InlineData(nameof(Sample.GetNullableSurface), true)]
+    [InlineData(nameof(Sample.GetNonNullSurface), false)]
+    public void ImportedGenericReceiver_ProjectsNestedMemberArgumentNullability(
+        string factoryName,
+        bool expectedNullable)
+    {
+        var factory = Assert.IsAssignableFrom<System.Reflection.MethodInfo>(
+            typeof(Sample).GetMethod(factoryName));
+        var receiver = ClrNullability.GetReturnTypeSymbol(factory);
+        var receiverClr = Assert.IsAssignableFrom<Type>(receiver.ClrType);
+        var nested = Assert.IsAssignableFrom<System.Reflection.PropertyInfo>(
+            receiverClr.GetProperty(nameof(GenericSurface<string>.Nested)));
+        var projected = MemberLookup.GetClrPropertyTypeSymbol(receiver, nested);
+        var imported = Assert.IsType<ImportedTypeSymbol>(
+            projected is NullabilityAnnotatedTypeSymbol annotated
+                ? annotated.BaseType
+                : projected);
+        var importedClr = Assert.IsAssignableFrom<Type>(imported.ClrType);
+        var element = imported.TypeArguments.IsDefaultOrEmpty
+            ? TypeSymbol.FromClrType(importedClr.GetGenericArguments()[0])
+            : imported.TypeArguments[0];
+
+        AssertStringNullability(element, expectedNullable);
+    }
+
+    private static void AssertStringNullability(TypeSymbol type, bool expectedNullable)
+    {
+        if (expectedNullable)
+        {
+            Assert.Same(
+                TypeSymbol.String,
+                Assert.IsType<NullableTypeSymbol>(type).UnderlyingType);
+        }
+        else
+        {
+            Assert.Same(TypeSymbol.String, type);
+        }
+    }
+
     [Fact]
     public void FuncParameter_WithNullableFirstArg_SurfacesInnerNullability()
     {
@@ -683,6 +772,16 @@ public class ClrNullabilityTests
             return new List<string?>();
         }
 
+        public GenericSurface<string?> GetNullableSurface()
+        {
+            return new GenericSurface<string?>(null);
+        }
+
+        public GenericSurface<string> GetNonNullSurface()
+        {
+            return new GenericSurface<string>(string.Empty);
+        }
+
         public int AcceptFunc(Func<string?, int> f)
         {
             return f(null);
@@ -696,6 +795,37 @@ public class ClrNullabilityTests
         public string?[,]? GetNullableGrid()
         {
             return null;
+        }
+    }
+
+    public sealed class GenericSurface<T>
+    {
+        public GenericSurface(T value)
+        {
+            Property = value;
+            Field = value;
+        }
+
+        public T Property { get; set; }
+
+        public T Field;
+
+        public List<T> Nested { get; } = new();
+
+        public T this[int index]
+        {
+            get => Property;
+            set => Property = value;
+        }
+
+        public T Get() => Property;
+
+        public void Set(T value) => Property = value;
+
+        public bool TryGet(out T value)
+        {
+            value = Property;
+            return true;
         }
     }
 
