@@ -34,7 +34,8 @@ let powers = Sequences.Iterate(
     func (n int32) int32 {
         return n * 2
     }
-).Take(5)
+)
+    .Take(5)
 for v in powers {
     Console.WriteLine(v)
 }

@@ -34,7 +34,8 @@ var doubledEvens = list.Where(
     func (x int32) bool {
         return x % 2 == 0
     }
-).Select(
+)
+    .Select(
     func (x int32) int32 {
         return x * 10
     }
@@ -49,6 +50,7 @@ Console.WriteLine(
         func (x int32) bool {
             return x > 3
         }
-    ).Count()
+    )
+        .Count()
 )
 Console.WriteLine(list.Sum())
