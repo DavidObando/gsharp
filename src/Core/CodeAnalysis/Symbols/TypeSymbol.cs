@@ -548,6 +548,14 @@ public class TypeSymbol : Symbol
 
                 return false;
             case DelegateTypeSymbol del:
+                foreach (var arg in del.TypeArguments)
+                {
+                    if (AnyTypeParameter(arg, match))
+                    {
+                        return true;
+                    }
+                }
+
                 foreach (var param in del.Parameters)
                 {
                     if (AnyTypeParameter(param.Type, match))
@@ -585,6 +593,54 @@ public class TypeSymbol : Symbol
     {
         return true;
     });
+
+    /// <summary>
+    /// Issue #4095: returns <see langword="true"/> when <paramref name="type"/>
+    /// denotes a CLR unbound generic definition rather than a construction
+    /// whose identity depends on an in-scope type parameter.
+    /// </summary>
+    /// <remarks>
+    /// Source nested types can be unbound definitions because of generic
+    /// containing types even when they declare no parameters themselves
+    /// (<c>Outer[_].Inner</c>). Constructed symbols are excluded by their
+    /// explicit argument vectors before the containing-type chain is checked.
+    /// </remarks>
+    /// <param name="type">The candidate type.</param>
+    /// <returns><see langword="true"/> for a representable unbound generic definition.</returns>
+    public static bool IsUnboundGenericDefinition(TypeSymbol type)
+    {
+        if (type.ClrType is { IsGenericTypeDefinition: true })
+        {
+            return true;
+        }
+
+        var isUnconstructedSourceType = type switch
+        {
+            StructSymbol structType =>
+                structType.EnclosingTypeArguments.IsDefaultOrEmpty
+                && structType.TypeArguments.IsDefaultOrEmpty,
+            EnumSymbol enumType => enumType.EnclosingTypeArguments.IsDefaultOrEmpty,
+            InterfaceSymbol interfaceType => interfaceType.TypeArguments.IsDefaultOrEmpty,
+            DelegateTypeSymbol delegateType => delegateType.TypeArguments.IsDefaultOrEmpty,
+            _ => false,
+        };
+        if (!isUnconstructedSourceType)
+        {
+            return false;
+        }
+
+        var declaresTypeParameters = type switch
+        {
+            StructSymbol structType => !structType.TypeParameters.IsDefaultOrEmpty,
+            EnumSymbol enumType => !enumType.TypeParameters.IsDefaultOrEmpty,
+            InterfaceSymbol interfaceType => !interfaceType.TypeParameters.IsDefaultOrEmpty,
+            DelegateTypeSymbol delegateType => !delegateType.TypeParameters.IsDefaultOrEmpty,
+            _ => false,
+        };
+        return declaresTypeParameters
+            || (type.ContainingType is { } containingType
+                && IsUnboundGenericDefinition(containingType));
+    }
 
     /// <summary>
     /// ADR-0172: returns <see langword="true"/> when <paramref name="type"/>
