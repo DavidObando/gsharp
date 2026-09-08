@@ -1105,7 +1105,7 @@ public sealed class Issue3466NestedHomonymAliasTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "let handler (TextStringBuilder) -> TextStringBuilder = (value TextStringBuilder) -> value",
+            "let handler Handler = (value TextStringBuilder) -> value",
             printed,
             StringComparison.Ordinal);
     }
@@ -1148,7 +1148,7 @@ public sealed class Issue3466NestedHomonymAliasTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "let handler (TextStringBuilder) -> void = (__anon0 TextStringBuilder) -> {",
+            "let handler ActionHandler = (__anon0 TextStringBuilder) -> {",
             printed,
             StringComparison.Ordinal);
     }

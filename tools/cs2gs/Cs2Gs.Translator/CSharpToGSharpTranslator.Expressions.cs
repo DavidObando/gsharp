@@ -1338,6 +1338,7 @@ public sealed partial class CSharpToGSharpTranslator
             // promotion; every other value position keeps its existing bytes.
             if (!this.IsPureForwardingPromotedTarget(targetSymbol)
                 && !this.IsActivePatternBinding(value)
+                && !this.LambdaResultFeedsNullableObservedInvocation(value)
                 && this.ReceiverNeedsNullForgiveness(value))
             {
                 return EnsureNonNullAssertion(translated);
@@ -1389,6 +1390,8 @@ public sealed partial class CSharpToGSharpTranslator
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 || targetSymbol is IFieldSymbol { IsConst: true } or ILocalSymbol { IsConst: true }
                 || this.IsWithinExpressionTreeLambda(value)
+                || IsInitializerOfInferredLocal(value, targetSymbol)
+                || this.LambdaResultFeedsNullableObservedInvocation(value)
                 || !this.TargetWillRemainNonNullableReference(targetType, targetSymbol))
             {
                 return translated;
@@ -1431,6 +1434,77 @@ public sealed partial class CSharpToGSharpTranslator
                     ? new ParenthesizedExpression(translated)
                     : translated;
             return EnsureNonNullAssertion(operand);
+        }
+
+        private bool IsInitializerOfInferredLocal(
+            ExpressionSyntax value,
+            ISymbol targetSymbol)
+        {
+            if (targetSymbol is not ILocalSymbol local
+                || (!this.IsUsedAsNullable(local, this.GetNullabilityScope(local))
+                    && !this.IsPassedToNullableParameter(local)))
+            {
+                return false;
+            }
+
+            return local.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is VariableDeclaratorSyntax declarator
+                && declarator.Parent is VariableDeclarationSyntax { Type.IsVar: true }
+                && declarator.Initializer?.Value is { } initializer
+                && initializer.SyntaxTree == value.SyntaxTree
+                && initializer.Span == value.Span);
+        }
+
+        private bool LambdaResultFeedsNullableObservedInvocation(ExpressionSyntax value)
+        {
+            if (this.FindResultLambda(value) is not { } lambda)
+            {
+                return false;
+            }
+
+            SyntaxNode node = lambda;
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            if (node.Parent is not ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation })
+            {
+                return false;
+            }
+
+            SyntaxNode invocationValue = invocation;
+            while (invocationValue.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                invocationValue = invocationValue.Parent;
+            }
+
+            if (invocationValue.Parent is ArgumentSyntax resultArgument
+                && this.IsXunitNullAssertionArgument(resultArgument))
+            {
+                return true;
+            }
+
+            return this.ResolveValueSink(invocation) is ILocalSymbol result
+                && (this.IsUsedAsNullable(result, this.GetNullabilityScope(result))
+                    || this.IsPassedToNullableParameter(result));
+        }
+
+        private bool IsPassedToNullableParameter(ILocalSymbol local)
+        {
+            SyntaxNode scope = this.GetNullabilityScope(local);
+            return scope != null
+                && scope.DescendantNodes(node =>
+                    node is not (LocalFunctionStatementSyntax or AnonymousFunctionExpressionSyntax))
+                .OfType<ArgumentSyntax>()
+                .Any(argument =>
+                    this.BindsTo(argument.Expression, local)
+                    && (this.IsXunitNullAssertionArgument(argument)
+                        || (this.context.SemanticModel.GetOperation(argument)
+                            is IArgumentOperation { Parameter.Type: { } parameterType }
+                            && (parameterType.NullableAnnotation == NullableAnnotation.Annotated
+                                || parameterType.OriginalDefinition?.SpecialType
+                                    == SpecialType.System_Nullable_T))));
         }
 
         private GExpression AssertFlowNarrowedNullableReference(
@@ -2065,6 +2139,8 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ReturnStatementSyntax => this.context.SemanticModel.GetEnclosingSymbol(value.SpanStart),
                 ArrowExpressionClauseSyntax arrow => this.context.GetDeclaredSymbol(arrow.Parent),
+                AnonymousFunctionExpressionSyntax lambda when lambda.Body == current =>
+                    this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod,
                 _ => null,
             };
 
@@ -3318,6 +3394,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || this.IsSyntacticallyNullableResultShape(use)
                 || !this.IsObliviousCompilation()
                 || this.IsWithinExpressionTreeLambda(use)
+                || this.LambdaResultFeedsNullableObservedInvocation(use)
                 || this.FindResultLambda(use) is not { } lambda
                 || this.LambdaResultFlowsToNullableSink(lambda)
                 || this.GetLambdaTargetDelegateType(lambda) is not { DelegateInvokeMethod: { } invoke }

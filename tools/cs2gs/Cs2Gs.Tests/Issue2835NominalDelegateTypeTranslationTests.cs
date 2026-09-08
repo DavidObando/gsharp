@@ -98,7 +98,7 @@ namespace Corpus.Delegates
     }
 
     [Fact]
-    public void BclDelegates_StillRenderInArrowForm()
+    public void CanonicalBclDelegates_StillRenderInArrowForm()
     {
         string rendered = Render();
 

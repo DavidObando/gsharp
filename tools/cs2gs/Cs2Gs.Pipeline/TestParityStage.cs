@@ -319,10 +319,11 @@ public sealed class TestParityStage : IMigrationStage
         // the timeout for what it is, ahead of both other classifications.
         if (result.TimedOut)
         {
+            TimeSpan timeout = SdkCompileRunner.MirroredTestRunTimeoutFor(context.App.Id);
             return StageOutcome.Failed(new[]
             {
                 context.Triage.TestParityLibraryTestRunTimedOut(
-                    SdkCompileRunner.MirroredTestRunTimeout, output, EmittedGsRelative(context)),
+                    timeout, output, EmittedGsRelative(context)),
             });
         }
 
@@ -516,7 +517,8 @@ public sealed class TestParityStage : IMigrationStage
             generatedProject,
             context.ArtifactDir,
             context.Options.Config,
-            context.Options.GeneratedProjectPaths);
+            context.Options.GeneratedProjectPaths,
+            SdkCompileRunner.MirroredTestRunTimeoutFor(context.App.Id));
         return this.EvaluateMirroredTestRun(context, result);
     }
 

@@ -515,6 +515,37 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
+    /// Maps an explicitly written source type while preserving named CLR
+    /// delegate identity. The canonical function delegates remain structural;
+    /// other named delegates (for example <c>EventHandler</c>) are nominal.
+    /// </summary>
+    /// <param name="type">The explicitly declared source type.</param>
+    /// <param name="context">The translation context.</param>
+    /// <param name="location">The originating source location.</param>
+    /// <returns>The canonical G# type reference.</returns>
+    public GTypeReference MapExplicitType(
+        ITypeSymbol type,
+        TranslationContext context,
+        Location location)
+    {
+        if (type is INamedTypeSymbol named
+            && named.TypeKind == TypeKind.Delegate
+            && named.DelegateInvokeMethod != null
+            && (named.ContainingNamespace?.ToDisplayString() != "System"
+                || (named.Name != "Func"
+                    && named.Name != "Action"
+                    && named.Name != "Predicate")))
+        {
+            GTypeReference mapped = this.MapEventType(type, context, location);
+            return type.NullableAnnotation == NullableAnnotation.Annotated
+                ? WithNullable(mapped, true)
+                : mapped;
+        }
+
+        return this.Map(type, context, location);
+    }
+
+    /// <summary>
     /// Issue #2282: maps a C# anonymous type (<c>new { A = 1, B = "x" }</c>) to
     /// a synthesized G# <c>data class</c> whose primary-constructor parameters
     /// carry the SAME member names, instead of the earlier positional-tuple

@@ -441,7 +441,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             ITypeSymbol symbol = this.context.GetTypeInfo(type).Type;
             return symbol != null
-                ? this.typeMapper.Map(symbol, this.context, type.GetLocation())
+                ? this.typeMapper.MapExplicitType(symbol, this.context, type.GetLocation())
                 : new NamedTypeReference(type.ToString());
         }
 
