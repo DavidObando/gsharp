@@ -428,7 +428,12 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
     /// the parent, so the boxing one won by default; now both are applicable
     /// and the more specific one wins. The move is TOWARD <c>csc</c> — the
     /// same divergence class as #4086 — and was verified by compiling and
-    /// running the C# equivalent.</description></item>
+    /// running the C# equivalent. It is THIS change's move, not #4086's:
+    /// re-measured after rebasing onto <c>a83abc98</c>, which carries #4108's
+    /// fix for #4086, the parent still answers <c>object</c>. The two repairs
+    /// are adjacent but independent — #4108 fixed inferred type-parameter
+    /// IDENTITY during ranking, this one fixed candidate APPLICABILITY before
+    /// ranking runs.</description></item>
     /// <item><description><c>E().Describe()</c>, where <c>E</c> does NOT
     /// implement the interface — parent <c>any</c>; here <c>any</c>. The
     /// constrained candidate stays inapplicable, so nothing moves. This is the
