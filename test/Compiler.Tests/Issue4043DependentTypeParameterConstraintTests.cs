@@ -37,9 +37,16 @@ namespace GSharp.Compiler.Tests;
 /// sort: <c>TBase</c> may itself be unconstrained, so <c>TDerived</c> can be
 /// instantiated with a struct. Reusing that slot would have admitted <c>nil</c>
 /// at a value-type slot, which is exactly the #4027 unverifiable-<c>ldnull</c>
-/// defect one release later. <c>TypeParameterBound</c> is therefore separate,
-/// and the "does not propagate reference-ness" row below pins that decision.
-/// </para>
+/// defect one release later. <c>TypeParameterBound</c> is therefore separate.
+/// <b>Issue #4062 update:</b> the slot is still separate, and the sentence
+/// above still holds for a bound whose chain root proves nothing — but when the
+/// ROOT does carry <c>class</c> (or a class-base bound), C# propagates it and
+/// <c>nil</c> is legal. That half is answered by
+/// <c>TypeParameterSymbol.DependentBoundProvesReferenceType</c>, a separate
+/// depth-bounded walk read by exactly one consumer
+/// (<c>Conversion.IsNilAssignableWithoutNullableWrapper</c>), so the forty
+/// <c>ClassConstraint</c> consumers are untouched. The rows for both
+/// directions live in <c>Issue4062DependentBoundReferenceTypeTests</c>.</para>
 /// <para><b>The metadata is measured, not assumed.</b>
 /// <see cref="TheEmittedConstraintRowsNameTheOtherGenericParameter"/> reflects
 /// over the emitted assembly and asserts the <c>GenericParamConstraint</c> row

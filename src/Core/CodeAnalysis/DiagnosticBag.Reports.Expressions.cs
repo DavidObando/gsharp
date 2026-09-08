@@ -415,6 +415,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.CannotConvertMethodGroup, methodName, toType);
 
     /// <summary>
+    /// Reports that a method group escaped a call or delegate-conversion
+    /// context and was used as an ordinary value.
+    /// </summary>
+    /// <param name="location">The method-group name location.</param>
+    /// <param name="methodGroupKind">The source and dispatch kind of method group.</param>
+    /// <param name="methodName">The method-group name.</param>
+    public void ReportMethodGroupRequiresTarget(TextLocation location, string methodGroupKind, string methodName)
+    => Report(location, DiagnosticDescriptors.MethodGroupRequiresTarget, methodGroupKind, methodName);
+
+    /// <summary>
     /// Issue #367: reports that a by-ref-like (<c>ref struct</c>) value is used in
     /// a position that would let it escape the stack. By-ref-like types such as
     /// <c>Span[T]</c>, <c>ReadOnlySpan[T]</c>, and

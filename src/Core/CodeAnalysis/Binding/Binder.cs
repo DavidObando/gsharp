@@ -27,6 +27,13 @@ public sealed class Binder
 {
 #pragma warning disable SA1202 // 'internal' members should appear before 'private' members — kept in original positions during PR-B-8 extraction to minimize diff churn.
     /// <summary>
+    /// Issue #4067: the longest chain of forwarded type-parameter bounds the
+    /// implication walk follows. A cycle is already rejected at declaration by
+    /// <c>GS0581</c>; this bounds a malformed symbol graph as well.
+    /// </summary>
+    private const int ForwardedConstraintChainLimit = 32;
+
+    /// <summary>
     /// Targets permitted on a function declaration (member or free):
     /// <c>method</c> by default; <c>return</c> via use-site qualifier.
     /// </summary>
@@ -1659,6 +1666,13 @@ public sealed class Binder
             .Where(attribute => attribute.Target == AttributeTargetKind.Module)
             .ToImmutableArray();
 
+        // Issue #4065: top-level statements do not pass through
+        // AnalyzeFunctionBody, so reject any unresolved method group retained
+        // by inference/conditional binding before the global diagnostic
+        // snapshot is taken.
+        MethodGroupDiagnostics.ReportUnresolved(
+            new BoundBlockStatement(null, statements.ToImmutable()),
+            binder.Diagnostics);
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
         if (previous != null)
@@ -2861,6 +2875,7 @@ public sealed class Binder
         DiagnosticBag diagnostics)
     {
         var body = lowered.PreEmitAnalysisBody ?? lowered;
+        MethodGroupDiagnostics.ReportUnresolved(body, diagnostics);
         DefiniteAssignmentAnalyzer.Analyze(body, function, diagnostics);
         RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics);
     }
@@ -2920,6 +2935,7 @@ public sealed class Binder
             binder.statements.FinalizeUserLabels();
             var combined = new BoundBlockStatement(null, boundBlocks.ToImmutable());
             var lowered = Lowerer.Lower(combined, structSym);
+            MethodGroupDiagnostics.ReportUnresolved(lowered, binder.Diagnostics);
             diagnostics.AddRange(binder.Diagnostics.ToImmutableArray());
             structSym.SetStaticInitializerStatements(lowered.Statements);
         }
@@ -4154,6 +4170,17 @@ public sealed class Binder
                         return null;
                     }
 
+                    // Issue #4067: the G#-declared twin of #4037's rule. This
+                    // is the site `class Unf[T] : GsHandler[T]` reaches — a
+                    // source generic base is closed by symbol substitution
+                    // here, never by `Type.MakeGenericType`, so #4037's
+                    // checker never sees it.
+                    ReportUnforwardedUserGenericConstraint(
+                        Diagnostics,
+                        (genericStruct.Definition ?? genericStruct).TypeParameters,
+                        typeArgs,
+                        identifierToken.Location);
+
                     element = StructSymbol.Construct(genericStruct, typeArgs, scope.References.MapClrTypeToReferences);
                 }
                 else if (element is DelegateTypeSymbol genericDelegate)
@@ -4560,6 +4587,8 @@ public sealed class Binder
         switch (definition)
         {
             case StructSymbol genericStruct when genericStruct.IsGenericDefinition && genericStruct.TypeParameters.Length == typeArgs.Length:
+                // Issue #4067: the qualified spelling of the same construction.
+                ReportUnforwardedUserGenericConstraint(Diagnostics, genericStruct.TypeParameters, typeArgs, location);
                 return StructSymbol.Construct(genericStruct, typeArgs, scope.References.MapClrTypeToReferences);
             case InterfaceSymbol genericIface when genericIface.IsGenericDefinition && genericIface.TypeParameters.Length == typeArgs.Length:
                 return InterfaceSymbol.Construct(genericIface, typeArgs, scope.References.MapClrTypeToReferences);
@@ -5606,6 +5635,370 @@ public sealed class Binder
             // One diagnostic per construction, even when two positions fail:
             // the author fixes the declaration, not the instantiation.
             return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4067: reports <c>GS0580</c> when an instantiation of a
+    /// <b>G#-declared</b> constrained generic writes the enclosing
+    /// declaration's own type parameter at a position whose bound that
+    /// parameter does not forward — <c>class Unf[T] : GsHandler[T]</c> over
+    /// <c>open class GsHandler[TOptions SchemeOptions]</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why #4037's checker cannot reach this.</b> #4037 put the
+    /// implication rule at
+    /// <see cref="ReportUnsatisfiedGenericTypeConstraint"/>, the one entry
+    /// point every user-facing <c>Type.MakeGenericType</c> construction funnels
+    /// through. A G#-declared generic base is never closed that way: the
+    /// declaration binder resolves it by symbol substitution over
+    /// <c>StructSymbol</c> / <c>InterfaceSymbol</c> / <c>TypeParameterSymbol</c>
+    /// and never touches a CLR open definition, so it reaches no CLR checker at
+    /// all. The RULE is identical (C# §13.4.3, which <c>csc</c> spells
+    /// <c>CS0314</c>); only the substrate differs, so this is the symbolic twin
+    /// of <c>ClrOverloadResolution.TypeParameterForwardsDeclaredConstraints</c>
+    /// and reports the same diagnostic.</para>
+    /// <para><b>Only a type argument that IS a type parameter.</b> A composite
+    /// open shape (<c>GsHandler[List[T]]</c>) has no forwarding question, and a
+    /// CLOSED argument is a different question that this checker deliberately
+    /// does not ask — see the note on the closed gap below. Both are pinned as
+    /// green rows.</para>
+    /// <para><b>A declared bound that mentions another of the definition's own
+    /// parameters is skipped</b>, exactly as #4037 skips it: that is the
+    /// #4031/#4041 dependent shape, where answering on an unsubstituted
+    /// parameter is precisely what goes wrong.</para>
+    /// <para><b>Wired to the STRUCT/CLASS construction only, and that boundary
+    /// was measured rather than chosen.</b> A G#-declared generic INTERFACE
+    /// publishes bare type parameters with its shell and resolves their
+    /// constraints only when its MEMBERS are bound — deliberately, so CRTP
+    /// still works (#2519, <c>DeclareInterfaceSymbol</c>). A class body binds
+    /// first, so at <c>IGsBox[T]</c> in a field type the declared parameter
+    /// still reads <c>ClassConstraint == null</c> and there is nothing to
+    /// imply. Traced, not inferred. Asking there would answer "forwarded" for
+    /// every interface and mean nothing; moving the resolution earlier is the
+    /// CRTP lifecycle this change has no business touching. The gap is real —
+    /// <c>class Holder[T] : IGsBox[T]</c> throws <c>TypeLoadException</c>,
+    /// though its IL verifies — and is filed as <b>#4089</b> and pinned by
+    /// <c>Issue4067UnforwardedGsDeclaredGenericBaseTests</c>'
+    /// <c>AGsDeclaredGenericInterface_IsStillNotChecked</c>.</para>
+    /// </remarks>
+    /// <param name="diagnostics">The bag the diagnostic is reported into.</param>
+    /// <param name="declaredParameters">The definition's own type parameters.</param>
+    /// <param name="typeArgs">The symbolic arguments, in declaration order.</param>
+    /// <param name="location">Where to anchor the diagnostic.</param>
+    /// <returns><see langword="true"/> when a diagnostic was reported.</returns>
+    internal static bool ReportUnforwardedUserGenericConstraint(
+        DiagnosticBag diagnostics,
+        ImmutableArray<TypeParameterSymbol> declaredParameters,
+        ImmutableArray<TypeSymbol> typeArgs,
+        TextLocation location)
+    {
+        if (declaredParameters.IsDefaultOrEmpty
+            || typeArgs.IsDefaultOrEmpty
+            || declaredParameters.Length != typeArgs.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < typeArgs.Length; i++)
+        {
+            if (typeArgs[i] is not TypeParameterSymbol argument)
+            {
+                continue;
+            }
+
+            var declared = declaredParameters[i];
+            if (declared == null || ReferenceEquals(declared, argument))
+            {
+                continue;
+            }
+
+            if (TypeParameterForwardsUserDeclaredConstraints(argument, declared, out var constraintDescription)
+                || constraintDescription == null)
+            {
+                continue;
+            }
+
+            // Issue #4032's once-per-expression rule, inherited through #4037.
+            // A type clause is re-bound through several entry points, so a
+            // per-call report would turn one violation into a count that is a
+            // function of how many internal paths the binder happened to take.
+            var message = string.Format(
+                CultureInfo.CurrentCulture,
+                DiagnosticDescriptors.TypeParameterDoesNotForwardConstraint.MessageFormat,
+                argument.Name,
+                declared.Name,
+                constraintDescription);
+            if (!AlreadyReportedHere(
+                    diagnostics,
+                    DiagnosticDescriptors.TypeParameterDoesNotForwardConstraint.Id,
+                    message,
+                    location))
+            {
+                diagnostics.ReportTypeParameterDoesNotForwardConstraint(
+                    location,
+                    argument.Name,
+                    declared.Name,
+                    constraintDescription);
+            }
+
+            // One diagnostic per construction, even when two positions fail:
+            // the author fixes the declaration, not the instantiation.
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4067: whether <paramref name="argument"/>'s own constraint set
+    /// implies every constraint <paramref name="declared"/> requires, so that
+    /// writing it at that position is valid for EVERY type the argument admits.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Two different walks, and the difference is load-bearing.</b>
+    /// A TYPE bound is implied by anything the argument is provably an instance
+    /// of, so it is asked of the argument AND of every bound in its chain —
+    /// that is what makes <c>[T DisposableOptions]</c> forward
+    /// <c>[TOptions IDisposable]</c> when <c>DisposableOptions</c> implements
+    /// it, the false rejection #4037's review caught in the imported twin. A
+    /// SPECIAL constraint (<c>struct</c> / <c>class</c> / <c>new()</c> /
+    /// <c>unmanaged</c>) is a property of the PARAMETER's own declaration and
+    /// is asked only of the type parameters in the chain: a class bound with a
+    /// public parameterless constructor does NOT give the parameter
+    /// <c>new()</c>, and accepting it there would be a false accept the CLR
+    /// then refuses.</para>
+    /// <para><b>Indeterminate accepts.</b> A bound that still mentions a type
+    /// parameter has no closed answer here and is skipped, and so is a
+    /// dependent bound (<c>TypeParameterBound</c>) — the #4031/#4041 shape. A
+    /// wrong "no" is a GS0580 on a legal program, which is strictly worse than
+    /// the defect being fixed.</para>
+    /// </remarks>
+    /// <param name="argument">The type parameter written as the type argument.</param>
+    /// <param name="declared">The definition's type parameter at that position.</param>
+    /// <param name="failedConstraint">The unforwarded constraint's description, when the answer is no.</param>
+    /// <returns><see langword="true"/> when every constraint is forwarded.</returns>
+    private static bool TypeParameterForwardsUserDeclaredConstraints(
+        TypeParameterSymbol argument,
+        TypeParameterSymbol declared,
+        out string? failedConstraint)
+    {
+        failedConstraint = null;
+        var parameters = EnumerateForwardedParameterChain(argument);
+
+        if (declared.HasValueTypeConstraint
+            && !AnyParameter(parameters, static p => p.HasValueTypeConstraint || p.HasUnmanagedConstraint))
+        {
+            failedConstraint = "struct";
+            return false;
+        }
+
+        if (declared.HasUnmanagedConstraint
+            && !AnyParameter(parameters, static p => p.HasUnmanagedConstraint))
+        {
+            failedConstraint = "unmanaged";
+            return false;
+        }
+
+        if (declared.HasReferenceTypeConstraint
+            && !AnyBound(parameters, IsReferenceTypeForConstraint))
+        {
+            failedConstraint = "class";
+            return false;
+        }
+
+        if (declared.HasDefaultConstructorConstraint
+            && !AnyParameter(
+                parameters,
+                static p => p.HasDefaultConstructorConstraint || p.HasValueTypeConstraint || p.HasUnmanagedConstraint))
+        {
+            failedConstraint = "new()";
+            return false;
+        }
+
+        if (declared.Constraint == TypeParameterConstraint.Comparable
+            && !AnyBound(parameters, IsComparable))
+        {
+            failedConstraint = "comparable";
+            return false;
+        }
+
+        if (declared.ClassConstraint is { } classBound
+            && !TypeSymbol.ContainsTypeParameter(classBound)
+            && !AnyBound(parameters, candidate => SatisfiesClassConstraint(candidate, classBound)))
+        {
+            failedConstraint = SymbolDisplay.ToTypeDisplayString(classBound);
+            return false;
+        }
+
+        if (declared.InterfaceConstraint is { } userInterfaceBound
+            && !TypeSymbol.ContainsTypeParameter(userInterfaceBound)
+            && !AnyBound(parameters, candidate => ImplementsInterface(candidate, userInterfaceBound)))
+        {
+            failedConstraint = SymbolDisplay.ToTypeDisplayString(userInterfaceBound);
+            return false;
+        }
+
+        if (declared.ClrInterfaceConstraint is { } clrInterfaceBound
+            && !TypeSymbol.ContainsTypeParameter(clrInterfaceBound)
+            && !AnyBound(parameters, candidate => BoundCarriesClrInterface(candidate, clrInterfaceBound, declared)))
+        {
+            failedConstraint = SymbolDisplay.ToTypeDisplayString(clrInterfaceBound);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4067 (review): whether <paramref name="candidate"/> carries the
+    /// IMPORTED interface <paramref name="clrInterfaceBound"/>, asking the
+    /// SYMBOL when the reflective answer is unavailable.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The defect this closes, measured on the reviewed commit.</b>
+    /// <c>SatisfiesClrInterfaceConstraint</c> reads
+    /// <c>typeArgument.ClrType.GetInterfaces()</c>, and a SAME-COMPILATION
+    /// class has no CLR type while binding — so for <c>class D : IDisposable</c>
+    /// it returned <see langword="false"/> without ever reading <c>D</c>'s
+    /// interface list, and <c>class Fwd[T D] : GsDisposable[T]</c> over
+    /// <c>GsDisposable[TD IDisposable]</c> reported <c>GS0580</c> on a program
+    /// <c>csc</c> and the CLR both accept. A false rejection is the worse
+    /// direction of this rule's two failure modes.</para>
+    /// <para><b>Reused, not reimplemented.</b> This is the SAME defect #4061
+    /// fixed for the imported class-chain walk and #4068 fixed for the
+    /// dependent-bound path, and #4068's repair —
+    /// <see cref="SourceSymbolImplementsImportedInterface"/> — is the walk this
+    /// calls, so all three arms now bottom out in one place and a future
+    /// widening lands everywhere at once. It is only consulted when the
+    /// candidate has NO CLR type, which is exactly the case the reflective
+    /// path cannot see, so nothing the reflective path already answers
+    /// changes.</para>
+    /// </remarks>
+    /// <param name="candidate">The bound being tested.</param>
+    /// <param name="clrInterfaceBound">The imported interface the definition requires.</param>
+    /// <param name="declared">The definition's parameter (for CLR self-substitution).</param>
+    /// <returns><see langword="true"/> when the candidate carries the interface.</returns>
+    private static bool BoundCarriesClrInterface(
+        TypeSymbol candidate,
+        TypeSymbol clrInterfaceBound,
+        TypeParameterSymbol declared)
+    {
+        if (SatisfiesClrInterfaceConstraint(candidate, clrInterfaceBound, declared))
+        {
+            return true;
+        }
+
+        return candidate is { ClrType: null }
+            && clrInterfaceBound.ClrType is { IsInterface: true } boundInterfaceClr
+            && SourceSymbolImplementsImportedInterface(candidate, clrInterfaceBound, boundInterfaceClr);
+    }
+
+    /// <summary>
+    /// Issue #4067: <paramref name="argument"/> and every type parameter its
+    /// own bounds prove it to be an instance of — through a dependent bound
+    /// (<c>[U SchemeOptions, T U]</c>) or through a type-parameter-valued class
+    /// constraint. Bounded and cycle-safe: a cycle is already rejected at
+    /// declaration by <c>GS0581</c>, and the visited set keeps a malformed
+    /// symbol from hanging the binder anyway.
+    /// </summary>
+    /// <param name="argument">The type parameter to walk from.</param>
+    /// <returns>The chain, argument first.</returns>
+    private static List<TypeParameterSymbol> EnumerateForwardedParameterChain(TypeParameterSymbol argument)
+    {
+        var chain = new List<TypeParameterSymbol> { argument };
+        for (var i = 0; i < chain.Count && chain.Count < ForwardedConstraintChainLimit; i++)
+        {
+            var current = chain[i];
+            AddForwardedParameter(chain, current.TypeParameterBound);
+            AddForwardedParameter(chain, current.ClassConstraint as TypeParameterSymbol);
+        }
+
+        return chain;
+    }
+
+    /// <summary>
+    /// Issue #4067: appends <paramref name="candidate"/> to
+    /// <paramref name="chain"/> when it is present and not already there.
+    /// </summary>
+    /// <param name="chain">The chain being built.</param>
+    /// <param name="candidate">The parameter to append, if any.</param>
+    private static void AddForwardedParameter(List<TypeParameterSymbol> chain, TypeParameterSymbol? candidate)
+    {
+        if (candidate == null)
+        {
+            return;
+        }
+
+        foreach (var seen in chain)
+        {
+            if (ReferenceEquals(seen, candidate))
+            {
+                return;
+            }
+        }
+
+        chain.Add(candidate);
+    }
+
+    /// <summary>
+    /// Issue #4067: whether any type parameter in the chain answers
+    /// <paramref name="predicate"/>.
+    /// </summary>
+    /// <param name="parameters">The forwarded-bound chain.</param>
+    /// <param name="predicate">The property asked of each parameter's own declaration.</param>
+    /// <returns><see langword="true"/> when one answers.</returns>
+    private static bool AnyParameter(
+        List<TypeParameterSymbol> parameters,
+        Func<TypeParameterSymbol, bool> predicate)
+    {
+        foreach (var parameter in parameters)
+        {
+            if (predicate(parameter))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4067: whether any type parameter in the chain, OR any concrete
+    /// bound those parameters carry, answers <paramref name="predicate"/>. A
+    /// type bound is implied by the class or interface a parameter is bounded
+    /// by, which is why the concrete bounds are asked too.
+    /// </summary>
+    /// <param name="parameters">The forwarded-bound chain.</param>
+    /// <param name="predicate">The relation asked of each candidate.</param>
+    /// <returns><see langword="true"/> when one answers.</returns>
+    private static bool AnyBound(
+        List<TypeParameterSymbol> parameters,
+        Func<TypeSymbol, bool> predicate)
+    {
+        foreach (var parameter in parameters)
+        {
+            if (predicate(parameter))
+            {
+                return true;
+            }
+
+            if (parameter.ClassConstraint is { } classBound && predicate(classBound))
+            {
+                return true;
+            }
+
+            if (parameter.InterfaceConstraint is { } userInterfaceBound && predicate(userInterfaceBound))
+            {
+                return true;
+            }
+
+            if (parameter.ClrInterfaceConstraint is { } clrInterfaceBound && predicate(clrInterfaceBound))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -7039,12 +7432,17 @@ public sealed class Binder
     /// </remarks>
     /// <param name="typeArgument">The argument supplied for the bounded parameter.</param>
     /// <param name="boundArgument">The argument supplied for the bounding parameter.</param>
-    /// <param name="tp">The bounded type parameter (for CLR self-substitution).</param>
+    /// <param name="tp">The bounded type parameter, used only to recognise a
+    /// SELF-REFERENTIAL generic interface bound. Issue #4063: the IMPORTED
+    /// spelling of this bound reaches the relation from a reflective
+    /// <c>Type</c> vector and has no such symbol, so it passes
+    /// <see langword="null"/> — and declines to ask at all unless both sides
+    /// are closed, which is precisely when self-substitution cannot matter.</param>
     /// <returns><see langword="true"/> when the bound holds or cannot be disproved.</returns>
     internal static bool SatisfiesDependentBound(
         TypeSymbol typeArgument,
         TypeSymbol boundArgument,
-        TypeParameterSymbol tp)
+        TypeParameterSymbol? tp)
     {
         if (typeArgument is null || boundArgument is null)
         {
@@ -7247,6 +7645,27 @@ public sealed class Binder
                     {
                         yield return projection;
                     }
+                }
+
+                // Issue #4067 (review): a source class INHERITS every interface
+                // its IMPORTED base carries, and that base is held in its own
+                // slot rather than in `BaseClass` — so `class Sub : ArrayList`
+                // reached this walk with an empty interface list and
+                // `class Fwd[T Sub] : GsEnumerable[T]` was rejected for not
+                // carrying `IEnumerable`, which `ArrayList` plainly does.
+                // Measured on the reviewed commit.
+                //
+                // The base itself is yielded rather than its interface list:
+                // the NON-GENERIC arm below answers with
+                // `IsAssignableByName(bound, ArrayList)`, which already walks
+                // the CLR closure. The GENERIC arm skips it, because an
+                // imported base is never a construction of the interface being
+                // sought and its arguments are CLR-level rather than symbolic —
+                // a same-compilation class reaching a GENERIC bound through an
+                // imported base is therefore still not answered here.
+                if (current.ImportedBaseType is { ClrType: not null } importedBase)
+                {
+                    yield return importedBase;
                 }
             }
         }
@@ -7696,7 +8115,7 @@ public sealed class Binder
     /// <param name="constraint">The CLR interface constraint type.</param>
     /// <param name="tp">The constrained type parameter (for self-substitution).</param>
     /// <returns><see langword="true"/> when the constraint is satisfied.</returns>
-    internal static bool SatisfiesClrInterfaceConstraint(TypeSymbol typeArgument, TypeSymbol constraint, TypeParameterSymbol tp)
+    internal static bool SatisfiesClrInterfaceConstraint(TypeSymbol typeArgument, TypeSymbol constraint, TypeParameterSymbol? tp)
     {
         // Constraint propagation: another type parameter constrained to the same
         // interface trivially satisfies the constraint.
@@ -7783,7 +8202,7 @@ public sealed class Binder
         Type[] candidateArgs,
         ImmutableArray<TypeSymbol> constraintArgs,
         Type[] constraintClrArgs,
-        TypeParameterSymbol tp,
+        TypeParameterSymbol? tp,
         Type typeArgClr)
     {
         var expectedCount = !constraintArgs.IsDefaultOrEmpty

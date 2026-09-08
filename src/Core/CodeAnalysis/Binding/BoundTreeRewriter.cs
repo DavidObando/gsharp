@@ -2147,10 +2147,12 @@ public abstract class BoundTreeRewriter
                 node.MethodTypeArguments)
             {
                 ForceNonVirtualDispatch = node.ForceNonVirtualDispatch,
+                HasTargetDelegateType = node.HasTargetDelegateType,
             }
             : new BoundMethodGroupExpression(node.Syntax, receiver, node.Candidates, node.StaticOwnerType)
             {
                 ForceNonVirtualDispatch = node.ForceNonVirtualDispatch,
+                HasTargetDelegateType = node.HasTargetDelegateType,
             };
     }
 

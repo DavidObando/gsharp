@@ -1957,59 +1957,7 @@ internal static class ClrOverloadResolution
 
         if (constraint.IsInterface)
         {
-            if (ErasedSymbolSatisfiesInterfaceConstraint(argument, constraint))
-            {
-                return true;
-            }
-
-            // Issue #4037 (review): a CLASS bound implies every interface that
-            // class implements — `[T DisposableOptions]` forwards
-            // `where T : IDisposable` when `DisposableOptions : IDisposable`,
-            // and `csc` accepts exactly that (measured; the first version of
-            // this rule reported GS0580 on it, which is a FALSE rejection of
-            // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
-            // type-parameter arm reads only the interface bounds, so the class
-            // chain has to be walked here.
-            TypeSymbol? bound = argument.ClassConstraint;
-            for (var depth = 0; bound != null && depth < ForwardedBoundChainLimit; depth++)
-            {
-                if (bound.ClrType is Type boundClr)
-                {
-                    try
-                    {
-                        if (ClrTypeUtilities.IsAssignableByName(constraint, boundClr))
-                        {
-                            return true;
-                        }
-                    }
-                    catch (Exception ex) when (IsMetadataLoadFailure(ex))
-                    {
-                        return true;
-                    }
-                }
-
-                switch (bound)
-                {
-                    case StructSymbol userClassBound:
-                        // A same-compilation class bound: its own interface
-                        // list and imported base chain answer this.
-                        return ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint);
-
-                    case TypeParameterSymbol nestedBound:
-                        if (ErasedSymbolSatisfiesInterfaceConstraint(nestedBound, constraint))
-                        {
-                            return true;
-                        }
-
-                        bound = nestedBound.ClassConstraint;
-                        continue;
-
-                    default:
-                        return false;
-                }
-            }
-
-            return false;
+            return TypeParameterSatisfiesClrInterfaceBound(argument, constraint);
         }
 
         // A base-class bound: walk this parameter's own class-constraint chain.
@@ -2039,6 +1987,98 @@ internal static class ClrOverloadResolution
 
                 case TypeParameterSymbol nested:
                     current = nested.ClassConstraint;
+                    continue;
+
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4037 (review) / issue #4070: whether a type parameter's own
+    /// bounds imply the imported INTERFACE bound <paramref name="constraint"/>
+    /// — either directly, through one of its own interface bounds, or through
+    /// its class-constraint chain, because a class bound proves every interface
+    /// that class implements.
+    /// </summary>
+    /// <remarks>
+    /// <para>Extracted from <see cref="TypeParameterSatisfiesClrBound"/> so the
+    /// SAME walk answers the question on both paths that ask it. #4070
+    /// enumerated them: the generic-TYPE construction path
+    /// (<see cref="TypeParameterSatisfiesClrBound"/>, #4037's <c>GS0580</c>)
+    /// walked the class chain; the generic-METHOD path
+    /// (<c>SatisfiesDeclaredConstraints</c>' #2617 arm, since #750/ADR-0088)
+    /// did not, so <c>Probes.NeedsDisposable[T]()</c> inside
+    /// <c>func callIt[T DisposableBase]()</c> reported <c>GS0159 Cannot find
+    /// function</c> while <c>class Forwarded[T DisposableBase] :
+    /// DisposableConstrained[T]</c> bound. <c>csc</c> accepts both (measured).
+    /// The leaf <c>ErasedSymbolSatisfiesInterfaceConstraint</c> is deliberately
+    /// left byte-identical — its type-parameter arm reads only interface
+    /// bounds, and it has other callers that must keep that meaning.</para>
+    /// <para>Deliberately does NOT read
+    /// <see cref="TypeParameterSymbol.TypeParameterBound"/>: a dependent bound
+    /// (<c>[TBase DisposableBase, TDerived TBase]</c>) forwards the interface
+    /// too, but neither path reads that slot today, so closing it here would
+    /// be new behaviour on both. Filed separately and pinned as a red row.</para>
+    /// <para>The METHOD-path caller additionally guards on the UNSUBSTITUTED
+    /// constraint mentioning no type parameter, which is the same skip the
+    /// generic-TYPE path applies (#4031/#4041) — a self-referential bound such
+    /// as <c>where T : IEquatable&lt;T&gt;</c> cannot be answered on the erased
+    /// vector. See that call site for the measurement.</para>
+    /// </remarks>
+    /// <param name="argument">The type parameter written as the type argument.</param>
+    /// <param name="constraint">The imported interface bound the definition declares.</param>
+    /// <returns><see langword="true"/> when the interface bound is forwarded.</returns>
+    private static bool TypeParameterSatisfiesClrInterfaceBound(TypeParameterSymbol argument, Type constraint)
+    {
+        if (ErasedSymbolSatisfiesInterfaceConstraint(argument, constraint))
+        {
+            return true;
+        }
+
+        // Issue #4037 (review): a CLASS bound implies every interface that
+        // class implements — `[T DisposableOptions]` forwards
+        // `where T : IDisposable` when `DisposableOptions : IDisposable`,
+        // and `csc` accepts exactly that (measured; the first version of
+        // this rule reported GS0580 on it, which is a FALSE rejection of
+        // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
+        // type-parameter arm reads only the interface bounds, so the class
+        // chain has to be walked here.
+        TypeSymbol? bound = argument.ClassConstraint;
+        for (var depth = 0; bound != null && depth < ForwardedBoundChainLimit; depth++)
+        {
+            if (bound.ClrType is Type boundClr)
+            {
+                try
+                {
+                    if (ClrTypeUtilities.IsAssignableByName(constraint, boundClr))
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    return true;
+                }
+            }
+
+            switch (bound)
+            {
+                case StructSymbol userClassBound:
+                    // A same-compilation class bound: its own interface
+                    // list and imported base chain answer this.
+                    return ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint);
+
+                case TypeParameterSymbol nestedBound:
+                    if (ErasedSymbolSatisfiesInterfaceConstraint(nestedBound, constraint))
+                    {
+                        return true;
+                    }
+
+                    bound = nestedBound.ClassConstraint;
                     continue;
 
                 default:
@@ -5601,6 +5641,17 @@ internal static class ClrOverloadResolution
                         continue;
                     }
 
+                    // Issue #4063: for a BARE dependent bound the substituted
+                    // `constraint` is the erased placeholder — `object` — and a
+                    // message reading "does not satisfy the 'System.Object'
+                    // constraint" names the erasure rather than the bound the
+                    // author wrote. The UNSUBSTITUTED bound is the generic
+                    // parameter itself, whose `Name` is `TBase`.
+                    if (rawConstraint.IsGenericParameter)
+                    {
+                        failedConstraint = rawConstraint;
+                    }
+
                     return false;
                 }
 
@@ -5618,13 +5669,42 @@ internal static class ClrOverloadResolution
                         continue;
                     }
 
-                    // Issue #4086 depends on #4070's narrow applicability
-                    // prerequisite: a caller type parameter's class bound can
-                    // prove this non-dependent interface constraint. Reuse the
-                    // generic-type path's existing proof instead of copying it.
-                    if (interfaceSymbol is TypeParameterSymbol typeParameter
+                    // Issue #4070: when the type argument is a TYPE PARAMETER,
+                    // its CLASS bound proves every interface that class
+                    // implements — `Probes.NeedsDisposable[T]()` inside
+                    // `func callIt[T DisposableBase]()` forwards
+                    // `where T : IDisposable`, and `csc` accepts it. This is
+                    // the SAME question the generic-TYPE construction path
+                    // answers in `TypeParameterSatisfiesClrBound` (#4037), and
+                    // it is answered by the SAME walk — the two paths differed
+                    // only in that this one never looked past the parameter's
+                    // interface bounds, so the candidate was silently FILTERED
+                    // out of overload resolution and the author saw
+                    // `GS0159 Cannot find function` rather than a constraint
+                    // message. Monotone in the satisfaction direction: it only
+                    // turns a `false` into a `true`, never the reverse.
+                    //
+                    // Guarded on the UNSUBSTITUTED constraint mentioning no
+                    // type parameter, which is the same skip the generic-TYPE
+                    // path applies (#4031/#4041: a bound such as
+                    // `where T : IEquatable<T>` cannot be answered on the
+                    // erased vector, because `IEquatable<T>` and the
+                    // same-compilation `IEquatable<GsEq>` both project to
+                    // `IEquatable<object>` and the walk would "prove" an
+                    // implication that does not hold). Without it, measured:
+                    // `func callIt[T GsEq]()` over a same-compilation
+                    // `class GsEq : IEquatable[GsEq]` compiled and then threw
+                    // `VerificationException: Method
+                    // HelperLib2.Probes.NeedsEquatable: type argument 'T'
+                    // violates the constraint of type parameter 'T'` — and
+                    // `csc` reports `CS0311` on the C# equivalent, so the
+                    // acceptance was wrong on both counts. A constraint whose
+                    // arguments are all CONCRETE (`where T : IEnumerable<string>`)
+                    // still goes through: the erasure cannot lose anything
+                    // there.
+                    if (interfaceSymbol is TypeParameterSymbol erasedTypeParameter
                         && !rawConstraint.ContainsGenericParameters
-                        && TypeParameterSatisfiesClrBound(typeParameter, constraint))
+                        && TypeParameterSatisfiesClrInterfaceBound(erasedTypeParameter, constraint))
                     {
                         continue;
                     }
@@ -6256,8 +6336,10 @@ internal static class ClrOverloadResolution
     /// non-generic) position, a mentioned parameter has no recovered symbol,
     /// the open definition declares a VARIANT parameter — where
     /// <c>IEnumerable[Derived]</c> legitimately satisfies
-    /// <c>IEnumerable[Base]</c> and identity is the wrong relation — or the open
-    /// definition is not reachable from the argument's symbol at all. Every one
+    /// <c>IEnumerable[Base]</c> and identity is the wrong relation — the open
+    /// definition is not reachable from the argument's symbol at all, or (issue
+    /// #4063) the assignability relation at the TOP of a bare bound cannot be
+    /// settled on closed symbols. Every one
     /// of those falls back to the pre-#4041 CLR comparison, which is what keeps
     /// the same-compilation base-chain path (#4032's
     /// <c>AddScheme[TOptions, THandler]</c> row) green. A wrong "no" here would
@@ -6313,9 +6395,13 @@ internal static class ClrOverloadResolution
     /// <param name="atTopOfBound">
     /// Whether this is the bound's outermost position. The relation there is
     /// ASSIGNABILITY, not the invariant identity that is correct at an argument
-    /// position, so a bare type parameter at the top declines to answer. This
-    /// is load-bearing and was measured: with it removed, the legal
-    /// <c>Chain[ChBase, ChDerived]</c> fails with a false <c>GS0152</c>.
+    /// position, and that distinction is load-bearing rather than defensive: it
+    /// was measured, and comparing the two arguments for identity here fails
+    /// the legal <c>Chain[ChBase, ChDerived]</c> with a false <c>GS0152</c>.
+    /// Issue #4063: a bare type parameter at the top is therefore routed to
+    /// <see cref="MatchDependentTopOfBound"/>, which asks assignability of the
+    /// symbols, instead of declining to answer at all — declining is what left
+    /// <c>Chain[ChA, ChB]</c> over two unrelated erased classes accepted.
     /// </param>
     /// <param name="shapePath">
     /// The printed forms of the shape fragments on the path from the bound's root to this node.
@@ -6349,24 +6435,32 @@ internal static class ClrOverloadResolution
             // indistinguishable as the `object` both project to.
             if (shape.IsGenericParameter)
             {
-                // Identity is the right relation only at an INVARIANT ARGUMENT
-                // position inside a constructed bound. At the TOP of a bound it
-                // is assignability: an imported `where TDerived : TBase` admits
-                // any TDerived that derives from TBase, so comparing the two
-                // arguments for identity would reject `Chain[Base, Derived]`
-                // outright. That is the imported analogue of #4043 and is left
-                // to the CLR comparison, which keeps its pre-#4041 answer.
-                if (atTopOfBound)
-                {
-                    return DependentShapeIndeterminate;
-                }
-
                 var position = IndexOfGenericParameter(typeParams, shape);
                 if (position < 0
                     || position >= typeArgSymbols.Length
                     || typeArgSymbols[position] is not { } expected)
                 {
                     return DependentShapeIndeterminate;
+                }
+
+                // Identity is the right relation only at an INVARIANT ARGUMENT
+                // position inside a constructed bound. At the TOP of a bound it
+                // is ASSIGNABILITY: an imported `where TDerived : TBase` admits
+                // any TDerived that derives from TBase, so comparing the two
+                // arguments for identity would reject `Chain[ChBase, ChDerived]`
+                // outright.
+                //
+                // Issue #4063: #4041 declined to answer here at all, which left
+                // `Chain[ChA, ChB]` over two UNRELATED erased classes accepted —
+                // the substituted bound is `object`, and every erased class
+                // trivially satisfies it. The relation is now asked of the
+                // SYMBOLS, through the very predicate the G#-declared spelling
+                // of this bound already uses (#4043's
+                // `Binder.SatisfiesDependentBound`), so the imported and
+                // G#-declared spellings cannot drift apart.
+                if (atTopOfBound)
+                {
+                    return MatchDependentTopOfBound(actual, expected);
                 }
 
                 return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual, expected)
@@ -6463,6 +6557,50 @@ internal static class ClrOverloadResolution
         {
             return DependentShapeIndeterminate;
         }
+    }
+
+    /// <summary>
+    /// Issue #4063: answers a BARE dependent bound (<c>where TDerived : TBase</c>)
+    /// at the TOP of the bound, where the relation is ASSIGNABILITY rather than
+    /// the invariant identity that is correct at an argument position.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>One predicate, two spellings.</b> The G#-declared spelling of
+    /// this exact bound (<c>func take[TBase, TDerived TBase]()</c>) has been
+    /// answered by <c>Binder.SatisfiesDependentBound</c> since #4043, and that
+    /// predicate is deliberately reused here rather than reimplemented: an
+    /// independent copy would let the imported and G#-declared spellings of the
+    /// same rule drift apart, and it is the drift — not the relation — that
+    /// produces a false <c>GS0152</c>. The reference is a call to one pure
+    /// <c>internal static</c> method in the same assembly; no binder state is
+    /// reachable from here and none is used.</para>
+    /// <para><b>It only ever REJECTS what it can disprove.</b>
+    /// <c>SatisfiesDependentBound</c> accepts on every indeterminate answer, so
+    /// a <see langword="false"/> from it is a definitive "no". A
+    /// <see langword="true"/> is mapped to <c>Indeterminate</c> rather than to
+    /// <c>Matches</c> — it may mean "yes" or "cannot tell", and the CLR
+    /// comparison this falls back to accepts an erased vector anyway, so the
+    /// outcome is identical and the label stays honest.</para>
+    /// <para><b>An open side declines outright.</b> When either symbol still
+    /// mentions a type parameter the relation has no closed answer, and the
+    /// self-substitution <c>SatisfiesDependentBound</c> performs for a
+    /// self-referential generic interface bound needs the bounded parameter's
+    /// own symbol, which the imported path does not have. Refusing to answer
+    /// there keeps the missing symbol from ever mattering.</para>
+    /// </remarks>
+    /// <param name="actual">The symbol supplied for the BOUNDED parameter.</param>
+    /// <param name="expected">The symbol supplied for the BOUNDING parameter.</param>
+    /// <returns>One of the three <c>DependentShape*</c> verdicts.</returns>
+    private static int MatchDependentTopOfBound(TypeSymbol actual, TypeSymbol expected)
+    {
+        if (TypeSymbol.ContainsTypeParameter(actual) || TypeSymbol.ContainsTypeParameter(expected))
+        {
+            return DependentShapeIndeterminate;
+        }
+
+        return Binder.SatisfiesDependentBound(actual, expected, tp: null)
+            ? DependentShapeIndeterminate
+            : DependentShapeDiffers;
     }
 
     /// <summary>

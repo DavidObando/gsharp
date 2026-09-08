@@ -2313,12 +2313,11 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            // ADR-0112 / ADR-0063 §9: an unresolved method group argument
-            // (multiple user overloads, or a CLR method group) carries no fixed
-            // type until the target delegate signature drives overload
-            // selection. Route it through BindConversion — which performs the
-            // signature-directed pick — instead of the type-equality / implicit
-            // conversion checks below (which would reject the Error-typed group).
+            // ADR-0112 / ADR-0063 §9: every method-group argument must pass
+            // through BindConversion once the delegate parameter is known.
+            // Unresolved groups need its signature-directed overload pick;
+            // already-resolved user groups need it to retain that a real target
+            // delegate supplied their value context (issue #4065).
             // Issue #3760: the generic guard below must look at the SUBSTITUTED
             // target (`expectedType`), not the declared `parameter.Type`. A
             // generic callee's delegate parameter — `func Map[TOut](value
@@ -2331,7 +2330,7 @@ internal sealed partial class OverloadResolver
             // the emitter as GS9998 (internal compiler error). Only a target
             // that is STILL open after substitution has no signature to drive
             // the pick, and only that case may skip.
-            if ((argument is BoundMethodGroupExpression { FunctionType: null }
+            if ((argument is BoundMethodGroupExpression
                     || argument is BoundClrMethodGroupExpression { ResolvedMethod: null })
                 && !(substitution != null
                     && (expectedType == null || TypeSymbol.ContainsTypeParameter(expectedType))))

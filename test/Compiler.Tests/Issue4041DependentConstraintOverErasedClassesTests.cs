@@ -66,12 +66,22 @@ namespace GSharp.Compiler.Tests;
 /// <para>The second one is load-bearing rather than defensive, and that was
 /// MEASURED: with <c>MatchDependentShape</c>'s <c>depth == 0</c> guard disabled
 /// and nothing else changed, <c>a-bare-dependent-bound-that-holds-over-erased-classes</c>
-/// fails with a false <c>GS0152</c> (1 red / 11 green on that build). The cost
-/// of declining there is that the imported spelling of a bare dependent bound
-/// over two UNRELATED erased classes is still accepted — the imported analogue
-/// of #4043, needing symbolic ASSIGNABILITY rather than identity, filed as
-/// #4063. Accepting too much is the recoverable direction; a false GS0152 on a
-/// legal program is not.</para>
+/// fails with a false <c>GS0152</c> (1 red / 11 green on that build).</para>
+/// <para><b>#4063 has since replaced the decline with an answer, and this row
+/// is why it could not simply be identity.</b> The cost of declining at the top
+/// of a bound was that the imported spelling of a bare dependent bound over two
+/// UNRELATED erased classes stayed accepted — the imported analogue of #4043,
+/// needing symbolic ASSIGNABILITY rather than identity, filed as #4063 and now
+/// closed by routing that position through
+/// <c>Binder.SatisfiesDependentBound</c>, the predicate #4043 already used for
+/// the G#-declared spelling. The guard itself is unchanged in substance:
+/// identity is still refused at the top, and an indeterminate assignability
+/// answer still falls through to the CLR comparison rather than to a
+/// rejection. Accepting too much was the recoverable direction; a false GS0152
+/// on a legal program is not, and
+/// <c>a-bare-dependent-bound-that-holds-over-erased-classes</c> below is the
+/// row that proves it still binds. The violating spellings live in
+/// <c>Issue4063BareImportedDependentBoundTests</c>.</para>
 /// <para><b>The asserting row this issue was filed with has been moved, not
 /// deleted.</b> <c>Issue4032ConstrainedImportedGenericBaseTests</c> pinned this
 /// gap as <c>ADependentConstraintOverTwoErasedClasses_IsStillAccepted_Issue4041</c>,
@@ -114,8 +124,9 @@ public class Issue4041DependentConstraintOverErasedClassesTests
         }
 
         // A BARE dependent bound. Its relation is assignability, not identity:
-        // `Chain<ChBase, ChDerived>` is legal, so the symbolic path must decline
-        // to answer at the top of a bound and leave it to the CLR comparison.
+        // `Chain<ChBase, ChDerived>` is legal, so identity at the top of a bound
+        // would be a false rejection. Issue #4063 answers that position with
+        // symbolic ASSIGNABILITY instead; the row below pins that it still binds.
         public class Chain<TBase, TDerived>
             where TDerived : TBase
         {
