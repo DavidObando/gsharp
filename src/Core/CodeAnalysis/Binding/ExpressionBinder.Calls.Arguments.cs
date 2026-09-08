@@ -1501,7 +1501,7 @@ internal sealed partial class ExpressionBinder
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
             openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments),
-            symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
 
         switch (resolution.Outcome)
         {
@@ -1978,7 +1978,7 @@ internal sealed partial class ExpressionBinder
                 explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                 explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1),
                 openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1),
-                symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments, argumentOffset: 1));
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments, argumentOffset: 1));
 
         var resolution = ResolveExtensionCandidates();
 
@@ -3763,7 +3763,7 @@ internal sealed partial class ExpressionBinder
             delegateRefKindArgumentCheck: MakeDelegateRefKindArgumentCheck(arguments),
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
-            symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
+            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3858,7 +3858,7 @@ internal sealed partial class ExpressionBinder
             var targetType = TypeSymbol.FromClrType(parameters[parameterIndex].ParameterType);
             if (argument.Type == null
                 || targetType == null
-                || Conversion.Classify(argument.Type, targetType).Exists
+                || (Conversion.Classify(argument.Type, targetType) is { Exists: true, IsStructuralProjection: false })
                 || !conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var converted))
             {
                 continue;

@@ -457,7 +457,7 @@ public sealed class ImportedClassSymbol : Symbol
                 }),
             deferredInferenceArgs: deferredInferenceArgs,
             openLiteralArgumentCheck: ExpressionBinder.MakeOpenLiteralArgumentCheck(arguments),
-            symbolicUserDefinedImplicitConversionCheck: ExpressionBinder.MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
+            symbolicArgumentConversionClassifier: ExpressionBinder.MakeSymbolicArgumentConversionClassifier(arguments));
 
         switch (result.Outcome)
         {

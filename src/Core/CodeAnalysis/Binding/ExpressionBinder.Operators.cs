@@ -15,6 +15,7 @@ using System.Linq;
 using System.Numerics;
 using System.Reflection;
 using System.Text;
+using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -3376,7 +3377,7 @@ internal sealed partial class ExpressionBinder
     // through an implicit user conversion. Imported arguments stay entirely on
     // the established CLR path, and an erased argument with no such conversion
     // gains no applicability.
-    internal static Func<int, System.Type, bool>? MakeSymbolicUserDefinedImplicitConversionCheck(
+    internal static Func<int, System.Type, ClrOverloadResolution.ImplicitConversionKind?>? MakeSymbolicArgumentConversionClassifier(
         IReadOnlyList<BoundExpression>? boundArguments,
         int argumentOffset = 0)
     {
@@ -3393,7 +3394,7 @@ internal sealed partial class ExpressionBinder
                 || clrParameterType == null
                 || clrParameterType.IsByRef)
             {
-                return false;
+                return null;
             }
 
             var sourceType = boundArguments[argIndex].Type;
@@ -3401,15 +3402,36 @@ internal sealed partial class ExpressionBinder
                 || sourceType.ClrType != null
                 || !TypeSymbol.ContainsSameCompilationUserType(sourceType))
             {
-                return false;
+                return null;
+            }
+
+            var targetType = TypeSymbol.FromClrType(clrParameterType);
+            if (targetType == null
+                || !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType))
+            {
+                return null;
+            }
+
+            var standard = Conversion.ClassifyNonStructural(sourceType, targetType);
+            if (standard.IsIdentity)
+            {
+                return ClrOverloadResolution.ImplicitConversionKind.Identity;
+            }
+
+            if (standard.IsImplicit)
+            {
+                return sourceType is StructSymbol { IsClass: false }
+                        or EnumSymbol
+                        or NullableTypeSymbol
+                    ? ClrOverloadResolution.ImplicitConversionKind.Boxing
+                    : ClrOverloadResolution.ImplicitConversionKind.Reference;
             }
 
             // Lifted symbolic operators are not yet materialized by CLR
             // argument lowering, so they must remain inapplicable here.
-            var targetType = TypeSymbol.FromClrType(clrParameterType);
-            return targetType != null
-                && !(sourceType is NullableTypeSymbol && targetType is NullableTypeSymbol)
-                && ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType);
+            return sourceType is NullableTypeSymbol && targetType is NullableTypeSymbol
+                ? ClrOverloadResolution.ImplicitConversionKind.None
+                : ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit;
         };
     }
 

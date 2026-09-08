@@ -1487,7 +1487,7 @@ internal sealed partial class ExpressionBinder
                 explicitTypeArgs,
                 scope.References.MapClrTypeToReferences,
                 argumentNames: deferredArgumentNames,
-                symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(
+                symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(
                     boundArgs,
                     argumentOffset: offset));
             if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
@@ -3865,7 +3865,7 @@ internal sealed partial class ExpressionBinder
                     methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
                     explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                     explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
-                    symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
+                    symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
 
                 // Issue #3745: a user-declared class argument erases to
                 // `System.Object`, which gives an imported generic method no
@@ -3902,7 +3902,7 @@ internal sealed partial class ExpressionBinder
                             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
                             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
-                            symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
+                            symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
                         if (projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
                         {
                             resolution = projectedResolution;
