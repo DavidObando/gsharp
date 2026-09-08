@@ -26,11 +26,12 @@ public sealed class DeclaredProjectItem
     /// <param name="element">The namespace-free item XML.</param>
     /// <param name="sourceInclude">The absolute source ProjectReference target.</param>
     /// <param name="sourceAssemblyName">The evaluated referenced project's assembly name.</param>
+#nullable enable annotations
     public DeclaredProjectItem(
-        string itemGroupCondition,
+        string? itemGroupCondition,
         XElement element,
-        string sourceInclude = null,
-        string sourceAssemblyName = null)
+        string? sourceInclude = null,
+        string? sourceAssemblyName = null)
     {
         this.ItemGroupCondition = itemGroupCondition;
         this.Element = element ?? throw new ArgumentNullException(nameof(element));
@@ -39,16 +40,16 @@ public sealed class DeclaredProjectItem
     }
 
     /// <summary>Gets the containing ItemGroup condition, or <see langword="null"/>.</summary>
-    public string ItemGroupCondition { get; }
+    public string? ItemGroupCondition { get; }
 
     /// <summary>Gets the namespace-free item XML.</summary>
     public XElement Element { get; }
 
     /// <summary>Gets the absolute source ProjectReference target, when applicable.</summary>
-    public string SourceInclude { get; }
+    public string? SourceInclude { get; }
 
     /// <summary>Gets the evaluated referenced project's assembly name, when known.</summary>
-    public string SourceAssemblyName { get; }
+    public string? SourceAssemblyName { get; }
 }
 
 /// <summary>Reads and rewrites declared project dependency items.</summary>
@@ -98,13 +99,17 @@ internal static class DeclaredProjectItems
         IReadOnlyList<string> evaluatedProjectReferencePaths = null)
     {
         IReadOnlyList<DeclaredProjectItem> items = Read(projectPath, "ProjectReference");
-        return items
-            .Select(item => item.SourceInclude)
-            .Where(path => !string.IsNullOrEmpty(path))
-            .Concat(RequireEvaluatedProjectReferencePaths(
-                projectPath,
-                items,
-                evaluatedProjectReferencePaths))
+        var paths = new List<string>();
+        foreach (DeclaredProjectItem item in items)
+        {
+            if (item.SourceInclude is string sourceInclude)
+            {
+                paths.Add(sourceInclude);
+            }
+        }
+
+        return paths
+            .Concat(RequireEvaluatedProjectReferencePaths(projectPath, items, evaluatedProjectReferencePaths))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }

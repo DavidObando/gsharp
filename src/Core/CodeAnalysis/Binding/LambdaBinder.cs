@@ -2050,14 +2050,26 @@ internal sealed class LambdaBinder
                 return TypeSymbol.Void;
             }
 
-            if (targetReturn != null
-                && candidates.All(c => c == TypeSymbol.Error
-                    || Conversion.Classify(c, targetReturn).IsImplicit
-                    || ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
-                        c,
-                        targetReturn)))
+            var allCandidatesConvert = targetReturn != null;
+            if (targetReturn != null)
             {
-                return targetReturn;
+                foreach (TypeSymbol candidate in candidates)
+                {
+                    if (candidate != TypeSymbol.Error
+                        && !Conversion.Classify(candidate, targetReturn).IsImplicit
+                        && !ConversionClassifier.HasUserDefinedImplicitConversionForTypes(
+                            candidate,
+                            targetReturn))
+                    {
+                        allCandidatesConvert = false;
+                        break;
+                    }
+                }
+            }
+
+            if (allCandidatesConvert)
+            {
+                return targetReturn!;
             }
         }
 
@@ -2066,7 +2078,7 @@ internal sealed class LambdaBinder
             return TypeSymbol.Void;
         }
 
-        var result = candidates[0];
+        TypeSymbol? result = candidates[0];
         for (var i = 1; i < candidates.Count; i++)
         {
             result = ComputeLambdaCommonType(result, candidates[i]);

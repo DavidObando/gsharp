@@ -156,8 +156,8 @@ public static class NullAssertionPolishPass
             .Where(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal)
                 && d.Line == d.EndLine
                 && d.EndColumn - d.Column == 2)
-            .GroupBy(d => ResolveStrippableFile(d.File, ownedByFullPath, strippableRoot))
-            .Where(g => g.Key != null);
+            .GroupBy(d => ResolveStrippableFile(d.File, ownedByFullPath, strippableRoot) ?? string.Empty)
+            .Where(g => g.Key.Length != 0);
 
         foreach (IGrouping<string, GscDiagnostic> group in byFile)
         {
@@ -215,11 +215,24 @@ public static class NullAssertionPolishPass
         }
 
         Dictionary<string, string> ownedByFullPath = BuildOwnedIndex(emittedGsFiles);
+        var files = new List<string>();
+        foreach (GscDiagnostic diagnostic in diagnostics)
+        {
+            if (!string.Equals(diagnostic.Id, DiagnosticId, StringComparison.Ordinal))
+            {
+                continue;
+            }
 
-        return diagnostics
-            .Where(d => string.Equals(d.Id, DiagnosticId, StringComparison.Ordinal))
-            .Select(d => ResolveStrippableFile(d.File, ownedByFullPath, strippableRoot))
-            .Where(f => f != null)
+            if (ResolveStrippableFile(
+                diagnostic.File,
+                ownedByFullPath,
+                strippableRoot) is string file)
+            {
+                files.Add(file);
+            }
+        }
+
+        return files
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
@@ -361,10 +374,11 @@ public static class NullAssertionPolishPass
         return index;
     }
 
-    private static string ResolveStrippableFile(
+#nullable enable annotations
+    private static string? ResolveStrippableFile(
         string diagnosticFile,
         IReadOnlyDictionary<string, string> ownedByFullPath,
-        string strippableRoot)
+        string? strippableRoot)
     {
         if (string.IsNullOrEmpty(diagnosticFile))
         {
