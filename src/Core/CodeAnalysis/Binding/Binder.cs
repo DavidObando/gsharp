@@ -1,4 +1,4 @@
-// <copyright file="Binder.cs" company="GSharp">
+﻿// <copyright file="Binder.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -928,6 +928,12 @@ public sealed class Binder
         var parentScope = CreateParentScope(previous, references, preprocessorSymbols, preserveLatestImportSyntaxTrees: false, submissionImports: submission?.Imports);
         var binder = new Binder(parentScope, function: null);
 
+        // Issues #4089/#4090: the declaration phase binds type clauses before
+        // every same-compilation declaration's type-parameter constraints are
+        // resolved, so the G#-declared generic constraint checks are queued
+        // here and answered by FlushPendingUserGenericConstraintChecks below.
+        binder.scope.SetDeferUserGenericConstraintChecks(true);
+
         // ADR-0156 Phase 2: replay the session's accumulated imports so an
         // `import` evaluated in an earlier cell keeps its effect in this one
         // (each submission is a fresh compilation with no source chaining).
@@ -1361,6 +1367,17 @@ public sealed class Binder
         binder.declarations.BindPendingFieldInitializers();
 
         binder.declarations.ExpandStructInterfaceClosures();
+
+        // Issues #4089/#4090: every same-compilation declaration's
+        // type-parameter constraints are now resolved (class bodies, then
+        // interface members) and every class's implemented-interface closure is
+        // populated, so the G#-declared generic type-clause constraint checks
+        // recorded during the declaration phase can finally be answered. Asking
+        // them at their construction sites made the answer a function of source
+        // order — see CheckUserGenericTypeClauseConstraints. Constructions bound
+        // after this point (method bodies, later submissions) are answered in
+        // place.
+        FlushPendingUserGenericConstraintChecks(binder.scope);
 
         // ADR-0149: bind every explicit-interface qualifier clause
         // (`func (IFoo) M(...)` / `prop (IFoo) P T`) to its target interface
@@ -4145,6 +4162,16 @@ public sealed class Binder
                         return null;
                     }
 
+                    // Issues #4089/#4090: a G#-declared generic INTERFACE
+                    // reaches the same symbolic construction as a class, and
+                    // was never constraint-checked at all — its type-parameter
+                    // constraints are resolved only when its members bind,
+                    // which is after every class body (#2519).
+                    CheckUserGenericTypeClauseConstraints(
+                        (iface.Definition ?? iface).TypeParameters,
+                        typeArgs,
+                        identifierToken.Location);
+
                     element = InterfaceSymbol.Construct(iface, typeArgs, scope.References.MapClrTypeToReferences);
                 }
                 else if (element is StructSymbol genericStruct)
@@ -4165,9 +4192,9 @@ public sealed class Binder
                     // is the site `class Unf[T] : GsHandler[T]` reaches — a
                     // source generic base is closed by symbol substitution
                     // here, never by `Type.MakeGenericType`, so #4037's
-                    // checker never sees it.
-                    ReportUnforwardedUserGenericConstraint(
-                        Diagnostics,
+                    // checker never sees it. Issues #4089/#4090: queued rather
+                    // than asked here, and now also asks the CLOSED question.
+                    CheckUserGenericTypeClauseConstraints(
                         (genericStruct.Definition ?? genericStruct).TypeParameters,
                         typeArgs,
                         identifierToken.Location);
@@ -4579,9 +4606,19 @@ public sealed class Binder
         {
             case StructSymbol genericStruct when genericStruct.IsGenericDefinition && genericStruct.TypeParameters.Length == typeArgs.Length:
                 // Issue #4067: the qualified spelling of the same construction.
-                ReportUnforwardedUserGenericConstraint(Diagnostics, genericStruct.TypeParameters, typeArgs, location);
+                // Issues #4089/#4090: queued, and the CLOSED question asked too.
+                CheckUserGenericTypeClauseConstraints(
+                    (genericStruct.Definition ?? genericStruct).TypeParameters,
+                    typeArgs,
+                    location);
                 return StructSymbol.Construct(genericStruct, typeArgs, scope.References.MapClrTypeToReferences);
             case InterfaceSymbol genericIface when genericIface.IsGenericDefinition && genericIface.TypeParameters.Length == typeArgs.Length:
+                // Issues #4089/#4090: the qualified spelling of the interface
+                // construction, which asked nothing at all before.
+                CheckUserGenericTypeClauseConstraints(
+                    (genericIface.Definition ?? genericIface).TypeParameters,
+                    typeArgs,
+                    location);
                 return InterfaceSymbol.Construct(genericIface, typeArgs, scope.References.MapClrTypeToReferences);
             case DelegateTypeSymbol genericDelegate when genericDelegate.IsGenericDefinition && genericDelegate.TypeParameters.Length == typeArgs.Length:
                 return DelegateTypeSymbol.Construct(genericDelegate, typeArgs);
@@ -5632,6 +5669,133 @@ public sealed class Binder
     }
 
     /// <summary>
+    /// Issues #4089/#4090: asks both constraint questions of a G#-declared
+    /// generic TYPE-CLAUSE construction — does an OPEN argument forward the
+    /// declared bound (<c>GS0580</c>, #4067), and does a CLOSED argument
+    /// satisfy it (<c>GS0152</c>, #4090) — deferring the ask until every
+    /// same-compilation declaration's type-parameter constraints are resolved.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Why it cannot be asked here.</b> A declaration's type-parameter
+    /// constraints are resolved by <c>ResolvePartialTypeParameterConstraints</c>
+    /// when that declaration's own body (a class) or members (an interface) are
+    /// bound — #2519's aggregate-shell lifecycle, which exists so a constraint
+    /// may name any same-compilation type and so CRTP works. A type clause in
+    /// ANOTHER declaration may bind before that, and then the declared
+    /// parameter still reads no constraints at all, which both checkers read as
+    /// "nothing to violate" and accept. That is not a conservative default; it
+    /// is a silent hole whose shape is source order.</para>
+    /// <para><b>Both defects are that one hole.</b> Interface members bind
+    /// after every class body, so a G#-declared generic INTERFACE was NEVER
+    /// checked (#4089). A class is ordered base-first
+    /// (<c>AddBaseFirst</c>), so <c>class Unf[T] : GsHandler[T]</c> happened to
+    /// work — but a FIELD type has no such ordering, and
+    /// <c>class Unf[T] { var f GsHandler[T] }</c> was accepted whenever
+    /// <c>GsHandler</c> was declared below it. Measured both ways.</para>
+    /// <para><b>Deferral, not lifecycle surgery.</b> The alternative — resolving
+    /// interface type-parameter constraints before class bodies bind — is the
+    /// #2519 CRTP shell lifecycle, and moving it is a far larger change than
+    /// the rule needs. Queuing costs one list per compilation and answers with
+    /// exactly the same code. Once <see cref="FlushPendingUserGenericConstraintChecks"/>
+    /// has run, later constructions (method bodies, deferred initializers,
+    /// interactive submissions) are answered in place.</para>
+    /// </remarks>
+    /// <param name="declaredParameters">The definition's own type parameters.</param>
+    /// <param name="typeArgs">The symbolic arguments, in declaration order.</param>
+    /// <param name="location">Where to anchor the diagnostic.</param>
+    private void CheckUserGenericTypeClauseConstraints(
+        ImmutableArray<TypeParameterSymbol> declaredParameters,
+        ImmutableArray<TypeSymbol> typeArgs,
+        TextLocation location)
+    {
+        if (declaredParameters.IsDefaultOrEmpty
+            || typeArgs.IsDefaultOrEmpty
+            || declaredParameters.Length != typeArgs.Length)
+        {
+            return;
+        }
+
+        var pending = new PendingUserGenericConstraintCheck(Diagnostics, declaredParameters, typeArgs, location);
+        if (!scope.IsDeferringUserGenericConstraintChecks())
+        {
+            RunUserGenericTypeClauseConstraintCheck(pending);
+            return;
+        }
+
+        scope.GetPendingUserGenericConstraintChecks().Add(pending);
+    }
+
+    /// <summary>
+    /// Issues #4089/#4090: answers every queued G#-declared generic
+    /// type-clause constraint check and latches the queue closed, so any later
+    /// construction is answered at its own site.
+    /// </summary>
+    /// <remarks>
+    /// <para>Called from <c>BindGlobalScope</c> after
+    /// <c>ExpandStructInterfaceClosures</c>. The BINDING constraint is the
+    /// interface-members loop just above it: that is where an interface's own
+    /// type-parameter constraints are resolved (#2519), and nothing before it
+    /// can answer #4089's question at all.</para>
+    /// <para><b>The later boundary is the conservative choice, and it was
+    /// measured rather than argued.</b> The obvious worry is
+    /// <see cref="SatisfiesConstraint"/>'s interface arm: it answers through
+    /// <see cref="ImplementsInterface"/>, which reads a class's own
+    /// <c>Interfaces</c> list, so flushing before the closure expansion might
+    /// reject a class that inherits its implementation. Traced by moving the
+    /// call up to immediately after the interface-members loop, rebuilding, and
+    /// compiling both shapes — an implementation inherited from a BASE CLASS
+    /// and one reached through a BASE INTERFACE. Both stay green at either
+    /// boundary, because <see cref="ImplementsInterface"/> walks
+    /// <c>BaseClass</c> itself and asks <c>SelfAndAllBaseInterfaces()</c>, and
+    /// both of those are populated by the time the interface loop ends. The
+    /// later point is kept anyway — it is the first place at which every
+    /// declaration-phase structure this predicate can read is final — and both
+    /// shapes are pinned as green rows so moving either boundary is caught.</para>
+    /// </remarks>
+    /// <param name="scope">Any scope in the compilation's chain.</param>
+    internal static void FlushPendingUserGenericConstraintChecks(BoundScope scope)
+    {
+        var pending = scope.GetPendingUserGenericConstraintChecks();
+
+        // Clear the latch FIRST: anything the reports themselves bind is
+        // answered in place rather than appended to the list being walked.
+        scope.SetDeferUserGenericConstraintChecks(false);
+        foreach (var check in pending)
+        {
+            RunUserGenericTypeClauseConstraintCheck(check);
+        }
+
+        pending.Clear();
+    }
+
+    /// <summary>
+    /// Issues #4089/#4090: asks the OPEN (forwarding) question first and, only
+    /// when it reports nothing, the CLOSED (satisfaction) question. They are
+    /// complementary per position — an argument is either a bare type
+    /// parameter, fully closed, or a composite open shape neither asks — so the
+    /// ordering only decides which of two positions in the SAME vector wins the
+    /// one-diagnostic-per-construction budget.
+    /// </summary>
+    /// <param name="check">The recorded construction.</param>
+    private static void RunUserGenericTypeClauseConstraintCheck(PendingUserGenericConstraintCheck check)
+    {
+        if (ReportUnforwardedUserGenericConstraint(
+                check.Diagnostics,
+                check.DeclaredParameters,
+                check.TypeArgs,
+                check.Location))
+        {
+            return;
+        }
+
+        ReportUnsatisfiedUserGenericTypeArgument(
+            check.Diagnostics,
+            check.DeclaredParameters,
+            check.TypeArgs,
+            check.Location);
+    }
+
+    /// <summary>
     /// Issue #4067: reports <c>GS0580</c> when an instantiation of a
     /// <b>G#-declared</b> constrained generic writes the enclosing
     /// declaration's own type parameter at a position whose bound that
@@ -5652,28 +5816,30 @@ public sealed class Binder
     /// of <c>ClrOverloadResolution.TypeParameterForwardsDeclaredConstraints</c>
     /// and reports the same diagnostic.</para>
     /// <para><b>Only a type argument that IS a type parameter.</b> A composite
-    /// open shape (<c>GsHandler[List[T]]</c>) has no forwarding question, and a
-    /// CLOSED argument is a different question that this checker deliberately
-    /// does not ask — see the note on the closed gap below. Both are pinned as
-    /// green rows.</para>
+    /// open shape (<c>GsHandler[List[T]]</c>) has no forwarding question. A
+    /// CLOSED argument is a DIFFERENT question that this checker deliberately
+    /// does not ask; since #4090 it is asked immediately afterwards by
+    /// <see cref="ReportUnsatisfiedUserGenericTypeArgument"/>, which reports
+    /// <c>GS0152</c>.</para>
     /// <para><b>A declared bound that mentions another of the definition's own
     /// parameters is skipped</b>, exactly as #4037 skips it: that is the
     /// #4031/#4041 dependent shape, where answering on an unsubstituted
     /// parameter is precisely what goes wrong.</para>
-    /// <para><b>Wired to the STRUCT/CLASS construction only, and that boundary
-    /// was measured rather than chosen.</b> A G#-declared generic INTERFACE
-    /// publishes bare type parameters with its shell and resolves their
-    /// constraints only when its MEMBERS are bound — deliberately, so CRTP
-    /// still works (#2519, <c>DeclareInterfaceSymbol</c>). A class body binds
-    /// first, so at <c>IGsBox[T]</c> in a field type the declared parameter
-    /// still reads <c>ClassConstraint == null</c> and there is nothing to
-    /// imply. Traced, not inferred. Asking there would answer "forwarded" for
-    /// every interface and mean nothing; moving the resolution earlier is the
-    /// CRTP lifecycle this change has no business touching. The gap is real —
-    /// <c>class Holder[T] : IGsBox[T]</c> throws <c>TypeLoadException</c>,
-    /// though its IL verifies — and is filed as <b>#4089</b> and pinned by
-    /// <c>Issue4067UnforwardedGsDeclaredGenericBaseTests</c>'
-    /// <c>AGsDeclaredGenericInterface_IsStillNotChecked</c>.</para>
+    /// <para><b>Never called at the construction site.</b> #4067 wired this
+    /// inline at the STRUCT/CLASS type clause, which made the answer a function
+    /// of DECLARATION ORDER: a declaration's type-parameter constraints are
+    /// resolved when its own body/members are bound, so a reference that binds
+    /// earlier reads <c>ClassConstraint == null</c> and is silently accepted.
+    /// Measured three ways — a generic INTERFACE is always accepted (#4089,
+    /// because interface members bind after every class body, #2519), and even
+    /// the class case flips on source order (<c>class Unf[T] { var f
+    /// GsHandler[T] }</c> is accepted when <c>GsHandler</c> is declared BELOW
+    /// it and rejected when it is declared above). #4089/#4090 therefore route
+    /// every type-clause construction through
+    /// <see cref="CheckUserGenericTypeClauseConstraints"/>, which queues the
+    /// question until <see cref="FlushPendingUserGenericConstraintChecks"/>
+    /// runs it with every same-compilation constraint resolved. The RULE is
+    /// unchanged; only when it is asked moved.</para>
     /// </remarks>
     /// <param name="diagnostics">The bag the diagnostic is reported into.</param>
     /// <param name="declaredParameters">The definition's own type parameters.</param>
@@ -5737,6 +5903,124 @@ public sealed class Binder
 
             // One diagnostic per construction, even when two positions fail:
             // the author fixes the declaration, not the instantiation.
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4090: reports <c>GS0152</c> when a CLOSED type argument at a
+    /// <b>G#-declared</b> generic TYPE clause does not satisfy the bound the
+    /// definition declares — <c>class Bad : GsHandler[Unrelated]</c> and
+    /// <c>var f GsHandler[Unrelated]</c> over
+    /// <c>open class GsHandler[TOptions SchemeOptions]</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The rule already exists; only this site did not ask it.</b>
+    /// The CONSTRUCTOR spelling <c>GsHandler[Unrelated]()</c> has always
+    /// reported <c>GS0152</c> — <c>OverloadResolver.Constructors</c> runs
+    /// <see cref="SatisfiesConstraint"/> over the vector — and so has the
+    /// struct-literal spelling (<c>ExpressionBinder.Literals</c>). The two
+    /// TYPE-position construction sites
+    /// (<c>BindNonNullableTypeClause</c> and
+    /// <c>BindAndConstructUserGenericSegment</c>) called nothing, so the same
+    /// violation written as a base clause or a field/variable type compiled and
+    /// emitted IL that fails verification with
+    /// <c>UnsatisfiedMethodParentInst</c>. This is C# §13.4.3's concrete half,
+    /// which <c>csc</c> spells <c>CS0311</c>.</para>
+    /// <para><b>Only fully CLOSED arguments are asked</b>, which is the exact
+    /// complement of <see cref="ReportUnforwardedUserGenericConstraint"/>: an
+    /// argument that still mentions a type parameter stands for every type its
+    /// own bounds admit and has no closed answer here, so it is the FORWARDING
+    /// question (<c>GS0580</c>) or it is a composite open shape that neither
+    /// checker asks. The two never both fire at one position.</para>
+    /// <para><b>The whole vector builds the substitution before any position is
+    /// checked.</b> A dependent bound (<c>[TBase, TDerived TBase]</c>, #4043)
+    /// is only answerable once the BOUNDING parameter's own argument is known,
+    /// and <see cref="SatisfiesConstraint"/> reads it out of that map. A
+    /// per-position check without it would ACCEPT — the deliberate
+    /// indeterminate direction — and silently lose the dependent shape.</para>
+    /// </remarks>
+    /// <param name="diagnostics">The bag the diagnostic is reported into.</param>
+    /// <param name="declaredParameters">The definition's own type parameters.</param>
+    /// <param name="typeArgs">The symbolic arguments, in declaration order.</param>
+    /// <param name="location">Where to anchor the diagnostic.</param>
+    /// <returns><see langword="true"/> when a diagnostic was reported.</returns>
+    internal static bool ReportUnsatisfiedUserGenericTypeArgument(
+        DiagnosticBag diagnostics,
+        ImmutableArray<TypeParameterSymbol> declaredParameters,
+        ImmutableArray<TypeSymbol> typeArgs,
+        TextLocation location)
+    {
+        if (declaredParameters.IsDefaultOrEmpty
+            || typeArgs.IsDefaultOrEmpty
+            || declaredParameters.Length != typeArgs.Length)
+        {
+            return false;
+        }
+
+        // Issue #4043: the dependent bound needs the sibling's argument, so the
+        // whole vector is mapped before any position is asked.
+        var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < typeArgs.Length; i++)
+        {
+            if (declaredParameters[i] is { } parameter && typeArgs[i] is { } argument)
+            {
+                substitution[parameter] = argument;
+            }
+        }
+
+        for (var i = 0; i < typeArgs.Length; i++)
+        {
+            var declared = declaredParameters[i];
+            var typeArgument = typeArgs[i];
+            if (declared == null
+                || typeArgument == null
+                || typeArgument == TypeSymbol.Error
+                || ReferenceEquals(declared, typeArgument))
+            {
+                continue;
+            }
+
+            // The OPEN half of the question belongs to
+            // ReportUnforwardedUserGenericConstraint, which has already run.
+            if (TypeSymbol.ContainsTypeParameter(typeArgument))
+            {
+                continue;
+            }
+
+            if (SatisfiesConstraint(typeArgument, declared, substitution))
+            {
+                continue;
+            }
+
+            var constraintDescription = DescribeConstraint(declared);
+
+            // Issue #4032's once-per-expression rule, inherited through #4067.
+            // A type clause is re-bound through several entry points, so a
+            // per-call report would turn one violation into a count that is a
+            // function of how many internal paths the binder happened to take.
+            var message = string.Format(
+                CultureInfo.CurrentCulture,
+                DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.MessageFormat,
+                typeArgument,
+                declared.Name,
+                constraintDescription);
+            if (!AlreadyReportedHere(
+                    diagnostics,
+                    DiagnosticDescriptors.TypeArgumentDoesNotSatisfyConstraint.Id,
+                    message,
+                    location))
+            {
+                diagnostics.ReportTypeArgumentDoesNotSatisfyConstraint(
+                    location,
+                    declared.Name,
+                    typeArgument,
+                    constraintDescription);
+            }
+
+            // One diagnostic per construction, matching the forwarding twin.
             return true;
         }
 
@@ -7331,8 +7615,23 @@ public sealed class Binder
         // Issue #943: enforce a CLR interface constraint (generic or not), e.g.
         // `[T IComparable[T]]`. The type argument must implement the (self-ref
         // substituted) closed interface.
+        //
+        // Issue #4090: through `BoundCarriesClrInterface`, which is the SAME
+        // walk #4068 and #4092 gave the dependent-bound and forwarding arms,
+        // rather than the bare reflective probe. The reflective probe reads
+        // `typeArgument.ClrType.GetInterfaces()`, and a SAME-COMPILATION class
+        // has no CLR type while binding — so `class D : IDisposable` used as
+        // `GsDisposable[D]` over `GsDisposable[TD IDisposable]` was reported as
+        // a violation on a program `csc` and the CLR both accept. That false
+        // rejection is measurable on `main` at the CONSTRUCTOR spelling
+        // (`GsDisposable[D]()`), which has always run this predicate and is
+        // filed as #4136; #4090
+        // widens the predicate's reach to every type clause, so the last of the
+        // three arms is brought to the shared walk here. It is consulted only
+        // when the reflective answer is "no", so nothing that already passed
+        // changes.
         if (tp.ClrInterfaceConstraint != null
-            && !SatisfiesClrInterfaceConstraint(typeArgument, tp.ClrInterfaceConstraint, tp))
+            && !BoundCarriesClrInterface(typeArgument, tp.ClrInterfaceConstraint, tp))
         {
             return false;
         }
@@ -9085,6 +9384,45 @@ public sealed class Binder
     private readonly record struct BodyBindResult(
         BoundBlockStatement Body,
         ImmutableArray<Diagnostic> Diagnostics);
+
+    /// <summary>
+    /// Issues #4089/#4090: one G#-declared generic TYPE-CLAUSE construction
+    /// whose constraint check has been recorded but not yet answered, because
+    /// at the construction site the definition's own type-parameter constraints
+    /// may not be resolved yet.
+    /// </summary>
+    /// <remarks>
+    /// The <see cref="DiagnosticBag"/> is captured rather than looked up at
+    /// flush time: a binder's bag is its own, and a type clause bound inside a
+    /// field initializer or a lambda during the declaration phase belongs to a
+    /// different bag from the root binder's.
+    /// </remarks>
+    internal readonly struct PendingUserGenericConstraintCheck
+    {
+        public PendingUserGenericConstraintCheck(
+            DiagnosticBag diagnostics,
+            ImmutableArray<TypeParameterSymbol> declaredParameters,
+            ImmutableArray<TypeSymbol> typeArgs,
+            TextLocation location)
+        {
+            Diagnostics = diagnostics;
+            DeclaredParameters = declaredParameters;
+            TypeArgs = typeArgs;
+            Location = location;
+        }
+
+        /// <summary>Gets the bag the diagnostic is reported into.</summary>
+        public DiagnosticBag Diagnostics { get; }
+
+        /// <summary>Gets the definition's own type parameters.</summary>
+        public ImmutableArray<TypeParameterSymbol> DeclaredParameters { get; }
+
+        /// <summary>Gets the symbolic arguments, in declaration order.</summary>
+        public ImmutableArray<TypeSymbol> TypeArgs { get; }
+
+        /// <summary>Gets the location the diagnostic is anchored to.</summary>
+        public TextLocation Location { get; }
+    }
 
 #pragma warning restore SA1202
 }

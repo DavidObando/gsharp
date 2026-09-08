@@ -1402,6 +1402,14 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
+        // Issues #4089/#4090: a constraint bound may itself be a G#-declared
+        // generic type clause (`[T IGsBox[U]]`), which QUEUES a deferred
+        // constraint check. These two loops are speculative — they bind each
+        // partial part's header and roll the diagnostics back — so the queue
+        // has to roll back with them, or a discarded candidate's check would
+        // still be reported at flush time.
+        var pendingConstraintChecks = binderCtx.RootScope.GetPendingUserGenericConstraintChecks();
+
         // Issue #3336: bind every matching header through its own file imports.
         var successfulBindings =
             new List<(int PartIndex, TypeParameterListSyntax Syntax, ImmutableArray<TypeParameterSymbol> Symbols)>();
@@ -1410,6 +1418,7 @@ internal sealed partial class DeclarationBinder
         {
             var candidate = matchingPartialLists[partIndex];
             var diagnosticCount = Diagnostics.Count;
+            var pendingCheckCount = pendingConstraintChecks.Count;
             var candidateSymbols = CreateTypeParameterSymbols(candidate);
             ImmutableArray<Diagnostic> candidateDiagnostics;
             try
@@ -1420,6 +1429,12 @@ internal sealed partial class DeclarationBinder
             finally
             {
                 Diagnostics.TruncateTo(diagnosticCount);
+                if (pendingConstraintChecks.Count > pendingCheckCount)
+                {
+                    pendingConstraintChecks.RemoveRange(
+                        pendingCheckCount,
+                        pendingConstraintChecks.Count - pendingCheckCount);
+                }
             }
 
             diagnosticsByPart.Add(candidateDiagnostics);
@@ -1434,6 +1449,7 @@ internal sealed partial class DeclarationBinder
             // Preserve primary-part recovery state, but surface each part's own
             // constraint diagnostics exactly once.
             var diagnosticCount = Diagnostics.Count;
+            var pendingCheckCount = pendingConstraintChecks.Count;
             try
             {
                 ResolveTypeParameterConstraints(primarySyntax, symbols);
@@ -1441,6 +1457,12 @@ internal sealed partial class DeclarationBinder
             finally
             {
                 Diagnostics.TruncateTo(diagnosticCount);
+                if (pendingConstraintChecks.Count > pendingCheckCount)
+                {
+                    pendingConstraintChecks.RemoveRange(
+                        pendingCheckCount,
+                        pendingConstraintChecks.Count - pendingCheckCount);
+                }
             }
 
             foreach (var candidateDiagnostics in diagnosticsByPart)

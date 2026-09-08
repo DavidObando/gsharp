@@ -85,6 +85,15 @@ public sealed class BoundScope
 
     private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>? richAnonymousClassMap;
 
+    // Issues #4089/#4090: the declaration-phase queue of G#-declared generic
+    // TYPE-CLAUSE constraint checks, and the latch that says the queue has been
+    // drained. Both live on the ROOT scope of the chain (like
+    // richAnonymousClassMap above) because every binder in a compilation shares
+    // that root, while each binder has its own BinderContext.
+    private List<Binder.PendingUserGenericConstraintCheck>? pendingUserGenericConstraintChecks;
+
+    private bool deferUserGenericConstraintChecks;
+
     // Issue #1680: name-keyed index over extensionFunctions. Extension lookup is a
     // per-call-site hot path run for every member call that doesn't resolve as an
     // instance member, so a flat per-scope list forced an O(callsites x extensions)
@@ -1886,6 +1895,56 @@ public sealed class BoundScope
     /// <returns>The shared rich-anonymous-object map for this scope's chain.</returns>
     internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> GetRichAnonymousClassMap()
         => Parent != null ? Parent.GetRichAnonymousClassMap() : richAnonymousClassMap ??= new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
+
+    /// <summary>
+    /// Issues #4089/#4090: gets the queue of G#-declared generic TYPE-CLAUSE
+    /// constraint checks recorded while the DECLARATION phase runs, shared
+    /// across every binder in the chain. See
+    /// <c>Binder.CheckUserGenericTypeClauseConstraints</c> for why the check
+    /// cannot be answered at the construction site.
+    /// </summary>
+    /// <returns>The shared pending-check queue for this scope's chain.</returns>
+    internal List<Binder.PendingUserGenericConstraintCheck> GetPendingUserGenericConstraintChecks()
+        => Parent != null
+            ? Parent.GetPendingUserGenericConstraintChecks()
+            : pendingUserGenericConstraintChecks ??= new List<Binder.PendingUserGenericConstraintCheck>();
+
+    /// <summary>
+    /// Issues #4089/#4090: whether a G#-declared generic type-clause constraint
+    /// check must be QUEUED rather than answered where it is written, because
+    /// same-compilation declarations may not have their type-parameter
+    /// constraints resolved yet.
+    /// </summary>
+    /// <remarks>
+    /// Defaults to <see langword="false"/> — answer in place — and is set only
+    /// for the DECLARATION phase's own scope chain, by <c>BindGlobalScope</c>.
+    /// The default direction is load-bearing: <c>BindProgram</c> derives a
+    /// FRESH scope chain (<c>CreateParentScope</c>) for member bodies, so a
+    /// body binder never sees this flag, and a queue it could never flush would
+    /// silently drop the check. Answering in place is exactly what those
+    /// binders did before, and by then every constraint is resolved anyway.
+    /// </remarks>
+    /// <returns><see langword="true"/> while the declaration phase is queuing.</returns>
+    internal bool IsDeferringUserGenericConstraintChecks()
+        => Parent != null ? Parent.IsDeferringUserGenericConstraintChecks() : deferUserGenericConstraintChecks;
+
+    /// <summary>
+    /// Issues #4089/#4090: turns the queuing described by
+    /// <see cref="IsDeferringUserGenericConstraintChecks"/> on or off for this
+    /// scope's whole chain.
+    /// </summary>
+    /// <param name="value">Whether checks must be queued.</param>
+    internal void SetDeferUserGenericConstraintChecks(bool value)
+    {
+        if (Parent != null)
+        {
+            Parent.SetDeferUserGenericConstraintChecks(value);
+        }
+        else
+        {
+            deferUserGenericConstraintChecks = value;
+        }
+    }
 
     /// <summary>
     /// Issue #2455: sets the package name explicitly PEELED off a
