@@ -590,7 +590,15 @@ internal sealed class CustomAttributeEncoder
         var ctor = ResolveAttributeConstructor(resolved, positional);
         if (ctor == null)
         {
-            return;
+            // Issue #4097: "no candidate matched" is the right ANSWER for this
+            // program; treating it as "nothing to emit" was the bug. Dropping
+            // the row here compiled clean, IL-verified and ran, and the
+            // annotation the author wrote was simply absent from the metadata.
+            // That silence is how issue #4073's `Type[]` half stayed invisible.
+            EmitDiagnosticException.ThrowAttributeConstructorNotFound(
+                attr.Syntax,
+                attr.AttributeType.Name,
+                DescribeArgumentList(positional));
         }
 
         var ctorParams = ctor.GetParameters();
@@ -671,9 +679,32 @@ internal sealed class CustomAttributeEncoder
     /// </remarks>
     private void EmitUserBoundAttribute(EntityHandle parent, StructSymbol attributeType, BoundAttribute attr)
     {
-        if (!this.TryResolveUserAttributeConstructor(attributeType, attr, out var ctorToken, out var paramTypes))
+        if (!this.TryResolveUserAttributeConstructor(
+                attributeType,
+                attr,
+                out var ctorToken,
+                out var paramTypes,
+                out var unsupportedParameter))
         {
-            return;
+            // Issue #4097: both failure modes used to drop the row silently.
+            // They are genuinely different and must not share one message: an
+            // unencodable PARAMETER type means the arguments were right and the
+            // encoder is not there yet (GS0584, in the spirit of GS0466), while
+            // anything else means no constructor accepts what was written
+            // (GS0583).
+            if (unsupportedParameter is { } offending)
+            {
+                EmitDiagnosticException.ThrowAttributeConstructorParameterTypeNotSupported(
+                    attr.Syntax,
+                    offending.Name,
+                    attributeType.Name,
+                    offending.Type?.Name ?? "?");
+            }
+
+            EmitDiagnosticException.ThrowAttributeConstructorNotFound(
+                attr.Syntax,
+                attributeType.Name,
+                DescribeArgumentList(attr.PositionalArguments));
         }
 
         var valueBlob = new BlobBuilder();
@@ -715,19 +746,38 @@ internal sealed class CustomAttributeEncoder
         StructSymbol attributeType,
         BoundAttribute attr,
         out EntityHandle ctorToken,
-        [NotNullWhen(true)] out Type[]? paramTypes)
+        [NotNullWhen(true)] out Type[]? paramTypes,
+        out ParameterSymbol? unsupportedParameter)
     {
         var argCount = attr.PositionalArguments.Length;
         ctorToken = default;
         paramTypes = null;
+        unsupportedParameter = null;
 
         if (attributeType.HasPrimaryConstructor
             && attributeType.PrimaryConstructorParameters.Length == argCount
-            && this.resolvePrimaryCtorToken != null
-            && TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes))
+            && this.resolvePrimaryCtorToken != null)
         {
-            ctorToken = this.resolvePrimaryCtorToken(attributeType);
-            return true;
+            if (!TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes, out var offending))
+            {
+                unsupportedParameter = offending;
+            }
+            else if (ArgumentsAssignable(attr.PositionalArguments, paramTypes))
+            {
+                ctorToken = this.resolvePrimaryCtorToken(attributeType);
+                return true;
+            }
+            else
+            {
+                // Issue #4097: this arm used to be missing entirely. A primary
+                // constructor was accepted on ARITY alone, so `@Note(1)` at
+                // `NoteAttribute(Text string)` reached the blob writer with an
+                // int for a string slot and came out as GS9998 — an internal
+                // compiler error for a plain argument-type mistake. The
+                // CLR-imported path has always applied this rule via
+                // `ParametersMatch`.
+                paramTypes = null;
+            }
         }
 
         if (this.resolveExplicitCtorToken != null)
@@ -743,8 +793,16 @@ internal sealed class CustomAttributeEncoder
                     continue;
                 }
 
-                if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes))
+                if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending))
                 {
+                    // First unencodable parameter wins, and an already-recorded
+                    // one from the primary constructor is kept. Where BOTH a
+                    // primary constructor of this arity rejected the arguments
+                    // and an explicit one of the same arity has an unencodable
+                    // parameter, GS0584 is reported rather than GS0583 — it
+                    // names a real obstacle to emitting this attribute at all,
+                    // so fixing the arguments alone would not help.
+                    unsupportedParameter ??= offending;
                     continue;
                 }
 
@@ -800,15 +858,33 @@ internal sealed class CustomAttributeEncoder
         return false;
     }
 
-    private static bool TryGetClrParameterTypes(ImmutableArray<ParameterSymbol> parameters, [NotNullWhen(true)] out Type[]? clrTypes)
+    /// <summary>
+    /// Projects a same-compilation constructor's parameter types onto CLR
+    /// types, naming the first parameter that has none.
+    /// </summary>
+    /// <param name="parameters">The constructor's parameters.</param>
+    /// <param name="clrTypes">The projected types, when every parameter has one.</param>
+    /// <param name="unsupported">
+    /// Issue #4097: the first parameter whose type has no <c>ClrType</c> — a
+    /// same-compilation type, whose TypeDef only exists at emit. The caller
+    /// needs to know WHICH parameter so it can say so instead of reporting the
+    /// unrelated "no constructor accepts these arguments".
+    /// </param>
+    /// <returns>Whether every parameter projected.</returns>
+    private static bool TryGetClrParameterTypes(
+        ImmutableArray<ParameterSymbol> parameters,
+        [NotNullWhen(true)] out Type[]? clrTypes,
+        out ParameterSymbol? unsupported)
     {
         clrTypes = new Type[parameters.Length];
+        unsupported = null;
         for (int i = 0; i < parameters.Length; i++)
         {
             var clr = parameters[i].Type?.ClrType;
             if (clr == null)
             {
                 clrTypes = null;
+                unsupported = parameters[i];
                 return false;
             }
 
@@ -817,6 +893,19 @@ internal sealed class CustomAttributeEncoder
 
         return true;
     }
+
+    /// <summary>
+    /// Describes the supplied positional arguments by their SOURCE types, for
+    /// the GS0583 message — the same information C# puts in CS1503.
+    /// </summary>
+    /// <param name="positional">The bound positional arguments.</param>
+    /// <returns>A comma-separated list of type names, empty for no arguments.</returns>
+    private static string DescribeArgumentList(ImmutableArray<BoundAttributeArgument> positional)
+        => string.Join(
+            ", ",
+            positional.Select(argument =>
+                argument.Type?.Name
+                    ?? (argument.Value is { } value ? value.GetType().Name : "nil")));
 
     private static ConstructorInfo? ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
     {

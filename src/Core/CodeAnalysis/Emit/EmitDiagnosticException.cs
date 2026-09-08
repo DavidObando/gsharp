@@ -81,6 +81,69 @@ internal sealed class EmitDiagnosticException : Exception
     }
 
     /// <summary>
+    /// Throws a failure that surfaces as <c>GS0583</c>: an attribute whose
+    /// arguments match no constructor of the attribute type.
+    /// </summary>
+    /// <remarks>
+    /// Issue #4097: the emitter used to treat "no candidate matched" as
+    /// "nothing to emit" and dropped the whole CustomAttribute row with no
+    /// diagnostic at all, so the author asked for metadata and got silence.
+    /// Constructor SELECTION is the emitter's own applicability rule
+    /// (<c>ArgAssignable</c> over the resolved constructor set, including
+    /// params-array expansion) and the emit pipeline has no
+    /// <c>DiagnosticBag</c> in scope, so the failure travels this channel the
+    /// way GS0546 does.
+    /// </remarks>
+    /// <param name="anchor">The annotation, or <c>null</c>.</param>
+    /// <param name="attributeName">The attribute type's name.</param>
+    /// <param name="argumentList">The supplied argument types, comma-separated.</param>
+    [DoesNotReturn]
+    public static void ThrowAttributeConstructorNotFound(SyntaxNode? anchor, string attributeName, string argumentList)
+    {
+        var descriptor = DiagnosticDescriptors.AttributeConstructorNotFound;
+        throw new EmitDiagnosticException(
+            descriptor.Id,
+            string.Format(System.Globalization.CultureInfo.InvariantCulture, descriptor.MessageFormat, attributeName, argumentList),
+            anchor);
+    }
+
+    /// <summary>
+    /// Throws a failure that surfaces as <c>GS0584</c>: a user-defined
+    /// attribute whose constructor the arguments DO match, but one of whose
+    /// parameter types the attribute-blob writer cannot encode.
+    /// </summary>
+    /// <remarks>
+    /// Issue #4097's sibling cause, and a different one: the program is legal
+    /// and the arguments are right, but a same-compilation parameter type has
+    /// no <c>ClrType</c> while the blob is built, so the row was dropped in
+    /// silence. Reported in the spirit of GS0466 — a construct that is not
+    /// implemented yet says so instead of vanishing. Supporting the shape
+    /// properly is filed as issue #4135.
+    /// </remarks>
+    /// <param name="anchor">The annotation, or <c>null</c>.</param>
+    /// <param name="parameterName">The offending constructor parameter.</param>
+    /// <param name="attributeName">The attribute type's name.</param>
+    /// <param name="parameterTypeName">The parameter's declared type.</param>
+    [DoesNotReturn]
+    public static void ThrowAttributeConstructorParameterTypeNotSupported(
+        SyntaxNode? anchor,
+        string parameterName,
+        string attributeName,
+        string parameterTypeName)
+    {
+        var descriptor = DiagnosticDescriptors.AttributeConstructorParameterTypeNotSupported;
+        throw new EmitDiagnosticException(
+            descriptor.Id,
+            string.Format(
+                System.Globalization.CultureInfo.InvariantCulture,
+                descriptor.MessageFormat,
+                parameterName,
+                attributeName,
+                parameterTypeName),
+            anchor);
+    }
+
+    /// <summary>
     /// Throws an <see cref="EmitDiagnosticException"/> anchored at the given
     /// syntax node. Use this helper at call sites that previously threw
     /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/>.
