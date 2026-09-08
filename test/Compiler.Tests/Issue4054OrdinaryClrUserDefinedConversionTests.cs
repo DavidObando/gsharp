@@ -85,6 +85,13 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             return result
         }
 
+        class CrossCastSource {
+        }
+
+        func operator implicit(value CrossCastSource) IDisposable {
+            return DisposableValue()
+        }
+
         """;
 
     private const string LibrarySource = """
@@ -127,6 +134,8 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
 
             public static string StandardRank(IRight value) => "right";
 
+            public static string InterfaceValue(IDisposable value) => value.GetType().Name;
+
             public static string Ambiguous(string value) => "string";
 
             public static string Ambiguous(DateTime value) => "date";
@@ -158,6 +167,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             double ConstrainedParams(params double[] values);
 
             int ConstrainedProjection(ProjectionTarget value);
+
+            string ConstrainedInterface(ILeft value);
+
+            string ConstrainedDisposable(IDisposable value);
         }
 
         public sealed class ConstrainedTarget : IConstrainedTarget
@@ -167,6 +180,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public double ConstrainedParams(params double[] values) => values.Sum();
 
             public int ConstrainedProjection(ProjectionTarget value) => value.Value;
+
+            public string ConstrainedInterface(ILeft value) => value.GetType().Name;
+
+            public string ConstrainedDisposable(IDisposable value) => value.GetType().Name;
         }
 
         public interface IStaticConstrainedTarget<TSelf>
@@ -207,6 +224,13 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         public sealed class ProjectionTarget
         {
             public int Value { get; set; }
+        }
+
+        public sealed class DisposableValue : IDisposable
+        {
+            public void Dispose()
+            {
+            }
         }
 
         public readonly struct Fahrenheit
@@ -297,6 +321,15 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             Console.WriteLine(ConversionTargets.GenericParamsRank(Celsius{ Degrees: 8.0 }))
             """,
             new[] { "generic", "generic" },
+        };
+
+        yield return new object[]
+        {
+            "an-implicit-operator-beats-an-explicit-reference-cross-cast",
+            """
+            Console.WriteLine(ConversionTargets.InterfaceValue(CrossCastSource()))
+            """,
+            new[] { "DisposableValue" },
         };
 
         yield return new object[]
@@ -394,6 +427,14 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
                 return target.ConstrainedProjection(value)
             }
 
+            func CallConstrainedInterface[T IConstrainedTarget](target T, value LocalRankSource) string {
+                return target.ConstrainedInterface(value)
+            }
+
+            func CallConstrainedDisposable[T IConstrainedTarget](target T, value CrossCastSource) string {
+                return target.ConstrainedDisposable(value)
+            }
+
             func CallStaticConstrained[T IStaticConstrainedTarget[T]](value Celsius) float64 {
                 return T.ConstrainedStaticValue(value)
             }
@@ -416,6 +457,12 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             Console.WriteLine(CallConstrainedProjection(
                 ConstrainedTarget(),
                 Projectable{ Value: 7 }))
+            Console.WriteLine(CallConstrainedInterface(
+                ConstrainedTarget(),
+                LocalRankSource{}))
+            Console.WriteLine(CallConstrainedDisposable(
+                ConstrainedTarget(),
+                CrossCastSource()))
             Console.WriteLine(CallStaticConstrained[StaticConstrainedTarget](
                 Celsius{ Degrees: 6.25 }))
             Console.WriteLine(CallStaticConstrainedParams[StaticConstrainedTarget](
@@ -428,7 +475,7 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
         RunAndExpect(
             "constrained-instance-and-static-methods",
             Body,
-            new[] { "5.75", "4", "107", "6.25", "6", "6.5" },
+            new[] { "5.75", "4", "107", "LocalRankSource", "DisposableValue", "6.25", "6", "6.5" },
             IlVerifier.KnownIssues.StaticVirtualInterface,
             @"<Program>\.CallStaticConstrained(Params|Named)?$");
     }

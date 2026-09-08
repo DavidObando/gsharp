@@ -4205,7 +4205,7 @@ internal sealed partial class ExpressionBinder
         }
 
         arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, downstreamMapping);
-        arguments = ApplyUserDefinedImplicitClrArgumentConversions(
+        arguments = ApplySymbolicClrArgumentConversions(
             arguments,
             parameters,
             downstreamMapping);

@@ -3814,7 +3814,7 @@ internal sealed partial class ExpressionBinder
         // candidate's applicability actually depended on the flag) is
         // unchanged.
         arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, downstreamMapping);
-        arguments = ApplyUserDefinedImplicitClrArgumentConversions(
+        arguments = ApplySymbolicClrArgumentConversions(
             arguments,
             parameters,
             downstreamMapping);
@@ -3839,7 +3839,7 @@ internal sealed partial class ExpressionBinder
         return true;
     }
 
-    private ImmutableArray<BoundExpression> ApplyUserDefinedImplicitClrArgumentConversions(
+    private ImmutableArray<BoundExpression> ApplySymbolicClrArgumentConversions(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
         ImmutableArray<int> parameterMapping)
@@ -3849,17 +3849,32 @@ internal sealed partial class ExpressionBinder
         {
             var parameterIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             if (parameterIndex >= parameters.Length
-                || parameters[parameterIndex].ParameterType.IsByRef)
+                || parameters[parameterIndex].ParameterType.IsByRef
+                || parameters[parameterIndex].ParameterType.ContainsGenericParameters)
             {
                 continue;
             }
 
             var argument = arguments[i];
             var targetType = TypeSymbol.FromClrType(parameters[parameterIndex].ParameterType);
-            if (argument.Type == null
-                || targetType == null
-                || (Conversion.Classify(argument.Type, targetType) is { Exists: true, IsStructuralProjection: false })
-                || !conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out var converted))
+            if (argument.Type is not { } sourceType
+                || sourceType.ClrType != null
+                || !TypeSymbol.ContainsSameCompilationUserType(sourceType)
+                || targetType == null)
+            {
+                continue;
+            }
+
+            var conversion = Conversion.Classify(sourceType, targetType);
+            BoundExpression converted;
+            if (conversion.IsImplicit && !conversion.IsStructuralProjection)
+            {
+                converted = conversions.BindConversion(
+                    argument.Syntax?.Location ?? default,
+                    argument,
+                    targetType);
+            }
+            else if (!conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out converted))
             {
                 continue;
             }
