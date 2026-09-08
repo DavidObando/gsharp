@@ -183,6 +183,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             string ConstrainedInterface(ILeft value);
 
             string ConstrainedDisposable(IDisposable value);
+
+            string ConstrainedAmbiguous(string value);
+
+            string ConstrainedAmbiguous(DateTime value);
         }
 
         public sealed class ConstrainedTarget : IConstrainedTarget
@@ -196,6 +200,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public string ConstrainedInterface(ILeft value) => value.GetType().Name;
 
             public string ConstrainedDisposable(IDisposable value) => value.GetType().Name;
+
+            public string ConstrainedAmbiguous(string value) => "string";
+
+            public string ConstrainedAmbiguous(DateTime value) => "date";
         }
 
         public interface IStaticConstrainedTarget<TSelf>
@@ -206,6 +214,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             static abstract double ConstrainedStaticParams(params double[] values);
 
             static abstract double ConstrainedStaticNamed(string first, double second);
+
+            static abstract string ConstrainedStaticAmbiguous(string value);
+
+            static abstract string ConstrainedStaticAmbiguous(DateTime value);
         }
 
         public sealed class StaticConstrainedTarget : IStaticConstrainedTarget<StaticConstrainedTarget>
@@ -215,6 +227,10 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             public static double ConstrainedStaticParams(params double[] values) => values.Sum();
 
             public static double ConstrainedStaticNamed(string first, double second) => second;
+
+            public static string ConstrainedStaticAmbiguous(string value) => "string";
+
+            public static string ConstrainedStaticAmbiguous(DateTime value) => "date";
         }
 
         public interface ILeft
@@ -442,6 +458,35 @@ public class Issue4054OrdinaryClrUserDefinedConversionTests
             "imported-standard-conversion-control",
             """
             Console.WriteLine(ConversionTargets.StandardRank(ImportedRankSource()))
+            """,
+            "GS0160",
+        };
+
+        yield return new object[]
+        {
+            "constrained-instance-ambiguity-is-reported",
+            """
+            func CallAmbiguous[T IConstrainedTarget](target T, value AmbiguousValue) string {
+                return target.ConstrainedAmbiguous(value)
+            }
+
+            Console.WriteLine(CallAmbiguous(
+                ConstrainedTarget(),
+                AmbiguousValue{ Value: 1 }))
+            """,
+            "GS0160",
+        };
+
+        yield return new object[]
+        {
+            "constrained-static-ambiguity-is-reported",
+            """
+            func CallStaticAmbiguous[T IStaticConstrainedTarget[T]](value AmbiguousValue) string {
+                return T.ConstrainedStaticAmbiguous(value)
+            }
+
+            Console.WriteLine(CallStaticAmbiguous[StaticConstrainedTarget](
+                AmbiguousValue{ Value: 1 }))
             """,
             "GS0160",
         };

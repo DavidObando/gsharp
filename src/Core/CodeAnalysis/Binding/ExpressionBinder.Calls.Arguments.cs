@@ -3764,6 +3764,17 @@ internal sealed partial class ExpressionBinder
             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
             symbolicArgumentConversionClassifier: MakeSymbolicArgumentConversionClassifier(arguments));
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverload(
+                ce.Location,
+                methodName,
+                resolution.Ambiguous.Length,
+                resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+            result = new BoundErrorExpression(ce);
+            return true;
+        }
+
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
@@ -3962,6 +3973,17 @@ internal sealed partial class ExpressionBinder
             scope.References.MapClrTypeToReferences,
             null,
             argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames);
+        if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Ambiguous)
+        {
+            Diagnostics.ReportAmbiguousOverload(
+                ce.Location,
+                methodName,
+                resolution.Ambiguous.Length,
+                resolution.Ambiguous.Select(ClrOverloadResolution.FormatMethodSignature));
+            result = new BoundErrorExpression(ce);
+            return true;
+        }
+
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved)
         {
             return false;
