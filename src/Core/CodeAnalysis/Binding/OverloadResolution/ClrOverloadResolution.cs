@@ -3101,15 +3101,12 @@ internal static class ClrOverloadResolution
 
                 Type[]? typeArgs = null;
 
-                // Function literals and method groups need CLR/deferred
-                // inference. Other symbolic bounds must close first because
-                // the CLR merger does not retain upper-bound variance.
-                var useRecoveredInference = !HasDeferredMethodGroupArgument(
+                // CLR inference remains authoritative for ordinary arguments;
+                // symbolic-first closure is only needed for withheld arguments.
+                var useRecoveredInference = HasDeferredInferenceArgument(deferredInferenceArgs)
+                    && !HasDeferredMethodGroupArgument(
                         argTypes.Count,
                         methodGroupArgumentCheck)
-                    && !HasFunctionLiteralArgument(
-                        argTypes.Count,
-                        functionLiteralArgumentCheck)
                     && TryRecoverErasedTypeArguments(
                         mi,
                         symbolicTypeArgs,
@@ -3530,26 +3527,6 @@ internal static class ClrOverloadResolution
         for (var i = 0; i < deferredInferenceArgs.Count; i++)
         {
             if (deferredInferenceArgs[i])
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasFunctionLiteralArgument(
-        int argumentCount,
-        Func<int, bool>? functionLiteralArgumentCheck)
-    {
-        if (functionLiteralArgumentCheck == null)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < argumentCount; i++)
-        {
-            if (functionLiteralArgumentCheck(i))
             {
                 return true;
             }
@@ -7094,6 +7071,54 @@ internal static class ClrOverloadResolution
             _ => false,
         };
 
+    private static bool UnifyUpperBoundForInference(
+        Type parameterType,
+        Type argumentType,
+        Dictionary<string, Type> bounds)
+    {
+        if (!parameterType.IsGenericParameter)
+        {
+            return UnifyForInference(parameterType, argumentType, bounds);
+        }
+
+        if (!bounds.TryGetValue(parameterType.Name, out var existing))
+        {
+            bounds[parameterType.Name] = argumentType;
+            return true;
+        }
+
+        if (ClrTypeUtilities.AreSame(existing, argumentType))
+        {
+            return true;
+        }
+
+        try
+        {
+            if (existing.IsAssignableFrom(argumentType))
+            {
+                bounds[parameterType.Name] = argumentType;
+                return true;
+            }
+
+            if (argumentType.IsAssignableFrom(existing))
+            {
+                return true;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Cross-context types are compared by the shared classifier below.
+        }
+
+        if (IsInferenceBoundPromotion(existing, argumentType))
+        {
+            bounds[parameterType.Name] = argumentType;
+            return true;
+        }
+
+        return IsInferenceBoundPromotion(argumentType, existing);
+    }
+
     private static bool UnifyForInference(Type? parameterType, Type? argumentType, Dictionary<string, Type> bounds)
     {
         if (parameterType is null || argumentType is null)
@@ -7228,7 +7253,10 @@ internal static class ClrOverloadResolution
 
             for (var i = 0; i < parameterDelegateParameters.Length; i++)
             {
-                if (!UnifyForInference(parameterDelegateParameters[i], argumentDelegateParameters[i], bounds))
+                if (!UnifyUpperBoundForInference(
+                        parameterDelegateParameters[i],
+                        argumentDelegateParameters[i],
+                        bounds))
                 {
                     return false;
                 }
