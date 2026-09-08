@@ -3369,6 +3369,47 @@ internal sealed partial class ExpressionBinder
         };
     }
 
+    // Issue #4054: a same-compilation type has no CLR identity while binding,
+    // so its overload-resolution argument is an erasure surrogate (usually
+    // object). Keep the real symbol available only for the narrow question the
+    // CLR classifier cannot answer: whether this candidate parameter is reached
+    // through an implicit user conversion. Imported arguments stay entirely on
+    // the established CLR path, and an erased argument with no such conversion
+    // gains no applicability.
+    internal static Func<int, System.Type, bool>? MakeSymbolicUserDefinedImplicitConversionCheck(
+        IReadOnlyList<BoundExpression>? boundArguments,
+        int argumentOffset = 0)
+    {
+        if (boundArguments == null)
+        {
+            return null;
+        }
+
+        return (index, clrParameterType) =>
+        {
+            var argIndex = index - argumentOffset;
+            if (argIndex < 0
+                || argIndex >= boundArguments.Count
+                || clrParameterType == null
+                || clrParameterType.IsByRef)
+            {
+                return false;
+            }
+
+            var sourceType = boundArguments[argIndex].Type;
+            if (sourceType == null
+                || sourceType.ClrType != null
+                || !TypeSymbol.ContainsSameCompilationUserType(sourceType))
+            {
+                return false;
+            }
+
+            var targetType = TypeSymbol.FromClrType(clrParameterType);
+            return targetType != null
+                && ConversionClassifier.HasUserDefinedImplicitConversionForTypes(sourceType, targetType);
+        };
+    }
+
     // ADR-0148: imported overload resolution works on CLR Type surrogates and
     // cannot see a G# argument's symbolic public shape. Supply that context as
     // a call-local applicability callback; by-ref parameters remain excluded.

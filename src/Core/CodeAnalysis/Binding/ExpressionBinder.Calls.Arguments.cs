@@ -1500,7 +1500,8 @@ internal sealed partial class ExpressionBinder
             deferredInferenceArgs: BuildOpenLiteralInferenceFlags(arguments),
             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
             explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
-            openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments));
+            openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments),
+            symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
 
         switch (resolution.Outcome)
         {
@@ -1976,7 +1977,8 @@ internal sealed partial class ExpressionBinder
                 functionLiteralArgumentCheck: functionLiteralArgumentCheck,
                 explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
                 explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols, argumentOffset: 1),
-                openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1));
+                openLiteralArgumentCheck: MakeOpenLiteralArgumentCheck(arguments, argumentOffset: 1),
+                symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments, argumentOffset: 1));
 
         var resolution = ResolveExtensionCandidates();
 

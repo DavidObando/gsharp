@@ -89,14 +89,10 @@ namespace GSharp.Compiler.Tests;
 /// <c>Remove</c> were already correct in their named spellings. The rows below
 /// pin all of them, plus the negative control that reordering must not smuggle
 /// a conversion that does not exist.</para>
-/// <para><b>Out of scope, filed.</b> A same-compilation user-defined conversion
-/// at an ordinary CLR parameter with no widening member in sight —
-/// <c>Math.Abs(someCelsius)</c> — still reports <c>GS0159</c>. That is a
-/// general applicability gap rather than an erasure escape hatch, it needs the
-/// symbolic argument type carried into <c>ClrOverloadResolution</c>, and
-/// widening this gate to reach it would remove the very narrowing that makes it
-/// safe. Pinned below as the behaviour it has, so whoever closes it gets a red
-/// row. Filed as #4054.</para>
+/// <para><b>Issue #4054 follow-up.</b> The formerly pinned
+/// <c>Math.Abs(someCelsius)</c> failure is now a positive row below. Ordinary
+/// imported calls preserve the symbolic argument just long enough for CLR
+/// overload resolution to classify the same user-defined conversion.</para>
 /// </remarks>
 public class Issue4036CollectionCallUserDefinedConversionTests
 {
@@ -175,6 +171,18 @@ public class Issue4036CollectionCallUserDefinedConversionTests
             let source = []Celsius{ Celsius{ Degrees: 2.5 } }
             let list = List[float64](){ ...source }
             Console.WriteLine(list[0])
+            """,
+            new[] { "2.5" },
+        };
+
+        // ISSUE #4054: the pinned ordinary-CLR-call failure. There is no
+        // widening interface member beside Math.Abs(double); symbolic
+        // conversion classification now makes the overload applicable.
+        yield return new object[]
+        {
+            "an-ordinary-static-clr-parameter",
+            """
+            Console.WriteLine(Math.Abs(Celsius{ Degrees: 0.0 - 2.5 }))
             """,
             new[] { "2.5" },
         };
@@ -494,52 +502,6 @@ public class Issue4036CollectionCallUserDefinedConversionTests
             // assembly, so it is a MethodDef rather than a MemberRef — and the
             // program only prints 2.5 because it is now called.
             Assert.Contains("op_Implicit", DefinedMethodNames(appPath));
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
-    }
-
-    /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described:
-    /// a same-compilation user-defined conversion at an ordinary CLR parameter
-    /// that has no widening interface member beside it. <c>Math.Abs</c> takes a
-    /// <c>double</c>, the erased <c>Celsius</c> presents as <c>object</c>, and
-    /// there is no <c>IList.Add(object)</c>-shaped escape hatch for this repair
-    /// to key on — so the call reports <c>GS0159</c>.
-    /// </summary>
-    /// <remarks>
-    /// <para><b>Pre-existing and unchanged by this PR</b>: the same program
-    /// reported the same diagnostic on the parent, and this change only makes
-    /// the repair fire where a widening member was already being kept.
-    /// Deliberately not chased here: closing it means carrying the symbolic
-    /// argument type into <c>ClrOverloadResolution</c>'s applicability for
-    /// every imported call, which is a far larger blast radius than the
-    /// erasure escape hatch this issue is about. Filed as #4054.</para>
-    /// <para>The row asserts the CURRENT behaviour, so whoever fixes it gets a
-    /// red row pointing at the exact program rather than silence.</para>
-    /// </remarks>
-    [Fact]
-    public void ASameCompilationConversionAtAnOrdinaryClrParameter_IsStillRefused()
-    {
-        const string Body = """
-            Console.WriteLine(Math.Abs(Celsius{ Degrees: 0.0 - 2.5 }))
-            """;
-
-        var tempDir = Directory.CreateTempSubdirectory("gs_4036_open_").FullName;
-        try
-        {
-            var libPath = CompileCSharpLibrary(tempDir);
-            var appPath = Path.Combine(tempDir, "App.dll");
-            var appLog = Compile(tempDir, "App.gs", Preamble + Body + "\n", appPath, "/target:exe", "/reference:" + libPath);
-
-            Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
-            Assert.False(
-                File.Exists(appPath),
-                "this gap is still open. If the call now compiles, the general case is closed — move this "
-                    + $"row into ConversionIsApplied and close #4054. Log:\n{appLog}");
-            Assert.Equal(new[] { "GS0159" }, ErrorIds(appLog));
         }
         finally
         {

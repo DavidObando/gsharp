@@ -3861,7 +3861,8 @@ internal sealed partial class ExpressionBinder
                     methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
                     methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
                     explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
-                    explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
+                    explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
+                    symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
 
                 // Issue #3745: a user-declared class argument erases to
                 // `System.Object`, which gives an imported generic method no
@@ -3897,7 +3898,8 @@ internal sealed partial class ExpressionBinder
                             methodGroupInference: MakeMethodGroupInference(arguments, GetEffectiveArgumentClrTypeForOverloadResolution),
                             methodGroupArgumentCheck: MakeMethodGroupArgumentCheck(arguments),
                             explicitTypeArgIsGenuine: ClrOverloadResolution.BuildGenuineExplicitTypeArgFlags(typeArgSymbols),
-                            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols));
+                            explicitTypeArgumentMismatchCheck: MakeExplicitTypeArgumentMismatchCheck(arguments, typeArgSymbols),
+                            symbolicUserDefinedImplicitConversionCheck: MakeSymbolicUserDefinedImplicitConversionCheck(arguments));
                         if (projectedResolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
                         {
                             resolution = projectedResolution;
