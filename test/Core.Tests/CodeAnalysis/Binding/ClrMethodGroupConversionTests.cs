@@ -70,15 +70,15 @@ sb.ToString()
     }
 
     [Fact]
-    public void MethodGroup_ToNonDelegateType_ReportsDiagnostic()
+    public void MethodGroup_ToNonDelegateType_ReportsRequiresTargetDiagnostic()
     {
-        // A method group converted to a non-delegate target is rejected (GS0218).
+        // A method group in an ordinary value slot has no delegate target.
         var result = Evaluate(@"
 import System
 
 var x int32 = Console.WriteLine
 ");
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0218");
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0582");
     }
 
     private static EmittedOracleResult Evaluate(string source)

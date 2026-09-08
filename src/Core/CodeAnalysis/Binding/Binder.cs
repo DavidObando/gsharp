@@ -1664,6 +1664,13 @@ public sealed class Binder
             .Where(attribute => attribute.Target == AttributeTargetKind.Module)
             .ToImmutableArray();
 
+        // Issue #4065: top-level statements do not pass through
+        // AnalyzeFunctionBody, so reject any unresolved method group retained
+        // by inference/conditional binding before the global diagnostic
+        // snapshot is taken.
+        MethodGroupDiagnostics.ReportUnresolved(
+            new BoundBlockStatement(null, statements.ToImmutable()),
+            binder.Diagnostics);
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
         if (previous != null)
@@ -2866,6 +2873,7 @@ public sealed class Binder
         DiagnosticBag diagnostics)
     {
         var body = lowered.PreEmitAnalysisBody ?? lowered;
+        MethodGroupDiagnostics.ReportUnresolved(body, diagnostics);
         DefiniteAssignmentAnalyzer.Analyze(body, function, diagnostics);
         RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics);
     }
@@ -2925,6 +2933,7 @@ public sealed class Binder
             binder.statements.FinalizeUserLabels();
             var combined = new BoundBlockStatement(null, boundBlocks.ToImmutable());
             var lowered = Lowerer.Lower(combined, structSym);
+            MethodGroupDiagnostics.ReportUnresolved(lowered, binder.Diagnostics);
             diagnostics.AddRange(binder.Diagnostics.ToImmutableArray());
             structSym.SetStaticInitializerStatements(lowered.Statements);
         }
