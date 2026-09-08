@@ -1022,7 +1022,19 @@ public sealed partial class CSharpToGSharpTranslator
                     $"params collection of type '{parameterType}' has no gsc construction form.");
             }
 
-            GTypeReference type = this.typeMapper.Map(parameterType, this.context, symbol.Locations.FirstOrDefault());
+            bool explicitlyNamedDelegate = parameterType is INamedTypeSymbol
+                { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null }
+                && symbol.DeclaringSyntaxReferences.Any(reference =>
+                    reference.GetSyntax() is ParameterSyntax { Type: not null });
+            GTypeReference type = explicitlyNamedDelegate
+                ? this.typeMapper.MapExplicitType(
+                    parameterType,
+                    this.context,
+                    symbol.Locations.FirstOrDefault())
+                : this.typeMapper.Map(
+                    parameterType,
+                    this.context,
+                    symbol.Locations.FirstOrDefault());
 
             // Issue #1072/#3888: promote the declaration position that actually
             // receives null. Ordinary parameters use their carrier symbol; a

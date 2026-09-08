@@ -186,8 +186,15 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (emitType)
                     {
+                        // Issue #4045: an explicitly named delegate is a nominal
+                        // CLR type, even when it comes from metadata. Preserve
+                        // that identity instead of inferring an equivalent
+                        // System.Action/Func structural arrow at runtime.
                         type = declaredType != null
-                            ? this.typeMapper.Map(declaredType, this.context, declaration.Type.GetLocation())
+                            ? this.typeMapper.MapExplicitType(
+                                declaredType,
+                                this.context,
+                                declaration.Type.GetLocation())
                             : null;
 
                         // Issue #1072: a non-nullable reference/array local that is
