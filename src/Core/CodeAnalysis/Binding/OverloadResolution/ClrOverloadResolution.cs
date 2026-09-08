@@ -5218,6 +5218,17 @@ internal static class ClrOverloadResolution
                         continue;
                     }
 
+                    // Issue #4063: for a BARE dependent bound the substituted
+                    // `constraint` is the erased placeholder — `object` — and a
+                    // message reading "does not satisfy the 'System.Object'
+                    // constraint" names the erasure rather than the bound the
+                    // author wrote. The UNSUBSTITUTED bound is the generic
+                    // parameter itself, whose `Name` is `TBase`.
+                    if (rawConstraint.IsGenericParameter)
+                    {
+                        failedConstraint = rawConstraint;
+                    }
+
                     return false;
                 }
 
@@ -5862,8 +5873,10 @@ internal static class ClrOverloadResolution
     /// non-generic) position, a mentioned parameter has no recovered symbol,
     /// the open definition declares a VARIANT parameter — where
     /// <c>IEnumerable[Derived]</c> legitimately satisfies
-    /// <c>IEnumerable[Base]</c> and identity is the wrong relation — or the open
-    /// definition is not reachable from the argument's symbol at all. Every one
+    /// <c>IEnumerable[Base]</c> and identity is the wrong relation — the open
+    /// definition is not reachable from the argument's symbol at all, or (issue
+    /// #4063) the assignability relation at the TOP of a bare bound cannot be
+    /// settled on closed symbols. Every one
     /// of those falls back to the pre-#4041 CLR comparison, which is what keeps
     /// the same-compilation base-chain path (#4032's
     /// <c>AddScheme[TOptions, THandler]</c> row) green. A wrong "no" here would
@@ -5919,9 +5932,13 @@ internal static class ClrOverloadResolution
     /// <param name="atTopOfBound">
     /// Whether this is the bound's outermost position. The relation there is
     /// ASSIGNABILITY, not the invariant identity that is correct at an argument
-    /// position, so a bare type parameter at the top declines to answer. This
-    /// is load-bearing and was measured: with it removed, the legal
-    /// <c>Chain[ChBase, ChDerived]</c> fails with a false <c>GS0152</c>.
+    /// position, and that distinction is load-bearing rather than defensive: it
+    /// was measured, and comparing the two arguments for identity here fails
+    /// the legal <c>Chain[ChBase, ChDerived]</c> with a false <c>GS0152</c>.
+    /// Issue #4063: a bare type parameter at the top is therefore routed to
+    /// <see cref="MatchDependentTopOfBound"/>, which asks assignability of the
+    /// symbols, instead of declining to answer at all — declining is what left
+    /// <c>Chain[ChA, ChB]</c> over two unrelated erased classes accepted.
     /// </param>
     /// <param name="shapePath">
     /// The printed forms of the shape fragments on the path from the bound's root to this node.
@@ -5955,24 +5972,32 @@ internal static class ClrOverloadResolution
             // indistinguishable as the `object` both project to.
             if (shape.IsGenericParameter)
             {
-                // Identity is the right relation only at an INVARIANT ARGUMENT
-                // position inside a constructed bound. At the TOP of a bound it
-                // is assignability: an imported `where TDerived : TBase` admits
-                // any TDerived that derives from TBase, so comparing the two
-                // arguments for identity would reject `Chain[Base, Derived]`
-                // outright. That is the imported analogue of #4043 and is left
-                // to the CLR comparison, which keeps its pre-#4041 answer.
-                if (atTopOfBound)
-                {
-                    return DependentShapeIndeterminate;
-                }
-
                 var position = IndexOfGenericParameter(typeParams, shape);
                 if (position < 0
                     || position >= typeArgSymbols.Length
                     || typeArgSymbols[position] is not { } expected)
                 {
                     return DependentShapeIndeterminate;
+                }
+
+                // Identity is the right relation only at an INVARIANT ARGUMENT
+                // position inside a constructed bound. At the TOP of a bound it
+                // is ASSIGNABILITY: an imported `where TDerived : TBase` admits
+                // any TDerived that derives from TBase, so comparing the two
+                // arguments for identity would reject `Chain[ChBase, ChDerived]`
+                // outright.
+                //
+                // Issue #4063: #4041 declined to answer here at all, which left
+                // `Chain[ChA, ChB]` over two UNRELATED erased classes accepted —
+                // the substituted bound is `object`, and every erased class
+                // trivially satisfies it. The relation is now asked of the
+                // SYMBOLS, through the very predicate the G#-declared spelling
+                // of this bound already uses (#4043's
+                // `Binder.SatisfiesDependentBound`), so the imported and
+                // G#-declared spellings cannot drift apart.
+                if (atTopOfBound)
+                {
+                    return MatchDependentTopOfBound(actual, expected);
                 }
 
                 return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(actual, expected)
@@ -6069,6 +6094,50 @@ internal static class ClrOverloadResolution
         {
             return DependentShapeIndeterminate;
         }
+    }
+
+    /// <summary>
+    /// Issue #4063: answers a BARE dependent bound (<c>where TDerived : TBase</c>)
+    /// at the TOP of the bound, where the relation is ASSIGNABILITY rather than
+    /// the invariant identity that is correct at an argument position.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>One predicate, two spellings.</b> The G#-declared spelling of
+    /// this exact bound (<c>func take[TBase, TDerived TBase]()</c>) has been
+    /// answered by <c>Binder.SatisfiesDependentBound</c> since #4043, and that
+    /// predicate is deliberately reused here rather than reimplemented: an
+    /// independent copy would let the imported and G#-declared spellings of the
+    /// same rule drift apart, and it is the drift — not the relation — that
+    /// produces a false <c>GS0152</c>. The reference is a call to one pure
+    /// <c>internal static</c> method in the same assembly; no binder state is
+    /// reachable from here and none is used.</para>
+    /// <para><b>It only ever REJECTS what it can disprove.</b>
+    /// <c>SatisfiesDependentBound</c> accepts on every indeterminate answer, so
+    /// a <see langword="false"/> from it is a definitive "no". A
+    /// <see langword="true"/> is mapped to <c>Indeterminate</c> rather than to
+    /// <c>Matches</c> — it may mean "yes" or "cannot tell", and the CLR
+    /// comparison this falls back to accepts an erased vector anyway, so the
+    /// outcome is identical and the label stays honest.</para>
+    /// <para><b>An open side declines outright.</b> When either symbol still
+    /// mentions a type parameter the relation has no closed answer, and the
+    /// self-substitution <c>SatisfiesDependentBound</c> performs for a
+    /// self-referential generic interface bound needs the bounded parameter's
+    /// own symbol, which the imported path does not have. Refusing to answer
+    /// there keeps the missing symbol from ever mattering.</para>
+    /// </remarks>
+    /// <param name="actual">The symbol supplied for the BOUNDED parameter.</param>
+    /// <param name="expected">The symbol supplied for the BOUNDING parameter.</param>
+    /// <returns>One of the three <c>DependentShape*</c> verdicts.</returns>
+    private static int MatchDependentTopOfBound(TypeSymbol actual, TypeSymbol expected)
+    {
+        if (TypeSymbol.ContainsTypeParameter(actual) || TypeSymbol.ContainsTypeParameter(expected))
+        {
+            return DependentShapeIndeterminate;
+        }
+
+        return Binder.SatisfiesDependentBound(actual, expected, tp: null)
+            ? DependentShapeIndeterminate
+            : DependentShapeDiffers;
     }
 
     /// <summary>

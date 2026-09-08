@@ -93,14 +93,21 @@ namespace GSharp.Compiler.Tests;
 /// error. The whole <c>.gs</c> corpus was swept before and after: 192 files,
 /// 166 of which emit an assembly under the sweep's reference set,
 /// <b>0 occurrences of GS0580</b>.</para>
-/// <para><b>One gap remains and is pinned, not hidden.</b> A <b>G#-declared</b>
-/// constrained generic base (<c>class Unf[T] : GsHandler[T]</c> where
-/// <c>GsHandler[TOptions SchemeOptions]</c> is declared in the same
+/// <para><b>The G#-declared gap this class pinned is CLOSED (#4067).</b> A
+/// <b>G#-declared</b> constrained generic base (<c>class Unf[T] : GsHandler[T]</c>
+/// where <c>GsHandler[TOptions SchemeOptions]</c> is declared in the same
 /// compilation) is a different code path — closed by symbol substitution in the
 /// declaration binder, never by <c>Type.MakeGenericType</c> — so it never
-/// reaches this check. The issue's own Notes raise it; it is measured here, it
-/// still compiles, its IL still does not verify, and it has its own asserting
-/// row below. Filed as #4067.</para>
+/// reached this check. It was pinned here as
+/// <c>AGsDeclaredConstrainedGenericBase_IsStillNotChecked</c>, asserting that it
+/// compiled and that ILVerify reported <c>UnsatisfiedMethodParentInst</c>. #4067
+/// gave that path the symbolic twin of this rule, so the asserting row has been
+/// MOVED rather than deleted: the violating spelling is
+/// <c>issue-4067-a-gs-declared-constrained-generic-base</c> in
+/// <c>UnforwardedConstraints</c> and the forwarded spelling is
+/// <c>issue-4067-the-forwarded-gs-declared-constrained-base</c> in
+/// <c>ForwardedAndSkippedShapes</c>. The full matrix is
+/// <c>Issue4067UnforwardedGsDeclaredGenericBaseTests</c>.</para>
 /// </remarks>
 public class Issue4037UnforwardedConstrainedGenericBaseTests
 {
@@ -382,6 +389,38 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
             "GS0580",
         };
 
+        // Issue #4067, CLOSED: the same shape over a G#-DECLARED constrained
+        // generic base. This was the asserting row
+        // `AGsDeclaredConstrainedGenericBase_IsStillNotChecked` on this class,
+        // which pinned that it compiled and that ILVerify reported
+        // UnsatisfiedMethodParentInst, and told whoever closed the issue to
+        // move it here. Its full matrix lives in
+        // Issue4067UnforwardedGsDeclaredGenericBaseTests; it stays here as the
+        // row this class's own Notes promised.
+        yield return new object[]
+        {
+            "issue-4067-a-gs-declared-constrained-generic-base",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            open class GsHandler[TOptions SchemeOptions] {
+                public var Tag string = "g"
+            }
+
+            class SchemeOptions {
+                public var Name string = ""
+            }
+
+            class Unf[T] : GsHandler[T] {
+            }
+
+            Console.WriteLine("x")
+            """,
+            "GS0580",
+        };
+
         // A generic CLASS's own method, so the offending parameter belongs to
         // the enclosing TYPE rather than to the function.
         yield return new object[]
@@ -432,6 +471,34 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
             Console.WriteLine(f.Tag)
             """,
             new[] { "t" },
+        };
+
+        // Issue #4067's control, moved here beside its violation row: the
+        // FORWARDED spelling of the G#-declared constrained generic base. It
+        // was green before #4067 and is green after, which is the invariant
+        // that fix must not break.
+        yield return new object[]
+        {
+            "issue-4067-the-forwarded-gs-declared-constrained-base",
+            """
+            package P
+            import System
+            import HelperLib2
+
+            open class GsHandler[TOptions SchemeOptions] {
+                public var Tag string = "g"
+            }
+
+            class SchemeOptions {
+                public var Name string = ""
+            }
+
+            class Fwd[T SchemeOptions] : GsHandler[T] {
+            }
+
+            Console.WriteLine(Fwd[SchemeOptions]().Tag)
+            """,
+            new[] { "g" },
         };
 
         // Every OTHER open position, forwarded. `csc` accepts all of these.
@@ -718,105 +785,6 @@ public class Issue4037UnforwardedConstrainedGenericBaseTests
             """,
             new[] { "compiled" },
         };
-    }
-
-    /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described:
-    /// the same shape over a <b>G#-declared</b> constrained generic base
-    /// (<c>class Unf[T] : GsHandler[T]</c> where <c>GsHandler</c> is declared
-    /// <c>[TOptions SchemeOptions]</c> in the same compilation) still compiles,
-    /// and its IL still does not verify.
-    /// </summary>
-    /// <remarks>
-    /// <para>The issue's own Notes raise it — "the same question applies to a
-    /// G#-declared constrained generic base, not only an imported one; only the
-    /// imported case was measured here" — so it is measured here. It is a
-    /// DIFFERENT code path: a source generic base is closed by symbol
-    /// substitution in the declaration binder, never by
-    /// <c>Type.MakeGenericType</c>, so it does not pass through
-    /// <c>Binder.ReportUnsatisfiedGenericTypeConstraint</c> at all and this
-    /// change cannot see it. Closing it means teaching the source-type
-    /// substitution path the same implication rule, which is a separate
-    /// repair; filed as #4067 rather than attempted opportunistically.</para>
-    /// <para>The row asserts the CURRENT behaviour — it compiles, and ILVerify
-    /// reports <c>UnsatisfiedMethodParentInst</c> — so whoever fixes it gets a
-    /// red row pointing at the exact program rather than silence. The FORWARDED
-    /// spelling is green beside it, which is what any fix must not break.</para>
-    /// </remarks>
-    [Fact]
-    public void AGsDeclaredConstrainedGenericBase_IsStillNotChecked()
-    {
-        const string Unforwarded = """
-            package P
-            import System
-            import HelperLib2
-
-            open class GsHandler[TOptions SchemeOptions] {
-                public var Tag string = "g"
-            }
-
-            class Unf[T] : GsHandler[T] {
-            }
-
-            Console.WriteLine("x")
-            """;
-
-        const string Forwarded = """
-            package P
-            import System
-            import HelperLib2
-
-            open class GsHandler[TOptions SchemeOptions] {
-                public var Tag string = "g"
-            }
-
-            class Fwd[T SchemeOptions] : GsHandler[T] {
-            }
-
-            Console.WriteLine(Fwd[SchemeOptions]().Tag)
-            """;
-
-        var tempDir = Directory.CreateTempSubdirectory("gs_4037_gsbase_").FullName;
-        try
-        {
-            var libPath = CompileCSharpLibrary(tempDir);
-
-            var unforwardedPath = Path.Combine(tempDir, "GsUnforwarded.dll");
-            var unforwardedLog = Compile(
-                tempDir, "GsUnforwarded.gs", Unforwarded, unforwardedPath, "/target:exe", "/reference:" + libPath);
-            Assert.DoesNotContain("GS9998", unforwardedLog, StringComparison.Ordinal);
-            Assert.True(
-                File.Exists(unforwardedPath),
-                "the G#-declared-base gap is still open, so this must still compile. If it now reports "
-                    + $"GS0580, the gap is closed — move this into UnforwardedConstraints. Log:\n{unforwardedLog}");
-
-            // The accepted assembly is the one ILVerify refuses with
-            // UnsatisfiedMethodParentInst — measured. It is named as a tracked
-            // suppression rather than asserted through a caught exception, so
-            // the rest of the assembly is still verified and a DIFFERENT
-            // verification error would fail this row.
-            IlVerifier.Verify(
-                unforwardedPath,
-                new[] { libPath },
-                ignoredErrorCodes: new[] { "UnsatisfiedMethodParentInst" });
-
-            // The control any fix must not break: the forwarded spelling of the
-            // same G#-declared base is a legitimate program and stays green.
-            var forwardedPath = Path.Combine(tempDir, "GsForwarded.dll");
-            var forwardedLog = Compile(
-                tempDir, "GsForwarded.gs", Forwarded, forwardedPath, "/target:exe", "/reference:" + libPath);
-            Assert.True(File.Exists(forwardedPath), $"the forwarded spelling must compile. Log:\n{forwardedLog}");
-
-            IlVerifier.Verify(forwardedPath, new[] { libPath });
-
-            var (exit, output) = RunDotnet(forwardedPath);
-            Assert.True(exit == 0, $"the forwarded spelling must run. Exit {exit}:\n{output}");
-            Assert.Equal("g", output.Trim());
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
     }
 
     /// <summary>
