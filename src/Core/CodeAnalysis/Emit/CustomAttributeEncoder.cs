@@ -926,7 +926,51 @@ internal sealed class CustomAttributeEncoder
             }
         }
 
-        // Second pass: params-array expansion. A constructor whose last
+        // Second pass: trailing OPTIONAL parameters. `ToStringAttribute(Type
+        // type, string format = null)` applied as `@ToString(typeof(X))` is
+        // legal C# and legal G#, and the blob still carries a value for every
+        // constructor parameter — the defaulted one included.
+        //
+        // Issue #4097 found this in the Oahu corpus rather than by reasoning:
+        // no pass admitted it, so the attribute was DROPPED from every Oahu
+        // assembly that used it, silently, and had been for as long as the
+        // corpus has been pinned. That is the defect this issue is about, seen
+        // from the other side — the silence was hiding a matcher gap, not just
+        // a user error. Reporting GS0583 here would be wrong: the program is
+        // one the language accepts.
+        //
+        // Placed before the params-array pass because normal form beats
+        // expanded form, which is also what C# overload resolution does.
+        foreach (var ctor in ctors)
+        {
+            var pars = ctor.GetParameters();
+            if (pars.Length <= positional.Length)
+            {
+                continue;
+            }
+
+            if (!TrailingParametersAreOptional(pars, positional.Length))
+            {
+                continue;
+            }
+
+            var applicable = true;
+            for (int i = 0; i < positional.Length; i++)
+            {
+                if (!ArgAssignable(positional[i].Value, pars[i].ParameterType, positional[i].Type))
+                {
+                    applicable = false;
+                    break;
+                }
+            }
+
+            if (applicable)
+            {
+                return ctor;
+            }
+        }
+
+        // Third pass: params-array expansion. A constructor whose last
         // parameter is a single-dimensional array can absorb zero or more
         // trailing positional arguments, each assignable to the element type —
         // e.g. xUnit's InlineData(params object[] data). The exact-arity pass
@@ -957,6 +1001,72 @@ internal sealed class CustomAttributeEncoder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Whether every parameter from <paramref name="suppliedCount"/> onward is
+    /// optional AND carries a default the attribute blob can actually write.
+    /// </summary>
+    /// <remarks>
+    /// An ECMA-335 II.23.3 fixed-argument list has one entry per constructor
+    /// parameter, so "the caller may omit it" is not enough — a value has to be
+    /// produced. A parameter marked <c>[Optional]</c> with no constant gives
+    /// nothing to write for a value type, so it is refused rather than guessed
+    /// at; a reference type takes <c>nil</c>, which is what the CLR would pass.
+    /// </remarks>
+    /// <param name="pars">The candidate constructor's parameters.</param>
+    /// <param name="suppliedCount">How many arguments the source supplied.</param>
+    /// <returns>Whether the omitted tail can be defaulted.</returns>
+    private static bool TrailingParametersAreOptional(ParameterInfo[] pars, int suppliedCount)
+    {
+        for (int i = suppliedCount; i < pars.Length; i++)
+        {
+            if (!TryGetOptionalDefault(pars[i], out _))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reads an omitted parameter's default. Uses <c>RawDefaultValue</c> rather
+    /// than <c>DefaultValue</c> because a third-party attribute is routinely
+    /// resolved through a <see cref="MetadataLoadContext"/>, where the latter
+    /// is not available.
+    /// </summary>
+    /// <param name="parameter">The omitted parameter.</param>
+    /// <param name="value">The value to encode for it.</param>
+    /// <returns>Whether a writable default exists.</returns>
+    private static bool TryGetOptionalDefault(ParameterInfo parameter, out object? value)
+    {
+        value = null;
+        if (!parameter.IsOptional)
+        {
+            return false;
+        }
+
+        object? raw;
+        try
+        {
+            raw = parameter.RawDefaultValue;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // A metadata-loaded parameter whose Constant row cannot be decoded.
+            return false;
+        }
+
+        if (raw is DBNull or Missing)
+        {
+            // `[Optional]` with no Constant row. A reference slot takes nil; a
+            // value slot has no answer this encoder may invent.
+            return !parameter.ParameterType.IsValueType;
+        }
+
+        value = raw;
+        return true;
     }
 
     private static bool ParametersMatch(ParameterInfo[] pars, ImmutableArray<BoundAttributeArgument> positional, bool expandLast)
@@ -1128,7 +1238,14 @@ internal sealed class CustomAttributeEncoder
         var lastSupplied = positional.Length == ctorParams.Length && positional.Length > 0
             ? positional[positional.Length - 1].Value
             : null;
-        var direct = !lastIsArray
+
+        // Issue #4097: a constructor selected through its trailing OPTIONAL
+        // parameters supplies fewer arguments than it has slots, and the blob
+        // needs one entry per slot. That is the normal form, never the expanded
+        // one, so it short-circuits the params-array reasoning below.
+        var defaulted = positional.Length < ctorParams.Length;
+        var direct = defaulted
+            || !lastIsArray
             || (positional.Length == ctorParams.Length
                 && (lastSupplied == null
                     || ctorParams[ctorParams.Length - 1].ParameterType.IsInstanceOfType(lastSupplied)
@@ -1139,7 +1256,14 @@ internal sealed class CustomAttributeEncoder
             var values = new object?[ctorParams.Length];
             for (int i = 0; i < ctorParams.Length; i++)
             {
-                values[i] = positional[i].Value;
+                if (i < positional.Length)
+                {
+                    values[i] = positional[i].Value;
+                }
+                else if (TryGetOptionalDefault(ctorParams[i], out var fallback))
+                {
+                    values[i] = fallback;
+                }
             }
 
             return values;

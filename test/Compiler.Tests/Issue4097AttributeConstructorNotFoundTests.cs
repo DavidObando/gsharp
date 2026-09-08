@@ -46,6 +46,21 @@ namespace GSharp.Compiler.Tests;
 /// at the annotation. The consequence is that the first offending attribute
 /// aborts emit, so a program with several reports one — the same limitation
 /// GS0546 has, and still infinitely better than silence.</para>
+/// <para><b>The diagnostic immediately found a matcher gap, which is the whole
+/// point of it.</b> Turning the drop into an error ran the Oahu corpus red on
+/// <c>@ToString(typeof(ToStringConverterPath))</c>, against
+/// <c>ToStringAttribute(Type type, string format = null)</c> — a trailing
+/// OPTIONAL parameter, which no pass of <c>ResolveAttributeConstructor</c>
+/// admitted. That program is legal C# and legal G#, so GS0583 was the WRONG
+/// answer for it; the right one is to match the constructor and write the
+/// default into the blob. It had been dropped from every Oahu assembly that
+/// used it for as long as the corpus has been pinned, and nothing reported it.
+/// Optional parameters are now a resolution pass of their own, placed before
+/// params-array expansion because normal form beats expanded form — the same
+/// order C# overload resolution uses. See <c>OmittedTrailingOptional</c> and
+/// <see cref="OmittedOptionalDefaults_AreWrittenIntoTheBlob"/>, which asserts
+/// the defaulted values are really in the metadata rather than merely
+/// tolerated by the matcher.</para>
 /// <para><b>This is also the #4087 non-regression proof.</b> PR #4087 narrowed
 /// <c>ArgAssignable</c>'s widened-array arm so <c>[]object{"x"}</c> no longer
 /// satisfies a <c>string[]</c> constructor. That narrowing routed such programs
@@ -95,6 +110,40 @@ public class Issue4097AttributeConstructorNotFoundTests
             }
 
             public Type Value { get; }
+        }
+
+        // The shape the Oahu corpus uses, reproduced exactly: one required
+        // parameter and one OPTIONAL one. Legal C#, legal G#, and matched by no
+        // pass of the constructor resolver before #4097.
+        [AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+        public class ToStringAttribute : Attribute
+        {
+            public ToStringAttribute(Type type, string format = null)
+            {
+                Type = type;
+                Format = format;
+            }
+
+            public Type Type { get; }
+
+            public string Format { get; }
+        }
+
+        [AttributeUsage(AttributeTargets.All, AllowMultiple = true)]
+        public class OptionalsAttribute : Attribute
+        {
+            public OptionalsAttribute(int first, int second = 7, string third = "d")
+            {
+                First = first;
+                Second = second;
+                Third = third;
+            }
+
+            public int First { get; }
+
+            public int Second { get; }
+
+            public string Third { get; }
         }
         """;
 
@@ -206,6 +255,39 @@ public class Issue4097AttributeConstructorNotFoundTests
             "UserAttributeMatched",
             "@Note(\"hello\")",
             new[] { "NoteAttribute" },
+        };
+
+        // Issue #4097, found in the Oahu corpus rather than by reasoning: a
+        // constructor reached through its trailing OPTIONAL parameter. Legal
+        // C#, legal G#, and matched by NO pass of the resolver before this
+        // change — so `@ToString(typeof(X))` was dropped from every Oahu
+        // assembly that used it, silently, for as long as the corpus has been
+        // pinned. The first draft of this fix reported GS0583 here, which is
+        // the wrong answer: the program is one the language accepts, so the
+        // attribute must be EMITTED with the default filled in.
+        yield return new object[]
+        {
+            "OmittedTrailingOptional",
+            "@ToString(typeof(Status))",
+            new[] { "ToStringAttribute" },
+        };
+
+        // Two omitted optionals, one of them a value type with a non-zero
+        // default — the blob carries a value per parameter, so `7` and `"d"`
+        // have to be read out of the metadata, not merely tolerated.
+        yield return new object[]
+        {
+            "OmittedTrailingOptionals",
+            "@Optionals(1)",
+            new[] { "OptionalsAttribute" },
+        };
+
+        // Supplying an optional explicitly must keep the exact-arity path.
+        yield return new object[]
+        {
+            "SuppliedTrailingOptional",
+            "@ToString(typeof(Status), \"G\")",
+            new[] { "ToStringAttribute" },
         };
     }
 
@@ -338,6 +420,75 @@ public class Issue4097AttributeConstructorNotFoundTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// The defaults of omitted optional parameters must be WRITTEN into the
+    /// blob, not merely tolerated by the matcher. ECMA-335 II.23.3 gives a
+    /// fixed-argument list one entry per constructor parameter, so a reader
+    /// gets `7` and `"d"` back or the row is malformed.
+    /// </summary>
+    [Fact]
+    public void OmittedOptionalDefaults_AreWrittenIntoTheBlob()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4097_opt_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var source = Preamble
+                + "@Optionals(1)\nclass Defaulted {\n}\n\n"
+                + "@ToString(typeof(Status))\nclass Converted {\n}\n\n"
+                + "Console.WriteLine(\"ok\")\n";
+            var log = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
+
+            Assert.Empty(ErrorIds(log));
+            Assert.True(File.Exists(appPath), $"the sample must compile. Log:\n{log}");
+
+            IlVerifier.Verify(appPath, new[] { libPath });
+
+            Assert.Equal(new object[] { 1, 7, "d" }, ConstructorArguments(appPath, libPath, "Defaulted"));
+
+            // The `Type` argument reifies; the omitted `string format` is nil,
+            // which is what `format = null` means.
+            Assert.Equal(
+                new object[] { "P.Status", null },
+                ConstructorArguments(appPath, libPath, "Converted"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>Reads the positional constructor arguments of the helper attribute on one type.</summary>
+    /// <param name="assemblyPath">The emitted assembly.</param>
+    /// <param name="libPath">The referenced helper library.</param>
+    /// <param name="typeName">The annotated type's simple name.</param>
+    /// <returns>The argument values, in parameter order.</returns>
+    private static object[] ConstructorArguments(string assemblyPath, string libPath, string typeName)
+    {
+        var paths = new List<string>(TrustedPlatformAssemblies())
+        {
+            assemblyPath,
+            libPath,
+        };
+
+        using var context = new MetadataLoadContext(new PathAssemblyResolver(paths.Distinct(StringComparer.Ordinal)));
+        var assembly = context.LoadFromAssemblyPath(assemblyPath);
+        var target = assembly.GetTypes().Single(candidate => candidate.Name == typeName);
+
+        var attribute = target.GetCustomAttributesData()
+            .Single(candidate =>
+                candidate.AttributeType.Namespace?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true);
+
+        // Projected to a name WHILE the context is alive: a reflection `Type`
+        // read after the load context is disposed throws.
+        return attribute.ConstructorArguments
+            .Select(argument => argument.Value is Type type
+                ? (object)(type.FullName ?? type.Name)
+                : argument.Value)
+            .ToArray();
     }
 
     private static string[] ErrorIds(string log)
