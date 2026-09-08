@@ -1075,6 +1075,8 @@ internal sealed partial class OverloadResolver
 
         var seenSlots = new HashSet<int>();
         var reordered = false;
+        var hasHandlerSourceForwarding =
+            HasHandlerSourceForwarding(parameterOrderedArguments);
         for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
         {
             var parameterIndex = sourceToParameterMapping[sourceIndex];
@@ -1087,9 +1089,15 @@ internal sealed partial class OverloadResolver
             }
 
             reordered |= parameterIndex != sourceIndex;
+            if (!hasHandlerSourceForwarding &&
+                parameterOrderedArguments[slot] is
+                    BoundAddressOfExpression or BoundConditionalAddressExpression)
+            {
+                return parameterOrderedArguments;
+            }
         }
 
-        if (!reordered && !HasHandlerSourceForwarding(parameterOrderedArguments))
+        if (!reordered && !hasHandlerSourceForwarding)
         {
             return parameterOrderedArguments;
         }
