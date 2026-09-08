@@ -1932,12 +1932,19 @@ internal static class ClrOverloadResolution
 
     /// <summary>
     /// Issue #4037: whether a type parameter's own bounds imply the CLR bound
-    /// <paramref name="constraint"/> — an interface bound through the existing
-    /// <c>ErasedSymbolSatisfiesInterfaceConstraint</c> walk, a base-class bound
-    /// by walking the parameter's own <c>ClassConstraint</c> chain (which may
-    /// end in an imported CLR class, a same-compilation user class, or another
-    /// forwarded type parameter).
+    /// <paramref name="constraint"/> — an interface bound through
+    /// <see cref="TypeParameterSatisfiesClrInterfaceBound"/>, a base-class
+    /// bound through <see cref="TypeParameterSatisfiesClrClassBound"/>. Both
+    /// walk the class bound of every parameter this one stands for
+    /// (issue #4084), which may end in an imported CLR class or a
+    /// same-compilation user class.
     /// </summary>
+    /// <remarks>
+    /// Issue #4083: the two halves are separate methods because the generic
+    /// METHOD path calls the class half DIRECTLY, without this method's
+    /// <c>object</c>/<c>ValueType</c> early-out — see that method's remarks
+    /// for why accepting <c>System.ValueType</c> there would be a false accept.
+    /// </remarks>
     /// <param name="argument">The type parameter written as the type argument.</param>
     /// <param name="constraint">The CLR bound the definition declares.</param>
     /// <returns><see langword="true"/> when the bound is forwarded.</returns>
@@ -2057,11 +2064,18 @@ internal static class ClrOverloadResolution
     /// The leaf <c>ErasedSymbolSatisfiesInterfaceConstraint</c> is deliberately
     /// left byte-identical — its type-parameter arm reads only interface
     /// bounds, and it has other callers that must keep that meaning.</para>
-    /// <para>Deliberately does NOT read
-    /// <see cref="TypeParameterSymbol.TypeParameterBound"/>: a dependent bound
-    /// (<c>[TBase DisposableBase, TDerived TBase]</c>) forwards the interface
-    /// too, but neither path reads that slot today, so closing it here would
-    /// be new behaviour on both. Filed separately and pinned as a red row.</para>
+    /// <para>Issue #4084 CLOSED the dependent-bound gap this once declined:
+    /// the walk read only <c>ClassConstraint</c>, so
+    /// <c>[TBase DisposableBase, TDerived TBase]</c> did not forward
+    /// <c>TBase</c>'s <c>IDisposable</c> onto <c>TDerived</c> — <c>GS0159</c>
+    /// at a generic method, <c>GS0580</c> at a generic type, two different
+    /// wrong answers to one question <c>csc</c> answers yes. The chain is now
+    /// <see cref="Binder.EnumerateForwardedParameterChain"/>, #4067's existing
+    /// symbol walk, which follows
+    /// <see cref="TypeParameterSymbol.TypeParameterBound"/> as well and
+    /// terminates on a visited set rather than a depth limit — so one chain
+    /// serves both paths and the base-class sibling
+    /// (<see cref="TypeParameterSatisfiesClrClassBound"/>) alike.</para>
     /// <para>The METHOD-path caller additionally guards on the UNSUBSTITUTED
     /// constraint mentioning no type parameter, which is the same skip the
     /// generic-TYPE path applies (#4031/#4041) — a self-referential bound such

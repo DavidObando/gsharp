@@ -91,25 +91,29 @@ namespace GSharp.Compiler.Tests;
 /// position beside one open one — has been broken twice by rewrites of this
 /// erasure gate. It is a green row here so any future edit to this checker
 /// trips over it in this file too.</para>
-/// <para><b>Three gaps left open, filed rather than fixed, and pinned as
-/// asserting rows so a later fix sees the exact programs.</b> (1) A
-/// BASE-CLASS constraint at a generic method — <c>Probes.NeedsScheme[T]()</c>
-/// under <c>where T : SchemeOptions</c> from inside
-/// <c>func callIt[T SchemeOptions]()</c> — is refused for the same reason one
-/// bound-kind over, but it lives on the loop's non-interface FALLTHROUGH, the
-/// path every base-class and special constraint of every imported generic
-/// method takes, so widening it is a strictly larger blast radius than the
-/// interface branch this change touches. Filed as #4083. (2) A DEPENDENT bound
-/// (<c>[TBase DisposableBase, TDerived TBase]</c>) forwards the interface just
-/// as well, and <c>csc</c> accepts it — but NEITHER walk reads
-/// <c>TypeParameterSymbol.TypeParameterBound</c>, so the generic-TYPE path
-/// refuses it too (measured: <c>GS0580</c>), and closing it is new behaviour on
-/// both paths at once. Filed as #4084. (3) An INFERRED call picks the boxing
-/// <c>Take(object)</c> where <c>csc</c> picks the constrained
-/// <c>Take&lt;T&gt;(T)</c> — measured identical before and after this change,
-/// so it is surfaced by the blast-radius measurement rather than caused by it.
-/// Filed as #4086, and CLOSED by the erased-type-parameter identity fix; the
-/// row below now asserts the same answer for both spellings.</para>
+/// <para><b>Three gaps #4070 left open, all since closed, and their rows now
+/// assert the fixed behaviour rather than the gap.</b> (1) A BASE-CLASS
+/// constraint at a generic method — <c>Probes.NeedsScheme[T]()</c> under
+/// <c>where T : SchemeOptions</c> from inside
+/// <c>func callIt[T SchemeOptions]()</c> — was refused for the same reason one
+/// bound-kind over, on the loop's non-interface FALLTHROUGH, the path every
+/// base-class constraint of every imported generic method takes. Filed as
+/// #4083 and closed by extracting the generic-TYPE path's class-chain walk and
+/// calling it from the method path too; see
+/// <see cref="AClassBoundForwardsABaseClassConstraintAtAGenericMethod"/>.
+/// (2) A DEPENDENT bound (<c>[TBase DisposableBase, TDerived TBase]</c>)
+/// forwards the interface just as well, and <c>csc</c> accepts it — but
+/// NEITHER walk read <c>TypeParameterSymbol.TypeParameterBound</c>, so the
+/// generic-TYPE path refused it too (measured: <c>GS0580</c>). Filed as #4084
+/// and closed by giving both walks #4067's
+/// <c>Binder.EnumerateForwardedParameterChain</c>; see
+/// <see cref="ADependentBoundForwardsTheBoundingParametersConstraints"/>.
+/// (3) An INFERRED call picked the boxing <c>Take(object)</c> where <c>csc</c>
+/// picks the constrained <c>Take&lt;T&gt;(T)</c> — measured identical before
+/// and after #4070, so it was surfaced by the blast-radius measurement rather
+/// than caused by it. Filed as #4086, and CLOSED by the erased-type-parameter
+/// identity fix; the row below now asserts the same answer for both
+/// spellings.</para>
 /// </remarks>
 public class Issue4070ImportedGenericMethodClassBoundTests
 {

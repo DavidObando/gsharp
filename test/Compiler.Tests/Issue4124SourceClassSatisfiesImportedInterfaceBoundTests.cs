@@ -412,6 +412,104 @@ public class Issue4124SourceClassSatisfiesImportedInterfaceBoundTests
         }
     }
 
+    /// <summary>
+    /// The other half of the blast-radius question, and the one monotonicity
+    /// does NOT settle by itself: once a constrained candidate becomes
+    /// applicable, which one WINS? Measured on the parent and here, and
+    /// nothing moves.
+    /// </summary>
+    /// <remarks>
+    /// <para><c>TryUnifyAndCheckConstraints</c> scores specificity from the
+    /// <c>struct</c>/<c>class</c> flags only — an interface bound contributes
+    /// 0 — so two same-name extensions that both survive would tie. Measured:
+    /// the pair below reported <c>GS0266</c> (ambiguous) on the parent AND
+    /// here, so no program that compiled before stops compiling; the
+    /// widening changed which candidates are applicable, not the ranking. The
+    /// free-function pair <c>f[T IDisposable](T)</c> / <c>f(object)</c> picks
+    /// the generic one on the parent AND here.</para>
+    /// <para>The DIFFERENT-name shape is the actual red row and lives in
+    /// <see cref="AConstrainedExtensionIsReachedForASourceClass"/>: there the
+    /// constrained candidate was skipped entirely on the parent, so the call
+    /// reported <c>GS0159</c> and now binds.</para>
+    /// </remarks>
+    [Fact]
+    public void NoOverloadWinnerMoves()
+    {
+        const string AmbiguousExtensions = """
+            package P
+            import System
+
+            class D : IDisposable {
+                public func Dispose() {
+                }
+            }
+
+            func (value T) Describe[T IDisposable]() string {
+                return "disposable"
+            }
+
+            func (value U) Describe[U]() string {
+                return "any"
+            }
+
+            Console.WriteLine(D().Describe())
+            """;
+
+        const string FreeFunctions = """
+            package P
+            import System
+
+            class D : IDisposable {
+                public func Dispose() {
+                }
+            }
+
+            func f[T IDisposable](x T) string {
+                return "generic"
+            }
+
+            func f(x object) string {
+                return "object"
+            }
+
+            Console.WriteLine(f(D()))
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4124_rank_").FullName;
+        try
+        {
+            // Ambiguous on the parent and ambiguous here — an interface bound
+            // is worth 0 specificity, so the two same-name extensions tie
+            // whether or not the constrained one is applicable.
+            var ambiguousPath = Path.Combine(tempDir, "Ambiguous.dll");
+            var ambiguousLog = Compile(
+                tempDir, "Ambiguous.gs", AmbiguousExtensions, ambiguousPath, "/target:exe");
+            Assert.DoesNotContain("GS9998", ambiguousLog, StringComparison.Ordinal);
+            Assert.False(
+                File.Exists(ambiguousPath),
+                $"the same-name extension pair must stay ambiguous. Log:\n{ambiguousLog}");
+            var occurrences = ambiguousLog.Split("GS0266", StringSplitOptions.None).Length - 1;
+            Assert.True(
+                occurrences == 1,
+                $"the ambiguity must be reported exactly once, saw {occurrences}. Log:\n{ambiguousLog}");
+
+            // The constrained generic already won on the parent and still does.
+            var freePath = Path.Combine(tempDir, "Free.dll");
+            var freeLog = Compile(tempDir, "Free.gs", FreeFunctions, freePath, "/target:exe");
+            Assert.True(File.Exists(freePath), $"the free-function pair must compile. Log:\n{freeLog}");
+
+            IlVerifier.Verify(freePath, Array.Empty<string>());
+
+            var (exit, output) = RunDotnet(freePath);
+            Assert.True(exit == 0, $"the free-function pair must run. Exit {exit}:\n{output}");
+            Assert.Equal("generic", output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static string[] SplitLines(string output)
         => output
             .Split('\n')
