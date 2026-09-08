@@ -77,17 +77,27 @@ public sealed class Issue3931KilledTestRunClassificationTests
         Assert.DoesNotContain(outcome.Artifacts, a => a.Diagnostic.Id == "LIBRARY-TESTS-TIMED-OUT");
     }
 
+    /// <summary>
+    /// Issue #4045 gave <c>Compiler.Tests</c> a 90-minute budget by app id;
+    /// issue #3501 replaced that hand-set exception with a size-derived one.
+    /// The property #4045 bought must survive the replacement: the largest
+    /// suite in the corpus still gets a budget it can COMPLETE in, and it is
+    /// still bounded. Expressed against the sizing function rather than the app
+    /// id, because there is no app id in the budget any more.
+    /// </summary>
     [Fact]
-    public void CompilerTestsGetsACompleteButStillBoundedParityBudget()
+    public void CompilerTestsSizedSuiteGetsACompleteButStillBoundedParityBudget()
     {
-        Assert.Equal(
-            TimeSpan.FromMinutes(90),
-            SdkCompileRunner.MirroredTestRunTimeoutFor(
-                "test/Compiler.Tests/Compiler.Tests.csproj"));
-        Assert.Equal(
-            TimeSpan.FromMinutes(10),
-            SdkCompileRunner.MirroredTestRunTimeoutFor(
-                "test/Core.Tests/Core.Tests.csproj"));
+        // test/Compiler.Tests declares 4,103 [Fact] methods; its migrated
+        // validation measured ~81 minutes in gate run 34232380469.
+        TimeSpan compilerTests = SdkCompileRunner.MirroredTestRunTimeoutFor(4103);
+
+        Assert.Equal(TimeSpan.FromMinutes(90), compilerTests);
+        Assert.True(compilerTests <= SdkCompileRunner.MirroredTestRunTimeoutCeiling);
+
+        // And a suite of ordinary size keeps the tight budget, so a hang there
+        // still fails promptly rather than waiting out the largest app's grant.
+        Assert.Equal(TimeSpan.FromMinutes(10), SdkCompileRunner.MirroredTestRunTimeoutFor(12));
     }
 
     private static StageExecutionContext Context()
