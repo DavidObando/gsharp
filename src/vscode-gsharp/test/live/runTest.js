@@ -24,6 +24,14 @@ async function main() {
     (process.platform === 'win32' && process.env.LOCALAPPDATA
       ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code', 'Code.exe')
       : undefined);
+  if (!executable) {
+    throw new Error(
+      'Set VSCODE_EXECUTABLE_PATH to the installed VS Code executable on this platform.',
+    );
+  }
+  if (!fs.existsSync(executable)) {
+    throw new Error(`Installed VS Code executable was not found: ${executable}`);
+  }
 
   try {
     await runTests({

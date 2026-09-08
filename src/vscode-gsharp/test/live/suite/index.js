@@ -190,25 +190,41 @@ async function runTestExplorer(folder) {
     (value) => Array.isArray(value) && value.some((symbol) => symbol.name === 'LiveTests'),
     60000,
   );
-  await delay(1000);
   editor.selection = new vscode.Selection(
     positionOf(document, 'RunsInVsCode'),
     positionOf(document, 'RunsInVsCode'),
   );
-  const marker = await waitFor(
-    'Test Explorer execution',
-    async () => {
-      await vscode.commands.executeCommand('gsharp.test.runInContext');
-      try {
-        return await vscode.workspace.fs.readFile(markerUri);
-      } catch {
-        return undefined;
-      }
-    },
-    (value) => value != null,
-    120000,
-  );
+  await vscode.commands.executeCommand('gsharp.test.runInContext');
+  let marker;
+  try {
+    marker = await vscode.workspace.fs.readFile(markerUri);
+  } catch {
+    assert.fail('Test Explorer run did not execute the selected G# test.');
+  }
   assert.strictEqual(Buffer.from(marker).toString(), 'passed');
+}
+
+async function verifyFormatting(document) {
+  const original = document.getText();
+  const malformed = original.replace('var input = 20', 'var input=20');
+  assert.notStrictEqual(malformed, original, 'Could not create malformed formatting input.');
+
+  const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(original.length));
+  const makeMalformed = new vscode.WorkspaceEdit();
+  makeMalformed.replace(document.uri, fullRange, malformed);
+  assert.strictEqual(await vscode.workspace.applyEdit(makeMalformed), true);
+
+  const edits = await vscode.commands.executeCommand(
+    'vscode.executeFormatDocumentProvider',
+    document.uri,
+  );
+  assert.ok(Array.isArray(edits) && edits.length > 0, 'Formatter returned no edits.');
+
+  const applyFormatting = new vscode.WorkspaceEdit();
+  applyFormatting.set(document.uri, edits);
+  assert.strictEqual(await vscode.workspace.applyEdit(applyFormatting), true);
+  assert.ok(document.getText().includes('var input = 20'));
+  assert.ok(!document.getText().includes('var input=20'));
 }
 
 async function run() {
@@ -263,8 +279,7 @@ async function run() {
   );
   assert.ok(completions.items.some((item) => String(item.label) === 'WriteLine'));
 
-  const edits = await vscode.commands.executeCommand('vscode.executeFormatDocumentProvider', uri);
-  assert.ok(Array.isArray(edits), 'Formatting provider was not registered.');
+  await verifyFormatting(document);
 
   const semanticTokens = await waitFor(
     'semantic tokens',

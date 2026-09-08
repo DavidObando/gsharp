@@ -31,7 +31,7 @@ export async function activate(context: vscode.ExtensionContext) {
       if (serverManager) {
         logger.info('Restarting language server...');
         await serverManager.restart();
-        testing.refresh();
+        await testing.refresh();
       }
     }),
     vscode.commands.registerCommand('gsharp.openOutput', () => {
@@ -46,7 +46,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // The server is running once start() resolves; kick off an initial test discovery
   // so the Test Explorer is populated immediately (even before any .gs file is opened).
-  testing.refresh();
+  await testing.refresh();
 
   // Register debugger
   registerDebugger(context);
@@ -65,4 +65,3 @@ export function deactivate(): Thenable<void> | undefined {
   }
   return undefined;
 }
-

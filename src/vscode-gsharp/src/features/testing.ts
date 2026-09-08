@@ -31,7 +31,7 @@ export function registerTestingFeatures(
   context: vscode.ExtensionContext,
   getClient: () => LanguageClient | undefined,
   logger: Logger,
-): { refresh: () => void } {
+): { refresh: () => Promise<void> } {
   const testController = vscode.tests.createTestController('gsharp-tests', 'GSharp Tests');
   context.subscriptions.push(testController);
 
@@ -114,7 +114,7 @@ export function registerTestingFeatures(
     }),
   );
 
-  return { refresh: scheduleDiscovery };
+  return { refresh: () => discoverTests(testController, getClient, logger) };
 }
 
 async function runTestAtCursor(
@@ -496,7 +496,11 @@ async function runTestProcess(
  * process groups here; `killProcessTree` instead uses `taskkill /T` to walk the actual
  * process tree by pid.
  */
-function spawnDotnet(args: string[], cwd: string, env?: NodeJS.ProcessEnv): cp.ChildProcessWithoutNullStreams {
+function spawnDotnet(
+  args: string[],
+  cwd: string,
+  env?: NodeJS.ProcessEnv,
+): cp.ChildProcessWithoutNullStreams {
   return cp.spawn('dotnet', args, {
     cwd,
     env,
