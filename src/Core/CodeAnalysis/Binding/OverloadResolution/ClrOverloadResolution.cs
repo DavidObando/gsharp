@@ -2045,6 +2045,15 @@ internal static class ClrOverloadResolution
             return false;
         }
 
+        // Issue #1531: void supplies no output bound for a value-returning
+        // delegate. In particular, it cannot become a generic type argument.
+        if (string.Equals(signature.Value.Return.FullName, "System.Void", StringComparison.Ordinal)
+            && !string.Equals(delegateReturn.FullName, "System.Void", StringComparison.Ordinal)
+            && delegateReturn.ContainsGenericParameters)
+        {
+            return false;
+        }
+
         var inferred = new Dictionary<string, Type>(bounds, StringComparer.Ordinal);
         for (var i = 0; i < delegateParameters.Length; i++)
         {
@@ -3092,12 +3101,15 @@ internal static class ClrOverloadResolution
 
                 Type[]? typeArgs = null;
 
-                // CLR inference remains authoritative for ordinary arguments;
-                // symbolic-first closure is only needed for withheld arguments.
-                var useRecoveredInference = HasDeferredInferenceArgument(deferredInferenceArgs)
-                    && !HasDeferredMethodGroupArgument(
+                // Function literals and method groups need CLR/deferred
+                // inference. Other symbolic bounds must close first because
+                // the CLR merger does not retain upper-bound variance.
+                var useRecoveredInference = !HasDeferredMethodGroupArgument(
                         argTypes.Count,
                         methodGroupArgumentCheck)
+                    && !HasFunctionLiteralArgument(
+                        argTypes.Count,
+                        functionLiteralArgumentCheck)
                     && TryRecoverErasedTypeArguments(
                         mi,
                         symbolicTypeArgs,
@@ -3518,6 +3530,26 @@ internal static class ClrOverloadResolution
         for (var i = 0; i < deferredInferenceArgs.Count; i++)
         {
             if (deferredInferenceArgs[i])
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasFunctionLiteralArgument(
+        int argumentCount,
+        Func<int, bool>? functionLiteralArgumentCheck)
+    {
+        if (functionLiteralArgumentCheck == null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < argumentCount; i++)
+        {
+            if (functionLiteralArgumentCheck(i))
             {
                 return true;
             }

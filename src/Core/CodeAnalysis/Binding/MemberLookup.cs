@@ -6745,6 +6745,7 @@ internal sealed class MemberLookup
                 fixedType = exact[0];
                 for (var i = 1; i < exact.Count; i++)
                 {
+                    // Exact bounds are non-null, and MergeRecoveredTypeArgument preserves a non-null existing bound.
                     if (!DeclarationBinder.TypeSignaturesEquivalent(fixedType, exact[i])
                         && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fixedType!, exact[i]))
                     {
