@@ -34,6 +34,14 @@ public class ImportedMemberMatrixTests
             {
             }
 
+            public class Base
+            {
+            }
+
+            public sealed class Derived : Base
+            {
+            }
+
             public interface IInstanceOverloads
             {
                 string Take<T>(T value) where T : System.IDisposable;
@@ -315,20 +323,24 @@ public class ImportedMemberMatrixTests
                 return Derived()
             }
 
-            func outputInferenceConvert(value object) Base {
-                return Base()
+            func outputInferenceConvert(value object) Issue4086.CSharp.Base {
+                return Issue4086.CSharp.Base()
             }
 
-            func outputInferenceConvert(value int32) Derived {
-                return Derived()
+            func outputInferenceConvert(value int32) Issue4086.CSharp.Derived {
+                return Issue4086.CSharp.Derived()
             }
 
             func throughFixedMethodGroupOutputInference() string {
-                return MethodGroupOutputInference.Choose(Derived(), outputInferenceConvert)
+                return MethodGroupOutputInference.Choose(
+                    Issue4086.CSharp.Derived(),
+                    outputInferenceConvert)
             }
 
             func throughExpandedMethodGroupOutputInference() string {
-                return MethodGroupOutputInference.ChooseParams(Derived(), outputInferenceConvert)
+                return MethodGroupOutputInference.ChooseParams(
+                    Issue4086.CSharp.Derived(),
+                    outputInferenceConvert)
             }
 
             func throughExpandedStaticMethodGroup() string {
@@ -488,17 +500,13 @@ public class ImportedMemberMatrixTests
             package Issue4086.Incompatible
             import Issue4086.CSharp
 
-            open class Base {
+            func incompatibleConvert(value int32) Issue4086.CSharp.Base {
+                return Issue4086.CSharp.Base()
             }
 
-            class Derived : Base {
-            }
-
-            func incompatibleConvert(value int32) Base {
-                return Base()
-            }
-
-            MethodGroupOutputInference.Choose(Derived(), incompatibleConvert)
+            MethodGroupOutputInference.Choose(
+                Issue4086.CSharp.Derived(),
+                incompatibleConvert)
             """;
 
         var diagnostics = CompileExpectingErrorsWithSiblingCs(
