@@ -171,18 +171,39 @@ public sealed class Issue3501ScaledTestParityBudgetTests
     /// methods when this was written, for a 70-minute budget), so the test
     /// tracks the repository instead of restating a constant — if someone
     /// deletes two thousand tests, this correctly stops being true.
+    /// <para>
+    /// It must ALSO stop being evaluated in the one place where it cannot hold:
+    /// the self-migration gate runs this very suite from a G# mirror of itself,
+    /// where <c>tools/cs2gs/Cs2Gs.Tests</c> contains <c>.gs</c> files and no C#
+    /// at all. Measured, not assumed — the first complete migrated run under
+    /// this change reported exactly that, and an unguarded version of this test
+    /// would have added a 138th parity failure to the app the change exists to
+    /// unblock. The guard asserts the condition that makes the claim
+    /// inapplicable rather than swallowing an empty measurement.
+    /// </para>
     /// </summary>
     [Fact]
     public void TheAppThisUnblocksReceivesMoreThanTheOldConstant()
     {
         string suite = Path.Combine(RepoRoot(), "tools", "cs2gs", "Cs2Gs.Tests");
-        StageExecutionContext context = Context();
-        foreach (string csFile in Directory
+        string[] csharpSources = Directory
             .EnumerateFiles(suite, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}",
                     StringComparison.Ordinal) &&
                 !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}",
-                    StringComparison.Ordinal)))
+                    StringComparison.Ordinal))
+            .ToArray();
+        if (csharpSources.Length == 0)
+        {
+            // The migrated mirror of ourselves. Prove that is what we are
+            // looking at — a C#-sourced tree that suddenly has no C# would be a
+            // real failure, not an inapplicable claim.
+            Assert.NotEmpty(Directory.EnumerateFiles(suite, "*.gs", SearchOption.AllDirectories));
+            return;
+        }
+
+        StageExecutionContext context = Context();
+        foreach (string csFile in csharpSources)
         {
             context.EmittedFiles.Add(new EmittedGsFile(
                 Path.GetFileName(csFile), Path.GetFileName(csFile), csFile, string.Empty));
