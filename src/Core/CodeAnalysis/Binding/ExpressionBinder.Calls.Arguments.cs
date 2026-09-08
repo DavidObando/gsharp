@@ -3882,7 +3882,7 @@ internal sealed partial class ExpressionBinder
         // `!0` (== the reified `!!T`). A generic method needs its recovered
         // method arguments during conversion too, so `Take<U>(U)` reifies U as
         // the caller's T and does not box it to the reflection-time `object`.
-        arguments = method.IsGenericMethod
+        var convertedArguments = method.IsGenericMethod
             ? conversions.BindClrParameterConversions(
                 arguments,
                 parameters,
