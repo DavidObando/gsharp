@@ -68,7 +68,7 @@ public sealed class Issue2618DelegateLikePipelineTests : IDisposable
             result.RunId,
             MigrationPipeline.SanitizeAppId(app.AppId));
         string translated = File.ReadAllText(Path.Combine(appDirectory, "Repro.gs"));
-        Assert.Contains("let onState (State) -> void", translated, StringComparison.Ordinal);
+        Assert.Contains("let onState(State) -> void", translated, StringComparison.Ordinal);
         Assert.Contains("Job(onState)", translated, StringComparison.Ordinal);
 
         string generated = File.ReadAllText(Directory.GetFiles(

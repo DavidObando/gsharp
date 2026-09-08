@@ -469,7 +469,7 @@ namespace Demo
         string translatedSource = Path.Combine(translatedDir, "Repro.gs");
         Assert.True(File.Exists(translatedSource), "Packed cs2gs did not emit Repro.gs.");
         Assert.Contains(
-            "if G() is { } values && values.Length > 0 {",
+            "if G() is {} values && values.Length > 0 {",
             File.ReadAllText(translatedSource),
             StringComparison.Ordinal);
 

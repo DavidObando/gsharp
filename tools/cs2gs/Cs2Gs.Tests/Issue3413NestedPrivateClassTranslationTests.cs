@@ -639,11 +639,11 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             translated,
             StringComparison.Ordinal);
         Assert.Contains(
-            "let valueLengthAsync () -> ValueTask[int32] = () -> ExtensionOwner.ValueLengthAsync(\"five\")",
+            "let valueLengthAsync() -> ValueTask[int32] = () -> ExtensionOwner.ValueLengthAsync(\"five\")",
             translated,
             StringComparison.Ordinal);
         Assert.Contains(
-            "let valueDelayAsync () -> ValueTask = () -> ExtensionOwner.ValueDelayAsync(\"later\")",
+            "let valueDelayAsync() -> ValueTask = () -> ExtensionOwner.ValueDelayAsync(\"later\")",
             translated,
             StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal);

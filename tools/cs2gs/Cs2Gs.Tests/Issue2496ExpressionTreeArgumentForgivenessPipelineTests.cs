@@ -59,10 +59,15 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessPipelineTests
             Directory.GetFiles(appRunDir, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
 
-        Assert.Contains("HasKey((item Item) -> item.Id)", emitted, StringComparison.Ordinal);
-        Assert.Contains("HasIndex((item Item) -> item.Name)", emitted, StringComparison.Ordinal);
-        Assert.Contains("HasForeignKey((item Item) ->", emitted, StringComparison.Ordinal);
-        Assert.Contains("(item Item) -> item.Name!!)", emitted, StringComparison.Ordinal);
+        // ADR-0179 phase 7b: the gsfmt post-pass wraps the two over-wide calls
+        // in this chain, so the argument assertions are taken over
+        // whitespace-normalised text. What issue #2496 asserts is which
+        // arguments carry a `!!`, never where the line breaks.
+        string compact = Compact(emitted);
+        Assert.Contains("HasKey((item Item) -> item.Id)", compact, StringComparison.Ordinal);
+        Assert.Contains("HasIndex( (item Item) -> item.Name )", compact, StringComparison.Ordinal);
+        Assert.Contains("HasForeignKey((item Item) ->", compact, StringComparison.Ordinal);
+        Assert.Contains("(item Item) -> item.Name!! )", compact, StringComparison.Ordinal);
         Assert.Contains("Selector[Item]((item Item) -> item.Id)", emitted, StringComparison.Ordinal);
         Assert.Contains("OverloadSink.Select", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("item.Id!!", emitted, StringComparison.Ordinal);
@@ -73,6 +78,12 @@ public sealed class Issue2496ExpressionTreeArgumentForgivenessPipelineTests
             "Expected default --via-sdk/gsc compilation to accept all expression-tree sinks. Stages: " +
                 string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
     }
+
+    /// <summary>Collapses every run of whitespace to one space.</summary>
+    private static string Compact(string value) =>
+        string.Join(
+            " ",
+            value.Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
 
     private static (string ApiProject, string AppProject) WriteFixture(string sourceRoot)
     {

@@ -158,15 +158,25 @@ public sealed class Issue3083WithLambdaRoundTripTests
                     "*.gs",
                     SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
+        // ADR-0179 phase 7b: the gsfmt post-pass wraps this call, so the
+        // assertion is taken over whitespace-normalised text — the shape of the
+        // emitted `with` expression is what issue #3083 is about, not its
+        // layout, which the formatter now owns.
         Assert.Contains(
-            ".Select((s ArchScenario) -> (s with { Steps = ",
-            emitted,
+            ".Select( (s ArchScenario) -> ( s with{ Steps = ",
+            Compact(emitted),
             StringComparison.Ordinal);
         Assert.True(
             app.Succeeded,
             "Expected translated LINQ with-expression to compile and run. Stages: "
                 + string.Join("; ", app.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
     }
+
+    /// <summary>Collapses every run of whitespace to one space.</summary>
+    private static string Compact(string value) =>
+        string.Join(
+            " ",
+            value.Split((char[])null, StringSplitOptions.RemoveEmptyEntries));
 
     private static string Translate(string source)
     {

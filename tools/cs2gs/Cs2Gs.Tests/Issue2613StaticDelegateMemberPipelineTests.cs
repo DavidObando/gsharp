@@ -54,9 +54,9 @@ public sealed class Issue2613StaticDelegateMemberPipelineTests
             Environment.NewLine,
             Directory.GetFiles(runDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
-        Assert.Contains("var _property (int32) -> int32", emitted, StringComparison.Ordinal);
-        Assert.Contains("prop Property (int32) -> int32", emitted, StringComparison.Ordinal);
-        Assert.Contains("var Field (int32) -> int32", emitted, StringComparison.Ordinal);
+        Assert.Contains("var _property(int32) -> int32", emitted, StringComparison.Ordinal);
+        Assert.Contains("prop Property(int32) -> int32", emitted, StringComparison.Ordinal);
+        Assert.Contains("var Field(int32) -> int32", emitted, StringComparison.Ordinal);
         Assert.Contains("Factory.Property(2)", emitted, StringComparison.Ordinal);
         Assert.Contains("Factory.Field(2)", emitted, StringComparison.Ordinal);
 

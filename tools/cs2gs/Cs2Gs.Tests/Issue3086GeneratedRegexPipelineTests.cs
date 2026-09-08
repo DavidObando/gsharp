@@ -69,10 +69,12 @@ public sealed class Issue3086GeneratedRegexPipelineTests
             Environment.NewLine,
             Directory.GetFiles(appDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
-        string defaultPatternField = translated.Split(Environment.NewLine).Single(
-            line => line.Contains("__generatedRegex_DefaultPattern Regex =", StringComparison.Ordinal));
-        string infinitePatternField = translated.Split(Environment.NewLine).Single(
-            line => line.Contains("__generatedRegex_InfinitePattern Regex =", StringComparison.Ordinal));
+        // ADR-0179 phase 7b: the gsfmt post-pass wraps an over-wide backing
+        // field across several lines, so "the initializer of THIS field" is no
+        // longer "the line that declares it". Slice from the declaration to the
+        // next `__generatedRegex_` instead, which is the following member.
+        string defaultPatternField = GeneratedRegexInitializer(translated, "__generatedRegex_DefaultPattern");
+        string infinitePatternField = GeneratedRegexInitializer(translated, "__generatedRegex_InfinitePattern");
 
         Assert.Contains("let __generatedRegex_Pattern Regex = Regex(", translated, StringComparison.Ordinal);
         Assert.Contains("RegexOptions.ExplicitCapture", translated, StringComparison.Ordinal);
@@ -186,6 +188,23 @@ public sealed class Issue3086GeneratedRegexPipelineTests
         Assert.Contains("func EscapedLiteral()", translated, StringComparison.Ordinal);
         Assert.Contains("func CharacterClassLiteral()", translated, StringComparison.Ordinal);
         Assert.Contains("func InvariantIgnoreCase()", translated, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Returns the initializer text of one <c>[GeneratedRegex]</c> backing
+    /// field: everything between its declaration and the next
+    /// <c>__generatedRegex_</c>, which is the accessor that reads it. Slicing
+    /// by member rather than by line keeps the assertion honest once the
+    /// ADR-0179 post-pass is free to wrap the initializer.
+    /// </summary>
+    private static string GeneratedRegexInitializer(string translated, string field)
+    {
+        string marker = field + " Regex =";
+        int start = translated.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"expected '{marker}' in the migrated source.");
+        start += marker.Length;
+        int end = translated.IndexOf("__generatedRegex_", start, StringComparison.Ordinal);
+        return end < 0 ? translated[start..] : translated[start..end];
     }
 
     private static void CopyFixture(string destination)
