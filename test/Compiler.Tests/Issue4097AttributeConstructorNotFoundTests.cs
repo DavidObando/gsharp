@@ -363,23 +363,28 @@ public class Issue4097AttributeConstructorNotFoundTests
     }
 
     /// <summary>
-    /// The OTHER silent-drop cause on the user-attribute path, and a genuinely
-    /// different one: the arguments DO match, but the constructor parameter is
-    /// typed as a same-compilation enum, which has no <c>ClrType</c> while the
-    /// attribute blob is built. Measured on this branch's parent: no
-    /// diagnostic, and the <c>NoteAttribute</c> row absent from
-    /// <c>Widget</c>.
+    /// The OTHER silent-drop cause on the user-attribute path: the arguments DO
+    /// match, but the constructor parameter is typed as a same-compilation
+    /// enum, which has no <c>ClrType</c> while the attribute blob is built.
+    /// Measured on this branch's parent: no diagnostic, and the
+    /// <c>NoteAttribute</c> row absent from <c>Widget</c>.
     /// </summary>
     /// <remarks>
-    /// This is not the user's mistake — the program is legal and a
-    /// same-compilation enum is a perfectly good attribute-argument type — so
-    /// it must NOT be told it has the wrong arguments. It gets GS0584, in the
-    /// spirit of GS0466: a construct that is not implemented yet says so
-    /// instead of vanishing. Supporting it properly is filed as issue #4135,
-    /// and this row is the one to flip when that lands.
+    /// <para>This is EMITTED, not diagnosed. The program is legal — <c>csc</c>
+    /// accepts the C# equivalent — so a diagnostic is the wrong answer, which
+    /// is the same lesson the Oahu corpus taught about trailing optional
+    /// parameters. Oahu carries this exact shape too
+    /// (<c>@OahuCapability(CapabilityClass.Safe)</c>), so an earlier draft that
+    /// reported GS0584 here took four of its apps red.</para>
+    /// <para>Encoding it is a substitution, not a feature: a G# enum's
+    /// underlying type is always <c>int32</c>, the bound value is already that
+    /// constant rather than a symbol, and the constructor token and signature
+    /// come from the emitted <c>MethodDef</c> — so only the value's WIDTH was
+    /// ever missing. ECMA-335 II.23.3 writes an enum-typed fixed argument as
+    /// its underlying primitive, which is what this now does.</para>
     /// </remarks>
     [Fact]
-    public void AUserAttributeConstructorParameterTypedAsASourceEnum_ReportsItsOwnDiagnostic()
+    public void AUserAttributeConstructorParameterTypedAsASourceEnum_IsEmitted()
     {
         const string ProbeSource = """
             package P
@@ -393,7 +398,7 @@ public class Issue4097AttributeConstructorNotFoundTests
             class NoteAttribute(Kind Status) : Attribute {
             }
 
-            @Note(Status.Active)
+            @Note(Status.Retired)
             class Widget {
             }
 
@@ -407,14 +412,70 @@ public class Issue4097AttributeConstructorNotFoundTests
             var appPath = Path.Combine(tempDir, "P.dll");
             var log = Compile(tempDir, "App.gs", ProbeSource + "\n", appPath, "/target:exe", "/reference:" + libPath);
 
+            Assert.Empty(ErrorIds(log));
+            Assert.True(File.Exists(appPath), $"the sample must compile. Log:\n{log}");
+
+            IlVerifier.Verify(appPath, new[] { libPath });
+
+            // The row lands, and the blob carries the enum's UNDERLYING value.
+            // `Retired` is 1, so a reader that got 0 would mean the argument had
+            // been written as a default rather than as what the source named.
+            Assert.Equal(new[] { "NoteAttribute" }, EmittedAttributeNames(appPath, libPath, "Widget"));
+            Assert.Equal(new object[] { 1 }, ConstructorArguments(appPath, libPath, "Widget"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// GS0584's remaining population, measured: every shape that still reports
+    /// it is one <c>csc</c> rejects as CS0181 — "not a valid attribute
+    /// parameter type". There is no legal-but-unencodable residue.
+    /// </summary>
+    /// <remarks>
+    /// G# has no bind-time CS0181 analogue — no descriptor mentions attribute
+    /// parameter types, and the binder does not validate them — so these
+    /// programs reach emit unchecked, where the old code dropped them in
+    /// silence. GS0584 is the last line rather than the right place: the check
+    /// belongs on the attribute's DECLARATION, and is filed separately.
+    /// </remarks>
+    /// <param name="name">The row name.</param>
+    /// <param name="declaration">The attribute class declaration.</param>
+    /// <param name="usage">The annotation applying it.</param>
+    [Theory]
+    [InlineData("SourceClass", "class BoxedAttribute(Value Holder) : Attribute {\n}", "@Boxed(nil)")]
+    [InlineData("SourceInterface", "class ThingAttribute(Value IThing) : Attribute {\n}", "@Thing(nil)")]
+    public void AnInvalidAttributeParameterType_ReportsGS0584(string name, string declaration, string usage)
+    {
+        const string ProbeSource = """
+            package P
+            import System
+
+            class Holder {
+            }
+
+            interface IThing {
+                func Get() int32;
+            }
+
+
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4097_bad_param_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var source = ProbeSource + declaration + "\n\n" + usage
+                + "\nclass Target {\n}\n\nConsole.WriteLine(\"ok\")\n";
+            var log = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
+
             var ids = ErrorIds(log);
             Assert.True(
                 ids.Contains("GS0584", StringComparer.Ordinal),
-                $"must report GS0584. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
-
-            // Not the "wrong arguments" message — the arguments are right.
-            Assert.DoesNotContain(ExpectedId, ids);
-            Assert.DoesNotContain("GS9998", ids);
+                $"'{name}' must report GS0584. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
         }
         finally
         {
@@ -478,9 +539,12 @@ public class Issue4097AttributeConstructorNotFoundTests
         var assembly = context.LoadFromAssemblyPath(assemblyPath);
         var target = assembly.GetTypes().Single(candidate => candidate.Name == typeName);
 
+        // Same predicate as EmittedAttributeNames: a same-compilation user
+        // attribute lives in the compilation's own package, not the helper lib.
         var attribute = target.GetCustomAttributesData()
             .Single(candidate =>
-                candidate.AttributeType.Namespace?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true);
+                candidate.AttributeType.Namespace?.StartsWith("HelperLib4097", StringComparison.Ordinal) == true
+                || candidate.AttributeType.Name == "NoteAttribute");
 
         // Projected to a name WHILE the context is alive: a reflection `Type`
         // read after the load context is disposed throws.

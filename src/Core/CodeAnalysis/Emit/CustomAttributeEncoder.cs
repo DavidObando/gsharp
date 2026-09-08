@@ -880,8 +880,7 @@ internal sealed class CustomAttributeEncoder
         unsupported = null;
         for (int i = 0; i < parameters.Length; i++)
         {
-            var clr = parameters[i].Type?.ClrType;
-            if (clr == null)
+            if (!TryGetAttributeParameterWriteType(parameters[i].Type, out var clr))
             {
                 clrTypes = null;
                 unsupported = parameters[i];
@@ -892,6 +891,48 @@ internal sealed class CustomAttributeEncoder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// The CLR type the fixed-argument writer should encode one same-compilation
+    /// constructor parameter AS.
+    /// </summary>
+    /// <remarks>
+    /// <para>Issue #4097, found in the Oahu corpus: a user attribute whose
+    /// constructor parameter is a same-compilation ENUM —
+    /// <c>@OahuCapability(CapabilityClass.Safe)</c> — has no <c>ClrType</c>
+    /// while the blob is built, because the enum's TypeDef only exists at emit.
+    /// The whole attribute used to be dropped in silence, and a first pass at
+    /// this issue reported it as unsupported. Both are wrong: the program is
+    /// legal, and ECMA-335 II.23.3 writes an enum-typed fixed argument as its
+    /// UNDERLYING primitive, which is available here.</para>
+    /// <para>Three facts make this a substitution rather than a feature. The
+    /// underlying type of a G# enum is always <c>int32</c>; the bound argument
+    /// value is already that underlying constant, not a symbol (the binder's
+    /// enum-literal arm stores <c>lit.Value</c>); and the constructor's own
+    /// token and signature come from the emitted <c>MethodDef</c> via the
+    /// injected resolvers, so nothing on this path has to encode the enum type
+    /// itself. Only the value's WIDTH was ever missing.</para>
+    /// </remarks>
+    /// <param name="type">The declared parameter type.</param>
+    /// <param name="writeType">The CLR type to encode the argument as.</param>
+    /// <returns>Whether the parameter can be encoded at all.</returns>
+    private static bool TryGetAttributeParameterWriteType(TypeSymbol? type, [NotNullWhen(true)] out Type? writeType)
+    {
+        if (type?.ClrType is { } declared)
+        {
+            writeType = declared;
+            return true;
+        }
+
+        if (type is EnumSymbol sourceEnum && sourceEnum.UnderlyingType.ClrType is { } underlying)
+        {
+            writeType = underlying;
+            return true;
+        }
+
+        writeType = null;
+        return false;
     }
 
     /// <summary>
