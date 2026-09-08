@@ -7340,9 +7340,16 @@ internal static class ClrOverloadResolution
             if (matched != null)
             {
                 var matchedArgs = matched.GetGenericArguments();
+                var genericParameters = openDef.GetGenericArguments();
                 for (var i = 0; i < paramArgs.Length && i < matchedArgs.Length; i++)
                 {
-                    if (!UnifyForInference(paramArgs[i], matchedArgs[i], bounds))
+                    var variance = i < genericParameters.Length
+                        ? genericParameters[i].GenericParameterAttributes & GenericParameterAttributes.VarianceMask
+                        : GenericParameterAttributes.None;
+                    var unified = variance == GenericParameterAttributes.Contravariant
+                        ? UnifyUpperBoundForInference(paramArgs[i], matchedArgs[i], bounds)
+                        : UnifyForInference(paramArgs[i], matchedArgs[i], bounds);
+                    if (!unified)
                     {
                         return false;
                     }
