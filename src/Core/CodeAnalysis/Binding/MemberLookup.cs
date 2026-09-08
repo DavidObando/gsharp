@@ -5519,7 +5519,7 @@ internal sealed class MemberLookup
     /// (<c>BuildSymbolicMethodTypeArgs</c> zipped open parameters with symbolic
     /// arguments positionally, and a named call defeated it), and it is
     /// resolved the same way: through
-    /// <see cref="ClrOverloadResolution.TryBuildNamedArgumentReordering"/>, the
+    /// <c>ClrOverloadResolution.TryBuildNamedArgumentReordering</c>, the
     /// resolver's own mapping, so no second implementation can drift from
     /// it.</para>
     /// <para>Three outcomes, and the middle one is the reason this is a helper
