@@ -4290,6 +4290,7 @@ internal sealed partial class ExpressionBinder
                 orderedArgs,
                 resolution.ParameterMapping);
         }
+
         var refKinds = ComputeArgumentRefKinds(parameters);
 
         result = new BoundConstrainedStaticCallExpression(
