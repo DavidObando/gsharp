@@ -588,7 +588,7 @@ public class ImportedMemberMatrixTests
                 value: secondExpandedNamedArgument()))
             Console.WriteLine(MethodGroupOutputInference.FormattableOrder(
                 rest: firstExpandedNamedArgument(),
-                item: $"item={interpolatedExpandedNamedArgument()}",
+                item: "item=${interpolatedExpandedNamedArgument()}",
                 value: secondExpandedNamedArgument()))
             Console.WriteLine(throughExpandedStaticMethodGroup())
             Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
