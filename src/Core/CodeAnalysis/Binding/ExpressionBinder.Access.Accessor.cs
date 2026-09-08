@@ -1997,7 +1997,9 @@ internal sealed partial class ExpressionBinder
     /// parser shapes a single type argument as an <see cref="IndexExpressionSyntax"/>
     /// (target is the bare type name, e.g. <c>Comparer[int32]</c>) and multiple
     /// or type-shaped arguments as a <see cref="GenericNameExpressionSyntax"/>
-    /// (e.g. <c>Pair[int32, string]</c>, <c>Box[int32?]</c>).
+    /// (e.g. <c>Pair[int32, string]</c>, <c>Box[int32?]</c>). A generic
+    /// constructor followed by another access carries the same type arguments
+    /// on a <see cref="CallExpressionSyntax"/>.
     /// </summary>
     private static bool TryGetGenericSegmentNameAndArity(
         ExpressionSyntax segment,
@@ -2023,6 +2025,11 @@ internal sealed partial class ExpressionBinder
                 arity = generic.TypeArgumentList.Arguments.Count;
                 return true;
 
+            case CallExpressionSyntax { TypeArgumentList: not null } call:
+                identifier = call.Identifier;
+                arity = call.TypeArgumentList.Arguments.Count;
+                return true;
+
             default:
                 identifier = null;
                 arity = 0;
@@ -2045,6 +2052,14 @@ internal sealed partial class ExpressionBinder
 
             case GenericNameExpressionSyntax generic:
                 return TryBindGenericSegmentArguments(generic, out typeArgs) && typeArgs.Length == arity;
+
+            case CallExpressionSyntax { TypeArgumentList: not null } call:
+                return TryResolveClrConstructionTypeArgs(
+                    call.TypeArgumentList,
+                    out _,
+                    out typeArgs,
+                    out _)
+                    && typeArgs.Length == arity;
 
             default:
                 typeArgs = default;

@@ -176,11 +176,11 @@ internal sealed partial class ExpressionBinder
     /// position, e.g. <c>System.Text.StringBuilder()</c> or
     /// <c>System.Collections.Generic.List[int]()</c>, including an object
     /// initializer suffix. Such an expression parses as an accessor chain whose
-    /// terminal segment is the constructor call (or its initializer wrapper), so
-    /// it never reaches <see cref="TryBindClrConstructorCall"/> (which only sees
-    /// simple-name calls). This walks the dotted name, resolves the closed CLR
-    /// type via the active references/imports, and reuses the shared
-    /// constructor-binding core (issue #293).
+    /// constructor call is either terminal or followed by an instance-member
+    /// suffix, so it never reaches <see cref="TryBindClrConstructorCall"/> (which
+    /// only sees simple-name calls). This walks the dotted name, resolves the
+    /// closed CLR type via the active references/imports, and reuses the shared
+    /// constructor-binding core (issues #293 and #4055).
     /// </summary>
     /// <param name="syntax">The accessor expression to bind.</param>
     /// <param name="result">The bound constructor call on success.</param>
@@ -204,18 +204,34 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax current = syntax;
         CallExpressionSyntax? terminalCall = null;
         ObjectCreationExpressionSyntax? terminalObjectCreation = null;
+        ExpressionSyntax? trailingAccess = null;
         while (true)
         {
             if (current is AccessorExpressionSyntax accessor)
             {
-                if (accessor.IsNullConditional || !(accessor.LeftPart is NameExpressionSyntax leftName))
+                if (accessor.IsNullConditional)
                 {
                     return false;
                 }
 
-                segments.Add(leftName.IdentifierToken.ValueText);
-                current = accessor.RightPart;
-                continue;
+                if (accessor.LeftPart is NameExpressionSyntax leftName)
+                {
+                    segments.Add(leftName.IdentifierToken.ValueText);
+                    current = accessor.RightPart;
+                    continue;
+                }
+
+                if (accessor.LeftPart is CallExpressionSyntax nestedCall)
+                {
+                    // `System.Nullable[int32]().HasValue` keeps the call on the
+                    // left of the final accessor; bind it here, then continue on
+                    // the constructed value rather than re-reading `System` as a type.
+                    terminalCall = nestedCall;
+                    trailingAccess = accessor.RightPart;
+                    break;
+                }
+
+                return false;
             }
 
             if (current is CallExpressionSyntax call)
@@ -318,6 +334,16 @@ internal sealed partial class ExpressionBinder
                 Invariant.Required(
                     result,
                     "a successful qualified constructor binding produces a bound target"));
+        }
+
+        if (handled && trailingAccess != null && result is not BoundErrorExpression)
+        {
+            result = BindAccessorStep(
+                Invariant.Required(
+                    result,
+                    "a successful qualified constructor binding produces a bound target"),
+                classSymbol: null,
+                trailingAccess);
         }
 
         return handled;
