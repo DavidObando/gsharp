@@ -96,6 +96,25 @@ defects with cheap fixes (Phase 9), and fixing them is *faster* than the formatt
 > reported 626. Any local before/after must be taken in the character scale to be
 > comparable to `longLineCeiling`.
 
+> **Correction (issue #4082).** The **~27-line irreducible floor** stated above was
+> computed from a `single-atom-bounded` bucket that the counter was inflating, and it
+> must not be reused as a target. `cs2gs_long_line_counts` decided whether a line sat
+> inside a backtick raw string by toggling a flag on **per-line backtick parity**,
+> which counted backticks that are not raw-string delimiters: one inside a `"…"`
+> literal, one inside a `//` comment, one as the `` '`' `` character literal. Each
+> flipped the flag on with nothing later in the file to flip it back, and while it is
+> on the widest atom is taken to be the *whole line* — so every subsequent long line
+> in that file was filed as unreachable. On the tree of gate run 34232380469 that
+> misfiled **121 of 590** long lines: the counter read 433 reducible / 157
+> single-atom-bounded, and reads **554 / 36** once raw-string state is tracked by a
+> file-level lexical scan instead. The corrected bucket of 36 is 33 lines that *are*
+> one over-budget string literal plus 3 raw-string body lines, which is consistent
+> with the ~27 estimate above rather than with 157. The 121 recovered lines are
+> ordinary multi-argument calls — phase 6/7 argument-list wrapping work that the
+> metric had been hiding, not new drift. `longLineCeiling` was re-baselined 450 → 570
+> in the same PR; the ledger entry in `tools/cs2gs/selfmig-baseline.json` records that
+> the tree did not change, only the measurement.
+
 ### Is the syntax tree formattable at all?
 
 **The tree is not full-fidelity. The token stream is.**
