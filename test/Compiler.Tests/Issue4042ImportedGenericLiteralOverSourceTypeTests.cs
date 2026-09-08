@@ -65,14 +65,10 @@ namespace GSharp.Compiler.Tests;
 /// report GS0157, and #4037's forwarding rule reaches the literal too, so
 /// <c>Handler[T]{…}</c> inside an unconstrained <c>func f[T]</c> reports
 /// <c>GS0580</c>. Both are rows here.</para>
-/// <para><b>One shared limitation is out of scope and filed.</b> A member
-/// whose type IS the erased type parameter reads as the surrogate on BOTH
-/// spellings: <c>Handler[MyOptions]().Options.Name</c> and
-/// <c>Handler[MyOptions]{…}.Options.Name</c> both report <c>GS0158: Cannot
-/// find member Name</c>. That is pre-existing on the constructor path,
-/// measured on the parent, and unchanged here — the issue's Expected is
-/// "binds exactly as <c>Handler[MyOptions]()</c> does", and parity is what
-/// this delivers. Pinned by the asserting row below.</para>
+/// <para><b>Issue #4059 closed the shared follow-up.</b> A member whose type
+/// is the erased type parameter now projects through the symbolic receiver on
+/// both spellings, so <c>Handler[MyOptions]().Options.Name</c> and the literal
+/// twin bind and execute against <c>MyOptions</c>, not <c>object</c>.</para>
 /// </remarks>
 public class Issue4042ImportedGenericLiteralOverSourceTypeTests
 {
@@ -387,27 +383,12 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
     }
 
     /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described:
-    /// a member whose type IS the erased type parameter reads as the
-    /// <c>object</c> surrogate on BOTH spellings, so
-    /// <c>h.Options.Name</c> reports <c>GS0158</c> whichever way <c>h</c> was
-    /// built.
+    /// Issue #4059: a member whose type is the erased type parameter must be
+    /// projected through the symbolic receiver on both construction spellings.
     /// </summary>
-    /// <remarks>
-    /// <para>Pre-existing on the CONSTRUCTOR path — measured on the parent,
-    /// where the literal did not bind at all and the constructor spelling
-    /// already failed this way. The issue's Expected is "binds exactly as
-    /// <c>Handler[MyOptions]()</c> does", and PARITY is what this change
-    /// delivers; making the member surface see through the surrogate is a
-    /// separate repair in <c>ImportedTypeSymbol</c>'s constructed-member
-    /// projection, filed rather than attempted opportunistically.</para>
-    /// <para>The row asserts the CURRENT behaviour on both spellings, so
-    /// whoever closes it gets a red row pointing at the exact program rather
-    /// than silence — and it asserts that the two spellings agree, which is
-    /// the invariant this change is actually responsible for.</para>
-    /// </remarks>
+    /// <remarks>Both spellings must bind, execute, and produce the same value.</remarks>
     [Fact]
-    public void AMemberTypedByTheErasedParameter_ReadsAsTheSurrogateOnBothSpellings()
+    public void AMemberTypedByTheErasedParameter_ProjectsOnBothSpellings()
     {
         const string ViaLiteral = """
             package P
@@ -451,19 +432,17 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
             var constructorLog = Compile(
                 tempDir, "ViaConstructor.gs", ViaConstructor, constructorPath, "/target:exe", "/reference:" + libPath);
 
-            Assert.DoesNotContain("GS9998", literalLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("GS9998", constructorLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("error GS", literalLog, StringComparison.Ordinal);
+            Assert.DoesNotContain("error GS", constructorLog, StringComparison.Ordinal);
+            Assert.True(File.Exists(literalPath), literalLog);
+            Assert.True(File.Exists(constructorPath), constructorLog);
 
-            // The gap, on the reference spelling. If this stops reporting
-            // GS0158 the erasure was closed — update both halves of this row.
-            Assert.Contains("GS0158", constructorLog, StringComparison.Ordinal);
-
-            // PARITY is what this change owns: the literal must behave exactly
-            // as the constructor spelling does, gap included.
-            Assert.Contains("GS0158", literalLog, StringComparison.Ordinal);
-            Assert.DoesNotContain("GS0157", literalLog, StringComparison.Ordinal);
-            Assert.False(File.Exists(literalPath));
-            Assert.False(File.Exists(constructorPath));
+            var literalRun = RunDotnet(literalPath);
+            var constructorRun = RunDotnet(constructorPath);
+            Assert.Equal(0, literalRun.Exit);
+            Assert.Equal(0, constructorRun.Exit);
+            Assert.Equal("n1", literalRun.Output.Trim());
+            Assert.Equal("n1", constructorRun.Output.Trim());
         }
         finally
         {

@@ -28,13 +28,87 @@ namespace Cs2Gs.Pipeline;
 public sealed class SdkCompileRunner
 {
     /// <summary>
-    /// Issue #3931: the wall-clock budget for a mirrored <c>dotnet test</c> run.
-    /// Named (rather than inline) so the parity stage can report the exact
-    /// budget a killed run exceeded instead of describing a nameless timeout.
+    /// Issue #3931: the wall-clock budget for a mirrored <c>dotnet build</c>,
+    /// and the FLOOR of the budget for a mirrored <c>dotnet test</c> run
+    /// (see <see cref="MirroredTestRunTimeoutFor"/>). Named (rather than
+    /// inline) so the parity stage can report the exact budget a killed run
+    /// exceeded instead of describing a nameless timeout.
+    /// <para>
+    /// Issue #3501: this stayed the budget for EVERY app's test run until the
+    /// corpus grew suites of a few thousand cases, at which point a single
+    /// global constant stopped being a hang detector and became a size limit:
+    /// the app was killed for being big, not for being stuck. It survives as
+    /// the floor because a small suite that has not finished in ten minutes
+    /// really is stuck, and a hang there must still fail promptly.
+    /// </para>
     /// </summary>
     internal static readonly TimeSpan MirroredTestRunTimeout = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// Issue #3501: the hard ceiling on a mirrored test budget, whatever the
+    /// suite's size says it wants.
+    /// <para>
+    /// This is the value issue #4045 already granted <c>Compiler.Tests</c> by
+    /// hand, kept deliberately: the sizing formula below REPLACES that hand-set
+    /// exception without raising the worst case anywhere in the corpus. The
+    /// ceiling matters because a validation shard runs all of its apps under a
+    /// single <c>cs2gs validate</c> process that writes <c>shard-run.json</c>
+    /// only at the end (see <c>build/run-cs2gs-selfmig-validate.sh</c>), so a
+    /// shard that overruns the job's 240-minute limit loses EVERY app's
+    /// verdict — the same "no measurement at all" failure this sizing exists to
+    /// remove, just one level up. An unbounded per-app budget would trade one
+    /// app's missing parity count for a whole shard's.
+    /// </para>
+    /// </summary>
+    internal static readonly TimeSpan MirroredTestRunTimeoutCeiling = TimeSpan.FromMinutes(90);
+
+    /// <summary>
+    /// Issue #3501: seconds of budget granted per <c>[Fact]</c> method declared
+    /// by the app's C# original.
+    /// <para>
+    /// Calibrated against measurement, not taste. Two DIFFERENT measurements
+    /// feed this constant, and every figure below is labelled with the one it
+    /// came from — they were conflated once already, and a calibration record
+    /// that mixes them is worse than no record:
+    /// <list type="bullet">
+    ///   <item><description>CI — gate run 34232380469
+    ///   (<c>cs2gs-selfmig-nightly</c> on <c>main</c>, Release, GitHub-hosted
+    ///   runner). The MIGRATED <c>test/Compiler.Tests</c>, 4,103 declared
+    ///   <c>[Fact]</c> methods, completed and reported
+    ///   <c>Failed: 79, Passed: 5415, Skipped: 0, Total: 5494</c>. Its whole
+    ///   validation cost 4,864 s (~81 min), of which the test run was the
+    ///   dominant share at 3,658 s (~61 min): ~0.9 s per declared
+    ///   <c>[Fact]</c> for the run alone, ~1.2 s once the rest of validation is
+    ///   charged to the same count.</description></item>
+    ///   <item><description>LOCAL — the C# ORIGINALS timed on a developer
+    ///   machine in Debug, which agree on the shape: <c>Cs2Gs.Tests</c> 2,891
+    ///   cases in 21 m 57 s (re-measured 2026-09-08) and <c>Compiler.Tests</c>
+    ///   5,234 cases in 41 min (2026-09-06), ≈ 0.45 s per executed case. These
+    ///   case counts are local Debug numbers for the ORIGINALS and are NOT the
+    ///   CI run's totals above; the migrated build runs slower, and a declared
+    ///   count is lower than an executed count because a <c>[Theory]</c>
+    ///   expands.</description></item>
+    /// </list>
+    /// The rate is derived from the CI line alone — 4,103 declared facts over
+    /// that run's ~81 minutes — so the executed-case counts are context, not
+    /// inputs, and correcting one does not move the constant. 1.5 s/test is
+    /// that observed rate with a ~50% margin for runner variance, which is
+    /// enough to distinguish "large" from "stuck" without waiting out a real
+    /// hang.
+    /// </para>
+    /// </summary>
+    private const double MirroredTestRunSecondsPerDeclaredTest = 1.5;
+
     private const string SdkPackageId = "Gsharp.NET.Sdk";
+
+    /// <summary>
+    /// Issue #3501: the size-independent part of a mirrored test budget — SDK
+    /// host start, VSTest discovery over an assembly with thousands of types,
+    /// and first-run JIT. Charged to every scaled budget so
+    /// <see cref="MirroredTestRunSecondsPerDeclaredTest"/> prices only the
+    /// tests themselves.
+    /// </summary>
+    private static readonly TimeSpan MirroredTestRunFixedOverhead = TimeSpan.FromMinutes(5);
 
     // Matches a generic MSBuild/NuGet/CS error line, e.g.
     // `... : error NU1101: ...` or `... : error CS0246: ...`, used only as a
@@ -780,20 +854,71 @@ public sealed class SdkCompileRunner
     }
 
     /// <summary>
-    /// Returns the bounded stage-4 budget for one mirrored test project.
-    /// Compiler.Tests compiles G# snippets inside its tests and its measured
-    /// validation cost exceeds the default budget; other apps keep the tighter
-    /// timeout so hangs still fail promptly.
+    /// Issue #3501: returns the bounded stage-4 budget for one mirrored test
+    /// project, scaled to the amount of work that project actually has to do.
+    /// <para>
+    /// The budget used to be one global constant, and issue #4045 punched a
+    /// single hand-set hole in it for <c>Compiler.Tests</c>. Both shapes are
+    /// wrong for the same reason: a timeout is supposed to answer "is this run
+    /// stuck?", and a constant answers "is this suite bigger than the one I was
+    /// sized against?" instead. When it fires on a big-but-healthy suite the
+    /// cost is not merely a slow job — the killed run carries no VSTest
+    /// summary, so the app produces NO parity count at all and cannot be driven
+    /// to green, because nobody can see what is failing. That is what blocked
+    /// <c>tools/cs2gs/Cs2Gs.Tests</c> (2,579 declared <c>[Fact]</c> methods;
+    /// its C# ORIGINAL alone runs 2,891 cases in 21 minutes when measured
+    /// locally — the migrated run has never reported a count, which is the
+    /// point) under a 10-minute budget it could never have met.
+    /// </para>
+    /// <para>
+    /// The scale signal is the <c>[Fact]</c> count of the app's own C# original
+    /// — the number the parity stage already computes and already trusts as the
+    /// lower bound on executed cases (issue #3869), so no new measurement,
+    /// no new file, and no new way for the two to disagree. Two other available
+    /// signals were deliberately NOT used:
+    /// <c>build/selfmig-shard-costs.json</c> is a per-app WALL TIME republished
+    /// by each nightly, so deriving a timeout from it is circular — a killed
+    /// run's recorded cost is capped by the very budget being derived, and the
+    /// number a hang writes would fund the next hang; and the migrated suite's
+    /// own runtime cannot be consulted before the run it is meant to bound.
+    /// A count of declared tests, by contrast, is a property of the source: it
+    /// moves only when someone writes or deletes a test.
+    /// </para>
+    /// <para>
+    /// The result is clamped on both ends. Below
+    /// <see cref="MirroredTestRunTimeout"/> nothing changes for the ~50 small
+    /// apps in the corpus, so a hang there still fails in ten minutes; above
+    /// <see cref="MirroredTestRunTimeoutCeiling"/> the budget stops growing so
+    /// no app can take its shard past the CI job limit. The value is rounded up
+    /// to whole minutes because it is quoted verbatim in the
+    /// <c>LIBRARY-TESTS-TIMED-OUT</c> diagnostic (#3931), and a budget printed
+    /// to the millisecond reads like a measurement rather than a policy.
+    /// </para>
     /// </summary>
-    /// <param name="appId">The repository-relative app id.</param>
-    /// <returns>The deterministic per-app test budget.</returns>
-    internal static TimeSpan MirroredTestRunTimeoutFor(string appId) =>
-        string.Equals(
-            appId,
-            "test/Compiler.Tests/Compiler.Tests.csproj",
-            StringComparison.Ordinal)
-                ? TimeSpan.FromMinutes(90)
-                : MirroredTestRunTimeout;
+    /// <param name="declaredTestMethods">
+    /// The number of <c>[Fact]</c> methods declared by the app's C# original
+    /// (<c>TestParityStage.CountCSharpFactMethods</c>). Zero — an app whose
+    /// sources could not be counted — yields the floor, never something
+    /// smaller.
+    /// </param>
+    /// <returns>The deterministic, size-derived per-app test budget.</returns>
+    internal static TimeSpan MirroredTestRunTimeoutFor(int declaredTestMethods)
+    {
+        if (declaredTestMethods <= 0)
+        {
+            return MirroredTestRunTimeout;
+        }
+
+        double seconds = MirroredTestRunFixedOverhead.TotalSeconds +
+            (declaredTestMethods * MirroredTestRunSecondsPerDeclaredTest);
+        TimeSpan scaled = TimeSpan.FromMinutes(Math.Ceiling(seconds / 60.0));
+        if (scaled < MirroredTestRunTimeout)
+        {
+            return MirroredTestRunTimeout;
+        }
+
+        return scaled > MirroredTestRunTimeoutCeiling ? MirroredTestRunTimeoutCeiling : scaled;
+    }
 
     internal static ProcessRunResult TestMirroredProject(
         string generatedProjectPath,

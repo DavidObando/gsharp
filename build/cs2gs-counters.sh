@@ -114,12 +114,139 @@ cs2gs_raw_lines() {
 # characters. A line is single-atom-bounded when its indentation plus the
 # widest string/identifier atom already exceeds the budget; no formatter
 # can shorten that line without changing the token stream (ADR-0179).
+#
+# Deciding which lines sit inside a backtick raw string used to be
+# `raw_line.count("`") % 2` -- toggle a flag on odd backtick parity, per line.
+# Issue #4082: that counts backticks that are not raw-string delimiters at all.
+# A backtick inside a "..." literal is text (DiagnosticDescriptors.gs says
+# "Use ```xmldoc for complex XML-doc constructs."), a backtick inside a `//`
+# comment is prose (Binder.gs writes "mangled name `Name`N`"), and '`' is a
+# character literal (GSharpPrinter.gs tests for one). Each of those flipped the
+# flag with NOTHING to flip it back, and while the flag is wrongly set the
+# widest atom is taken to be the whole line -- so every later long line in the
+# file is filed as single-atom-bounded, the bucket meaning "no formatter can
+# reach this". On the run-34232380469 tree that misfiled 121 of 590 long lines,
+# every one of them in the direction that hides work from the GATED reducible
+# count.
+#
+# The fix is a file-level scan rather than a wider per-line mask, deliberately.
+# Masking only "..." literals recovers 70 of those 121 and still leaves 51
+# misfiled by the comment and character-literal cases, and it
+# leaves the real fragility in place: a heuristic whose failure mode is
+# UNBOUNDED, because one bad line silently corrupts every line after it.
+# raw_string_flags below tracks the lexical state each line STARTS in, so a
+# backtick only opens a raw string where a raw string can actually open. The
+# blast radius is bounded as well: a "..." or '...' literal cannot span a
+# newline, so any state this scanner does get wrong is reset at the next line
+# instead of running to end of file. (Raw strings, block comments and ADR-0055
+# multiline interpolation holes genuinely do span newlines and are carried
+# across, matching the real lexer.)
+#
+# Fidelity to Lexer.cs is the whole point, so the two places this scanner
+# initially diverged from it are fixed even though neither moves a count on
+# today's tree: `$$` escaping to a literal `$` (Lexer.cs:905-915) and multiline
+# `${...}` holes (Lexer.cs:824-830). A scanner that mishandles a construct the
+# real lexer accepts is the same class of latent, input-dependent corruption
+# #4082 was, and the count being right today is luck rather than design.
 cs2gs_long_line_counts() {
   local tree=$1
   python3 - 3< <(cs2gs_find_translated_sources "$tree" -print0) <<'PY'
 import os
 import pathlib
 import re
+
+
+def raw_string_flags(lines):
+    """For each line, whether it STARTS inside a backtick raw string.
+
+    A small lexer over G# surface syntax: backtick raw strings (which have no
+    escape, so the next backtick always closes one), "..." literals (backslash
+    escapes, `$$` escaping to a literal `$`, plus ${...} interpolation holes
+    whose contents are code and may contain nested string literals), '...'
+    character literals, // line comments and /* */ block comments. Only raw
+    strings, block comments and interpolation holes carry across a newline;
+    every other state is reset there, so a misread cannot cascade past the line
+    that caused it.
+    """
+    flags = []
+    state = "code"
+    holes = []
+    depth = 0
+    for line in lines:
+        flags.append(state == "raw")
+        index, length = 0, len(line)
+        while index < length:
+            char = line[index]
+            nxt = line[index + 1] if index + 1 < length else ""
+            if state == "code":
+                if char == "`":
+                    state = "raw"
+                elif char == '"':
+                    state = "dq"
+                elif char == "'":
+                    state = "char"
+                elif char == "/" and nxt == "/":
+                    break
+                elif char == "/" and nxt == "*":
+                    state = "block"
+                    index += 1
+                elif holes:
+                    if char == "{":
+                        depth += 1
+                    elif char == "}":
+                        if depth == 0:
+                            state = "dq"
+                            depth = holes.pop()
+                        else:
+                            depth -= 1
+            elif state == "raw":
+                if char == "`":
+                    state = "code"
+            elif state == "dq":
+                if char == "\\":
+                    index += 1
+                elif char == "$" and nxt == "$":
+                    # `$$` is the escape for a literal `$` (Lexer.cs:905-915),
+                    # so the second `$` cannot open a hole: in "$${" the brace
+                    # is an ordinary character and the literal runs on. Reading
+                    # it as an opener instead swallows the literal's own closing
+                    # quote as the START of a new one, and a raw-string opener
+                    # later on that line is then lost inside it.
+                    index += 1
+                elif char == "$" and nxt == "{":
+                    holes.append(depth)
+                    depth = 0
+                    state = "code"
+                    index += 1
+                elif char == '"':
+                    state = "code"
+            elif state == "char":
+                if char == "\\":
+                    index += 1
+                elif char == "'":
+                    state = "code"
+            elif state == "block":
+                if char == "*" and nxt == "/":
+                    state = "code"
+                    index += 1
+            index += 1
+        if state not in ("raw", "block"):
+            # A "..." or '...' literal cannot span a newline -- Lexer.cs:824-830
+            # reports a diagnostic for one that tries -- so the line boundary
+            # ends it and a misread costs one line, not the rest of the file.
+            state = "code"
+
+        # `holes`/`depth` deliberately SURVIVE the boundary. ADR-0055 holes are
+        # scanned by a sub-scanner that permits newlines (Lexer.cs:824-830,
+        # samples/InterpolatedStringRichHoles.gs:17-19), so a `${` opened on one
+        # line may close on a later one. Clearing the stack here left the
+        # continuation's `}` unable to restore `dq`, and the rest of that line
+        # -- including any raw-string opener on it -- was then read in the wrong
+        # state. Carrying the stack does not reintroduce an unbounded failure
+        # mode: a stale entry can only turn a later top-level `}` into `dq`, and
+        # `dq` is itself reset at the next boundary by the branch above.
+    return flags
+
 
 string_atom = re.compile(r'"(?:\\.|[^"\\])*"')
 identifier_atom = re.compile(r'\b[A-Za-z_$][A-Za-z0-9_$]*\b')
@@ -129,16 +256,15 @@ for raw_path in os.fdopen(3, "rb").read().split(b"\0"):
     if not raw_path:
         continue
     path = pathlib.Path(os.fsdecode(raw_path))
-    in_raw = False
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    in_raw_flags = raw_string_flags(lines)
+    for line_index, raw_line in enumerate(lines):
         if len(raw_line) <= 300:
-            if raw_line.count("`") % 2:
-                in_raw = not in_raw
             continue
 
         indent = len(raw_line) - len(raw_line.lstrip())
         widest = 0
-        if in_raw:
+        if in_raw_flags[line_index]:
             widest = len(raw_line.lstrip())
         else:
             widest = max(
@@ -151,9 +277,6 @@ for raw_path in os.fdopen(3, "rb").read().split(b"\0"):
             atomic += 1
         else:
             reducible += 1
-
-        if raw_line.count("`") % 2:
-            in_raw = not in_raw
 
 print(reducible, atomic, reducible + atomic)
 PY

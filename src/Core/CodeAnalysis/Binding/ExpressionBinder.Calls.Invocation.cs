@@ -451,7 +451,7 @@ internal sealed partial class ExpressionBinder
     /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
     private static TypeSymbol? ResolveInstanceReturnTypeFromReceiver(TypeSymbol receiverType, System.Reflection.MethodInfo? closedMethod)
     {
-        if (receiverType is not ImportedTypeSymbol imp
+        if (MemberLookup.GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp
             || imp.OpenDefinition == null
             || imp.TypeArguments.IsDefaultOrEmpty
             || closedMethod == null)
@@ -485,7 +485,10 @@ internal sealed partial class ExpressionBinder
             openMethod,
             BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod));
 
-        return mapped;
+        return NullableFlagsBuilder.MergeDeclarationNullability(
+            mapped,
+            openReturn,
+            ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod));
     }
 
     /// <summary>
@@ -541,7 +544,8 @@ internal sealed partial class ExpressionBinder
         System.Reflection.MethodInfo? closedMethod,
         int paramIndex)
     {
-        if (receiverType is not ImportedTypeSymbol imp
+        if (receiverType == null
+            || MemberLookup.GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp
             || imp.OpenDefinition == null
             || imp.TypeArguments.IsDefaultOrEmpty
             || closedMethod == null
@@ -575,12 +579,16 @@ internal sealed partial class ExpressionBinder
         // generic method on a symbolically-constructed receiver (e.g.
         // `Dictionary[K, V].TryAdd`-shaped generic members) does not project to
         // the open method type parameter.
-        return MemberLookup.MapOpenClrTypeToSymbolic(
+        var openParameter = openParameters[paramIndex];
+        return NullableFlagsBuilder.MergeDeclarationNullability(
+            MemberLookup.MapOpenClrTypeToSymbolic(
+                openPointee,
+                imp.OpenDefinition,
+                imp.TypeArguments,
+                openMethod,
+                BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)),
             openPointee,
-            imp.OpenDefinition,
-            imp.TypeArguments,
-            openMethod,
-            BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod));
+            ClrNullability.ReadNullableFlags(openParameter, openMethod));
     }
 
     /// <summary>

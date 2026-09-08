@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Emit;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
@@ -84,7 +85,16 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
         if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
             && (uint)argIndex < (uint)symbolicBase.TypeArguments.Length)
         {
-            derived = TransferTupleNames(symbolicBase.TypeArguments[argIndex], derived);
+            var symbolicArgument = symbolicBase.TypeArguments[argIndex];
+            derived = TypeSymbol.ContainsNamedTupleElements(symbolicArgument)
+                ? TransferTupleNames(symbolicArgument, derived)
+                : NullableFlagsBuilder.MergeDeclarationNullability(
+                    symbolicArgument,
+                    args[argIndex],
+                    ClrNullability.GetNullableFlagsForSubtree(
+                        args[argIndex],
+                        NullableFlags,
+                        offset));
         }
 
         return derived;

@@ -96,6 +96,25 @@ defects with cheap fixes (Phase 9), and fixing them is *faster* than the formatt
 > reported 626. Any local before/after must be taken in the character scale to be
 > comparable to `longLineCeiling`.
 
+> **Correction (issue #4082).** The **~27-line irreducible floor** stated above was
+> computed from a `single-atom-bounded` bucket that the counter was inflating, and it
+> must not be reused as a target. `cs2gs_long_line_counts` decided whether a line sat
+> inside a backtick raw string by toggling a flag on **per-line backtick parity**,
+> which counted backticks that are not raw-string delimiters: one inside a `"…"`
+> literal, one inside a `//` comment, one as the `` '`' `` character literal. Each
+> flipped the flag on with nothing later in the file to flip it back, and while it is
+> on the widest atom is taken to be the *whole line* — so every subsequent long line
+> in that file was filed as unreachable. On the tree of gate run 34232380469 that
+> misfiled **121 of 590** long lines: the counter read 433 reducible / 157
+> single-atom-bounded, and reads **554 / 36** once raw-string state is tracked by a
+> file-level lexical scan instead. The corrected bucket of 36 is 33 lines that *are*
+> one over-budget string literal plus 3 raw-string body lines, which is consistent
+> with the ~27 estimate above rather than with 157. The 121 recovered lines are
+> ordinary multi-argument calls — phase 6/7 argument-list wrapping work that the
+> metric had been hiding, not new drift. `longLineCeiling` was re-baselined 450 → 570
+> in the same PR; the ledger entry in `tools/cs2gs/selfmig-baseline.json` records that
+> the tree did not change, only the measurement.
+
 ### Is the syntax tree formattable at all?
 
 **The tree is not full-fidelity. The token stream is.**
@@ -528,7 +547,7 @@ touch. It was **done first**, for exactly that reason — and it is what finally
 | gsfmt breaks the nightly gate by existing (#3831/#3896/#3905/#3915) | high | `guard_apps` from Phase 1; C# subset restricted to what `Cs2Gs.CodeModel` proves translatable |
 | Position-joining trivia binder is fragile (interpolated-string sub-ranges, #1605) | high | Phase 1 is a spike whose exit criterion is round-tripping every `.gs` in the repo; if it fails, escalate to alternative E |
 | Phase 7 golden churn larger than estimated | medium | 7a measures before 7b commits; churn lands in one mechanical PR |
-| LS formatting tests cannot be validated — migrated `LanguageServer.Tests` already exceeds the 10-minute parity budget (#3931) | medium | Phase 5 depends on #3931; do not add tests to that project until it is fixed, or the parity numbers become truncation artifacts |
+| LS formatting tests cannot be validated — migrated `LanguageServer.Tests` sat close to the flat 10-minute parity budget (#3931) | low | Reduced, not retired: the mirrored-test budget is now derived from the app's declared `[Fact]` count rather than fixed for the whole corpus (#3501), so `LanguageServer.Tests` is budgeted for the tests it actually has (~16 minutes today) and that budget is **non-decreasing** in the declared count — adding tests can never shrink it. It does not track every addition, though: only `[Fact]` methods are counted (a `[Theory]` is not counted at all), the value is rounded up to whole minutes, and it is clamped to 10 and 90 minutes, so ~40 added facts buy one extra minute and most single additions buy none. Residual risk: a theory-heavy or unusually expensive batch can grow the executed-case count substantially while the budget does not move at all, putting this project back into truncation — check such a batch against the measured run time rather than assuming the sizing absorbed it |
 | Users lose their configured indent width | low | ignoring `FormattingOptions` is stated in the release note; it is the point of D2 |
 | Formatter output uglier than hand-written G# somewhere | low | `samples/` reviewed by hand in Phase 8 before CI `--check` is enabled |
 
