@@ -1279,10 +1279,11 @@ public sealed class LspServer
         }
     }
 
-    // Re-evaluates diagnostics for open documents once background workspace discovery has
-    // finished. A file opened before discovery completed was initially bound without its
-    // project's references. Pull clients are asked to re-pull; push-only clients get a new
-    // full bind against the now-discovered project.
+    // Refreshes open-document snapshots once background workspace discovery has finished.
+    // A file opened before discovery completed was initially recorded without its owning
+    // project, so every project-aware feature (definition, hover, references, diagnostics,
+    // etc.) must see a replacement snapshot. Pull clients are then asked to re-pull
+    // diagnostics; push-only clients get a new full bind immediately.
     private void RefreshOpenDocumentDiagnosticsAfterDiscovery()
     {
         this.TestOnDiagnosticRefreshAfterDiscovery?.Invoke();
@@ -1294,12 +1295,6 @@ public sealed class LspServer
     // retain its existing per-document cancellation ordering.
     private void RefreshOpenDocumentDiagnostics()
     {
-        if (this.clientSupportsPullDiagnostics)
-        {
-            this.RequestDiagnosticRefresh();
-            return;
-        }
-
         foreach (var document in this.documentContentService.AllDocuments.ToList())
         {
             var uri = DocumentUri.From(document.Key);
@@ -1318,9 +1313,17 @@ public sealed class LspServer
                 project,
                 this.workspaceState);
             this.documentContentService.AddOrUpdate(document.Key, content);
-            this.SchedulePushDiagnosticsBind(
-                uri,
-                new DiagnosticComputationResult(content, Array.Empty<Diagnostic>()));
+            if (!this.clientSupportsPullDiagnostics)
+            {
+                this.SchedulePushDiagnosticsBind(
+                    uri,
+                    new DiagnosticComputationResult(content, Array.Empty<Diagnostic>()));
+            }
+        }
+
+        if (this.clientSupportsPullDiagnostics)
+        {
+            this.RequestDiagnosticRefresh();
         }
     }
 

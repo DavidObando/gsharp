@@ -12,7 +12,7 @@ const serverTargetDir = path.join(__dirname, '.server');
 /** Build the .NET Language Server and copy it to .server/ */
 function buildLanguageServer() {
   console.log('Building GSharp Language Server...');
-  execSync('dotnet build src/LanguageServer -nologo -clp:NoSummary', {
+  execSync('dotnet build src/LanguageServer -nologo -clp:NoSummary -p:NuGetAudit=false', {
     cwd: repoRoot,
     stdio: 'inherit',
   });

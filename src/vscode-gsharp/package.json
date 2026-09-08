@@ -344,7 +344,7 @@
     "lint": "eslint src --ext ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "test:unit": "jest --passWithNoTests",
-    "test:integration": "node ./out/test/runTest.js",
+    "test:integration": "npm run compile && node ./test/live/runTest.js",
     "package": "vsce package"
   },
   "dependencies": {

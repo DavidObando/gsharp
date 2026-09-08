@@ -201,6 +201,43 @@ public class ProjectStateTests
     }
 
     [Fact]
+    public void GetCompilation_DiscoversResponseFileCreatedAfterProjectLoad()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        try
+        {
+            Directory.CreateDirectory(tempDir);
+            var projectPath = Path.Combine(tempDir, "Sample.gsproj");
+            var sourcePath = Path.Combine(tempDir, "Program.gs");
+            File.WriteAllText(projectPath, "<Project Sdk=\"Gsharp.NET.Sdk\" />");
+            File.WriteAllText(sourcePath, "import System\nvar value = Uri(\"https://example.com\")\n");
+
+            var project = new ProjectState(projectPath);
+            project.AssemblyName = "Sample";
+            project.AddFileFromDisk(sourcePath);
+            var first = project.GetCompilation();
+
+            var rspDir = Path.Combine(tempDir, "obj", "Debug", "net10.0");
+            Directory.CreateDirectory(rspDir);
+            File.WriteAllLines(
+                Path.Combine(rspDir, "Sample.rsp"),
+                new[] { "/r:" + typeof(Uri).Assembly.Location });
+
+            Thread.Sleep(1100);
+            var second = project.GetCompilation();
+
+            Assert.NotSame(first, second);
+            Assert.NotNull(second.References);
+            Assert.Single(second.References.Assemblies);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); }
+            catch (IOException) { }
+        }
+    }
+
+    [Fact]
     public void UpdateFile_WithIdenticalText_PreservesCompilationCache()
     {
         // Hot-path optimization: the LSP re-invokes ComputeDiagnostics (which calls
