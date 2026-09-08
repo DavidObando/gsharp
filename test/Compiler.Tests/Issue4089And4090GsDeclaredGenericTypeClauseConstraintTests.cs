@@ -73,11 +73,23 @@ namespace GSharp.Compiler.Tests;
 /// predicate's reach to every type clause turned two latent false ACCEPTS into
 /// false REJECTIONS — the worse direction, and the reason both are repaired in
 /// this change rather than deferred.</para>
-/// <para><b>#4136</b>: the <c>ClrInterfaceConstraint</c> arm used the bare
-/// reflective probe, so <c>class D : IDisposable</c> did not satisfy
-/// <c>[TD IDisposable]</c>. Routed through <c>BoundCarriesClrInterface</c>, the
-/// same walk #4068 and #4092 gave the dependent-bound and forwarding arms.
-/// <b>#4139</b>: <c>IsNonNullableValueTypeForConstraint</c> fell through to the
+/// <para><b>#4136 — and it turned out to be a DUPLICATE, which is worth
+/// recording rather than quietly dropping.</b> The <c>ClrInterfaceConstraint</c>
+/// arm used the bare reflective probe, so <c>class D : IDisposable</c> did not
+/// satisfy <c>[TD IDisposable]</c>. That is #4124, which PR #4138 fixes at the
+/// shared leaf: it splits the reflective body out of
+/// <c>SatisfiesClrInterfaceConstraint</c> and wraps EVERY exit of it with the
+/// symbolic walk, deleting <c>BoundCarriesClrInterface</c> and the two
+/// caller-side copies. This arm already called
+/// <c>SatisfiesClrInterfaceConstraint</c>, so on that base it inherits the
+/// repair for free and the interim one-line routing here is dropped on the
+/// rebase. The rows stay: they are the TYPE-CLAUSE spelling, which is a
+/// position #4090 newly brings under the predicate and which #4124's own repro
+/// does not cover.</para>
+/// <para><b>#4139</b>, by contrast, is not covered by #4138 — measured, its
+/// diff touches none of <c>IsNonNullableValueTypeForConstraint</c>,
+/// <c>IsUnmanagedTypeForConstraint</c> or <c>EnumSymbol</c>.
+/// <c>IsNonNullableValueTypeForConstraint</c> fell through to the
 /// CLR probe for an <c>EnumSymbol</c>, so a source <c>enum Color</c> did not
 /// satisfy <c>struct</c> — which is how it was found, because
 /// <c>Issue2390NullableSameCompilationEnumBoxingEmitTests</c>'

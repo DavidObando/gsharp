@@ -7618,20 +7618,25 @@ public sealed class Binder
         // `[T IComparable[T]]`. The type argument must implement the (self-ref
         // substituted) closed interface.
         //
-        // Issue #4090: through `BoundCarriesClrInterface`, which is the SAME
-        // walk #4068 and #4092 gave the dependent-bound and forwarding arms,
-        // rather than the bare reflective probe. The reflective probe reads
-        // `typeArgument.ClrType.GetInterfaces()`, and a SAME-COMPILATION class
-        // has no CLR type while binding — so `class D : IDisposable` used as
-        // `GsDisposable[D]` over `GsDisposable[TD IDisposable]` was reported as
-        // a violation on a program `csc` and the CLR both accept. That false
-        // rejection is measurable on `main` at the CONSTRUCTOR spelling
-        // (`GsDisposable[D]()`), which has always run this predicate and is
-        // filed as #4136; #4090
-        // widens the predicate's reach to every type clause, so the last of the
-        // three arms is brought to the shared walk here. It is consulted only
-        // when the reflective answer is "no", so nothing that already passed
-        // changes.
+        // TEMPORARY, and DELETE THIS on the rebase onto merged #4138. The bare
+        // reflective probe reads `typeArgument.ClrType.GetInterfaces()`, and a
+        // SAME-COMPILATION class has no CLR type while binding — so
+        // `class D : IDisposable` at `GsDisposable[TD IDisposable]` was refused
+        // on a program `csc` and the CLR both accept. #4090 widens this
+        // predicate's reach to every type clause, so shipping over that would
+        // turn a latent false ACCEPT into a false REJECTION, which is the worse
+        // direction; hence the interim routing through
+        // `BoundCarriesClrInterface`.
+        //
+        // It is a DUPLICATE of #4124, which PR #4138 fixes properly by moving
+        // the fallback INTO `SatisfiesClrInterfaceConstraint` itself (the
+        // reflective body split out, the symbolic walk wrapping every exit) and
+        // DELETING `BoundCarriesClrInterface` along with the two caller-side
+        // copies at #4068's and #4092's sites. This arm already called
+        // `SatisfiesClrInterfaceConstraint`, so on that base it inherits the
+        // repair for free. #4136 was filed for this and has been closed as a
+        // duplicate. Resolution when the rebase conflicts here: restore
+        // `SatisfiesClrInterfaceConstraint(typeArgument, tp.ClrInterfaceConstraint, tp)`.
         if (tp.ClrInterfaceConstraint != null
             && !BoundCarriesClrInterface(typeArgument, tp.ClrInterfaceConstraint, tp))
         {
