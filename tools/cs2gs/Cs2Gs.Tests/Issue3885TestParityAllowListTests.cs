@@ -709,7 +709,14 @@ public sealed class Issue3885TestParityAllowListTests
         string baseline = Path.Combine(dir, "baseline.json");
 
         File.WriteAllText(runJson, """
-            { "apps": [ { "appId": "test/Sdk.Tests/Sdk.Tests.csproj", "succeeded": true,
+            { "apps": [ { "appId": "test/Sdk.Tests/Sdk.Tests.csproj",
+                "succeeded": true, "unverified": false,
+                "stages": [
+                  { "stage": "translate", "status": "passed" },
+                  { "stage": "compile", "status": "passed" },
+                  { "stage": "ilverify", "status": "passed" },
+                  { "stage": "test-parity", "status": "passed" }
+                ],
                 "allowedTestFailures": [ "GSharp.Sdk.Tests.SdkLayoutTests.Sdk_Csproj_Packs_As_MSBuildSdk" ],
                 "staleAllowListEntries": [ "SdkLayoutTests.Gone (test/Sdk.Tests/Sdk.Tests.csproj, #3885)" ] } ] }
             """);

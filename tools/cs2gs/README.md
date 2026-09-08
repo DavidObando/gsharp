@@ -207,6 +207,35 @@ triage artifact; later stages are reported as `skip`.
    `Gsharp.NET.Sdk`) and compares the passing/failing test set against the C#
    xUnit oracle. Failures → `test-parity-failure`.
 
+#### The self-migration stage floor (`selfmig-baseline.json`, #4058)
+
+`greenFloor` and `greenApps` protect the fully-green set. `stageFloor` protects
+each remaining red app from silently moving backward within the fixed pipeline:
+
+```json
+"stageFloor": {
+  "test/Core.Tests/Core.Tests.csproj": "compile"
+}
+```
+
+The value is the **furthest attempted stage**, not the furthest passed stage.
+Both `passed` and `failed` prove that a stage was reached; `skipped` and
+`not-applicable` do not. Thus a red app that fails at `test-parity` has a
+`test-parity` floor, while a run in which it fails at `compile` is a regression.
+Missing, duplicate, out-of-order, or unknown stage rows fail closed.
+
+Advancement is advisory so the PR that earns a win can pass: the gate prints
+the old and new stages to bank in `stageFloor`. When an app becomes fully
+green, move it from `stageFloor` to `greenApps` and advance `greenFloor` in the
+same verified re-baseline. New red apps are reported until their observed
+stage is added. Removed apps fail while still named by either identity ratchet;
+remove them only in the corpus-changing PR.
+
+The gate never lowers or deletes a floor automatically. A deliberate new gap
+therefore requires an explicit re-baseline, with the evidence and reason added
+to the top-level `comment` string. JSON comments are not valid baseline
+metadata.
+
 #### The test-parity failure allow-list (`selfmig-test-allowlist.json`, #3885)
 
 Some migrated tests cannot pass, and should not be made to. A test that asserts
