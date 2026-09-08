@@ -1314,7 +1314,7 @@ internal sealed partial class ExpressionBinder
                     group,
                     out symbolicGroupType,
                     delegateParameters.Length);
-            if (!recovered)
+            if (!recovered || symbolicGroupType == null)
             {
                 continue;
             }
