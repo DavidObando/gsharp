@@ -1555,10 +1555,11 @@ internal sealed class MemberLookup
     /// <c>MVar(idx)</c> slot, then returns the per-ordinal vector. When
     /// some slot is still missing the corresponding entry is <see langword="null"/>
     /// — callers must treat <see langword="null"/> as "no symbolic
-    /// override; fall back to the closed-CLR projection". A conflicting or
-    /// unfixable bound set uses a private sentinel distinct from
-    /// <see cref="TypeSymbol.Error"/>, which is also the unresolved type of
-    /// target-typed literals and deferred arguments.
+    /// override; fall back to the closed-CLR projection". Conflicting exact
+    /// or upper bounds use a private sentinel distinct from
+    /// <see cref="TypeSymbol.Error"/>, while lower-only bounds with no symbolic
+    /// common type remain unresolved so CLR inference can supply the erased
+    /// common type.
     /// </summary>
     /// <param name="openMethod">The open generic method definition.</param>
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver included as slot 0 for extension methods).</param>
@@ -6744,7 +6745,8 @@ internal sealed class MemberLookup
                 fixedType = exact[0];
                 for (var i = 1; i < exact.Count; i++)
                 {
-                    if (!DeclarationBinder.TypeSignaturesEquivalent(fixedType, exact[i]))
+                    if (!DeclarationBinder.TypeSignaturesEquivalent(fixedType, exact[i])
+                        && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(fixedType, exact[i]))
                     {
                         fixedType = SymbolicInferenceConflict;
                         break;
@@ -6766,8 +6768,15 @@ internal sealed class MemberLookup
                 continue;
             }
 
-            if (fixedType == null
-                || IsSymbolicInferenceConflict(fixedType)
+            if (fixedType == null)
+            {
+                result[slot] = exact is { Count: > 0 } || upper is { Count: > 0 }
+                    ? SymbolicInferenceConflict
+                    : null;
+                continue;
+            }
+
+            if (IsSymbolicInferenceConflict(fixedType)
                 || !SatisfiesSymbolicInferenceBounds(fixedType, lower, upper))
             {
                 result[slot] = SymbolicInferenceConflict;
@@ -7183,7 +7192,7 @@ internal sealed class MemberLookup
                     actual,
                     openMethod,
                     bounds,
-                    GetNestedInferenceBoundKind(openDef, 0, boundKind));
+                    boundKind);
                 return;
             }
 
@@ -8110,7 +8119,14 @@ internal sealed class MemberLookup
                 SymbolicInferenceBoundKind.Upper => this.Upper,
                 _ => this.Lower,
             };
-            (slots[position] ??= new List<TypeSymbol>()).Add(type);
+            var slot = slots[position];
+            if (slot == null)
+            {
+                slot = new List<TypeSymbol>();
+                slots[position] = slot;
+            }
+
+            slot.Add(type);
         }
     }
 

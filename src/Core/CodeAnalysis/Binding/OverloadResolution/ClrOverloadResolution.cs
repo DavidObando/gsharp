@@ -3091,7 +3091,10 @@ internal static class ClrOverloadResolution
                 }
 
                 Type[]? typeArgs = null;
-                var useRecoveredInference = !HasDeferredMethodGroupArgument(
+                // CLR inference remains authoritative for ordinary arguments;
+                // symbolic-first closure is only needed for withheld arguments.
+                var useRecoveredInference = HasDeferredInferenceArgument(deferredInferenceArgs)
+                    && !HasDeferredMethodGroupArgument(
                         argTypes.Count,
                         methodGroupArgumentCheck)
                     && TryRecoverErasedTypeArguments(
@@ -3100,7 +3103,12 @@ internal static class ClrOverloadResolution
                         projectTypeArgument,
                         out typeArgs);
                 if (!useRecoveredInference
-                    && !TryInferTypeArguments(mi, inferenceArgTypes, out typeArgs, inferenceMethodGroup))
+                    && !TryInferTypeArguments(mi, inferenceArgTypes, out typeArgs, inferenceMethodGroup)
+                    && !TryRecoverErasedTypeArguments(
+                        mi,
+                        symbolicTypeArgs,
+                        projectTypeArgument,
+                        out typeArgs))
                 {
                     return;
                 }
@@ -3499,6 +3507,24 @@ internal static class ClrOverloadResolution
         return false;
     }
 
+    private static bool HasDeferredInferenceArgument(IReadOnlyList<bool>? deferredInferenceArgs)
+    {
+        if (deferredInferenceArgs == null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < deferredInferenceArgs.Count; i++)
+        {
+            if (deferredInferenceArgs[i])
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsMethodGroupSignatureCompatible(
         (Type[] Parameters, Type Return)? signature,
         IReadOnlyList<Type> delegateParameters,
@@ -3618,9 +3644,10 @@ internal static class ClrOverloadResolution
 
             Type[]? typeArgs = null;
 
-            // Let a deferred method group contribute output bounds below before
-            // a partial symbolic vector can close the candidate.
-            var useRecoveredInference = !HasDeferredMethodGroupArgument(
+            // CLR inference owns ordinary and method-group evidence. Only
+            // withheld non-method-group arguments require symbolic-first closure.
+            var useRecoveredInference = HasDeferredInferenceArgument(deferredInferenceArgs)
+                && !HasDeferredMethodGroupArgument(
                     argTypes.Count,
                     methodGroupArgumentCheck)
                 && TryRecoverErasedTypeArguments(
@@ -3636,6 +3663,11 @@ internal static class ClrOverloadResolution
                     deferredInferenceArgs,
                     methodGroupInference,
                     methodGroupArgumentCheck,
+                    out typeArgs)
+                && !TryRecoverErasedTypeArguments(
+                    mi,
+                    symbolicTypeArgs,
+                    projectTypeArgument,
                     out typeArgs))
             {
                 return;
