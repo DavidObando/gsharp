@@ -30,6 +30,10 @@ public class ImportedMemberMatrixTests
                 }
             }
 
+            public sealed class DerivedDisposable : DisposableBase
+            {
+            }
+
             public interface IInstanceOverloads
             {
                 string Take<T>(T value) where T : System.IDisposable;
@@ -138,6 +142,36 @@ public class ImportedMemberMatrixTests
 
                 public static System.Collections.Generic.IComparer<object> ObjectComparer()
                     => System.Collections.Generic.Comparer<object>.Default;
+
+                public static System.Action<DisposableBase> BaseAction()
+                    => _ => { };
+
+                public static System.Action<DerivedDisposable> DerivedAction()
+                    => _ => { };
+
+                public static string UpperType<T>(
+                    System.Action<T> first,
+                    System.Action<T> second)
+                    => typeof(T).Name;
+
+                public static string InvariantWinner<T>(
+                    System.Collections.Generic.List<T> first,
+                    System.Collections.Generic.List<T> second)
+                    => "generic-invariant";
+
+                public static string InvariantWinner(
+                    System.Collections.Generic.List<object> first,
+                    object second)
+                    => "object-invariant";
+
+                public static string InvariantParams<T>(
+                    params System.Collections.Generic.List<T>[] values)
+                    => "generic-invariant-params";
+
+                public static string InvariantParams(
+                    System.Collections.Generic.List<object> first,
+                    params object[] rest)
+                    => "object-invariant-params";
             }
             """;
 
@@ -194,6 +228,14 @@ public class ImportedMemberMatrixTests
                 return VarianceOverloads.InterfaceWinner(value, VarianceOverloads.ObjectComparer())
             }
 
+            func throughInvariantConflict[T](value List[T]) string {
+                return VarianceOverloads.InvariantWinner(List[object](), value)
+            }
+
+            func throughInvariantExpandedConflict[T](value List[T]) string {
+                return VarianceOverloads.InvariantParams(List[object](), value)
+            }
+
             func throughConstrainedInstance[TReceiver IInstanceOverloads, TValue DisposableBase](
                 receiver TReceiver,
                 value TValue) string {
@@ -246,6 +288,14 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughDelegateUpperBoundWinner[DisposableBase](DisposableBase()))
             Console.WriteLine(throughInterfaceUpperBoundType[DisposableBase](DisposableBase()))
             Console.WriteLine(throughInterfaceUpperBoundWinner[DisposableBase](DisposableBase()))
+            Console.WriteLine(VarianceOverloads.UpperType(
+                VarianceOverloads.BaseAction(),
+                VarianceOverloads.DerivedAction()))
+            Console.WriteLine(VarianceOverloads.UpperType(
+                VarianceOverloads.DerivedAction(),
+                VarianceOverloads.BaseAction()))
+            Console.WriteLine(throughInvariantConflict[DisposableBase](List[DisposableBase]()))
+            Console.WriteLine(throughInvariantExpandedConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughConstrainedInstance[InstanceOverloads, DisposableBase](
                 InstanceOverloads(),
                 DisposableBase()))
@@ -269,6 +319,8 @@ public class ImportedMemberMatrixTests
                 + $"Object{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"generic-delegate:DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"generic-interface:DisposableBase{Environment.NewLine}"
+                + $"DerivedDisposable{Environment.NewLine}DerivedDisposable{Environment.NewLine}"
+                + $"object-invariant{Environment.NewLine}object-invariant-params{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
                 + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}Object{Environment.NewLine}",

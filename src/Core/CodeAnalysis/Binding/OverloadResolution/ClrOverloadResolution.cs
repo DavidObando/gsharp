@@ -2976,6 +2976,11 @@ internal static class ClrOverloadResolution
                     // `closed`'s parameter types.
                     var constraintTypeArgSymbols = recoverTypeArgSymbols?.Invoke(closed, false) ?? default;
                     resolvedTypeArgSymbols = constraintTypeArgSymbols;
+                    if (HasSymbolicInferenceConflict(resolvedTypeArgSymbols))
+                    {
+                        return;
+                    }
+
                     if (!SatisfiesGenericConstraints(
                             gmi,
                             NormaliseErasedTypeArgsForConstraintCheck(explicitTypeArgsArray, constraintTypeArgSymbols),
@@ -3080,25 +3085,19 @@ internal static class ClrOverloadResolution
                 }
 
                 var symbolicTypeArgs = recoverTypeArgSymbols?.Invoke(mi, false) ?? default;
-                Type[]? typeArgs = null;
-                var hasDeferredInferenceArgument = false;
-                if (deferredInferenceArgs is not null)
+                if (HasSymbolicInferenceConflict(symbolicTypeArgs))
                 {
-                    foreach (var deferred in deferredInferenceArgs)
-                    {
-                        hasDeferredInferenceArgument |= deferred;
-                    }
+                    return;
                 }
 
-                var useRecoveredInference = hasDeferredInferenceArgument
-                    && TryRecoverErasedTypeArguments(
-                        mi,
-                        symbolicTypeArgs,
-                        projectTypeArgument,
-                        out typeArgs);
+                Type[]? typeArgs = null;
+                var useRecoveredInference = TryRecoverErasedTypeArguments(
+                    mi,
+                    symbolicTypeArgs,
+                    projectTypeArgument,
+                    out typeArgs);
                 if (!useRecoveredInference
-                    && !TryInferTypeArguments(mi, inferenceArgTypes, out typeArgs, inferenceMethodGroup)
-                    && !TryRecoverErasedTypeArguments(mi, symbolicTypeArgs, projectTypeArgument, out typeArgs))
+                    && !TryInferTypeArguments(mi, inferenceArgTypes, out typeArgs, inferenceMethodGroup))
                 {
                     return;
                 }
@@ -3144,6 +3143,10 @@ internal static class ClrOverloadResolution
                 catch (ArgumentException ex)
                 {
                     var recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi, false) ?? default;
+                    if (HasSymbolicInferenceConflict(recoveredSymbols))
+                    {
+                        return;
+                    }
 
                     // Issue #1325: live reflection rejects the `object` erasure
                     // of a user value type against a `struct` constraint. Retry
@@ -3173,6 +3176,11 @@ internal static class ClrOverloadResolution
                 // resolver picks the wrong overload, emitting IL that fails
                 // verification at runtime.
                 resolvedTypeArgSymbols = recoverTypeArgSymbols?.Invoke(closed, false) ?? default;
+                if (HasSymbolicInferenceConflict(resolvedTypeArgSymbols))
+                {
+                    return;
+                }
+
                 if (!SatisfiesGenericConstraints(mi, typeArgs, resolvedTypeArgSymbols))
                 {
                     return;
@@ -3244,9 +3252,7 @@ internal static class ClrOverloadResolution
                     rawCandidate,
                     paramIndex,
                     isExpanded: false,
-                    resolvedTypeArgSymbols: resolvedTypeArgSymbols,
-                    symbolicArgTypes: symbolicArgTypes,
-                    argumentMapping: mapping);
+                    resolvedTypeArgSymbols: resolvedTypeArgSymbols);
 
                 // Issue #3989: the CLR comparison just above ranks the ERASED
                 // argument, where an element with no CLR identity is
@@ -3414,9 +3420,7 @@ internal static class ClrOverloadResolution
         MethodBase rawCandidate,
         int parameterIndex,
         bool isExpanded,
-        ImmutableArray<TypeSymbol?> resolvedTypeArgSymbols,
-        IReadOnlyList<TypeSymbol>? symbolicArgTypes,
-        int[]? argumentMapping)
+        ImmutableArray<TypeSymbol?> resolvedTypeArgSymbols)
     {
         if (conversion != ImplicitConversionKind.Identity
             || sourceSymbol is not TypeParameterSymbol sourceTypeParameter
@@ -3448,13 +3452,7 @@ internal static class ClrOverloadResolution
             var position = declaredParameter.GenericParameterPosition;
             if ((uint)position < (uint)resolvedTypeArgSymbols.Length
                 && resolvedTypeArgSymbols[position] is { } recovered
-                && DeclarationBinder.TypeSignaturesEquivalent(recovered, sourceTypeParameter)
-                && !HasGenuineObjectInferenceBound(
-                    openCandidate,
-                    declaredParameter,
-                    symbolicArgTypes,
-                    argumentMapping,
-                    isExpanded))
+                && DeclarationBinder.TypeSignaturesEquivalent(recovered, sourceTypeParameter))
             {
                 return conversion;
             }
@@ -3474,52 +3472,9 @@ internal static class ClrOverloadResolution
             : ImplicitConversionKind.Boxing;
     }
 
-    private static bool HasGenuineObjectInferenceBound(
-        MethodBase openCandidate,
-        Type methodTypeParameter,
-        IReadOnlyList<TypeSymbol>? symbolicArgTypes,
-        int[]? argumentMapping,
-        bool isExpanded)
-    {
-        if (symbolicArgTypes == null
-            || openCandidate is not MethodInfo openMethod)
-        {
-            return false;
-        }
-
-        var parameters = openCandidate.GetParameters();
-        for (var sourceIndex = 0; sourceIndex < symbolicArgTypes.Count; sourceIndex++)
-        {
-            var parameterIndex = argumentMapping != null && sourceIndex < argumentMapping.Length
-                ? argumentMapping[sourceIndex]
-                : sourceIndex;
-            if ((uint)parameterIndex >= (uint)parameters.Length)
-            {
-                continue;
-            }
-
-            var parameter = parameters[parameterIndex];
-            var declaredType = parameter.ParameterType;
-            if (isExpanded
-                && parameterIndex == parameters.Length - 1
-                && IsParamsArrayParameter(parameter)
-                && declaredType.GetElementType() is { } elementType)
-            {
-                declaredType = elementType;
-            }
-
-            if (MemberLookup.HasGenuineObjectInferenceBound(
-                    openMethod,
-                    declaredType,
-                    symbolicArgTypes[sourceIndex],
-                    methodTypeParameter.GenericParameterPosition))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    private static bool HasSymbolicInferenceConflict(ImmutableArray<TypeSymbol?> typeArguments)
+        => !typeArguments.IsDefaultOrEmpty
+            && typeArguments.Any(type => ReferenceEquals(type, TypeSymbol.Error));
 
     private static bool IsMethodGroupSignatureCompatible(
         (Type[] Parameters, Type Return)? signature,
@@ -3605,6 +3560,11 @@ internal static class ClrOverloadResolution
                 resolvedTypeArgSymbols = recoveredSymbols.IsDefault
                     ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default
                     : recoveredSymbols;
+                if (HasSymbolicInferenceConflict(resolvedTypeArgSymbols))
+                {
+                    return;
+                }
+
                 if (!SatisfiesGenericConstraints(
                     gmi,
                     explicitTypeArgs.ToArray(),
@@ -3628,33 +3588,23 @@ internal static class ClrOverloadResolution
         {
             var mi = inferredMethod;
             var symbolicTypeArgs = recoverTypeArgSymbols?.Invoke(mi, true) ?? default;
-            Type[]? typeArgs = null;
-            var hasDeferredInferenceArgument = false;
-            if (deferredInferenceArgs is not null)
+            if (HasSymbolicInferenceConflict(symbolicTypeArgs))
             {
-                foreach (var deferred in deferredInferenceArgs)
-                {
-                    hasDeferredInferenceArgument |= deferred;
-                }
+                return;
             }
 
-            var useRecoveredInference = hasDeferredInferenceArgument
-                && TryRecoverErasedTypeArguments(
-                    mi,
-                    symbolicTypeArgs,
-                    projectTypeArgument,
-                    out typeArgs);
+            Type[]? typeArgs = null;
+            var useRecoveredInference = TryRecoverErasedTypeArguments(
+                mi,
+                symbolicTypeArgs,
+                projectTypeArgument,
+                out typeArgs);
             if (!useRecoveredInference
                 && !TryInferTypeArgumentsForExpandedParams(
                     mi,
                     argTypes,
                     argumentNames,
                     deferredInferenceArgs,
-                    out typeArgs)
-                && !TryRecoverErasedTypeArguments(
-                    mi,
-                    symbolicTypeArgs,
-                    projectTypeArgument,
                     out typeArgs))
             {
                 return;
@@ -3688,6 +3638,11 @@ internal static class ClrOverloadResolution
             catch (ArgumentException ex)
             {
                 recoveredSymbols = recoverTypeArgSymbols?.Invoke(mi, true) ?? default;
+                if (HasSymbolicInferenceConflict(recoveredSymbols))
+                {
+                    return;
+                }
+
                 if (TryCloseOverUserValueTypePlaceholders(mi, typeArgs, recoveredSymbols, out closed))
                 {
                     paramTypeRewrite = RewriteUserValueTypePlaceholder;
@@ -3706,6 +3661,11 @@ internal static class ClrOverloadResolution
             resolvedTypeArgSymbols = recoveredSymbols.IsDefault
                 ? recoverTypeArgSymbols?.Invoke(closed, true) ?? default
                 : recoveredSymbols;
+            if (HasSymbolicInferenceConflict(resolvedTypeArgSymbols))
+            {
+                return;
+            }
+
             if (!SatisfiesGenericConstraints(
                 mi,
                 typeArgs,
@@ -3800,9 +3760,7 @@ internal static class ClrOverloadResolution
                 rawCandidate,
                 slot,
                 isExpanded: true,
-                resolvedTypeArgSymbols: resolvedTypeArgSymbols,
-                symbolicArgTypes: symbolicArgTypes,
-                argumentMapping: mapping);
+                resolvedTypeArgSymbols: resolvedTypeArgSymbols);
 
             // Issue #3989: the same second opinion the normal-form loop takes.
             // A `params object[]` slot is the common shape here, and it is a
@@ -5073,7 +5031,7 @@ internal static class ClrOverloadResolution
         if (openMethod is null
             || recoveredSymbols.IsDefaultOrEmpty
             || recoveredSymbols.Length != openMethod.GetGenericArguments().Length
-            || recoveredSymbols.Any(static symbol => symbol is null))
+            || recoveredSymbols.Any(static symbol => symbol is null || ReferenceEquals(symbol, TypeSymbol.Error)))
         {
             return false;
         }

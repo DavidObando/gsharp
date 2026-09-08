@@ -1552,7 +1552,8 @@ internal sealed class MemberLookup
     /// <c>MVar(idx)</c> slot, then returns the per-ordinal vector. When
     /// some slot is still missing the corresponding entry is <see langword="null"/>
     /// — callers must treat <see langword="null"/> as "no symbolic
-    /// override; fall back to the closed-CLR projection".
+    /// override; fall back to the closed-CLR projection". A conflicting or
+    /// unfixable bound set is represented by <see cref="TypeSymbol.Error"/>.
     /// </summary>
     /// <param name="openMethod">The open generic method definition.</param>
     /// <param name="symbolicArgTypes">Symbolic argument types in call order (receiver included as slot 0 for extension methods).</param>
@@ -1569,8 +1570,7 @@ internal sealed class MemberLookup
         }
 
         var arity = openMethod.GetGenericArguments().Length;
-        var result = new TypeSymbol?[arity];
-        var genuineObjectFixingBounds = new bool[arity];
+        var bounds = new SymbolicInferenceBounds(arity);
 
         var openParams = openMethod.GetParameters();
         var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
@@ -1580,7 +1580,6 @@ internal sealed class MemberLookup
             && openParams[^1].ParameterType.GetElementType() is Type paramsElementType)
         {
             var paramsIndex = openParams.Length - 1;
-            var conflicting = new bool[arity];
             var fixedPairs = Math.Min(paramsIndex, argumentCount);
             for (var i = 0; i < fixedPairs; i++)
             {
@@ -1588,47 +1587,16 @@ internal sealed class MemberLookup
                     openParams[i].ParameterType,
                     symbolicArgTypes[i],
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds);
+                    bounds);
             }
 
             for (var i = paramsIndex; i < argumentCount; i++)
             {
-                var tailInference = new TypeSymbol?[arity];
-                var tailObjectFixingBounds = new bool[arity];
                 UnifyForMethodTypeArgs(
                     paramsElementType,
                     symbolicArgTypes[i],
                     openMethod,
-                    tailInference,
-                    tailObjectFixingBounds);
-                for (var slot = 0; slot < arity; slot++)
-                {
-                    genuineObjectFixingBounds[slot] |= tailObjectFixingBounds[slot];
-                    if (genuineObjectFixingBounds[slot])
-                    {
-                        result[slot] = TypeSymbol.Object;
-                        conflicting[slot] = false;
-                        continue;
-                    }
-
-                    if (conflicting[slot] || tailInference[slot] == null)
-                    {
-                        continue;
-                    }
-
-                    if (result[slot] != null
-                        && !DeclarationBinder.TypeSignaturesEquivalent(result[slot], tailInference[slot]))
-                    {
-                        result[slot] = null;
-                        conflicting[slot] = true;
-                        continue;
-                    }
-
-                    result[slot] = MergeRecoveredTypeArgument(
-                        result[slot],
-                        tailInference[slot]);
-                }
+                    bounds);
             }
         }
         else
@@ -1640,20 +1608,11 @@ internal sealed class MemberLookup
                     openParams[i].ParameterType,
                     symbolicArgTypes[i],
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds);
+                    bounds);
             }
         }
 
-        for (var slot = 0; slot < arity; slot++)
-        {
-            if (genuineObjectFixingBounds[slot])
-            {
-                result[slot] = TypeSymbol.Object;
-            }
-        }
-
-        return result;
+        return FixSymbolicMethodTypeArguments(bounds);
     }
 
     /// <summary>
@@ -1880,6 +1839,7 @@ internal sealed class MemberLookup
             }
         }
 
+        var closedTypeArguments = closed.GetGenericArguments();
         var anySymbolic = false;
         for (int i = 0; i < inferred.Length; i++)
         {
@@ -1902,9 +1862,13 @@ internal sealed class MemberLookup
             // The named-tuple clause above is why the tuple spelling of the
             // same program already worked, which is how the gate was located.
             if (inferred[i] is { } inferredType
-                && (TypeSymbol.RequiresSymbolicProjection(inferredType)
+                && (ReferenceEquals(inferredType, TypeSymbol.Error)
+                    || TypeSymbol.RequiresSymbolicProjection(inferredType)
                     || TypeSymbol.ContainsNamedTupleElements(inferredType)
                     || TypeSymbol.ContainsSourceArrayShape(inferredType)
+                    || (i < closedTypeArguments.Length
+                        && inferredType.ClrType is { } inferredClr
+                        && !ClrTypeUtilities.AreSame(inferredClr, closedTypeArguments[i]))
                     || symbolicArgTypes.Any(
                         symbolic => symbolic != null
                             && TypeSymbol.ContainsNullLiteralType(symbolic))))
@@ -5397,24 +5361,6 @@ internal sealed class MemberLookup
     internal static TypeSymbol? MergeInferredTypeArgument(TypeSymbol? existing, TypeSymbol? incoming)
         => MergeRecoveredTypeArgument(existing, incoming);
 
-    internal static bool HasGenuineObjectInferenceBound(
-        MethodInfo openMethod,
-        Type openParameter,
-        TypeSymbol argument,
-        int typeParameterPosition)
-    {
-        var arity = openMethod.GetGenericArguments().Length;
-        if ((uint)typeParameterPosition >= (uint)arity)
-        {
-            return false;
-        }
-
-        var inferred = new TypeSymbol?[arity];
-        var genuineObjectFixingBounds = new bool[arity];
-        UnifyForMethodTypeArgs(openParameter, argument, openMethod, inferred, genuineObjectFixingBounds);
-        return genuineObjectFixingBounds[typeParameterPosition];
-    }
-
     internal static bool TryMapConstructedTypeArgumentsThroughHierarchy(
         ImportedTypeSymbol source,
         Type targetOpenDefinition,
@@ -6760,25 +6706,118 @@ internal sealed class MemberLookup
         return null;
     }
 
-    /// <summary>
-    /// Issue #3896: folds the bounds recovered from delegate PARAMETER
-    /// positions into the main vector without letting them widen it. A
-    /// delegate parameter constrains the type argument from above, so it may
-    /// fill an empty slot but must never generalise a bound the covariant
-    /// (value) positions already established.
-    /// </summary>
-    /// <param name="result">The main per-ordinal vector, updated in place.</param>
-    /// <param name="contravariant">Bounds recovered from delegate parameters.</param>
-    private static void MergeContravariantBounds(TypeSymbol?[] result, TypeSymbol?[] contravariant)
+    private static TypeSymbol?[] FixSymbolicMethodTypeArguments(SymbolicInferenceBounds bounds)
     {
-        for (var slot = 0; slot < result.Length && slot < contravariant.Length; slot++)
+        var result = new TypeSymbol?[bounds.Arity];
+        for (var slot = 0; slot < bounds.Arity; slot++)
         {
-            if (contravariant[slot] != null)
+            var exact = bounds.Exact[slot];
+            var lower = bounds.Lower[slot];
+            var upper = bounds.Upper[slot];
+
+            TypeSymbol? fixedType;
+            if (exact is { Count: > 0 })
             {
-                result[slot] = MergeRecoveredTypeArgument(result[slot], contravariant[slot], allowBaseWidening: false);
+                fixedType = exact[0];
+                for (var i = 1; i < exact.Count; i++)
+                {
+                    if (!DeclarationBinder.TypeSignaturesEquivalent(fixedType, exact[i]))
+                    {
+                        fixedType = TypeSymbol.Error;
+                        break;
+                    }
+
+                    fixedType = MergeRecoveredTypeArgument(fixedType, exact[i], allowBaseWidening: false);
+                }
+            }
+            else if (lower is { Count: > 0 })
+            {
+                fixedType = FindSymbolicInferenceCandidate(lower, isLowerBound: true);
+            }
+            else if (upper is { Count: > 0 })
+            {
+                fixedType = FindSymbolicInferenceCandidate(upper, isLowerBound: false);
+            }
+            else
+            {
+                continue;
+            }
+
+            if (fixedType == null
+                || ReferenceEquals(fixedType, TypeSymbol.Error)
+                || !SatisfiesSymbolicInferenceBounds(fixedType, lower, upper))
+            {
+                result[slot] = TypeSymbol.Error;
+                continue;
+            }
+
+            result[slot] = fixedType;
+        }
+
+        return result;
+    }
+
+    private static TypeSymbol? FindSymbolicInferenceCandidate(
+        IReadOnlyList<TypeSymbol> bounds,
+        bool isLowerBound)
+    {
+        TypeSymbol? best = null;
+        foreach (var candidate in bounds)
+        {
+            var satisfiesAll = true;
+            foreach (var bound in bounds)
+            {
+                if (!(isLowerBound
+                    ? HasImplicitSymbolicConversion(bound, candidate)
+                    : HasImplicitSymbolicConversion(candidate, bound)))
+                {
+                    satisfiesAll = false;
+                    break;
+                }
+            }
+
+            if (!satisfiesAll)
+            {
+                continue;
+            }
+
+            if (best == null)
+            {
+                best = candidate;
+                continue;
+            }
+
+            if (DeclarationBinder.TypeSignaturesEquivalent(best, candidate))
+            {
+                best = MergeRecoveredTypeArgument(best, candidate, allowBaseWidening: false);
+                continue;
+            }
+
+            var candidateToBest = HasImplicitSymbolicConversion(candidate, best);
+            var bestToCandidate = HasImplicitSymbolicConversion(best, candidate);
+            if (candidateToBest && !bestToCandidate)
+            {
+                best = candidate;
+            }
+            else if (candidateToBest == bestToCandidate)
+            {
+                return null;
             }
         }
+
+        return best;
     }
+
+    private static bool SatisfiesSymbolicInferenceBounds(
+        TypeSymbol candidate,
+        IReadOnlyList<TypeSymbol>? lower,
+        IReadOnlyList<TypeSymbol>? upper)
+        => (lower == null || lower.All(bound => HasImplicitSymbolicConversion(bound, candidate)))
+            && (upper == null || upper.All(bound => HasImplicitSymbolicConversion(candidate, bound)));
+
+    private static bool HasImplicitSymbolicConversion(TypeSymbol source, TypeSymbol target)
+        => DeclarationBinder.TypeSignaturesEquivalent(source, target)
+            || Conversion.Classify(source, target).IsImplicit;
 
     private static SymbolicInferenceBoundKind GetNestedInferenceBoundKind(
         Type openDefinition,
@@ -6811,8 +6850,7 @@ internal sealed class MemberLookup
         Type? openClr,
         TypeSymbol? actual,
         MethodInfo openMethod,
-        TypeSymbol?[] result,
-        bool[]? genuineObjectFixingBounds = null,
+        SymbolicInferenceBounds bounds,
         SymbolicInferenceBoundKind boundKind = SymbolicInferenceBoundKind.Lower)
     {
         if (openClr == null || actual == null)
@@ -6835,21 +6873,9 @@ internal sealed class MemberLookup
                 || openClr.DeclaringMethod.MetadataToken == openMethod.MetadataToken)
             {
                 var pos = openClr.GenericParameterPosition;
-                if ((uint)pos < (uint)result.Length)
+                if ((uint)pos < (uint)bounds.Arity)
                 {
-                    var recovered = NormalizeRecoveredNullability(actual);
-                    if (IsGenuineObjectType(actual)
-                        && boundKind != SymbolicInferenceBoundKind.Upper
-                        && genuineObjectFixingBounds != null
-                        && (uint)pos < (uint)genuineObjectFixingBounds.Length)
-                    {
-                        genuineObjectFixingBounds[pos] = true;
-                    }
-
-                    result[pos] = MergeRecoveredTypeArgument(
-                        result[pos],
-                        recovered,
-                        allowBaseWidening: boundKind != SymbolicInferenceBoundKind.Upper);
+                    bounds.Add(pos, NormalizeRecoveredNullability(actual), boundKind);
                 }
             }
 
@@ -6891,8 +6917,7 @@ internal sealed class MemberLookup
                     openClr.GetElementType(),
                     actualRectangular.ElementType,
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds,
+                    bounds,
                     boundKind);
             }
 
@@ -6915,8 +6940,7 @@ internal sealed class MemberLookup
                     openElement,
                     actualElement,
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds,
+                    bounds,
                     boundKind);
             }
 
@@ -6932,8 +6956,7 @@ internal sealed class MemberLookup
                     openPointee,
                     bf.PointeeType,
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds,
+                    bounds,
                     SymbolicInferenceBoundKind.Exact);
             }
             else
@@ -6942,8 +6965,7 @@ internal sealed class MemberLookup
                     openPointee,
                     actual,
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds,
+                    bounds,
                     SymbolicInferenceBoundKind.Exact);
             }
 
@@ -6965,8 +6987,7 @@ internal sealed class MemberLookup
                 openPointerPointee,
                 actual is PointerTypeSymbol actualPointer ? actualPointer.PointeeType : actual,
                 openMethod,
-                result,
-                genuineObjectFixingBounds,
+                bounds,
                 SymbolicInferenceBoundKind.Exact);
             return;
         }
@@ -6986,8 +7007,7 @@ internal sealed class MemberLookup
                         openArgs[i],
                         tuple.ElementTypes[i],
                         openMethod,
-                        result,
-                        genuineObjectFixingBounds,
+                        bounds,
                         SymbolicInferenceBoundKind.Exact);
                 }
 
@@ -7032,8 +7052,7 @@ internal sealed class MemberLookup
                     openArgs[0],
                     channelActualElement,
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds,
+                    bounds,
                     GetNestedInferenceBoundKind(openDef, 0, boundKind));
                 return;
             }
@@ -7075,8 +7094,7 @@ internal sealed class MemberLookup
                         openArgs[j],
                         projectedImp.TypeArguments[j],
                         openMethod,
-                        result,
-                        genuineObjectFixingBounds,
+                        bounds,
                         GetNestedInferenceBoundKind(openDef, j, boundKind));
                 }
 
@@ -7107,8 +7125,7 @@ internal sealed class MemberLookup
                     openArgs[0],
                     actual,
                     openMethod,
-                    result,
-                    genuineObjectFixingBounds,
+                    bounds,
                     GetNestedInferenceBoundKind(openDef, 0, boundKind));
                 return;
             }
@@ -7126,23 +7143,15 @@ internal sealed class MemberLookup
                     && invokeParameters != null
                     && invokeParameters.Length == namedDelegateFunction.ParameterTypes.Length)
                 {
-                    // Issue #3896: a delegate PARAMETER is a contravariant
-                    // position — an upper bound. Collect it apart from the
-                    // covariant bounds so the base-class widening below never
-                    // sees it (see MergeRecoveredTypeArgument).
-                    var contravariant = new TypeSymbol?[result.Length];
                     for (var j = 0; j < invokeParameters.Length; j++)
                     {
                         UnifyForMethodTypeArgs(
                             invokeParameters[j].ParameterType,
                             namedDelegateFunction.ParameterTypes[j],
                             openMethod,
-                            contravariant,
-                            genuineObjectFixingBounds,
+                            bounds,
                             ReverseInferenceBoundKind(boundKind));
                     }
-
-                    MergeContravariantBounds(result, contravariant);
 
                     if (!FunctionTypeSymbol.IsVoidReturn(namedDelegateFunction.ReturnType)
                         && !invoke.ReturnType.IsSameAs(typeof(void)))
@@ -7151,8 +7160,7 @@ internal sealed class MemberLookup
                             invoke.ReturnType,
                             namedDelegateFunction.ReturnType,
                             openMethod,
-                            result,
-                            genuineObjectFixingBounds,
+                            bounds,
                             boundKind);
                     }
                 }
@@ -7179,22 +7187,15 @@ internal sealed class MemberLookup
                 var expectedArgs = fnVoid ? fn.ParameterTypes.Length : fn.ParameterTypes.Length + 1;
                 if (openArgs.Length == expectedArgs)
                 {
-                    // Issue #3896: contravariant (delegate-parameter) bounds are
-                    // collected apart from the covariant ones; only the latter
-                    // widen toward a common base.
-                    var contravariant = new TypeSymbol?[result.Length];
                     for (int j = 0; j < fn.ParameterTypes.Length; j++)
                     {
                         UnifyForMethodTypeArgs(
                             openArgs[j],
                             fn.ParameterTypes[j],
                             openMethod,
-                            contravariant,
-                            genuineObjectFixingBounds,
+                            bounds,
                             ReverseInferenceBoundKind(boundKind));
                     }
-
-                    MergeContravariantBounds(result, contravariant);
 
                     if (!fnVoid)
                     {
@@ -7202,8 +7203,7 @@ internal sealed class MemberLookup
                             openArgs[openArgs.Length - 1],
                             fn.ReturnType,
                             openMethod,
-                            result,
-                            genuineObjectFixingBounds,
+                            bounds,
                             boundKind);
                     }
                 }
@@ -7223,8 +7223,7 @@ internal sealed class MemberLookup
                         openArgs[0],
                         actualElement,
                         openMethod,
-                        result,
-                        genuineObjectFixingBounds,
+                        bounds,
                         GetNestedInferenceBoundKind(openDef, 0, boundKind));
                     return;
                 }
@@ -7245,8 +7244,7 @@ internal sealed class MemberLookup
                             openArgs[j],
                             liftedArgs[j],
                             openMethod,
-                            result,
-                            genuineObjectFixingBounds,
+                            bounds,
                             GetNestedInferenceBoundKind(openDef, j, boundKind));
                     }
                 }
@@ -7301,22 +7299,6 @@ internal sealed class MemberLookup
         }
 
         return t;
-    }
-
-    private static bool IsGenuineObjectType(TypeSymbol type)
-    {
-        while (type is NullabilityAnnotatedTypeSymbol annotated)
-        {
-            type = annotated.BaseType;
-        }
-
-        if (type is NullableTypeSymbol nullable
-            && !NullableLifting.IsAnyValueTypeNullable(nullable))
-        {
-            type = nullable.UnderlyingType;
-        }
-
-        return ReferenceEquals(type, TypeSymbol.Object);
     }
 
     private static TypeSymbol? MergeRecoveredTypeArgument(
@@ -8044,5 +8026,34 @@ internal sealed class MemberLookup
         public IReadOnlyList<MethodInfo> Methods { get; }
 
         public int ReceiverParameterOffset { get; }
+    }
+
+    private sealed class SymbolicInferenceBounds
+    {
+        public SymbolicInferenceBounds(int arity)
+        {
+            this.Exact = new List<TypeSymbol>?[arity];
+            this.Lower = new List<TypeSymbol>?[arity];
+            this.Upper = new List<TypeSymbol>?[arity];
+        }
+
+        public int Arity => this.Exact.Length;
+
+        public List<TypeSymbol>?[] Exact { get; }
+
+        public List<TypeSymbol>?[] Lower { get; }
+
+        public List<TypeSymbol>?[] Upper { get; }
+
+        public void Add(int position, TypeSymbol type, SymbolicInferenceBoundKind kind)
+        {
+            var slots = kind switch
+            {
+                SymbolicInferenceBoundKind.Exact => this.Exact,
+                SymbolicInferenceBoundKind.Upper => this.Upper,
+                _ => this.Lower,
+            };
+            (slots[position] ??= new List<TypeSymbol>()).Add(type);
+        }
     }
 }
