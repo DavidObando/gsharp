@@ -3059,7 +3059,11 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            var paramIndex = parameterMapping.IsDefaultOrEmpty
+                ? isExpanded
+                    ? Math.Min(i, parameters.Length - 1)
+                    : i
+                : parameterMapping[i];
             if (paramIndex < 0 || paramIndex >= parameters.Length)
             {
                 continue;
