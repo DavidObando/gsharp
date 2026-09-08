@@ -11,8 +11,9 @@ public sealed class TemplateAssetTests
     [Fact]
     public void Vsix_DeclaresProjectAndItemTemplateAssets()
     {
+        string extensionRoot = FindExtensionRoot();
         XDocument manifest = XDocument.Load(Path.Combine(
-            FindExtensionRoot(),
+            extensionRoot,
             "src",
             "VsGsharp",
             "source.extension.vsixmanifest"));
@@ -26,6 +27,15 @@ public sealed class TemplateAssetTests
 
         Assert.Contains("Microsoft.VisualStudio.ProjectTemplate", assetTypes);
         Assert.Contains("Microsoft.VisualStudio.ItemTemplate", assetTypes);
+
+        string extensionId = manifest.Descendants()
+            .Single(element => element.Name.LocalName == "Identity")
+            .Attribute("Id")!.Value;
+        string installer = File.ReadAllText(Path.Combine(
+            extensionRoot,
+            "scripts",
+            "Install-ExperimentalVsix.ps1"));
+        Assert.Contains("$extensionId = '" + extensionId + "'", installer);
     }
 
     [Fact]

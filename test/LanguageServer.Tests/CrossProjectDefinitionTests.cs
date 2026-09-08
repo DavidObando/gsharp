@@ -265,6 +265,9 @@ public class CrossProjectDefinitionTests
 
             var libDllPath = System.IO.Path.Combine(libDir, "XProjTestLib.dll");
             var libPdbPath = System.IO.Path.Combine(libDir, "XProjTestLib.pdb");
+            var libRefDir = System.IO.Path.Combine(libDir, "ref");
+            System.IO.Directory.CreateDirectory(libRefDir);
+            var libRefPath = System.IO.Path.Combine(libRefDir, "XProjTestLib.dll");
 
             var libCompilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(
                 GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.Default(),
@@ -276,8 +279,9 @@ public class CrossProjectDefinitionTests
             };
             using (var peStream = new System.IO.FileStream(libDllPath, System.IO.FileMode.Create))
             using (var pdbStream = new System.IO.FileStream(libPdbPath, System.IO.FileMode.Create))
+            using (var refStream = new System.IO.FileStream(libRefPath, System.IO.FileMode.Create))
             {
-                var libResult = libCompilation.Emit(peStream, pdbStream, refStream: null, assemblyName: "XProjTestLib");
+                var libResult = libCompilation.Emit(peStream, pdbStream, refStream, assemblyName: "XProjTestLib");
                 Assert.True(libResult.Success, "Lib should compile: " + string.Join(", ", libResult.Diagnostics.Select(d => d.Message)));
             }
 
@@ -302,7 +306,7 @@ public class CrossProjectDefinitionTests
 
             var appProject = workspace.AddProject(System.IO.Path.Combine(appDir, "XProjTestApp.gsproj"));
             appProject.AssemblyName = "XProjTestApp";
-            appProject.References = new[] { libDllPath };
+            appProject.References = new[] { libRefPath };
             appProject.AddFileFromDisk(appSourcePath);
             workspace.RegisterFile(appSourcePath, appProject);
 

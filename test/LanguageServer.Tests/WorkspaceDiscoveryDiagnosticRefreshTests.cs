@@ -24,9 +24,10 @@ namespace GSharp.LanguageServer.Tests;
 /// persisted because nothing re-pulled the file once discovery finished — the user had to edit
 /// the file to trigger a refresh.
 ///
-/// This test locks in the fix: once background discovery completes, the server asks the client
-/// to refresh diagnostics, and the resulting re-pull binds each open file against its
-/// now-discovered project, clearing the spurious diagnostics.
+/// This test locks in the fix: once background discovery completes, the server replaces each
+/// open document snapshot with one attached to its now-discovered project and asks the client
+/// to refresh diagnostics. Project-aware requests such as Go-to-Definition then work immediately,
+/// and the resulting re-pull clears the spurious diagnostics.
 /// </summary>
 public class WorkspaceDiscoveryDiagnosticRefreshTests
 {
@@ -68,6 +69,15 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
             server.Initialized(doc.RootElement.Clone());
 
             await WaitForAsync(() => refreshRequested && workspace.GetProjectForFile(fooPath) != null);
+
+            var definitions = await server.DefinitionAsync(
+                new DefinitionParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = uri },
+                    Position = LanguageServerTestHelpers.PositionOf(FooSource, "Bar"),
+                });
+            var definition = Assert.Single(definitions);
+            Assert.EndsWith("Bar.gs", definition.Uri.GetFileSystemPath());
 
             // The refresh-driven re-pull now binds Foo.gs against its project (both source files),
             // so the sibling symbols resolve and the spurious diagnostics are gone.
