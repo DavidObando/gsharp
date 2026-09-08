@@ -130,14 +130,14 @@ public class Issue3394InlineOutTupleBindingTests
         Assert.True(MemberLookup.IsSymbolicInferenceConflict(
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 invariant,
-                ImmutableArray.Create<TypeSymbol?>(listObject, listSourceType)))));
+                ImmutableArray.Create<TypeSymbol>(listObject, listSourceType)))));
 
         var invariantParams = typeof(Issue3394InlineOutTupleBindingTests)
             .GetMethod(nameof(InvariantParams), BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.True(MemberLookup.IsSymbolicInferenceConflict(
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 invariantParams,
-                ImmutableArray.Create<TypeSymbol?>(listObject, listSourceType),
+                ImmutableArray.Create<TypeSymbol>(listObject, listSourceType),
                 isExpanded: true))));
 
         var byRef = typeof(Issue3394InlineOutTupleBindingTests)
@@ -145,7 +145,7 @@ public class Issue3394InlineOutTupleBindingTests
         Assert.True(MemberLookup.IsSymbolicInferenceConflict(
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 byRef,
-                ImmutableArray.Create<TypeSymbol?>(TypeSymbol.Object, sourceTypeParameter)))));
+                ImmutableArray.Create<TypeSymbol>(TypeSymbol.Object, sourceTypeParameter)))));
 
         var direct = typeof(Issue3394InlineOutTupleBindingTests)
             .GetMethod(nameof(DirectPair), BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -153,7 +153,7 @@ public class Issue3394InlineOutTupleBindingTests
             sourceTypeParameter,
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 direct,
-                ImmutableArray.Create<TypeSymbol?>(sourceTypeParameter, TypeSymbol.Error))));
+                ImmutableArray.Create<TypeSymbol>(sourceTypeParameter, TypeSymbol.Error))));
 
         var upper = typeof(Issue3394InlineOutTupleBindingTests)
             .GetMethod(nameof(UpperPair), BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -164,12 +164,12 @@ public class Issue3394InlineOutTupleBindingTests
             typeof(InferenceDerived),
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 upper,
-                ImmutableArray.Create<TypeSymbol?>(baseAction, derivedAction)))!.ClrType);
+                ImmutableArray.Create<TypeSymbol>(baseAction, derivedAction)))!.ClrType);
         Assert.Equal(
             typeof(InferenceDerived),
             Assert.Single(MemberLookup.InferSymbolicMethodTypeArguments(
                 upper,
-                ImmutableArray.Create<TypeSymbol?>(derivedAction, baseAction)))!.ClrType);
+                ImmutableArray.Create<TypeSymbol>(derivedAction, baseAction)))!.ClrType);
     }
 
     [Fact]
