@@ -70,7 +70,7 @@ cs2gs_synthetic_families=(
 # How many distinct unknown identifiers to name in the table before truncating.
 cs2gs_unknown_sample_limit=${CS2GS_UNKNOWN_SAMPLE_LIMIT:-25}
 
-# Visits translated source files while pruning conventional build-output trees.
+# Visits translated source files while pruning generated project-output trees.
 # Validation can create transient .gs test fixtures under these directories;
 # they are artifacts, not translator output, and must not move readability
 # counters. Callers supply the find action so every metric shares this scope.
@@ -78,7 +78,7 @@ cs2gs_find_translated_sources() {
   local tree=$1
   shift
   find "$tree" \
-    \( -type d \( -name out -o -name bin -o -name obj \) -prune \) -o \
+    \( -type d \( -name bin -o -name obj \) -prune \) -o \
     \( -type f -name '*.gs' "$@" \)
 }
 

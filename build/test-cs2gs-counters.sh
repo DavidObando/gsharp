@@ -61,7 +61,7 @@ grep -Fq 'GATE: reducible raw >300-char line count 1 exceeded ceiling 0.' <<< "$
 
 measurement_tree="$scratch/measurement-tree"
 artifact="$measurement_tree/out/bin/Release/Cs2Gs.Tests/issue-2231-e2e/guid/Snippet.gs"
-source_file="$measurement_tree/src/Translated.gs"
+source_file="$measurement_tree/out/scratch/ildump/Program.gs"
 mkdir -p "$(dirname "$artifact")" "$(dirname "$source_file")"
 python3 - "$artifact" <<'PY'
 import pathlib
