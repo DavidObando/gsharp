@@ -860,7 +860,7 @@ internal static class ClrOverloadResolution
 
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, deferredInferenceArgs, openLiteralArgumentCheck, symbolicArgTypes);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, methodGroupArgumentCheck, deferredInferenceArgs, openLiteralArgumentCheck, symbolicArgTypes);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -3538,7 +3538,7 @@ internal static class ClrOverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -3617,6 +3617,8 @@ internal static class ClrOverloadResolution
             }
 
             Type[]? typeArgs = null;
+            // Expanded inference has no method-group output callback. Do not
+            // let a partial symbolic vector fabricate a closed candidate.
             var useRecoveredInference = !HasDeferredMethodGroupArgument(
                     argTypes.Count,
                     methodGroupArgumentCheck)
