@@ -63,6 +63,7 @@ internal sealed class MemberLookup
     private static readonly ConditionalWeakTable<MethodInfo, MethodInfo> OpenMethodsByMappedMethod = new();
     private static readonly TypeSymbol SymbolicInferenceConflict =
         TypeSymbol.FromClrType(typeof(SymbolicInferenceConflictMarker));
+
     private readonly BinderContext binderCtx;
 
     /// <summary>
