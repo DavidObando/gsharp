@@ -69,8 +69,7 @@ Console.WriteLine(n)
 
 // 5. If-expression as a call argument. The expression is evaluated to a
 //    string and passed straight through.
-Console
-    .WriteLine(
+Console.WriteLine(
     if visits == 1 {
         "one visit so far"
     } else {

@@ -27,21 +27,21 @@ func echo(x int32) int32 {
 }
 
 func MakeZero[T]() T {
-    return default (T)
+    return default(T)
 }
 
 // `default(T)` for built-in value types — zero-initialised.
-Console.WriteLine(default (int32)) // 0
-Console.WriteLine(default (int64)) // 0
-Console.WriteLine(default (float64)) // 0
-Console.WriteLine(default (bool)) // False
+Console.WriteLine(default(int32)) // 0
+Console.WriteLine(default(int64)) // 0
+Console.WriteLine(default(float64)) // 0
+Console.WriteLine(default(bool)) // False
 
 // `default(T)` for reference types — `nil`.
-let s string = default (string)
+let s string = default(string)
 Console.WriteLine(s == nil) // True
 
 // `default(T?)` for nullable value types — `nil`.
-let n int32? = default (int32?)
+let n int32? = default(int32?)
 Console.WriteLine(n == nil) // True
 
 // Bare `default` in a let with an explicit type clause.
