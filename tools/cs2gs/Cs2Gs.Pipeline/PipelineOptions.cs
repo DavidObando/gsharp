@@ -103,10 +103,15 @@ public sealed class PipelineOptions
 
     /// <summary>
     /// Gets or sets a value indicating whether emitted G# is passed through
-    /// the ADR-0179 canonical formatter. Disabled by default during phase 7a;
-    /// formatter failures preserve the printer output and produce a triage artifact.
+    /// the ADR-0179 canonical formatter. Enabled by default since phase 7b:
+    /// the formatter, not <see cref="Cs2Gs.CodeModel.Printing.GSharpPrinter"/>,
+    /// owns where a line breaks. Formatter failures preserve the printer output
+    /// and produce a <c>CS2GS-ROUNDTRIP</c> triage artifact, so the file is
+    /// never lost and the defect is never silent; measured over the whole
+    /// self-migration corpus (3,905 <c>.gs</c> files) the failure count is 0.
+    /// <c>--no-format</c> restores the printer layout for A/B measurement.
     /// </summary>
-    public bool FormatOutput { get; set; }
+    public bool FormatOutput { get; set; } = true;
 
     /// <summary>
     /// Gets or sets the test-parity failure allow-list (issue #3885): the

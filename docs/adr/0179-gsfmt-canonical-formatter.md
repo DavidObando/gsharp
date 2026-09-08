@@ -450,7 +450,7 @@ no consumer and cannot regress anything.
 | 4 | `gsfmt` CLI | `Gsfmt.Cli`, `PackAsTool`, `-w/-l/--check/-d`, stdin, recursion, `.gsfmtignore`. SDK `GsharpFormatCheck` target (opt-in). | — |
 | 5 | Language server | `FormattingEngine` deleted; LS calls `GSharpFormatter`. **Enable `rangeFormatting`** (closes #1660's caveat) and `onTypeFormatting`. VS Code extension defaults `editor.formatOnSave` for `.gs`. Ignore `FormattingOptions`. Release-note the 2→4 space change. | LS formatting tests (see risks: #3931) |
 | 6 | Wrapping (2 PRs) | 6a: `Group`/`Nest` on argument lists and member chains (317 of 537). 6b: collection/object literals and `+` chains (173). Measured against the migrated tree each time. | line-width property test |
-| 7 | cs2gs adoption (2 PRs) | 7a: format-as-post-pass behind `--format`, off by default; run the corpus, publish the diff and the round-trip failure count. 7b: flip on; absorb golden churn; delete `RenderWrappable`/`RenderWrapped`. | migrated-tree round-trip count |
+| 7 | cs2gs adoption (3 PRs) | 7a: format-as-post-pass behind `--format`, off by default; run the corpus, publish the diff and the round-trip failure count. **DONE.** 7b: flip the default on; absorb test churn; re-baseline. **DONE**, measured 557 → 1 reducible long lines. 7c: delete `RenderWrappable`/`RenderWrapped`, and fix the chain-argument nesting defect — split out of 7b, see the correction below. | migrated-tree round-trip count |
 | 8 | Repo adoption | `gsfmt -w` over hand-written `.gs`; CI `gsfmt --check`. | `gsfmt --check` in CI |
 | 9 | The other 62 | 9a: cs2gs preserves doc-comment line structure (−32). 9b: backtick-safe raw strings — split a literal containing a backtick into concatenation, as Go does (−30, not −61: see the correction above). **DONE, #3950**, measured 631 → 565 locally. | — |
 
@@ -491,11 +491,87 @@ no consumer and cannot regress anything.
 > than as operator tokens, so `case A or B or C:` had no break point at all and
 > could not be reached by any `SyntaxKind`-keyed rule.
 
-**Implementation note (September 5, 2026):** phases 1–6, 7a, and 8 were
-implemented when the ADR was accepted. The formatter library, CLI,
-language-server/SDK integration, repository rewrite, and CI gate are active;
-the cs2gs post-pass remains behind `--format` until phase 7b's corpus
-round-trip gaps are measured and cleared.
+> **Correction (Phase 7b, September 8, 2026).** Phase 6 shipped a formatter
+> that wraps correctly and phase 7a shipped the `--format` flag that runs it —
+> but **nothing passed the flag**, so the migrated tree the gate measures was
+> still produced entirely by `GSharpPrinter`. Every long line the ratchet
+> counted was emitted by the printer, and phases 6a/6b had therefore bought the
+> corpus nothing. Phase 7b is the flip: `PipelineOptions.FormatOutput` now
+> defaults to `true`.
+>
+> Measured over the whole self-migration corpus, two `migrate --translate-only`
+> passes over the same commit (3,905 `.gs` files, 3,870 counted after the
+> `bin`/`obj` prune), scored with `build/cs2gs-counters.sh`'s post-#4123
+> counter:
+>
+> | | printer only | + gsfmt post-pass |
+> |---|---:|---:|
+> | lines >300 (reducible) | **557** | **1** |
+> | lines >300 (single-atom-bounded) | 36 | 36 |
+> | lines >300 (total) | 593 | 37 |
+> | files gsfmt refused to format | – | **0** |
+>
+> The reducible 557, by the outermost construct a formatter has to break:
+> if-expression 145, call argument list 120, collection/object literal 112,
+> string concatenation 73, `&&`/`||`/`??`/`or`/`and` chain 67, single-argument
+> call 24, switch-arm pattern list 16. **All of them go to zero.** Three
+> expectations carried into this measurement were wrong and are corrected here:
+> if-expressions, never in the phase-6 plan, were the *largest* family and are
+> fully handled; string concatenation does move, because breaking at the `+`
+> the printer already emitted is enough; and member/dot chains, which phase 6a
+> was sized around, had already stopped being a family at all. The single
+> surviving reducible line is a 304-character `description: "…"` whose literal
+> is 279 characters — the `indent + 8 + widest_atom` heuristic calls it
+> reducible, but there is no legal break point in it. The residual is therefore
+> a *defect count*, not a backlog.
+>
+> **Two other ratcheted counters move, and neither is a regression.**
+> `selfmig_code_grep` drops any line containing a `"` before counting, so a
+> `!!` or a `__local_` sharing a line with a string literal is invisible to it —
+> the undercount `build/cs2gs-counters.sh` already documents from #3937.
+> Wrapping moves tokens off those lines, so it *unmasks* occurrences that were
+> always there. The raw counts prove it: over the same two trees they are
+> byte-identical (`__local_` 67, `!!` 29,920, synthetic labels 30), while the
+> code-filtered views read 30 → 31 lifts and 22,387 → 23,535 `!!`. The single
+> unmasked lift is exact: one line of
+> `src/Core/CodeAnalysis/Binding/ControlFlowGraph.gs` carried two `__local_`
+> calls *and* a `"finallyBody"` literal, so the filter dropped the line and hid
+> both; wrapping puts `__local_…_CollectLabels(root)` on its own quote-free
+> line, and only the one still sitting beside the literal stays hidden. The
+> durable fix is to mask string-literal *contents* instead of dropping
+> their lines, which would make every counter layout-invariant — deliberately
+> not done here, because it re-baselines three corpora at once.
+>
+> **Invariants re-checked on the corpus, not asserted.** `gsfmt --check` over
+> all 3,905 formatted files exits 0, so D4's idempotence holds corpus-wide, and
+> the 13 `Cs2Gs.Tests` failures the flip produced are all `Assert.Contains` on
+> emitted layout — no compile, ILVerify, round-trip or stdout-golden movement,
+> which is what D4 predicts and what the "any movement is a bug" rule demands.
+> Eleven of the thirteen are one-line spacing updates to the canonical form the
+> repository's own `.gs` already carries (`var f(int32) -> int32`,
+> `func Gather(ok bool)(Items …)`, `is {}`, `@assembly: X`, `text[1 .. ^1]`,
+> `{source.Value!!}`); two are assertions that read a *line* where the member is
+> now several lines, and are re-expressed against the member.
+>
+> One readability defect was found and is deliberately left for 7c, because it
+> is layout-only and idempotent: when a member-chain link's argument list
+> breaks, the argument is nested against the chain head rather than against the
+> link, so `.Select(` puts its argument at the same column as itself and the
+> closing `)` one level further out. Reproducible on a four-line input; not a
+> correctness problem, and not worth coupling to the flip.
+>
+> **`RenderWrappable`/`RenderWrapped` are NOT deleted here**, and phase 7 is
+> split into 7b (flip) and 7c (delete) for that reason. The printer's wrapping
+> is now dead weight for output that gsfmt reformats anyway, but it is still the
+> layout of record whenever the post-pass fails soft, and removing it re-lays
+> every one of the ~4,756 printer assertions in `Cs2Gs.Tests`. That is a
+> mechanical PR of its own; coupling it to the behaviour change would make
+> neither reviewable.
+
+**Implementation note (September 8, 2026):** phases 1–6, 7a, 7b, 8 and 9 are
+implemented. The formatter library, CLI, language-server/SDK integration,
+repository rewrite, CI gate and the cs2gs post-pass are all active by default;
+only phase 7c (deleting the printer's own wrapping) remains.
 
 **Sequencing note:** Phase 9 was listed last but had the best ratio in the plan — one
 small, self-contained cs2gs PR removing ~62 long lines that no formatter work can
@@ -527,7 +603,15 @@ touch. It was **done first**, for exactly that reason — and it is what finally
 1. Phases 1–6 do not change migrated output; ceilings untouched.
 2. Phase 7b lands with a re-baseline in the same PR, per the file's stated discipline
    ("improve a metric, then tighten the corresponding number in the same PR").
-   `longLineCeiling` drops to the measured value plus the conventional margin.
+   **Done: `longLineCeiling` 570 → 10, measured 1.** The conventional ~3% margin does
+   not survive the scale change — 3% of 1 is not a margin — so the number is sized to
+   the failure mode instead: a reducible long line now means gsfmt failed on a file,
+   and 10 allows a handful of such files before the gate goes red. Two ceilings move
+   the *other* way in the same PR and neither is a regression: `liftedLocalCeiling`
+   30 → 31 and `nullAssertionCeiling` 11500 → 12100, because `selfmig_code_grep` drops
+   any line containing a `"` and wrapping unmasks occurrences that were always there.
+   The raw counts are identical across the two trees, which is what makes that
+   checkable rather than asserted.
 3. **Change what the metric measures.** Once the formatter owns wrapping, split the
    counter in `build/cs2gs-counters.sh` into `lines>300 (reducible)` and
    `lines>300 (single-atom-bounded)`. Only the reducible count is ratcheted; the
