@@ -3444,7 +3444,11 @@ internal sealed partial class ExpressionBinder
 
             // Lifted symbolic operators are not yet materialized by CLR
             // argument lowering, so they must remain inapplicable here.
-            return sourceType is NullableTypeSymbol && targetType is NullableTypeSymbol && hasUserDefined
+            return sourceType is NullableTypeSymbol sourceNullable
+                && targetType is NullableTypeSymbol targetNullable
+                && NullableLifting.IsAnyValueTypeNullable(sourceNullable)
+                && NullableLifting.IsAnyValueTypeNullable(targetNullable)
+                && hasUserDefined
                 ? ClrOverloadResolution.ImplicitConversionKind.None
                 : hasUserDefined
                     ? ClrOverloadResolution.ImplicitConversionKind.UserDefinedImplicit
