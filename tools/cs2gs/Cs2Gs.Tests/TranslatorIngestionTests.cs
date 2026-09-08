@@ -141,23 +141,6 @@ namespace Sample.Geometry
     }
 
     private static string ResolveCorpusProject(string projectFolder, string projectFile)
-    {
-        // Walk up from the test assembly location until the cs2gs corpus is found,
-        // so the test is independent of the working directory / build layout.
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(
-                dir.FullName, "tools", "cs2gs", "corpus", projectFolder, projectFile);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate corpus project '{projectFolder}/{projectFile}' above {AppContext.BaseDirectory}.");
-    }
+        => TestFixtureSource.Resolve(
+            "tools", "cs2gs", "corpus", projectFolder, projectFile);
 }

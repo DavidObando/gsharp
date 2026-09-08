@@ -526,6 +526,37 @@ public sealed class SdkCompileRunner
         return SdkCompileResult.Completed(result.ExitCode, result.Output, diagnostics, assemblyPath);
     }
 
+    internal static IReadOnlyDictionary<string, string> IsolatedNugetEnvironment(string root) =>
+        new Dictionary<string, string>
+        {
+            ["NUGET_PACKAGES"] = Path.Combine(root, ".nuget-packages"),
+            [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = string.Empty,
+        };
+
+    internal static IReadOnlyDictionary<string, string> MirroredTestEnvironment(
+        string artifactRoot, string sourceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(sourceRoot))
+        {
+            throw new DirectoryNotFoundException(
+                $"Stage 4 requires the original C# source root; " +
+                $"{GsharpTestProjectRunner.SourceRootEnvironmentVariable} was not configured.");
+        }
+
+        string canonicalSourceRoot = CanonicalRootPath.Resolve(sourceRoot);
+        if (!Directory.Exists(canonicalSourceRoot))
+        {
+            throw new DirectoryNotFoundException(
+                $"Stage-4 source root does not exist: '{canonicalSourceRoot}'.");
+        }
+
+        var environment = new Dictionary<string, string>(IsolatedNugetEnvironment(artifactRoot))
+        {
+            [GsharpTestProjectRunner.SourceRootEnvironmentVariable] = canonicalSourceRoot,
+        };
+        return environment;
+    }
+
     /// <summary>
     /// Partitions a flat reference-path list into reconstructed
     /// <c>PackageReference</c> ids/versions (for dlls that live under a NuGet
@@ -925,6 +956,7 @@ public sealed class SdkCompileRunner
         string artifactDirectory,
         string config,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
+        string sourceRoot,
         TimeSpan timeout)
     {
         string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath));
@@ -955,7 +987,7 @@ public sealed class SdkCompileRunner
                 },
                 projectDirectory,
                 timeout,
-                IsolatedNugetEnvironment(artifactDirectory));
+                MirroredTestEnvironment(artifactDirectory, sourceRoot));
         }
         finally
         {
@@ -1523,12 +1555,6 @@ public sealed class SdkCompileRunner
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".nuget", "packages");
     }
-
-    private static IReadOnlyDictionary<string, string> IsolatedNugetEnvironment(string root) =>
-        new Dictionary<string, string>
-        {
-            ["NUGET_PACKAGES"] = Path.Combine(root, ".nuget-packages"),
-        };
 
     private static (string NupkgPath, string Version)? ResolveFallbackSdkPackageFromLocalFeed(string repoRoot)
     {

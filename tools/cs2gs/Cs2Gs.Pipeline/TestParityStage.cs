@@ -536,6 +536,7 @@ public sealed partial class TestParityStage : IMigrationStage
             context.ArtifactDir,
             context.Options.Config,
             context.Options.GeneratedProjectPaths,
+            context.Options.SourceRoot,
             budget);
         return this.EvaluateMirroredTestRun(context, result, budget);
     }

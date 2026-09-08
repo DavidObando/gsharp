@@ -190,7 +190,8 @@ public sealed class Issue3086GeneratedRegexPipelineTests
 
     private static void CopyFixture(string destination)
     {
-        string source = Path.Combine(AppContext.BaseDirectory, "Fixtures", "Issue3086GeneratedRegex");
+        string source = TestFixtureSource.Resolve(
+            "tools", "cs2gs", "Cs2Gs.Tests", "Fixtures", "Issue3086GeneratedRegex");
         Directory.CreateDirectory(destination);
         foreach (string file in Directory.GetFiles(source))
         {

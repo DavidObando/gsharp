@@ -171,20 +171,6 @@ public class L1MigrationEndToEndTests
     }
 
     private static string ResolveCorpusFile(string projectFolder, string fileName)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "tools", "cs2gs", "corpus", projectFolder, fileName);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate corpus file '{projectFolder}/{fileName}' above {AppContext.BaseDirectory}.");
-    }
+        => TestFixtureSource.Resolve(
+            "tools", "cs2gs", "corpus", projectFolder, fileName);
 }

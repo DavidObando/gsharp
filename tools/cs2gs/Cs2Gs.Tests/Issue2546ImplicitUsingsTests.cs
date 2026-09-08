@@ -18,8 +18,10 @@ public class Issue2546ImplicitUsingsTests
     [Fact]
     public async Task EffectiveGlobalUsings_ImportOnlyNamespacesUsedByBareFrameworkTypes()
     {
-        string projectPath = Path.Combine(
-            AppContext.BaseDirectory,
+        string projectPath = TestFixtureSource.Resolve(
+            "tools",
+            "cs2gs",
+            "Cs2Gs.Tests",
             "Fixtures",
             "Issue2546ImplicitUsings",
             "Issue2546ImplicitUsings.csproj");
