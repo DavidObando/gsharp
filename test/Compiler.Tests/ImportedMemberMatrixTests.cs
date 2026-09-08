@@ -202,9 +202,18 @@ public class ImportedMemberMatrixTests
                 public static System.Action<DerivedDisposable> DerivedAction()
                     => _ => { };
 
+                public static System.Action<Base> InferenceBaseAction()
+                    => _ => { };
+
+                public static System.Action<Derived> InferenceDerivedAction()
+                    => _ => { };
+
                 public static string UpperType<T>(
                     System.Action<T> first,
                     System.Action<T> second)
+                    => typeof(T).Name;
+
+                public static string UpperParams<T>(params System.Action<T>[] sinks)
                     => typeof(T).Name;
 
                 public static string InvariantWinner<T>(
@@ -438,6 +447,12 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(VarianceOverloads.UpperType(
                 VarianceOverloads.DerivedAction(),
                 VarianceOverloads.BaseAction()))
+            Console.WriteLine(VarianceOverloads.UpperParams(
+                VarianceOverloads.InferenceBaseAction(),
+                VarianceOverloads.InferenceDerivedAction()))
+            Console.WriteLine(VarianceOverloads.UpperParams(
+                VarianceOverloads.InferenceDerivedAction(),
+                VarianceOverloads.InferenceBaseAction()))
             Console.WriteLine(throughInvariantConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughInvariantExpandedConflict[DisposableBase](List[DisposableBase]()))
             Console.WriteLine(throughInstanceMethodGroup(InstanceOverloads()))
@@ -479,6 +494,7 @@ public class ImportedMemberMatrixTests
                 + $"generic-delegate:DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"generic-interface:DisposableBase{Environment.NewLine}"
                 + $"DerivedDisposable{Environment.NewLine}DerivedDisposable{Environment.NewLine}"
+                + $"Derived{Environment.NewLine}Derived{Environment.NewLine}"
                 + $"object-invariant{Environment.NewLine}object-invariant-params{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}DisposableBase{Environment.NewLine}"
                 + $"Derived:Base{Environment.NewLine}Derived:Base{Environment.NewLine}"

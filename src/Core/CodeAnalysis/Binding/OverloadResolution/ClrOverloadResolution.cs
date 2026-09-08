@@ -1302,6 +1302,11 @@ internal static class ClrOverloadResolution
             {
                 if (argTypes[i] is null)
                 {
+                    TryInferSingleCandidateMethodGroupInputs(
+                        parameters[i].ParameterType,
+                        i,
+                        bounds,
+                        methodGroupInference);
                     TryInferMethodGroupArgument(parameters[i].ParameterType, i, bounds, methodGroupInference);
                 }
             }
@@ -2017,27 +2022,19 @@ internal static class ClrOverloadResolution
         {
             return false;
         }
-
         var closedInputs = new Type[delegateParameters.Length];
-        var inputsClosed = true;
         for (var i = 0; i < delegateParameters.Length; i++)
         {
             if (!TryCloseInferredType(delegateParameters[i], bounds, out var closedInput)
                 || closedInput is null)
             {
-                inputsClosed = false;
-                break;
+                return false;
             }
 
             closedInputs[i] = closedInput;
         }
 
-        // Issue #3766: an open delegate input cannot drive overload
-        // resolution, but a single arity-matching candidate is unambiguous and
-        // can supply the missing input bounds.
-        var signature = methodGroupInference(
-            argumentIndex,
-            inputsClosed ? closedInputs : delegateParameters);
+        var signature = methodGroupInference(argumentIndex, closedInputs);
         if (!signature.HasValue
             || signature.Value.Parameters.Length != delegateParameters.Length
             || signature.Value.Return is null)
@@ -2055,34 +2052,14 @@ internal static class ClrOverloadResolution
         }
 
         var inferred = new Dictionary<string, Type>(bounds, StringComparer.Ordinal);
-        if (inputsClosed)
+        // Method-group input types select and validate the candidate; only its
+        // return type contributes output-inference bounds.
+        for (var i = 0; i < closedInputs.Length; i++)
         {
-            // Method-group input types select and validate the candidate; only
-            // its return type contributes output-inference bounds.
-            for (var i = 0; i < closedInputs.Length; i++)
+            if (ClassifyImplicit(signature.Value.Parameters[i], closedInputs[i])
+                == ImplicitConversionKind.None)
             {
-                if (ClassifyImplicit(signature.Value.Parameters[i], closedInputs[i])
-                    == ImplicitConversionKind.None)
-                {
-                    return false;
-                }
-            }
-        }
-        else
-        {
-            // Issue #3766: preserve the single-candidate fallback for a
-            // delegate whose input types cannot be fixed from other arguments.
-            for (var i = 0; i < delegateParameters.Length; i++)
-            {
-                if (!UnifyForInference(delegateParameters[i], signature.Value.Parameters[i], inferred))
-                {
-                    if (!TryCloseInferredType(delegateParameters[i], inferred, out var closedParameter)
-                        || closedParameter is null
-                        || !IsVariantAssignable(target: signature.Value.Parameters[i], source: closedParameter))
-                    {
-                        return false;
-                    }
-                }
+                return false;
             }
         }
 
@@ -2093,6 +2070,71 @@ internal static class ClrOverloadResolution
             if (!TryCloseInferredType(delegateReturn, inferred, out var closedReturn)
                 || closedReturn is null
                 || !IsVariantAssignable(target: closedReturn, source: signature.Value.Return))
+            {
+                return false;
+            }
+        }
+
+        bounds.Clear();
+        foreach (var pair in inferred)
+        {
+            bounds.Add(pair.Key, pair.Value);
+        }
+
+        return true;
+    }
+
+    private static bool TryInferSingleCandidateMethodGroupInputs(
+        Type delegateType,
+        int argumentIndex,
+        Dictionary<string, Type> bounds,
+        Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?> methodGroupInference)
+    {
+        if (!ClrLoadContext.TryGetDelegateSignature(delegateType, out var delegateParameters, out _))
+        {
+            return false;
+        }
+
+        var closedInputs = new Type?[delegateParameters.Length];
+        var hasOpenInput = false;
+        for (var i = 0; i < delegateParameters.Length; i++)
+        {
+            if (!TryCloseInferredType(delegateParameters[i], bounds, out closedInputs[i])
+                || closedInputs[i] is null)
+            {
+                hasOpenInput = true;
+            }
+        }
+
+        if (!hasOpenInput)
+        {
+            return true;
+        }
+
+        // Issue #3766: preserve single-candidate input inference only for
+        // delegate inputs that could not be fixed from other arguments.
+        var signature = methodGroupInference(argumentIndex, delegateParameters);
+        if (!signature.HasValue
+            || signature.Value.Parameters.Length != delegateParameters.Length)
+        {
+            return false;
+        }
+
+        var inferred = new Dictionary<string, Type>(bounds, StringComparer.Ordinal);
+        for (var i = 0; i < delegateParameters.Length; i++)
+        {
+            if (closedInputs[i] is { } closedInput)
+            {
+                if (ClassifyImplicit(signature.Value.Parameters[i], closedInput)
+                    == ImplicitConversionKind.None)
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!UnifyForInference(delegateParameters[i], signature.Value.Parameters[i], inferred))
             {
                 return false;
             }
@@ -4020,6 +4062,11 @@ internal static class ClrOverloadResolution
                         return false;
                     }
 
+                    TryInferSingleCandidateMethodGroupInputs(
+                        targetType,
+                        i,
+                        bounds,
+                        methodGroupInference);
                     TryInferMethodGroupArgument(targetType, i, bounds, methodGroupInference);
                 }
             }
