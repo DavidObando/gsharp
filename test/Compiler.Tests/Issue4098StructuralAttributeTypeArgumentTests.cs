@@ -52,8 +52,18 @@ namespace GSharp.Compiler.Tests;
 /// <para><b>Reified, not printed.</b> Every row is read back through a
 /// <see cref="MetadataLoadContext"/> and described by walking the generic
 /// definition and arguments, naming each part's declaring ASSEMBLY. A row whose
-/// serialised name does not resolve reads as <c>!</c> plus the failure, which is
-/// what every broken row did before this fix.</para>
+/// serialised name does not resolve reads as <c>!</c> plus the failure.</para>
+/// <para><b>The broken rows failed in TWO ways, and the difference is the whole
+/// argument for the ungated arms.</b> Nine of the ten threw — an undecodable G#
+/// spelling (<c>map</c>, <c>chan</c>, <c>sequence</c>, <c>(Status) -&gt; bool</c>)
+/// or an invalid assembly name. The tenth,
+/// <c>MapOverImportedGenericOfSourceEnum</c>, did NOT throw: it resolved
+/// perfectly well, to <c>Dictionary&lt;string, List&lt;int&gt;&gt;</c> — the
+/// wrong type, read back without complaint. That row is the one a
+/// <c>{ ClrType: null }</c> guard would have left broken, because its
+/// <c>ClrType</c> is non-null; and it is the more dangerous of the two failures,
+/// because nothing downstream can detect it. Saying "every broken row failed to
+/// resolve" would erase exactly the distinction this fix turns on.</para>
 /// <para><b>No new diagnostic.</b> These programs are legal and were accepted
 /// before; only their metadata was wrong — the same as #4073.</para>
 /// </remarks>
@@ -169,6 +179,36 @@ public class Issue4098StructuralAttributeTypeArgumentTests
             "NestedStructuralOverSourceEnum",
             "typeof(Box[map[string, (int32, Status)]])",
             "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.Dictionary`2@System.Private.CoreLib[System.String@System.Private.CoreLib,System.ValueTuple`2@System.Private.CoreLib[System.Int32@System.Private.CoreLib,P.Status@P]]]",
+        };
+
+        // --- Review feedback on PR #4140: two arms of the helper that no row
+        // reached. Both SELECT something — an open definition, and a nesting
+        // shape — so an untested arm is where a wrong projection hides.
+
+        // The async-sequence arm picks a DIFFERENT open definition from the
+        // sync one (`IAsyncEnumerable` rather than `IEnumerable`), and the two
+        // share a symbol name, so nothing but the reified type tells them apart.
+        yield return new object[]
+        {
+            "AsyncSequenceOverSourceEnum",
+            "typeof(Box[async sequence[Status]])",
+            "HelperLib4098.Box`1@HelperLib4098[System.Collections.Generic.IAsyncEnumerable`1@System.Private.CoreLib[P.Status@P]]",
+        };
+
+        // Above arity 7 a tuple nests its tail into `TRest`. A FLAT encoding
+        // would read back plausibly at a glance, so the nesting is asserted
+        // structurally: `ValueTuple`8` whose eighth argument is itself a
+        // `ValueTuple`1` over the source enum.
+        yield return new object[]
+        {
+            "LargeTupleOverSourceEnum",
+            "typeof(Box[(int32, int32, int32, int32, int32, int32, int32, Status)])",
+            "HelperLib4098.Box`1@HelperLib4098[System.ValueTuple`8@System.Private.CoreLib["
+                + "System.Int32@System.Private.CoreLib,System.Int32@System.Private.CoreLib,"
+                + "System.Int32@System.Private.CoreLib,System.Int32@System.Private.CoreLib,"
+                + "System.Int32@System.Private.CoreLib,System.Int32@System.Private.CoreLib,"
+                + "System.Int32@System.Private.CoreLib,"
+                + "System.ValueTuple`1@System.Private.CoreLib[P.Status@P]]]",
         };
 
         // --- Controls: the same kinds over components that HAVE a CLR type.
