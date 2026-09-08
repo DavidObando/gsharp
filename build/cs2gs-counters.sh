@@ -136,9 +136,18 @@ cs2gs_raw_lines() {
 # UNBOUNDED, because one bad line silently corrupts every line after it.
 # raw_string_flags below tracks the lexical state each line STARTS in, so a
 # backtick only opens a raw string where a raw string can actually open. The
-# blast radius is bounded as well: only raw strings and block comments may span
-# a newline, so any state this scanner does get wrong is reset at the next line
-# instead of running to end of file.
+# blast radius is bounded as well: a "..." or '...' literal cannot span a
+# newline, so any state this scanner does get wrong is reset at the next line
+# instead of running to end of file. (Raw strings, block comments and ADR-0055
+# multiline interpolation holes genuinely do span newlines and are carried
+# across, matching the real lexer.)
+#
+# Fidelity to Lexer.cs is the whole point, so the two places this scanner
+# initially diverged from it are fixed even though neither moves a count on
+# today's tree: `$$` escaping to a literal `$` (Lexer.cs:905-915) and multiline
+# `${...}` holes (Lexer.cs:824-830). A scanner that mishandles a construct the
+# real lexer accepts is the same class of latent, input-dependent corruption
+# #4082 was, and the count being right today is luck rather than design.
 cs2gs_long_line_counts() {
   local tree=$1
   python3 - 3< <(cs2gs_find_translated_sources "$tree" -print0) <<'PY'
@@ -152,11 +161,12 @@ def raw_string_flags(lines):
 
     A small lexer over G# surface syntax: backtick raw strings (which have no
     escape, so the next backtick always closes one), "..." literals (backslash
-    escapes, plus ${...} interpolation holes whose contents are code and may
-    contain nested string literals), '...' character literals, // line comments
-    and /* */ block comments. Only raw strings and block comments carry across
-    a newline; every other state is reset there, so a misread cannot cascade
-    past the line that caused it.
+    escapes, `$$` escaping to a literal `$`, plus ${...} interpolation holes
+    whose contents are code and may contain nested string literals), '...'
+    character literals, // line comments and /* */ block comments. Only raw
+    strings, block comments and interpolation holes carry across a newline;
+    every other state is reset there, so a misread cannot cascade past the line
+    that caused it.
     """
     flags = []
     state = "code"
@@ -195,6 +205,14 @@ def raw_string_flags(lines):
             elif state == "dq":
                 if char == "\\":
                     index += 1
+                elif char == "$" and nxt == "$":
+                    # `$$` is the escape for a literal `$` (Lexer.cs:905-915),
+                    # so the second `$` cannot open a hole: in "$${" the brace
+                    # is an ordinary character and the literal runs on. Reading
+                    # it as an opener instead swallows the literal's own closing
+                    # quote as the START of a new one, and a raw-string opener
+                    # later on that line is then lost inside it.
+                    index += 1
                 elif char == "$" and nxt == "{":
                     holes.append(depth)
                     depth = 0
@@ -213,9 +231,20 @@ def raw_string_flags(lines):
                     index += 1
             index += 1
         if state not in ("raw", "block"):
+            # A "..." or '...' literal cannot span a newline -- Lexer.cs:824-830
+            # reports a diagnostic for one that tries -- so the line boundary
+            # ends it and a misread costs one line, not the rest of the file.
             state = "code"
-            holes = []
-            depth = 0
+
+        # `holes`/`depth` deliberately SURVIVE the boundary. ADR-0055 holes are
+        # scanned by a sub-scanner that permits newlines (Lexer.cs:824-830,
+        # samples/InterpolatedStringRichHoles.gs:17-19), so a `${` opened on one
+        # line may close on a later one. Clearing the stack here left the
+        # continuation's `}` unable to restore `dq`, and the rest of that line
+        # -- including any raw-string opener on it -- was then read in the wrong
+        # state. Carrying the stack does not reintroduce an unbounded failure
+        # mode: a stale entry can only turn a later top-level `}` into `dq`, and
+        # `dq` is itself reset at the next boundary by the branch above.
     return flags
 
 

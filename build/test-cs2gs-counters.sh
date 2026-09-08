@@ -110,6 +110,52 @@ PY
 read -r reducible atomic total < <(cs2gs_long_line_counts "$tree4082")
 assert_eq "$reducible $atomic $total" "3 1 4" "issue #4082 non-delimiter backticks"
 
+# PR #4123 review: two constructs the real lexer handles and the scanner did
+# not. Both are LATENT on today's migrated tree -- neither moves a count there
+# -- so each gets its own tree with its own long line, whose classification
+# flips the moment the scanner's state desyncs from the lexer's. A shared tree
+# would let one fix mask the other's fixture.
+#
+# (a) `$$` escapes to a literal `$` (Lexer.cs:905-915), so in "$${" the brace
+#     is ordinary text. Reading the second `$` as an interpolation opener makes
+#     the literal's own closing quote look like the START of a new literal, and
+#     the raw-string opener after it is then swallowed -- so the raw body line
+#     below is misfiled as reducible instead of single-atom-bounded.
+dollar_escape_tree="$scratch/tree-dollar-escape"
+mkdir -p "$dollar_escape_tree"
+python3 - "$dollar_escape_tree/dollar-escape.gs" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    'let braces = "$${" + `\n' + ("x " * 160) + "\n`\n",
+    encoding="utf-8",
+)
+PY
+
+read -r reducible atomic total < <(cs2gs_long_line_counts "$dollar_escape_tree")
+assert_eq "$reducible $atomic $total" "0 1 1" "PR #4123: \$\$ escape does not open a hole"
+
+# (b) An ADR-0055 interpolation hole may span a newline (Lexer.cs:824-830,
+#     samples/InterpolatedStringRichHoles.gs:17-19). Dropping the hole stack at
+#     the line boundary left the continuation's `}` unable to restore the
+#     string state, so the closing quote opened a literal that swallowed the
+#     raw-string opener on the same line -- again misfiling the body line.
+multiline_hole_tree="$scratch/tree-multiline-hole"
+mkdir -p "$multiline_hole_tree"
+python3 - "$multiline_hole_tree/multiline-hole.gs" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    'let answer = "answer=${n *\n7}" + `\n' + ("x " * 160) + "\n`\n",
+    encoding="utf-8",
+)
+PY
+
+read -r reducible atomic total < <(cs2gs_long_line_counts "$multiline_hole_tree")
+assert_eq "$reducible $atomic $total" "0 1 1" "PR #4123: multiline interpolation hole"
+
 cat > "$scratch/baseline.json" <<'JSON'
 {
   "greenFloor": 0,
