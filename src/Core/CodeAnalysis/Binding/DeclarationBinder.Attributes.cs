@@ -920,7 +920,21 @@ internal sealed partial class DeclarationBinder
                     (operandType.ClrType is not null ||
                      operandType is StructSymbol or InterfaceSymbol or EnumSymbol or DelegateTypeSymbol))
                 {
-                    value = operandType.ClrType is { } clrType ? clrType : operandType;
+                    // Issue #4073: a constructed generic over a same-compilation
+                    // type ALWAYS has a non-null `ClrType` — the erased close is
+                    // a real closed type — and that CLR type names the SURROGATE
+                    // (`System.Int32` for a source enum, `System.Object` for a
+                    // source class). Preferring it wrote
+                    // `JsonStringEnumConverter<int32>` into the blob and
+                    // reflection materialisation refused the instantiation. The
+                    // symbolic type is the only thing that still knows what the
+                    // author wrote, so hand THAT to the encoder whenever the CLR
+                    // shape is not faithful. A fully imported argument
+                    // (`Box[int32]`) is faithful and keeps the CLR path byte for
+                    // byte, which is what the control rows pin.
+                    value = AttributeTypeArgumentIsErased(operandType)
+                        ? operandType
+                        : operandType.ClrType is { } clrType ? clrType : operandType;
                     type = bt.Type;
                     return true;
                 }
@@ -992,6 +1006,31 @@ internal sealed partial class DeclarationBinder
 
         return false;
     }
+
+    /// <summary>
+    /// Issue #4073: returns <see langword="true"/> when a <c>typeof</c> operand's
+    /// CLR <see cref="Type"/> is the type-ERASED surrogate rather than the type
+    /// the author named, so the custom-attribute blob must be written from the
+    /// SYMBOL instead.
+    /// </summary>
+    /// <remarks>
+    /// <para>The condition is exactly "a same-compilation type appears
+    /// somewhere in this type" — at the top level (where <c>ClrType</c> is
+    /// already <see langword="null"/> and the symbolic path was always taken) or
+    /// at any structural position inside a constructed generic, a slice, an
+    /// array or a nilable, where the surrogate hides behind a perfectly real
+    /// closed <c>ClrType</c>.</para>
+    /// <para>Deliberately NOT <c>RequiresSymbolicProjection</c>, which also
+    /// answers <see langword="true"/> for a reference-nullable annotation
+    /// (<c>typeof(Box[string?])</c>). That annotation is metadata over a type
+    /// whose CLR shape is entirely faithful, and ECMA-335 II.23.3 has nowhere to
+    /// put it; routing that shape onto the symbolic writer would change a
+    /// correct blob for no gain.</para>
+    /// </remarks>
+    /// <param name="type">The bound <c>typeof</c> operand.</param>
+    /// <returns><c>true</c> when the CLR projection is a surrogate.</returns>
+    private static bool AttributeTypeArgumentIsErased(TypeSymbol type)
+        => type.ClrType is null || TypeSymbol.ContainsSameCompilationUserType(type);
 
     private bool TryBindAttributeArrayArgument(
         ArrayCreationExpressionSyntax syntax,

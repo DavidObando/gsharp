@@ -875,7 +875,7 @@ internal sealed class CustomAttributeEncoder
         var fixedCount = expandLast ? pars.Length - 1 : pars.Length;
         for (int i = 0; i < fixedCount; i++)
         {
-            if (!ArgAssignable(positional[i].Value, pars[i].ParameterType))
+            if (!ArgAssignable(positional[i].Value, pars[i].ParameterType, positional[i].Type))
             {
                 return false;
             }
@@ -886,7 +886,7 @@ internal sealed class CustomAttributeEncoder
             var elementType = pars[pars.Length - 1].ParameterType.GetElementType()!;
             for (int i = fixedCount; i < positional.Length; i++)
             {
-                if (!ArgAssignable(positional[i].Value, elementType))
+                if (!ArgAssignable(positional[i].Value, elementType, positional[i].Type))
                 {
                     return false;
                 }
@@ -896,7 +896,22 @@ internal sealed class CustomAttributeEncoder
         return true;
     }
 
-    private static bool ArgAssignable(object? supplied, Type paramType)
+    /// <summary>
+    /// Decides whether one bound attribute argument may be encoded into one
+    /// constructor parameter — the applicability rule that drives constructor
+    /// SELECTION, so anything this admits is a call the emitter is willing to
+    /// write.
+    /// </summary>
+    /// <param name="supplied">The bound constant value.</param>
+    /// <param name="paramType">The constructor parameter's CLR type.</param>
+    /// <param name="suppliedType">
+    /// The argument's SOURCE type, when the caller has the
+    /// <see cref="BoundAttributeArgument"/> in hand. Only the widened-array arm
+    /// consults it; a recursive element check passes <c>null</c> because an
+    /// element carries no separate bound type.
+    /// </param>
+    /// <returns>Whether the value may be encoded into that parameter.</returns>
+    private static bool ArgAssignable(object? supplied, Type paramType, TypeSymbol? suppliedType = null)
     {
         // Third-party attributes are commonly resolved through a
         // MetadataLoadContext. Normalize framework types before using CLR
@@ -927,6 +942,62 @@ internal sealed class CustomAttributeEncoder
             return true;
         }
 
+        // Issue #4073: `[]Type{typeof(SourceType)}` is carried as an `object[]`,
+        // because #3684 had to widen the constant CONTAINER to hold the
+        // `TypeSymbol` placeholder a same-compilation `typeof` produces (a
+        // `Type[]` cannot). Without this arm the widened container matched no
+        // `Type[]` constructor parameter, so the WHOLE attribute was dropped from
+        // the assembly with no diagnostic — the array's own elements were never
+        // even reached. The blob is written from the SIGNATURE's element type,
+        // so the container's element type never leaves the compiler.
+        //
+        // Review feedback on PR #4087: the container is widened, the SOURCE's
+        // array type is not — so the widening is undone by asking
+        // `BoundAttributeArgument.Type` what the author actually wrote, and the
+        // arm fires only when that element type IS the parameter's. Matching on
+        // the container alone made every `object[]` covariant by its current
+        // VALUES: `@Names([]object{"x"})` satisfied a `string[]` constructor and
+        // the emitter encoded a call the source could not have written. Compared
+        // by name rather than by identity because a `/r:` compile resolves the
+        // attribute through a `MetadataLoadContext`, so its `System.Type[]` is
+        // not the runtime's.
+        //
+        // The normalized element is bound to a PATTERN LOCAL rather than read
+        // inline as a member of the call result. cs2gs migrates this file, and
+        // its nullable flow does not honour `[NotNullIfNotNull]`, so the inline
+        // form translated to an asserted parenthesized receiver and tripped the
+        // redundant-assertion inventory ratchet in
+        // `Issue3422RedundantNullForgivenessTranslationTests` — eight permitted,
+        // this made nine. The local is the same value: the argument is non-null
+        // here, so the helper's `[NotNullIfNotNull]` guarantees a non-null
+        // result and the pattern always matches. (Spelled without the token the
+        // ratchet counts: that inventory strips comment lines, but a comment
+        // quoting the pattern is the #3469 trap and makes every grep-based
+        // reading of the migrated tree lie.)
+        if (paramType.IsArray
+            && paramType.GetArrayRank() == 1
+            && paramType.GetElementType() is { } parameterElementType
+            && supplied is object?[] widenedElements
+            && suppliedType?.ClrType is { IsArray: true } declaredArrayType
+            && declaredArrayType.GetArrayRank() == 1
+            && declaredArrayType.GetElementType() is { } declaredElementType
+            && NormalizeWellKnownType(declaredElementType) is { } normalizedElementType
+            && string.Equals(
+                normalizedElementType.FullName,
+                parameterElementType.FullName,
+                StringComparison.Ordinal))
+        {
+            foreach (var element in widenedElements)
+            {
+                if (!ArgAssignable(element, parameterElementType))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         return IsTriviallyConvertible(supplied.GetType(), paramType);
     }
 
@@ -942,7 +1013,7 @@ internal sealed class CustomAttributeEncoder
     {
         for (int i = 0; i < paramTypes.Length; i++)
         {
-            if (!ArgAssignable(positional[i].Value, paramTypes[i]))
+            if (!ArgAssignable(positional[i].Value, paramTypes[i], positional[i].Type))
             {
                 return false;
             }
@@ -1272,14 +1343,170 @@ internal sealed class CustomAttributeEncoder
         return t.AssemblyQualifiedName ?? t.FullName ?? t.Name;
     }
 
+    /// <summary>
+    /// Issue #4073: writes the assembly-qualified name of a SYMBOLIC
+    /// <c>typeof</c> argument, recursing through every structural position so a
+    /// constructed generic names its real arguments.
+    /// </summary>
+    /// <remarks>
+    /// <para>This used to be one line — the type's own metadata name plus the
+    /// assembly under compilation — which is correct for a scalar
+    /// same-compilation type and wrong for everything else. A constructed
+    /// generic's DEFINITION usually lives in a referenced assembly while its
+    /// arguments live here, so a single trailing assembly name cannot describe
+    /// it; and the definition needs its arity suffix and an argument list, which
+    /// a constructed <see cref="StructSymbol"/> could not supply because it
+    /// carries its arguments on <c>TypeArguments</c> and leaves
+    /// <c>TypeParameters</c> empty (so the suffix computed to zero and
+    /// <c>typeof(MyBox[Status])</c> serialised as the unresolvable
+    /// <c>P.MyBox</c>).</para>
+    /// <para>The shape is ECMA-335 I.8.5.2 / <see cref="Type.AssemblyQualifiedName"/>:
+    /// <c>Ns.Def`N[[argAqn],[argAqn]], DefAssembly</c>, with array and
+    /// <c>Nullable</c> wrappers attaching to the NAME while the assembly stays
+    /// the wrapped part's (respectively the core library's).</para>
+    /// </remarks>
+    /// <param name="type">The symbolic type to serialise.</param>
+    /// <returns>The assembly-qualified name.</returns>
     private string GetSerializedTypeName(TypeSymbol type)
     {
-        string assemblyName =
-            this.emitCtx.AssemblyNameOverride ??
-            this.emitCtx.Program.PackageName ??
-            "Default";
-        return GetMetadataTypeName(type) + ", " + assemblyName;
+        var (name, assembly) = this.GetSerializedTypeParts(type);
+        return name + ", " + assembly;
     }
+
+    /// <summary>
+    /// Splits a symbolic type's serialised form into its name and its declaring
+    /// assembly, so a wrapper (array, <c>Nullable</c>) can attach to the name
+    /// without disturbing the assembly, and a generic instantiation can qualify
+    /// each argument independently.
+    /// </summary>
+    /// <param name="type">The symbolic type.</param>
+    /// <returns>The name part and the assembly part.</returns>
+    private (string Name, string Assembly) GetSerializedTypeParts(TypeSymbol type)
+    {
+        switch (type)
+        {
+            case NullableTypeSymbol nullable when nullable.UnderlyingType is { } underlying:
+                // A nullable REFERENCE has no distinct runtime type (ADR: the
+                // annotation is metadata over the same CLR shape), so it
+                // serialises as its underlying type. A nullable VALUE type is a
+                // real `System.Nullable<T>` instantiation.
+                return NullableLifting.IsAnyValueTypeNullable(nullable)
+                    ? this.BuildNullableParts(underlying)
+                    : this.GetSerializedTypeParts(underlying);
+
+            case SliceTypeSymbol slice:
+                return AppendNameSuffix(this.GetSerializedTypeParts(slice.ElementType), "[]");
+
+            case ArrayTypeSymbol array:
+                return AppendNameSuffix(this.GetSerializedTypeParts(array.ElementType), "[]");
+
+            case RectangularArrayTypeSymbol rectangular:
+                return AppendNameSuffix(
+                    this.GetSerializedTypeParts(rectangular.ElementType),
+                    "[" + new string(',', Math.Max(rectangular.Rank - 1, 0)) + "]");
+
+            case ImportedTypeSymbol { OpenDefinition: { } openDefinition } imported
+                when !imported.TypeArguments.IsDefaultOrEmpty:
+                return (
+                    (openDefinition.FullName ?? openDefinition.Name) + this.BuildArgumentList(imported.TypeArguments),
+                    openDefinition.Assembly.FullName ?? openDefinition.Assembly.GetName().Name ?? this.CompilationAssemblyName());
+
+            case StructSymbol { ClrType: null } structType when !structType.TypeArguments.IsDefaultOrEmpty:
+                return (
+                    GetMetadataTypeName(structType.Definition) + this.BuildArgumentList(structType.TypeArguments),
+                    this.CompilationAssemblyName());
+
+            case InterfaceSymbol { ClrType: null } interfaceType when !interfaceType.TypeArguments.IsDefaultOrEmpty:
+                return (
+                    GetMetadataTypeName(interfaceType.Definition) + this.BuildArgumentList(interfaceType.TypeArguments),
+                    this.CompilationAssemblyName());
+
+            // Review feedback on PR #4087: a constructed generic DELEGATE keeps
+            // its vector on `TypeArguments` exactly as a struct or interface
+            // does, so it belongs with them and not with the scalar arm below.
+            // It fails differently, though: `DelegateTypeSymbol.CreateConstructed`
+            // PRESERVES `TypeParameters`, so the arity suffix is right and the
+            // name resolves — to the OPEN definition. `typeof(Pred[Status])`
+            // reified as `P.Pred`1` rather than `Pred<Status>`, and nested as an
+            // argument (`Box[Pred[Status]]`) it produced a type whose `FullName`
+            // is null, because an open generic is not a legal instantiation
+            // argument.
+            case DelegateTypeSymbol { ClrType: null } delegateType
+                when !delegateType.TypeArguments.IsDefaultOrEmpty:
+                return (
+                    GetMetadataTypeName(delegateType.Definition ?? delegateType)
+                        + this.BuildArgumentList(delegateType.TypeArguments),
+                    this.CompilationAssemblyName());
+
+            case StructSymbol { ClrType: null }:
+            case InterfaceSymbol { ClrType: null }:
+            case EnumSymbol { ClrType: null }:
+            case DelegateTypeSymbol { ClrType: null }:
+                return (GetMetadataTypeName(type), this.CompilationAssemblyName());
+        }
+
+        if (type.ClrType is { } clrType)
+        {
+            return (
+                clrType.FullName ?? clrType.Name,
+                clrType.Assembly.FullName ?? clrType.Assembly.GetName().Name ?? this.CompilationAssemblyName());
+        }
+
+        return (GetMetadataTypeName(type), this.CompilationAssemblyName());
+    }
+
+    /// <summary>
+    /// Builds the <c>[[arg],[arg]]</c> instantiation suffix, qualifying each
+    /// argument with its OWN assembly — the whole point of the recursion, since
+    /// an imported definition is routinely closed over a same-compilation
+    /// argument.
+    /// </summary>
+    /// <param name="typeArguments">The symbolic type arguments.</param>
+    /// <returns>The bracketed argument list.</returns>
+    private string BuildArgumentList(ImmutableArray<TypeSymbol> typeArguments)
+    {
+        var parts = typeArguments.Select(argument =>
+        {
+            var (name, assembly) = this.GetSerializedTypeParts(argument);
+            return "[" + name + ", " + assembly + "]";
+        });
+        return "[" + string.Join(",", parts) + "]";
+    }
+
+    /// <summary>
+    /// Builds the <c>System.Nullable`1</c> instantiation over
+    /// <paramref name="underlying"/>, resolving the open definition through the
+    /// compilation's reference set rather than the emitting host's, so the
+    /// assembly it names is the one the emitted assembly actually references.
+    /// </summary>
+    /// <param name="underlying">The value-type underlying type.</param>
+    /// <returns>The name and assembly parts of the nullable instantiation.</returns>
+    private (string Name, string Assembly) BuildNullableParts(TypeSymbol underlying)
+    {
+        var (innerName, innerAssembly) = this.GetSerializedTypeParts(underlying);
+        var suffix = "[[" + innerName + ", " + innerAssembly + "]]";
+        if (this.emitCtx.References.TryResolveType("System.Nullable`1", requireExternalVisibility: false, out var nullableOpen)
+            && nullableOpen != null)
+        {
+            return (
+                (nullableOpen.FullName ?? "System.Nullable`1") + suffix,
+                nullableOpen.Assembly.FullName ?? nullableOpen.Assembly.GetName().Name ?? innerAssembly);
+        }
+
+        // Defensive: every reference set that can compile a nilable value type
+        // carries the core library, so this is unreachable in practice.
+        return ("System.Nullable`1" + suffix, innerAssembly);
+    }
+
+    /// <summary>Gets the identity of the assembly being emitted.</summary>
+    /// <returns>The assembly's simple name.</returns>
+    private string CompilationAssemblyName()
+        => this.emitCtx.AssemblyNameOverride ??
+           this.emitCtx.Program.PackageName ??
+           "Default";
+
+    private static (string Name, string Assembly) AppendNameSuffix((string Name, string Assembly) parts, string suffix)
+        => (parts.Name + suffix, parts.Assembly);
 
     internal static string GetMetadataTypeName(TypeSymbol type)
     {

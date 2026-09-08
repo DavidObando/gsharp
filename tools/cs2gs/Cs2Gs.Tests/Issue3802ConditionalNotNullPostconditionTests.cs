@@ -30,6 +30,29 @@ namespace Cs2Gs.Tests;
 public class Issue3802ConditionalNotNullPostconditionTests
 {
     /// <summary>
+    /// Issue #4071: a symbol resolver is allowed to miss. The null must reach
+    /// the helper so its pattern check can reject the candidate; asserting at
+    /// the callback boundary crashes before that check.
+    /// </summary>
+    [Fact]
+    public void MissingInvocationSymbol_DoesNotCrashPostconditionAnalysis()
+    {
+        string printed = Translate(@"
+namespace Demo
+{
+    public class Probe
+    {
+        public static string Run(string @select)
+        {
+            return nameof(@select);
+        }
+    }
+}");
+
+        Assert.Contains("\"select\"", printed);
+    }
+
+    /// <summary>
     /// The migrated shape, reduced: the iterator element must stay
     /// <c>string</c>, the local must stay <c>string</c>, and the dictionary
     /// index that consumes them must bind.

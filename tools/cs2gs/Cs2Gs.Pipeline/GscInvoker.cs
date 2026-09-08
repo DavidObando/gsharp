@@ -38,7 +38,8 @@ public sealed class GscInvoker
     /// dev tree gsc.dll and gsgen.dll are not siblings, so callers running
     /// against a dev build should resolve and pass this explicitly).
     /// </param>
-    public GscInvoker(string gscPath, string gsgenPath = null)
+#nullable enable annotations
+    public GscInvoker(string gscPath, string? gsgenPath = null)
     {
         this.GscPath = gscPath ?? throw new ArgumentNullException(nameof(gscPath));
         this.GsgenPath = gsgenPath;
@@ -48,7 +49,7 @@ public sealed class GscInvoker
     public string GscPath { get; }
 
     /// <summary>Gets the resolved <c>gsgen.dll</c> path, or <see langword="null"/> to use gsc's own default.</summary>
-    public string GsgenPath { get; }
+    public string? GsgenPath { get; }
 
     /// <summary>
     /// Resolves the <c>gsc.dll</c> to use: the explicit override when supplied,
@@ -59,7 +60,8 @@ public sealed class GscInvoker
     /// <param name="config">The build configuration to probe (e.g. <c>Release</c>).</param>
     /// <param name="startDirectory">The directory to begin the upward walk from.</param>
     /// <returns>The resolved path, or <see langword="null"/> if none was found.</returns>
-    public static string Resolve(string explicitPath, string config, string startDirectory) =>
+#nullable enable annotations
+    public static string? Resolve(string? explicitPath, string config, string startDirectory) =>
         ResolveSiblingTool(explicitPath, config, startDirectory, "Compiler", "gsc.dll");
 
     /// <summary>
@@ -75,7 +77,7 @@ public sealed class GscInvoker
     /// <param name="config">The build configuration to probe (e.g. <c>Release</c>).</param>
     /// <param name="startDirectory">The directory to begin the upward walk from.</param>
     /// <returns>The resolved path, or <see langword="null"/> if none was found.</returns>
-    public static string ResolveGsgenTool(string explicitPath, string config, string startDirectory) =>
+    public static string? ResolveGsgenTool(string? explicitPath, string config, string startDirectory) =>
         ResolveSiblingTool(explicitPath, config, startDirectory, "Gsgen.Cli", "gsgen.dll");
 
     /// <summary>
@@ -228,8 +230,9 @@ public sealed class GscInvoker
         return diagnostics;
     }
 
-    private static string ResolveSiblingTool(
-        string explicitPath, string config, string startDirectory, string projectDirName, string dllName)
+#nullable enable annotations
+    private static string? ResolveSiblingTool(
+        string? explicitPath, string config, string startDirectory, string projectDirName, string dllName)
     {
         if (!string.IsNullOrEmpty(explicitPath))
         {
