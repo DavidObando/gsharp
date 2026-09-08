@@ -2042,17 +2042,35 @@ internal sealed partial class ExpressionBinder
     /// <summary>
     /// Binds a compound write through an imported static CLR type receiver.
     /// </summary>
+    /// <remarks>
+    /// Issue #4056: <paramref name="symbolicContainerType"/> is the constructed
+    /// generic view of a receiver whose closed CLR shape is type-ERASED —
+    /// <c>Handler[MyOptions]</c> over a same-compilation <c>MyOptions</c> closes
+    /// over the <c>object</c> surrogate, because the user type has no
+    /// <c>ClrType</c> while binding. Both the read path
+    /// (<c>ExpressionBinder.Access.MemberLookup.cs</c>) and the simple-write
+    /// path (<c>BindMemberFieldAssignmentExpression</c>) already thread that
+    /// symbol onto the bound node so the emitter parents the member reference at
+    /// the real <c>Handler&lt;MyOptions&gt;</c> TypeSpec. This path dropped it,
+    /// and BOTH the compound read (<c>ldsfld</c>) and the compound write
+    /// (<c>stsfld</c>) named <c>Handler&lt;object&gt;</c> — IL that ILVerify
+    /// rejects with <c>UnsatisfiedFieldParentInst</c> and that the CLR refuses to
+    /// load. <see langword="null"/> for an ordinary (non-generic, or fully
+    /// concrete) imported static receiver, which is every other caller.
+    /// </remarks>
     private BoundExpression? TryBindStaticClrCompoundAssignment(
         Type clrReceiverType,
         string memberName,
         NameExpressionSyntax memberNameSyntax,
         EventSubscriptionExpressionSyntax syntax,
-        SyntaxKind baseOpSyntaxKind)
+        SyntaxKind baseOpSyntaxKind,
+        ImportedTypeSymbol? symbolicContainerType = null)
     {
         var importedClass = new ImportedClassSymbol(
             clrReceiverType,
             memberNameSyntax,
-            references: scope.References);
+            symbolicContainerType,
+            scope.References);
         if (!importedClass.TryLookupMember(memberName, ne: null, out var staticMember))
         {
             return null;
@@ -2065,11 +2083,16 @@ internal sealed partial class ExpressionBinder
         }
 
         var boundRhs = BindExpression(syntax.Value);
+
+        // Issue #4056: the compound READ is a `ldsfld` / `call get_X` of its own,
+        // so it needs the symbolic container just as much as the write below. A
+        // write-only repair still emits an erased TypeSpec for the read half.
         var leftRead = new BoundClrPropertyAccessExpression(
             null,
             receiver: null,
             staticMember,
-            targetSymbol);
+            targetSymbol,
+            staticContainerType: symbolicContainerType);
         var binary = TryBindCompoundBinaryOperation(
             baseOpSyntaxKind,
             leftRead,
@@ -2095,7 +2118,7 @@ internal sealed partial class ExpressionBinder
             staticMember,
             converted,
             targetSymbol,
-            staticContainerType: null);
+            staticContainerType: symbolicContainerType);
     }
 
     /// <summary>
