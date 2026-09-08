@@ -2022,6 +2022,7 @@ internal static class ClrOverloadResolution
         {
             return false;
         }
+
         var closedInputs = new Type[delegateParameters.Length];
         for (var i = 0; i < delegateParameters.Length; i++)
         {
@@ -2052,6 +2053,7 @@ internal static class ClrOverloadResolution
         }
 
         var inferred = new Dictionary<string, Type>(bounds, StringComparer.Ordinal);
+
         // Method-group input types select and validate the candidate; only its
         // return type contributes output-inference bounds.
         for (var i = 0; i < closedInputs.Length; i++)
