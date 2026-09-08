@@ -2368,10 +2368,19 @@ internal sealed partial class ExpressionBinder
             parameterMapping,
             receiverArgCount,
             isExpanded);
+        var handlerArgs = ApplyInterpolatedStringHandlers(
+            parameters,
+            rebound,
+            receiver,
+            location,
+            parameterMapping,
+            isExpanded,
+            out preludeStatements,
+            out updatedReceiver);
         if (isExpanded)
         {
-            rebound = overloads.ExpandParamsArguments(
-                rebound,
+            handlerArgs = overloads.ExpandParamsArguments(
+                handlerArgs,
                 parameters,
                 call,
                 receiverArgCount,
@@ -2380,7 +2389,6 @@ internal sealed partial class ExpressionBinder
             parameterMapping = default;
         }
 
-        var handlerArgs = ApplyInterpolatedStringHandlers(parameters, rebound, receiver, location, parameterMapping, out preludeStatements, out updatedReceiver);
         var delegateArgs = delegateRebindMode == ClrCallDelegateRebindMode.Full
             ? RebindFunctionLiteralDelegateArguments(
                 handlerArgs,

@@ -3006,15 +3006,17 @@ internal sealed partial class ExpressionBinder
     /// <param name="receiver">The instance receiver, or <see langword="null"/> for static/constructor calls.</param>
     /// <param name="location">The diagnostic location for the call.</param>
     /// <param name="parameterMapping">Issue #343: per-source-argument → parameter-position map; default for identity.</param>
+    /// <param name="isExpanded">Whether trailing source arguments target a params-array element.</param>
     /// <returns>The arguments, with handler-targeted interpolations rewritten.</returns>
     private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
         System.Reflection.ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression? receiver,
         TextLocation location,
-        ImmutableArray<int> parameterMapping = default)
+        ImmutableArray<int> parameterMapping = default,
+        bool isExpanded = false)
     {
-        return ApplyInterpolatedStringHandlers(parameters, arguments, receiver, location, parameterMapping, out _, out _);
+        return ApplyInterpolatedStringHandlers(parameters, arguments, receiver, location, parameterMapping, isExpanded, out _, out _);
     }
 
     /// <summary>
@@ -3033,6 +3035,7 @@ internal sealed partial class ExpressionBinder
         BoundExpression? receiver,
         TextLocation location,
         ImmutableArray<int> parameterMapping,
+        bool isExpanded,
         out ImmutableArray<BoundStatement> preludeStatements,
         out BoundExpression? updatedReceiver)
     {
@@ -3057,12 +3060,22 @@ internal sealed partial class ExpressionBinder
             }
 
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
-            if (paramIndex >= parameters.Length)
+            if (paramIndex < 0 || paramIndex >= parameters.Length)
             {
                 continue;
             }
 
-            var parameterType = parameters[paramIndex].ParameterType;
+            var parameter = parameters[paramIndex];
+            var parameterType = parameter.ParameterType;
+            if (isExpanded &&
+                paramIndex == parameters.Length - 1 &&
+                parameter.GetCustomAttribute<ParamArrayAttribute>() is not null &&
+                parameterType.IsArray)
+            {
+                parameterType = Invariant.Required(
+                    parameterType.GetElementType(),
+                    "a params array has an element type");
+            }
 
             // Issue #377 sub-item 1: accept a by-ref handler-typed parameter
             // (e.g. `ref DefaultInterpolatedStringHandler`). Peel before
@@ -3079,10 +3092,11 @@ internal sealed partial class ExpressionBinder
 
             var handler = InterpolatedStringHandlerInfo.TryCreate(
                 peeled,
-                parameters[paramIndex],
+                parameter,
                 parameters,
                 arguments,
                 receiver,
+                parameterMapping,
                 interp.Parts,
                 out var failure);
             if (handler == null)

@@ -211,6 +211,7 @@ public sealed class InterpolatedStringHandlerInfo
             parameters,
             arguments,
             receiver,
+            default,
             ImmutableArray<BoundInterpolatedStringPart>.Empty,
             out failure);
 
@@ -220,6 +221,7 @@ public sealed class InterpolatedStringHandlerInfo
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression? receiver,
+        ImmutableArray<int> parameterMapping,
         ImmutableArray<BoundInterpolatedStringPart> parts,
         out string? failure)
     {
@@ -266,14 +268,28 @@ public sealed class InterpolatedStringHandlerInfo
                 }
             }
 
-            if (index < 0 || index >= arguments.Length)
+            var sourceIndex = index;
+            if (!parameterMapping.IsDefaultOrEmpty)
+            {
+                sourceIndex = -1;
+                for (var source = 0; source < parameterMapping.Length; source++)
+                {
+                    if (parameterMapping[source] == index)
+                    {
+                        sourceIndex = source;
+                        break;
+                    }
+                }
+            }
+
+            if (sourceIndex < 0 || sourceIndex >= arguments.Length)
             {
                 failure = $"the handler argument references parameter '{name}', which is not a preceding argument of this call";
                 return null;
             }
 
-            forwarded.Add(arguments[index]);
-            sources.Add(index);
+            forwarded.Add(arguments[sourceIndex]);
+            sources.Add(sourceIndex);
         }
 
         var forwardedArgs = forwarded.ToImmutable();

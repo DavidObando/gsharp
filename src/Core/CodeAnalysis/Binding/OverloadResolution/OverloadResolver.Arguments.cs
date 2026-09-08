@@ -183,8 +183,7 @@ internal sealed partial class OverloadResolver
 
             if (parameterIndex < receiverArgCount
                 || parameterIndex >= paramsIndex
-                || !fixedSlots.Add(parameterIndex)
-                || parameterOrderedArguments[parameterIndex] is BoundAddressOfExpression or BoundConditionalAddressExpression)
+                || !fixedSlots.Add(parameterIndex))
             {
                 return parameterOrderedArguments;
             }
@@ -215,7 +214,14 @@ internal sealed partial class OverloadResolver
                 isReadOnly: true,
                 argument.Type);
             evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
-            var replacement = new BoundVariableExpression(argument.Syntax, temp);
+            BoundExpression replacement = new BoundVariableExpression(argument.Syntax, temp);
+            if (argument.Type is ByRefTypeSymbol)
+            {
+                replacement = new BoundAddressOfExpression(
+                    argument.Syntax,
+                    new BoundDereferenceExpression(argument.Syntax, replacement));
+            }
+
             if (parameterIndex == paramsIndex)
             {
                 paramsElements[paramsElementIndex++] = replacement;
@@ -236,10 +242,20 @@ internal sealed partial class OverloadResolver
             paramsArray.ContainerType,
             paramsElements.ToImmutable());
         var carrier = Math.Min(receiverArgCount, replacements.Length - 1);
-        replacements[carrier] = new BoundBlockExpression(
+        BoundExpression orderedCarrier = new BoundBlockExpression(
             parameterOrderedArguments[carrier].Syntax,
             evaluations.ToImmutable(),
             replacements[carrier]);
+        if (replacements[carrier].Type is ByRefTypeSymbol)
+        {
+            orderedCarrier = new BoundAddressOfExpression(
+                parameterOrderedArguments[carrier].Syntax,
+                new BoundDereferenceExpression(
+                    parameterOrderedArguments[carrier].Syntax,
+                    orderedCarrier));
+        }
+
+        replacements[carrier] = orderedCarrier;
         return ImmutableArray.Create(replacements);
     }
 
