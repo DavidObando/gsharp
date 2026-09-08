@@ -66,17 +66,35 @@ public sealed class SdkCompileRunner
     /// Issue #3501: seconds of budget granted per <c>[Fact]</c> method declared
     /// by the app's C# original.
     /// <para>
-    /// Calibrated against measurement, not taste. In gate run 34232380469 the
-    /// migrated <c>test/Compiler.Tests</c> — 4,103 declared <c>[Fact]</c>
-    /// methods, 5,234 executed cases — spent ~81 minutes on its whole
-    /// validation, of which the test run was the dominant share: roughly 1.0
-    /// second per declared <c>[Fact]</c>. The C# originals measured locally
-    /// agree on the shape (<c>Cs2Gs.Tests</c> 2,851 cases in 21 minutes,
-    /// <c>Compiler.Tests</c> 5,234 cases in 41 minutes ≈ 0.45 s per case; the
-    /// migrated build runs slower and the declared count is lower than the
-    /// executed count because a <c>[Theory]</c> expands). 1.5 s/test is that
-    /// observed rate with a ~50% margin for runner variance, which is enough
-    /// to distinguish "large" from "stuck" without waiting out a real hang.
+    /// Calibrated against measurement, not taste. Two DIFFERENT measurements
+    /// feed this constant, and every figure below is labelled with the one it
+    /// came from — they were conflated once already, and a calibration record
+    /// that mixes them is worse than no record:
+    /// <list type="bullet">
+    ///   <item><description>CI — gate run 34232380469
+    ///   (<c>cs2gs-selfmig-nightly</c> on <c>main</c>, Release, GitHub-hosted
+    ///   runner). The MIGRATED <c>test/Compiler.Tests</c>, 4,103 declared
+    ///   <c>[Fact]</c> methods, completed and reported
+    ///   <c>Failed: 79, Passed: 5415, Skipped: 0, Total: 5494</c>. Its whole
+    ///   validation cost 4,864 s (~81 min), of which the test run was the
+    ///   dominant share at 3,658 s (~61 min): ~0.9 s per declared
+    ///   <c>[Fact]</c> for the run alone, ~1.2 s once the rest of validation is
+    ///   charged to the same count.</description></item>
+    ///   <item><description>LOCAL — the C# ORIGINALS timed on a developer
+    ///   machine in Debug, which agree on the shape: <c>Cs2Gs.Tests</c> 2,891
+    ///   cases in 21 m 57 s (re-measured 2026-09-08) and <c>Compiler.Tests</c>
+    ///   5,234 cases in 41 min (2026-09-06), ≈ 0.45 s per executed case. These
+    ///   case counts are local Debug numbers for the ORIGINALS and are NOT the
+    ///   CI run's totals above; the migrated build runs slower, and a declared
+    ///   count is lower than an executed count because a <c>[Theory]</c>
+    ///   expands.</description></item>
+    /// </list>
+    /// The rate is derived from the CI line alone — 4,103 declared facts over
+    /// that run's ~81 minutes — so the executed-case counts are context, not
+    /// inputs, and correcting one does not move the constant. 1.5 s/test is
+    /// that observed rate with a ~50% margin for runner variance, which is
+    /// enough to distinguish "large" from "stuck" without waiting out a real
+    /// hang.
     /// </para>
     /// </summary>
     private const double MirroredTestRunSecondsPerDeclaredTest = 1.5;
@@ -847,9 +865,10 @@ public sealed class SdkCompileRunner
     /// cost is not merely a slow job — the killed run carries no VSTest
     /// summary, so the app produces NO parity count at all and cannot be driven
     /// to green, because nobody can see what is failing. That is what blocked
-    /// <c>tools/cs2gs/Cs2Gs.Tests</c> (2,579 declared <c>[Fact]</c> methods,
-    /// 2,851 cases; its C# original alone takes 21 minutes) under a 10-minute
-    /// budget it could never have met.
+    /// <c>tools/cs2gs/Cs2Gs.Tests</c> (2,579 declared <c>[Fact]</c> methods;
+    /// its C# ORIGINAL alone runs 2,891 cases in 21 minutes when measured
+    /// locally — the migrated run has never reported a count, which is the
+    /// point) under a 10-minute budget it could never have met.
     /// </para>
     /// <para>
     /// The scale signal is the <c>[Fact]</c> count of the app's own C# original

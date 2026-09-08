@@ -70,7 +70,7 @@ public sealed class Issue3501ScaledTestParityBudgetTests
     /// <summary>
     /// The case that motivated the change. <c>tools/cs2gs/Cs2Gs.Tests</c>
     /// declares 2,579 <c>[Fact]</c> methods and its C# ORIGINAL takes 21
-    /// minutes to run 2,851 cases — so the migrated suite, which is slower,
+    /// minutes to run 2,891 cases — so the migrated suite, which is slower,
     /// could never have completed inside ten minutes no matter how healthy it
     /// was. The budget it gets must comfortably clear that measured original,
     /// or the app stays a measurement blocker.
