@@ -4288,6 +4288,13 @@ internal sealed partial class ExpressionBinder
 
         arguments = RebindFormattableInterpolationArguments(arguments, callSyntax.Arguments, parameters, downstreamMapping);
 
+        arguments = ApplySymbolicClrArgumentConversions(
+            arguments,
+            parameters,
+            downstreamMapping,
+            method,
+            constraintType);
+
         var convertedArguments = method.IsGenericMethod
             ? conversions.BindClrParameterConversions(
                 arguments,

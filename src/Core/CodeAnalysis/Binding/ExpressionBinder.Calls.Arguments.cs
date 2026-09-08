@@ -3877,6 +3877,13 @@ internal sealed partial class ExpressionBinder
         // unchanged.
         arguments = RebindFormattableInterpolationArguments(arguments, ce.Arguments, parameters, downstreamMapping);
 
+        arguments = ApplySymbolicClrArgumentConversions(
+            arguments,
+            parameters,
+            downstreamMapping,
+            method,
+            constraintType);
+
         // Non-generic constrained slots stay on the established unconverted
         // path: the emitted MemberRef parameter is the interface type-variable
         // `!0` (== the reified `!!T`). A generic method needs its recovered
@@ -3906,6 +3913,67 @@ internal sealed partial class ExpressionBinder
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: declaringConstraint);
         return true;
+    }
+
+    /// <summary>
+    /// Issue #4054: a constrained CLR dispatch through a type-parameter
+    /// receiver still has to apply the USER-DEFINED implicit conversion a
+    /// same-compilation argument needs to reach the parameter type. Without
+    /// it the argument is pushed unconverted and the emitted call does not
+    /// verify — <c>[StackUnexpected] [found value 'P.Celsius'][expected
+    /// Double]</c> and three sibling shapes, measured.
+    /// </summary>
+    private ImmutableArray<BoundExpression> ApplySymbolicClrArgumentConversions(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        ImmutableArray<int> parameterMapping,
+        MethodInfo method,
+        TypeSymbol constraintType)
+    {
+        ImmutableArray<BoundExpression>.Builder? builder = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var parameterIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (parameterIndex >= parameters.Length
+                || parameters[parameterIndex].ParameterType.IsByRef)
+            {
+                continue;
+            }
+
+            var argument = arguments[i];
+            var targetType = MemberLookup.GetClrMethodParameterTypeSymbol(
+                constraintType,
+                method,
+                parameterIndex);
+            if (argument.Type is not { } sourceType
+                || sourceType.ClrType != null
+                || !TypeSymbol.ContainsSameCompilationUserType(sourceType)
+                || targetType == null
+                || targetType == TypeSymbol.Error
+                || TypeSymbol.ContainsTypeParameter(targetType))
+            {
+                continue;
+            }
+
+            var conversion = Conversion.Classify(sourceType, targetType);
+            BoundExpression converted;
+            if (conversion.IsImplicit && !conversion.IsStructuralProjection)
+            {
+                converted = conversions.BindConversion(
+                    argument.Syntax?.Location ?? default,
+                    argument,
+                    targetType);
+            }
+            else if (!conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, targetType, out converted))
+            {
+                continue;
+            }
+
+            builder ??= arguments.ToBuilder();
+            builder[i] = converted;
+        }
+
+        return builder?.MoveToImmutable() ?? arguments;
     }
 
     /// <summary>
