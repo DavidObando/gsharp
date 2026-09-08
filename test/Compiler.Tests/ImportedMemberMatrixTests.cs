@@ -102,24 +102,6 @@ public class ImportedMemberMatrixTests
                     => typeof(T).Name;
             }
 
-            public interface IAsyncStaticOverloads
-            {
-                static abstract string Take<T>(T value)
-                    where T : System.IDisposable;
-
-                static abstract string Take(object value);
-            }
-
-            public sealed class AsyncStaticOverloads : IAsyncStaticOverloads
-            {
-                public static string Take<T>(T value)
-                    where T : System.IDisposable
-                    => "async-static-generic";
-
-                public static string Take(object value)
-                    => "async-static-object";
-            }
-
             public static class Overloads
             {
                 public static string Take<T>(T value)
@@ -160,60 +142,6 @@ public class ImportedMemberMatrixTests
 
             public static class MethodGroupOutputInference
             {
-                [System.Runtime.CompilerServices.InterpolatedStringHandler]
-                public struct MatrixHandler
-                {
-                    private System.Text.StringBuilder builder;
-
-                    public MatrixHandler(int literalLength, int formattedCount)
-                    {
-                        builder = new System.Text.StringBuilder(literalLength);
-                    }
-
-                    public void AppendLiteral(string value)
-                        => builder.Append(value);
-
-                    public void AppendFormatted<T>(T value)
-                        => builder.Append(value);
-
-                    public override string ToString()
-                        => builder.ToString();
-                }
-
-                [System.Runtime.CompilerServices.InterpolatedStringHandler]
-                public struct ForwardingMatrixHandler
-                {
-                    private System.Text.StringBuilder builder;
-
-                    public ForwardingMatrixHandler(
-                        int literalLength,
-                        int formattedCount,
-                        string prefix)
-                    {
-                        builder = new System.Text.StringBuilder(literalLength + prefix.Length + 1);
-                        builder.Append(prefix);
-                        builder.Append(':');
-                    }
-
-                    public ForwardingMatrixHandler(
-                        int literalLength,
-                        int formattedCount,
-                        InstanceOverloads receiver,
-                        string prefix)
-                        : this(literalLength, formattedCount, prefix)
-                    {
-                    }
-
-                    public void AppendLiteral(string value)
-                        => builder.Append(value);
-
-                    public void AppendFormatted<T>(T value)
-                        => builder.Append(value);
-
-                    public override string ToString()
-                        => builder.ToString();
-                }
-
                 public static string Choose<TIn, TOut>(
                     TIn value,
                     System.Func<TIn, TOut> converter)
@@ -233,48 +161,6 @@ public class ImportedMemberMatrixTests
                     TIn value,
                     params System.Func<TIn, TOut>[] converters)
                     => converters[0](value);
-
-                public static TOut EscapedConvert<TIn, TOut>(
-                    TIn value,
-                    System.Func<TIn, TOut> @func)
-                    => @func(value);
-
-                public static TOut EscapedConvertParams<TIn, TOut>(
-                    TIn value,
-                    params System.Func<TIn, TOut>[] @func)
-                    => @func[0](value);
-
-                public static string EvaluationOrder<T>(
-                    T value,
-                    params object[] items)
-                    => value + ":" + string.Join(",", items);
-
-                public static string FormattableOrder(
-                    int value,
-                    System.FormattableString item,
-                    params object[] rest)
-                    => item.Format + ":" + item.GetArgument(0) + ":" + value + ":" + rest[0];
-
-                public static string HandlerParams(
-                    int value,
-                    params MatrixHandler[] handlers)
-                    => value + ":" + string.Join(",", handlers);
-
-                public static string ForwardedHandlerOrder(
-                    int first,
-                    string prefix,
-                    [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument("prefix")]
-                    ForwardingMatrixHandler handler,
-                    params object[] rest)
-                    => first + ":" + handler + ":" + string.Join(",", rest);
-
-                public static string RefEvaluationOrder(
-                    ref int value,
-                    params object[] items)
-                {
-                    value += 10;
-                    return value + ":" + string.Join(",", items);
-                }
             }
 
             public static class ExtensionOverloads
@@ -284,15 +170,6 @@ public class ImportedMemberMatrixTests
                     T value,
                     params System.Func<T>[] factories)
                     => typeof(T).Name;
-
-                public static string ForwardedHandlerExtension(
-                    this InstanceOverloads receiver,
-                    int first,
-                    string prefix,
-                    [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument("receiver", "prefix")]
-                    MethodGroupOutputInference.ForwardingMatrixHandler handler,
-                    params object[] rest)
-                    => first + ":" + handler + ":" + string.Join(",", rest);
             }
 
             public static class VarianceOverloads
@@ -530,60 +407,6 @@ public class ImportedMemberMatrixTests
                 return result.Kind()
             }
 
-            func throughEscapedNamedFixedMethodGroupOutputValue() string {
-                var result Base = MethodGroupOutputInference.EscapedConvert(
-                    func_: symbolicOutputConvert,
-                    value: Derived())
-                return result.Kind()
-            }
-
-            func throughEscapedNamedExpandedMethodGroupOutputValue() string {
-                var result Base = MethodGroupOutputInference.EscapedConvertParams(
-                    func_: symbolicOutputConvert,
-                    value: Derived())
-                return result.Kind()
-            }
-
-            func firstExpandedNamedArgument() string {
-                Console.Write("first|")
-                return "first"
-            }
-
-            func secondExpandedNamedArgument() int32 {
-                Console.Write("second|")
-                return 2
-            }
-
-            func interpolatedExpandedNamedArgument() int32 {
-                Console.Write("format|")
-                return 7
-            }
-
-            func refExpandedNamedArgument() int32 {
-                Console.Write("ref|")
-                return 0
-            }
-
-            func nonForwardedHandlerArgument() int32 {
-                Console.Write("first|")
-                return 1
-            }
-
-            func forwardedHandlerArgument() string {
-                Console.Write("prefix|")
-                return "p"
-            }
-
-            func handlerHoleArgument() int32 {
-                Console.Write("handler|")
-                return 3
-            }
-
-            func extensionHandlerReceiver() InstanceOverloads {
-                Console.Write("receiver|")
-                return InstanceOverloads()
-            }
-
             func throughExpandedStaticMethodGroup() string {
                 return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
             }
@@ -628,10 +451,8 @@ public class ImportedMemberMatrixTests
                 return TReceiver.Take(value)
             }
 
-            async func throughConstrainedStaticAsync[
-                TReceiver IAsyncStaticOverloads,
-                TValue DisposableBase](value TValue) string {
-                return TReceiver.Take(await Task.FromResult[TValue](value))
+            async func throughStaticAsync[TValue DisposableBase](value TValue) string {
+                return StaticOverloads.Take(await Task.FromResult[TValue](value))
             }
 
             func throughConstrainedStaticObject[TReceiver IStaticOverloads[TReceiver]](
@@ -710,47 +531,6 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(throughNamedFixedMethodGroupOutputValue())
             Console.WriteLine(throughNamedExpandedMethodGroupOutputValue())
             Console.WriteLine(throughNamedExpandedMultiMethodGroupOutputValue())
-            Console.WriteLine(throughEscapedNamedFixedMethodGroupOutputValue())
-            Console.WriteLine(throughEscapedNamedExpandedMethodGroupOutputValue())
-            Console.WriteLine(MethodGroupOutputInference.EvaluationOrder(
-                items: firstExpandedNamedArgument(),
-                value: secondExpandedNamedArgument()))
-            Console.WriteLine(MethodGroupOutputInference.FormattableOrder(
-                rest: firstExpandedNamedArgument(),
-                item: "item=${interpolatedExpandedNamedArgument()}",
-                value: secondExpandedNamedArgument()))
-            Console.WriteLine(MethodGroupOutputInference.HandlerParams(
-                3,
-                "first=${7}",
-                "second=${8}"))
-            Console.WriteLine(MethodGroupOutputInference.HandlerParams(
-                handlers: "named=${firstExpandedNamedArgument()}",
-                value: secondExpandedNamedArgument()))
-            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
-                first: nonForwardedHandlerArgument(),
-                prefix: forwardedHandlerArgument(),
-                handler: "hole=${handlerHoleArgument()}",
-                rest: "tail"))
-            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
-                nonForwardedHandlerArgument(),
-                forwardedHandlerArgument(),
-                "hole=${handlerHoleArgument()}",
-                "tail"))
-            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
-                nonForwardedHandlerArgument(),
-                forwardedHandlerArgument(),
-                "hole=${handlerHoleArgument()}",
-                []object{"tail"}))
-            Console.WriteLine(extensionHandlerReceiver().ForwardedHandlerExtension(
-                rest: "tail",
-                first: nonForwardedHandlerArgument(),
-                prefix: forwardedHandlerArgument(),
-                handler: "hole=${handlerHoleArgument()}"))
-            let refValues = []int32{2}
-            Console.WriteLine(MethodGroupOutputInference.RefEvaluationOrder(
-                items: firstExpandedNamedArgument(),
-                value: ref refValues[refExpandedNamedArgument()]))
-            Console.WriteLine(refValues[0])
             Console.WriteLine(throughExpandedStaticMethodGroup())
             Console.WriteLine(throughExpandedSymbolicInstanceMethodGroup(InstanceOverloads()))
             Console.WriteLine(throughExpandedInheritedMethodGroup(DerivedInstanceOverloads()))
@@ -767,8 +547,7 @@ public class ImportedMemberMatrixTests
                 DisposableBase()))
             Console.WriteLine(throughConstrainedStatic[StaticOverloads, DisposableBase](
                 DisposableBase()))
-            Console.WriteLine(throughConstrainedStaticAsync[AsyncStaticOverloads, DisposableBase](
-                DisposableBase()).Result)
+            Console.WriteLine(throughStaticAsync[DisposableBase](DisposableBase()).Result)
             Console.WriteLine(throughConstrainedStaticObject[StaticOverloads](
                 DisposableBase()))
             Console.WriteLine(throughConstrainedStaticMixedInference[StaticOverloads, DisposableBase](
@@ -796,22 +575,12 @@ public class ImportedMemberMatrixTests
                 + $"Derived:Base{Environment.NewLine}"
                 + $"same-compilation-Base{Environment.NewLine}same-compilation-Base{Environment.NewLine}"
                 + $"same-compilation-Base{Environment.NewLine}"
-                + $"same-compilation-Base{Environment.NewLine}same-compilation-Base{Environment.NewLine}"
-                + $"first|second|2:first{Environment.NewLine}"
-                + $"first|format|second|item={{0}}:7:2:first{Environment.NewLine}"
-                + $"3:first=7,second=8{Environment.NewLine}"
-                + $"first|second|2:named=first{Environment.NewLine}"
-                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
-                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
-                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
-                + $"receiver|first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
-                + $"first|ref|12:first{Environment.NewLine}12{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}"
                 + $"Base{Environment.NewLine}"
                 + $"instance-generic{Environment.NewLine}instance-object{Environment.NewLine}"
-                + $"static-generic{Environment.NewLine}async-static-generic{Environment.NewLine}"
+                + $"static-generic{Environment.NewLine}static-generic{Environment.NewLine}"
                 + $"static-object{Environment.NewLine}Object{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}Base{Environment.NewLine}"
                 + $"DisposableBase{Environment.NewLine}Base{Environment.NewLine}",
@@ -839,27 +608,6 @@ public class ImportedMemberMatrixTests
             incompatibleSource,
             "Issue4086.CSharp");
         Assert.Contains(diagnostics, diagnostic => diagnostic.Contains("GS0159", StringComparison.Ordinal));
-
-        const string forwardReferenceSource = """
-            package Issue4086.HandlerForwardReference
-            import Issue4086.CSharp
-
-            MethodGroupOutputInference.ForwardedHandlerOrder(
-                handler: "bad=${1}",
-                prefix: "p",
-                first: 1,
-                rest: "tail")
-            """;
-
-        var forwardReferenceDiagnostics = CompileExpectingErrorsWithSiblingCs(
-            csSource,
-            forwardReferenceSource,
-            "Issue4086.CSharp");
-        Assert.Contains(
-            forwardReferenceDiagnostics,
-            diagnostic =>
-                diagnostic.Contains("GS0221", StringComparison.Ordinal) &&
-                diagnostic.Contains("preceding argument", StringComparison.Ordinal));
     }
 
     private const string Issue3076CsSource = """

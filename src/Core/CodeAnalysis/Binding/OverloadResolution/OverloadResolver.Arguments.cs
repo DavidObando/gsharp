@@ -147,240 +147,6 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
-    /// Preserves lexical evaluation order after params expansion has packed
-    /// several source arguments into one parameter-ordered array slot.
-    /// </summary>
-    internal static ImmutableArray<BoundExpression> PreserveExpandedArgumentEvaluationOrder(
-        ImmutableArray<BoundExpression> parameterOrderedArguments,
-        ImmutableArray<int> sourceToParameterMapping,
-        int receiverArgCount = 0)
-    {
-        if (parameterOrderedArguments.IsDefaultOrEmpty)
-        {
-            return parameterOrderedArguments;
-        }
-
-        var paramsIndex = parameterOrderedArguments.Length - 1;
-        if (parameterOrderedArguments[paramsIndex] is not BoundArrayCreationExpression paramsArray)
-        {
-            return parameterOrderedArguments;
-        }
-
-        if (sourceToParameterMapping.IsDefaultOrEmpty)
-        {
-            if (!HasHandlerSourceForwarding(parameterOrderedArguments))
-            {
-                return parameterOrderedArguments;
-            }
-
-            var positionalMapping = ImmutableArray.CreateBuilder<int>(
-                paramsIndex + paramsArray.Elements.Length);
-            for (var i = 0; i < paramsIndex; i++)
-            {
-                positionalMapping.Add(i);
-            }
-
-            for (var i = 0; i < paramsArray.Elements.Length; i++)
-            {
-                positionalMapping.Add(paramsIndex);
-            }
-
-            sourceToParameterMapping = positionalMapping.MoveToImmutable();
-        }
-
-        var fixedSlots = new HashSet<int>();
-        var paramsElementIndex = 0;
-
-        // Source slot zero may be a synthesized extension receiver. Keep it
-        // in the same capture map used by handler-forwarded arguments.
-        for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
-        {
-            var parameterIndex = sourceToParameterMapping[sourceIndex];
-            if (sourceIndex < receiverArgCount && parameterIndex != sourceIndex)
-            {
-                return parameterOrderedArguments;
-            }
-
-            if (parameterIndex == paramsIndex)
-            {
-                if (paramsElementIndex >= paramsArray.Elements.Length)
-                {
-                    return parameterOrderedArguments;
-                }
-
-                paramsElementIndex++;
-                continue;
-            }
-
-            if (parameterIndex < 0
-                || parameterIndex >= paramsIndex
-                || !fixedSlots.Add(parameterIndex))
-            {
-                return parameterOrderedArguments;
-            }
-        }
-
-        var replacements = parameterOrderedArguments.ToArray();
-        var paramsElements = paramsArray.Elements.ToBuilder();
-        var evaluations = ImmutableArray.CreateBuilder<BoundStatement>();
-        var sourceCaptures = new Dictionary<int, BoundExpression>();
-        paramsElementIndex = 0;
-        for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
-        {
-            var parameterIndex = sourceToParameterMapping[sourceIndex];
-            var argument = parameterIndex == paramsIndex
-                ? paramsElements[paramsElementIndex]
-                : replacements[parameterIndex];
-            argument = RewriteHandlerForwardedArguments(argument, sourceCaptures);
-            var addressCapturedValue = false;
-            if (argument is BoundInterpolatedStringExpression handlerArgument &&
-                handlerArgument.Handler is { HandlerRefKind: not RefKind.None } handler)
-            {
-                addressCapturedValue = true;
-                argument = handlerArgument.Update(
-                    handlerArgument.Parts,
-                    handler.WithHandlerRefKind(RefKind.None));
-            }
-
-            if (StatementBinder.IsNilLiteral(argument))
-            {
-                if (parameterIndex == paramsIndex)
-                {
-                    paramsElementIndex++;
-                }
-
-                continue;
-            }
-
-            var temp = new LocalVariableSymbol(
-                $"<>expandedNamedArg{sourceIndex}",
-                isReadOnly: true,
-                argument.Type);
-            evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
-            BoundExpression tempLoad = new BoundVariableExpression(argument.Syntax, temp);
-            sourceCaptures[sourceIndex] = tempLoad;
-            var replacement = tempLoad;
-            if (addressCapturedValue)
-            {
-                replacement = new BoundAddressOfExpression(
-                    argument.Syntax,
-                    replacement);
-            }
-            else if (argument.Type is ByRefTypeSymbol)
-            {
-                replacement = new BoundAddressOfExpression(
-                    argument.Syntax,
-                    new BoundDereferenceExpression(argument.Syntax, replacement));
-            }
-
-            if (parameterIndex == paramsIndex)
-            {
-                paramsElements[paramsElementIndex++] = replacement;
-            }
-            else
-            {
-                replacements[parameterIndex] = replacement;
-            }
-        }
-
-        if (evaluations.Count == 0)
-        {
-            return parameterOrderedArguments;
-        }
-
-        replacements[paramsIndex] = new BoundArrayCreationExpression(
-            paramsArray.Syntax,
-            paramsArray.ContainerType,
-            paramsElements.ToImmutable());
-        const int carrier = 0;
-        BoundExpression orderedCarrier = new BoundBlockExpression(
-            parameterOrderedArguments[carrier].Syntax,
-            evaluations.ToImmutable(),
-            replacements[carrier]);
-        if (replacements[carrier].Type is ByRefTypeSymbol)
-        {
-            orderedCarrier = new BoundAddressOfExpression(
-                parameterOrderedArguments[carrier].Syntax,
-                new BoundDereferenceExpression(
-                    parameterOrderedArguments[carrier].Syntax,
-                    orderedCarrier));
-        }
-
-        replacements[carrier] = orderedCarrier;
-        return ImmutableArray.Create(replacements);
-    }
-
-    private static bool HasHandlerSourceForwarding(
-        ImmutableArray<BoundExpression> arguments)
-    {
-        foreach (var argument in arguments)
-        {
-            if (HasHandlerSourceForwarding(argument))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool HasHandlerSourceForwarding(BoundExpression argument)
-    {
-        if (argument is BoundInterpolatedStringExpression { Handler: { } handler })
-        {
-            foreach (var sourceIndex in handler.ForwardedSourceIndices)
-            {
-                if (sourceIndex >= 0)
-                {
-                    return true;
-                }
-            }
-        }
-
-        if (argument is BoundArrayCreationExpression array)
-        {
-            foreach (var element in array.Elements)
-            {
-                if (HasHandlerSourceForwarding(element))
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private static BoundExpression RewriteHandlerForwardedArguments(
-        BoundExpression argument,
-        IReadOnlyDictionary<int, BoundExpression> sourceCaptures)
-    {
-        if (argument is not BoundInterpolatedStringExpression { Handler: { } handler } interpolated)
-        {
-            return argument;
-        }
-
-        ImmutableArray<BoundExpression>.Builder? forwarded = null;
-        for (var i = 0; i < handler.ForwardedSourceIndices.Length; i++)
-        {
-            var sourceIndex = handler.ForwardedSourceIndices[i];
-            if (sourceIndex < 0 ||
-                !sourceCaptures.TryGetValue(sourceIndex, out var captured))
-            {
-                continue;
-            }
-
-            forwarded ??= handler.ForwardedArguments.ToBuilder();
-            forwarded[i] = captured;
-        }
-
-        return interpolated.Update(
-            interpolated.Parts,
-            handler.WithCapturedForwardedArguments(
-                forwarded?.ToImmutable() ?? handler.ForwardedArguments));
-    }
-
-    /// <summary>
     /// Issue #3747: resolves the ELEMENT type of an imported <c>params T[]</c>
     /// parameter with the declaration's <c>[Nullable]</c> metadata applied.
     /// <para>
@@ -975,24 +741,7 @@ internal sealed partial class OverloadResolver
         {
             // No named-argument reordering required — preserve the existing
             // trailing-optional behaviour.
-            var orderedArguments = ConversionClassifier.AppendOmittedOptionalArguments(
-                suppliedArguments,
-                parameters);
-            if (!HasHandlerSourceForwarding(orderedArguments))
-            {
-                return orderedArguments;
-            }
-
-            var positionalMapping = ImmutableArray.CreateBuilder<int>(
-                suppliedArguments.Length);
-            for (var i = 0; i < suppliedArguments.Length; i++)
-            {
-                positionalMapping.Add(i);
-            }
-
-            return PreserveMappedArgumentEvaluationOrder(
-                orderedArguments,
-                positionalMapping.MoveToImmutable());
+            return ConversionClassifier.AppendOmittedOptionalArguments(suppliedArguments, parameters);
         }
 
         var ordered = new BoundExpression[parameters.Length];
@@ -1084,8 +833,6 @@ internal sealed partial class OverloadResolver
 
         var seenSlots = new HashSet<int>();
         var reordered = false;
-        var hasHandlerSourceForwarding =
-            HasHandlerSourceForwarding(parameterOrderedArguments);
         for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
         {
             var parameterIndex = sourceToParameterMapping[sourceIndex];
@@ -1098,15 +845,16 @@ internal sealed partial class OverloadResolver
             }
 
             reordered |= parameterIndex != sourceIndex;
-            if (!hasHandlerSourceForwarding &&
-                parameterOrderedArguments[slot] is
-                    BoundAddressOfExpression or BoundConditionalAddressExpression)
+            BoundExpression argument = parameterOrderedArguments[slot];
+            if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression)
             {
+                // Preserve the existing ref/out/in call path. Managed pointers
+                // cannot be materialized into ordinary value temps.
                 return parameterOrderedArguments;
             }
         }
 
-        if (!reordered && !hasHandlerSourceForwarding)
+        if (!reordered)
         {
             return parameterOrderedArguments;
         }
@@ -1114,24 +862,10 @@ internal sealed partial class OverloadResolver
         var replacements = parameterOrderedArguments.ToArray();
         var evaluations = ImmutableArray.CreateBuilder<BoundStatement>(
             sourceToParameterMapping.Length);
-        var sourceCaptures = new Dictionary<int, BoundExpression>();
         for (var sourceIndex = 0; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
         {
             var slot = parameterOffset + sourceToParameterMapping[sourceIndex];
             BoundExpression argument = parameterOrderedArguments[slot];
-            argument = RewriteHandlerForwardedArguments(
-                argument,
-                sourceCaptures);
-            var addressCapturedValue = false;
-            if (argument is BoundInterpolatedStringExpression handlerArgument &&
-                handlerArgument.Handler is { HandlerRefKind: not RefKind.None } handler)
-            {
-                addressCapturedValue = true;
-                argument = handlerArgument.Update(
-                    handlerArgument.Parts,
-                    handler.WithHandlerRefKind(RefKind.None));
-            }
-
             if (StatementBinder.IsNilLiteral(argument))
             {
                 // A nil literal has no evaluation to preserve. Capturing it
@@ -1146,40 +880,14 @@ internal sealed partial class OverloadResolver
                 isReadOnly: true,
                 argument.Type);
             evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
-            BoundExpression tempLoad = new BoundVariableExpression(argument.Syntax, temp);
-            sourceCaptures[sourceIndex] = tempLoad;
-            BoundExpression replacement = tempLoad;
-            if (addressCapturedValue)
-            {
-                replacement = new BoundAddressOfExpression(
-                    argument.Syntax,
-                    replacement);
-            }
-            else if (argument.Type is ByRefTypeSymbol)
-            {
-                replacement = new BoundAddressOfExpression(
-                    argument.Syntax,
-                    new BoundDereferenceExpression(argument.Syntax, replacement));
-            }
-
-            replacements[slot] = replacement;
+            replacements[slot] = new BoundVariableExpression(argument.Syntax, temp);
         }
 
         var carrier = parameterOffset;
-        BoundExpression orderedCarrier = new BoundBlockExpression(
+        replacements[carrier] = new BoundBlockExpression(
             parameterOrderedArguments[carrier].Syntax,
             evaluations.ToImmutable(),
             replacements[carrier]);
-        if (replacements[carrier].Type is ByRefTypeSymbol)
-        {
-            orderedCarrier = new BoundAddressOfExpression(
-                parameterOrderedArguments[carrier].Syntax,
-                new BoundDereferenceExpression(
-                    parameterOrderedArguments[carrier].Syntax,
-                    orderedCarrier));
-        }
-
-        replacements[carrier] = orderedCarrier;
         return ImmutableArray.Create(replacements);
     }
 

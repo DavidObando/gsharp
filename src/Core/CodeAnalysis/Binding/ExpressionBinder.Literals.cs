@@ -1239,26 +1239,23 @@ internal sealed partial class ExpressionBinder
                 isExpanded,
                 argumentNames)
             : default;
-        var effectiveParameterMapping = parameterMapping;
-        if (effectiveParameterMapping.IsDefault
-            && ClrOverloadResolution.TryBuildNamedArgumentReordering(
-                openMethod,
-                symbolicArgs.Length,
-                argumentNames,
-                isExpanded,
-                out var namedMapping))
-        {
-            effectiveParameterMapping = ImmutableArray.Create(namedMapping);
-        }
-
         ImmutableArray<TypeSymbol>.Builder? refined = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var slot = i + receiverArgCount;
-            var parameterIndex = !effectiveParameterMapping.IsDefault
-                && slot < effectiveParameterMapping.Length
-                    ? effectiveParameterMapping[slot]
+            var parameterIndex = !parameterMapping.IsDefault
+                && slot < parameterMapping.Length
+                    ? parameterMapping[slot]
                     : slot;
+            if (parameterMapping.IsDefault
+                && argumentNames != null
+                && slot < argumentNames.Count
+                && argumentNames[slot] is { Length: > 0 } argumentName)
+            {
+                parameterIndex = Array.FindIndex(
+                    parameters,
+                    parameter => string.Equals(parameter.Name, argumentName, StringComparison.Ordinal));
+            }
 
             parameterIndex = isExpanded
                 && paramsIndex >= 0
@@ -1502,34 +1499,21 @@ internal sealed partial class ExpressionBinder
         SeparatedSyntaxList<ExpressionSyntax> argumentSyntax,
         System.Reflection.ParameterInfo[] parameters,
         ImmutableArray<int> parameterMapping = default,
-        int receiverArgCount = 0,
-        bool isExpanded = false)
+        int receiverArgCount = 0)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         var limit = Math.Min(arguments.Length, argumentSyntax.Count + receiverArgCount);
-        var paramsIndex = parameters.Length - 1;
         for (var i = receiverArgCount; i < limit; i++)
         {
-            var paramIndex = parameterMapping.IsDefault
-                ? isExpanded && i >= paramsIndex ? paramsIndex : i
-                : parameterMapping[i];
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             if (paramIndex >= parameters.Length)
             {
                 continue;
             }
 
             var argSyntax = OverloadResolver.UnwrapNamedArgumentValue(argumentSyntax[i - receiverArgCount]);
-            var targetType = parameters[paramIndex].ParameterType;
-            if (isExpanded
-                && paramIndex == paramsIndex
-                && ClrOverloadResolution.IsParamsArrayParameter(parameters[paramIndex])
-                && targetType.GetElementType() is { } elementType)
-            {
-                targetType = elementType;
-            }
-
             if (argSyntax is InterpolatedStringExpressionSyntax interpolated
-                && ClrOverloadResolution.IsFormattableStringTarget(targetType))
+                && ClrOverloadResolution.IsFormattableStringTarget(parameters[paramIndex].ParameterType))
             {
                 builder ??= arguments.ToBuilder();
                 builder[i] = BindInterpolatedStringAsFormattable(interpolated, targetType: null);
@@ -3003,35 +2987,25 @@ internal sealed partial class ExpressionBinder
     /// <param name="receiver">The instance receiver, or <see langword="null"/> for static/constructor calls.</param>
     /// <param name="location">The diagnostic location for the call.</param>
     /// <param name="parameterMapping">Issue #343: per-source-argument → parameter-position map; default for identity.</param>
-    /// <param name="isExpanded">Whether trailing source arguments target a params-array element.</param>
     /// <returns>The arguments, with handler-targeted interpolations rewritten.</returns>
     private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
         System.Reflection.ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression? receiver,
         TextLocation location,
-        ImmutableArray<int> parameterMapping = default,
-        bool isExpanded = false)
+        ImmutableArray<int> parameterMapping = default)
     {
-        return ApplyInterpolatedStringHandlers(
-            parameters,
-            arguments,
-            receiver,
-            location,
-            parameterMapping,
-            isExpanded,
-            out _,
-            out _);
+        return ApplyInterpolatedStringHandlers(parameters, arguments, receiver, location, parameterMapping, out _, out _);
     }
 
     /// <summary>
-    /// Issue #377 sub-items 1 + 2: extended overload that rewrites
-    /// handler-targeted interpolations and captures a separate instance
-    /// receiver exactly once (matches C# §11.18.1). Source arguments and
-    /// synthesized extension receivers are captured later in lexical order.
-    /// Returns receiver capture statements through
-    /// <paramref name="preludeStatements"/> and the substituted receiver
-    /// through <paramref name="updatedReceiver"/>. Callers wrap the call in a
+    /// Issue #377 sub-items 1 + 2: extended overload that, in addition to
+    /// rewriting handler-targeted interpolations, captures forwarded sibling
+    /// arguments and the receiver into local temps so they are evaluated
+    /// exactly once (matches C# §11.18.1). Returns the captured prelude
+    /// statements through <paramref name="preludeStatements"/> and the
+    /// (possibly substituted) receiver through <paramref name="updatedReceiver"/>.
+    /// Callers wrap the produced call expression in a
     /// <see cref="BoundBlockExpression"/> when the prelude is non-empty.
     /// </summary>
     private ImmutableArray<BoundExpression> ApplyInterpolatedStringHandlers(
@@ -3040,7 +3014,6 @@ internal sealed partial class ExpressionBinder
         BoundExpression? receiver,
         TextLocation location,
         ImmutableArray<int> parameterMapping,
-        bool isExpanded,
         out ImmutableArray<BoundStatement> preludeStatements,
         out BoundExpression? updatedReceiver)
     {
@@ -3064,31 +3037,13 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var paramIndex = parameterMapping.IsDefaultOrEmpty
-                ? isExpanded
-                    ? Math.Min(i, parameters.Length - 1)
-                    : i
-                : parameterMapping[i];
-            if (paramIndex < 0 || paramIndex >= parameters.Length)
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (paramIndex >= parameters.Length)
             {
                 continue;
             }
 
-            var parameter = parameters[paramIndex];
-            var parameterType = parameter.ParameterType;
-            if (isExpanded &&
-                paramIndex == parameters.Length - 1 &&
-                parameter.GetCustomAttributesData().Any(attribute =>
-                    string.Equals(
-                        attribute.AttributeType.FullName,
-                        "System.ParamArrayAttribute",
-                        StringComparison.Ordinal)) &&
-                parameterType.IsArray)
-            {
-                parameterType = Invariant.Required(
-                    parameterType.GetElementType(),
-                    "a params array has an element type");
-            }
+            var parameterType = parameters[paramIndex].ParameterType;
 
             // Issue #377 sub-item 1: accept a by-ref handler-typed parameter
             // (e.g. `ref DefaultInterpolatedStringHandler`). Peel before
@@ -3105,12 +3060,10 @@ internal sealed partial class ExpressionBinder
 
             var handler = InterpolatedStringHandlerInfo.TryCreate(
                 peeled,
-                parameter,
+                parameters[paramIndex],
                 parameters,
                 arguments,
                 receiver,
-                parameterMapping,
-                i,
                 interp.Parts,
                 out var failure);
             if (handler == null)
@@ -3129,16 +3082,16 @@ internal sealed partial class ExpressionBinder
             return arguments;
         }
 
-        // Pass 2 (issue #377 sub-item 2): capture a separate instance
-        // receiver. Forwarded call arguments, including a synthesized
-        // extension receiver, are captured later with all source arguments
-        // in lexical order.
+        // Pass 2 (issue #377 sub-item 2): capture each forwarded source into
+        // a shared local so the parent argument slot AND the handler
+        // constructor reuse the same value. Side-effect-free expressions
+        // (literals, locals, parameters) are not captured.
         argBuilder = arguments.ToBuilder();
         var preludeBuilder = ImmutableArray.CreateBuilder<BoundStatement>();
         var capturedReceiver = receiver;
         var receiverCaptured = false;
 
-        // -1 represents a separate instance receiver.
+        // sourceIndex -> captured BoundVariableExpression. -1 represents the receiver.
         var captures = new System.Collections.Generic.Dictionary<int, BoundExpression>();
 
         foreach (var (_, _, handler) in handlerSlots)
@@ -3146,22 +3099,43 @@ internal sealed partial class ExpressionBinder
             for (var k = 0; k < handler.ForwardedSourceIndices.Length; k++)
             {
                 var srcIndex = handler.ForwardedSourceIndices[k];
-                if (srcIndex >= 0 || receiverCaptured)
+                if (srcIndex < 0)
                 {
-                    continue;
-                }
+                    if (receiverCaptured)
+                    {
+                        continue;
+                    }
 
-                if (receiver == null || IsSideEffectFreeForHandlerCapture(receiver))
-                {
+                    if (receiver == null || IsSideEffectFreeForHandlerCapture(receiver))
+                    {
+                        receiverCaptured = true;
+                        continue;
+                    }
+
+                    var (recvLocal, recvDecl) = CreateHandlerForwardCapture(receiver, "$handlerRecv", location);
+                    preludeBuilder.Add(recvDecl);
+                    capturedReceiver = recvLocal;
+                    captures[-1] = recvLocal;
                     receiverCaptured = true;
-                    continue;
                 }
+                else
+                {
+                    if (captures.ContainsKey(srcIndex))
+                    {
+                        continue;
+                    }
 
-                var (recvLocal, recvDecl) = CreateHandlerForwardCapture(receiver, "$handlerRecv", location);
-                preludeBuilder.Add(recvDecl);
-                capturedReceiver = recvLocal;
-                captures[-1] = recvLocal;
-                receiverCaptured = true;
+                    var srcArg = argBuilder[srcIndex];
+                    if (IsSideEffectFreeForHandlerCapture(srcArg))
+                    {
+                        continue;
+                    }
+
+                    var (local, decl) = CreateHandlerForwardCapture(srcArg, "$handlerArg" + srcIndex.ToString(System.Globalization.CultureInfo.InvariantCulture), location);
+                    preludeBuilder.Add(decl);
+                    argBuilder[srcIndex] = local;
+                    captures[srcIndex] = local;
+                }
             }
         }
 

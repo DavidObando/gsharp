@@ -3106,6 +3106,14 @@ internal sealed partial class ExpressionBinder
                     argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                 var staticParameters = staticFn.Method.GetParameters();
+                var staticExpandedArgs = staticIsExpanded
+                    ? overloads.ExpandParamsArguments(
+                        arguments,
+                        staticParameters,
+                        ce,
+                        parameterMapping: staticMapping,
+                        symbolicMethodTypeArgs: staticTypeArgSymbolsForCall)
+                    : arguments;
                 var staticDownstreamMapping = staticIsExpanded ? default : staticMapping;
 
                 // Issue #1325 / #1471: recover the symbolic method type-argument
@@ -3126,10 +3134,10 @@ internal sealed partial class ExpressionBinder
                 // `String.Format("{0}", 42)` selecting the fixed `(string,
                 // object)` overload).
                 var staticConvertedArgs = BuildResolvedClrCallArguments(
-                    arguments,
+                    staticExpandedArgs,
                     ce.Arguments,
                     staticParameters,
-                    staticMapping,
+                    staticDownstreamMapping,
                     receiver: null,
                     ce.Location,
                     ce,
@@ -3137,8 +3145,7 @@ internal sealed partial class ExpressionBinder
                     out var staticHandlerPrelude,
                     out _,
                     method: staticFn.Method,
-                    symbolicMethodTypeArgs: staticTypeArgSymbolsForCall,
-                    isExpanded: staticIsExpanded);
+                    symbolicMethodTypeArgs: staticTypeArgSymbolsForCall);
                 var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
                 var refKinds = ComputeArgumentRefKinds(staticParameters);
                 overloads.ValidateRefArguments(staticArguments, refKinds, methodName, ce.Location);
@@ -4003,6 +4010,14 @@ internal sealed partial class ExpressionBinder
                             ?? MapClrMethodReturnType(method);
                         var instParameters = method.GetParameters();
                         var instMapping = resolution.ParameterMapping;
+                        var instExpandedArgs = resolution.IsExpanded
+                            ? overloads.ExpandParamsArguments(
+                                arguments,
+                                instParameters,
+                                ce,
+                                parameterMapping: instMapping,
+                                symbolicMethodTypeArgs: instTypeArgSymbolsForCall)
+                            : arguments;
                         var instDownstreamMapping = resolution.IsExpanded ? default : instMapping;
 
                         // Issue #1638: shared CLR call-argument-construction
@@ -4021,10 +4036,10 @@ internal sealed partial class ExpressionBinder
                             ? effectiveReceiverType
                             : receiver?.Type;
                         var instConvertedArgs = BuildResolvedClrCallArguments(
-                            arguments,
+                            instExpandedArgs,
                             ce.Arguments,
                             instParameters,
-                            instMapping,
+                            instDownstreamMapping,
                             receiver,
                             ce.Location,
                             ce,
@@ -4035,8 +4050,7 @@ internal sealed partial class ExpressionBinder
                             symbolicMethodTypeArgs: instTypeArgSymbolsForCall,
                             receiverType: effectiveReceiverType,
                             hasConversionReceiverTypeOverride: true,
-                            conversionReceiverType: instConversionReceiverType,
-                            isExpanded: resolution.IsExpanded);
+                            conversionReceiverType: instConversionReceiverType);
                         var instArguments = OverloadResolver.BuildOrderedCallArguments(instConvertedArgs, instDownstreamMapping, instParameters);
                         var instRefKinds = ComputeArgumentRefKinds(instParameters);
                         overloads.ValidateRefArguments(instArguments, instRefKinds, methodName, ce.Location);
