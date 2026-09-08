@@ -557,7 +557,7 @@ public class ImportedMemberMatrixTests
                 return TReceiver.Take(value)
             }
 
-            async func throughStaticAsync[
+            async func throughConstrainedStaticAsync[
                 TReceiver IAsyncStaticOverloads,
                 TValue DisposableBase](value TValue) string {
                 return TReceiver.Take(await Task.FromResult[TValue](value))
@@ -676,7 +676,7 @@ public class ImportedMemberMatrixTests
                 DisposableBase()))
             Console.WriteLine(throughConstrainedStatic[StaticOverloads, DisposableBase](
                 DisposableBase()))
-            Console.WriteLine(throughStaticAsync[AsyncStaticOverloads, DisposableBase](
+            Console.WriteLine(throughConstrainedStaticAsync[AsyncStaticOverloads, DisposableBase](
                 DisposableBase()).Result)
             Console.WriteLine(throughConstrainedStaticObject[StaticOverloads](
                 DisposableBase()))
