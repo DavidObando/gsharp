@@ -1915,59 +1915,7 @@ internal static class ClrOverloadResolution
 
         if (constraint.IsInterface)
         {
-            if (ErasedSymbolSatisfiesInterfaceConstraint(argument, constraint))
-            {
-                return true;
-            }
-
-            // Issue #4037 (review): a CLASS bound implies every interface that
-            // class implements — `[T DisposableOptions]` forwards
-            // `where T : IDisposable` when `DisposableOptions : IDisposable`,
-            // and `csc` accepts exactly that (measured; the first version of
-            // this rule reported GS0580 on it, which is a FALSE rejection of
-            // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
-            // type-parameter arm reads only the interface bounds, so the class
-            // chain has to be walked here.
-            TypeSymbol? bound = argument.ClassConstraint;
-            for (var depth = 0; bound != null && depth < ForwardedBoundChainLimit; depth++)
-            {
-                if (bound.ClrType is Type boundClr)
-                {
-                    try
-                    {
-                        if (ClrTypeUtilities.IsAssignableByName(constraint, boundClr))
-                        {
-                            return true;
-                        }
-                    }
-                    catch (Exception ex) when (IsMetadataLoadFailure(ex))
-                    {
-                        return true;
-                    }
-                }
-
-                switch (bound)
-                {
-                    case StructSymbol userClassBound:
-                        // A same-compilation class bound: its own interface
-                        // list and imported base chain answer this.
-                        return ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint);
-
-                    case TypeParameterSymbol nestedBound:
-                        if (ErasedSymbolSatisfiesInterfaceConstraint(nestedBound, constraint))
-                        {
-                            return true;
-                        }
-
-                        bound = nestedBound.ClassConstraint;
-                        continue;
-
-                    default:
-                        return false;
-                }
-            }
-
-            return false;
+            return TypeParameterSatisfiesClrInterfaceBound(argument, constraint);
         }
 
         // A base-class bound: walk this parameter's own class-constraint chain.
@@ -1997,6 +1945,98 @@ internal static class ClrOverloadResolution
 
                 case TypeParameterSymbol nested:
                     current = nested.ClassConstraint;
+                    continue;
+
+                default:
+                    return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Issue #4037 (review) / issue #4070: whether a type parameter's own
+    /// bounds imply the imported INTERFACE bound <paramref name="constraint"/>
+    /// — either directly, through one of its own interface bounds, or through
+    /// its class-constraint chain, because a class bound proves every interface
+    /// that class implements.
+    /// </summary>
+    /// <remarks>
+    /// <para>Extracted from <see cref="TypeParameterSatisfiesClrBound"/> so the
+    /// SAME walk answers the question on both paths that ask it. #4070
+    /// enumerated them: the generic-TYPE construction path
+    /// (<see cref="TypeParameterSatisfiesClrBound"/>, #4037's <c>GS0580</c>)
+    /// walked the class chain; the generic-METHOD path
+    /// (<c>SatisfiesDeclaredConstraints</c>' #2617 arm, since #750/ADR-0088)
+    /// did not, so <c>Probes.NeedsDisposable[T]()</c> inside
+    /// <c>func callIt[T DisposableBase]()</c> reported <c>GS0159 Cannot find
+    /// function</c> while <c>class Forwarded[T DisposableBase] :
+    /// DisposableConstrained[T]</c> bound. <c>csc</c> accepts both (measured).
+    /// The leaf <c>ErasedSymbolSatisfiesInterfaceConstraint</c> is deliberately
+    /// left byte-identical — its type-parameter arm reads only interface
+    /// bounds, and it has other callers that must keep that meaning.</para>
+    /// <para>Deliberately does NOT read
+    /// <see cref="TypeParameterSymbol.TypeParameterBound"/>: a dependent bound
+    /// (<c>[TBase DisposableBase, TDerived TBase]</c>) forwards the interface
+    /// too, but neither path reads that slot today, so closing it here would
+    /// be new behaviour on both. Filed separately and pinned as a red row.</para>
+    /// <para>The METHOD-path caller additionally guards on the UNSUBSTITUTED
+    /// constraint mentioning no type parameter, which is the same skip the
+    /// generic-TYPE path applies (#4031/#4041) — a self-referential bound such
+    /// as <c>where T : IEquatable&lt;T&gt;</c> cannot be answered on the erased
+    /// vector. See that call site for the measurement.</para>
+    /// </remarks>
+    /// <param name="argument">The type parameter written as the type argument.</param>
+    /// <param name="constraint">The imported interface bound the definition declares.</param>
+    /// <returns><see langword="true"/> when the interface bound is forwarded.</returns>
+    private static bool TypeParameterSatisfiesClrInterfaceBound(TypeParameterSymbol argument, Type constraint)
+    {
+        if (ErasedSymbolSatisfiesInterfaceConstraint(argument, constraint))
+        {
+            return true;
+        }
+
+        // Issue #4037 (review): a CLASS bound implies every interface that
+        // class implements — `[T DisposableOptions]` forwards
+        // `where T : IDisposable` when `DisposableOptions : IDisposable`,
+        // and `csc` accepts exactly that (measured; the first version of
+        // this rule reported GS0580 on it, which is a FALSE rejection of
+        // valid code). `ErasedSymbolSatisfiesInterfaceConstraint`'s
+        // type-parameter arm reads only the interface bounds, so the class
+        // chain has to be walked here.
+        TypeSymbol? bound = argument.ClassConstraint;
+        for (var depth = 0; bound != null && depth < ForwardedBoundChainLimit; depth++)
+        {
+            if (bound.ClrType is Type boundClr)
+            {
+                try
+                {
+                    if (ClrTypeUtilities.IsAssignableByName(constraint, boundClr))
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception ex) when (IsMetadataLoadFailure(ex))
+                {
+                    return true;
+                }
+            }
+
+            switch (bound)
+            {
+                case StructSymbol userClassBound:
+                    // A same-compilation class bound: its own interface
+                    // list and imported base chain answer this.
+                    return ErasedSymbolSatisfiesInterfaceConstraint(userClassBound, constraint);
+
+                case TypeParameterSymbol nestedBound:
+                    if (ErasedSymbolSatisfiesInterfaceConstraint(nestedBound, constraint))
+                    {
+                        return true;
+                    }
+
+                    bound = nestedBound.ClassConstraint;
                     continue;
 
                 default:
@@ -5231,6 +5271,46 @@ internal static class ClrOverloadResolution
                     && interfaceSymbol.ClrType == null)
                 {
                     if (ErasedSymbolSatisfiesInterfaceConstraint(interfaceSymbol, constraint))
+                    {
+                        continue;
+                    }
+
+                    // Issue #4070: when the type argument is a TYPE PARAMETER,
+                    // its CLASS bound proves every interface that class
+                    // implements — `Probes.NeedsDisposable[T]()` inside
+                    // `func callIt[T DisposableBase]()` forwards
+                    // `where T : IDisposable`, and `csc` accepts it. This is
+                    // the SAME question the generic-TYPE construction path
+                    // answers in `TypeParameterSatisfiesClrBound` (#4037), and
+                    // it is answered by the SAME walk — the two paths differed
+                    // only in that this one never looked past the parameter's
+                    // interface bounds, so the candidate was silently FILTERED
+                    // out of overload resolution and the author saw
+                    // `GS0159 Cannot find function` rather than a constraint
+                    // message. Monotone in the satisfaction direction: it only
+                    // turns a `false` into a `true`, never the reverse.
+                    //
+                    // Guarded on the UNSUBSTITUTED constraint mentioning no
+                    // type parameter, which is the same skip the generic-TYPE
+                    // path applies (#4031/#4041: a bound such as
+                    // `where T : IEquatable<T>` cannot be answered on the
+                    // erased vector, because `IEquatable<T>` and the
+                    // same-compilation `IEquatable<GsEq>` both project to
+                    // `IEquatable<object>` and the walk would "prove" an
+                    // implication that does not hold). Without it, measured:
+                    // `func callIt[T GsEq]()` over a same-compilation
+                    // `class GsEq : IEquatable[GsEq]` compiled and then threw
+                    // `VerificationException: Method
+                    // HelperLib2.Probes.NeedsEquatable: type argument 'T'
+                    // violates the constraint of type parameter 'T'` — and
+                    // `csc` reports `CS0311` on the C# equivalent, so the
+                    // acceptance was wrong on both counts. A constraint whose
+                    // arguments are all CONCRETE (`where T : IEnumerable<string>`)
+                    // still goes through: the erasure cannot lose anything
+                    // there.
+                    if (interfaceSymbol is TypeParameterSymbol erasedTypeParameter
+                        && !rawConstraint.ContainsGenericParameters
+                        && TypeParameterSatisfiesClrInterfaceBound(erasedTypeParameter, constraint))
                     {
                         continue;
                     }
