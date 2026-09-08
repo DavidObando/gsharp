@@ -180,6 +180,31 @@ public class ImportedMemberMatrixTests
                         => builder.ToString();
                 }
 
+                [System.Runtime.CompilerServices.InterpolatedStringHandler]
+                public struct ForwardingMatrixHandler
+                {
+                    private System.Text.StringBuilder builder;
+
+                    public ForwardingMatrixHandler(
+                        int literalLength,
+                        int formattedCount,
+                        string prefix)
+                    {
+                        builder = new System.Text.StringBuilder(literalLength + prefix.Length + 1);
+                        builder.Append(prefix);
+                        builder.Append(':');
+                    }
+
+                    public void AppendLiteral(string value)
+                        => builder.Append(value);
+
+                    public void AppendFormatted<T>(T value)
+                        => builder.Append(value);
+
+                    public override string ToString()
+                        => builder.ToString();
+                }
+
                 public static string Choose<TIn, TOut>(
                     TIn value,
                     System.Func<TIn, TOut> converter)
@@ -225,6 +250,14 @@ public class ImportedMemberMatrixTests
                     int value,
                     params MatrixHandler[] handlers)
                     => value + ":" + string.Join(",", handlers);
+
+                public static string ForwardedHandlerOrder(
+                    int first,
+                    string prefix,
+                    [System.Runtime.CompilerServices.InterpolatedStringHandlerArgument("prefix")]
+                    ForwardingMatrixHandler handler,
+                    params object[] rest)
+                    => first + ":" + handler + ":" + string.Join(",", rest);
 
                 public static string RefEvaluationOrder(
                     ref int value,
@@ -513,6 +546,21 @@ public class ImportedMemberMatrixTests
                 return 0
             }
 
+            func nonForwardedHandlerArgument() int32 {
+                Console.Write("first|")
+                return 1
+            }
+
+            func forwardedHandlerArgument() string {
+                Console.Write("prefix|")
+                return "p"
+            }
+
+            func handlerHoleArgument() int32 {
+                Console.Write("handler|")
+                return 3
+            }
+
             func throughExpandedStaticMethodGroup() string {
                 return GenericOnly.ChooseParams(Derived(), expandedSymbolicFactory)
             }
@@ -655,6 +703,11 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(MethodGroupOutputInference.HandlerParams(
                 handlers: "named=${firstExpandedNamedArgument()}",
                 value: secondExpandedNamedArgument()))
+            Console.WriteLine(MethodGroupOutputInference.ForwardedHandlerOrder(
+                first: nonForwardedHandlerArgument(),
+                prefix: forwardedHandlerArgument(),
+                handler: "hole=${handlerHoleArgument()}",
+                rest: "tail"))
             let refValues = []int32{2}
             Console.WriteLine(MethodGroupOutputInference.RefEvaluationOrder(
                 items: firstExpandedNamedArgument(),
@@ -710,6 +763,7 @@ public class ImportedMemberMatrixTests
                 + $"first|format|second|item={{0}}:7:2:first{Environment.NewLine}"
                 + $"3:first=7,second=8{Environment.NewLine}"
                 + $"first|second|2:named=first{Environment.NewLine}"
+                + $"first|prefix|handler|1:p:hole=3:tail{Environment.NewLine}"
                 + $"first|ref|12:first{Environment.NewLine}12{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
                 + $"Base{Environment.NewLine}Base{Environment.NewLine}"
@@ -744,6 +798,27 @@ public class ImportedMemberMatrixTests
             incompatibleSource,
             "Issue4086.CSharp");
         Assert.Contains(diagnostics, diagnostic => diagnostic.Contains("GS0159", StringComparison.Ordinal));
+
+        const string forwardReferenceSource = """
+            package Issue4086.HandlerForwardReference
+            import Issue4086.CSharp
+
+            MethodGroupOutputInference.ForwardedHandlerOrder(
+                handler: "bad=${1}",
+                prefix: "p",
+                first: 1,
+                rest: "tail")
+            """;
+
+        var forwardReferenceDiagnostics = CompileExpectingErrorsWithSiblingCs(
+            csSource,
+            forwardReferenceSource,
+            "Issue4086.CSharp");
+        Assert.Contains(
+            forwardReferenceDiagnostics,
+            diagnostic =>
+                diagnostic.Contains("GS0221", StringComparison.Ordinal) &&
+                diagnostic.Contains("preceding argument", StringComparison.Ordinal));
     }
 
     private const string Issue3076CsSource = """

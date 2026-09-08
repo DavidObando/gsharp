@@ -212,6 +212,7 @@ public sealed class InterpolatedStringHandlerInfo
             arguments,
             receiver,
             default,
+            System.Array.IndexOf(parameters, parameter),
             ImmutableArray<BoundInterpolatedStringPart>.Empty,
             out failure);
 
@@ -222,6 +223,7 @@ public sealed class InterpolatedStringHandlerInfo
         ImmutableArray<BoundExpression> arguments,
         BoundExpression? receiver,
         ImmutableArray<int> parameterMapping,
+        int handlerSourceIndex,
         ImmutableArray<BoundInterpolatedStringPart> parts,
         out string? failure)
     {
@@ -282,7 +284,11 @@ public sealed class InterpolatedStringHandlerInfo
                 }
             }
 
-            if (sourceIndex < 0 || sourceIndex >= arguments.Length)
+            // Handler forwarding may only reference arguments already
+            // evaluated in lexical source order (C# CS8950 semantics).
+            if (sourceIndex < 0 ||
+                sourceIndex >= arguments.Length ||
+                sourceIndex >= handlerSourceIndex)
             {
                 failure = $"the handler argument references parameter '{name}', which is not a preceding argument of this call";
                 return null;

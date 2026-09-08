@@ -192,6 +192,7 @@ internal sealed partial class OverloadResolver
         var replacements = parameterOrderedArguments.ToArray();
         var paramsElements = paramsArray.Elements.ToBuilder();
         var evaluations = ImmutableArray.CreateBuilder<BoundStatement>();
+        var sourceCaptures = new Dictionary<int, BoundExpression>();
         paramsElementIndex = 0;
         for (var sourceIndex = receiverArgCount; sourceIndex < sourceToParameterMapping.Length; sourceIndex++)
         {
@@ -199,6 +200,7 @@ internal sealed partial class OverloadResolver
             var argument = parameterIndex == paramsIndex
                 ? paramsElements[paramsElementIndex]
                 : replacements[parameterIndex];
+            argument = RewriteExpandedHandlerForwardedArguments(argument, sourceCaptures);
             if (StatementBinder.IsNilLiteral(argument))
             {
                 if (parameterIndex == paramsIndex)
@@ -214,7 +216,9 @@ internal sealed partial class OverloadResolver
                 isReadOnly: true,
                 argument.Type);
             evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
-            BoundExpression replacement = new BoundVariableExpression(argument.Syntax, temp);
+            BoundExpression tempLoad = new BoundVariableExpression(argument.Syntax, temp);
+            sourceCaptures[sourceIndex] = tempLoad;
+            var replacement = tempLoad;
             if (argument.Type is ByRefTypeSymbol)
             {
                 replacement = new BoundAddressOfExpression(
@@ -257,6 +261,36 @@ internal sealed partial class OverloadResolver
 
         replacements[carrier] = orderedCarrier;
         return ImmutableArray.Create(replacements);
+    }
+
+    private static BoundExpression RewriteExpandedHandlerForwardedArguments(
+        BoundExpression argument,
+        IReadOnlyDictionary<int, BoundExpression> sourceCaptures)
+    {
+        if (argument is not BoundInterpolatedStringExpression { Handler: { } handler } interpolated)
+        {
+            return argument;
+        }
+
+        ImmutableArray<BoundExpression>.Builder? forwarded = null;
+        for (var i = 0; i < handler.ForwardedArguments.Length; i++)
+        {
+            var sourceIndex = handler.ForwardedSourceIndices[i];
+            if (sourceIndex < 0 ||
+                !sourceCaptures.TryGetValue(sourceIndex, out var captured))
+            {
+                continue;
+            }
+
+            forwarded ??= handler.ForwardedArguments.ToBuilder();
+            forwarded[i] = captured;
+        }
+
+        return forwarded == null
+            ? argument
+            : interpolated.Update(
+                interpolated.Parts,
+                handler.WithForwardedArguments(forwarded.ToImmutable()));
     }
 
     /// <summary>

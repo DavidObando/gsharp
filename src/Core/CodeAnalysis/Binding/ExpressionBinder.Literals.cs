@@ -3105,6 +3105,7 @@ internal sealed partial class ExpressionBinder
                 arguments,
                 receiver,
                 parameterMapping,
+                i,
                 interp.Parts,
                 out var failure);
             if (handler == null)
@@ -3161,6 +3162,13 @@ internal sealed partial class ExpressionBinder
                 }
                 else
                 {
+                    // Expanded named calls capture every source argument
+                    // together later, preserving lexical order.
+                    if (isExpanded && !parameterMapping.IsDefaultOrEmpty)
+                    {
+                        continue;
+                    }
+
                     if (captures.ContainsKey(srcIndex))
                     {
                         continue;
