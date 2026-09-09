@@ -99,7 +99,20 @@ internal static class AccessibilityChecker
             return SameDeclaringType(GetTopLevelContainer(enclosingType), GetTopLevelContainer(declaringType));
         }
 
-        for (var t = enclosingType; t != null; t = t.BaseClass)
+        // Issue #4164: this used to walk `.BaseClass` directly with no cycle
+        // guard. Most callers are reached only after the post-bind cycle
+        // detector (#973) has already broken any cyclic BaseClass link, but
+        // at least one (BoundScope.TryLookupNestedTypeAliasIncludingInherited,
+        // fixed for its own outer walk by #4164) can reach this defensively
+        // before that point. `enclosingType.GetHierarchy()` is the single
+        // guarded walk (fixed by #4162), so this can no longer diverge
+        // regardless of caller.
+        if (enclosingType == null)
+        {
+            return false;
+        }
+
+        foreach (var t in enclosingType.GetHierarchy())
         {
             if (SameDeclaringType(t, declaringType))
             {

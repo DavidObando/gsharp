@@ -801,18 +801,16 @@ public static class TypeMemberModel
         return false;
     }
 
-    private static List<StructSymbol> GetHierarchy(StructSymbol type)
-    {
-        var hierarchy = new List<StructSymbol>();
-        StructSymbol? current = type;
-        while (current != null)
-        {
-            hierarchy.Add(current);
-            current = current.BaseClass;
-        }
-
-        return hierarchy;
-    }
+    // Issue #4164: this used to be its own unguarded copy of the
+    // hierarchy walk (`current = current.BaseClass` with no visited guard),
+    // independently reachable from StructSymbol.GetHierarchy()'s (fixed by
+    // #4162) via TryGetProperty/TryGetEvent during declaration-time
+    // `override prop`/`override event` base-member lookup, before the
+    // post-bind cycle detector (#973) has run — confirmed hanging (~13 GB
+    // RSS in 6s) on a two-class base-class cycle with an `override prop` on
+    // either side. Forwards to the single guarded walk instead of keeping a
+    // second copy that can drift out of sync with its fix again.
+    private static List<StructSymbol> GetHierarchy(StructSymbol type) => type.GetHierarchy();
 
     private static IEnumerable<Symbol> EnumerateStructMembers(StructSymbol structSymbol, MemberQuery query)
     {

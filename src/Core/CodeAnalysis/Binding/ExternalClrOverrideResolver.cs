@@ -459,18 +459,14 @@ internal static class ExternalClrOverrideResolver
             ? type.IsGenericTypeDefinition ? type : type.GetGenericTypeDefinition()
             : type;
 
-    private static List<StructSymbol> GetStructHierarchy(StructSymbol type)
-    {
-        var hierarchy = new List<StructSymbol>();
-        StructSymbol? current = type;
-        while (current != null)
-        {
-            hierarchy.Add(current);
-            current = current.BaseClass;
-        }
-
-        return hierarchy;
-    }
+    // Issue #4164: this used to be its own unguarded copy of the hierarchy
+    // walk, independently reachable (via FindMethod/FindProperty/FindEvent)
+    // during declaration-time `override func`/`override prop`/`override
+    // event` base-member lookup, before the post-bind cycle detector (#973)
+    // has run. Forwards to StructSymbol's single guarded walk (fixed by
+    // #4162) instead of keeping a second copy that can drift out of sync
+    // with its fix again.
+    private static List<StructSymbol> GetStructHierarchy(StructSymbol type) => type.GetHierarchy();
 
     private static List<Type> GetTypeHierarchy(Type? type)
     {

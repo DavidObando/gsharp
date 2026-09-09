@@ -1862,20 +1862,34 @@ public sealed class StructSymbol : TypeSymbol
         return SubstituteTypeForConstruction(type, GetSubstitutionMap(), mapClrType);
     }
 
-    private List<StructSymbol> GetHierarchy()
+    /// <summary>
+    /// Gets this class and every ancestor along its <see cref="BaseClass"/>
+    /// chain, most-derived first.
+    /// </summary>
+    /// <remarks>
+    /// Issue #4162 / #4164: a genuine base-class cycle (e.g. <c>class B : C</c>
+    /// / <c>class C : B</c>) is normally caught by the post-bind cycle
+    /// detector (#973), but this walk can run earlier — during declaration
+    /// binding, before that detector has run — from several independent call
+    /// sites (an annotation naming a cyclic type via
+    /// <see cref="DerivesFromSystemAttribute"/>; an <c>override</c> member
+    /// whose base-member lookup walks the hierarchy). Without a visited
+    /// guard, a cyclic <see cref="BaseClass"/> chain makes this loop forever,
+    /// growing the list without bound until the process OOMs. `visited.Add`
+    /// returning false on a repeat both detects the cycle and stops the
+    /// walk; the returned (truncated) hierarchy is still correct for every
+    /// acyclic caller since it only ever omits nodes that would otherwise
+    /// repeat.
+    ///
+    /// Internal rather than private: this is the single guarded walk of the
+    /// symbol-level <see cref="BaseClass"/> chain, shared by every caller
+    /// that used to keep its own unguarded copy (<c>TypeMemberModel</c>,
+    /// <c>ExternalClrOverrideResolver</c>) so a fix here cannot be
+    /// independently missed by a sibling copy again.
+    /// </remarks>
+    /// <returns>This class and its ancestors, most-derived first.</returns>
+    internal List<StructSymbol> GetHierarchy()
     {
-        // Issue #4162: a genuine base-class cycle (e.g. `class B : C` / `class
-        // C : B`) is normally caught by the post-bind cycle detector (#973),
-        // but this walk can run earlier — during declaration binding, before
-        // that detector has run — when an annotation names a type that is
-        // itself part of an unresolved cycle (see DerivesFromSystemAttribute
-        // below, reached from IsAttributeType while binding an annotation).
-        // Without a visited guard, a cyclic BaseClass chain makes this loop
-        // forever, growing the list without bound until the process OOMs.
-        // `visited.Add` returning false on a repeat both detects the cycle
-        // and stops the walk; the returned (truncated) hierarchy is still
-        // correct for every acyclic caller since it only ever omits nodes
-        // that would otherwise repeat.
         var hierarchy = new List<StructSymbol>();
         var visited = new HashSet<StructSymbol>();
         StructSymbol? current = this;

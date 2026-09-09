@@ -1649,7 +1649,21 @@ public sealed class BoundScope
         [NotNullWhen(true)] out TypeSymbol? type,
         [NotNullWhen(true)] out StructSymbol? declaringContainer)
     {
-        for (var c = container.BaseClass; c != null; c = c.BaseClass)
+        // Issue #4164: a genuine base-class cycle (e.g. `class B : C` / `class
+        // C : B`) is normally caught by the post-bind cycle detector (#973),
+        // but this walk runs earlier — during declaration binding, while
+        // binding an explicit `init(...)` constructor parameter's type clause
+        // (Binder.LookupType -> BinderContext.TryLookupSourceType ->
+        // TryLookupLexicalNestedTypeAlias -> here), before that detector has
+        // run. Without a visited guard, a cyclic BaseClass chain makes this
+        // loop forever (B -> C -> B -> C -> ...), growing memory without
+        // bound until the process OOMs — the same shape #4162 fixed in
+        // StructSymbol.GetHierarchy(). `visited.Add` returning false on a
+        // repeat both detects the cycle and stops the walk; this only
+        // changes behavior for an already-invalid (cyclic) program, since an
+        // acyclic chain can never revisit a node.
+        var visited = new HashSet<StructSymbol>();
+        for (var c = container.BaseClass; c != null && visited.Add(c); c = c.BaseClass)
         {
             var definition = c.Definition ?? c;
             if (!TryLookupNestedTypeAlias(definition, simpleName, preferredArity, out type))

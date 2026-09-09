@@ -1697,9 +1697,24 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     private static IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? BuildBaseTypeArgumentSubstitution(StructSymbol derived)
     {
+        // Issue #4164: this walked `.BaseClass` with no cycle guard. Reached
+        // unconditionally from BindStructInstanceMethods for any `override`
+        // method, before the post-bind cycle detector (#973) has run —
+        // confirmed hanging (dotnet-stack showed this frame spinning) on a
+        // two-class base-class cycle with an `override func` on either side.
+        // `derived.GetHierarchy()` is the single guarded walk (fixed by
+        // #4162); skip the first entry (`derived` itself) to match this
+        // loop's original `derived.BaseClass` starting point.
         Dictionary<TypeParameterSymbol, TypeSymbol>? subst = null;
-        for (var b = derived?.BaseClass; b != null; b = b.BaseClass)
+        var baseChain = derived?.GetHierarchy();
+        if (baseChain == null)
         {
+            return null;
+        }
+
+        for (var level = 1; level < baseChain.Count; level++)
+        {
+            var b = baseChain[level];
             if (b.Definition == null || b.TypeArguments.IsDefaultOrEmpty)
             {
                 continue;
