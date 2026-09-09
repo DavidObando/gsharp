@@ -1,4 +1,4 @@
-// <copyright file="Issue4067UnforwardedGsDeclaredGenericBaseTests.cs" company="GSharp">
+﻿// <copyright file="Issue4067UnforwardedGsDeclaredGenericBaseTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -80,17 +80,22 @@ namespace GSharp.Compiler.Tests;
 /// stays with it.</para>
 /// <para><b>What is still not asked, and it is pinned rather than described.</b>
 /// Only a type argument that IS a type parameter. A composite open shape
-/// (<c>GsList[[]T]</c>) has no forwarding question; a declared bound that
+/// (<c>GsList[[]T]</c>) has no forwarding question, and a declared bound that
 /// mentions another of the definition's own parameters is the #4031/#4041
 /// dependent shape, where answering on an unsubstituted parameter is precisely
-/// what goes wrong; a G#-declared generic INTERFACE has not resolved its own
-/// parameters' constraints yet when a class body is bound (#2519's CRTP
-/// lifecycle — traced at the site, see
-/// <see cref="AGsDeclaredGenericInterface_IsStillNotChecked"/>); and a CLOSED
-/// violating argument (<c>class Bad : GsHandler[Unrelated]</c>) is a different
-/// question this checker deliberately does not ask — see
-/// <see cref="AClosedViolatingArgumentAtAGsDeclaredGeneric_IsStillNotChecked"/>.
-/// Each is a row rather than a sentence.</para>
+/// what goes wrong. Each is a row rather than a sentence.</para>
+/// <para><b>Two shapes this class pinned as OPEN have since been closed by
+/// #4089/#4090, and their rows moved rather than being deleted.</b> A
+/// G#-declared generic INTERFACE was never reached (its own parameters resolve
+/// their constraints only when its members bind — #2519), and a CLOSED
+/// violating argument (<c>class Bad : GsHandler[Unrelated]</c>) is the OTHER
+/// question, C#'s CS0311, which G# spells <c>GS0152</c>. Both were pinned here
+/// as asserting rows telling whoever closed them to move them; they now live in
+/// <c>Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests</c>, which also
+/// carries the third witness those two issues did not name — that this rule's
+/// answer used to depend on SOURCE ORDER at a field type. The repair is a
+/// deferral of WHEN the question is asked, not a change to the rule this class
+/// describes, so every row below is unchanged.</para>
 /// <para><b>The asserting row this issue was filed with has been moved, not
 /// deleted.</b> <c>Issue4037UnforwardedConstrainedGenericBaseTests</c> pinned
 /// this gap as <c>AGsDeclaredConstrainedGenericBase_IsStillNotChecked</c>,
@@ -697,9 +702,11 @@ public class Issue4067UnforwardedGsDeclaredGenericBaseTests
             new[] { "l" },
         };
 
-        // A G#-declared generic INTERFACE, forwarded. Interfaces are outside
-        // this rule's reach (see AGsDeclaredGenericInterface_IsStillNotChecked)
-        // and the forwarded spelling must keep binding either way.
+        // A G#-declared generic INTERFACE, forwarded. Interfaces were outside
+        // this rule's reach when this class was written; #4089 brought them in,
+        // and the forwarded spelling must keep binding either way. The
+        // UNforwarded spelling is now a red row in
+        // Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests.
         yield return new object[]
         {
             "a-forwarded-gs-declared-generic-interface",
@@ -825,151 +832,6 @@ public class Issue4067UnforwardedGsDeclaredGenericBaseTests
             Assert.Contains("'T'", appLog, StringComparison.Ordinal);
             Assert.Contains("'TOptions'", appLog, StringComparison.Ordinal);
             Assert.Contains("'SchemeOptions'", appLog, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
-    }
-
-    /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described:
-    /// the same unforwarded shape over a G#-declared generic <b>INTERFACE</b>
-    /// (<c>class Holder[T] : IGsBox[T]</c> where
-    /// <c>IGsBox[TI SchemeOptions]</c> is declared in the same compilation)
-    /// still compiles, and still throws <c>TypeLoadException</c> when the
-    /// program touches it.
-    /// </summary>
-    /// <remarks>
-    /// <para>The RULE is the one this change adds; the SUBSTRATE is not ready
-    /// when it would have to run. An interface publishes bare type parameters
-    /// with its shell and resolves their constraints only when its MEMBERS are
-    /// bound — deliberately, so CRTP still works (#2519). A class body binds
-    /// first, so at <c>IGsBox[T]</c> the declared parameter still reads
-    /// <c>ClassConstraint == null</c> and there is nothing to imply. Traced at
-    /// the construction site, not inferred. Moving that resolution earlier is
-    /// the interface-shell lifecycle, which is a separate repair.</para>
-    /// <para><b>ILVerify does not catch this one, and the row says so.</b> The
-    /// emitted assembly verifies — the interface-implementation row is not
-    /// something ILVerify checks — and the CLR refuses the instantiation at
-    /// load time instead. The row therefore asserts the RUN, which is the only
-    /// place the defect is visible.</para>
-    /// <para>Filed as <b>#4089</b>. A fix should turn this row red, at which
-    /// point it moves into <see cref="UnforwardedConstraints"/> beside its
-    /// class siblings. The forwarded spelling is already a green row
-    /// there.</para>
-    /// </remarks>
-    [Fact]
-    public void AGsDeclaredGenericInterface_IsStillNotChecked()
-    {
-        const string Unforwarded = """
-            class Holder[T] : IGsBox[T] {
-                public func Unbox() T { return default(T) }
-            }
-
-            Console.WriteLine(Holder[SchemeOptions]().Unbox() == nil)
-            """;
-
-        var tempDir = Directory.CreateTempSubdirectory("gs_4067_iface_").FullName;
-        try
-        {
-            var appPath = Path.Combine(tempDir, "GsInterface.dll");
-            var appLog = Compile(tempDir, "GsInterface.gs", Prelude + Unforwarded, appPath, "/target:exe");
-            Assert.DoesNotContain("GS9998", appLog, StringComparison.Ordinal);
-            Assert.True(
-                File.Exists(appPath),
-                "the G#-declared generic INTERFACE gap is still open, so this must still compile. If it now "
-                    + $"reports GS0580, the gap is closed — move this into UnforwardedConstraints. Log:\n{appLog}");
-
-            // The emitted IL verifies; the CLR refuses the instantiation at
-            // load time. Both halves are asserted so a fix that only silences
-            // one of them is still visible here.
-            IlVerifier.Verify(appPath, Array.Empty<string>());
-
-            var (exit, output) = RunDotnet(appPath);
-            Assert.True(
-                exit != 0 && output.Contains("TypeLoadException", StringComparison.Ordinal),
-                "the unforwarded G#-declared generic interface is still refused by the CLR at run time. If it "
-                    + $"now runs, say why here. Exit {exit}:\n{output}");
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
-    }
-
-    /// <summary>
-    /// NOT COVERED, and pinned so it is measured rather than merely described:
-    /// a CLOSED violating argument at the same G#-declared construction site
-    /// (<c>class Bad : GsHandler[Unrelated]</c>, <c>var f GsHandler[Unrelated]</c>)
-    /// still compiles, and its IL still does not verify.
-    /// </summary>
-    /// <remarks>
-    /// <para>It is a DIFFERENT question from this issue's. #4067 asks whether
-    /// an OPEN argument's own bounds IMPLY the declared ones (C#'s CS0314);
-    /// this asks whether a CLOSED argument SATISFIES them (CS0311, which G#
-    /// spells <c>GS0152</c>). The constructor spelling
-    /// <c>GsHandler[Unrelated]()</c> already reports <c>GS0152</c> through
-    /// <c>OverloadResolver.Constructors</c> — measured — so only the TYPE-CLAUSE
-    /// spelling is unchecked, and closing it is one
-    /// <c>Binder.SatisfiesConstraint</c> loop at the same site this change
-    /// already touches. It is left out because it is a separate GS0152 blast
-    /// radius on every closed user-generic type clause in the corpus, and
-    /// because #4067 does not ask for it. Filed as <b>#4090</b>.</para>
-    /// <para>The row asserts the CURRENT behaviour — it compiles, and ILVerify
-    /// reports <c>UnsatisfiedMethodParentInst</c>, named as a tracked
-    /// suppression so a DIFFERENT verification error would still fail this row
-    /// — so whoever fixes it gets a red row pointing at the exact program
-    /// rather than silence. The satisfied spelling is green beside it.</para>
-    /// </remarks>
-    [Fact]
-    public void AClosedViolatingArgumentAtAGsDeclaredGeneric_IsStillNotChecked()
-    {
-        const string Violating = """
-            class Bad : GsHandler[Unrelated] {
-            }
-
-            var f GsHandler[Unrelated]
-            Console.WriteLine("x")
-            """;
-
-        const string Satisfied = """
-            class Good : GsHandler[SchemeOptions] {
-            }
-
-            Console.WriteLine(Good().Tag)
-            """;
-
-        var tempDir = Directory.CreateTempSubdirectory("gs_4067_closed_").FullName;
-        try
-        {
-            var violatingPath = Path.Combine(tempDir, "ClosedViolating.dll");
-            var violatingLog = Compile(
-                tempDir, "ClosedViolating.gs", Prelude + Violating, violatingPath, "/target:exe");
-            Assert.DoesNotContain("GS9998", violatingLog, StringComparison.Ordinal);
-            Assert.True(
-                File.Exists(violatingPath),
-                "the CLOSED-argument gap at a G#-declared generic type clause is still open, so this must "
-                    + "still compile. If it now reports GS0152, the gap is closed — move this row into "
-                    + $"UnforwardedConstraints' closed sibling. Log:\n{violatingLog}");
-
-            IlVerifier.Verify(
-                violatingPath,
-                Array.Empty<string>(),
-                ignoredErrorCodes: new[] { "UnsatisfiedMethodParentInst" });
-
-            var satisfiedPath = Path.Combine(tempDir, "ClosedSatisfied.dll");
-            var satisfiedLog = Compile(
-                tempDir, "ClosedSatisfied.gs", Prelude + Satisfied, satisfiedPath, "/target:exe");
-            Assert.True(
-                File.Exists(satisfiedPath),
-                $"the satisfied closed spelling must compile. Log:\n{satisfiedLog}");
-
-            IlVerifier.Verify(satisfiedPath, Array.Empty<string>());
-
-            var (exit, output) = RunDotnet(satisfiedPath);
-            Assert.True(exit == 0, $"the satisfied closed spelling must run. Exit {exit}:\n{output}");
-            Assert.Equal("g", output.Trim());
         }
         finally
         {
