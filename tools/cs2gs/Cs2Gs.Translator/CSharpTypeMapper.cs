@@ -499,16 +499,20 @@ public sealed class CSharpTypeMapper
     public GTypeReference MapEventType(ITypeSymbol type, TranslationContext context, Location location)
     {
         // Issue #4127/#4129 (a #3841/#2835 self-hosting regression, #3501):
-        // a single nested pattern combining an ENUM sub-pattern
-        // (`TypeKind: TypeKind.Delegate`) with a null-check sub-pattern,
-        // matched against a value whose STATIC type is an imported
-        // interface (`ITypeSymbol`), silently evaluates as non-matching
-        // once this exact translation source is itself translated to G#
-        // and compiled by gsc — even though every individual sub-property
-        // holds. That is a gsc pattern-matcher defect (issue #4153), not a
-        // cs2gs one, but self-hosting means cs2gs's own
-        // source must avoid the shape gsc mishandles. The decomposed form
-        // below — designated `is` narrowing, then plain `==`/`!=`
+        // a property pattern containing an ENUM-constant sub-pattern
+        // (`TypeKind: TypeKind.Delegate`) matched against a value whose
+        // STATIC type is an imported interface (`ITypeSymbol`) silently
+        // evaluates as non-matching once this exact translation source is
+        // itself translated to G# and compiled by gsc — even though the
+        // type test and every individual sub-property hold. #4153's own
+        // repro isolates this to the enum sub-pattern ALONE: no other
+        // sub-pattern (a null check or otherwise) is required to trigger
+        // it, so every enum-containing property pattern over an
+        // imported-interface-typed scrutinee is a candidate, not only ones
+        // that also null-check. That is a gsc pattern-matcher defect
+        // (issue #4153), not a cs2gs one, but self-hosting means cs2gs's
+        // own source must avoid the shape gsc mishandles. The decomposed
+        // form below — designated `is` narrowing, then plain `==`/`!=`
         // comparisons — is semantically identical in C# and is proven (by
         // regression test) to survive self-hosting.
         if (type is INamedTypeSymbol named
@@ -2855,10 +2859,12 @@ public sealed class CSharpTypeMapper
 
         // Issue #4127/#4129 (self-hosting regression, #3501): decomposed for
         // the same gsc pattern-matcher reason as <see cref="MapEventType"/>
-        // and <see cref="AddIfDistinctDelegates"/> — a nested pattern
-        // combining an enum sub-pattern with a null-check sub-pattern against
-        // an imported-interface-typed scrutinee does not reliably match once
-        // this method is itself translated to G# and compiled by gsc.
+        // and <see cref="AddIfDistinctDelegates"/> — a property pattern
+        // containing an enum-constant sub-pattern against an
+        // imported-interface-typed scrutinee does not reliably match once
+        // this method is itself translated to G# and compiled by gsc; see
+        // <see cref="MapEventType"/> for why no other sub-pattern (a null
+        // check included) is needed to trigger it.
         if (left is not INamedTypeSymbol leftDelegate
             || leftDelegate.TypeKind != TypeKind.Delegate
             || leftDelegate.DelegateInvokeMethod == null
