@@ -101,13 +101,26 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterSyntaxNodeAction(AnalyzeAssignment, SyntaxKind.SimpleAssignmentExpression);
+
+        // Issue #4173: registered on the identifier rather than the
+        // assignment itself, and filtered by an equality check against
+        // AssignmentExpressionSyntax.Left (StructFieldDefsReadAnalyzer.cs
+        // uses the identical idiom), rather than an `assignment.Left is not
+        // IdentifierNameSyntax leftIdentifier` type-pattern test. Both
+        // recognize exactly the same set of assignments — an identifier can
+        // only be found as `.Left` when `.Left` IS an IdentifierNameSyntax —
+        // but cs2gs's analyzer-API mode only knows how to lower an equality
+        // comparison against `.Left` (which has no G# counterpart: G#'s
+        // AssignmentExpressionSyntax targets a plain IdentifierToken, never
+        // an arbitrary expression), not a type-pattern test against it.
+        context.RegisterSyntaxNodeAction(AnalyzeAssignment, SyntaxKind.IdentifierName);
     }
 
     private static void AnalyzeAssignment(SyntaxNodeAnalysisContext context)
     {
-        var assignment = (AssignmentExpressionSyntax)context.Node;
-        if (assignment.Left is not IdentifierNameSyntax leftIdentifier)
+        var leftIdentifier = (IdentifierNameSyntax)context.Node;
+        if (leftIdentifier.Parent is not AssignmentExpressionSyntax assignment
+            || assignment.Left != leftIdentifier)
         {
             return;
         }
