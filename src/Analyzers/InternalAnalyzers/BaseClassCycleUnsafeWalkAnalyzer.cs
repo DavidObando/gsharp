@@ -103,16 +103,25 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
         context.EnableConcurrentExecution();
 
         // Issue #4173: registered on the identifier rather than the
-        // assignment itself, and filtered by an equality check against
-        // AssignmentExpressionSyntax.Left (StructFieldDefsReadAnalyzer.cs
-        // uses the identical idiom), rather than an `assignment.Left is not
-        // IdentifierNameSyntax leftIdentifier` type-pattern test. Both
-        // recognize exactly the same set of assignments — an identifier can
-        // only be found as `.Left` when `.Left` IS an IdentifierNameSyntax —
-        // but cs2gs's analyzer-API mode only knows how to lower an equality
-        // comparison against `.Left` (which has no G# counterpart: G#'s
+        // assignment itself, and filtered by elimination against
+        // AssignmentExpressionSyntax.Right rather than an
+        // `assignment.Left is not IdentifierNameSyntax leftIdentifier`
+        // type-pattern test (or an equality test against .Left itself).
+        // AssignmentExpressionSyntax.Left has NO G# counterpart at all — G#'s
         // AssignmentExpressionSyntax targets a plain IdentifierToken, never
-        // an arbitrary expression), not a type-pattern test against it.
+        // an arbitrary expression — and cs2gs's analyzer-API mode
+        // unconditionally folds ANY comparison against a no-G#-counterpart
+        // member to a fixed constant (true for !=, false for ==) regardless
+        // of what actually matches at the call site, so testing `.Left`
+        // itself (in any shape) would make this rule either never fire or
+        // always fire once translated. `.Right`, unlike `.Left`, DOES have a
+        // real G# counterpart (Expression) with no such folding — so instead
+        // of asking "am I positioned as .Left", this asks "am I NOT
+        // positioned as .Right": since a simple assignment has exactly two
+        // identifier-bearing child slots (Left, Right), and this callback
+        // only runs for an identifier whose immediate parent IS the
+        // assignment, ruling out .Right leaves .Left as the only
+        // possibility — a real, correctly-translating equality check.
         context.RegisterSyntaxNodeAction(AnalyzeAssignment, SyntaxKind.IdentifierName);
     }
 
@@ -120,7 +129,7 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
     {
         var leftIdentifier = (IdentifierNameSyntax)context.Node;
         if (leftIdentifier.Parent is not AssignmentExpressionSyntax assignment
-            || assignment.Left != leftIdentifier)
+            || assignment.Right == leftIdentifier)
         {
             return;
         }

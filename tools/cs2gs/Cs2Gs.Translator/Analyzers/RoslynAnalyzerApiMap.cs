@@ -238,6 +238,7 @@ internal static class RoslynAnalyzerApiMap
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "ElementAccessExpression")] = new(null, "IndexExpression"),
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "SimpleMemberAccessExpression")] = new(null, "AccessorExpression"),
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "SimpleAssignmentExpression")] = new(null, "AssignmentExpression"),
+        [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "IdentifierName")] = new(null, "NameExpression"),
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "InvocationExpression")] = new(null, "CallExpression"),
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "MethodDeclaration")] = new(
             null,
