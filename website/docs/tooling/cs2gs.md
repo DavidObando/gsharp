@@ -64,8 +64,8 @@ Useful `migrate` options:
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
 | `--baseline <file>` | Gate on the gap ledger. New and regressed fingerprints fail; known-open gaps are tolerated. |
 | `--baseline-strict` | Also fail on stale ledger entries. Intended for nightly checks. |
-| `--format` | Run the canonical formatter over emitted G#. Opt-in during ADR-0179 phase 7a while corpus round-trip gaps are measured. |
-| `--no-format` | Keep the printer layout. This remains the default until phase 7b. |
+| `--format` | Run the canonical formatter over emitted G#. This is the default since ADR-0179 phase 7b. |
+| `--no-format` | Keep the printer's own layout instead of the canonical one. Useful for A/B measurement against the formatter; the emitted G# is the same program either way, only its line breaks differ. |
 
 ## Roslyn analyzer projects
 
