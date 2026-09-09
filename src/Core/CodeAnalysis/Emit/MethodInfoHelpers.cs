@@ -64,6 +64,37 @@ internal static class MethodInfoHelpers
             }
         }
 
+        // Issue #4157: the property loop above checks a PROPERTY accessor's
+        // explicit-interface clause, but an ordinary METHOD's own explicit
+        // binding to an interface slot was never checked here — the code fell
+        // straight through to the implicit-match fallback below, whose own
+        // contract (see its doc comment) only recognizes an IMPLICIT
+        // same-name/same-signature match. Two distinct explicit-binding shapes
+        // both need the same "must be virtual" answer as the property case:
+        //   - `function.HasExplicitInterfaceClause` — a G#-authored explicit
+        //     qualifier clause (`func (IFoo) M(...)`, ADR-0149), whether the
+        //     clause target is a G# interface (ExplicitInterfaceMember) or an
+        //     imported CLR interface (ExplicitInterfaceSlot) — mirrors the
+        //     property check immediately above.
+        //   - `function.ExplicitInterfaceSlot != null` — set WITHOUT any
+        //     explicit-interface clause syntax at all (G# has none for plain
+        //     methods) when DeclarationBinder.Structs.cs's covariant-return
+        //     interface bridge (issue #985) binds a same-name/same-parameter
+        //     method to a DIFFERENT interface slot than its sibling overload
+        //     — the exact shape of the non-generic `IEnumerable.GetEnumerator`
+        //     bridge alongside a public generic `GetEnumerator()` that this
+        //     issue's failing corpus fixtures hit. Both shapes emit a
+        //     `MethodImpl` row (see InterfaceImplEmitter) that binds the
+        //     method to an interface slot; per ECMA-335 the CLR type loader
+        //     requires that method to be `virtual` or the type fails to load
+        //     (`TypeLoadException: "...must be virtual to implement a method
+        //     on an interface or super type."`) — a defect ilverify does not
+        //     catch (see the dotnet/runtime issue this fix cites).
+        if (function.HasExplicitInterfaceClause || function.ExplicitInterfaceSlot != null)
+        {
+            return true;
+        }
+
         return MethodImplicitlyImplementsInterface(receiverStruct, function);
     }
 
