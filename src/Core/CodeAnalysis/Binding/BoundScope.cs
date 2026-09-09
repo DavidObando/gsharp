@@ -1649,8 +1649,26 @@ public sealed class BoundScope
         [NotNullWhen(true)] out TypeSymbol? type,
         [NotNullWhen(true)] out StructSymbol? declaringContainer)
     {
-        for (var c = container.BaseClass; c != null; c = c.BaseClass)
+        // Issue #4164: a genuine base-class cycle (e.g. `class B : C` / `class
+        // C : B`) is normally caught by the post-bind cycle detector (#973),
+        // but this walk runs earlier — during declaration binding, while
+        // binding an explicit `init(...)` constructor parameter's type clause
+        // (Binder.LookupType -> BinderContext.TryLookupSourceType ->
+        // TryLookupLexicalNestedTypeAlias -> here), before that detector has
+        // run. Without a guard, a cyclic BaseClass chain made this loop
+        // forever (B -> C -> B -> C -> ...); unlike #4162's
+        // StructSymbol.GetHierarchy() (which grew an unbounded List and OOMed
+        // the process), this loop allocated nothing per iteration, so
+        // unguarded it spun the CPU indefinitely at roughly stable RSS rather
+        // than growing memory — measured ~80 MB RSS, no growth, over a 30s
+        // hang. `container.GetHierarchy()` is the single guarded walk (fixed
+        // by #4162, and the one every other #4164 call site now goes
+        // through too); skip the first entry (`container` itself) to match
+        // this loop's original `container.BaseClass` starting point.
+        var baseChain = container.GetHierarchy();
+        for (var level = 1; level < baseChain.Count; level++)
         {
+            var c = baseChain[level];
             var definition = c.Definition ?? c;
             if (!TryLookupNestedTypeAlias(definition, simpleName, preferredArity, out type))
             {

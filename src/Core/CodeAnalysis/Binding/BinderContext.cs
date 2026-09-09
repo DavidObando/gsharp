@@ -531,10 +531,18 @@ internal sealed class BinderContext
                 continue;
             }
 
-            for (StructSymbol? baseType = currentStruct.BaseClass;
-                baseType != null;
-                baseType = baseType.BaseClass)
+            // Issue #4164: this used to walk `.BaseClass` directly with no
+            // cycle guard, reached from TryLookupSourceType — the same
+            // declaration-time type-clause lookup entry point implicated in
+            // #4164's traced hang — before the post-bind cycle detector
+            // (#973) has run. `currentStruct.GetHierarchy()` is the single
+            // guarded walk (fixed by #4162); skip the first entry
+            // (`currentStruct` itself) to match this loop's original
+            // `currentStruct.BaseClass` starting point.
+            var baseChain = currentStruct.GetHierarchy();
+            for (var level = 1; level < baseChain.Count; level++)
             {
+                var baseType = baseChain[level];
                 if (ReferenceEquals(Definition(baseType), Definition(sourceStruct))
                     && AccessibilityChecker.IsAccessibleFromType(
                         TypeAccessibility(sourceType),
