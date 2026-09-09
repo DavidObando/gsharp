@@ -22,11 +22,20 @@ internal static class AnalyzerTestHelper
         var expectedLocations = new List<(int Line, int Column)>();
         var cleanSource = StripMarkers(source, expectedLocations);
         var tree = CSharpSyntaxTree.ParseText(cleanSource, new CSharpParseOptions(LanguageVersion.Preview));
+
+        // Force every diagnostic the analyzer under test supports to report
+        // as its declared default severity, regardless of the descriptor's
+        // own IsEnabledByDefault. Without this, a rule shipped disabled by
+        // default (e.g. GSA0006, parked pending a follow-up cleanup) would
+        // silently report nothing here, and a positive test asserting it
+        // fires would fail for a reason unrelated to the analyzer's logic.
+        var specificOptions = analyzer.SupportedDiagnostics.ToImmutableDictionary(d => d.Id, d => ToReportDiagnostic(d.DefaultSeverity));
         var compilation = CSharpCompilation.Create(
             "AnalyzerTests",
             new[] { tree },
             GetReferences(),
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithSpecificDiagnosticOptions(specificOptions));
 
         var diagnostics = await compilation.WithAnalyzers(ImmutableArray.Create(analyzer)).GetAnalyzerDiagnosticsAsync();
         diagnostics = diagnostics.OrderBy(d => d.Location.SourceSpan.Start).ToImmutableArray();
@@ -40,6 +49,15 @@ internal static class AnalyzerTestHelper
             Assert.Equal(expectedLocations[i].Column, lineSpan.StartLinePosition.Character + 1);
         }
     }
+
+    private static ReportDiagnostic ToReportDiagnostic(DiagnosticSeverity severity) => severity switch
+    {
+        DiagnosticSeverity.Error => ReportDiagnostic.Error,
+        DiagnosticSeverity.Warning => ReportDiagnostic.Warn,
+        DiagnosticSeverity.Info => ReportDiagnostic.Info,
+        DiagnosticSeverity.Hidden => ReportDiagnostic.Hidden,
+        _ => ReportDiagnostic.Default,
+    };
 
     private static string StripMarkers(string source, List<(int Line, int Column)> expectedLocations)
     {
