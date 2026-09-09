@@ -3065,6 +3065,13 @@ internal sealed partial class ExpressionBinder
                 argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
                 (closed, isExpanded, vector) =>
                 {
+                    // `argumentNames!` below: the ternary's `IsDefault` arm
+                    // already routes a default array to `null`; that branch
+                    // only runs once `argumentNames` is known non-default, so
+                    // the cast to `IReadOnlyList<string?>` widens the element
+                    // type's static nullability (a `string` element read back
+                    // as `string?`) — it does not introduce an actual null the
+                    // array doesn't already hold.
                     var refinedArgs = RefineSymbolicArgsForMethodGroups(
                         closed,
                         arguments,
