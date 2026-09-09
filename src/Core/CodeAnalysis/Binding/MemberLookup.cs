@@ -6828,13 +6828,23 @@ internal sealed class MemberLookup
                     fixedType = MergeRecoveredTypeArgument(fixedType, exact[i], allowBaseWidening: false);
                 }
             }
-            else if (lower is { Count: > 0 })
+            else if (lower is { Count: > 0 } || upper is { Count: > 0 })
             {
-                fixedType = FindSymbolicInferenceCandidate(lower, isLowerBound: true);
-            }
-            else if (upper is { Count: > 0 })
-            {
-                fixedType = FindSymbolicInferenceCandidate(upper, isLowerBound: false);
+                // Issue #4133: build the candidate set from BOTH categories
+                // together, not from `lower` alone when both are present. A
+                // contravariant argument (`Action<T>`, `IComparer<T>`, ...)
+                // contributes an upper bound that must be able to RAISE the
+                // fixed type past a lower bound contributed by an ordinary
+                // (covariant/invariant) argument — mirroring csc, which lets
+                // `Action<object>` push a `T : DisposableBase` lower bound up
+                // to `object`. The previous `else if` chain here fixed from
+                // `lower` whenever any lower bound existed and only
+                // considered `upper` as a post-hoc validity check
+                // (`SatisfiesSymbolicInferenceBounds` below), never as a
+                // candidate that could WIN — so the upper bound could
+                // validate a narrower answer without ever being allowed to
+                // replace it.
+                fixedType = FindSymbolicInferenceCandidate(lower, upper);
             }
             else
             {
@@ -6891,26 +6901,35 @@ internal sealed class MemberLookup
         return false;
     }
 
+    /// <summary>
+    /// Issue #4133: picks the fixed type for one type parameter's non-exact
+    /// bounds, C# fixing style (§12.6.3.13): the candidate set is the union
+    /// of BOTH <paramref name="lower"/> and <paramref name="upper"/> bounds
+    /// together, not <paramref name="lower"/> alone when both are present.
+    /// A contravariant argument (<c>Action&lt;T&gt;</c>,
+    /// <c>IComparer&lt;T&gt;</c>, ...) contributes an upper bound that must
+    /// be able to RAISE the fixed type past a lower bound contributed by an
+    /// ordinary (covariant/invariant) argument — mirroring <c>csc</c>, which
+    /// lets <c>Action&lt;object&gt;</c> push a <c>T : DisposableBase</c>
+    /// lower bound up to <c>object</c>. The prior version of this routine
+    /// only ever considered ONE category as a candidate SOURCE (the caller
+    /// picked <paramref name="lower"/> whenever it was non-empty) and used
+    /// the other category solely to validate that pick afterwards
+    /// (<see cref="SatisfiesSymbolicInferenceBounds"/>), so an upper bound
+    /// could confirm a narrower answer without ever being allowed to win.
+    /// </summary>
     private static TypeSymbol? FindSymbolicInferenceCandidate(
-        IReadOnlyList<TypeSymbol> bounds,
-        bool isLowerBound)
+        IReadOnlyList<TypeSymbol>? lower,
+        IReadOnlyList<TypeSymbol>? upper)
     {
-        TypeSymbol? best = null;
-        foreach (var candidate in bounds)
-        {
-            var satisfiesAll = true;
-            foreach (var bound in bounds)
-            {
-                if (!(isLowerBound
-                    ? HasImplicitSymbolicConversion(bound, candidate)
-                    : HasImplicitSymbolicConversion(candidate, bound)))
-                {
-                    satisfiesAll = false;
-                    break;
-                }
-            }
+        var candidates = new List<TypeSymbol>();
+        AddSymbolicInferenceCandidates(lower, candidates);
+        AddSymbolicInferenceCandidates(upper, candidates);
 
-            if (!satisfiesAll)
+        TypeSymbol? best = null;
+        foreach (var candidate in candidates)
+        {
+            if (!SatisfiesSymbolicInferenceBounds(candidate, lower, upper))
             {
                 continue;
             }
@@ -6927,19 +6946,51 @@ internal sealed class MemberLookup
                 continue;
             }
 
+            // The winner is the unique survivor every OTHER survivor
+            // converts into — regardless of which bound category (lower or
+            // upper) either one came from. Two survivors sourced from the
+            // same category are always mutually convertible (each already
+            // had to satisfy "every bound in that category converts into
+            // it"), so `bestToCandidate == candidateToBest` there and this
+            // falls through to the ambiguous branch exactly as the
+            // single-category version did. A lower-sourced survivor paired
+            // with a wider upper-sourced one is the new case: only
+            // `best -> candidate` holds, so `candidate` (the upper bound)
+            // must replace `best` (the lower bound) — the direction the
+            // pre-fix code never took.
             var candidateToBest = HasImplicitSymbolicConversion(candidate, best);
             var bestToCandidate = HasImplicitSymbolicConversion(best, candidate);
-            if (candidateToBest && !bestToCandidate)
+            if (bestToCandidate && !candidateToBest)
             {
                 best = candidate;
             }
-            else if (candidateToBest == bestToCandidate)
+            else if (candidateToBest && !bestToCandidate)
+            {
+                // `best` already absorbs `candidate`; keep it.
+            }
+            else
             {
                 return null;
             }
         }
 
         return best;
+    }
+
+    private static void AddSymbolicInferenceCandidates(IReadOnlyList<TypeSymbol>? bounds, List<TypeSymbol> candidates)
+    {
+        if (bounds == null)
+        {
+            return;
+        }
+
+        foreach (var bound in bounds)
+        {
+            if (!candidates.Any(existing => DeclarationBinder.TypeSignaturesEquivalent(existing, bound)))
+            {
+                candidates.Add(bound);
+            }
+        }
     }
 
     private static bool SatisfiesSymbolicInferenceBounds(
@@ -6949,9 +7000,26 @@ internal sealed class MemberLookup
         => (lower == null || lower.All(bound => HasImplicitSymbolicConversion(bound, candidate)))
             && (upper == null || upper.All(bound => HasImplicitSymbolicConversion(candidate, bound)));
 
+    /// <summary>
+    /// Issue #4133 (review finding): only the STANDARD implicit conversions
+    /// (identity, reference, boxing, numeric widening) participate in
+    /// generic-bound elimination/fixing — mirroring
+    /// <c>ClrOverloadResolution.IsInferenceBoundPromotion</c>'s own comment
+    /// on the CLR side. <see cref="Conversion.Classify"/> also admits ADR-0148
+    /// structural projection (constructing a new, unrelated user class
+    /// through its public constructor/member surface), which is a VALUE
+    /// conversion, not a type relationship, and must never let one bound
+    /// "satisfy" another — e.g. two structurally-identical but unrelated
+    /// classes (a homonym `Item` imported from two different packages) are
+    /// not implicitly convertible for inference purposes just because a new
+    /// instance of one could be projected from the other. Using
+    /// <see cref="Conversion.ClassifyNonStructural"/> here keeps that
+    /// projection available for ordinary argument conversions while refusing
+    /// to let it decide which upper/lower bound wins.
+    /// </summary>
     private static bool HasImplicitSymbolicConversion(TypeSymbol source, TypeSymbol target)
         => DeclarationBinder.TypeSignaturesEquivalent(source, target)
-            || Conversion.Classify(source, target).IsImplicit;
+            || Conversion.ClassifyNonStructural(source, target).IsImplicit;
 
     private static SymbolicInferenceBoundKind GetNestedInferenceBoundKind(
         Type openDefinition,

@@ -758,25 +758,31 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
-    /// KNOWN-WRONG, pinned so it is measured rather than described, and named
-    /// for the issue that owns it: issue #4133.
+    /// Issue #4133's own row. A contravariant <c>Action&lt;object&gt;</c> /
+    /// <c>IComparer&lt;object&gt;</c> argument RAISES the inferred type
+    /// argument to <c>object</c>, exactly as a plain <c>T value</c> argument
+    /// would LOWER it: <c>csc</c> prints <c>Object</c>,
+    /// <c>generic-delegate:Object</c>, <c>Object</c>,
+    /// <c>generic-interface:Object</c>; so does G# now. Measured against a
+    /// compiled and run C# twin, not reasoned about.
     /// </summary>
     /// <remarks>
-    /// <para><c>csc</c> lets a contravariant <c>Action&lt;object&gt;</c> /
-    /// <c>IComparer&lt;object&gt;</c> argument RAISE the inferred type
-    /// argument to <c>object</c> and prints <c>Object</c>,
-    /// <c>generic-delegate:Object</c>, <c>Object</c>,
-    /// <c>generic-interface:Object</c> — compiled and run, not reasoned
-    /// about. G# fixes the argument from the first argument's declared type
-    /// and never lets the delegate raise it.</para>
-    /// <para>This is PRE-EXISTING and unchanged by #4086's fix: measured
-    /// identical on the parent and here. It is asserted on the CURRENT
-    /// (divergent) answer so whoever fixes #4133 gets a failing row rather
-    /// than silence. The winner does not move — only the inferred type
-    /// argument — which is why it is a different defect from #4086.</para>
+    /// The symbolic type-argument fixer
+    /// (<c>MemberLookup.FixSymbolicMethodTypeArguments</c>) collected both a
+    /// lower bound (from <c>value</c>) and an upper bound (from the
+    /// contravariant <c>sink</c> parameter) correctly, but picked the fixed
+    /// type from whichever list was <c>lower</c> whenever it was non-empty
+    /// and used <c>upper</c> only to validate that pick afterwards — never as
+    /// a candidate that could win. <c>FindSymbolicInferenceCandidate</c> now
+    /// builds its candidate set from BOTH lists together, so the upper bound
+    /// can raise the fixed type the way it already could narrow one upper
+    /// bound against another (order-independence, unaffected by this fix).
+    /// The winner does not move in the <c>*Winner</c> rows — only the
+    /// inferred type argument — which is why this was a different defect
+    /// from #4086.
     /// </remarks>
     [Fact]
-    public void Issue4133_AContravariantDelegateOrInterfaceArgumentDoesNotRaiseTheInferredArgument()
+    public void Issue4133_AContravariantDelegateOrInterfaceArgumentRaisesTheInferredArgument()
     {
         const string drivers = """
             Console.WriteLine(throughDelegateUpperBoundType[DisposableBase](DisposableBase()))
@@ -786,10 +792,10 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-                $"DisposableBase{Environment.NewLine}"
-                + $"generic-delegate:DisposableBase{Environment.NewLine}"
-                + $"DisposableBase{Environment.NewLine}"
-                + $"generic-interface:DisposableBase{Environment.NewLine}",
+                $"Object{Environment.NewLine}"
+                + $"generic-delegate:Object{Environment.NewLine}"
+                + $"Object{Environment.NewLine}"
+                + $"generic-interface:Object{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 Issue4086CsSource,
                 Issue4086GsDeclarations + "\n" + drivers,
