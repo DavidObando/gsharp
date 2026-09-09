@@ -1032,7 +1032,12 @@ internal sealed partial class ExpressionBinder
         var enclosingType = (this.function?.ReceiverType as StructSymbol)
             ?? (this.function?.StaticOwnerType as StructSymbol);
 
-        for (var t = enclosingType; t != null; t = t.BaseClass)
+        if (enclosingType == null)
+        {
+            return false;
+        }
+
+        foreach (var t in enclosingType.GetHierarchy())
         {
             if (ReferenceEquals(t, type)
                 || (t.Declaration != null && ReferenceEquals(t.Declaration, type.Declaration)))

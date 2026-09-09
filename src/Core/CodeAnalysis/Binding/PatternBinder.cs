@@ -925,8 +925,7 @@ internal sealed class PatternBinder
         var name = syntax.Identifier.ValueText;
         if (lookupType is StructSymbol structType)
         {
-            StructSymbol? current = structType;
-            while (current != null)
+            foreach (var current in structType.GetHierarchy())
             {
                 foreach (var field in current.Fields)
                 {
@@ -968,8 +967,6 @@ internal sealed class PatternBinder
                             preferTypeNames));
                     return true;
                 }
-
-                current = current.BaseClass;
             }
 
             var importedBase = TypeMemberModel.GetNearestImportedBase(structType);

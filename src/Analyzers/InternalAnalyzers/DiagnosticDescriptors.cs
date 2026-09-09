@@ -84,13 +84,11 @@ public static class DiagnosticDescriptors
         "GSharp.InternalAnalyzers",
         DiagnosticSeverity.Warning,
 
-        // Disabled by default for now: a real-tree run found 47 further
-        // hand-rolled walks beyond the six sites that motivated this rule,
-        // and this repository builds with TreatWarningsAsErrors=true, so
-        // enabling it today is an immediate ~45-site build break rather
-        // than a well-scoped change. Flip to true once the follow-up
-        // cleanup (migrate those sites onto GetHierarchy()) lands — see the
-        // issue cross-linked from PR #4170.
-        isEnabledByDefault: false,
+        // Issue #4172: the follow-up cleanup migrated every remaining
+        // hand-rolled walk found by the real-tree run onto GetHierarchy()
+        // (or deleted the one that was dead code), so the rule is now
+        // enabled by default — a real, scoped build break is no longer a
+        // risk, and every walk added from here on gets caught immediately.
+        isEnabledByDefault: true,
         description: "A genuine base-class cycle (`class B : C` / `class C : B`) is normally caught by the post-bind cycle detector (issue #973), but any loop that re-walks the symbol-level BaseClass chain by hand runs before that detector on every struct's declaration body, and will spin or OOM if it lacks its own cycle guard. This recurred at least six times (issues #4162 and #4164's five call sites) as independent, unguarded copies of the same loop shape. StructSymbol.GetHierarchy() is the single already-guarded walk; every caller should go through it instead of re-deriving its own guard.");
 }

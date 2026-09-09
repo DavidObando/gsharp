@@ -697,7 +697,7 @@ internal sealed class InterfaceImplEmitter
         [NotNullWhen(true)] out EventSymbol? implementation,
         [NotNullWhen(true)] out StructSymbol? declaringType)
     {
-        for (var current = type; current != null; current = current.BaseClass)
+        foreach (var current in type.GetHierarchy())
         {
             foreach (var candidate in current.Events)
             {
@@ -725,7 +725,7 @@ internal sealed class InterfaceImplEmitter
         [NotNullWhen(true)] out EventSymbol? implementation,
         [NotNullWhen(true)] out StructSymbol? declaringType)
     {
-        for (var current = type; current != null; current = current.BaseClass)
+        foreach (var current in type.GetHierarchy())
         {
             foreach (var candidate in current.Events)
             {
@@ -831,8 +831,10 @@ internal sealed class InterfaceImplEmitter
 
     private static StructSymbol FindDeclaringType(StructSymbol type, EventSymbol ev)
     {
-        for (var current = type.BaseClass; current != null; current = current.BaseClass)
+        var chain = type.GetHierarchy();
+        for (var level = 1; level < chain.Count; level++)
         {
+            var current = chain[level];
             foreach (var candidate in current.Events)
             {
                 if (ReferenceEquals(candidate, ev))

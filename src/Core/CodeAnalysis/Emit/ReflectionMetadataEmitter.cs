@@ -2031,11 +2031,9 @@ internal sealed class ReflectionMetadataEmitter
             .Concat(nestedOrdered.OfType<StructSymbol>().Where(type => type.IsClass))
             .Where(type => type.IsData))
         {
-            StructSymbol? current = dataClass;
-            while (current != null)
+            foreach (var current in dataClass.GetHierarchy())
             {
                 dataCopyConstructorClasses.Add(current.Definition ?? current);
-                current = current.BaseClass;
             }
         }
 

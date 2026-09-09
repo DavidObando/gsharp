@@ -1991,11 +1991,8 @@ internal sealed partial class OverloadResolver
         // class's declaration-parameter -> (resolved) argument mappings, exactly
         // like Conversion.DerivesFromConstructed threads its map for subtyping.
         Dictionary<TypeParameterSymbol, TypeSymbol>? map = null;
-        StructSymbol? current = start;
-        while (current != null)
+        foreach (var c in start.GetHierarchy())
         {
-            var c = current;
-
             // Issue #1537: a receiver that is a generic type nested inside a
             // generic enclosing type (e.g. `Outer[int32].Middle[string]`)
             // carries the enclosing construction's arguments on
@@ -2026,7 +2023,6 @@ internal sealed partial class OverloadResolver
                 || c.TypeArguments.IsDefaultOrEmpty
                 || c.Definition.TypeParameters.IsDefaultOrEmpty)
             {
-                current = c.BaseClass;
                 continue;
             }
 
@@ -2046,8 +2042,6 @@ internal sealed partial class OverloadResolver
                 map ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
                 map[defTps[i]] = arg;
             }
-
-            current = c.BaseClass;
         }
 
         return map;

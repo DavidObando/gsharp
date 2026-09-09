@@ -819,8 +819,10 @@ internal sealed class ConstructorBodyEmitter
         il.OpCode(ILOpCode.Call);
 
         EntityHandle baseFinalizeToken = baseFinalizeRef;
-        for (var ancestor = classSym.BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
+        var ancestorChain = classSym.GetHierarchy();
+        for (var level = 1; level < ancestorChain.Count; level++)
         {
+            var ancestor = ancestorChain[level];
             if (ancestor.Deinitializer != null
                 && this.cache.MethodHandles.TryGetValue(ancestor.Deinitializer.Function, out var ancestorHandle))
             {

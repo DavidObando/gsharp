@@ -1036,24 +1036,6 @@ public sealed class StructSymbol : TypeSymbol
         FixedBufferElementType = elementType;
     }
 
-    /// <summary>Walks the base chain looking for a method with the given name. Returns the most-derived overridable definition (the binder narrows further on overload match).</summary>
-    /// <param name="name">The method name.</param>
-    /// <param name="method">The found method on success.</param>
-    /// <returns>True if found.</returns>
-    public bool TryGetInheritedMethod(string name, [NotNullWhen(true)] out FunctionSymbol? method)
-    {
-        for (var c = this.BaseClass; c != null; c = c.BaseClass)
-        {
-            if (c.TryGetMethod(name, out method))
-            {
-                return true;
-            }
-        }
-
-        method = null;
-        return false;
-    }
-
     /// <summary>Looks up a method by name on this class or any ancestor (this-first).</summary>
     /// <param name="name">The method name.</param>
     /// <param name="method">The found method on success.</param>
@@ -1662,8 +1644,10 @@ public sealed class StructSymbol : TypeSymbol
     /// <returns>The nearest data-class ancestor, or null when none exists.</returns>
     internal StructSymbol? GetDataCloneAncestor()
     {
-        for (var ancestor = BaseClass; ancestor != null; ancestor = ancestor.BaseClass)
+        var chain = GetHierarchy();
+        for (var level = 1; level < chain.Count; level++)
         {
+            var ancestor = chain[level];
             if (ancestor.IsData)
             {
                 return ancestor;

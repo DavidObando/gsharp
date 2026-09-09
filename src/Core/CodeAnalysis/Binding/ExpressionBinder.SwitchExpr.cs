@@ -382,11 +382,10 @@ internal sealed partial class ExpressionBinder
 
         if (type is StructSymbol structSymbol)
         {
-            StructSymbol? baseClass = structSymbol.BaseClass;
-            while (baseClass != null)
+            var baseClassChain = structSymbol.GetHierarchy();
+            for (var level = 1; level < baseClassChain.Count; level++)
             {
-                yield return baseClass;
-                baseClass = baseClass.BaseClass;
+                yield return baseClassChain[level];
             }
 
             // Issue #1274: a user class's transitive base chain may end in an
@@ -395,16 +394,13 @@ internal sealed partial class ExpressionBinder
             // chain. Surface that imported base as a candidate so two sibling
             // subclasses of the same imported base unify to it. Walk the
             // user-base chain to find the first class carrying an imported base.
-            StructSymbol? c = structSymbol;
-            while (c != null)
+            foreach (var c in structSymbol.GetHierarchy())
             {
                 if (c.ImportedBaseType != null)
                 {
                     yield return c.ImportedBaseType;
                     break;
                 }
-
-                c = c.BaseClass;
             }
 
             foreach (var iface in structSymbol.Interfaces)

@@ -571,7 +571,7 @@ internal sealed partial class StatementBinder
             // assignability to System.Exception.
             if (argClr == null && expression.Type is StructSymbol throwStruct)
             {
-                for (var t = throwStruct; t != null; t = t.BaseClass)
+                foreach (var t in throwStruct.GetHierarchy())
                 {
                     if (t.ImportedBaseType?.ClrType is System.Type clrBase)
                     {

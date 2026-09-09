@@ -59,18 +59,18 @@ namespace GSharp.InternalAnalyzers;
 /// recursive, so this is not yet a proven gap, but it is a known one.
 /// </para>
 /// <para>
-/// SHIPPED DISABLED BY DEFAULT (<c>isEnabledByDefault: false</c> on
+/// ENABLED BY DEFAULT (<c>isEnabledByDefault: true</c> on
 /// <see cref="DiagnosticDescriptors.UnguardedBaseClassWalk"/>): a real-tree
-/// run against <c>src/Core</c> found 47 further hand-rolled <c>.BaseClass</c>
-/// walks beyond the six this rule was written to catch, all currently safe
-/// only because of binding-phase ordering (they run after the cycle
-/// detector, or after emit-time diagnostics have already rejected a cyclic
-/// program). This repository builds with
-/// <c>TreatWarningsAsErrors=true</c>, so enabling this rule today would be
-/// an immediate build break across ~45 sites, not a "small, well-scoped"
-/// change — see the follow-up issue cross-linked from PR #4170 for the
-/// rollout plan (migrate the flagged sites onto <c>GetHierarchy()</c>,
-/// then flip this to enabled).
+/// run against <c>src/Core</c> initially found 47 further hand-rolled
+/// <c>.BaseClass</c> walks beyond the six this rule was written to catch,
+/// all safe only because of binding-phase ordering (they ran after the
+/// cycle detector, or after emit-time diagnostics had already rejected a
+/// cyclic program) — not a structural guarantee a future edit couldn't
+/// break. Issue #4172 migrated every one of those 47 onto
+/// <c>GetHierarchy()</c> (or deleted the one that was dead code), so this
+/// repository's <c>TreatWarningsAsErrors=true</c> build now enforces the
+/// rule for real: any new unguarded walk is a build break, not a runtime
+/// hang waiting to be reported.
 /// </para>
 /// </remarks>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]

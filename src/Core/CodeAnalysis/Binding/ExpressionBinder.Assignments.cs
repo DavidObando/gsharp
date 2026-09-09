@@ -1275,10 +1275,8 @@ internal sealed partial class ExpressionBinder
         // base to the derived type, breaking bound-node parity. Left as a manual walk.
         if (isEventOperator && function?.ThisParameter != null && function.ReceiverType is StructSymbol receiverStruct)
         {
-            StructSymbol? current = receiverStruct;
-            while (current != null)
+            foreach (var t in receiverStruct.GetHierarchy())
             {
-                var t = current;
                 if (!t.Events.IsDefaultOrEmpty)
                 {
                     var ev = t.Events.FirstOrDefault(e => e.Name == name);
@@ -1289,8 +1287,6 @@ internal sealed partial class ExpressionBinder
                         return new BoundEventSubscriptionExpression(null, receiver, t, ev, handler, isAdd);
                     }
                 }
-
-                current = t.BaseClass;
             }
         }
 

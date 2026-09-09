@@ -1360,7 +1360,7 @@ internal sealed class ImportedMemberRefFactory
         switch (containingTypeSymbol)
         {
             case StructSymbol userType:
-                for (StructSymbol? current = userType; current != null; current = current.BaseClass)
+                foreach (var current in userType.GetHierarchy())
                 {
                     if (current.ImportedBaseType != null
                         && TryNormalizeToSymbolicContainer(

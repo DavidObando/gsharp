@@ -6028,7 +6028,7 @@ internal static class ClrOverloadResolution
     {
         if (symbol is StructSymbol aggregate)
         {
-            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
+            foreach (var current in aggregate.GetHierarchy())
             {
                 foreach (var implemented in current.ImplementedClrInterfaces)
                 {
@@ -6768,7 +6768,7 @@ internal static class ClrOverloadResolution
 
         if (symbol is StructSymbol aggregate)
         {
-            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
+            foreach (var current in aggregate.GetHierarchy())
             {
                 foreach (var implemented in current.ImplementedClrInterfaces)
                 {
@@ -6955,7 +6955,7 @@ internal static class ClrOverloadResolution
             return true;
         }
 
-        for (StructSymbol? current = symbol; current != null; current = current.BaseClass)
+        foreach (var current in symbol.GetHierarchy())
         {
             Type? importedBase = current.ImportedBaseType?.ClrType;
             if (importedBase != null)
@@ -7000,11 +7000,13 @@ internal static class ClrOverloadResolution
             }
 
             Type? importedBase = null;
-            StructSymbol? current = symbol;
-            while (current != null && importedBase == null)
+            foreach (var current in symbol.GetHierarchy())
             {
                 importedBase = current.ImportedBaseType?.ClrType;
-                current = current.BaseClass;
+                if (importedBase != null)
+                {
+                    break;
+                }
             }
 
             if (importedBase == null)
