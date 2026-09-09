@@ -170,6 +170,51 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
         }
     }
 
+    /// <summary>
+    /// Review finding on #4178: the sibling test above exercises only bare
+    /// `gsc`'s STDOUT diagnostic path. `gsi` (<see cref="GSharp.Repl.Program"/>)
+    /// renders every diagnostic to STANDARD ERROR regardless of severity — a
+    /// different stream than bare `gsc` uses — so a `StripDiagnosticNoise`
+    /// regression specific to stderr, or to `gsi`'s own diagnostic
+    /// rendering, would not be caught by the stdout-only test above. This is
+    /// the same deterministic GS0536 shape, routed through
+    /// <see cref="RunScriptDriver"/> and checked with the same
+    /// <see cref="CheckDriver"/> the real `Issue3149` test uses for its own
+    /// `gsi` leg, so this test and that one can never disagree about what
+    /// `CheckDriver` accepts on the `gsi` path.
+    /// </summary>
+    [Fact]
+    public void ScriptDriverWarning_RedundantNullAssertion_DoesNotFailDriverCheck()
+    {
+        var directory = CreateEmptyTestDirectory("RedundantBangBangScript");
+        try
+        {
+            var sourcePath = WriteSource(
+                directory,
+                "warn.gs",
+                """
+                import System
+                let value = 41
+                Console.WriteLine(value!! + 1)
+                """);
+
+            var script = RunScriptDriver(sourcePath);
+
+            // The warning must actually have fired, and on STDERR specifically
+            // -- otherwise this test would pass whether or not the gsi leg of
+            // #4130's fix is present, and would not be discriminating.
+            Assert.Contains("GS0536", script.StandardError, StringComparison.Ordinal);
+
+            var failures = new List<string>();
+            CheckDriver("gsi", script, "42" + Environment.NewLine, failures);
+            Assert.True(failures.Count == 0, string.Join("\n\n", failures));
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -453,13 +498,50 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
     // Matching (and removing) the run as one unit, rather than per-line,
     // keeps that shared trailing blank line from being left behind as
     // stray whitespace once the diagnostics themselves are stripped.
+    //
+    // Review finding on #4178: deliberately WARNING/INFO only, never
+    // `error`. #4130's fix is meant to tolerate a driver that succeeds
+    // despite printing a non-fatal diagnostic -- it is not meant to make
+    // this check blind to a driver that emits an actual error and still
+    // (incorrectly) exits 0. Stripping `error` text here would leave
+    // CheckDriver trusting ExitCode alone for that case, silently
+    // re-opening the exact class of false-negative this fix exists to
+    // close, just for a worse condition than the one it was written for.
     private static readonly Regex CompilerDiagnosticsBlock = new(
-        @"(?:\r?\n(?:.*\(\d+,\d+,\d+,\d+\):\ (?:error|warning|info)\ [A-Za-z0-9]+:\ .*\r?\n.*\r?\n" +
-        @"|(?:error|warning|info)\ [A-Za-z0-9]+:\ .*\r?\n))+\r?\n",
+        @"(?:\r?\n(?:.*\(\d+,\d+,\d+,\d+\):\ (?:warning|info)\ [A-Za-z0-9]+:\ .*\r?\n.*\r?\n" +
+        @"|(?:warning|info)\ [A-Za-z0-9]+:\ .*\r?\n))+\r?\n",
         RegexOptions.Compiled);
 
     private static string StripDiagnosticNoise(string text) =>
         string.IsNullOrEmpty(text) ? text : CompilerDiagnosticsBlock.Replace(text, string.Empty);
+
+    /// <summary>
+    /// Review finding on #4178: confirms the boundary the fix deliberately
+    /// keeps -- <see cref="CompilerDiagnosticsBlock"/> strips WARNING/INFO
+    /// text so a legitimate non-fatal diagnostic cannot fail
+    /// <see cref="CheckDriver"/>, but must never strip an ERROR. A driver
+    /// that (hypothetically, via its own bug) reports a real error yet still
+    /// exits 0 must still be caught here through the exact-output-equality
+    /// check, not silently waved through because #4130's fix trusted
+    /// <c>ExitCode</c> alone. Constructs the hazard directly (a synthetic
+    /// <see cref="DriverResult"/> with an error diagnostic AND exit code 0)
+    /// rather than trying to make a real driver misbehave.
+    /// </summary>
+    [Fact]
+    public void ErrorDiagnosticAlongsideFakeSuccessExitCode_StillFailsCheckDriver()
+    {
+        var fakeResult = new DriverResult(
+            0,
+            "\nfake.gs(1,1,1,2): error GS9999: something is actually broken\nlet x = 1\n\n" + "42" + Environment.NewLine,
+            string.Empty);
+        var failures = new List<string>();
+        CheckDriver("probe", fakeResult, "42" + Environment.NewLine, failures);
+        Assert.True(
+            failures.Count > 0,
+            "CheckDriver must still fail when an error diagnostic is present, even though "
+                + "warnings/info are excluded from the stdout-equality strip -- if this assertion "
+                + "fails, the strip regex is (again) silently eating errors too.");
+    }
 
     private static DriverResult RunCompiler(params string[] arguments) =>
         Capture(() => GSharp.Compiler.Program.Main(arguments));
