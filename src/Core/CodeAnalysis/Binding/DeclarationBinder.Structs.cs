@@ -851,6 +851,29 @@ internal sealed partial class DeclarationBinder
             structSymbol.SetImportedBaseType(importedBaseType);
         }
 
+        // Issue #4143: an attribute class's PRIMARY constructor parameters
+        // are validated here, at the declaration, rather than left to fall
+        // through to GS0584 at each use site (or GS9998 if nothing catches
+        // it at all). Code review (Copilot): `DerivesFromSystemAttribute`
+        // alone is NOT reliable here for a NESTED same-compilation base —
+        // it reads the base's already-computed `IsAttributeClass`/
+        // `ImportedBaseType` flags, which are only set once THAT type's own
+        // `BindStructBaseAndInterfaces` has run, and a nested type whose
+        // base is a NESTED sibling declared later in the same enclosing
+        // body has not run yet at this point (measured: a bad primary
+        // parameter on `Outer.Derived(Value Holder) : Outer.Base` compiled
+        // clean with no `GS0585` when `Base` was declared after `Derived`
+        // inside the same `Outer`).
+        // `DerivesFromSystemAttributeDuringDeclaration` closes that gap
+        // without `IsAttributeType`'s `bindTypeClause` fallback, which
+        // regressed `Issue1244GenericAbstractOverrideBinderTests` when
+        // called here (a generic base clause it was never meant to
+        // re-resolve outside its own USE-site caller).
+        if (DerivesFromSystemAttributeDuringDeclaration(structSymbol))
+        {
+            ValidateAttributeConstructorParameterTypes(primaryCtorParameters, syntax.Identifier.Location);
+        }
+
         // Issue #306: bind and resolve an explicit base-constructor initializer
         // (`: Base(args)`). The arguments are bound in a scope that exposes the
         // primary-constructor parameters so they can be forwarded to the base.

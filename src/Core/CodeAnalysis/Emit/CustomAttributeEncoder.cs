@@ -950,6 +950,25 @@ internal sealed class CustomAttributeEncoder
             return true;
         }
 
+        // Issue #4144: the array sibling of the case above — a same-
+        // compilation enum ARRAY parameter (`Kinds []Status`) — has no
+        // `ClrType` on the ARRAY type either, for the same reason (the
+        // element enum's TypeDef only exists at emit). The binder
+        // (`DeclarationBinder.TryBindAttributeArrayArgument`) already builds
+        // the constant CONTAINER as `int32[]` for exactly this shape, so the
+        // signature must match: encode the parameter as `int32[]`.
+        TypeSymbol? arrayElementType = type switch
+        {
+            SliceTypeSymbol slice => slice.ElementType,
+            ArrayTypeSymbol array => array.ElementType,
+            _ => null,
+        };
+        if (arrayElementType is EnumSymbol arrayEnum && arrayEnum.UnderlyingType.ClrType is { } arrayUnderlying)
+        {
+            writeType = arrayUnderlying.MakeArrayType();
+            return true;
+        }
+
         writeType = null;
         return false;
     }
