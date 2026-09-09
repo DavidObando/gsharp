@@ -105,5 +105,20 @@ public sealed class ConstructorDeclarationSyntax : MemberSyntax
     public bool HasBaseInitializer => BaseKeyword != null;
 
     /// <inheritdoc/>
-    public override TextSpan Span => TextSpan.FromBounds((ConvenienceModifier ?? InitKeyword).Span.Start, Body.Span.End);
+    /// <remarks>
+    /// The span starts at the ACCESSIBILITY MODIFIER when there is one. It used to
+    /// start at <c>convenience</c>/<c>init</c>, which left `private` outside the
+    /// declaration it introduces -- and a declaration whose span excludes its own
+    /// modifiers is not merely imprecise, it is wrong in two places that both read
+    /// `Span.Start` as "where this declaration begins":
+    /// <see cref="DocumentationAttacher"/> requires a documented declaration to start
+    /// on the line after the `///` block, and the ADR-0179 formatter puts its
+    /// member break before that same position. Together those produced
+    /// `private` on its own line, a blank line, then `init` -- and GS0227
+    /// "documentation comment is not attached to a declaration" on the migrated tree.
+    /// </remarks>
+    public override TextSpan Span =>
+        TextSpan.FromBounds(
+            (AccessibilityModifier ?? ConvenienceModifier ?? InitKeyword).Span.Start,
+            Body.Span.End);
 }

@@ -542,6 +542,37 @@ no consumer and cannot regress anything.
 > their lines, which would make every counter layout-invariant — deliberately
 > not done here, because it re-baselines three corpora at once.
 >
+> **Idempotence is not compilability, and this is where that was learned.**
+> `gsfmt --check` over all 3,905 formatted files exits 0 — and the first
+> revision of this phase still broke six of the eight PR-guard apps. The
+> formatter split the accessibility modifier off `init`, emitting `private`, a
+> blank line, then `init(...)`, which detached the preceding `///` block and
+> produced 15 `GS0227` "documentation comment is not attached to a declaration"
+> errors across `src/Core`, `GSharp.Formatting`, and four `Cs2Gs` projects. That
+> output was a perfectly *stable* fixed point; it was simply the wrong one, and
+> every invariant D4 lists except the emit oracle was blind to it, because none
+> of them compiles what the formatter produced.
+>
+> The cause was not in the formatter at all: `ConstructorDeclarationSyntax.Span`
+> started at `convenience`/`init` and excluded the accessibility modifier, so a
+> declaration's own span did not cover the modifier that introduces it. Two
+> consumers read `Span.Start` as "where this declaration begins" —
+> `DocumentationAttacher`, which requires a documented declaration to start on
+> the line after the `///` block, and the layout builder, which puts its member
+> break at that same position. Widening the span to
+> `AccessibilityModifier ?? ConvenienceModifier ?? InitKeyword` fixes both. It
+> was `init` alone: probing every sibling declaration keyword (`func`, `prop`,
+> `var`, `let`, nested `class`/`struct`/`interface`/`enum`, `shared`, `event`,
+> `deinit`) showed only the two nodes that override `Span` by hand were at
+> risk, and only one of those has modifiers to lose.
+>
+> `test/Formatting.Tests/DocCommentAttachmentTests.cs` is the standing
+> consequence: it binds and **emits** formatted output and asserts on the
+> diagnostics, across all 13 documented-member shapes. It fails on 4 of them
+> without the span fix and passes with it. D4's invariant list should be read
+> as incomplete without it — a formatter can reach a stable fixed point that
+> does not compile, and only compiling the output can see that.
+>
 > **Invariants re-checked on the corpus, not asserted.** `gsfmt --check` over
 > all 3,905 formatted files exits 0, so D4's idempotence holds corpus-wide, and
 > the 13 `Cs2Gs.Tests` failures the flip produced are all `Assert.Contains` on
