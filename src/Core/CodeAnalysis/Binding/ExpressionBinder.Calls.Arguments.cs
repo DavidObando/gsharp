@@ -1476,18 +1476,33 @@ internal sealed partial class ExpressionBinder
             null,
             ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
         Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverInheritedTypeArgs =
-            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                typeArgSymbols,
-                RefineSymbolicArgsForMethodGroups(
+            (closed, isExpanded) =>
+            {
+                var refinedArgs = RefineSymbolicArgsForMethodGroups(
                     closed,
                     arguments,
                     inheritedSymbolicArgs,
                     receiverArgCount: 0,
                     isExpanded: isExpanded,
-                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
-                isExpanded,
-                argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    parameterMapping: default,
+                    methodGroupSlots: out var recoverInheritedMethodGroupSlots);
+
+                // Issue #4133 (hot-core translation guard finding): see
+                // MergeMethodGroupArgumentSlots's doc.
+                recoverInheritedMethodGroupSlots = MergeMethodGroupArgumentSlots(
+                    arguments,
+                    receiverArgCount: 0,
+                    refinedArgs.Length,
+                    recoverInheritedMethodGroupSlots);
+                return MemberLookup.BuildSymbolicMethodTypeArgs(
+                    closed,
+                    typeArgSymbols,
+                    refinedArgs,
+                    isExpanded,
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    recoverInheritedMethodGroupSlots);
+            };
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -1564,13 +1579,23 @@ internal sealed partial class ExpressionBinder
                     receiverArgCount: 0,
                     isExpanded: resolution.IsExpanded,
                     argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
-                    parameterMapping: resolution.ParameterMapping);
+                    parameterMapping: resolution.ParameterMapping,
+                    methodGroupSlots: out var inheritedMethodGroupArgumentSlots);
+
+                // Issue #4133 (hot-core translation guard finding): see
+                // MergeMethodGroupArgumentSlots's doc.
+                inheritedMethodGroupArgumentSlots = MergeMethodGroupArgumentSlots(
+                    arguments,
+                    receiverArgCount: 0,
+                    refinedInheritedSymbolicArgs.Length,
+                    inheritedMethodGroupArgumentSlots);
                 var inheritedSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     best,
                     typeArgSymbols,
                     refinedInheritedSymbolicArgs,
                     resolution.IsExpanded,
-                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    inheritedMethodGroupArgumentSlots);
                 var inheritedTypeArgSymbolsForCall = !inheritedSymbolicTypeArgs.IsDefault
                     ? inheritedSymbolicTypeArgs
                     : typeArgSymbols.IsDefault
@@ -1950,18 +1975,33 @@ internal sealed partial class ExpressionBinder
         // 1 (receiverArgCount) since slot 0 here is the receiver, not a
         // user-supplied argument.
         Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverExtensionTypeArgs =
-            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                typeArgSymbols,
-                RefineSymbolicArgsForMethodGroups(
+            (closed, isExpanded) =>
+            {
+                var refinedArgs = RefineSymbolicArgsForMethodGroups(
                     closed,
                     arguments,
                     extensionSymbolicArgs,
                     receiverArgCount: 1,
                     isExpanded: isExpanded,
-                    argumentNames: extensionArgumentNames),
-                isExpanded,
-                extensionArgumentNames);
+                    argumentNames: extensionArgumentNames,
+                    parameterMapping: default,
+                    methodGroupSlots: out var recoverExtensionMethodGroupSlots);
+
+                // Issue #4133 (hot-core translation guard finding): see
+                // MergeMethodGroupArgumentSlots's doc.
+                recoverExtensionMethodGroupSlots = MergeMethodGroupArgumentSlots(
+                    arguments,
+                    receiverArgCount: 1,
+                    refinedArgs.Length,
+                    recoverExtensionMethodGroupSlots);
+                return MemberLookup.BuildSymbolicMethodTypeArgs(
+                    closed,
+                    typeArgSymbols,
+                    refinedArgs,
+                    isExpanded,
+                    extensionArgumentNames,
+                    recoverExtensionMethodGroupSlots);
+            };
         Func<int, bool> functionLiteralArgumentCheck = argumentIndex =>
             argumentIndex > 0
             && argumentIndex - 1 < arguments.Length
@@ -2066,13 +2106,28 @@ internal sealed partial class ExpressionBinder
             receiverArgCount: 1,
             isExpanded: resolution.IsExpanded,
             argumentNames: extensionArgumentNames,
-            parameterMapping: resolution.ParameterMapping);
+            parameterMapping: resolution.ParameterMapping,
+            methodGroupSlots: out var extensionMethodGroupArgumentSlots);
+
+        // Issue #4133 (hot-core translation guard finding): see
+        // MergeMethodGroupArgumentSlots's doc — a method group that already
+        // had a single, unambiguous candidate was substituted with its
+        // natural FunctionTypeSymbol back when `extensionSymbolicArgs` was
+        // first built above, before `best` was known, so
+        // RefineSymbolicArgsForMethodGroups's own tracking alone missed it.
+        extensionMethodGroupArgumentSlots = MergeMethodGroupArgumentSlots(
+            arguments,
+            receiverArgCount: 1,
+            refinedExtensionSymbolicArgs.Length,
+            extensionMethodGroupArgumentSlots);
+
         var extensionSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
             best,
             typeArgSymbols,
             refinedExtensionSymbolicArgs,
             resolution.IsExpanded,
-            extensionArgumentNames);
+            extensionArgumentNames,
+            extensionMethodGroupArgumentSlots);
         var extensionTypeArgSymbolsForCall = !extensionSymbolicTypeArgs.IsDefault
             ? extensionSymbolicTypeArgs
             : typeArgSymbols.IsDefault
@@ -3783,18 +3838,33 @@ internal sealed partial class ExpressionBinder
             null,
             ImmutableArray.CreateRange(arguments.Select(argument => argument.Type)));
         Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverTypeArgSymbols =
-            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                default,
-                RefineSymbolicArgsForMethodGroups(
+            (closed, isExpanded) =>
+            {
+                var refinedArgs = RefineSymbolicArgsForMethodGroups(
                     closed,
                     arguments,
                     symbolicArgTypes,
                     receiverArgCount: 0,
                     isExpanded: isExpanded,
-                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
-                isExpanded,
-                argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
+                    argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    parameterMapping: default,
+                    methodGroupSlots: out var recoverConstrainedMethodGroupSlots);
+
+                // Issue #4133 (hot-core translation guard finding): see
+                // MergeMethodGroupArgumentSlots's doc.
+                recoverConstrainedMethodGroupSlots = MergeMethodGroupArgumentSlots(
+                    arguments,
+                    receiverArgCount: 0,
+                    refinedArgs.Length,
+                    recoverConstrainedMethodGroupSlots);
+                return MemberLookup.BuildSymbolicMethodTypeArgs(
+                    closed,
+                    default,
+                    refinedArgs,
+                    isExpanded,
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    recoverConstrainedMethodGroupSlots);
+            };
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,

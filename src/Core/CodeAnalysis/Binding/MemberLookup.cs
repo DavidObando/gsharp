@@ -108,6 +108,32 @@ internal sealed class MemberLookup
         Exact,
         Lower,
         Upper,
+
+        // Issue #4133 (hot-core translation guard finding): the top-level
+        // marker for an argument recovered from a bare METHOD GROUP (see
+        // `RefineSymbolicArgsForMethodGroups`'s method-group-slots overload).
+        // C#'s method-type inference (§12.6.3.7) never makes an INPUT
+        // inference from a method group's own parameter types — only an
+        // OUTPUT inference from its return type. `UnifyForMethodTypeArgs`'s
+        // Issue-#1334 delegate-shape unification does not know it is looking
+        // at a method group's synthesized natural type rather than a real
+        // lambda/delegate VALUE, so without this marker it treats the
+        // method group's parameter type as an ordinary contravariant upper
+        // bound — see `MethodGroupUpper`. `SymbolicInferenceBounds.Add`
+        // demotes `MethodGroupSource` itself straight to `Lower` (the return
+        // side of that same unification keeps this marker unchanged, and a
+        // return-type contribution genuinely IS a legitimate lower bound).
+        MethodGroupSource,
+
+        // The reversed (contravariant-position) counterpart of
+        // `MethodGroupSource` — what a method-group argument's own parameter
+        // type would contribute as an upper bound, kept in
+        // `SymbolicInferenceBounds.MethodGroupUpper` rather than `Upper` so
+        // it can be used as a same-slot FALLBACK (promoted only when no
+        // other bound exists for that type-parameter slot) instead of
+        // silently outranking the receiver/value bounds that already
+        // correctly fix the slot.
+        MethodGroupUpper,
     }
 
     // ----- CLR-side type walks -----
@@ -1742,6 +1768,39 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol> symbolicArgTypes,
         bool isExpanded = false,
         IReadOnlyList<string?>? argumentNames = null)
+        => BuildSymbolicMethodTypeArgs(
+            closed,
+            explicitTypeArgSymbols,
+            symbolicArgTypes,
+            isExpanded,
+            argumentNames,
+            methodGroupArgumentSlots: default);
+
+    /// <summary>
+    /// Issue #4133 (hot-core translation guard finding): overload that also
+    /// accepts, parallel to <paramref name="symbolicArgTypes"/>, which
+    /// argument slots were recovered from a bare method group (see
+    /// <c>RefineSymbolicArgsForMethodGroups</c>'s method-group-slots
+    /// overload) — forwarded to <c>InferSymbolicMethodTypeArgumentsCore</c>
+    /// so their contravariant contribution demotes to a same-slot fallback
+    /// instead of outranking a real bound. Reordered here the same way
+    /// <paramref name="symbolicArgTypes"/> is reordered for a named-argument
+    /// call, so the two stay aligned by parameter position.
+    /// </summary>
+    /// <param name="closed">The winning (possibly closed generic) CLR method.</param>
+    /// <param name="explicitTypeArgSymbols">Explicit type arguments supplied at the call site, if any.</param>
+    /// <param name="symbolicArgTypes">The pre-resolution symbolic argument vector.</param>
+    /// <param name="isExpanded">Whether trailing arguments target a params-array element.</param>
+    /// <param name="argumentNames">Optional source-slot argument names.</param>
+    /// <param name="methodGroupArgumentSlots">Parallel to <paramref name="symbolicArgTypes"/>: <see langword="true"/> for a slot recovered from a bare method group.</param>
+    /// <returns>The recovered symbolic type arguments, or <see langword="default"/> when none could be recovered.</returns>
+    public static ImmutableArray<TypeSymbol?> BuildSymbolicMethodTypeArgs(
+        MethodInfo? closed,
+        ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
+        ImmutableArray<TypeSymbol> symbolicArgTypes,
+        bool isExpanded,
+        IReadOnlyList<string?>? argumentNames,
+        ImmutableArray<bool> methodGroupArgumentSlots)
     {
         if (closed == null || !closed.IsGenericMethod)
         {
@@ -1766,6 +1825,7 @@ internal sealed class MemberLookup
             }
 
             var orderedSymbolicArgTypes = nullableSymbolicArgTypes.MoveToImmutable();
+            var orderedMethodGroupArgumentSlots = methodGroupArgumentSlots;
 
             // Issue #4026 (review finding): unification below zips the open
             // parameters with these arguments POSITIONALLY, so a call that
@@ -1809,6 +1869,25 @@ internal sealed class MemberLookup
                     }
 
                     orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+                    if (!methodGroupArgumentSlots.IsDefault)
+                    {
+                        var byParameterFlags = new bool[paramsIndex + expandedCount];
+                        var expandedFlagSlot = paramsIndex;
+                        for (var source = 0; source < methodGroupArgumentSlots.Length && source < sourceToParameter.Length; source++)
+                        {
+                            var parameter = sourceToParameter[source];
+                            if (parameter == paramsIndex)
+                            {
+                                byParameterFlags[expandedFlagSlot++] = methodGroupArgumentSlots[source];
+                            }
+                            else
+                            {
+                                byParameterFlags[parameter] = methodGroupArgumentSlots[source];
+                            }
+                        }
+
+                        orderedMethodGroupArgumentSlots = ImmutableArray.Create(byParameterFlags);
+                    }
                 }
                 else
                 {
@@ -1819,6 +1898,16 @@ internal sealed class MemberLookup
                     }
 
                     orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+                    if (!methodGroupArgumentSlots.IsDefault)
+                    {
+                        var byParameterFlags = new bool[parameterCount];
+                        for (var source = 0; source < methodGroupArgumentSlots.Length && source < sourceToParameter.Length; source++)
+                        {
+                            byParameterFlags[sourceToParameter[source]] = methodGroupArgumentSlots[source];
+                        }
+
+                        orderedMethodGroupArgumentSlots = ImmutableArray.Create(byParameterFlags);
+                    }
                 }
             }
 
@@ -1826,6 +1915,7 @@ internal sealed class MemberLookup
                 openMethod,
                 orderedSymbolicArgTypes,
                 isExpanded,
+                orderedMethodGroupArgumentSlots,
                 out requiresRecoveredInference);
         }
         else
@@ -2729,7 +2819,7 @@ internal sealed class MemberLookup
     /// using <c>object</c> as the erasure placeholder. This lets
     /// overload resolution match the open generic candidate (the real
     /// symbolic substitution is recovered downstream via
-    /// <see cref="BuildSymbolicMethodTypeArgs"/> +
+    /// <c>BuildSymbolicMethodTypeArgs</c> +
     /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/>).
     /// </summary>
     /// <param name="t">The argument's bound type.</param>
@@ -6745,6 +6835,33 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol?> symbolicArgTypes,
         bool isExpanded,
         out bool requiresRecoveredInference)
+        => InferSymbolicMethodTypeArgumentsCore(
+            openMethod,
+            symbolicArgTypes,
+            isExpanded,
+            methodGroupArgumentSlots: default,
+            out requiresRecoveredInference);
+
+    /// <summary>
+    /// Issue #4133 (hot-core translation guard finding): overload that also
+    /// accepts, parallel to <paramref name="symbolicArgTypes"/>, which
+    /// argument slots were recovered from a bare method group (see
+    /// <c>RefineSymbolicArgsForMethodGroups</c>'s method-group-slots
+    /// overload). Those slots unify with
+    /// <see cref="SymbolicInferenceBoundKind.MethodGroupSource"/> instead of
+    /// the default <see cref="SymbolicInferenceBoundKind.Lower"/>, so a
+    /// contravariant bound recovered from the method group's OWN parameter
+    /// type — which C#'s method-type inference never treats as an input
+    /// bound (§12.6.3.7) — lands in <c>bounds.MethodGroupUpper</c> instead
+    /// of <c>bounds.Upper</c>, and only backfills a slot that ends up with
+    /// no other bound at all (<see cref="SymbolicInferenceBounds.PromoteMethodGroupFallbacks"/>).
+    /// </summary>
+    private static TypeSymbol?[] InferSymbolicMethodTypeArgumentsCore(
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol?> symbolicArgTypes,
+        bool isExpanded,
+        ImmutableArray<bool> methodGroupArgumentSlots,
+        out bool requiresRecoveredInference)
     {
         requiresRecoveredInference = false;
         if (openMethod == null || !openMethod.IsGenericMethodDefinition)
@@ -6754,6 +6871,13 @@ internal sealed class MemberLookup
 
         var arity = openMethod.GetGenericArguments().Length;
         var bounds = new SymbolicInferenceBounds(arity);
+
+        SymbolicInferenceBoundKind ArgumentBoundKind(int i)
+            => !methodGroupArgumentSlots.IsDefault
+                && i < methodGroupArgumentSlots.Length
+                && methodGroupArgumentSlots[i]
+                    ? SymbolicInferenceBoundKind.MethodGroupSource
+                    : SymbolicInferenceBoundKind.Lower;
 
         var openParams = openMethod.GetParameters();
         var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
@@ -6770,7 +6894,8 @@ internal sealed class MemberLookup
                     openParams[i].ParameterType,
                     symbolicArgTypes[i],
                     openMethod,
-                    bounds);
+                    bounds,
+                    ArgumentBoundKind(i));
             }
 
             for (var i = paramsIndex; i < argumentCount; i++)
@@ -6779,7 +6904,8 @@ internal sealed class MemberLookup
                     paramsElementType,
                     symbolicArgTypes[i],
                     openMethod,
-                    bounds);
+                    bounds,
+                    ArgumentBoundKind(i));
             }
         }
         else
@@ -6791,10 +6917,12 @@ internal sealed class MemberLookup
                     openParams[i].ParameterType,
                     symbolicArgTypes[i],
                     openMethod,
-                    bounds);
+                    bounds,
+                    ArgumentBoundKind(i));
             }
         }
 
+        bounds.PromoteMethodGroupFallbacks();
         return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference);
     }
 
@@ -6961,6 +7089,61 @@ internal sealed class MemberLookup
                 continue;
             }
 
+            // Issue #4133 (review finding, hot-core translation guard):
+            // a pure reference-nullable-annotation difference (top-level or
+            // nested inside a tuple element) is never a real type
+            // relationship — the underlying CLR shape is identical, nullable
+            // annotations are compile-time-only, and C#'s own fixing
+            // (§12.6.3.13) computes nullability separately, AFTER a
+            // candidate is picked, never as grounds to eliminate or "raise"
+            // one. This check must run BEFORE the directional widening logic
+            // below, not only when both directions of
+            // `HasImplicitSymbolicConversion` hold: e.g. `string -> string?`
+            // is a one-directional, non-structural conversion (`string? ->
+            // string` is not implicit — you cannot drop nullability for
+            // free), so without this early check an EXPLICITLY-typed lambda
+            // parameter whose tuple-element nullability differs from the
+            // receiver's element type — `xs.Select((s (Id Guid, Text
+            // string?)) -> s.Text)` against `List[(Id Guid, Text string)]`
+            // — would "win" through the ordinary one-directional widening
+            // branch below exactly the way a genuine base-class upper bound
+            // is meant to, resolving `TResult` to the nullable tuple shape.
+            // (A BARE METHOD GROUP argument's own parameter type no longer
+            // reaches this merge at all for the analogous case — see
+            // `SymbolicInferenceBoundKind.MethodGroupUpper` and
+            // `PromoteMethodGroupFallbacks` below, which demote a method
+            // group's parameter type out of the ordinary bound lists
+            // entirely, per C# §12.6.3.7: a method group is never an input
+            // inference source. Before that fix, this same branch is what
+            // let a cs2gs oblivious-nullability method-group parameter
+            // cascade a spurious `?` forward into a later call, producing a
+            // false ambiguity and a real GS0159
+            // (`tools/cs2gs/Cs2Gs.Pipeline/DeclaredProjectItem.cs`); that
+            // path no longer reaches here because the group's parameter
+            // type is demoted before bound-merging ever sees it.)
+            // Resolving to the non-nullable, stripped form deterministically
+            // keeps the pre-#4133 default (the lower bound's shape, when it
+            // is the non-nullable one) without reintroducing the
+            // true-ambiguity failure the merge branch further below exists
+            // to close for every OTHER annotation-only difference (a tuple
+            // element name, or a nullable difference the directional checks
+            // do treat as mutual — see that branch's own comment). Note this
+            // is a knowing deviation from C#: given `string` (lower) and
+            // `string?` (upper) bounds, C#'s own fixing (§12.6.3.13) would
+            // resolve to the exact/upper-compatible annotation (`string?`)
+            // and let flow analysis warn separately; gsc instead prefers the
+            // non-nullable shape here because it is deterministic without
+            // needing flow-sensitive nullable warnings on the inferred type
+            // argument itself.
+            var strippedBest = StripReferenceNullableAnnotations(best);
+            var strippedCandidate = StripReferenceNullableAnnotations(candidate);
+            if ((!ReferenceEquals(strippedBest, best) || !ReferenceEquals(strippedCandidate, candidate))
+                && DeclarationBinder.TypeSignaturesEquivalent(strippedBest, strippedCandidate))
+            {
+                best = strippedBest;
+                continue;
+            }
+
             // The winner is the unique survivor every OTHER survivor
             // converts into — regardless of which bound category (lower or
             // upper) either one came from. Two survivors sourced from the
@@ -6988,19 +7171,15 @@ internal sealed class MemberLookup
                 // Issue #4133 (review finding): mutually convertible in BOTH
                 // directions under `HasImplicitSymbolicConversion`
                 // (identity/reference/boxing/numeric only — no structural
-                // projection) but not `TypeSignaturesEquivalent` means the two
-                // bounds denote the same underlying CLR shape and differ only
-                // in a compile-time-only annotation: nullable-reference
-                // wrapping (possibly nested inside a tuple element) or a tuple
-                // element name. C#'s own fixing (§12.6.3.13) never treats that
-                // as a real ambiguity — nullability is folded in afterward,
-                // not used to eliminate candidates. Before this fix ever
-                // consulted both bound categories together (see the dispatch
-                // above), a lower-only and an upper-only bound could never
-                // reach this branch in the first place, so this case is new
-                // with #4133 and needs its own resolution: merge, using the
-                // same ADR-0172 name-reconciliation and nullable-widening
+                // projection) but not `TypeSignaturesEquivalent`, and NOT a
+                // pure nullable-annotation difference (that was handled
+                // above) means the two bounds differ only by a tuple element
+                // name. Merge, using the same ADR-0172 name-reconciliation
                 // logic the equivalent-bounds branch above already applies.
+                // Before this fix ever consulted both bound categories
+                // together (see the dispatch above), a lower-only and an
+                // upper-only bound could never reach this branch in the
+                // first place, so this case is new with #4133.
                 best = MergeRecoveredTypeArgument(best, candidate, allowBaseWidening: false);
             }
             else
@@ -7010,6 +7189,43 @@ internal sealed class MemberLookup
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// Recursively strips reference-nullable annotations — a top-level
+    /// <see cref="NullableTypeSymbol"/> wrapping a non-nullable-VALUE-type
+    /// underlying type (a real <c>Nullable&lt;T&gt;</c> wrapper is left
+    /// alone, matching <c>MergeRecoveredTypeArgument</c>'s own
+    /// <c>existingNullable</c>/<c>incomingNullable</c> check), and the same
+    /// check applied to each element of a <see cref="TupleTypeSymbol"/> —
+    /// so two candidates that differ only by nullable annotation, however
+    /// deeply nested, compare equal once stripped. Returns the original
+    /// instance, unchanged, when nothing needed stripping, so a caller can
+    /// tell "no annotation difference here" from a reference comparison
+    /// alone.
+    /// </summary>
+    private static TypeSymbol StripReferenceNullableAnnotations(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable))
+        {
+            return StripReferenceNullableAnnotations(nullable.UnderlyingType);
+        }
+
+        if (type is TupleTypeSymbol tuple)
+        {
+            var changed = false;
+            var stripped = ImmutableArray.CreateBuilder<TypeSymbol>(tuple.ElementTypes.Length);
+            foreach (var element in tuple.ElementTypes)
+            {
+                var strippedElement = StripReferenceNullableAnnotations(element);
+                changed |= !ReferenceEquals(strippedElement, element);
+                stripped.Add(strippedElement);
+            }
+
+            return changed ? TupleTypeSymbol.Get(stripped.MoveToImmutable(), tuple.ElementNames) : type;
+        }
+
+        return type;
     }
 
     private static bool SatisfiesSymbolicInferenceBounds(
@@ -7064,6 +7280,8 @@ internal sealed class MemberLookup
         {
             SymbolicInferenceBoundKind.Lower => SymbolicInferenceBoundKind.Upper,
             SymbolicInferenceBoundKind.Upper => SymbolicInferenceBoundKind.Lower,
+            SymbolicInferenceBoundKind.MethodGroupSource => SymbolicInferenceBoundKind.MethodGroupUpper,
+            SymbolicInferenceBoundKind.MethodGroupUpper => SymbolicInferenceBoundKind.MethodGroupSource,
             _ => SymbolicInferenceBoundKind.Exact,
         };
 
@@ -8261,6 +8479,7 @@ internal sealed class MemberLookup
             this.Exact = new List<TypeSymbol>?[arity];
             this.Lower = new List<TypeSymbol>?[arity];
             this.Upper = new List<TypeSymbol>?[arity];
+            this.MethodGroupUpper = new List<TypeSymbol>?[arity];
         }
 
         public int Arity => this.Exact.Length;
@@ -8271,12 +8490,22 @@ internal sealed class MemberLookup
 
         public List<TypeSymbol>?[] Upper { get; }
 
+        // Issue #4133 (hot-core translation guard finding): an upper bound
+        // recovered from a bare method group's OWN parameter type
+        // (`SymbolicInferenceBoundKind.MethodGroupUpper`) — C# never makes
+        // this an input-inference bound (§12.6.3.7), so it is held apart
+        // from `Upper` and only promoted into it, per slot, by
+        // `PromoteMethodGroupFallbacks` when no other bound exists for that
+        // slot at all.
+        public List<TypeSymbol>?[] MethodGroupUpper { get; }
+
         public void Add(int position, TypeSymbol type, SymbolicInferenceBoundKind kind)
         {
             var slots = kind switch
             {
                 SymbolicInferenceBoundKind.Exact => this.Exact,
                 SymbolicInferenceBoundKind.Upper => this.Upper,
+                SymbolicInferenceBoundKind.MethodGroupUpper => this.MethodGroupUpper,
                 _ => this.Lower,
             };
             var slot = slots[position];
@@ -8287,6 +8516,29 @@ internal sealed class MemberLookup
             }
 
             slot.Add(type);
+        }
+
+        /// <summary>
+        /// Issue #4133 (hot-core translation guard finding): for each slot
+        /// with no <see cref="Exact"/>, <see cref="Lower"/>, or
+        /// <see cref="Upper"/> bound at all, promotes its
+        /// <see cref="MethodGroupUpper"/> entries into <see cref="Upper"/> —
+        /// the C#-faithful fallback for a type parameter that ONLY a method
+        /// group's parameter type ever constrained (e.g. <c>Foo(SomeMethod)</c>
+        /// with no other argument to fix <c>T</c> from). A slot that already
+        /// has a real bound from elsewhere (the common case — a receiver, a
+        /// plain value argument, another delegate argument) keeps that bound
+        /// exactly as it was pre-#4133, unaffected by the method group.
+        /// </summary>
+        public void PromoteMethodGroupFallbacks()
+        {
+            for (var i = 0; i < this.Arity; i++)
+            {
+                if (this.Exact[i] == null && this.Lower[i] == null && this.Upper[i] == null)
+                {
+                    this.Upper[i] = this.MethodGroupUpper[i];
+                }
+            }
         }
     }
 

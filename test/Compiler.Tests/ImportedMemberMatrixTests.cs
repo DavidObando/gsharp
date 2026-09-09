@@ -918,6 +918,210 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
+    /// Issue #4133 follow-up (hot-core translation guard finding #1,
+    /// <c>tools/cs2gs/Cs2Gs.Pipeline/DeclaredProjectItem.gs</c>): a BARE
+    /// METHOD GROUP argument's own declared parameter type is never a real
+    /// input-inference bound — C# §12.6.3.7 makes only an OUTPUT inference
+    /// from a method group's return type, never an input inference from its
+    /// parameters. Before this fix, <c>Where[TSource]</c>'s receiver
+    /// correctly lower-bounds <c>TSource</c> to <c>Item</c>, but the bare
+    /// predicate's own nullable-annotated parameter (<c>Item?</c> — the kind
+    /// of annotation cs2gs's oblivious-nullability heuristic adds to
+    /// nullable-oblivious C#) was ALSO fed in as a genuine upper bound and
+    /// "raised" <c>TSource</c> to <c>Item?</c>, which a LATER, explicitly
+    /// non-nullable lambda parameter two calls downstream could not absorb —
+    /// a false ambiguity surfacing as a real GS0159. Reduced from the real
+    /// failure to this single-file repro; matches <c>csc</c>, which infers
+    /// <c>TSource = Item</c> throughout. See
+    /// <c>MemberLookup.SymbolicInferenceBoundKind.MethodGroupUpper</c> and
+    /// <c>MemberLookup.SymbolicInferenceBounds.PromoteMethodGroupFallbacks</c>
+    /// for the mechanism.
+    /// </summary>
+    [Fact]
+    public void Issue4133_BareMethodGroupParameterTypeDoesNotRaiseTheReceiversInferredArgument()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133MethodGroupParam
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            class Item {
+                init(name string) {
+                    this.Name = name
+                }
+                prop Name string {
+                    get;
+                    init;
+                }
+            }
+
+            func pred(x Item?) bool -> x != nil && x.Name.Length > 0
+
+            func run(items IReadOnlyList[Item]) List[string] {
+                return items
+                    .Where(pred)
+                    .Select((item Item) -> item.Name)
+                    .ToList()
+            }
+
+            let xs = List[Item]()
+            xs.Add(Item("a"))
+            xs.Add(Item("b"))
+            let result = run(xs)
+            Console.WriteLine(result.Count)
+            Console.WriteLine(result[0])
+            Console.WriteLine(result[1])
+            """;
+
+        Assert.Equal(
+            $"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
+    /// Issue #4133 follow-up (hot-core translation guard finding #2,
+    /// <c>tools/cs2gs/Cs2Gs.Translator/EmittedNameAllocator.gs</c>'s
+    /// <c>GetScopeNames</c>). The same bare-method-group mechanism as the
+    /// sibling test above, but reduced from the REAL failure (an ILVerify
+    /// <c>StackUnexpected</c> — the emitted MethodSpec closed
+    /// <c>Select</c> over <c>ISymbol</c> while the delegate site referenced
+    /// <c>Func&lt;INamespaceOrTypeSymbol,string&gt;</c>) rather than a
+    /// GS0159: a single bare method group (<c>SourceName</c>, parameter
+    /// <c>ISymbol?</c>) is used via <c>.Select(SourceName)</c> at TWO call
+    /// sites whose receivers yield DIFFERENT element types —
+    /// <c>INamespaceSymbol.GetMembers()</c> (a shadowing declaration
+    /// returning <c>IEnumerable&lt;INamespaceOrTypeSymbol&gt;</c>, a
+    /// subtype of <c>ISymbol</c>) in one branch, and the inherited
+    /// <c>ImmutableArray&lt;ISymbol&gt;</c>-returning overload in the other.
+    /// Before this fix, the first call site's receiver correctly
+    /// lower-bounds <c>TSource</c> to <c>INamespaceOrTypeSymbol</c>, but the
+    /// method group's own <c>ISymbol?</c> parameter fed in as a spurious
+    /// upper bound raised it back to the wider <c>ISymbol</c> — gsc then
+    /// emitted a <c>Select&lt;ISymbol,...&gt;</c> MethodSpec at a call site
+    /// whose delegate creation (<c>Func&lt;INamespaceOrTypeSymbol,string&gt;</c>,
+    /// pinned by the extension method's own <c>this</c> receiver type) still
+    /// referenced the narrower type — an inconsistency ILVerify catches but
+    /// gsc's own binder did not. References the real
+    /// <c>Microsoft.CodeAnalysis.dll</c> already restored for this test
+    /// project (via <see cref="AppContext.BaseDirectory"/>) rather than a
+    /// user-declared analog, since this exact mismatch is specific to a CLR
+    /// interface hierarchy shape.
+    /// </summary>
+    [Fact]
+    public void Issue4133_BareMethodGroupUsedAcrossDifferentReceiverElementTypesEmitsConsistentMethodSpecs()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133MethodGroupCrossReceiver
+
+            import Microsoft.CodeAnalysis
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            class Allocator {
+                shared {
+                    private func SourceName(symbol ISymbol?) string -> symbol!!.Name
+
+                    func GetScopeNames(symbol ISymbol) IReadOnlyCollection[string] {
+                        switch symbol {
+                            case namespaceSymbol is INamespaceSymbol {
+                                return namespaceSymbol
+                                    .ContainingNamespace
+                                    ?.GetMembers()
+                                    .Select(SourceName)
+                                    .ToArray() ?? Array.Empty[string]()
+                            }
+                            default {
+                                return cast[IReadOnlyCollection[string]](
+                                    symbol.ContainingNamespace?.GetMembers().Select(SourceName).ToArray() ?? Array.Empty[string]()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var codeAnalysisReference = Path.Combine(AppContext.BaseDirectory, "Microsoft.CodeAnalysis.dll");
+        Assert.True(File.Exists(codeAnalysisReference), $"expected {codeAnalysisReference} to already be restored alongside this test assembly");
+
+        var workDir = CreateWorkDir("imported_member_matrix_roslyn_");
+        try
+        {
+            Assert.Equal(
+                $"ok{Environment.NewLine}",
+                CompileAndRun(source, new[] { codeAnalysisReference }, workDir));
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    /// <summary>
+    /// Issue #4133 follow-up: the FALLBACK half of the same mechanism.
+    /// <c>SymbolicInferenceBounds.PromoteMethodGroupFallbacks</c> exists so a
+    /// method type parameter that ONLY a bare method group's own parameter
+    /// type ever constrains — <c>Fallback.Wrap[T](predicate Func[T, bool])</c>
+    /// called as <c>Fallback.Wrap(check)</c>, with no other argument to fix
+    /// <c>T</c> from — still infers <c>T</c> from that parameter, matching
+    /// `csc`, instead of silently erasing to <c>object</c> and failing to
+    /// bind. Verified load-bearing (not dead code) by temporarily disabling
+    /// the promotion during this investigation: without it, this exact call
+    /// reports <c>GS0155: Cannot convert type '(Item) -> bool' to
+    /// 'System.Func[object, bool]'</c>, because <c>T</c>'s only bound (the
+    /// method group's parameter type) is demoted to
+    /// <c>MethodGroupUpper</c> and never promoted back. <c>T</c> is a
+    /// same-compilation user class deliberately — a CLR primitive like
+    /// <c>int32</c> can't discriminate this, since plain CLR reflection
+    /// already resolves <c>Wrap&lt;Int32&gt;</c> on its own regardless of
+    /// what the symbolic layer does.
+    /// </summary>
+    [Fact]
+    public void Issue4133_BareMethodGroupWithNoOtherBoundStillInfersFromItsParameterType()
+    {
+        const string csSource = """
+            namespace Sibling
+            {
+                public static class Fallback
+                {
+                    public static System.Func<T, bool> Wrap<T>(System.Func<T, bool> predicate) => predicate;
+                }
+            }
+            """;
+
+        const string gSource = """
+            package ImportedMemberMatrix.Issue4133MethodGroupFallback
+
+            import System
+            import Sibling
+
+            class Item {
+                init(name string) {
+                    this.Name = name
+                }
+                prop Name string {
+                    get;
+                    init;
+                }
+            }
+
+            func check(x Item) bool -> x.Name.Length > 0
+
+            let checker = Fallback.Wrap(check)
+            Console.WriteLine(checker.GetType().GenericTypeArguments[0].Name)
+            Console.WriteLine(checker(Item("a")))
+            """;
+
+        Assert.Equal(
+            $"Item{Environment.NewLine}True{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(csSource, gSource, "Issue4133Fallback.CSharp"));
+    }
+
+    /// <summary>
     /// Order-independence of the symbolic bound sets: two
     /// <c>Action&lt;T&gt;</c> arguments over a base and a derived type fix the
     /// same argument whichever order they are written in, in both the fixed

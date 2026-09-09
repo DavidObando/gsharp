@@ -1219,7 +1219,45 @@ internal sealed partial class ExpressionBinder
         bool isExpanded = false,
         IReadOnlyList<string?>? argumentNames = null,
         ImmutableArray<int> parameterMapping = default)
+        => this.RefineSymbolicArgsForMethodGroups(
+            resolved,
+            arguments,
+            symbolicArgs,
+            receiverArgCount,
+            isExpanded,
+            argumentNames,
+            parameterMapping,
+            out _);
+
+    /// <summary>
+    /// Issue #4133 (hot-core translation guard finding): overload that also
+    /// reports which slots were refined from a bare method group, so a
+    /// caller feeding the result into <c>MemberLookup.BuildSymbolicMethodTypeArgs</c>
+    /// can mark those slots' contribution as method-group-sourced. C#'s own
+    /// method-type-inference (§12.6.3.7) never makes an INPUT inference from
+    /// a method group — only an OUTPUT inference from its (eventually
+    /// resolved) return type, after the other type variables are already
+    /// fixed. Feeding a method group's own PARAMETER types back in as an
+    /// ordinary delegate-shaped argument (exactly what this refinement does,
+    /// for good reason elsewhere — see the type-recovery comment above) lets
+    /// <c>UnifyForMethodTypeArgs</c>'s existing lambda-parameter unification
+    /// (Issue #1334) treat that parameter type as a genuine contravariant
+    /// upper bound it is not: <c>Where(pred)</c> over <c>IEnumerable[Item]</c>
+    /// with <c>pred(x Item?) bool</c> then "raises" TSource from the
+    /// receiver's true <c>Item</c> to <c>Item?</c>, matching #4133's own
+    /// mechanism for a case it was never meant to cover.
+    /// </summary>
+    private ImmutableArray<TypeSymbol> RefineSymbolicArgsForMethodGroups(
+        MethodInfo resolved,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        int receiverArgCount,
+        bool isExpanded,
+        IReadOnlyList<string?>? argumentNames,
+        ImmutableArray<int> parameterMapping,
+        out ImmutableArray<bool> methodGroupSlots)
     {
+        methodGroupSlots = default;
         if (symbolicArgs.IsDefaultOrEmpty || arguments.IsDefaultOrEmpty)
         {
             return symbolicArgs;
@@ -1252,6 +1290,7 @@ internal sealed partial class ExpressionBinder
         }
 
         ImmutableArray<TypeSymbol>.Builder? refined = null;
+        ImmutableArray<bool>.Builder? methodGroupSlotsBuilder = null;
         for (var i = 0; i < arguments.Length; i++)
         {
             var slot = i + receiverArgCount;
@@ -1340,9 +1379,71 @@ internal sealed partial class ExpressionBinder
 
             refined ??= symbolicArgs.ToBuilder();
             refined[slot] = symbolicGroupType;
+            methodGroupSlotsBuilder ??= ImmutableArray.CreateBuilder<bool>(symbolicArgs.Length);
+            while (methodGroupSlotsBuilder.Count < symbolicArgs.Length)
+            {
+                methodGroupSlotsBuilder.Add(false);
+            }
+
+            methodGroupSlotsBuilder[slot] = true;
         }
 
+        methodGroupSlots = methodGroupSlotsBuilder?.MoveToImmutable() ?? default;
         return refined?.ToImmutable() ?? symbolicArgs;
+    }
+
+    /// <summary>
+    /// Issue #4133 (hot-core translation guard finding): builds the
+    /// parallel method-group-slot flags for <paramref name="arguments"/>
+    /// against a symbolic-argument vector of length
+    /// <paramref name="totalSlots"/>, merging in whatever the
+    /// <c>RefineSymbolicArgsForMethodGroups</c> method-group-slots overload
+    /// already discovered (<paramref name="refinedSlots"/>) with a direct
+    /// <see cref="BoundMethodGroupExpression"/> check on each source
+    /// argument. The direct check is needed on its own: a method group with
+    /// a single, unambiguous candidate is substituted with its natural
+    /// <see cref="FunctionTypeSymbol"/> earlier, while the vector is first
+    /// built (<c>TryGetSymbolicUserMethodGroupType</c>, before the resolved
+    /// method — and therefore the refined vector — exists), so
+    /// <c>RefineSymbolicArgsForMethodGroups</c> sees an already-recovered
+    /// slot and has nothing left to refine; only an OVERLOADED group (whose
+    /// arity disambiguation needs the resolved candidate) is ever caught by
+    /// its own tracking. Every method-group argument needs the same
+    /// downstream demotion in <c>BuildSymbolicMethodTypeArgs</c> regardless
+    /// of which of the two steps produced its natural type.
+    /// </summary>
+    private static ImmutableArray<bool> MergeMethodGroupArgumentSlots(
+        ImmutableArray<BoundExpression> arguments,
+        int receiverArgCount,
+        int totalSlots,
+        ImmutableArray<bool> refinedSlots)
+    {
+        if (arguments.IsDefaultOrEmpty)
+        {
+            return refinedSlots;
+        }
+
+        ImmutableArray<bool>.Builder? merged = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var slot = i + receiverArgCount;
+            if (slot >= totalSlots || arguments[i] is not BoundMethodGroupExpression)
+            {
+                continue;
+            }
+
+            merged ??= !refinedSlots.IsDefault
+                ? refinedSlots.ToBuilder()
+                : ImmutableArray.CreateBuilder<bool>(totalSlots);
+            while (merged.Count < totalSlots)
+            {
+                merged.Add(false);
+            }
+
+            merged[slot] = true;
+        }
+
+        return merged?.MoveToImmutable() ?? refinedSlots;
     }
 
     /// <summary>

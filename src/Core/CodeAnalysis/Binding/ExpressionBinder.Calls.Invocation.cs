@@ -3050,7 +3050,36 @@ internal sealed partial class ExpressionBinder
 
         if (classSymbol != null)
         {
-            if (classSymbol.TryLookupFunction(methodName, ce, arguments, out var staticFn, out var staticMapping, out var staticAmbiguous, out var staticAmbiguousMethods, out var staticIsExpanded, explicitTypeArgs, typeArgSymbols, scope.References.MapClrTypeToReferences, argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames, (closed, isExpanded, vector) => RefineSymbolicArgsForMethodGroups(closed, arguments, vector, receiverArgCount: 0, isExpanded: isExpanded, argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!)))
+            if (classSymbol.TryLookupFunction(
+                methodName,
+                ce,
+                arguments,
+                out var staticFn,
+                out var staticMapping,
+                out var staticAmbiguous,
+                out var staticAmbiguousMethods,
+                out var staticIsExpanded,
+                explicitTypeArgs,
+                typeArgSymbols,
+                scope.References.MapClrTypeToReferences,
+                argumentNames.IsDefault ? null : (IReadOnlyList<string>)argumentNames,
+                (closed, isExpanded, vector) =>
+                {
+                    var refinedArgs = RefineSymbolicArgsForMethodGroups(
+                        closed,
+                        arguments,
+                        vector,
+                        receiverArgCount: 0,
+                        isExpanded: isExpanded,
+                        argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                        parameterMapping: default,
+                        methodGroupSlots: out var groupSlots);
+
+                    // Issue #4133 (hot-core translation guard finding): see
+                    // MergeMethodGroupArgumentSlots's doc.
+                    groupSlots = MergeMethodGroupArgumentSlots(arguments, receiverArgCount: 0, refinedArgs.Length, groupSlots);
+                    return (refinedArgs, groupSlots);
+                }))
             {
                 // Issue #1538: now that the imported static overload is chosen,
                 // re-bind any inline `out var`/`out let`/`out _` placeholders
@@ -3105,13 +3134,23 @@ internal sealed partial class ExpressionBinder
                     receiverArgCount: 0,
                     isExpanded: staticIsExpanded,
                     argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
-                    parameterMapping: staticMapping);
+                    parameterMapping: staticMapping,
+                    methodGroupSlots: out var staticMethodGroupArgumentSlots);
+
+                // Issue #4133 (hot-core translation guard finding): see
+                // MergeMethodGroupArgumentSlots's doc.
+                staticMethodGroupArgumentSlots = MergeMethodGroupArgumentSlots(
+                    arguments,
+                    receiverArgCount: 0,
+                    refinedStaticSymbolicArgs.Length,
+                    staticMethodGroupArgumentSlots);
                 var staticSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     staticFn.Method,
                     typeArgSymbols,
                     refinedStaticSymbolicArgs,
                     staticIsExpanded,
-                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
+                    argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                    staticMethodGroupArgumentSlots);
                 var staticTypeArgSymbolsForCall = !staticSymbolicTypeArgs.IsDefault ? staticSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                 var staticParameters = staticFn.Method.GetParameters();
                 var staticDownstreamMapping = staticIsExpanded ? default : staticMapping;
@@ -3851,18 +3890,33 @@ internal sealed partial class ExpressionBinder
                     null,
                     ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
                 Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverTypeArgSymbols =
-                    (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                        closed,
-                        typeArgSymbols,
-                        RefineSymbolicArgsForMethodGroups(
+                    (closed, isExpanded) =>
+                    {
+                        var refinedArgs = RefineSymbolicArgsForMethodGroups(
                             closed,
                             arguments,
                             preResolutionSymbolicArgs,
                             receiverArgCount: 0,
                             isExpanded: isExpanded,
-                            argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!),
-                        isExpanded,
-                        argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
+                            argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                            parameterMapping: default,
+                            methodGroupSlots: out var recoverInstMethodGroupSlots);
+
+                        // Issue #4133 (hot-core translation guard finding): see
+                        // MergeMethodGroupArgumentSlots's doc.
+                        recoverInstMethodGroupSlots = MergeMethodGroupArgumentSlots(
+                            arguments,
+                            receiverArgCount: 0,
+                            refinedArgs.Length,
+                            recoverInstMethodGroupSlots);
+                        return MemberLookup.BuildSymbolicMethodTypeArgs(
+                            closed,
+                            typeArgSymbols,
+                            refinedArgs,
+                            isExpanded,
+                            argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                            recoverInstMethodGroupSlots);
+                    };
                 var resolution = ClrOverloadResolution.Resolve(
                     candidates,
                     argTypes,
@@ -3997,13 +4051,23 @@ internal sealed partial class ExpressionBinder
                             receiverArgCount: 0,
                             isExpanded: resolution.IsExpanded,
                             argumentNames: argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
-                            parameterMapping: resolution.ParameterMapping);
+                            parameterMapping: resolution.ParameterMapping,
+                            methodGroupSlots: out var instMethodGroupArgumentSlots);
+
+                        // Issue #4133 (hot-core translation guard finding): see
+                        // MergeMethodGroupArgumentSlots's doc.
+                        instMethodGroupArgumentSlots = MergeMethodGroupArgumentSlots(
+                            arguments,
+                            receiverArgCount: 0,
+                            refinedInstSymbolicArgs.Length,
+                            instMethodGroupArgumentSlots);
                         var instSymbolicTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                             method,
                             typeArgSymbols,
                             refinedInstSymbolicArgs,
                             resolution.IsExpanded,
-                            argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!);
+                            argumentNames.IsDefault ? null : (IReadOnlyList<string?>)argumentNames!,
+                            instMethodGroupArgumentSlots);
                         var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                         var returnType = ResolveImportedGenericReturnType(method, typeArgSymbols)
                             ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(method, instSymbolicTypeArgs, effectiveReceiverType)

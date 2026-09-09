@@ -204,9 +204,25 @@ public sealed class ImportedClassSymbol : Symbol
     /// <param name="typeArgSymbols">Explicit type-argument symbols in source order, or default.</param>
     /// <param name="projectTypeArgument">Projects an inferred type argument onto the reference load context, or <see langword="null"/>.</param>
     /// <param name="argumentNames">Per-source-argument names parallel to <paramref name="arguments"/>.</param>
-    /// <param name="refineSymbolicMethodGroupArgs">Issue #3712: given the selected method, expanded-form flag, and pre-resolution symbolic argument vector, returns the vector with each user method-group slot replaced by the symbolic function type the winning overload's delegate parameter selects. <see langword="null"/> leaves the vector unrefined.</param>
+    /// <param name="refineSymbolicMethodGroupArgs">
+    /// Issue #3712: given the selected method, expanded-form flag, and
+    /// pre-resolution symbolic argument vector, returns the vector with each
+    /// user method-group slot replaced by the symbolic function type the
+    /// winning overload's delegate parameter selects, alongside a parallel
+    /// flags array marking which slots were so replaced. <see langword="null"/>
+    /// leaves the vector unrefined.
+    /// <para>
+    /// Issue #4133 (hot-core translation guard finding): the flags array is
+    /// forwarded into <c>MemberLookup.BuildSymbolicMethodTypeArgs</c> so a
+    /// method group's own PARAMETER-type contribution demotes to a
+    /// same-slot fallback bound instead of outranking a real one — see
+    /// <c>SymbolicInferenceBoundKind.MethodGroupUpper</c>. C# never makes an
+    /// input inference from a method group (§12.6.3.7); only its return
+    /// type is a legitimate output-inference source.
+    /// </para>
+    /// </param>
     /// <returns>Whether we found a matching function or not.</returns>
-    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, out bool isExpanded, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<string>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>, ImmutableArray<TypeSymbol>>? refineSymbolicMethodGroupArgs = null)
+    public bool TryLookupFunction(string text, CallExpressionSyntax callExpression, ImmutableArray<BoundExpression> arguments, [NotNullWhen(true)] out ImportedFunctionSymbol? function, out ImmutableArray<int> parameterMapping, out bool isAmbiguous, out ImmutableArray<MethodInfo> ambiguousMethods, out bool isExpanded, Type[]? explicitTypeArgs = null, ImmutableArray<TypeSymbol> typeArgSymbols = default, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<string>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol>, (ImmutableArray<TypeSymbol> RefinedArgs, ImmutableArray<bool> MethodGroupSlots)>? refineSymbolicMethodGroupArgs = null)
     {
         function = null;
         parameterMapping = default;
@@ -435,12 +451,14 @@ public sealed class ImportedClassSymbol : Symbol
             argumentNames,
             (closed, isExpanded) =>
             {
+                var refined = refineSymbolicMethodGroupArgs?.Invoke(closed, isExpanded, symbolicArgVector);
                 return MemberLookup.BuildSymbolicMethodTypeArgs(
                     closed,
                     typeArgSymbols,
-                    refineSymbolicMethodGroupArgs?.Invoke(closed, isExpanded, symbolicArgVector) ?? symbolicArgVector,
+                    refined?.RefinedArgs ?? symbolicArgVector,
                     isExpanded,
-                    argumentNames);
+                    argumentNames,
+                    refined?.MethodGroupSlots ?? default);
             },
             supplementaryInterfaceCheck: supplementaryInterfaceCheck,
             constantNarrowingArgumentCheck: ExpressionBinder.MakeConstantNarrowingArgumentCheck(arguments),
@@ -491,12 +509,14 @@ public sealed class ImportedClassSymbol : Symbol
                     // against the winning candidate, or a group whose return
                     // type is a same-compilation user class leaves the call
                     // closed over that type's `object` erasure.
+                    var refinedForReturn = refineSymbolicMethodGroupArgs?.Invoke(bestMethod, result.IsExpanded, symbolicArgVector);
                     var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                         bestMethod,
                         typeArgSymbols,
-                        refineSymbolicMethodGroupArgs?.Invoke(bestMethod, result.IsExpanded, symbolicArgVector) ?? symbolicArgVector,
+                        refinedForReturn?.RefinedArgs ?? symbolicArgVector,
                         result.IsExpanded,
-                        argumentNames);
+                        argumentNames,
+                        refinedForReturn?.MethodGroupSlots ?? default);
                     returnOverride = MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(bestMethod, symbolicMethodTypeArgs, receiverType: null);
                 }
 
