@@ -139,4 +139,114 @@ public class Issue4157StructExplicitInterfaceBridgeVirtualEmitTests
         Assert.Null(result.UnhandledException);
         Assert.Equal(6, result.Value);
     }
+
+    /// <summary>
+    /// Review finding on PR #4174: every existing explicit-clause (ADR-0149)
+    /// emit test uses a CLASS receiver, and
+    /// <see cref="GSharp.Core.CodeAnalysis.Emit.FunctionEmitter"/>
+    /// (<c>!receiverIsValueType || ...</c>) stamps <c>Virtual</c> on a class
+    /// method UNCONDITIONALLY, before <c>RequiresVirtualOnValueType</c> is
+    /// ever consulted — so no existing test exercises this function on a
+    /// STRUCT receiver with an explicit-interface-clause method at all. This
+    /// closes that gap.
+    /// <para>
+    /// It does NOT isolate the <c>HasExplicitInterfaceClause</c> operand from
+    /// <c>MethodImplicitlyImplementsInterface</c>, and — checked directly,
+    /// not assumed — no G# program currently can: an explicit-clause method's
+    /// FunctionSymbol keeps the plain interface-member name (only the
+    /// metadata name is mangled, in <c>ExplicitInterfaceMetadataNaming</c>),
+    /// so <c>MethodSignaturesMatch</c> finds it by name+signature alone,
+    /// against ANY of the struct's declared interfaces — it does not check
+    /// which specific interface slot the clause targets. Verified by
+    /// temporarily deleting the <c>HasExplicitInterfaceClause</c> operand
+    /// from the production fix and rebuilding: this fixture, AND the
+    /// disambiguating two-interface/same-signature shape
+    /// (<c>struct W : IFoo, IBaz { private func (IFoo) Bar()...;
+    /// private func (IBaz) Bar()...; }</c>) that ADR-0149 exists for, both
+    /// still emitted <c>Virtual</c> — because both interfaces' <c>Bar</c>
+    /// methods share one signature, so the implicit-match loop finds a hit
+    /// against EITHER declared interface regardless of which one a given
+    /// method's clause actually names. The operand is real defensive code —
+    /// removing it is not proven safe by this repo's current binder rules,
+    /// which could change — but no scenario constructible today makes it
+    /// load-bearing, so no test here can honestly claim to isolate it. What
+    /// these tests DO prove: a struct with an explicit-clause method emits
+    /// correctly and loads through the interface, which had zero coverage
+    /// before this PR.
+    /// </para>
+    /// </summary>
+    private const string StructExplicitClauseSource = """
+        package Issue4174Repro
+        import System
+
+        interface IPoker {
+            func Poke() int32;
+        }
+
+        struct Widget : IPoker {
+            private var _n int32 = 0
+            func Bump() int32 {
+                _n = _n + 1
+                return _n
+            }
+            private func (IPoker) Poke() int32 { return Bump() }
+        }
+        """;
+
+    [Fact]
+    public void StructExplicitClauseMethod_EmitsVirtualNewSlotFinal()
+    {
+        using var peStream = new MemoryStream();
+        var tree = SyntaxTree.Parse(SourceText.From(StructExplicitClauseSource));
+        var compilation = new Compilation(tree);
+        var emitResult = compilation.Emit(peStream);
+        Assert.True(
+            emitResult.Success,
+            "compilation should succeed: " + string.Join("; ", emitResult.Diagnostics.Select(d => d.Message)));
+
+        peStream.Position = 0;
+        using var peReader = new PEReader(peStream, PEStreamOptions.LeaveOpen);
+        var md = peReader.GetMetadataReader();
+
+        var typeDef = md.TypeDefinitions
+            .Select(md.GetTypeDefinition)
+            .Single(t => md.GetString(t.Name) == "Widget");
+
+        // ADR-0149: an explicit-interface-clause method's CLR metadata name is
+        // mangled ("Issue4174Repro.IPoker.Poke" -- package-qualified, via
+        // ExplicitInterfaceMetadataNaming) to stay collision-free; the plain
+        // source name "Poke" is never emitted. Confirmed by dumping this
+        // fixture's actual emitted method names rather than assumed.
+        var poke = typeDef.GetMethods()
+            .Select(md.GetMethodDefinition)
+            .Single(m => md.GetString(m.Name) == "Issue4174Repro.IPoker.Poke");
+
+        Assert.True(
+            (poke.Attributes & MethodAttributes.Virtual) != 0,
+            "an explicit-interface-clause method on a struct must be emitted Virtual, "
+                + $"but found {poke.Attributes}");
+        Assert.True(
+            (poke.Attributes & MethodAttributes.NewSlot) != 0,
+            $"expected NewSlot, found {poke.Attributes}");
+        Assert.True(
+            (poke.Attributes & MethodAttributes.Final) != 0,
+            $"expected Final, found {poke.Attributes}");
+    }
+
+    [Fact]
+    public void StructExplicitClauseMethod_LoadsAndRunsThroughTheInterface()
+    {
+        var result = EmittedOracle.Evaluate(StructExplicitClauseSource + """
+
+            var w = Widget{}
+            var p IPoker = w
+            var a = p.Poke()
+            var b = p.Poke()
+            a + b
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(3, result.Value);
+    }
 }
