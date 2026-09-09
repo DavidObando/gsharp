@@ -6983,6 +6983,26 @@ internal sealed class MemberLookup
             {
                 // `best` already absorbs `candidate`; keep it.
             }
+            else if (candidateToBest && bestToCandidate)
+            {
+                // Issue #4133 (review finding): mutually convertible in BOTH
+                // directions under `HasImplicitSymbolicConversion`
+                // (identity/reference/boxing/numeric only — no structural
+                // projection) but not `TypeSignaturesEquivalent` means the two
+                // bounds denote the same underlying CLR shape and differ only
+                // in a compile-time-only annotation: nullable-reference
+                // wrapping (possibly nested inside a tuple element) or a tuple
+                // element name. C#'s own fixing (§12.6.3.13) never treats that
+                // as a real ambiguity — nullability is folded in afterward,
+                // not used to eliminate candidates. Before this fix ever
+                // consulted both bound categories together (see the dispatch
+                // above), a lower-only and an upper-only bound could never
+                // reach this branch in the first place, so this case is new
+                // with #4133 and needs its own resolution: merge, using the
+                // same ADR-0172 name-reconciliation and nullable-widening
+                // logic the equivalent-bounds branch above already applies.
+                best = MergeRecoveredTypeArgument(best, candidate, allowBaseWidening: false);
+            }
             else
             {
                 return null;
