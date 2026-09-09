@@ -3,11 +3,15 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -194,6 +198,169 @@ namespace Demo
 
         Assert.Contains("openTask.MakeGenericType(elements)", printed);
         Assert.DoesNotContain("elements!!", printed);
+    }
+
+    /// <summary>
+    /// Regression guard for the #4146 Copilot review of this issue's fix:
+    /// <c>TargetContractIsFrozenInMetadata</c> must compare assembly
+    /// IDENTITY, not the bare simple-name string. Two DIFFERENT assemblies
+    /// can legitimately share a simple name — here, a genuine same-run
+    /// sibling project ("Shared" v1.0.0.0, unrelated to the params sink) and
+    /// an EXTERNAL, frozen "Shared" v2.0.0.0 that actually declares
+    /// <c>Sink.Collect(params Type[])</c>. A name-only comparison matches the
+    /// sibling by coincidence and misclassifies the external sink's contract
+    /// as "emitted this run", silently dropping the <c>!!</c> bridge its
+    /// imported, unwidenable <c>params Type[]</c> element still needs — a
+    /// variant of #4128 itself. Reverting the identity comparison back to
+    /// <c>AssemblyName</c> string equality makes this test fail.
+    /// </summary>
+    [Fact]
+    public void ImportedParamsElement_SameSimpleNameDifferentIdentitySibling_StillAssertsNonNull()
+    {
+        const string sharedV1Source = @"
+using System.Reflection;
+
+[assembly: AssemblyVersion(""1.0.0.0"")]
+
+namespace SharedLib
+{
+    public static class Unrelated
+    {
+        public static void Noop()
+        {
+        }
+    }
+}";
+        // `#nullable enable` AND a genuinely EMITTED reference (below, via
+        // `EmitToMetadataReference`, not `.ToMetadataReference()`): the frozen
+        // contract this test defends only arises for a target with (a) real
+        // nullable-annotation metadata (`IsImportedObliviousNullableTarget`
+        // returns early for a genuinely oblivious import, before the
+        // params-element/frozen logic this test exercises is ever reached)
+        // and (b) NO `DeclaringSyntaxReferences` — a `CompilationReference`
+        // (`.ToMetadataReference()`) shares the referenced compilation's
+        // actual source symbols in-process, so `TargetContractIsFrozenInMetadata`'s
+        // own syntax-reference guard would trivially short-circuit before
+        // ever reaching the identity comparison this test targets. Emitting
+        // to real PE bytes first, as the BCL genuinely is, is required to
+        // reproduce a truly syntax-less imported symbol.
+        const string sharedV2Source = @"
+using System;
+using System.Reflection;
+
+[assembly: AssemblyVersion(""2.0.0.0"")]
+
+namespace SharedLib
+{
+    public static class Sink
+    {
+        public static void Collect(params Type[] elements)
+        {
+        }
+    }
+}";
+        LoadedCSharpProject sharedV1 = LoadNamed(sharedV1Source, "Shared");
+        CSharpCompilation sharedV2Compilation = CreateEnabledCompilation(sharedV2Source, "Shared");
+
+        // Prove the fixture actually exercises a same-name/different-identity
+        // collision before trusting what the translator does with it.
+        Assert.Equal(sharedV1.Compilation.AssemblyName, sharedV2Compilation.AssemblyName);
+        Assert.NotEqual(sharedV1.Compilation.Assembly.Identity, sharedV2Compilation.Assembly.Identity);
+
+        const string appSource = @"
+using System;
+using SharedLib;
+
+namespace Demo
+{
+    public static class Projection
+    {
+        public static void Close(Type projected)
+        {
+            var element = projected.GetElementType();
+            Sink.Collect(element);
+        }
+    }
+}";
+        LoadedCSharpProject app = LoadNamed(
+            appSource,
+            "App",
+            new MetadataReference[] { EmitToMetadataReference(sharedV2Compilation) });
+
+        LoadedDocument document = Assert.Single(app.Documents);
+        var context = new TranslationContext(
+            app.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblingCompilations: null,
+            repositoryCompilations: new[] { app.Compilation, sharedV1.Compilation });
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        // Round-trip only (not `AssertBinds`, which the other tests in this
+        // file use): the printed snippet imports `SharedLib`, a package this
+        // single-file fixture never emits — the same multi-assembly
+        // limitation `Issue2412CrossProjectObliviousNullabilityTranslationTests`
+        // documents on `ValidateRoundTripOnly`. Only the parse/print
+        // round-trip and the `!!` bridge below are this test's concern.
+        RoundTripResult roundTrip = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Binder.BindGlobalScope cannot resolve the external SharedLib import in this single-file fixture.");
+        Assert.True(roundTrip.Success, string.Join(Environment.NewLine, roundTrip.Errors));
+
+        Assert.Contains("Sink.Collect(element!!)", printed);
+    }
+
+    private static LoadedCSharpProject LoadNamed(
+        string source, string assemblyName, IReadOnlyList<MetadataReference> extraReferences = null)
+    {
+        IReadOnlyList<MetadataReference> references = extraReferences is null
+            ? CSharpProjectLoader.RuntimeReferences()
+            : CSharpProjectLoader.RuntimeReferences().Concat(extraReferences).ToList();
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { (assemblyName + ".cs", source) }, references, assemblyName);
+        Assert.True(
+            project.BoundWithoutErrors,
+            $"{assemblyName} should bind with no C# errors: " +
+                string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        return project;
+    }
+
+    // Builds a NULLABLE-ENABLED in-memory compilation directly (bypassing
+    // `CSharpProjectLoader.LoadInMemory`, which always defaults to
+    // `NullableContextOptions.Disable`) so its emitted metadata carries real
+    // nullable-annotation bytes, matching a genuinely annotated external
+    // dependency (e.g. the real BCL).
+    private static CSharpCompilation CreateEnabledCompilation(string source, string assemblyName)
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText(
+            source, new CSharpParseOptions(LanguageVersion.Latest), path: assemblyName + ".cs");
+        CSharpCompilation compilation = CSharpCompilation.Create(
+            assemblyName,
+            new[] { tree },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithNullableContextOptions(NullableContextOptions.Enable));
+        var diagnostics = compilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(
+            diagnostics.Count == 0,
+            $"{assemblyName} should bind with no C# errors: " + string.Join(Environment.NewLine, diagnostics));
+        return compilation;
+    }
+
+    // Emits a compilation to real PE bytes and wraps it as a metadata
+    // reference — unlike `Compilation.ToMetadataReference()`, this produces a
+    // genuinely syntax-less imported symbol on the referencing side (see the
+    // comment on `ImportedParamsElement_SameSimpleNameDifferentIdentitySibling_StillAssertsNonNull`).
+    private static MetadataReference EmitToMetadataReference(CSharpCompilation compilation)
+    {
+        using var stream = new System.IO.MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult emit = compilation.Emit(stream);
+        Assert.True(
+            emit.Success,
+            $"{compilation.AssemblyName} must emit: " + string.Join(Environment.NewLine, emit.Diagnostics));
+        return MetadataReference.CreateFromImage(stream.ToArray());
     }
 
     private static string TranslateOblivious(string source)

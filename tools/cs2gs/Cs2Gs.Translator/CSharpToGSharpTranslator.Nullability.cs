@@ -23,6 +23,14 @@ public sealed partial class CSharpToGSharpTranslator
     {
         private HashSet<string> repositorySharedDocumentPaths;
 
+        // Issue #4146 (Copilot review of #4128's fix): lazily-built cache
+        // backing `EmittedAssemblyIdentities()` below — see that method for
+        // why this exists (avoids an O(n) `RepositoryCompilations`/
+        // `SiblingCompilations` scan on every `TargetContractIsFrozenInMetadata`
+        // call) and `TargetContractIsFrozenInMetadata` for why identity
+        // (not simple-name string) comparison matters.
+        private HashSet<AssemblyIdentity> emittedAssemblyIdentities;
+
         // Issue #1072: G# follows Kotlin-style nullability, so `nil`-safety is
         // enforced by the static type, not by a `!!`-on-`nil` escape hatch. A C#
         // symbol DECLARED non-nullable (`T`) but defensively compared against
@@ -1582,6 +1590,39 @@ public sealed partial class CSharpToGSharpTranslator
                 && declaredType.NullableAnnotation == NullableAnnotation.None;
         }
 
+        // Issue #4146 (Copilot review of #4128's fix): the assembly IDENTITIES
+        // (name + version + culture + public key token — not the bare simple
+        // name) this migration run emits: the current compilation's own
+        // assembly plus every repository/sibling compilation's. A simple-name
+        // string collision (two differently-versioned or differently-signed
+        // assemblies sharing a name) would otherwise misclassify a frozen BCL
+        // contract as "emitted this run" and suppress a null-bridge the
+        // emitted code actually needs — a variant of #4128 itself.
+        //
+        // Built lazily once per document and reused by every
+        // `TargetContractIsFrozenInMetadata` call instead of re-scanning
+        // `RepositoryCompilations`/`SiblingCompilations` on each call, the
+        // same lazy-cache-on-the-visitor shape as
+        // `repositorySharedDocumentPaths` above (`IsDeclaredInRepositorySharedDocument`).
+        private HashSet<AssemblyIdentity> EmittedAssemblyIdentities()
+        {
+            if (this.emittedAssemblyIdentities == null)
+            {
+                this.emittedAssemblyIdentities = new HashSet<AssemblyIdentity>
+                {
+                    this.context.Compilation.Assembly.Identity,
+                };
+                foreach (CSharpCompilation compilation in
+                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                        ?? (IReadOnlyList<CSharpCompilation>)Array.Empty<CSharpCompilation>())
+                {
+                    this.emittedAssemblyIdentities.Add(compilation.Assembly.Identity);
+                }
+            }
+
+            return this.emittedAssemblyIdentities;
+        }
+
         // Issue #4128: whether <paramref name="targetSymbol"/>'s nullable
         // contract is already FROZEN — a declaration no project in this
         // migration run emits, so gsc reads its contract from CLR metadata and
@@ -1589,11 +1630,13 @@ public sealed partial class CSharpToGSharpTranslator
         // params element, of anything) can widen it.
         //
         // A symbol with any `DeclaringSyntaxReference` is source this run
-        // translates. A syntax-less symbol whose containing assembly is this
-        // compilation or any other compilation loaded in the run is a
-        // sibling/repository project loaded as a plain metadata reference —
-        // cs2gs is emitting its declaration too, so its contract is not frozen
-        // either. Everything else (the BCL, NuGet packages) is.
+        // translates. A syntax-less symbol whose containing assembly IDENTITY
+        // matches this compilation's or any other compilation loaded in the
+        // run (see `EmittedAssemblyIdentities()` above — compared structurally,
+        // not by simple name, per the #4146 review) is a sibling/repository
+        // project loaded as a plain metadata reference — cs2gs is emitting its
+        // declaration too, so its contract is not frozen either. Everything
+        // else (the BCL, NuGet packages) is.
         //
         // Extracted from `IsImportedObliviousNullableTarget` (issue #3865),
         // which asks the same same-run question before reading the frozen
@@ -1608,10 +1651,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            return original.ContainingAssembly?.Name is not { } assemblyName
-                || (assemblyName != this.context.Compilation.AssemblyName
-                    && (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
-                        compilation => compilation.AssemblyName == assemblyName) != true);
+            return original.ContainingAssembly?.Identity is not { } assemblyIdentity
+                || !this.EmittedAssemblyIdentities().Contains(assemblyIdentity);
         }
 
         // A skipped source-generated property is recreated from its hand-written
