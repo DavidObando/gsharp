@@ -6922,9 +6922,24 @@ internal sealed class MemberLookup
         IReadOnlyList<TypeSymbol>? lower,
         IReadOnlyList<TypeSymbol>? upper)
     {
+        // Issue #4133 (review finding): every bound is a candidate, including
+        // a signature-equivalent duplicate — the merge branch just below
+        // (`TypeSignaturesEquivalent` + `MergeRecoveredTypeArgument`)
+        // combines those, and dropping one here first (as an earlier version
+        // of this method did) would silently discard whichever of two
+        // equivalent bounds differed only in reference nullability or tuple
+        // element names, and would make which one survives depend on
+        // argument order.
         var candidates = new List<TypeSymbol>();
-        AddSymbolicInferenceCandidates(lower, candidates);
-        AddSymbolicInferenceCandidates(upper, candidates);
+        if (lower != null)
+        {
+            candidates.AddRange(lower);
+        }
+
+        if (upper != null)
+        {
+            candidates.AddRange(upper);
+        }
 
         TypeSymbol? best = null;
         foreach (var candidate in candidates)
@@ -6975,22 +6990,6 @@ internal sealed class MemberLookup
         }
 
         return best;
-    }
-
-    private static void AddSymbolicInferenceCandidates(IReadOnlyList<TypeSymbol>? bounds, List<TypeSymbol> candidates)
-    {
-        if (bounds == null)
-        {
-            return;
-        }
-
-        foreach (var bound in bounds)
-        {
-            if (!candidates.Any(existing => DeclarationBinder.TypeSignaturesEquivalent(existing, bound)))
-            {
-                candidates.Add(bound);
-            }
-        }
     }
 
     private static bool SatisfiesSymbolicInferenceBounds(
