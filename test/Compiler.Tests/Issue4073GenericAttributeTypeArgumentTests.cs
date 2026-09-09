@@ -102,7 +102,8 @@ namespace GSharp.Compiler.Tests;
 /// was replaced (a single <c>GetMetadataTypeName</c> plus one assembly name,
 /// which reaches the same fallback), not a measurement, and issue #4098 says
 /// so. The same kinds over an IMPORTED component already serialise correctly,
-/// which is what identifies the trigger.</para>
+/// which is what identifies the trigger. Repaired since, in
+/// <see cref="Issue4098StructuralAttributeTypeArgumentTests"/>.</para>
 /// <para><b>No new diagnostic.</b> Every program here is legal and was accepted
 /// before; only the metadata it emitted was wrong.</para>
 /// </remarks>
