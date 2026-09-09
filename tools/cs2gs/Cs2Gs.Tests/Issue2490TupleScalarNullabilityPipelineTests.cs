@@ -101,7 +101,7 @@ public sealed class Issue2490TupleScalarNullabilityPipelineTests
                 .Select(File.ReadAllText));
 
         Assert.Contains(
-            "func Gather(ok bool) (Items List[string]?, Stats Statistics?)",
+            "func Gather(ok bool)(Items List[string]?, Stats Statistics?)",
             emitted,
             StringComparison.Ordinal);
         Assert.Contains(

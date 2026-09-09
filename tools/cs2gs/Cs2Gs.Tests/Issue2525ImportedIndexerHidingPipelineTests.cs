@@ -74,7 +74,7 @@ public sealed class Issue2525ImportedIndexerHidingPipelineTests
         Assert.Contains("func ReadConstrained[T IDerived]", emitted, StringComparison.Ordinal);
         Assert.Contains("value[\"key\"] += \"!\"", emitted, StringComparison.Ordinal);
         Assert.Contains("value?[\"key\"]", emitted, StringComparison.Ordinal);
-        Assert.Contains("Values: { [\"key\"] = \"nested\" }", Compact(emitted), StringComparison.Ordinal);
+        Assert.Contains("Values: {[\"key\"] = \"nested\"}", Compact(emitted), StringComparison.Ordinal);
         Assert.Contains("ctx.Request.Headers[\"Authorization\"]", emitted, StringComparison.Ordinal);
         Assert.Contains("ctx.Response.Headers[\"Retry-After\"] = \"1\"", emitted, StringComparison.Ordinal);
     }

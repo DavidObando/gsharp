@@ -66,7 +66,7 @@ public sealed class Issue2511NullableIndexArgumentForgivenessPipelineTests
         Assert.Contains("span[i]", emitted, StringComparison.Ordinal);
         Assert.Contains("text[i]", emitted, StringComparison.Ordinal);
         Assert.Contains("array[^1]", emitted, StringComparison.Ordinal);
-        Assert.Contains("text[1..^1]", emitted, StringComparison.Ordinal);
+        Assert.Contains("text[1 .. ^1]", emitted, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
             "Expected default --via-sdk/gsc compilation to accept nullable-oblivious index arguments. Stages: " +

@@ -239,7 +239,7 @@ public class MigrationPipelineTests
             "@assembly:InternalsVisibleTo(\"L2-Library.Tests\")" + Environment.NewLine,
             File.ReadAllText(Path.Combine(appDir, "AssemblyInfo.gs")));
         Assert.Contains(
-            "@assembly:System.Runtime.CompilerServices.InternalsVisibleTo(\"L2-Library.Source.Tests\")",
+            "@assembly: System.Runtime.CompilerServices.InternalsVisibleTo(\"L2-Library.Source.Tests\")",
             File.ReadAllText(Path.Combine(appDir, "FriendAssembly.gs")),
             StringComparison.Ordinal);
 
@@ -287,7 +287,7 @@ public class MigrationPipelineTests
         Assert.Equal(StageStatus.Passed, translation.Status);
         Assert.False(File.Exists(Path.Combine(projectDir, "AssemblyInfo.gs")));
         Assert.Contains(
-            "@assembly:System.Runtime.CompilerServices.InternalsVisibleTo(\"L2-Library.Source.Tests\")",
+            "@assembly: System.Runtime.CompilerServices.InternalsVisibleTo(\"L2-Library.Source.Tests\")",
             File.ReadAllText(Path.Combine(projectDir, "FriendAssembly.gs")),
             StringComparison.Ordinal);
 

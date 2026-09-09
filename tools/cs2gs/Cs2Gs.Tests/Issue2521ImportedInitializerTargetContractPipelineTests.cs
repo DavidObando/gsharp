@@ -99,14 +99,14 @@ public sealed class Issue2521ImportedInitializerTargetContractPipelineTests
     {
         string compact = Compact(consumer);
         Assert.Contains(
-            "Target{Value: source.Value!!, InitValue: source.Value!!, Field: source.Value!!}",
+            "Target{ Value: source.Value!!, InitValue: source.Value!!, Field: source.Value!! }",
             compact);
         Assert.Contains("Target(1){Value = source.Value!!}", compact);
         Assert.Contains("Nested: Target{Value: source.Value!!}", compact);
         Assert.Contains("T{Value: source.Value!!}", compact);
-        Assert.Contains("List[string]{ source.Value!! }", compact);
-        Assert.Contains("Holder{Values: { source.Value!! }}", compact);
-        Assert.Contains("Holder(1){Values = { source.Value!! }}", compact);
+        Assert.Contains("List[string]{source.Value!!}", compact);
+        Assert.Contains("Holder{Values: {source.Value!!}}", compact);
+        Assert.Contains("Holder(1){Values = {source.Value!!}}", compact);
         Assert.Contains("\"key\": source.Value!!", compact);
         Assert.Contains("[\"key\"] = source.Value!!", compact);
         // Issue #3501: `value` here is nil-guard-narrowed, so the emitted
