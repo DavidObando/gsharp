@@ -1864,9 +1864,22 @@ public sealed class StructSymbol : TypeSymbol
 
     private List<StructSymbol> GetHierarchy()
     {
+        // Issue #4162: a genuine base-class cycle (e.g. `class B : C` / `class
+        // C : B`) is normally caught by the post-bind cycle detector (#973),
+        // but this walk can run earlier — during declaration binding, before
+        // that detector has run — when an annotation names a type that is
+        // itself part of an unresolved cycle (see DerivesFromSystemAttribute
+        // below, reached from IsAttributeType while binding an annotation).
+        // Without a visited guard, a cyclic BaseClass chain makes this loop
+        // forever, growing the list without bound until the process OOMs.
+        // `visited.Add` returning false on a repeat both detects the cycle
+        // and stops the walk; the returned (truncated) hierarchy is still
+        // correct for every acyclic caller since it only ever omits nodes
+        // that would otherwise repeat.
         var hierarchy = new List<StructSymbol>();
+        var visited = new HashSet<StructSymbol>();
         StructSymbol? current = this;
-        while (current != null)
+        while (current != null && visited.Add(current))
         {
             hierarchy.Add(current);
             current = current.BaseClass;
