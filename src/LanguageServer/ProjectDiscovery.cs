@@ -96,6 +96,11 @@ public static class ProjectDiscovery
     internal static IReadOnlyList<string> ParseGsAnalyzersFromResponseFile(string rspPath)
         => ParseSwitchValuesFromResponseFile(rspPath, "gsanalyzer");
 
+    internal static (IReadOnlyList<string> References, string? ReferenceSourcePath) DiscoverReferences(
+        string projectFilePath,
+        string projectDir)
+        => DiscoverReferencesCore(projectFilePath, projectDir);
+
     /// <summary>
     /// Resolves the project's effective <c>AssemblyName</c>, which the SDK uses
     /// as the base of the response-file name. Defaults to the project file's
@@ -359,7 +364,7 @@ public static class ProjectDiscovery
     /// <param name="projectFilePath">Absolute path to the <c>.gsproj</c> file.</param>
     /// <param name="projectDir">The project directory.</param>
     /// <returns>The discovered references plus the source <c>.rsp</c> path. Both are empty/null when no response file has been produced (e.g. the project has not been built or restored yet).</returns>
-    private static (IReadOnlyList<string> References, string? ReferenceSourcePath) DiscoverReferences(string projectFilePath, string projectDir)
+    private static (IReadOnlyList<string> References, string? ReferenceSourcePath) DiscoverReferencesCore(string projectFilePath, string projectDir)
     {
         if (!Directory.Exists(projectDir))
         {

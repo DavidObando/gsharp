@@ -37,6 +37,7 @@ public class ProjectState
     private IReadOnlyList<string> references = Array.Empty<string>();
     private string? referenceSourcePath;
     private DateTime referenceSourceMtimeUtc = DateTime.MinValue;
+    private DateTime nextReferenceDiscoveryUtc = DateTime.MinValue;
     private ReferenceResolver? cachedResolver;
     private IReadOnlyList<string>? resolverReferences;
     private DateTime gsAnalyzerSourceMtimeUtc = DateTime.MinValue;
@@ -506,7 +507,25 @@ public class ProjectState
     {
         if (string.IsNullOrEmpty(referenceSourcePath))
         {
-            return;
+            var now = DateTime.UtcNow;
+            if (now < nextReferenceDiscoveryUtc)
+            {
+                return;
+            }
+
+            nextReferenceDiscoveryUtc = now.AddSeconds(1);
+            var discovered = ProjectDiscovery.DiscoverReferences(ProjectFilePath, ProjectDirectory);
+            if (string.IsNullOrEmpty(discovered.ReferenceSourcePath))
+            {
+                return;
+            }
+
+            referenceSourcePath = discovered.ReferenceSourcePath;
+            references = discovered.References;
+            referenceSourceMtimeUtc = DateTime.MinValue;
+            cachedResolver = null;
+            resolverReferences = null;
+            Invalidate();
         }
 
         DateTime currentMtime;
