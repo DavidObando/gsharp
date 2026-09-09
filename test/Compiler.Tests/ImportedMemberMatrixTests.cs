@@ -242,6 +242,12 @@ public class ImportedMemberMatrixTests
                 params object[] items)
                 => value + ":" + string.Join(",", items);
 
+            // Used only by the blast-radius control: an ordinary method with
+            // no params slot, so the expanded-argument reordering must never
+            // touch it.
+            public static string Plain(string a, int b, string c)
+                => a + ":" + b + ":" + c;
+
             public static string FormattableOrder(
                 int value,
                 System.FormattableString item,
@@ -1230,6 +1236,68 @@ public class ImportedMemberMatrixTests
             diagnostics.Count(d =>
                 d.Contains("GS0221", StringComparison.Ordinal)
                 && d.Contains("preceding argument", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
+    /// Blast-radius CONTROL for #4134, and deliberately green on both sides:
+    /// the expanded-argument reordering must fire ONLY where a <c>params</c>
+    /// slot is actually expanded from reordered source, and must leave every
+    /// neighbouring call shape exactly as it was.
+    /// </summary>
+    /// <remarks>
+    /// <para>This fact does not pin the fix — it pins the fix's BOUNDARY. Each
+    /// row was compiled and run under <c>main</c> and under this branch and
+    /// produces the same answer on both, and that answer is <c>csc</c>'s: an
+    /// ordinary positional call, the same call with names in source order, the
+    /// same call with names REORDERED but no <c>params</c> slot, a
+    /// <c>params</c> call written positionally, and a reordered named call
+    /// whose <c>params</c> slot is given an EXPLICIT array, so nothing is
+    /// expanded.</para>
+    /// <para>The one neighbour that does move is the single-element expanded
+    /// form, pinned by
+    /// <see cref="Issue4134_AReorderedNamedArgumentIntoAParamsSlotEvaluatesInSourceOrder"/>.
+    /// Keeping the five unmoved shapes here means a future change to the
+    /// reordering cannot widen silently.</para>
+    /// </remarks>
+    [Fact]
+    public void Issue4134_OrdinaryAndPositionalCallsKeepTheirEvaluationOrder()
+    {
+        const string source = """
+            package Issue4134.Control
+            import System
+            import Issue4086.CSharp
+
+            func a() string {
+                Console.Write("a|")
+                return "a"
+            }
+
+            func b() int32 {
+                Console.Write("b|")
+                return 2
+            }
+
+            func c() string {
+                Console.Write("c|")
+                return "c"
+            }
+
+            Console.WriteLine(MethodGroupOutputInference.Plain(a(), b(), c()))
+            Console.WriteLine(MethodGroupOutputInference.Plain(a: a(), b: b(), c: c()))
+            Console.WriteLine(MethodGroupOutputInference.Plain(c: c(), a: a(), b: b()))
+            Console.WriteLine(MethodGroupOutputInference.EvaluationOrder(b(), a(), c()))
+            Console.WriteLine(MethodGroupOutputInference.EvaluationOrder(
+                items: []object{a(), c()},
+                value: b()))
+            """;
+
+        Assert.Equal(
+            $"a|b|c|a:2:c{Environment.NewLine}"
+                + $"a|b|c|a:2:c{Environment.NewLine}"
+                + $"c|a|b|a:2:c{Environment.NewLine}"
+                + $"b|a|c|2:a,c{Environment.NewLine}"
+                + $"a|c|b|2:a,c{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(Issue4086CsSource, source, "Issue4086.CSharp"));
     }
 
     private const string Issue3076CsSource = """
