@@ -1227,6 +1227,27 @@ internal sealed partial class DeclarationBinder
         }
 
         structSymbol.SetExplicitConstructors(ctorBuilder.ToImmutable());
+
+        // Issue #4143: validate every EXPLICIT `init(...)` overload's
+        // parameter types too — `csc` checks CS0181 against every
+        // constructor of an attribute class, not just the primary one. The
+        // synthesized primary constructor (if any) is skipped here: its
+        // parameters were already validated once, against the primary
+        // constructor's own parameter list, where the class's base clause
+        // was bound (`BindStructBaseAndInterfaces`) — validating it again
+        // here would double-report the same offending parameter.
+        if (structSymbol.DerivesFromSystemAttribute())
+        {
+            foreach (var ctor in ctorBuilder)
+            {
+                if (ctor == synthesizedPrimary)
+                {
+                    continue;
+                }
+
+                ValidateAttributeConstructorParameterTypes(ctor.Parameters, syntax.Identifier.Location);
+            }
+        }
     }
 
     /// <summary>

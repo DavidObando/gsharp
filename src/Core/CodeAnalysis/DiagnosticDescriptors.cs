@@ -497,7 +497,15 @@ internal static class DiagnosticDescriptors
 
     internal static readonly DiagnosticDescriptor AttributeConstructorNotFound = new("GS0583", DiagnosticSeverity.Error, "Attribute '{0}' has no constructor that accepts the argument list ({1}). Change the arguments to match one of its constructors (issue #4097; C# spells the same rule CS1729 and CS1503).");
 
-    internal static readonly DiagnosticDescriptor AttributeConstructorParameterTypeNotSupported = new("GS0584", DiagnosticSeverity.Error, "Constructor parameter '{0}' of user-defined attribute '{1}' has type '{2}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, an enum, or a 1-D array thereof (issue #4097; C# spells the same rule CS0181, and reports it on the attribute's declaration rather than on each use).");
+    internal static readonly DiagnosticDescriptor AttributeConstructorParameterTypeNotSupported = new("GS0584", DiagnosticSeverity.Error, "Constructor parameter '{0}' of user-defined attribute '{1}' has type '{2}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4097; C# spells the same rule CS0181, and reports it on the attribute's declaration rather than on each use).");
+
+    // Issue #4143: the declaration-time analogue of GS0584 / C#'s CS0181.
+    // GS0584 is emit's backstop for the same defect ("no candidate
+    // constructor projects" once every parameter type is inspected); this
+    // fires earlier, once, on the attribute class's own declaration — before
+    // any use exists to blame — the same predicate GS0202 uses for argument
+    // types (DeclarationBinder.IsValidAttributeParameterType).
+    internal static readonly DiagnosticDescriptor AttributeConstructorParameterInvalidType = new("GS0585", DiagnosticSeverity.Error, "Attribute constructor parameter '{0}' has type '{1}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4143; C# spells the same rule CS0181).");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

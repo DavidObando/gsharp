@@ -828,13 +828,120 @@ internal sealed partial class DeclarationBinder
     // those serialisable shapes.
     private static bool IsSerialisableAttributeConstant(TypeSymbol type)
     {
+        if (IsValidAttributeParameterType(type))
+        {
+            return true;
+        }
+
+        // `decimal` folds via the same unary/binary constant evaluator as any
+        // other numeric literal but — unlike the shapes above — is not
+        // itself a valid attribute parameter/argument type (ECMA-335 II.23.3
+        // has no ELEMENT_TYPE tag for it; `csc` reports CS0181 for a
+        // `decimal`-typed attribute constructor parameter). This is a
+        // pre-existing allowance kept as-is rather than folded into the
+        // shared predicate below, which #4143/#4144 define against what
+        // `csc`/ECMA-335 actually accept.
+        var clr = type?.ClrType;
+        return clr is not null && clr.IsSameAs(typeof(decimal));
+    }
+
+    /// <summary>
+    /// Issue #4143 / #4144: returns <see langword="true"/> when <paramref name="type"/>
+    /// is a valid attribute parameter/argument type per ECMA-335 II.23.3 and
+    /// C#'s CS0181 — a primitive, <c>string</c>, <c>System.Type</c>,
+    /// <c>object</c>, an enum, or a 1-D array thereof. This is the SHARED
+    /// predicate #4143's declaration-time check (GS0585) uses for a
+    /// constructor parameter's declared type and GS0202's argument-binding
+    /// path uses for a folded argument's type, rather than each spelling out
+    /// the list independently.
+    /// </summary>
+    /// <param name="type">The type to test.</param>
+    /// <returns><c>true</c> when the type is a valid attribute parameter/argument shape.</returns>
+    internal static bool IsValidAttributeParameterType(TypeSymbol? type)
+    {
+        if (GetOneDimensionalArrayElementType(type) is { } elementType)
+        {
+            return IsScalarAttributeParameterType(elementType);
+        }
+
+        return IsScalarAttributeParameterType(type);
+    }
+
+    /// <summary>
+    /// Returns <paramref name="type"/>'s element type when it is a 1-D array
+    /// shape (<see cref="SliceTypeSymbol"/> or a fixed-length
+    /// <see cref="ArrayTypeSymbol"/>); <see langword="null"/> for a scalar
+    /// type or a multi-dimensional <see cref="RectangularArrayTypeSymbol"/>
+    /// (ECMA-335 II.23.3 permits only a 1-D array as an attribute argument).
+    /// </summary>
+    private static TypeSymbol? GetOneDimensionalArrayElementType(TypeSymbol? type) => type switch
+    {
+        SliceTypeSymbol slice => slice.ElementType,
+        ArrayTypeSymbol array => array.ElementType,
+        _ => null,
+    };
+
+    private static bool IsScalarAttributeParameterType(TypeSymbol? type)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
         if (IsEnumLikeType(type))
         {
             return true;
         }
 
-        var clr = type?.ClrType;
-        return clr is not null && (clr.IsPrimitive || clr.IsSameAs(typeof(string)) || clr.IsSameAs(typeof(decimal)));
+        var clr = type.ClrType;
+        return clr is not null
+            && (clr.IsPrimitive
+                || clr.IsSameAs(typeof(string))
+                || clr.IsSameAs(typeof(System.Type))
+
+                // C#'s CS0181 list (and ECMA-335 II.23.3's boxed-argument
+                // encoding) includes plain `object` — measured: `[]object{1}`
+                // is how #4097's own tests pass a heterogeneous constant list
+                // to a `params object[]`-shaped attribute constructor
+                // (xUnit's `InlineDataAttribute` is the real-world example),
+                // and excluding it here regressed those rows to GS0202.
+                || clr.IsSameAs(typeof(object)));
+    }
+
+    /// <summary>
+    /// Issue #4143 (C#'s CS0181): reports <see cref="DiagnosticDescriptors.AttributeConstructorParameterInvalidType"/>
+    /// for every parameter of an attribute class's constructor whose declared
+    /// type is not a valid attribute parameter type
+    /// (<see cref="IsValidAttributeParameterType"/>). Called once for the
+    /// primary constructor and once per explicit <c>init(...)</c> overload —
+    /// each is a distinct constructor `csc` would check independently.
+    /// </summary>
+    /// <param name="parameters">The constructor's parameters.</param>
+    /// <param name="fallbackLocation">
+    /// Used when a parameter has no declaring syntax of its own (not
+    /// expected for a source-written parameter, but kept defensive rather
+    /// than throwing).
+    /// </param>
+    private void ValidateAttributeConstructorParameterTypes(
+        ImmutableArray<ParameterSymbol> parameters,
+        TextLocation fallbackLocation)
+    {
+        if (parameters.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var parameter in parameters)
+        {
+            if (parameter.Type != null && !IsValidAttributeParameterType(parameter.Type))
+            {
+                var location = parameter.DeclaringSyntax?.Location ?? fallbackLocation;
+                Diagnostics.ReportAttributeConstructorParameterInvalidType(
+                    location,
+                    parameter.Name,
+                    parameter.Type.Name);
+            }
+        }
     }
 
     private static bool TryParseTargetKind(string text, out AttributeTargetKind kind)
@@ -1076,17 +1183,18 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
-        // Attribute arrays must be a serialisable SZARRAY (1-D) shape per
-        // ECMA-335 II.23.3. Both `[]T{...}` (slice) and `[N]T{...}` (array)
-        // produce a CLR `T[]` for the element type clause.
-        var clrArrayType = bound.Type?.ClrType;
-        if (clrArrayType == null || !clrArrayType.IsArray || clrArrayType.GetArrayRank() != 1)
-        {
-            return false;
-        }
-
-        var elementClrType = clrArrayType.GetElementType();
-        if (elementClrType == null)
+        // Attribute arrays must be a serialisable SZARRAY (1-D) shape over an
+        // otherwise-valid attribute parameter type per ECMA-335 II.23.3. Both
+        // `[]T{...}` (slice) and `[N]T{...}` (array) qualify. Issue #4144:
+        // this used to gate on `bound.Type.ClrType` being a non-null,
+        // rank-1 array, which rejected a same-compilation enum element
+        // (`[]Status{...}`) — its `ClrType` is null until the enum is
+        // emitted, exactly like the SCALAR enum-parameter case #4097 already
+        // had to look past. Check the SYMBOL shape instead, via the same
+        // predicate #4143's declaration-time check uses, so both a
+        // same-compilation and an imported enum element are recognised.
+        var elementType = GetOneDimensionalArrayElementType(bound.Type);
+        if (elementType == null || !IsScalarAttributeParameterType(elementType))
         {
             return false;
         }
@@ -1106,7 +1214,23 @@ internal sealed partial class DeclarationBinder
         // encoder writes the blob from the SIGNATURE's element type and reads
         // values via Array.GetValue — so a runtime-equivalent container
         // element type is exact.
-        var containerElementType = ResolveRuntimeContainerElementType(elementClrType);
+        Type containerElementType;
+        if (elementType.ClrType is { } elementClrType)
+        {
+            containerElementType = ResolveRuntimeContainerElementType(elementClrType);
+        }
+        else if (IsEnumLikeType(elementType))
+        {
+            // Issue #4144: a same-compilation enum element has no `ClrType`
+            // until it is emitted. Its underlying type is always `int32`
+            // (the fact #4097's scalar fix established), so the container
+            // can be built directly without touching `ClrType`.
+            containerElementType = typeof(int);
+        }
+        else
+        {
+            return false;
+        }
 
         // Issue #3684 (family F11): bind every element FIRST, because a
         // `typeof(T)` naming a type declared in THIS compilation has no CLR
@@ -1246,8 +1370,17 @@ internal sealed partial class DeclarationBinder
 
         if (elementType.IsEnum)
         {
-            var underlying = Enum.GetUnderlyingType(elementType);
-            return Convert.ChangeType(value, underlying, System.Globalization.CultureInfo.InvariantCulture);
+            // Issue #4144: `value` is the enum's boxed UNDERLYING primitive
+            // (the binder's enum-literal arm always stores that, never a
+            // boxed enum instance — see `TryBindAttributeArgument`).
+            // Converting it to the underlying type (as this used to do)
+            // left a boxed `int`, and `Array.SetValue` refuses to store an
+            // `int` into a real (non-reflection-only) enum-typed array
+            // slot — "Object cannot be stored in an array of this type" —
+            // which silently surfaced as GS0202 on a legal program.
+            // `Enum.ToObject` produces the actual boxed enum instance the
+            // array slot needs.
+            return Enum.ToObject(elementType, value);
         }
 
         // Numeric / char widening between primitives (e.g. int → long).

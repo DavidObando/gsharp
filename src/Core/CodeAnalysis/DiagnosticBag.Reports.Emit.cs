@@ -301,6 +301,18 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.AttributeArgumentNotConstant);
 
     /// <summary>
+    /// Issue #4143: reports a parameter of an attribute class's own
+    /// constructor (primary or explicit) whose declared type is not a valid
+    /// attribute parameter type (C#'s CS0181), on the attribute class's
+    /// declaration rather than on any particular use site.
+    /// </summary>
+    /// <param name="location">The source location of the offending parameter.</param>
+    /// <param name="parameterName">The offending parameter's name.</param>
+    /// <param name="typeName">The offending parameter's declared type name.</param>
+    public void ReportAttributeConstructorParameterInvalidType(TextLocation location, string parameterName, string typeName)
+    => Report(location, DiagnosticDescriptors.AttributeConstructorParameterInvalidType, parameterName, typeName);
+
+    /// <summary>
     /// Reports a class declaration tagged with the <c>@Attribute</c>
     /// declaration sugar (ADR-0047 §5) that already declares an explicit
     /// base class other than <c>System.Attribute</c>. The implicit

@@ -511,18 +511,24 @@ public class Issue4097AttributeConstructorNotFoundTests
     /// Review feedback on PR #4137: an unprojectable parameter used to be
     /// recorded on ARITY alone, before applicability was settled, so it could
     /// outrank a constructor that projected fine and that the ARGUMENTS simply
-    /// did not match.
+    /// did not match. That ranking question — GS0583 (the arguments) vs GS0584
+    /// (a parameter on a constructor never going to be chosen) — is retired by
+    /// #4143: a constructor with an invalid attribute parameter type is now
+    /// rejected at the ATTRIBUTE CLASS'S OWN DECLARATION (GS0585), before any
+    /// use site exists to rank constructors against. There is no longer a
+    /// legal G# program in which an unprojectable-parameter constructor
+    /// survives to compete with an applicable one at a use site — every such
+    /// program fails earlier, at the class declaration.
     /// </summary>
     /// <remarks>
-    /// Here <c>PairAttribute</c> has two single-argument constructors: one
-    /// taking a same-compilation class (unprojectable, and not a valid
-    /// attribute parameter type), one taking a <c>string</c>. Passing an
-    /// <c>int32</c> matches neither — but the author's problem is the argument,
-    /// so the diagnostic must be GS0583 and not a complaint about a parameter
-    /// on the constructor that was never going to be chosen.
+    /// <c>PairAttribute</c> has two single-argument constructors: one taking
+    /// a same-compilation class (not a valid attribute parameter type), one
+    /// taking a <c>string</c>. Before #4143 this class declaration compiled
+    /// clean and the ranking question was only visible at <c>@Pair(1)</c>'s
+    /// use site; now it never gets that far.
     /// </remarks>
     [Fact]
-    public void AnApplicableConstructorOutranksAnUnprojectableOne()
+    public void AnUnprojectableConstructorOverload_ReportsGS0585AtDeclaration()
     {
         const string ProbeSource = """
             package P
@@ -539,26 +545,22 @@ public class Issue4097AttributeConstructorNotFoundTests
                 }
             }
 
-            @Pair(1)
-            class Target {
-            }
-
             Console.WriteLine("ok")
             """;
 
-        var tempDir = Directory.CreateTempSubdirectory("gs_4097_rank_").FullName;
+        var tempDir = Directory.CreateTempSubdirectory("gs_4143_rank_").FullName;
         try
         {
-            var libPath = CompileCSharpLibrary(tempDir);
             var appPath = Path.Combine(tempDir, "P.dll");
-            var log = Compile(tempDir, "App.gs", ProbeSource + "\n", appPath, "/target:exe", "/reference:" + libPath);
+            var log = Compile(tempDir, "App.gs", ProbeSource + "\n", appPath, "/target:exe");
 
             var ids = ErrorIds(log);
             Assert.True(
-                ids.Contains(ExpectedId, StringComparer.Ordinal),
-                $"must report {ExpectedId} (the arguments), not GS0584 (a parameter on an "
-                    + $"unchosen constructor). Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
+                ids.Contains("GS0585", StringComparer.Ordinal),
+                "must report GS0585 on the declaration — the 'Holder'-typed overload is ill-formed "
+                    + $"regardless of whether it is ever chosen at a use site. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
             Assert.DoesNotContain("GS0584", ids);
+            Assert.DoesNotContain("GS0583", ids);
         }
         finally
         {
@@ -567,24 +569,36 @@ public class Issue4097AttributeConstructorNotFoundTests
     }
 
     /// <summary>
-    /// GS0584's remaining population, measured: every shape that still reports
-    /// it is one <c>csc</c> rejects as CS0181 — "not a valid attribute
-    /// parameter type". There is no legal-but-unencodable residue.
+    /// Issue #4143: G# gained a bind-time CS0181 analogue (GS0585), which
+    /// FLIPS this row. Before #4143, an ill-formed attribute constructor
+    /// parameter reached emit unchecked and was reported once per USE as
+    /// GS0584 — this test used to assert exactly that. Now the declaration
+    /// itself is rejected as GS0585, earlier and independent of whether the
+    /// attribute is ever applied, and GS0584 is unreachable for these shapes
+    /// (it survives only as an emit-time backstop for a defect nothing else
+    /// catches, which no longer includes "invalid parameter type" — every
+    /// GS0584 case measured for #4097 was exactly this CS0181 set).
     /// </summary>
     /// <remarks>
-    /// G# has no bind-time CS0181 analogue — no descriptor mentions attribute
-    /// parameter types, and the binder does not validate them — so these
-    /// programs reach emit unchecked, where the old code dropped them in
-    /// silence. GS0584 is the last line rather than the right place: the check
-    /// belongs on the attribute's DECLARATION, and is filed separately.
+    /// The declaration is compiled with NO use site at all — no
+    /// <c>@Boxed(...)</c> annotation anywhere in the source — which is the
+    /// strongest form of this proof: <c>csc</c> reports CS0181 on a
+    /// constructor whether or not the attribute is ever applied, because the
+    /// mistake is in the attribute TYPE, not in any particular annotation.
+    /// If this test's fix were reverted, the declaration alone would compile
+    /// clean (no diagnostic at all — GS0584 needs a use site to fire), so a
+    /// bare <c>Assert.True(ids.Contains("GS0585"))</c> without also asserting
+    /// no use site exists would not distinguish the fixed behaviour from the
+    /// old one falling through silently.
     /// </remarks>
     /// <param name="name">The row name.</param>
     /// <param name="declaration">The attribute class declaration.</param>
-    /// <param name="usage">The annotation applying it.</param>
     [Theory]
-    [InlineData("SourceClass", "class BoxedAttribute(Value Holder) : Attribute {\n}", "@Boxed(nil)")]
-    [InlineData("SourceInterface", "class ThingAttribute(Value IThing) : Attribute {\n}", "@Thing(nil)")]
-    public void AnInvalidAttributeParameterType_ReportsGS0584(string name, string declaration, string usage)
+    [InlineData("SourceClass", "class BoxedAttribute(Value Holder) : Attribute {\n}")]
+    [InlineData("SourceInterface", "class ThingAttribute(Value IThing) : Attribute {\n}")]
+    [InlineData("SourceDelegate", "delegate Sink(x int32);\n\nclass SinkAttribute(Value Sink) : Attribute {\n}")]
+    [InlineData("SourceMap", "class MapAttribute(Lookup map[string, int32]) : Attribute {\n}")]
+    public void AnInvalidAttributeParameterType_ReportsGS0585AtDeclaration(string name, string declaration)
     {
         const string ProbeSource = """
             package P
@@ -600,19 +614,22 @@ public class Issue4097AttributeConstructorNotFoundTests
 
             """;
 
-        var tempDir = Directory.CreateTempSubdirectory("gs_4097_bad_param_").FullName;
+        var tempDir = Directory.CreateTempSubdirectory("gs_4143_bad_param_").FullName;
         try
         {
-            var libPath = CompileCSharpLibrary(tempDir);
             var appPath = Path.Combine(tempDir, "P.dll");
-            var source = ProbeSource + declaration + "\n\n" + usage
-                + "\nclass Target {\n}\n\nConsole.WriteLine(\"ok\")\n";
-            var log = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
+
+            // No use site anywhere — proves the check fires at the
+            // DECLARATION, not merely earlier at the same use site GS0584
+            // used to require.
+            var source = ProbeSource + declaration + "\n\nConsole.WriteLine(\"ok\")\n";
+            var log = Compile(tempDir, "App.gs", source, appPath, "/target:exe");
 
             var ids = ErrorIds(log);
             Assert.True(
-                ids.Contains("GS0584", StringComparer.Ordinal),
-                $"'{name}' must report GS0584. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
+                ids.Contains("GS0585", StringComparer.Ordinal),
+                $"'{name}' must report GS0585 on the declaration, with no use site anywhere. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
+            Assert.DoesNotContain("GS0584", ids);
         }
         finally
         {
