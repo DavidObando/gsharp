@@ -77,16 +77,16 @@ namespace GSharp.Compiler.Tests;
 /// recording rather than quietly dropping.</b> The
 /// <c>ClrInterfaceConstraint</c> arm used the bare reflective probe, so
 /// <c>class D : IDisposable</c> did not satisfy <c>[TD IDisposable]</c>. That
-/// is #4124, which PR #4138 fixes at the shared leaf — the reflective body
+/// is #4124, which PR #4138 fixed at the shared leaf — the reflective body
 /// split out of <c>SatisfiesClrInterfaceConstraint</c>, the symbolic walk
 /// wrapping EVERY exit, and <c>BoundCarriesClrInterface</c> plus the two
 /// caller-side copies DELETED. This arm already called
 /// <c>SatisfiesClrInterfaceConstraint</c>, so on that base it inherits the
 /// repair without any routing at all. Filed from this site as #4136 and closed
-/// as a duplicate; the interim one-line repair has been dropped from this
-/// branch, and its three rows withdrawn until #4138 lands (see the note in
-/// <see cref="AcceptedConstructions"/>, which records what removing it
-/// measured). The lesson is the consolidation one: #4136's own proposed fix
+/// as a duplicate; the interim one-line repair is gone from this branch and the
+/// rows are asked of #4138's leaf instead, because the TYPE-CLAUSE spelling is
+/// this change's own — #4124's repro is a generic method call and a
+/// constructor. The lesson is the consolidation one: #4136's own proposed fix
 /// was a FIFTH copy of those three lines, and #4138 made the fifth occurrence
 /// unexpressible instead of writing it.</para>
 /// <para><b>#4139</b>, by contrast, is not covered by #4138 — measured, its
@@ -97,10 +97,12 @@ namespace GSharp.Compiler.Tests;
 /// satisfy <c>struct</c> — which is how it was found, because
 /// <c>Issue2390NullableSameCompilationEnumBoxingEmitTests</c>'
 /// <c>class Source2390 : ISource2390[Color2390]</c> went red the moment #4090's
-/// enforcement reached it. Both are measurable on <c>main</c> at the
-/// CONSTRUCTOR spelling (<c>GsDisposable[DisposableSource]()</c>,
-/// <c>GsStruct[Color]()</c>), a path this change does not touch, which is what
-/// makes them pre-existing rather than introduced. #4139 is nonetheless a true
+/// enforcement reached it. Both were measurable at the CONSTRUCTOR spelling
+/// (<c>GsDisposable[DisposableSource]()</c>, <c>GsStruct[Color]()</c>) on the
+/// <c>main</c> this branch started from — a path this change does not touch,
+/// which is what makes them pre-existing rather than introduced. The first of
+/// those two passes on today's <c>main</c>, because #4124's consolidation has
+/// since landed underneath it; the second is still this branch's to fix. #4139 is nonetheless a true
 /// PREREQUISITE of this change rather than a user-visible failure it merely
 /// happened upon: its <c>class Source2390 : ISource2390[Color2390]</c> witness
 /// is green whether or not the interface arm is repaired, and goes red only
@@ -640,26 +642,52 @@ public class Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests
             new[] { "l" },
         };
 
-        // WITHDRAWN, and the reason is measured rather than asserted. Three
-        // rows lived here — `class Uses : GsDisposable[DisposableSource]`,
-        // `class Uses : GsEnumerable[EnumerableSource]`, and the CONSTRUCTOR
-        // spelling of the first — covering a SAME-COMPILATION class at an
-        // IMPORTED interface bound. That defect is #4124, and PR #4138 repairs
-        // it at the shared leaf: it splits the reflective body out of
-        // `SatisfiesClrInterfaceConstraint`, wraps every exit with the symbolic
-        // walk, and DELETES `BoundCarriesClrInterface` plus the two
-        // caller-side copies. #4136 was filed for the same thing from this
-        // site's `GS0152` witness and is closed as a duplicate; its proposed
-        // fix would have been a FIFTH copy of the fallback #4138 removed.
+        // A SAME-COMPILATION class at an IMPORTED interface bound, TYPE-CLAUSE
+        // spelling. These three rows were briefly withdrawn from this fixture,
+        // and the round trip is worth recording. A same-compilation class has
+        // no CLR type while binding, so the bare reflective probe answered "no"
+        // for `class D : IDisposable` at `[TD IDisposable]`. Filed from this
+        // site as #4136 and closed as a DUPLICATE of #4124, which PR #4138
+        // fixes at the shared leaf: the reflective body split out of
+        // `SatisfiesClrInterfaceConstraint`, the symbolic walk wrapping EVERY
+        // exit, and `BoundCarriesClrInterface` plus the two caller-side copies
+        // DELETED. This arm already called `SatisfiesClrInterfaceConstraint`,
+        // so it inherits the repair with no routing at all, and #4136's own
+        // proposed fix — a FIFTH copy of that fallback — stopped being
+        // expressible rather than getting written.
         //
-        // Dropping the interim one-line repair from this branch turns exactly
-        // these three rows red and NOTHING else — 28/31, with all fourteen
-        // refusals unchanged — so the interface widening neither loosens nor
-        // tightens anything this fixture asserts. They return on the rebase
-        // onto merged #4138, where the TYPE-CLAUSE spelling is the part worth
-        // keeping: #4124's own repro is a generic method call and a
-        // constructor, and the type clause is the position #4090 newly brings
-        // under the predicate.
+        // The rows stay because the SPELLING is this change's, not #4124's:
+        // #4124's repro is a generic method call and a constructor, and the
+        // type clause is the position #4090 newly brings under the predicate at
+        // all. Dropping the interim repair measured exactly these three red and
+        // NOTHING else — 28/31, all fourteen refusals unchanged — so the
+        // interface widening neither loosens nor tightens anything this fixture
+        // asserts in either direction.
+        yield return new object[]
+        {
+            "a-source-class-satisfies-the-imported-interface-it-implements",
+            """
+            class Uses : GsDisposable[DisposableSource] {
+            }
+
+            Console.WriteLine(Uses().Tag)
+            """,
+            new[] { "d" },
+        };
+
+        // ... and the imported-BASE arm: the interface arrives through an
+        // imported base class, which a source class holds in its own slot.
+        yield return new object[]
+        {
+            "a-source-class-satisfies-the-interface-its-imported-base-carries",
+            """
+            class Uses : GsEnumerable[EnumerableSource] {
+            }
+
+            Console.WriteLine(Uses().Tag)
+            """,
+            new[] { "e" },
+        };
 
         // PREREQUISITE FIX (#4139), type-clause spelling: a SAME-COMPILATION
         // enum is a non-nullable value type, so it satisfies `struct` — and
@@ -696,6 +724,22 @@ public class Issue4089And4090GsDeclaredGenericTypeClauseConstraintTests
             new[] { "Blue" },
         };
 
+        // The CONSTRUCTOR spelling of the imported-interface bound, which is
+        // what proves that defect was PRE-EXISTING rather than introduced here.
+        // `OverloadResolver.Constructors` is untouched by this change and
+        // reported a false GS0152 on the `main` this branch started from; it
+        // passes here because #4124's consolidation fixed the shared leaf
+        // underneath it, with none of this change's code in the path.
+        yield return new object[]
+        {
+            "the-constructor-spelling-of-a-source-class-carrying-an-imported-interface",
+            """
+            let a = GsDisposable[DisposableSource]()
+            let b = GsEnumerable[EnumerableSource]()
+            Console.WriteLine(a.Tag + b.Tag)
+            """,
+            new[] { "de" },
+        };
     }
 
     /// <summary>
