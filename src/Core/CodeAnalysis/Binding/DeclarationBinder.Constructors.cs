@@ -1236,7 +1236,15 @@ internal sealed partial class DeclarationBinder
         // constructor's own parameter list, where the class's base clause
         // was bound (`BindStructBaseAndInterfaces`) — validating it again
         // here would double-report the same offending parameter.
-        if (structSymbol.DerivesFromSystemAttribute())
+        //
+        // `DerivesFromSystemAttributeDuringDeclaration`, not
+        // `DerivesFromSystemAttribute` alone — see the matching comment in
+        // `BindStructBaseAndInterfaces` for why: a NESTED same-compilation
+        // base's own flags are not reliable here when it is declared after
+        // this type in the same enclosing body, and `IsAttributeType`'s
+        // `bindTypeClause` fallback is not safe to call from here (it
+        // regressed `Issue1244GenericAbstractOverrideBinderTests`).
+        if (DerivesFromSystemAttributeDuringDeclaration(structSymbol))
         {
             foreach (var ctor in ctorBuilder)
             {

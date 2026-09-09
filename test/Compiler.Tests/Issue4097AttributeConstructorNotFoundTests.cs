@@ -638,6 +638,178 @@ public class Issue4097AttributeConstructorNotFoundTests
     }
 
     /// <summary>
+    /// Code review (Copilot) on #4143: <c>Type.IsPrimitive</c> is also true
+    /// for <c>System.IntPtr</c>/<c>System.UIntPtr</c> (<c>nint</c>/
+    /// <c>nuint</c>), but ECMA-335 II.23.3's custom-attribute blob has no
+    /// native-int element type and <c>csc</c> rejects both as CS0181.
+    /// Measured before the fix: this declaration compiled clean, and a use
+    /// site then reported the unrelated-looking GS0583 ("no constructor
+    /// accepts (int32)") instead of naming the real problem.
+    /// </summary>
+    [Fact]
+    public void ANativeIntAttributeParameter_ReportsGS0585()
+    {
+        const string Source = """
+            package P
+            import System
+
+            class NIntAttribute(Value nint) : Attribute {
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4143_nint_").FullName;
+        try
+        {
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var log = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
+
+            var ids = ErrorIds(log);
+            Assert.True(
+                ids.Contains("GS0585", StringComparer.Ordinal),
+                $"'nint' must report GS0585 — ECMA-335 has no native-int attribute-argument shape. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Code review (Copilot) on #4143: an explicit <c>init(...)</c>
+    /// parameter whose type fails to resolve is bound as
+    /// <c>TypeSymbol.Error</c> rather than dropped (unlike a primary
+    /// constructor parameter, which is dropped and never reaches
+    /// validation), so it used to reach GS0585 alongside the diagnostic
+    /// already reported for the unresolved name — a misleading second
+    /// error naming <c>type '?'</c>.
+    /// </summary>
+    [Fact]
+    public void AnUnresolvedExplicitCtorParameterType_DoesNotAlsoReportGS0585()
+    {
+        const string Source = """
+            package P
+            import System
+
+            class BadAttribute : Attribute {
+                init(value Nonexistent) {
+                }
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4143_unresolved_").FullName;
+        try
+        {
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var log = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
+
+            var ids = ErrorIds(log);
+            Assert.Contains("GS0113", ids);
+            Assert.DoesNotContain("GS0585", ids);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Code review (Copilot) on #4143: <c>DerivesFromSystemAttribute</c>
+    /// reads flags (<c>IsAttributeClass</c>/<c>ImportedBaseType</c>) that
+    /// are only set once a base's OWN <c>BindStructBaseAndInterfaces</c> has
+    /// run. For a NESTED same-compilation base declared AFTER its derived
+    /// sibling inside the same enclosing type, that has not happened yet at
+    /// the point the derived type's primary constructor is validated.
+    /// Measured before the fix: this declaration compiled clean with no
+    /// GS0585, and the invalid parameter surfaced only as GS0584 if the
+    /// attribute happened to be used.
+    /// </summary>
+    [Fact]
+    public void ANestedAttributeDeclaredBeforeItsNestedBase_StillReportsGS0585AtDeclaration()
+    {
+        const string Source = """
+            package P
+            import System
+
+            class Holder {
+            }
+
+            class Outer {
+                class DerivedAttribute(Value Holder) : BaseAttribute {
+                }
+
+                open class BaseAttribute : Attribute {
+                }
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4143_nested_primary_").FullName;
+        try
+        {
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var log = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
+
+            var ids = ErrorIds(log);
+            Assert.True(
+                ids.Contains("GS0585", StringComparer.Ordinal),
+                $"a nested attribute class declared before its nested base must still report GS0585. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The explicit-constructor sibling of
+    /// <see cref="ANestedAttributeDeclaredBeforeItsNestedBase_StillReportsGS0585AtDeclaration"/>.
+    /// </summary>
+    [Fact]
+    public void ANestedAttributeExplicitCtorDeclaredBeforeItsNestedBase_StillReportsGS0585AtDeclaration()
+    {
+        const string Source = """
+            package P
+            import System
+
+            class Holder {
+            }
+
+            class Outer {
+                class DerivedAttribute : BaseAttribute {
+                    init(value Holder) {
+                    }
+                }
+
+                open class BaseAttribute : Attribute {
+                }
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4143_nested_explicit_").FullName;
+        try
+        {
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var log = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
+
+            var ids = ErrorIds(log);
+            Assert.True(
+                ids.Contains("GS0585", StringComparer.Ordinal),
+                $"a nested attribute's explicit init(...) declared before its nested base must still report GS0585. Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// The defaults of omitted optional parameters must be WRITTEN into the
     /// blob, not merely tolerated by the matcher. ECMA-335 II.23.3 gives a
     /// fixed-argument list one entry per constructor parameter, so a reader

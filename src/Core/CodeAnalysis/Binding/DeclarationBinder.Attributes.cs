@@ -793,6 +793,96 @@ internal sealed partial class DeclarationBinder
         return false;
     }
 
+    /// <summary>
+    /// Issue #4143 code review: a side-effect-free stand-in for
+    /// <c>IsAttributeType</c>, safe to call DURING declaration
+    /// binding (from <c>BindStructBaseAndInterfaces</c> /
+    /// <c>BindConstructorDeclarations</c>), where a same-compilation base
+    /// may not have had its own body bound yet.
+    /// </summary>
+    /// <remarks>
+    /// <para><c>IsAttributeType</c> falls back to <c>bindTypeClause</c>
+    /// when a base's <see cref="StructSymbol.DerivesFromSystemAttribute"/>
+    /// flags are not yet set — correct for its own USE-site caller, which
+    /// runs once every declaration already exists. Calling THAT fallback
+    /// during declaration binding re-resolves a base clause that is either
+    /// still being bound or belongs to an unrelated, non-attribute class,
+    /// and for a GENERIC base (an open type parameter in scope elsewhere,
+    /// not yet visible from here) it reported a spurious "Type '...' doesn't
+    /// exist" — measured: regressed
+    /// <c>Issue1244GenericAbstractOverrideBinderTests</c>.</para>
+    /// <para>This walks the same shapes using only side-effect-free lookups:
+    /// the already-computed <see cref="StructSymbol.DerivesFromSystemAttribute"/>
+    /// flags first, then — only when a same-compilation base is a SIMPLE
+    /// (non-generic, unqualified) name — the <c>@Attribute</c> sugar marker
+    /// or a literal <c>: Attribute</c> / <c>: System.Attribute</c> spelling
+    /// on the base's own declaration syntax, and
+    /// <see cref="BoundScope.TryLookupTypeAlias(string, out TypeSymbol?)"/>
+    /// (silent on a miss, unlike <c>bindTypeClause</c>) to recurse one level
+    /// further when the base names another same-compilation type.</para>
+    /// </remarks>
+    /// <param name="structSymbol">The struct/class symbol to test.</param>
+    /// <param name="visited">Cycle guard across the recursive walk.</param>
+    /// <returns><c>true</c> when the symbol is or derives from <see cref="System.Attribute"/>.</returns>
+    private bool DerivesFromSystemAttributeDuringDeclaration(StructSymbol structSymbol, HashSet<StructSymbol>? visited = null)
+    {
+        visited ??= new HashSet<StructSymbol>();
+        if (!visited.Add(structSymbol))
+        {
+            return false;
+        }
+
+        if (structSymbol.DerivesFromSystemAttribute())
+        {
+            return true;
+        }
+
+        if (structSymbol.Declaration is not { } declaration)
+        {
+            return false;
+        }
+
+        if (HasAttributeSugarMarker(declaration.Annotations))
+        {
+            return true;
+        }
+
+        foreach (var baseClause in declaration.BaseTypeClauses)
+        {
+            if (baseClause.HasTypeArguments)
+            {
+                // A generic base is either an in-scope type parameter (never
+                // an attribute base) or a constructed generic (G# does not
+                // support a same-compilation generic attribute base); either
+                // way, resolving it needs the general binder, which is
+                // exactly what must be avoided here.
+                continue;
+            }
+
+            var name = GetBaseClauseTypeDisplayName(baseClause);
+            if (name is "Attribute" or "System.Attribute")
+            {
+                return true;
+            }
+
+            if (name.Contains('.', StringComparison.Ordinal))
+            {
+                // A qualified name needs full resolution to find; not worth
+                // chasing for this narrow, order-of-declaration gap.
+                continue;
+            }
+
+            if (scope.TryLookupTypeAlias(name, out var resolved)
+                && resolved is StructSymbol baseStruct
+                && DerivesFromSystemAttributeDuringDeclaration(baseStruct, visited))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static TextLocation GetAnnotationNameLocation(AnnotationSyntax annotation)
     {
         if (!annotation.NameSegments.IsDefaultOrEmpty)
@@ -895,6 +985,17 @@ internal sealed partial class DeclarationBinder
 
         var clr = type.ClrType;
         return clr is not null
+
+            // Code review (Copilot) on #4143/#4144: `Type.IsPrimitive` is
+            // also true for `System.IntPtr`/`System.UIntPtr` (`nint`/
+            // `nuint`), but ECMA-335 II.23.3's custom-attribute blob has no
+            // native-int element type — `csc` rejects both as CS0181.
+            // Measured: `class NIntAttribute(Value nint) : Attribute` used
+            // to pass this check, and its use site then reported the
+            // unrelated-looking GS0583 ("no constructor accepts (int32)")
+            // instead of naming the real problem.
+            && !clr.IsSameAs(typeof(nint))
+            && !clr.IsSameAs(typeof(nuint))
             && (clr.IsPrimitive
                 || clr.IsSameAs(typeof(string))
                 || clr.IsSameAs(typeof(System.Type))
@@ -933,7 +1034,18 @@ internal sealed partial class DeclarationBinder
 
         foreach (var parameter in parameters)
         {
-            if (parameter.Type != null && !IsValidAttributeParameterType(parameter.Type))
+            // Code review (Copilot): an explicit `init(...)` parameter whose
+            // type failed to resolve is bound as `TypeSymbol.Error` (see
+            // `BindSingleConstructorDeclaration`) rather than dropped, so it
+            // reaches here alongside the GS0113 (or similar) already
+            // reported for the unresolved name. Reporting GS0585 too named
+            // a misleading `type '?'` on top of the real diagnostic.
+            if (parameter.Type == null || parameter.Type == TypeSymbol.Error)
+            {
+                continue;
+            }
+
+            if (!IsValidAttributeParameterType(parameter.Type))
             {
                 var location = parameter.DeclaringSyntax?.Location ?? fallbackLocation;
                 Diagnostics.ReportAttributeConstructorParameterInvalidType(
