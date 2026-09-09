@@ -5,6 +5,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -35,11 +36,14 @@ namespace GSharp.Compiler.Tests;
 /// actual trigger: an annotation naming a cyclic type, reproducible with a
 /// single external <c>gsc.dll</c> invocation on <c>main</c> itself.
 ///
-/// Runs OUT-OF-PROCESS with a hard timeout (rather than in-process via
-/// <c>Program.Main</c>) specifically so that if this guard ever regresses,
-/// the test fails cleanly at the timeout instead of hanging or OOM-killing
-/// the shared xUnit test-runner process — the same failure mode this issue
-/// is about.
+/// Runs OUT-OF-PROCESS (rather than in-process via <c>Program.Main</c>),
+/// polling the child's working set and killing it well below any real danger
+/// threshold, IN ADDITION to a wall-clock timeout — a timeout alone is not
+/// enough, since the pre-fix reproduction for this issue reached ~18 GB RSS
+/// in 10 seconds, fast enough for an unguarded regression to OOM-kill the CI
+/// runner itself before a 30s timeout would ever fire. Either guard failing
+/// makes the test fail cleanly instead of hanging or OOM-killing the shared
+/// runner — the same failure mode this issue is about.
 /// </summary>
 public class Issue4162CyclicAttributeHierarchyGuardTests
 {
@@ -120,22 +124,68 @@ public class Issue4162CyclicAttributeHierarchyGuardTests
         var stdoutTask = proc.StandardOutput.ReadToEndAsync();
         var stderrTask = proc.StandardError.ReadToEndAsync();
 
-        // A generous but bounded timeout: a correctly-guarded compile of this
-        // trivial source finishes in well under a second. 30s is ample
-        // headroom for a loaded CI runner while still failing fast (rather
-        // than hanging the shard) if the guard regresses.
+        // A wall-clock timeout alone is not enough: the pre-fix reproduction
+        // for this issue reached ~18 GB RSS in 10 seconds, so an unguarded
+        // regression can OOM-kill the CI runner itself long before any
+        // timeout fires — exactly the failure mode #4161 tracked. Poll the
+        // child's working set and kill it well before it could threaten the
+        // runner, in addition to the overall wall-clock ceiling below.
+        const int pollIntervalMs = 100;
+        const long memoryCeilingBytes = 512L * 1024 * 1024; // 512 MB.
         const int timeoutMs = 30_000;
-        if (!proc.WaitForExit(timeoutMs))
+        var elapsedMs = 0;
+        while (!proc.WaitForExit(0))
         {
-            proc.Kill(entireProcessTree: true);
-            proc.WaitForExit(5_000);
-            throw new TimeoutException(
-                $"gsc.dll did not exit within {timeoutMs} ms compiling an annotation naming a " +
-                "cyclic-inheritance type — StructSymbol.GetHierarchy()'s cycle guard has regressed.");
+            proc.Refresh();
+            long workingSet;
+            try
+            {
+                workingSet = proc.WorkingSet64;
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between WaitForExit(0) and the refresh.
+                break;
+            }
+
+            if (workingSet > memoryCeilingBytes)
+            {
+                KillAndDrain(proc);
+                throw new InvalidOperationException(
+                    $"gsc.dll's working set exceeded {memoryCeilingBytes / (1024 * 1024)} MB " +
+                    $"({workingSet / (1024 * 1024)} MB) compiling an annotation naming a " +
+                    "cyclic-inheritance type — StructSymbol.GetHierarchy()'s cycle guard has regressed. " +
+                    "Killed early to avoid OOM-killing the CI runner itself.");
+            }
+
+            if (elapsedMs >= timeoutMs)
+            {
+                KillAndDrain(proc);
+                throw new TimeoutException(
+                    $"gsc.dll did not exit within {timeoutMs} ms compiling an annotation naming a " +
+                    "cyclic-inheritance type — StructSymbol.GetHierarchy()'s cycle guard has regressed.");
+            }
+
+            Thread.Sleep(pollIntervalMs);
+            elapsedMs += pollIntervalMs;
         }
 
         var stdout = stdoutTask.GetAwaiter().GetResult();
         var stderr = stderrTask.GetAwaiter().GetResult();
         return (proc.ExitCode, stdout + stderr);
+    }
+
+    private static void KillAndDrain(Process proc)
+    {
+        try
+        {
+            proc.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited.
+        }
+
+        proc.WaitForExit(5_000);
     }
 }
