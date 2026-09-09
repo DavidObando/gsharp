@@ -108,6 +108,37 @@ internal sealed class MemberLookup
         Exact,
         Lower,
         Upper,
+
+        // Issue #4133 (hot-core translation guard finding): the top-level
+        // marker for an argument recovered from a bare METHOD GROUP (see
+        // `RefineSymbolicArgsForMethodGroups`'s method-group-slots overload).
+        // C#'s method-type inference (§12.6.3.7) never makes an INPUT
+        // inference from a method group's own parameter types — only an
+        // OUTPUT inference from its return type. `UnifyForMethodTypeArgs`'s
+        // Issue-#1334 delegate-shape unification does not know it is looking
+        // at a method group's synthesized natural type rather than a real
+        // lambda/delegate VALUE, so without this marker it treats the
+        // method group's parameter type as an ordinary contravariant upper
+        // bound — see `MethodGroupUpper`. `SymbolicInferenceBounds.Add`
+        // demotes `MethodGroupSource` itself straight to `Lower` (the return
+        // side of that same unification keeps this marker unchanged, and a
+        // return-type contribution genuinely IS a legitimate lower bound).
+        MethodGroupSource,
+
+        // The reversed (contravariant-position) counterpart of
+        // `MethodGroupSource` — what a method-group argument's own parameter
+        // type would contribute as an upper bound. `SymbolicInferenceBounds.Add`
+        // discards a bound of this kind outright rather than routing it
+        // anywhere: unlike an ordinary upper bound, a method group's own
+        // parameter type is NEVER legitimate input-inference evidence, not
+        // even as a last-resort fallback when a type parameter has no other
+        // bound at all. `csc` reports CS0411 for exactly that shape —
+        // `Wrap[T](predicate Func[T, bool])` called as `Wrap(Check)` with no
+        // other argument to fix `T` from — so gsc accepting it via a
+        // promoted fallback would make gsc MORE permissive than C#, the
+        // opposite direction of #4133's own defect (Copilot review finding
+        // on this PR, confirmed against a compiled and run `csc` control).
+        MethodGroupUpper,
     }
 
     // ----- CLR-side type walks -----
@@ -1742,6 +1773,39 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol> symbolicArgTypes,
         bool isExpanded = false,
         IReadOnlyList<string?>? argumentNames = null)
+        => BuildSymbolicMethodTypeArgs(
+            closed,
+            explicitTypeArgSymbols,
+            symbolicArgTypes,
+            isExpanded,
+            argumentNames,
+            methodGroupArgumentSlots: default);
+
+    /// <summary>
+    /// Issue #4133 (hot-core translation guard finding): overload that also
+    /// accepts, parallel to <paramref name="symbolicArgTypes"/>, which
+    /// argument slots were recovered from a bare method group (see
+    /// <c>RefineSymbolicArgsForMethodGroups</c>'s method-group-slots
+    /// overload) — forwarded to <c>InferSymbolicMethodTypeArgumentsCore</c>
+    /// so their contravariant contribution demotes to a same-slot fallback
+    /// instead of outranking a real bound. Reordered here the same way
+    /// <paramref name="symbolicArgTypes"/> is reordered for a named-argument
+    /// call, so the two stay aligned by parameter position.
+    /// </summary>
+    /// <param name="closed">The winning (possibly closed generic) CLR method.</param>
+    /// <param name="explicitTypeArgSymbols">Explicit type arguments supplied at the call site, if any.</param>
+    /// <param name="symbolicArgTypes">The pre-resolution symbolic argument vector.</param>
+    /// <param name="isExpanded">Whether trailing arguments target a params-array element.</param>
+    /// <param name="argumentNames">Optional source-slot argument names.</param>
+    /// <param name="methodGroupArgumentSlots">Parallel to <paramref name="symbolicArgTypes"/>: <see langword="true"/> for a slot recovered from a bare method group.</param>
+    /// <returns>The recovered symbolic type arguments, or <see langword="default"/> when none could be recovered.</returns>
+    public static ImmutableArray<TypeSymbol?> BuildSymbolicMethodTypeArgs(
+        MethodInfo? closed,
+        ImmutableArray<TypeSymbol> explicitTypeArgSymbols,
+        ImmutableArray<TypeSymbol> symbolicArgTypes,
+        bool isExpanded,
+        IReadOnlyList<string?>? argumentNames,
+        ImmutableArray<bool> methodGroupArgumentSlots)
     {
         if (closed == null || !closed.IsGenericMethod)
         {
@@ -1766,6 +1830,7 @@ internal sealed class MemberLookup
             }
 
             var orderedSymbolicArgTypes = nullableSymbolicArgTypes.MoveToImmutable();
+            var orderedMethodGroupArgumentSlots = methodGroupArgumentSlots;
 
             // Issue #4026 (review finding): unification below zips the open
             // parameters with these arguments POSITIONALLY, so a call that
@@ -1809,6 +1874,25 @@ internal sealed class MemberLookup
                     }
 
                     orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+                    if (!methodGroupArgumentSlots.IsDefault)
+                    {
+                        var byParameterFlags = new bool[paramsIndex + expandedCount];
+                        var expandedFlagSlot = paramsIndex;
+                        for (var source = 0; source < methodGroupArgumentSlots.Length && source < sourceToParameter.Length; source++)
+                        {
+                            var parameter = sourceToParameter[source];
+                            if (parameter == paramsIndex)
+                            {
+                                byParameterFlags[expandedFlagSlot++] = methodGroupArgumentSlots[source];
+                            }
+                            else
+                            {
+                                byParameterFlags[parameter] = methodGroupArgumentSlots[source];
+                            }
+                        }
+
+                        orderedMethodGroupArgumentSlots = ImmutableArray.Create(byParameterFlags);
+                    }
                 }
                 else
                 {
@@ -1819,6 +1903,16 @@ internal sealed class MemberLookup
                     }
 
                     orderedSymbolicArgTypes = ImmutableArray.Create(byParameter);
+                    if (!methodGroupArgumentSlots.IsDefault)
+                    {
+                        var byParameterFlags = new bool[parameterCount];
+                        for (var source = 0; source < methodGroupArgumentSlots.Length && source < sourceToParameter.Length; source++)
+                        {
+                            byParameterFlags[sourceToParameter[source]] = methodGroupArgumentSlots[source];
+                        }
+
+                        orderedMethodGroupArgumentSlots = ImmutableArray.Create(byParameterFlags);
+                    }
                 }
             }
 
@@ -1826,6 +1920,7 @@ internal sealed class MemberLookup
                 openMethod,
                 orderedSymbolicArgTypes,
                 isExpanded,
+                orderedMethodGroupArgumentSlots,
                 out requiresRecoveredInference);
         }
         else
@@ -2729,7 +2824,7 @@ internal sealed class MemberLookup
     /// using <c>object</c> as the erasure placeholder. This lets
     /// overload resolution match the open generic candidate (the real
     /// symbolic substitution is recovered downstream via
-    /// <see cref="BuildSymbolicMethodTypeArgs"/> +
+    /// <c>BuildSymbolicMethodTypeArgs</c> +
     /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/>).
     /// </summary>
     /// <param name="t">The argument's bound type.</param>
@@ -6745,6 +6840,34 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol?> symbolicArgTypes,
         bool isExpanded,
         out bool requiresRecoveredInference)
+        => InferSymbolicMethodTypeArgumentsCore(
+            openMethod,
+            symbolicArgTypes,
+            isExpanded,
+            methodGroupArgumentSlots: default,
+            out requiresRecoveredInference);
+
+    /// <summary>
+    /// Issue #4133 (hot-core translation guard finding): overload that also
+    /// accepts, parallel to <paramref name="symbolicArgTypes"/>, which
+    /// argument slots were recovered from a bare method group (see
+    /// <c>RefineSymbolicArgsForMethodGroups</c>'s method-group-slots
+    /// overload). Those slots unify with
+    /// <see cref="SymbolicInferenceBoundKind.MethodGroupSource"/> instead of
+    /// the default <see cref="SymbolicInferenceBoundKind.Lower"/>, so a
+    /// contravariant bound recovered from the method group's OWN parameter
+    /// type — which C#'s method-type inference never treats as an input
+    /// bound (§12.6.3.7), not even as a last-resort fallback when no other
+    /// bound exists — is discarded outright by
+    /// <see cref="SymbolicInferenceBounds.Add"/> rather than landing in
+    /// <c>bounds.Upper</c>.
+    /// </summary>
+    private static TypeSymbol?[] InferSymbolicMethodTypeArgumentsCore(
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol?> symbolicArgTypes,
+        bool isExpanded,
+        ImmutableArray<bool> methodGroupArgumentSlots,
+        out bool requiresRecoveredInference)
     {
         requiresRecoveredInference = false;
         if (openMethod == null || !openMethod.IsGenericMethodDefinition)
@@ -6754,6 +6877,13 @@ internal sealed class MemberLookup
 
         var arity = openMethod.GetGenericArguments().Length;
         var bounds = new SymbolicInferenceBounds(arity);
+
+        SymbolicInferenceBoundKind ArgumentBoundKind(int i)
+            => !methodGroupArgumentSlots.IsDefault
+                && i < methodGroupArgumentSlots.Length
+                && methodGroupArgumentSlots[i]
+                    ? SymbolicInferenceBoundKind.MethodGroupSource
+                    : SymbolicInferenceBoundKind.Lower;
 
         var openParams = openMethod.GetParameters();
         var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
@@ -6770,7 +6900,8 @@ internal sealed class MemberLookup
                     openParams[i].ParameterType,
                     symbolicArgTypes[i],
                     openMethod,
-                    bounds);
+                    bounds,
+                    ArgumentBoundKind(i));
             }
 
             for (var i = paramsIndex; i < argumentCount; i++)
@@ -6779,7 +6910,8 @@ internal sealed class MemberLookup
                     paramsElementType,
                     symbolicArgTypes[i],
                     openMethod,
-                    bounds);
+                    bounds,
+                    ArgumentBoundKind(i));
             }
         }
         else
@@ -6791,7 +6923,8 @@ internal sealed class MemberLookup
                     openParams[i].ParameterType,
                     symbolicArgTypes[i],
                     openMethod,
-                    bounds);
+                    bounds,
+                    ArgumentBoundKind(i));
             }
         }
 
@@ -6828,13 +6961,23 @@ internal sealed class MemberLookup
                     fixedType = MergeRecoveredTypeArgument(fixedType, exact[i], allowBaseWidening: false);
                 }
             }
-            else if (lower is { Count: > 0 })
+            else if (lower is { Count: > 0 } || upper is { Count: > 0 })
             {
-                fixedType = FindSymbolicInferenceCandidate(lower, isLowerBound: true);
-            }
-            else if (upper is { Count: > 0 })
-            {
-                fixedType = FindSymbolicInferenceCandidate(upper, isLowerBound: false);
+                // Issue #4133: build the candidate set from BOTH categories
+                // together, not from `lower` alone when both are present. A
+                // contravariant argument (`Action<T>`, `IComparer<T>`, ...)
+                // contributes an upper bound that must be able to RAISE the
+                // fixed type past a lower bound contributed by an ordinary
+                // (covariant/invariant) argument — mirroring csc, which lets
+                // `Action<object>` push a `T : DisposableBase` lower bound up
+                // to `object`. The previous `else if` chain here fixed from
+                // `lower` whenever any lower bound existed and only
+                // considered `upper` as a post-hoc validity check
+                // (`SatisfiesSymbolicInferenceBounds` below), never as a
+                // candidate that could WIN — so the upper bound could
+                // validate a narrower answer without ever being allowed to
+                // replace it.
+                fixedType = FindSymbolicInferenceCandidate(lower, upper);
             }
             else
             {
@@ -6891,26 +7034,50 @@ internal sealed class MemberLookup
         return false;
     }
 
+    /// <summary>
+    /// Issue #4133: picks the fixed type for one type parameter's non-exact
+    /// bounds, C# fixing style (§12.6.3.13): the candidate set is the union
+    /// of BOTH <paramref name="lower"/> and <paramref name="upper"/> bounds
+    /// together, not <paramref name="lower"/> alone when both are present.
+    /// A contravariant argument (<c>Action&lt;T&gt;</c>,
+    /// <c>IComparer&lt;T&gt;</c>, ...) contributes an upper bound that must
+    /// be able to RAISE the fixed type past a lower bound contributed by an
+    /// ordinary (covariant/invariant) argument — mirroring <c>csc</c>, which
+    /// lets <c>Action&lt;object&gt;</c> push a <c>T : DisposableBase</c>
+    /// lower bound up to <c>object</c>. The prior version of this routine
+    /// only ever considered ONE category as a candidate SOURCE (the caller
+    /// picked <paramref name="lower"/> whenever it was non-empty) and used
+    /// the other category solely to validate that pick afterwards
+    /// (<see cref="SatisfiesSymbolicInferenceBounds"/>), so an upper bound
+    /// could confirm a narrower answer without ever being allowed to win.
+    /// </summary>
     private static TypeSymbol? FindSymbolicInferenceCandidate(
-        IReadOnlyList<TypeSymbol> bounds,
-        bool isLowerBound)
+        IReadOnlyList<TypeSymbol>? lower,
+        IReadOnlyList<TypeSymbol>? upper)
     {
-        TypeSymbol? best = null;
-        foreach (var candidate in bounds)
+        // Issue #4133 (review finding): every bound is a candidate, including
+        // a signature-equivalent duplicate — the merge branch just below
+        // (`TypeSignaturesEquivalent` + `MergeRecoveredTypeArgument`)
+        // combines those, and dropping one here first (as an earlier version
+        // of this method did) would silently discard whichever of two
+        // equivalent bounds differed only in reference nullability or tuple
+        // element names, and would make which one survives depend on
+        // argument order.
+        var candidates = new List<TypeSymbol>();
+        if (lower != null)
         {
-            var satisfiesAll = true;
-            foreach (var bound in bounds)
-            {
-                if (!(isLowerBound
-                    ? HasImplicitSymbolicConversion(bound, candidate)
-                    : HasImplicitSymbolicConversion(candidate, bound)))
-                {
-                    satisfiesAll = false;
-                    break;
-                }
-            }
+            candidates.AddRange(lower);
+        }
 
-            if (!satisfiesAll)
+        if (upper != null)
+        {
+            candidates.AddRange(upper);
+        }
+
+        TypeSymbol? best = null;
+        foreach (var candidate in candidates)
+        {
+            if (!SatisfiesSymbolicInferenceBounds(candidate, lower, upper))
             {
                 continue;
             }
@@ -6927,19 +7094,143 @@ internal sealed class MemberLookup
                 continue;
             }
 
+            // Issue #4133 (review finding, hot-core translation guard):
+            // a pure reference-nullable-annotation difference (top-level or
+            // nested inside a tuple element) is never a real type
+            // relationship — the underlying CLR shape is identical, nullable
+            // annotations are compile-time-only, and C#'s own fixing
+            // (§12.6.3.13) computes nullability separately, AFTER a
+            // candidate is picked, never as grounds to eliminate or "raise"
+            // one. This check must run BEFORE the directional widening logic
+            // below, not only when both directions of
+            // `HasImplicitSymbolicConversion` hold: e.g. `string -> string?`
+            // is a one-directional, non-structural conversion (`string? ->
+            // string` is not implicit — you cannot drop nullability for
+            // free), so without this early check an EXPLICITLY-typed lambda
+            // parameter whose tuple-element nullability differs from the
+            // receiver's element type — `xs.Select((s (Id Guid, Text
+            // string?)) -> s.Text)` against `List[(Id Guid, Text string)]`
+            // — would "win" through the ordinary one-directional widening
+            // branch below exactly the way a genuine base-class upper bound
+            // is meant to, resolving `TResult` to the nullable tuple shape.
+            // (A BARE METHOD GROUP argument's own parameter type no longer
+            // reaches this merge at all for the analogous case — see
+            // `SymbolicInferenceBoundKind.MethodGroupUpper`, which
+            // `SymbolicInferenceBounds.Add` discards outright rather than
+            // routing into any bound list, per C# §12.6.3.7: a method group
+            // is never an input inference source, not even as a fallback.
+            // Before that fix, this same branch is what
+            // let a cs2gs oblivious-nullability method-group parameter
+            // cascade a spurious `?` forward into a later call, producing a
+            // false ambiguity and a real GS0159
+            // (`tools/cs2gs/Cs2Gs.Pipeline/DeclaredProjectItem.cs`); that
+            // path no longer reaches here because the group's parameter
+            // type is demoted before bound-merging ever sees it.)
+            // Resolving to the non-nullable, stripped form deterministically
+            // keeps the pre-#4133 default (the lower bound's shape, when it
+            // is the non-nullable one) without reintroducing the
+            // true-ambiguity failure the merge branch further below exists
+            // to close for every OTHER annotation-only difference (a tuple
+            // element name, or a nullable difference the directional checks
+            // do treat as mutual — see that branch's own comment). Note this
+            // is a knowing deviation from C#: given `string` (lower) and
+            // `string?` (upper) bounds, C#'s own fixing (§12.6.3.13) would
+            // resolve to the exact/upper-compatible annotation (`string?`)
+            // and let flow analysis warn separately; gsc instead prefers the
+            // non-nullable shape here because it is deterministic without
+            // needing flow-sensitive nullable warnings on the inferred type
+            // argument itself.
+            var strippedBest = StripReferenceNullableAnnotations(best);
+            var strippedCandidate = StripReferenceNullableAnnotations(candidate);
+            if ((!ReferenceEquals(strippedBest, best) || !ReferenceEquals(strippedCandidate, candidate))
+                && DeclarationBinder.TypeSignaturesEquivalent(strippedBest, strippedCandidate))
+            {
+                best = strippedBest;
+                continue;
+            }
+
+            // The winner is the unique survivor every OTHER survivor
+            // converts into — regardless of which bound category (lower or
+            // upper) either one came from. Two survivors sourced from the
+            // same category are always mutually convertible (each already
+            // had to satisfy "every bound in that category converts into
+            // it"), so `bestToCandidate == candidateToBest` there and this
+            // falls through to the ambiguous branch exactly as the
+            // single-category version did. A lower-sourced survivor paired
+            // with a wider upper-sourced one is the new case: only
+            // `best -> candidate` holds, so `candidate` (the upper bound)
+            // must replace `best` (the lower bound) — the direction the
+            // pre-fix code never took.
             var candidateToBest = HasImplicitSymbolicConversion(candidate, best);
             var bestToCandidate = HasImplicitSymbolicConversion(best, candidate);
-            if (candidateToBest && !bestToCandidate)
+            if (bestToCandidate && !candidateToBest)
             {
                 best = candidate;
             }
-            else if (candidateToBest == bestToCandidate)
+            else if (candidateToBest && !bestToCandidate)
+            {
+                // `best` already absorbs `candidate`; keep it.
+            }
+            else if (candidateToBest && bestToCandidate)
+            {
+                // Issue #4133 (review finding): mutually convertible in BOTH
+                // directions under `HasImplicitSymbolicConversion`
+                // (identity/reference/boxing/numeric only — no structural
+                // projection) but not `TypeSignaturesEquivalent`, and NOT a
+                // pure nullable-annotation difference (that was handled
+                // above) means the two bounds differ only by a tuple element
+                // name. Merge, using the same ADR-0172 name-reconciliation
+                // logic the equivalent-bounds branch above already applies.
+                // Before this fix ever consulted both bound categories
+                // together (see the dispatch above), a lower-only and an
+                // upper-only bound could never reach this branch in the
+                // first place, so this case is new with #4133.
+                best = MergeRecoveredTypeArgument(best, candidate, allowBaseWidening: false);
+            }
+            else
             {
                 return null;
             }
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// Recursively strips reference-nullable annotations — a top-level
+    /// <see cref="NullableTypeSymbol"/> wrapping a non-nullable-VALUE-type
+    /// underlying type (a real <c>Nullable&lt;T&gt;</c> wrapper is left
+    /// alone, matching <c>MergeRecoveredTypeArgument</c>'s own
+    /// <c>existingNullable</c>/<c>incomingNullable</c> check), and the same
+    /// check applied to each element of a <see cref="TupleTypeSymbol"/> —
+    /// so two candidates that differ only by nullable annotation, however
+    /// deeply nested, compare equal once stripped. Returns the original
+    /// instance, unchanged, when nothing needed stripping, so a caller can
+    /// tell "no annotation difference here" from a reference comparison
+    /// alone.
+    /// </summary>
+    private static TypeSymbol StripReferenceNullableAnnotations(TypeSymbol type)
+    {
+        if (type is NullableTypeSymbol nullable && !NullableLifting.IsAnyValueTypeNullable(nullable))
+        {
+            return StripReferenceNullableAnnotations(nullable.UnderlyingType);
+        }
+
+        if (type is TupleTypeSymbol tuple)
+        {
+            var changed = false;
+            var stripped = ImmutableArray.CreateBuilder<TypeSymbol>(tuple.ElementTypes.Length);
+            foreach (var element in tuple.ElementTypes)
+            {
+                var strippedElement = StripReferenceNullableAnnotations(element);
+                changed |= !ReferenceEquals(strippedElement, element);
+                stripped.Add(strippedElement);
+            }
+
+            return changed ? TupleTypeSymbol.Get(stripped.MoveToImmutable(), tuple.ElementNames) : type;
+        }
+
+        return type;
     }
 
     private static bool SatisfiesSymbolicInferenceBounds(
@@ -6949,9 +7240,54 @@ internal sealed class MemberLookup
         => (lower == null || lower.All(bound => HasImplicitSymbolicConversion(bound, candidate)))
             && (upper == null || upper.All(bound => HasImplicitSymbolicConversion(candidate, bound)));
 
+    /// <summary>
+    /// Issue #4133 (review finding): only the STANDARD implicit conversions
+    /// (identity, reference, boxing, numeric widening) participate in
+    /// generic-bound elimination/fixing — mirroring
+    /// <c>ClrOverloadResolution.IsInferenceBoundPromotion</c>'s own comment
+    /// on the CLR side. <see cref="Conversion.Classify"/> also admits ADR-0148
+    /// structural projection (constructing a new, unrelated user class
+    /// through its public constructor/member surface), which is a VALUE
+    /// conversion, not a type relationship, and must never let one bound
+    /// "satisfy" another — e.g. two structurally-identical but unrelated
+    /// classes (a homonym `Item` imported from two different packages) are
+    /// not implicitly convertible for inference purposes just because a new
+    /// instance of one could be projected from the other. Using
+    /// <see cref="Conversion.ClassifyNonStructural"/> here keeps that
+    /// projection available for ordinary argument conversions while refusing
+    /// to let it decide which upper/lower bound wins.
+    /// <para>
+    /// Issue #4133 (Copilot review finding, hot-core translation guard PR):
+    /// a PURE reference-nullable-annotation difference is treated as
+    /// mutually satisfying here too, not only inside
+    /// <see cref="FindSymbolicInferenceCandidate"/>'s own merge branch. That
+    /// merge branch only ever runs for a bound pair that both independently
+    /// pass <see cref="SatisfiesSymbolicInferenceBounds"/> first — this
+    /// method IS that gate — so without this check here, a bound PAIR whose
+    /// only relationship in the "wrong" direction is a nullable annotation
+    /// (e.g. a nullable LOWER bound against a non-nullable UPPER bound, the
+    /// mirror image of the shape the merge branch's own comment documents)
+    /// was eliminated before ever reaching the merge branch that exists to
+    /// resolve it, silently reporting a symbolic-inference conflict instead.
+    /// </para>
+    /// </summary>
     private static bool HasImplicitSymbolicConversion(TypeSymbol source, TypeSymbol target)
-        => DeclarationBinder.TypeSignaturesEquivalent(source, target)
-            || Conversion.Classify(source, target).IsImplicit;
+    {
+        if (DeclarationBinder.TypeSignaturesEquivalent(source, target))
+        {
+            return true;
+        }
+
+        var strippedSource = StripReferenceNullableAnnotations(source);
+        var strippedTarget = StripReferenceNullableAnnotations(target);
+        if ((!ReferenceEquals(strippedSource, source) || !ReferenceEquals(strippedTarget, target))
+            && DeclarationBinder.TypeSignaturesEquivalent(strippedSource, strippedTarget))
+        {
+            return true;
+        }
+
+        return Conversion.ClassifyNonStructural(source, target).IsImplicit;
+    }
 
     private static SymbolicInferenceBoundKind GetNestedInferenceBoundKind(
         Type openDefinition,
@@ -6972,11 +7308,40 @@ internal sealed class MemberLookup
         };
     }
 
+    /// <summary>
+    /// Issue #4133 (Copilot review finding, hot-core translation guard PR):
+    /// unlike ordinary <see cref="SymbolicInferenceBoundKind.Lower"/> /
+    /// <see cref="SymbolicInferenceBoundKind.Upper"/>, which correctly
+    /// toggle back and forth as nested generic-argument variance recurses
+    /// (two contravariant levels cancel out, matching real variance),
+    /// reversing <see cref="SymbolicInferenceBoundKind.MethodGroupUpper"/>
+    /// stays <c>MethodGroupUpper</c> rather than cycling back to
+    /// <see cref="SymbolicInferenceBoundKind.MethodGroupSource"/>. A method
+    /// group's own parameter type is discarded (never input-inference
+    /// evidence, §12.6.3.7) at ANY nesting depth beneath its own top-level
+    /// parameter position, not only at the first level: for
+    /// <c>M[T](items IEnumerable[T], handler Action[Action[T]])</c> called
+    /// with a bare method group <c>Handler(x Action[object])</c>, the outer
+    /// contravariant position (`Action[Action[T]]`'s own parameter) demotes
+    /// once to <c>MethodGroupUpper</c>, and the inner one — `Action[T]`'s
+    /// own contravariant type argument — recurses a SECOND time. Cycling
+    /// back to <c>MethodGroupSource</c> there would fall through to an
+    /// ordinary <see cref="SymbolicInferenceBoundKind.Lower"/> bound in
+    /// <see cref="SymbolicInferenceBounds.Add"/> — reintroducing the method
+    /// group's parameter type as genuine evidence through a second
+    /// contravariant level, exactly the shape this fix demotes at the
+    /// first level. <c>MethodGroupSource</c> (unreversed) is produced only
+    /// once, directly by the top-level argument's own bound kind — never by
+    /// a reversal — so staying sticky here cannot affect the group's own
+    /// legitimate top-level OUTPUT (return-type) contribution.
+    /// </summary>
     private static SymbolicInferenceBoundKind ReverseInferenceBoundKind(SymbolicInferenceBoundKind kind)
         => kind switch
         {
             SymbolicInferenceBoundKind.Lower => SymbolicInferenceBoundKind.Upper,
             SymbolicInferenceBoundKind.Upper => SymbolicInferenceBoundKind.Lower,
+            SymbolicInferenceBoundKind.MethodGroupSource => SymbolicInferenceBoundKind.MethodGroupUpper,
+            SymbolicInferenceBoundKind.MethodGroupUpper => SymbolicInferenceBoundKind.MethodGroupUpper,
             _ => SymbolicInferenceBoundKind.Exact,
         };
 
@@ -8186,6 +8551,23 @@ internal sealed class MemberLookup
 
         public void Add(int position, TypeSymbol type, SymbolicInferenceBoundKind kind)
         {
+            // Issue #4133 (Copilot review finding, hot-core translation
+            // guard PR): a bound recovered from a bare method group's OWN
+            // parameter type is discarded outright, never routed to any
+            // list — not even as a last-resort fallback for a slot with no
+            // other bound. C# never treats it as input-inference evidence
+            // (§12.6.3.7); `Fallback.Wrap[T](predicate Func[T, bool])`
+            // called as `Wrap(Check)` with no other argument to fix `T`
+            // reports CS0411 in `csc`, measured, not assumed. A prior
+            // version of this fix promoted it into `Upper` as a fallback,
+            // which made gsc accept that exact shape — strictly MORE
+            // permissive than `csc`, the opposite direction of #4133's own
+            // defect.
+            if (kind == SymbolicInferenceBoundKind.MethodGroupUpper)
+            {
+                return;
+            }
+
             var slots = kind switch
             {
                 SymbolicInferenceBoundKind.Exact => this.Exact,

@@ -758,25 +758,31 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
-    /// KNOWN-WRONG, pinned so it is measured rather than described, and named
-    /// for the issue that owns it: issue #4133.
+    /// Issue #4133's own row. A contravariant <c>Action&lt;object&gt;</c> /
+    /// <c>IComparer&lt;object&gt;</c> argument RAISES the inferred type
+    /// argument to <c>object</c>, exactly as a plain <c>T value</c> argument
+    /// would LOWER it: <c>csc</c> prints <c>Object</c>,
+    /// <c>generic-delegate:Object</c>, <c>Object</c>,
+    /// <c>generic-interface:Object</c>; so does G# now. Measured against a
+    /// compiled and run C# twin, not reasoned about.
     /// </summary>
     /// <remarks>
-    /// <para><c>csc</c> lets a contravariant <c>Action&lt;object&gt;</c> /
-    /// <c>IComparer&lt;object&gt;</c> argument RAISE the inferred type
-    /// argument to <c>object</c> and prints <c>Object</c>,
-    /// <c>generic-delegate:Object</c>, <c>Object</c>,
-    /// <c>generic-interface:Object</c> — compiled and run, not reasoned
-    /// about. G# fixes the argument from the first argument's declared type
-    /// and never lets the delegate raise it.</para>
-    /// <para>This is PRE-EXISTING and unchanged by #4086's fix: measured
-    /// identical on the parent and here. It is asserted on the CURRENT
-    /// (divergent) answer so whoever fixes #4133 gets a failing row rather
-    /// than silence. The winner does not move — only the inferred type
-    /// argument — which is why it is a different defect from #4086.</para>
+    /// The symbolic type-argument fixer
+    /// (<c>MemberLookup.FixSymbolicMethodTypeArguments</c>) collected both a
+    /// lower bound (from <c>value</c>) and an upper bound (from the
+    /// contravariant <c>sink</c> parameter) correctly, but picked the fixed
+    /// type from whichever list was <c>lower</c> whenever it was non-empty
+    /// and used <c>upper</c> only to validate that pick afterwards — never as
+    /// a candidate that could win. <c>FindSymbolicInferenceCandidate</c> now
+    /// builds its candidate set from BOTH lists together, so the upper bound
+    /// can raise the fixed type the way it already could narrow one upper
+    /// bound against another (order-independence, unaffected by this fix).
+    /// The winner does not move in the <c>*Winner</c> rows — only the
+    /// inferred type argument — which is why this was a different defect
+    /// from #4086.
     /// </remarks>
     [Fact]
-    public void Issue4133_AContravariantDelegateOrInterfaceArgumentDoesNotRaiseTheInferredArgument()
+    public void Issue4133_AContravariantDelegateOrInterfaceArgumentRaisesTheInferredArgument()
     {
         const string drivers = """
             Console.WriteLine(throughDelegateUpperBoundType[DisposableBase](DisposableBase()))
@@ -786,14 +792,393 @@ public class ImportedMemberMatrixTests
             """;
 
         Assert.Equal(
-                $"DisposableBase{Environment.NewLine}"
-                + $"generic-delegate:DisposableBase{Environment.NewLine}"
-                + $"DisposableBase{Environment.NewLine}"
-                + $"generic-interface:DisposableBase{Environment.NewLine}",
+                $"Object{Environment.NewLine}"
+                + $"generic-delegate:Object{Environment.NewLine}"
+                + $"Object{Environment.NewLine}"
+                + $"generic-interface:Object{Environment.NewLine}",
             CompileAndRunWithSiblingCs(
                 Issue4086CsSource,
                 Issue4086GsDeclarations + "\n" + drivers,
                 "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// Issue #4133 follow-up. Once symbolic inference started consulting a
+    /// lower AND an upper bound together (the fix above), a pair that is
+    /// mutually implicitly convertible but not <c>TypeSignaturesEquivalent</c>
+    /// — here, two same-shape named tuples differing only in whether one
+    /// field is a nullable reference — became reachable for the first time.
+    /// <c>csc</c>'s own fixing never treats a nullable-annotation-only
+    /// difference as ambiguity (nullability is folded in after a candidate is
+    /// picked, not used to eliminate one), so this must compile rather than
+    /// report a spurious <c>GS0159</c>. Found via the <c>cs2gs-code-exploder</c>
+    /// corpus (a real <c>ToDictionary</c> call over a same-shape,
+    /// differently-nullable tuple lower/upper bound pair) and reduced to this
+    /// single-file repro with no reference assembly, ruling out CLR-metadata
+    /// import as the cause (that turned out to be a separate, filed defect,
+    /// issue #4159).
+    /// </summary>
+    [Fact]
+    public void Issue4133_MutuallyConvertibleBoundsThatDifferOnlyByNullabilityMergeRatherThanConflict()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133Nullability
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            let xs = List[(Id int32, Text string)]()
+            xs.Add((1, "a"))
+            xs.Add((2, "b"))
+            let ys = xs.Select((s (Id int32, Text string?)) -> s.Text).ToList()
+            Console.WriteLine(ys.Count)
+            Console.WriteLine(ys[0])
+            Console.WriteLine(ys[1])
+            """;
+
+        Assert.Equal(
+            $"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
+    /// Issue #4133 follow-up, the REVERSE direction of the sibling test
+    /// above (Copilot review finding on this PR). That test's receiver
+    /// contributes the NON-nullable lower bound and the lambda's explicit
+    /// parameter contributes the nullable upper bound; both candidates
+    /// independently pass <c>SatisfiesSymbolicInferenceBounds</c> before
+    /// ever reaching the merge branch, because <c>string -&gt; string?</c>
+    /// is implicit. Swap which side is nullable — a nullable LOWER bound
+    /// (from the receiver) against a non-nullable UPPER bound (from the
+    /// lambda) — and neither candidate independently satisfied both bound
+    /// categories, since <c>string? -&gt; string</c> requires the bang
+    /// operator and is not implicit: `HasImplicitSymbolicConversion`'s
+    /// elimination gate rejected BOTH candidates before the merge branch
+    /// that resolves exactly this shape ever ran, silently reporting a
+    /// symbolic-inference conflict. `HasImplicitSymbolicConversion` now
+    /// treats a pure reference-nullable-annotation difference as mutually
+    /// satisfying at the gate itself, not only inside the merge branch, so
+    /// this direction reaches the same resolution as its sibling.
+    /// </summary>
+    [Fact]
+    public void Issue4133_MutuallyConvertibleBoundsMergeInTheReverseNullableDirectionToo()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133NullabilityReversed
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            class Item {
+                init(name string) {
+                    this.Name = name
+                }
+                prop Name string {
+                    get;
+                    init;
+                }
+            }
+
+            let xs = List[(Id int32, Value Item?)]()
+            xs.Add((1, Item("a")))
+            xs.Add((2, Item("b")))
+            let ys = xs.Select((s (Id int32, Value Item)) -> s.Value).ToList()
+            Console.WriteLine(ys.Count)
+            Console.WriteLine(ys[0].Name)
+            Console.WriteLine(ys[1].Name)
+            """;
+
+        Assert.Equal(
+            $"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
+    /// Issue #4160, found while measuring #4133's blast radius.
+    /// <c>FunctionTypeSymbol.AppendStructuralKey</c>'s tuple case keyed on
+    /// element TYPES only, omitting <c>TupleTypeSymbol.ElementNames</c> —
+    /// unlike <c>TupleTypeSymbol.Get</c>'s own cache key (ADR-0172), which
+    /// does include them. Two differently-named, same-shaped tuples used as
+    /// explicit lambda-parameter types at separate call sites in one
+    /// compilation therefore aliased in the shared cache: the
+    /// SECOND-processed call's parameter type silently resolved to the
+    /// FIRST's. Confirmed pre-existing (present identically on a control
+    /// build of the pre-#4133 compiler) and unrelated to #4133's own change —
+    /// just newly load-bearing once #4133 stopped silently ignoring upper
+    /// bounds recovered from a corrupted/aliased lower bound. Covers both the
+    /// flat case (the tuple itself is the lambda parameter) and a tuple
+    /// NESTED inside another type argument, since <c>TupleTypeSymbol.Get</c>
+    /// recurses through <c>FunctionTypeSymbol.AppendIdentityKey</c> for each
+    /// element too.
+    /// </summary>
+    [Fact]
+    public void Issue4160_DifferentlyNamedSameShapeTuplesDoNotAliasInTheStructuralCache()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4160TupleKey
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            func capOf(s string) string {
+                return s
+            }
+
+            func handleBatch(batch List[(Id int32, Content string)]) List[string] {
+                return batch.Select((b (Id int32, Content string)) -> capOf(b.Content)).ToList()
+            }
+
+            func handleSummaries(summaries List[(Id int32, Text string)]) List[string] {
+                return summaries.Select((s (Id int32, Text string)) -> capOf(s.Text)).ToList()
+            }
+
+            func handleNestedBatch(batch List[((Id int32, Content string), int32)]) List[string] {
+                return batch.Select((b ((Id int32, Content string), int32)) -> capOf(b.Item1.Content)).ToList()
+            }
+
+            func handleNestedSummaries(summaries List[((Id int32, Text string), int32)]) List[string] {
+                return summaries.Select((s ((Id int32, Text string), int32)) -> capOf(s.Item1.Text)).ToList()
+            }
+
+            let batch = List[(Id int32, Content string)]()
+            batch.Add((1, "hello"))
+            let batchResult = handleBatch(batch)
+            Console.WriteLine(batchResult[0])
+
+            let summaries = List[(Id int32, Text string)]()
+            summaries.Add((2, "world"))
+            let summariesResult = handleSummaries(summaries)
+            Console.WriteLine(summariesResult[0])
+
+            let nestedBatch = List[((Id int32, Content string), int32)]()
+            nestedBatch.Add(((3, "nested-hello"), 0))
+            let nestedBatchResult = handleNestedBatch(nestedBatch)
+            Console.WriteLine(nestedBatchResult[0])
+
+            let nestedSummaries = List[((Id int32, Text string), int32)]()
+            nestedSummaries.Add(((4, "nested-world"), 0))
+            let nestedSummariesResult = handleNestedSummaries(nestedSummaries)
+            Console.WriteLine(nestedSummariesResult[0])
+            """;
+
+        Assert.Equal(
+                $"hello{Environment.NewLine}"
+                + $"world{Environment.NewLine}"
+                + $"nested-hello{Environment.NewLine}"
+                + $"nested-world{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
+    /// Issue #4133 follow-up (hot-core translation guard finding #1,
+    /// <c>tools/cs2gs/Cs2Gs.Pipeline/DeclaredProjectItem.gs</c>): a BARE
+    /// METHOD GROUP argument's own declared parameter type is never a real
+    /// input-inference bound — C# §12.6.3.7 makes only an OUTPUT inference
+    /// from a method group's return type, never an input inference from its
+    /// parameters. Before this fix, <c>Where[TSource]</c>'s receiver
+    /// correctly lower-bounds <c>TSource</c> to <c>Item</c>, but the bare
+    /// predicate's own nullable-annotated parameter (<c>Item?</c> — the kind
+    /// of annotation cs2gs's oblivious-nullability heuristic adds to
+    /// nullable-oblivious C#) was ALSO fed in as a genuine upper bound and
+    /// "raised" <c>TSource</c> to <c>Item?</c>, which a LATER, explicitly
+    /// non-nullable lambda parameter two calls downstream could not absorb —
+    /// a false ambiguity surfacing as a real GS0159. Reduced from the real
+    /// failure to this single-file repro; matches <c>csc</c>, which infers
+    /// <c>TSource = Item</c> throughout. See
+    /// <c>MemberLookup.SymbolicInferenceBoundKind.MethodGroupUpper</c>,
+    /// which <c>MemberLookup.SymbolicInferenceBounds.Add</c> discards
+    /// outright, for the mechanism.
+    /// </summary>
+    [Fact]
+    public void Issue4133_BareMethodGroupParameterTypeDoesNotRaiseTheReceiversInferredArgument()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133MethodGroupParam
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            class Item {
+                init(name string) {
+                    this.Name = name
+                }
+                prop Name string {
+                    get;
+                    init;
+                }
+            }
+
+            func pred(x Item?) bool -> x != nil && x.Name.Length > 0
+
+            func run(items IReadOnlyList[Item]) List[string] {
+                return items
+                    .Where(pred)
+                    .Select((item Item) -> item.Name)
+                    .ToList()
+            }
+
+            let xs = List[Item]()
+            xs.Add(Item("a"))
+            xs.Add(Item("b"))
+            let result = run(xs)
+            Console.WriteLine(result.Count)
+            Console.WriteLine(result[0])
+            Console.WriteLine(result[1])
+            """;
+
+        Assert.Equal(
+            $"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
+    /// Issue #4133 follow-up (hot-core translation guard finding #2,
+    /// <c>tools/cs2gs/Cs2Gs.Translator/EmittedNameAllocator.gs</c>'s
+    /// <c>GetScopeNames</c>). The same bare-method-group mechanism as the
+    /// sibling test above, but reduced from the REAL failure (an ILVerify
+    /// <c>StackUnexpected</c> — the emitted MethodSpec closed
+    /// <c>Select</c> over <c>ISymbol</c> while the delegate site referenced
+    /// <c>Func&lt;INamespaceOrTypeSymbol,string&gt;</c>) rather than a
+    /// GS0159: a single bare method group (<c>SourceName</c>, parameter
+    /// <c>ISymbol?</c>) is used via <c>.Select(SourceName)</c> at TWO call
+    /// sites whose receivers yield DIFFERENT element types —
+    /// <c>INamespaceSymbol.GetMembers()</c> (a shadowing declaration
+    /// returning <c>IEnumerable&lt;INamespaceOrTypeSymbol&gt;</c>, a
+    /// subtype of <c>ISymbol</c>) in one branch, and the inherited
+    /// <c>ImmutableArray&lt;ISymbol&gt;</c>-returning overload in the other.
+    /// Before this fix, the first call site's receiver correctly
+    /// lower-bounds <c>TSource</c> to <c>INamespaceOrTypeSymbol</c>, but the
+    /// method group's own <c>ISymbol?</c> parameter fed in as a spurious
+    /// upper bound raised it back to the wider <c>ISymbol</c> — gsc then
+    /// emitted a <c>Select&lt;ISymbol,...&gt;</c> MethodSpec at a call site
+    /// whose delegate creation (<c>Func&lt;INamespaceOrTypeSymbol,string&gt;</c>,
+    /// pinned by the extension method's own <c>this</c> receiver type) still
+    /// referenced the narrower type — an inconsistency ILVerify catches but
+    /// gsc's own binder did not. References the real
+    /// <c>Microsoft.CodeAnalysis.dll</c> already restored for this test
+    /// project (via <see cref="AppContext.BaseDirectory"/>) rather than a
+    /// user-declared analog, since this exact mismatch is specific to a CLR
+    /// interface hierarchy shape.
+    /// </summary>
+    [Fact]
+    public void Issue4133_BareMethodGroupUsedAcrossDifferentReceiverElementTypesEmitsConsistentMethodSpecs()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133MethodGroupCrossReceiver
+
+            import Microsoft.CodeAnalysis
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            class Allocator {
+                shared {
+                    private func SourceName(symbol ISymbol?) string -> symbol!!.Name
+
+                    func GetScopeNames(symbol ISymbol) IReadOnlyCollection[string] {
+                        switch symbol {
+                            case namespaceSymbol is INamespaceSymbol {
+                                return namespaceSymbol
+                                    .ContainingNamespace
+                                    ?.GetMembers()
+                                    .Select(SourceName)
+                                    .ToArray() ?? Array.Empty[string]()
+                            }
+                            default {
+                                return cast[IReadOnlyCollection[string]](
+                                    symbol.ContainingNamespace?.GetMembers().Select(SourceName).ToArray() ?? Array.Empty[string]()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var codeAnalysisReference = Path.Combine(AppContext.BaseDirectory, "Microsoft.CodeAnalysis.dll");
+        Assert.True(File.Exists(codeAnalysisReference), $"expected {codeAnalysisReference} to already be restored alongside this test assembly");
+
+        var workDir = CreateWorkDir("imported_member_matrix_roslyn_");
+        try
+        {
+            Assert.Equal(
+                $"ok{Environment.NewLine}",
+                CompileAndRun(source, new[] { codeAnalysisReference }, workDir));
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    /// <summary>
+    /// Issue #4133 follow-up, negative witness (Copilot review finding on
+    /// this PR — a prior version of this fix got this backwards). A method
+    /// type parameter that ONLY a bare method group's own parameter type
+    /// ever constrains — <c>Fallback.Wrap[T](predicate Func[T, bool])</c>
+    /// called as <c>Fallback.Wrap(check)</c>, with no other argument to fix
+    /// <c>T</c> from — must FAIL to infer, matching <c>csc</c>, which
+    /// reports CS0411 ("The type arguments ... cannot be inferred from the
+    /// usage") for the identical C# shape, measured directly (not assumed)
+    /// against a compiled C# twin. An earlier draft of this fix added
+    /// <c>SymbolicInferenceBounds.PromoteMethodGroupFallbacks</c>, promoting
+    /// the demoted <c>MethodGroupUpper</c> bound back into <c>Upper</c> as a
+    /// same-slot "fallback" whenever no other bound existed — reasoning
+    /// that <c>Foo(SomeMethod)</c> with no other argument must be the one
+    /// shape where a method group's parameter type genuinely is the only
+    /// evidence. That reasoning was wrong: C# never treats it as evidence,
+    /// full stop, and the promoted fallback made gsc silently ACCEPT this
+    /// exact call — strictly MORE permissive than `csc`, the opposite
+    /// direction of #4133's own defect. <c>T</c> is a same-compilation user
+    /// class deliberately: a CLR primitive like <c>int32</c> can't
+    /// discriminate this case, since plain CLR reflection resolves
+    /// <c>Wrap&lt;Int32&gt;</c> on its own regardless of what the symbolic
+    /// layer does. `gsc` now reports `GS0155` (a real rejection, matching
+    /// `csc`'s reject decision even though the diagnostic code differs) —
+    /// `T` erases to `object`, and the bare method group's own parameter
+    /// type (<c>Item</c>) then fails to convert to the erased delegate
+    /// shape (<c>Func[object, bool]</c>).
+    /// </summary>
+    [Fact]
+    public void Issue4133_BareMethodGroupWithNoOtherBoundFailsToInferJustLikeCSharp()
+    {
+        const string csSource = """
+            namespace Sibling
+            {
+                public static class Fallback
+                {
+                    public static System.Func<T, bool> Wrap<T>(System.Func<T, bool> predicate) => predicate;
+                }
+            }
+            """;
+
+        const string gSource = """
+            package ImportedMemberMatrix.Issue4133MethodGroupFallback
+
+            import System
+            import Sibling
+
+            class Item {
+                init(name string) {
+                    this.Name = name
+                }
+                prop Name string {
+                    get;
+                    init;
+                }
+            }
+
+            func check(x Item) bool -> x.Name.Length > 0
+
+            let checker = Fallback.Wrap(check)
+            Console.WriteLine(checker.GetType().GenericTypeArguments[0].Name)
+            Console.WriteLine(checker(Item("a")))
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(csSource, gSource, "Issue4133Fallback.CSharp");
+        Assert.Contains(GetDiagnosticIds(diagnostics), id => id == "GS0155");
     }
 
     /// <summary>

@@ -4196,18 +4196,33 @@ internal sealed partial class ExpressionBinder
             null,
             ImmutableArray.CreateRange(arguments.Select(argument => argument.Type)));
         Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>> recoverTypeArgSymbols =
-            (closed, isExpanded) => MemberLookup.BuildSymbolicMethodTypeArgs(
-                closed,
-                default,
-                RefineSymbolicArgsForMethodGroups(
+            (closed, isExpanded) =>
+            {
+                var refinedArgs = RefineSymbolicArgsForMethodGroups(
                     closed,
                     arguments,
                     symbolicArgTypes,
                     receiverArgCount: 0,
                     isExpanded: isExpanded,
-                    argumentNames: clrArgumentNames),
-                isExpanded,
-                clrArgumentNames);
+                    argumentNames: clrArgumentNames,
+                    parameterMapping: default,
+                    methodGroupSlots: out var recoverMethodGroupSlots);
+
+                // Issue #4133 (hot-core translation guard finding): see
+                // MergeMethodGroupArgumentSlots's doc.
+                recoverMethodGroupSlots = MergeMethodGroupArgumentSlots(
+                    arguments,
+                    receiverArgCount: 0,
+                    refinedArgs.Length,
+                    recoverMethodGroupSlots);
+                return MemberLookup.BuildSymbolicMethodTypeArgs(
+                    closed,
+                    default,
+                    refinedArgs,
+                    isExpanded,
+                    clrArgumentNames,
+                    recoverMethodGroupSlots);
+            };
         var resolution = ClrOverloadResolution.Resolve(
             candidates,
             argTypes,
@@ -4242,19 +4257,30 @@ internal sealed partial class ExpressionBinder
         }
 
         var parameters = method.GetParameters();
+        var refinedSymbolicArgs = RefineSymbolicArgsForMethodGroups(
+            method,
+            arguments,
+            symbolicArgTypes,
+            receiverArgCount: 0,
+            isExpanded: resolution.IsExpanded,
+            argumentNames: clrArgumentNames,
+            parameterMapping: resolution.ParameterMapping,
+            methodGroupSlots: out var finalMethodGroupSlots);
+
+        // Issue #4133 (hot-core translation guard finding): see
+        // MergeMethodGroupArgumentSlots's doc.
+        finalMethodGroupSlots = MergeMethodGroupArgumentSlots(
+            arguments,
+            receiverArgCount: 0,
+            refinedSymbolicArgs.Length,
+            finalMethodGroupSlots);
         var symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
             method,
             default,
-            RefineSymbolicArgsForMethodGroups(
-                method,
-                arguments,
-                symbolicArgTypes,
-                receiverArgCount: 0,
-                isExpanded: resolution.IsExpanded,
-                argumentNames: clrArgumentNames,
-                parameterMapping: resolution.ParameterMapping),
+            refinedSymbolicArgs,
             resolution.IsExpanded,
-            clrArgumentNames);
+            clrArgumentNames,
+            finalMethodGroupSlots);
 
         // Return type: a return that names the constraint type-variable is
         // recovered by projecting through the constructed constraint,

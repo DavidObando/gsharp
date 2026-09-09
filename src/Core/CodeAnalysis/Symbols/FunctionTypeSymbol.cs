@@ -425,6 +425,31 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 }
 
                 builder.Append(')');
+
+                // Issue #4160 (found alongside #4133): mirror
+                // TupleTypeSymbol.Get's own cache key (ADR-0172) by folding
+                // element names into this structural key too. Without this,
+                // two differently-named same-shape tuples nested inside a
+                // larger structural type (e.g. two Func<(Id Guid, Text string), R> and
+                // Func<(Id Guid, Content string), R> lambda-parameter types
+                // from unrelated call sites in the same compilation) produce
+                // an identical key here, alias to the same cached
+                // FunctionTypeSymbol/instance, and silently cross-contaminate
+                // each other's parameter types.
+                if (tup.HasNames)
+                {
+                    builder.Append('|');
+                    for (var i = 0; i < tup.ElementNames.Length; i++)
+                    {
+                        if (i > 0)
+                        {
+                            builder.Append(',');
+                        }
+
+                        builder.Append(tup.ElementNames[i]);
+                    }
+                }
+
                 break;
             case ByRefTypeSymbol br:
                 builder.Append("!byref(");
