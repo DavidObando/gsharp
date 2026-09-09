@@ -394,7 +394,7 @@ internal sealed partial class ExpressionBinder
             // chain. Surface that imported base as a candidate so two sibling
             // subclasses of the same imported base unify to it. Walk the
             // user-base chain to find the first class carrying an imported base.
-            foreach (var c in structSymbol.GetHierarchy())
+            foreach (var c in baseClassChain)
             {
                 if (c.ImportedBaseType != null)
                 {

@@ -31,16 +31,16 @@ namespace GSharp.InternalAnalyzers;
 /// recurrence a build warning instead of a runtime defect.
 /// </para>
 /// <para>
-/// The rule: any assignment of the shape <c>x = x.BaseClass</c> (or
-/// <c>x = x?.BaseClass</c>), where <c>x</c> is a local/parameter identifier,
-/// occurring anywhere inside a <c>for</c>/<c>while</c>/<c>do</c> loop is
-/// exactly the "advance one step up the hierarchy" operation — the only
-/// legitimate reason to repeatedly reassign a variable to its own
-/// <c>BaseClass</c> is to walk the chain, and an unguarded walk of a cyclic
-/// chain never terminates. A single, non-repeating fetch into a NEW
-/// variable name (e.g. <c>var parent = current.BaseClass;</c>, used
-/// throughout the binder for immediate-base-class checks) is not flagged —
-/// only self-reassignment inside a loop is the unsafe shape.
+/// The rule: any assignment of the shape <c>x = x.BaseClass</c>, where
+/// <c>x</c> is a local/parameter identifier, occurring anywhere inside a
+/// <c>for</c>/<c>while</c>/<c>do</c> loop is exactly the "advance one step
+/// up the hierarchy" operation — the only legitimate reason to repeatedly
+/// reassign a variable to its own <c>BaseClass</c> is to walk the chain, and
+/// an unguarded walk of a cyclic chain never terminates. A single,
+/// non-repeating fetch into a NEW variable name (e.g. <c>var parent =
+/// current.BaseClass;</c>, used throughout the binder for immediate-base-class
+/// checks) is not flagged — only self-reassignment inside a loop is the
+/// unsafe shape.
 /// </para>
 /// <para>
 /// <see cref="IsInsideExemptMethod"/> exempts <c>StructSymbol.GetHierarchy()</c>
@@ -57,6 +57,16 @@ namespace GSharp.InternalAnalyzers;
 /// with <c>x.BaseClass</c> as an argument) is a different syntactic shape
 /// this rule does not detect — none of the sites found so far were
 /// recursive, so this is not yet a proven gap, but it is a known one.
+/// A null-conditional reassignment (<c>x = x?.BaseClass</c>) is also not
+/// detected: this file self-migrates as part of the cs2gs-pr-guard hot-core
+/// set (issue #4172), and <c>ConditionalAccessExpressionSyntax</c> /
+/// <c>MemberBindingExpressionSyntax</c> have no G# analyzer-API mapping
+/// (ADR-0169) — see issue #4173. Not a proven gap either: across every real
+/// <c>.BaseClass</c>-walk site found and fixed (#4162, #4164, #4172), the
+/// one null-conditional access encountered (<c>derived?.BaseClass</c> in
+/// <c>DeclarationBinder.Functions.cs</c>, fixed by #4164) was in a loop
+/// INITIALIZER, a position this rule never inspects — never in the
+/// reassignment position this rule targets.
 /// </para>
 /// <para>
 /// ENABLED BY DEFAULT (<c>isEnabledByDefault: true</c> on
@@ -129,11 +139,12 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
     /// <summary>
     /// Returns the member-access node of a <c>.BaseClass</c> access — an
     /// ordinary <see cref="MemberAccessExpressionSyntax"/> for
-    /// <c>x.BaseClass</c>, or the <see cref="MemberBindingExpressionSyntax"/>
-    /// for a null-conditional <c>x?.BaseClass</c> — together with its
-    /// receiver expression in <paramref name="receiver"/>. Returns
-    /// <see langword="null"/> when <paramref name="expression"/> is not a
-    /// <c>BaseClass</c> access at all.
+    /// <c>x.BaseClass</c> — together with its receiver expression in
+    /// <paramref name="receiver"/>. Returns <see langword="null"/> when
+    /// <paramref name="expression"/> is not a <c>BaseClass</c> access at all.
+    /// Deliberately does not also match a null-conditional <c>x?.BaseClass</c>
+    /// (see the "Deliberately out of scope" remark on this type — issue
+    /// #4173).
     /// </summary>
     private static ExpressionSyntax? GetBaseClassAccess(ExpressionSyntax expression, out ExpressionSyntax? receiver)
     {
@@ -142,14 +153,6 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
         {
             receiver = memberAccess.Expression;
             return memberAccess;
-        }
-
-        if (expression is ConditionalAccessExpressionSyntax conditionalAccess
-            && conditionalAccess.WhenNotNull is MemberBindingExpressionSyntax memberBinding
-            && memberBinding.Name.Identifier.ValueText == BaseClassPropertyName)
-        {
-            receiver = conditionalAccess.Expression;
-            return memberBinding;
         }
 
         receiver = null;

@@ -84,31 +84,6 @@ class Walker
     }
 
     [Fact]
-    public Task ReportsNullConditionalWalk()
-    {
-        const string Source = """
-class StructSymbol
-{
-    public StructSymbol? BaseClass;
-}
-
-class Walker
-{
-    void Walk(StructSymbol s)
-    {
-        var current = s;
-        while (current != null)
-        {
-            [|current = current?.BaseClass|];
-        }
-    }
-}
-""";
-
-        return AnalyzerTestHelper.AssertDiagnosticsAsync(new BaseClassCycleUnsafeWalkAnalyzer(), Source, "GSA0006");
-    }
-
-    [Fact]
     public Task IgnoresGetHierarchyItself()
     {
         // The one sanctioned implementation every other walk should call
