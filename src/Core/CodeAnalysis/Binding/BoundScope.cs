@@ -1655,19 +1655,20 @@ public sealed class BoundScope
         // binding an explicit `init(...)` constructor parameter's type clause
         // (Binder.LookupType -> BinderContext.TryLookupSourceType ->
         // TryLookupLexicalNestedTypeAlias -> here), before that detector has
-        // run. Without a visited guard, a cyclic BaseClass chain makes this
-        // loop forever (B -> C -> B -> C -> ...). Unlike #4162's
+        // run. Without a guard, a cyclic BaseClass chain made this loop
+        // forever (B -> C -> B -> C -> ...); unlike #4162's
         // StructSymbol.GetHierarchy() (which grew an unbounded List and OOMed
-        // the process), this loop allocates nothing per iteration, so
-        // unguarded it spins the CPU indefinitely at roughly stable RSS
-        // rather than growing memory — measured ~80 MB RSS, no growth, over
-        // a 30s hang. `visited.Add` returning false on a repeat both detects
-        // the cycle and stops the walk; this only changes behavior for an
-        // already-invalid (cyclic) program, since an acyclic chain can never
-        // revisit a node.
-        var visited = new HashSet<StructSymbol>();
-        for (var c = container.BaseClass; c != null && visited.Add(c); c = c.BaseClass)
+        // the process), this loop allocated nothing per iteration, so
+        // unguarded it spun the CPU indefinitely at roughly stable RSS rather
+        // than growing memory — measured ~80 MB RSS, no growth, over a 30s
+        // hang. `container.GetHierarchy()` is the single guarded walk (fixed
+        // by #4162, and the one every other #4164 call site now goes
+        // through too); skip the first entry (`container` itself) to match
+        // this loop's original `container.BaseClass` starting point.
+        var baseChain = container.GetHierarchy();
+        for (var level = 1; level < baseChain.Count; level++)
         {
+            var c = baseChain[level];
             var definition = c.Definition ?? c;
             if (!TryLookupNestedTypeAlias(definition, simpleName, preferredArity, out type))
             {

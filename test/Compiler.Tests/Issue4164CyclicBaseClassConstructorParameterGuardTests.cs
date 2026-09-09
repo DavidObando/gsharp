@@ -55,12 +55,20 @@ namespace GSharp.Compiler.Tests;
 /// report</c>; a CPU spin like the BoundScope site (no growing collection).
 /// </description></item>
 /// </list>
-/// All three shapes are fixed the same way #4162 fixed the original
-/// <c>StructSymbol.GetHierarchy()</c>: they now go through that single,
-/// already-guarded, <c>internal</c> walk (or, for the two remaining inline
-/// loops that could not be trivially expressed as a hierarchy consumer,
-/// a matching visited-set guard) instead of keeping independent unguarded
-/// copies that could drift out of sync with a future fix.
+/// Two more unguarded walks were found and fixed the same way, though no
+/// isolated repro was built for either (both are reachable only from the
+/// already-traced entry points above): <c>AccessibilityChecker.
+/// IsAccessibleFromType()</c> and <c>BinderContext.
+/// ImportedTypeOverridesSourceType()</c>.
+///
+/// All five sites are fixed the same way #4162 fixed the original
+/// <c>StructSymbol.GetHierarchy()</c>: every one of them now goes through
+/// that single, already-guarded, <c>internal</c> walk — including
+/// <c>TryLookupNestedTypeAliasIncludingInherited()</c> itself, whose own
+/// fix started as a hand-rolled <c>visited</c>-set guard and was then
+/// consolidated onto <c>GetHierarchy()</c> too, for consistency — instead of
+/// keeping independent unguarded (or independently-guarded) copies that
+/// could drift out of sync with a future fix again.
 ///
 /// Runs OUT-OF-PROCESS (rather than in-process via <c>Program.Main</c>),
 /// polling the child's working set and killing it well below any real danger
