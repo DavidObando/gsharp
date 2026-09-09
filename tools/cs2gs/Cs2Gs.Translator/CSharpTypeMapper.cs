@@ -498,7 +498,26 @@ public sealed class CSharpTypeMapper
     /// <returns>The canonical G# type reference for the event's handler type.</returns>
     public GTypeReference MapEventType(ITypeSymbol type, TranslationContext context, Location location)
     {
-        if (type is INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } named)
+        // Issue #4127/#4129 (a #3841/#2835 self-hosting regression, #3501):
+        // a property pattern containing an ENUM-constant sub-pattern
+        // (`TypeKind: TypeKind.Delegate`) matched against a value whose
+        // STATIC type is an imported interface (`ITypeSymbol`) silently
+        // evaluates as non-matching once this exact translation source is
+        // itself translated to G# and compiled by gsc — even though the
+        // type test and every individual sub-property hold. #4153's own
+        // repro isolates this to the enum sub-pattern ALONE: no other
+        // sub-pattern (a null check or otherwise) is required to trigger
+        // it, so every enum-containing property pattern over an
+        // imported-interface-typed scrutinee is a candidate, not only ones
+        // that also null-check. That is a gsc pattern-matcher defect
+        // (issue #4153), not a cs2gs one, but self-hosting means cs2gs's
+        // own source must avoid the shape gsc mishandles. The decomposed
+        // form below — designated `is` narrowing, then plain `==`/`!=`
+        // comparisons — is semantically identical in C# and is proven (by
+        // regression test) to survive self-hosting.
+        if (type is INamedTypeSymbol named
+            && named.TypeKind == TypeKind.Delegate
+            && named.DelegateInvokeMethod != null)
         {
             if (named.IsGenericType)
             {
@@ -2774,9 +2793,14 @@ public sealed class CSharpTypeMapper
         ITypeSymbol right,
         HashSet<INamedTypeSymbol> critical)
     {
+        // Issue #4127/#4129 (self-hosting regression, #3501): decomposed —
+        // not a nested `{ TypeKind: TypeKind.Delegate }` pattern — for the
+        // same gsc pattern-matcher reason as <see cref="MapEventType"/>.
+        // Verified by regression test to actually detect the collision once
+        // this method is itself translated to G# and compiled by gsc.
         if (SymbolEqualityComparer.Default.Equals(left, right)
-            || left is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } leftDelegate
-            || right is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } rightDelegate)
+            || left is not INamedTypeSymbol leftDelegate || leftDelegate.TypeKind != TypeKind.Delegate
+            || right is not INamedTypeSymbol rightDelegate || rightDelegate.TypeKind != TypeKind.Delegate)
         {
             return;
         }
@@ -2833,8 +2857,20 @@ public sealed class CSharpTypeMapper
             return true;
         }
 
-        if (left is not INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } leftDelegate
-            || right is not INamedTypeSymbol { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null } rightDelegate)
+        // Issue #4127/#4129 (self-hosting regression, #3501): decomposed for
+        // the same gsc pattern-matcher reason as <see cref="MapEventType"/>
+        // and <see cref="AddIfDistinctDelegates"/> — a property pattern
+        // containing an enum-constant sub-pattern against an
+        // imported-interface-typed scrutinee does not reliably match once
+        // this method is itself translated to G# and compiled by gsc; see
+        // <see cref="MapEventType"/> for why no other sub-pattern (a null
+        // check included) is needed to trigger it.
+        if (left is not INamedTypeSymbol leftDelegate
+            || leftDelegate.TypeKind != TypeKind.Delegate
+            || leftDelegate.DelegateInvokeMethod == null
+            || right is not INamedTypeSymbol rightDelegate
+            || rightDelegate.TypeKind != TypeKind.Delegate
+            || rightDelegate.DelegateInvokeMethod == null)
         {
             return false;
         }

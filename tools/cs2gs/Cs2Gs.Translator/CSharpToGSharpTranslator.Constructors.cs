@@ -1022,8 +1022,23 @@ public sealed partial class CSharpToGSharpTranslator
                     $"params collection of type '{parameterType}' has no gsc construction form.");
             }
 
-            bool explicitlyNamedDelegate = parameterType is INamedTypeSymbol
-                { TypeKind: TypeKind.Delegate, DelegateInvokeMethod: not null }
+            // Issue #4127/#4129 (self-hosting regression, #3501): decomposed —
+            // not a nested `{ TypeKind: TypeKind.Delegate, DelegateInvokeMethod:
+            // not null }` pattern — because gsc's pattern matcher does not
+            // reliably evaluate a property pattern containing an
+            // enum-constant sub-pattern against an imported-interface-typed
+            // scrutinee (`parameterType` is declared `ITypeSymbol`) once this
+            // exact source is itself translated to G# and compiled by gsc.
+            // See CSharpTypeMapper.MapEventType for the full explanation and
+            // for why the null-check sub-pattern here is incidental, not
+            // part of the trigger — #4153's own repro reproduces on the enum
+            // sub-pattern alone. This is the constructor-parameter call site
+            // that silently lost a C# `Predicate<int32>`'s nominal identity
+            // under self-hosting because this condition always evaluated to
+            // false.
+            bool explicitlyNamedDelegate = parameterType is INamedTypeSymbol namedParameterType
+                && namedParameterType.TypeKind == TypeKind.Delegate
+                && namedParameterType.DelegateInvokeMethod != null
                 && symbol.DeclaringSyntaxReferences.Any(reference =>
                     reference.GetSyntax() is ParameterSyntax { Type: not null });
             GTypeReference type = explicitlyNamedDelegate
