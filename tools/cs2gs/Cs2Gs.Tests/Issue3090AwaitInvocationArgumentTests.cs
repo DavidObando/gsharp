@@ -496,20 +496,5 @@ public sealed class Issue3090AwaitInvocationArgumentTests
     }
 
     private static string ResolveCorpusDir()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            string candidate = Path.Combine(directory.FullName, "tools", "cs2gs", "corpus");
-            if (Directory.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            "Could not locate tools/cs2gs/corpus above " + AppContext.BaseDirectory);
-    }
+        => TestFixtureSource.Resolve("tools", "cs2gs", "corpus");
 }

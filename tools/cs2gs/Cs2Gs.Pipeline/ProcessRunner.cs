@@ -86,6 +86,11 @@ public static class ProcessRunner
             psi.ArgumentList.Add(arg);
         }
 
+        // Stage 4 grants the original C# source tree only to the mirrored test
+        // host. Nested compiler/test/program launches must opt in explicitly;
+        // otherwise they could consume original fixtures as build inputs.
+        psi.Environment.Remove(GsharpTestProjectRunner.SourceRootEnvironmentVariable);
+
         if (environment is not null)
         {
             foreach ((string name, string value) in environment)

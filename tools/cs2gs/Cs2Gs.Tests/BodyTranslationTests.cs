@@ -526,22 +526,8 @@ public class BodyTranslationTests
     }
 
     private static string ResolveCorpusProject(string projectFolder, string projectFile)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "tools", "cs2gs", "corpus", projectFolder, projectFile);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate corpus project '{projectFolder}/{projectFile}' above {AppContext.BaseDirectory}.");
-    }
+        => TestFixtureSource.Resolve(
+            "tools", "cs2gs", "corpus", projectFolder, projectFile);
 
     /// <summary>
     /// Translates a small C# statement snippet (wrapped in a method with an

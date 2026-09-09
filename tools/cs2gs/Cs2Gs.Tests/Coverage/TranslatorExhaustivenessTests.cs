@@ -141,18 +141,5 @@ public class TranslatorExhaustivenessTests
         Path.Combine(RepoRoot(), ConstructInventory.RepoRelativePath.Replace('/', Path.DirectorySeparatorChar));
 
     private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(Path.GetDirectoryName(typeof(TranslatorExhaustivenessTests).Assembly.Location));
-        while (dir != null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "GSharp.sln")))
-            {
-                return dir.FullName;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new InvalidOperationException("GSharp.sln not found above the test assembly.");
-    }
+        => TestFixtureSource.Root;
 }

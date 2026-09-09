@@ -40,6 +40,12 @@ public enum GsharpTestRunStatus
 /// </summary>
 public class GsharpTestProjectRunner
 {
+    /// <summary>
+    /// The stage-4 child-process contract for the original, read-only C# source
+    /// tree. The variable is set only for <c>dotnet test --no-build</c>.
+    /// </summary>
+    public const string SourceRootEnvironmentVariable = "CS2GS_TEST_SOURCE_ROOT";
+
     private const string SdkPackageId = "Gsharp.NET.Sdk";
     private const string SdkPackagePrefix = SdkPackageId + ".";
 
@@ -353,6 +359,12 @@ public class GsharpTestProjectRunner
 
     internal static string FindRepoRoot()
     {
+        string configuredRoot = Environment.GetEnvironmentVariable(SourceRootEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            return ResolveConfiguredSourceRoot(configuredRoot, Environment.CurrentDirectory);
+        }
+
         string dir = Path.GetDirectoryName(typeof(GsharpTestProjectRunner).Assembly.Location);
         while (!string.IsNullOrEmpty(dir))
         {
@@ -365,7 +377,23 @@ public class GsharpTestProjectRunner
             dir = Path.GetDirectoryName(dir);
         }
 
-        return Environment.CurrentDirectory;
+        throw new DirectoryNotFoundException(
+            $"Could not locate the repository source root above " +
+            $"{typeof(GsharpTestProjectRunner).Assembly.Location}. Set " +
+            $"{SourceRootEnvironmentVariable} to the original source tree.");
+    }
+
+    internal static string ResolveConfiguredSourceRoot(string configuredRoot, string baseDirectory)
+    {
+        string fullPath = Path.GetFullPath(configuredRoot, baseDirectory);
+        string canonical = CanonicalRootPath.Resolve(fullPath);
+        if (!Directory.Exists(canonical))
+        {
+            throw new DirectoryNotFoundException(
+                $"Stage-4 source root from {SourceRootEnvironmentVariable} does not exist: '{canonical}'.");
+        }
+
+        return canonical;
     }
 
     private static (int[] Numbers, string Suffix) SplitVersion(string version)

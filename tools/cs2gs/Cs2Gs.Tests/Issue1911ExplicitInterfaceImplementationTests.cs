@@ -226,19 +226,5 @@ namespace Corpus.Issue1911
     }
 
     private static string ResolveCorpusDir()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            string candidate = Path.Combine(dir.FullName, "tools", "cs2gs", "corpus");
-            if (Directory.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate tools/cs2gs/corpus above " + AppContext.BaseDirectory);
-    }
+        => TestFixtureSource.Resolve("tools", "cs2gs", "corpus");
 }
