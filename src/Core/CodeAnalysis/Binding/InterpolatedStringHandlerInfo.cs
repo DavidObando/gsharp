@@ -211,8 +211,31 @@ public sealed class InterpolatedStringHandlerInfo
             parameters,
             arguments,
             receiver,
+            default,
+            System.Array.IndexOf(parameters, parameter),
             ImmutableArray<BoundInterpolatedStringPart>.Empty,
             out failure);
+
+    internal InterpolatedStringHandlerInfo WithCapturedForwardedArguments(
+        ImmutableArray<BoundExpression> forwardedArguments)
+        => new(
+            HandlerClrType,
+            HandlerType,
+            Constructor,
+            forwardedArguments,
+            HasTrailingOutBool,
+            ImmutableArray<int>.Empty,
+            HandlerRefKind);
+
+    internal InterpolatedStringHandlerInfo WithHandlerRefKind(RefKind handlerRefKind)
+        => new(
+            HandlerClrType,
+            HandlerType,
+            Constructor,
+            ForwardedArguments,
+            HasTrailingOutBool,
+            ForwardedSourceIndices,
+            handlerRefKind);
 
     internal static InterpolatedStringHandlerInfo? TryCreate(
         System.Type handlerClrType,
@@ -220,6 +243,8 @@ public sealed class InterpolatedStringHandlerInfo
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
         BoundExpression? receiver,
+        ImmutableArray<int> parameterMapping,
+        int handlerSourceIndex,
         ImmutableArray<BoundInterpolatedStringPart> parts,
         out string? failure)
     {
@@ -266,14 +291,32 @@ public sealed class InterpolatedStringHandlerInfo
                 }
             }
 
-            if (index < 0 || index >= arguments.Length)
+            var sourceIndex = index;
+            if (!parameterMapping.IsDefaultOrEmpty)
+            {
+                sourceIndex = -1;
+                for (var source = 0; source < parameterMapping.Length; source++)
+                {
+                    if (parameterMapping[source] == index)
+                    {
+                        sourceIndex = source;
+                        break;
+                    }
+                }
+            }
+
+            // Handler forwarding may only reference arguments already
+            // evaluated in lexical source order (C# CS8950 semantics).
+            if (sourceIndex < 0 ||
+                sourceIndex >= arguments.Length ||
+                sourceIndex >= handlerSourceIndex)
             {
                 failure = $"the handler argument references parameter '{name}', which is not a preceding argument of this call";
                 return null;
             }
 
-            forwarded.Add(arguments[index]);
-            sources.Add(index);
+            forwarded.Add(arguments[sourceIndex]);
+            sources.Add(sourceIndex);
         }
 
         var forwardedArgs = forwarded.ToImmutable();
