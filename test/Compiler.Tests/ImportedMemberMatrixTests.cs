@@ -803,6 +803,121 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
+    /// Issue #4133 follow-up. Once symbolic inference started consulting a
+    /// lower AND an upper bound together (the fix above), a pair that is
+    /// mutually implicitly convertible but not <c>TypeSignaturesEquivalent</c>
+    /// — here, two same-shape named tuples differing only in whether one
+    /// field is a nullable reference — became reachable for the first time.
+    /// <c>csc</c>'s own fixing never treats a nullable-annotation-only
+    /// difference as ambiguity (nullability is folded in after a candidate is
+    /// picked, not used to eliminate one), so this must compile rather than
+    /// report a spurious <c>GS0159</c>. Found via the <c>cs2gs-code-exploder</c>
+    /// corpus (a real <c>ToDictionary</c> call over a same-shape,
+    /// differently-nullable tuple lower/upper bound pair) and reduced to this
+    /// single-file repro with no reference assembly, ruling out CLR-metadata
+    /// import as the cause (that turned out to be a separate, filed defect,
+    /// issue #4159).
+    /// </summary>
+    [Fact]
+    public void Issue4133_MutuallyConvertibleBoundsThatDifferOnlyByNullabilityMergeRatherThanConflict()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133Nullability
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            let xs = List[(Id int32, Text string)]()
+            xs.Add((1, "a"))
+            xs.Add((2, "b"))
+            let ys = xs.Select((s (Id int32, Text string?)) -> s.Text).ToList()
+            Console.WriteLine(ys.Count)
+            Console.WriteLine(ys[0])
+            Console.WriteLine(ys[1])
+            """;
+
+        Assert.Equal(
+            $"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
+    /// Issue #4160, found while measuring #4133's blast radius.
+    /// <c>FunctionTypeSymbol.AppendStructuralKey</c>'s tuple case keyed on
+    /// element TYPES only, omitting <c>TupleTypeSymbol.ElementNames</c> —
+    /// unlike <c>TupleTypeSymbol.Get</c>'s own cache key (ADR-0172), which
+    /// does include them. Two differently-named, same-shaped tuples used as
+    /// explicit lambda-parameter types at separate call sites in one
+    /// compilation therefore aliased in the shared cache: the
+    /// SECOND-processed call's parameter type silently resolved to the
+    /// FIRST's. Confirmed pre-existing (present identically on a control
+    /// build of the pre-#4133 compiler) and unrelated to #4133's own change —
+    /// just newly load-bearing once #4133 stopped silently ignoring upper
+    /// bounds recovered from a corrupted/aliased lower bound. Covers both the
+    /// flat case (the tuple itself is the lambda parameter) and a tuple
+    /// NESTED inside another type argument, since <c>TupleTypeSymbol.Get</c>
+    /// recurses through <c>FunctionTypeSymbol.AppendIdentityKey</c> for each
+    /// element too.
+    /// </summary>
+    [Fact]
+    public void Issue4160_DifferentlyNamedSameShapeTuplesDoNotAliasInTheStructuralCache()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4160TupleKey
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            func capOf(s string) string {
+                return s
+            }
+
+            func handleBatch(batch List[(Id int32, Content string)]) List[string] {
+                return batch.Select((b (Id int32, Content string)) -> capOf(b.Content)).ToList()
+            }
+
+            func handleSummaries(summaries List[(Id int32, Text string)]) List[string] {
+                return summaries.Select((s (Id int32, Text string)) -> capOf(s.Text)).ToList()
+            }
+
+            func handleNestedBatch(batch List[((Id int32, Content string), int32)]) List[string] {
+                return batch.Select((b ((Id int32, Content string), int32)) -> capOf(b.Item1.Content)).ToList()
+            }
+
+            func handleNestedSummaries(summaries List[((Id int32, Text string), int32)]) List[string] {
+                return summaries.Select((s ((Id int32, Text string), int32)) -> capOf(s.Item1.Text)).ToList()
+            }
+
+            let batch = List[(Id int32, Content string)]()
+            batch.Add((1, "hello"))
+            let batchResult = handleBatch(batch)
+            Console.WriteLine(batchResult[0])
+
+            let summaries = List[(Id int32, Text string)]()
+            summaries.Add((2, "world"))
+            let summariesResult = handleSummaries(summaries)
+            Console.WriteLine(summariesResult[0])
+
+            let nestedBatch = List[((Id int32, Content string), int32)]()
+            nestedBatch.Add(((3, "nested-hello"), 0))
+            let nestedBatchResult = handleNestedBatch(nestedBatch)
+            Console.WriteLine(nestedBatchResult[0])
+
+            let nestedSummaries = List[((Id int32, Text string), int32)]()
+            nestedSummaries.Add(((4, "nested-world"), 0))
+            let nestedSummariesResult = handleNestedSummaries(nestedSummaries)
+            Console.WriteLine(nestedSummariesResult[0])
+            """;
+
+        Assert.Equal(
+                $"hello{Environment.NewLine}"
+                + $"world{Environment.NewLine}"
+                + $"nested-hello{Environment.NewLine}"
+                + $"nested-world{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
     /// Order-independence of the symbolic bound sets: two
     /// <c>Action&lt;T&gt;</c> arguments over a base and a derived type fix the
     /// same argument whichever order they are written in, in both the fixed
