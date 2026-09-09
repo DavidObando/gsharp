@@ -23,6 +23,14 @@ public sealed partial class CSharpToGSharpTranslator
     {
         private HashSet<string> repositorySharedDocumentPaths;
 
+        // Issue #4146 (Copilot review of #4128's fix): lazily-built cache
+        // backing `EmittedAssemblyIdentities()` below — see that method for
+        // why this exists (avoids an O(n) `RepositoryCompilations`/
+        // `SiblingCompilations` scan on every `TargetContractIsFrozenInMetadata`
+        // call) and `TargetContractIsFrozenInMetadata` for why identity
+        // (not simple-name string) comparison matters.
+        private HashSet<AssemblyIdentity> emittedAssemblyIdentities;
+
         // Issue #1072: G# follows Kotlin-style nullability, so `nil`-safety is
         // enforced by the static type, not by a `!!`-on-`nil` escape hatch. A C#
         // symbol DECLARED non-nullable (`T`) but defensively compared against
@@ -1492,10 +1500,26 @@ public sealed partial class CSharpToGSharpTranslator
             // #3888 adds one deliberately separate exception: when this query
             // is for the expanded ELEMENT position and that position's own
             // evidence widened `...T` to `...T?`, no bridge is needed.
+            //
+            // Issue #4128: that exception must carry the same-run gate the
+            // ordinary-parameter tail below already applies. #3888's evidence
+            // is a PREDICTION about the `...T?` this run will emit, and
+            // `IsParamsElementTainted` keys its edges on the owning method's
+            // documentation-comment ID, which an imported declaration has too
+            // — so a call site here passing a promoted `T?` taints the element
+            // position of `System.Type.MakeGenericType(params Type[])` itself,
+            // and the prediction then suppresses the very bridge that argument
+            // needs. That is circular for a frozen target: gsc imports the BCL
+            // carrier as `...Type` from its nullable metadata and nothing this
+            // translator decides can widen it, so the migrated
+            // test/Core.Tests `openTask.MakeGenericType(element)` lost its `!!`
+            // and produced GS0155. Trust the widening only where this run
+            // actually emits the declaration.
             if (IsVariadicCarrierParameter(targetSymbol))
             {
                 return targetSymbol is not IParameterSymbol { Type: IArrayTypeSymbol array } paramsParameter
                     || !SymbolEqualityComparer.Default.Equals(targetType, array.ElementType)
+                    || this.TargetContractIsFrozenInMetadata(paramsParameter)
                     || !ObliviousNullabilityAnalyzer.IsParamsElementTainted(
                         this.context.Compilation,
                         paramsParameter,
@@ -1547,24 +1571,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (!this.TargetContractIsFrozenInMetadata(targetSymbol))
+            {
+                return false;
+            }
+
             ISymbol original = targetSymbol.OriginalDefinition;
-            if (!original.DeclaringSyntaxReferences.IsDefaultOrEmpty)
-            {
-                return false;
-            }
-
-            // A sibling/repository project loaded as a plain metadata reference
-            // has no syntax either, but cs2gs is emitting its declaration in this
-            // same run — its contract is not frozen, so it stays on the
-            // promotion path above.
-            if (original.ContainingAssembly?.Name is { } assemblyName
-                && (assemblyName == this.context.Compilation.AssemblyName
-                    || (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
-                        compilation => compilation.AssemblyName == assemblyName) == true))
-            {
-                return false;
-            }
-
             ITypeSymbol declaredType = original switch
             {
                 IParameterSymbol parameter => parameter.Type,
@@ -1576,6 +1588,71 @@ public sealed partial class CSharpToGSharpTranslator
             return declaredType is { IsReferenceType: true }
                 and not ITypeParameterSymbol
                 && declaredType.NullableAnnotation == NullableAnnotation.None;
+        }
+
+        // Issue #4146 (Copilot review of #4128's fix): the assembly IDENTITIES
+        // (name + version + culture + public key token — not the bare simple
+        // name) this migration run emits: the current compilation's own
+        // assembly plus every repository/sibling compilation's. A simple-name
+        // string collision (two differently-versioned or differently-signed
+        // assemblies sharing a name) would otherwise misclassify a frozen BCL
+        // contract as "emitted this run" and suppress a null-bridge the
+        // emitted code actually needs — a variant of #4128 itself.
+        //
+        // Built lazily once per document and reused by every
+        // `TargetContractIsFrozenInMetadata` call instead of re-scanning
+        // `RepositoryCompilations`/`SiblingCompilations` on each call, the
+        // same lazy-cache-on-the-visitor shape as
+        // `repositorySharedDocumentPaths` above (`IsDeclaredInRepositorySharedDocument`).
+        private HashSet<AssemblyIdentity> EmittedAssemblyIdentities()
+        {
+            if (this.emittedAssemblyIdentities == null)
+            {
+                this.emittedAssemblyIdentities = new HashSet<AssemblyIdentity>
+                {
+                    this.context.Compilation.Assembly.Identity,
+                };
+                foreach (CSharpCompilation compilation in
+                    this.context.RepositoryCompilations ?? this.context.SiblingCompilations
+                        ?? (IReadOnlyList<CSharpCompilation>)Array.Empty<CSharpCompilation>())
+                {
+                    this.emittedAssemblyIdentities.Add(compilation.Assembly.Identity);
+                }
+            }
+
+            return this.emittedAssemblyIdentities;
+        }
+
+        // Issue #4128: whether <paramref name="targetSymbol"/>'s nullable
+        // contract is already FROZEN — a declaration no project in this
+        // migration run emits, so gsc reads its contract from CLR metadata and
+        // nothing this translator decides (promotion of the parameter, of a
+        // params element, of anything) can widen it.
+        //
+        // A symbol with any `DeclaringSyntaxReference` is source this run
+        // translates. A syntax-less symbol whose containing assembly IDENTITY
+        // matches this compilation's or any other compilation loaded in the
+        // run (see `EmittedAssemblyIdentities()` above — compared structurally,
+        // not by simple name, per the #4146 review) is a sibling/repository
+        // project loaded as a plain metadata reference — cs2gs is emitting its
+        // declaration too, so its contract is not frozen either. Everything
+        // else (the BCL, NuGet packages) is.
+        //
+        // Extracted from `IsImportedObliviousNullableTarget` (issue #3865),
+        // which asks the same same-run question before reading the frozen
+        // annotation; the params-element exception in
+        // `TargetWillRemainNonNullableReference` needs the question without the
+        // obliviousness half.
+        private bool TargetContractIsFrozenInMetadata(ISymbol targetSymbol)
+        {
+            ISymbol original = targetSymbol?.OriginalDefinition;
+            if (original == null || !original.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            return original.ContainingAssembly?.Identity is not { } assemblyIdentity
+                || !this.EmittedAssemblyIdentities().Contains(assemblyIdentity);
         }
 
         // A skipped source-generated property is recreated from its hand-written
