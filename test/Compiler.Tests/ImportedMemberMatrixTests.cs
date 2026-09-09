@@ -842,6 +842,58 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
+    /// Issue #4133 follow-up, the REVERSE direction of the sibling test
+    /// above (Copilot review finding on this PR). That test's receiver
+    /// contributes the NON-nullable lower bound and the lambda's explicit
+    /// parameter contributes the nullable upper bound; both candidates
+    /// independently pass <c>SatisfiesSymbolicInferenceBounds</c> before
+    /// ever reaching the merge branch, because <c>string -&gt; string?</c>
+    /// is implicit. Swap which side is nullable — a nullable LOWER bound
+    /// (from the receiver) against a non-nullable UPPER bound (from the
+    /// lambda) — and neither candidate independently satisfied both bound
+    /// categories, since <c>string? -&gt; string</c> requires the bang
+    /// operator and is not implicit: `HasImplicitSymbolicConversion`'s
+    /// elimination gate rejected BOTH candidates before the merge branch
+    /// that resolves exactly this shape ever ran, silently reporting a
+    /// symbolic-inference conflict. `HasImplicitSymbolicConversion` now
+    /// treats a pure reference-nullable-annotation difference as mutually
+    /// satisfying at the gate itself, not only inside the merge branch, so
+    /// this direction reaches the same resolution as its sibling.
+    /// </summary>
+    [Fact]
+    public void Issue4133_MutuallyConvertibleBoundsMergeInTheReverseNullableDirectionToo()
+    {
+        const string source = """
+            package ImportedMemberMatrix.Issue4133NullabilityReversed
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            class Item {
+                init(name string) {
+                    this.Name = name
+                }
+                prop Name string {
+                    get;
+                    init;
+                }
+            }
+
+            let xs = List[(Id int32, Value Item?)]()
+            xs.Add((1, Item("a")))
+            xs.Add((2, Item("b")))
+            let ys = xs.Select((s (Id int32, Value Item)) -> s.Value).ToList()
+            Console.WriteLine(ys.Count)
+            Console.WriteLine(ys[0].Name)
+            Console.WriteLine(ys[1].Name)
+            """;
+
+        Assert.Equal(
+            $"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}",
+            CompileAndRun(source));
+    }
+
+    /// <summary>
     /// Issue #4160, found while measuring #4133's blast radius.
     /// <c>FunctionTypeSymbol.AppendStructuralKey</c>'s tuple case keyed on
     /// element TYPES only, omitting <c>TupleTypeSymbol.ElementNames</c> —
@@ -933,9 +985,9 @@ public class ImportedMemberMatrixTests
     /// a false ambiguity surfacing as a real GS0159. Reduced from the real
     /// failure to this single-file repro; matches <c>csc</c>, which infers
     /// <c>TSource = Item</c> throughout. See
-    /// <c>MemberLookup.SymbolicInferenceBoundKind.MethodGroupUpper</c> and
-    /// <c>MemberLookup.SymbolicInferenceBounds.PromoteMethodGroupFallbacks</c>
-    /// for the mechanism.
+    /// <c>MemberLookup.SymbolicInferenceBoundKind.MethodGroupUpper</c>,
+    /// which <c>MemberLookup.SymbolicInferenceBounds.Add</c> discards
+    /// outright, for the mechanism.
     /// </summary>
     [Fact]
     public void Issue4133_BareMethodGroupParameterTypeDoesNotRaiseTheReceiversInferredArgument()
@@ -1062,26 +1114,35 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
-    /// Issue #4133 follow-up: the FALLBACK half of the same mechanism.
-    /// <c>SymbolicInferenceBounds.PromoteMethodGroupFallbacks</c> exists so a
-    /// method type parameter that ONLY a bare method group's own parameter
-    /// type ever constrains — <c>Fallback.Wrap[T](predicate Func[T, bool])</c>
+    /// Issue #4133 follow-up, negative witness (Copilot review finding on
+    /// this PR — a prior version of this fix got this backwards). A method
+    /// type parameter that ONLY a bare method group's own parameter type
+    /// ever constrains — <c>Fallback.Wrap[T](predicate Func[T, bool])</c>
     /// called as <c>Fallback.Wrap(check)</c>, with no other argument to fix
-    /// <c>T</c> from — still infers <c>T</c> from that parameter, matching
-    /// `csc`, instead of silently erasing to <c>object</c> and failing to
-    /// bind. Verified load-bearing (not dead code) by temporarily disabling
-    /// the promotion during this investigation: without it, this exact call
-    /// reports <c>GS0155: Cannot convert type '(Item) -> bool' to
-    /// 'System.Func[object, bool]'</c>, because <c>T</c>'s only bound (the
-    /// method group's parameter type) is demoted to
-    /// <c>MethodGroupUpper</c> and never promoted back. <c>T</c> is a
-    /// same-compilation user class deliberately — a CLR primitive like
-    /// <c>int32</c> can't discriminate this, since plain CLR reflection
-    /// already resolves <c>Wrap&lt;Int32&gt;</c> on its own regardless of
-    /// what the symbolic layer does.
+    /// <c>T</c> from — must FAIL to infer, matching <c>csc</c>, which
+    /// reports CS0411 ("The type arguments ... cannot be inferred from the
+    /// usage") for the identical C# shape, measured directly (not assumed)
+    /// against a compiled C# twin. An earlier draft of this fix added
+    /// <c>SymbolicInferenceBounds.PromoteMethodGroupFallbacks</c>, promoting
+    /// the demoted <c>MethodGroupUpper</c> bound back into <c>Upper</c> as a
+    /// same-slot "fallback" whenever no other bound existed — reasoning
+    /// that <c>Foo(SomeMethod)</c> with no other argument must be the one
+    /// shape where a method group's parameter type genuinely is the only
+    /// evidence. That reasoning was wrong: C# never treats it as evidence,
+    /// full stop, and the promoted fallback made gsc silently ACCEPT this
+    /// exact call — strictly MORE permissive than `csc`, the opposite
+    /// direction of #4133's own defect. <c>T</c> is a same-compilation user
+    /// class deliberately: a CLR primitive like <c>int32</c> can't
+    /// discriminate this case, since plain CLR reflection resolves
+    /// <c>Wrap&lt;Int32&gt;</c> on its own regardless of what the symbolic
+    /// layer does. `gsc` now reports `GS0155` (a real rejection, matching
+    /// `csc`'s reject decision even though the diagnostic code differs) —
+    /// `T` erases to `object`, and the bare method group's own parameter
+    /// type (<c>Item</c>) then fails to convert to the erased delegate
+    /// shape (<c>Func[object, bool]</c>).
     /// </summary>
     [Fact]
-    public void Issue4133_BareMethodGroupWithNoOtherBoundStillInfersFromItsParameterType()
+    public void Issue4133_BareMethodGroupWithNoOtherBoundFailsToInferJustLikeCSharp()
     {
         const string csSource = """
             namespace Sibling
@@ -1116,9 +1177,8 @@ public class ImportedMemberMatrixTests
             Console.WriteLine(checker(Item("a")))
             """;
 
-        Assert.Equal(
-            $"Item{Environment.NewLine}True{Environment.NewLine}",
-            CompileAndRunWithSiblingCs(csSource, gSource, "Issue4133Fallback.CSharp"));
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(csSource, gSource, "Issue4133Fallback.CSharp");
+        Assert.Contains(GetDiagnosticIds(diagnostics), id => id == "GS0155");
     }
 
     /// <summary>

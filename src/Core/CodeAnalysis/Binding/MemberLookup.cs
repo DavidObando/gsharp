@@ -127,12 +127,17 @@ internal sealed class MemberLookup
 
         // The reversed (contravariant-position) counterpart of
         // `MethodGroupSource` — what a method-group argument's own parameter
-        // type would contribute as an upper bound, kept in
-        // `SymbolicInferenceBounds.MethodGroupUpper` rather than `Upper` so
-        // it can be used as a same-slot FALLBACK (promoted only when no
-        // other bound exists for that type-parameter slot) instead of
-        // silently outranking the receiver/value bounds that already
-        // correctly fix the slot.
+        // type would contribute as an upper bound. `SymbolicInferenceBounds.Add`
+        // discards a bound of this kind outright rather than routing it
+        // anywhere: unlike an ordinary upper bound, a method group's own
+        // parameter type is NEVER legitimate input-inference evidence, not
+        // even as a last-resort fallback when a type parameter has no other
+        // bound at all. `csc` reports CS0411 for exactly that shape —
+        // `Wrap[T](predicate Func[T, bool])` called as `Wrap(Check)` with no
+        // other argument to fix `T` from — so gsc accepting it via a
+        // promoted fallback would make gsc MORE permissive than C#, the
+        // opposite direction of #4133's own defect (Copilot review finding
+        // on this PR, confirmed against a compiled and run `csc` control).
         MethodGroupUpper,
     }
 
@@ -6852,9 +6857,10 @@ internal sealed class MemberLookup
     /// the default <see cref="SymbolicInferenceBoundKind.Lower"/>, so a
     /// contravariant bound recovered from the method group's OWN parameter
     /// type — which C#'s method-type inference never treats as an input
-    /// bound (§12.6.3.7) — lands in <c>bounds.MethodGroupUpper</c> instead
-    /// of <c>bounds.Upper</c>, and only backfills a slot that ends up with
-    /// no other bound at all (<see cref="SymbolicInferenceBounds.PromoteMethodGroupFallbacks"/>).
+    /// bound (§12.6.3.7), not even as a last-resort fallback when no other
+    /// bound exists — is discarded outright by
+    /// <see cref="SymbolicInferenceBounds.Add"/> rather than landing in
+    /// <c>bounds.Upper</c>.
     /// </summary>
     private static TypeSymbol?[] InferSymbolicMethodTypeArgumentsCore(
         MethodInfo openMethod,
@@ -6922,7 +6928,6 @@ internal sealed class MemberLookup
             }
         }
 
-        bounds.PromoteMethodGroupFallbacks();
         return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference);
     }
 
@@ -7110,11 +7115,11 @@ internal sealed class MemberLookup
             // is meant to, resolving `TResult` to the nullable tuple shape.
             // (A BARE METHOD GROUP argument's own parameter type no longer
             // reaches this merge at all for the analogous case — see
-            // `SymbolicInferenceBoundKind.MethodGroupUpper` and
-            // `PromoteMethodGroupFallbacks` below, which demote a method
-            // group's parameter type out of the ordinary bound lists
-            // entirely, per C# §12.6.3.7: a method group is never an input
-            // inference source. Before that fix, this same branch is what
+            // `SymbolicInferenceBoundKind.MethodGroupUpper`, which
+            // `SymbolicInferenceBounds.Add` discards outright rather than
+            // routing into any bound list, per C# §12.6.3.7: a method group
+            // is never an input inference source, not even as a fallback.
+            // Before that fix, this same branch is what
             // let a cs2gs oblivious-nullability method-group parameter
             // cascade a spurious `?` forward into a later call, producing a
             // false ambiguity and a real GS0159
@@ -7251,10 +7256,38 @@ internal sealed class MemberLookup
     /// <see cref="Conversion.ClassifyNonStructural"/> here keeps that
     /// projection available for ordinary argument conversions while refusing
     /// to let it decide which upper/lower bound wins.
+    /// <para>
+    /// Issue #4133 (Copilot review finding, hot-core translation guard PR):
+    /// a PURE reference-nullable-annotation difference is treated as
+    /// mutually satisfying here too, not only inside
+    /// <see cref="FindSymbolicInferenceCandidate"/>'s own merge branch. That
+    /// merge branch only ever runs for a bound pair that both independently
+    /// pass <see cref="SatisfiesSymbolicInferenceBounds"/> first — this
+    /// method IS that gate — so without this check here, a bound PAIR whose
+    /// only relationship in the "wrong" direction is a nullable annotation
+    /// (e.g. a nullable LOWER bound against a non-nullable UPPER bound, the
+    /// mirror image of the shape the merge branch's own comment documents)
+    /// was eliminated before ever reaching the merge branch that exists to
+    /// resolve it, silently reporting a symbolic-inference conflict instead.
+    /// </para>
     /// </summary>
     private static bool HasImplicitSymbolicConversion(TypeSymbol source, TypeSymbol target)
-        => DeclarationBinder.TypeSignaturesEquivalent(source, target)
-            || Conversion.ClassifyNonStructural(source, target).IsImplicit;
+    {
+        if (DeclarationBinder.TypeSignaturesEquivalent(source, target))
+        {
+            return true;
+        }
+
+        var strippedSource = StripReferenceNullableAnnotations(source);
+        var strippedTarget = StripReferenceNullableAnnotations(target);
+        if ((!ReferenceEquals(strippedSource, source) || !ReferenceEquals(strippedTarget, target))
+            && DeclarationBinder.TypeSignaturesEquivalent(strippedSource, strippedTarget))
+        {
+            return true;
+        }
+
+        return Conversion.ClassifyNonStructural(source, target).IsImplicit;
+    }
 
     private static SymbolicInferenceBoundKind GetNestedInferenceBoundKind(
         Type openDefinition,
@@ -7275,13 +7308,40 @@ internal sealed class MemberLookup
         };
     }
 
+    /// <summary>
+    /// Issue #4133 (Copilot review finding, hot-core translation guard PR):
+    /// unlike ordinary <see cref="SymbolicInferenceBoundKind.Lower"/> /
+    /// <see cref="SymbolicInferenceBoundKind.Upper"/>, which correctly
+    /// toggle back and forth as nested generic-argument variance recurses
+    /// (two contravariant levels cancel out, matching real variance),
+    /// reversing <see cref="SymbolicInferenceBoundKind.MethodGroupUpper"/>
+    /// stays <c>MethodGroupUpper</c> rather than cycling back to
+    /// <see cref="SymbolicInferenceBoundKind.MethodGroupSource"/>. A method
+    /// group's own parameter type is discarded (never input-inference
+    /// evidence, §12.6.3.7) at ANY nesting depth beneath its own top-level
+    /// parameter position, not only at the first level: for
+    /// <c>M[T](items IEnumerable[T], handler Action[Action[T]])</c> called
+    /// with a bare method group <c>Handler(x Action[object])</c>, the outer
+    /// contravariant position (`Action[Action[T]]`'s own parameter) demotes
+    /// once to <c>MethodGroupUpper</c>, and the inner one — `Action[T]`'s
+    /// own contravariant type argument — recurses a SECOND time. Cycling
+    /// back to <c>MethodGroupSource</c> there would fall through to an
+    /// ordinary <see cref="SymbolicInferenceBoundKind.Lower"/> bound in
+    /// <see cref="SymbolicInferenceBounds.Add"/> — reintroducing the method
+    /// group's parameter type as genuine evidence through a second
+    /// contravariant level, exactly the shape this fix demotes at the
+    /// first level. <c>MethodGroupSource</c> (unreversed) is produced only
+    /// once, directly by the top-level argument's own bound kind — never by
+    /// a reversal — so staying sticky here cannot affect the group's own
+    /// legitimate top-level OUTPUT (return-type) contribution.
+    /// </summary>
     private static SymbolicInferenceBoundKind ReverseInferenceBoundKind(SymbolicInferenceBoundKind kind)
         => kind switch
         {
             SymbolicInferenceBoundKind.Lower => SymbolicInferenceBoundKind.Upper,
             SymbolicInferenceBoundKind.Upper => SymbolicInferenceBoundKind.Lower,
             SymbolicInferenceBoundKind.MethodGroupSource => SymbolicInferenceBoundKind.MethodGroupUpper,
-            SymbolicInferenceBoundKind.MethodGroupUpper => SymbolicInferenceBoundKind.MethodGroupSource,
+            SymbolicInferenceBoundKind.MethodGroupUpper => SymbolicInferenceBoundKind.MethodGroupUpper,
             _ => SymbolicInferenceBoundKind.Exact,
         };
 
@@ -8479,7 +8539,6 @@ internal sealed class MemberLookup
             this.Exact = new List<TypeSymbol>?[arity];
             this.Lower = new List<TypeSymbol>?[arity];
             this.Upper = new List<TypeSymbol>?[arity];
-            this.MethodGroupUpper = new List<TypeSymbol>?[arity];
         }
 
         public int Arity => this.Exact.Length;
@@ -8490,22 +8549,29 @@ internal sealed class MemberLookup
 
         public List<TypeSymbol>?[] Upper { get; }
 
-        // Issue #4133 (hot-core translation guard finding): an upper bound
-        // recovered from a bare method group's OWN parameter type
-        // (`SymbolicInferenceBoundKind.MethodGroupUpper`) — C# never makes
-        // this an input-inference bound (§12.6.3.7), so it is held apart
-        // from `Upper` and only promoted into it, per slot, by
-        // `PromoteMethodGroupFallbacks` when no other bound exists for that
-        // slot at all.
-        public List<TypeSymbol>?[] MethodGroupUpper { get; }
-
         public void Add(int position, TypeSymbol type, SymbolicInferenceBoundKind kind)
         {
+            // Issue #4133 (Copilot review finding, hot-core translation
+            // guard PR): a bound recovered from a bare method group's OWN
+            // parameter type is discarded outright, never routed to any
+            // list — not even as a last-resort fallback for a slot with no
+            // other bound. C# never treats it as input-inference evidence
+            // (§12.6.3.7); `Fallback.Wrap[T](predicate Func[T, bool])`
+            // called as `Wrap(Check)` with no other argument to fix `T`
+            // reports CS0411 in `csc`, measured, not assumed. A prior
+            // version of this fix promoted it into `Upper` as a fallback,
+            // which made gsc accept that exact shape — strictly MORE
+            // permissive than `csc`, the opposite direction of #4133's own
+            // defect.
+            if (kind == SymbolicInferenceBoundKind.MethodGroupUpper)
+            {
+                return;
+            }
+
             var slots = kind switch
             {
                 SymbolicInferenceBoundKind.Exact => this.Exact,
                 SymbolicInferenceBoundKind.Upper => this.Upper,
-                SymbolicInferenceBoundKind.MethodGroupUpper => this.MethodGroupUpper,
                 _ => this.Lower,
             };
             var slot = slots[position];
@@ -8516,29 +8582,6 @@ internal sealed class MemberLookup
             }
 
             slot.Add(type);
-        }
-
-        /// <summary>
-        /// Issue #4133 (hot-core translation guard finding): for each slot
-        /// with no <see cref="Exact"/>, <see cref="Lower"/>, or
-        /// <see cref="Upper"/> bound at all, promotes its
-        /// <see cref="MethodGroupUpper"/> entries into <see cref="Upper"/> —
-        /// the C#-faithful fallback for a type parameter that ONLY a method
-        /// group's parameter type ever constrained (e.g. <c>Foo(SomeMethod)</c>
-        /// with no other argument to fix <c>T</c> from). A slot that already
-        /// has a real bound from elsewhere (the common case — a receiver, a
-        /// plain value argument, another delegate argument) keeps that bound
-        /// exactly as it was pre-#4133, unaffected by the method group.
-        /// </summary>
-        public void PromoteMethodGroupFallbacks()
-        {
-            for (var i = 0; i < this.Arity; i++)
-            {
-                if (this.Exact[i] == null && this.Lower[i] == null && this.Upper[i] == null)
-                {
-                    this.Upper[i] = this.MethodGroupUpper[i];
-                }
-            }
         }
     }
 
