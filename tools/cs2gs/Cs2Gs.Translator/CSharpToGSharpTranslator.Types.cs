@@ -1134,7 +1134,14 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool RequiresEnumStatementFallback(SwitchStatementSyntax node)
         {
-            if (this.context.GetTypeInfo(node.Expression).Type is not INamedTypeSymbol { TypeKind: TypeKind.Enum } enumType)
+            // Issue #4167 (tracked by #4153): decomposed -- not a nested
+            // `{ TypeKind: TypeKind.Enum }` pattern -- because gsc's pattern
+            // matcher does not reliably evaluate an enum sub-pattern against
+            // an imported-interface-typed scrutinee (here, `ITypeSymbol` from
+            // `GetTypeInfo().Type`) under self-hosting. Same fix shape as the
+            // four call sites #4155 already decomposed for TypeKind.Delegate.
+            if (this.context.GetTypeInfo(node.Expression).Type is not INamedTypeSymbol enumType
+                || enumType.TypeKind != TypeKind.Enum)
             {
                 return false;
             }
