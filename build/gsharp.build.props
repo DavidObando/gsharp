@@ -35,6 +35,11 @@
     <SpectreConsolePackageReference Include="Spectre.Console" Version="0.55.2" />
     <!-- Design-time packages -->
     <NerdbankGitVersioningPackageReference Include="Nerdbank.GitVersioning" Version="3.11.13-beta" PrivateAssets="All" />
+    <!-- Pin transitive Microsoft.Build.Tasks.Git to a patched version (advisory
+         GHSA-23fw-v26w-5fgq / CVE-2026-62900). Nerdbank.GitVersioning 3.11.13-beta
+         pulls in 8.0.0, which is on the vulnerable list; 10.0.401 is the latest
+         stable release and is outside every vulnerable range in the advisory. -->
+    <MicrosoftBuildTasksGitPackageReference Include="Microsoft.Build.Tasks.Git" Version="10.0.401" PrivateAssets="All" />
     <StyleCopAnalyzersPackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers</IncludeAssets>
@@ -112,6 +117,10 @@
   <!-- Versioning Support -->
   <ItemGroup>
     <PackageReference Include="@(NerdBankGitVersioningPackageReference)" />
+    <!-- The pinned MicrosoftBuildTasksGitPackageReference item above overrides
+         the vulnerable 8.0.0 transitive floor pulled in by both
+         Nerdbank.GitVersioning and Microsoft.SourceLink.GitHub. -->
+    <PackageReference Include="@(MicrosoftBuildTasksGitPackageReference)" />
   </ItemGroup>
   <ItemGroup>
     <!-- All projects need to be rebuilt if the version changes. -->
