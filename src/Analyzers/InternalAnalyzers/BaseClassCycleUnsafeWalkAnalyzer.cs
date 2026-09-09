@@ -72,15 +72,21 @@ namespace GSharp.InternalAnalyzers;
 /// ENABLED BY DEFAULT (<c>isEnabledByDefault: true</c> on
 /// <see cref="DiagnosticDescriptors.UnguardedBaseClassWalk"/>): a real-tree
 /// run against <c>src/Core</c> initially found 47 further hand-rolled
-/// <c>.BaseClass</c> walks beyond the six this rule was written to catch,
-/// all safe only because of binding-phase ordering (they ran after the
-/// cycle detector, or after emit-time diagnostics had already rejected a
-/// cyclic program) — not a structural guarantee a future edit couldn't
-/// break. Issue #4172 migrated every one of those 47 onto
-/// <c>GetHierarchy()</c> (or deleted the one that was dead code), so this
-/// repository's <c>TreatWarningsAsErrors=true</c> build now enforces the
-/// rule for real: any new unguarded walk is a build break, not a runtime
-/// hang waiting to be reported.
+/// <c>.BaseClass</c> walks beyond the six this rule was written to catch.
+/// Two of those 47 were not migration candidates at all: one was
+/// <c>DeclarationBinder.DetectClassInheritanceCycles()</c> itself, already
+/// exempted above — safe because of its own independent back-edge guard
+/// (<c>onPath</c>/<c>acyclic</c> sets), not because of binding-phase
+/// ordering — and one, <c>StructSymbol.TryGetInheritedMethod</c>, was
+/// confirmed dead code (zero callers) and deleted outright. The remaining
+/// sites were all safe only because of binding-phase ordering (they ran
+/// after the cycle detector, or after emit-time diagnostics had already
+/// rejected a cyclic program) — not a structural guarantee a future edit
+/// couldn't break. Issue #4172 migrated every one of those onto
+/// <c>GetHierarchy()</c>, so this repository's
+/// <c>TreatWarningsAsErrors=true</c> build now enforces the rule for real:
+/// any new unguarded walk is a build break, not a runtime hang waiting to
+/// be reported.
 /// </para>
 /// </remarks>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -102,42 +108,51 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
 
-        // Issue #4173: registered on the identifier rather than the
-        // assignment itself, and filtered by elimination against
-        // AssignmentExpressionSyntax.Right rather than an
-        // `assignment.Left is not IdentifierNameSyntax leftIdentifier`
-        // type-pattern test (or an equality test against .Left itself).
-        // AssignmentExpressionSyntax.Left has NO G# counterpart at all — G#'s
-        // AssignmentExpressionSyntax targets a plain IdentifierToken, never
-        // an arbitrary expression — and cs2gs's analyzer-API mode
-        // unconditionally folds ANY comparison against a no-G#-counterpart
-        // member to a fixed constant (true for !=, false for ==) regardless
-        // of what actually matches at the call site, so testing `.Left`
-        // itself (in any shape) would make this rule either never fire or
-        // always fire once translated. `.Right`, unlike `.Left`, DOES have a
-        // real G# counterpart (Expression) with no such folding — so instead
-        // of asking "am I positioned as .Left", this asks "am I NOT
-        // positioned as .Right": since a simple assignment has exactly two
-        // identifier-bearing child slots (Left, Right), and this callback
-        // only runs for an identifier whose immediate parent IS the
-        // assignment, ruling out .Right leaves .Left as the only
-        // possibility — a real, correctly-translating equality check.
-        context.RegisterSyntaxNodeAction(AnalyzeAssignment, SyntaxKind.IdentifierName);
+        context.RegisterSyntaxNodeAction(AnalyzeAssignment, SyntaxKind.SimpleAssignmentExpression);
     }
 
     private static void AnalyzeAssignment(SyntaxNodeAnalysisContext context)
     {
-        var leftIdentifier = (IdentifierNameSyntax)context.Node;
-        if (leftIdentifier.Parent is not AssignmentExpressionSyntax assignment
-            || assignment.Right == leftIdentifier)
+        var assignment = (AssignmentExpressionSyntax)context.Node;
+
+        // Issue #4173: gets the assignment target WITHOUT ever naming
+        // `.Left` — it has no G# counterpart at all (G#'s
+        // AssignmentExpressionSyntax targets a plain IdentifierToken, never
+        // an arbitrary expression), and cs2gs's analyzer-API mode
+        // unconditionally folds any COMPARISON against a no-G#-counterpart
+        // member to a fixed constant regardless of what actually matches at
+        // the call site — an earlier version of this method learned that the
+        // hard way (`assignment.Left != leftIdentifier` compiled but always
+        // evaluated true once translated, making this whole rule a silent
+        // no-op in its migrated form). `GetFirstToken()`/`.Parent`, unlike
+        // `.Left`, are ordinary SyntaxNode members with no such folding.
+        //
+        // `GetFirstToken()` returns the assignment's very first token
+        // regardless of shape. For `x = y` that token IS `x`; walking up from
+        // it, `x`'s immediate parent is the wrapping `IdentifierNameSyntax`,
+        // and THAT node's parent is the assignment itself (two hops). For
+        // `obj.Field = y` or `arr[i] = y`, the same walk needs a third hop
+        // (through a MemberAccessExpressionSyntax/ElementAccessExpressionSyntax)
+        // before reaching the assignment — so "one or two hops up reaches the
+        // assignment" is true only for a bare-identifier target, exactly
+        // mirroring `assignment.Left is IdentifierNameSyntax`. In G#, where
+        // this callback only ever fires for an already-identifier-only
+        // target, `IdentifierToken` is a DIRECT child of the assignment, so
+        // the same first token's immediate parent (one hop) already IS the
+        // assignment — the disjunction covers both shapes so this reads
+        // correctly translated OR not.
+        var leftToken = assignment.GetFirstToken();
+        if (leftToken.Parent != assignment && leftToken.Parent?.Parent != assignment)
         {
             return;
         }
 
+        var leftText = leftToken.Text;
+
         var baseClassAccess = GetBaseClassAccess(assignment.Right, out var rightReceiver);
         if (baseClassAccess == null
             || rightReceiver is not IdentifierNameSyntax rightIdentifier
-            || rightIdentifier.Identifier.ValueText != leftIdentifier.Identifier.ValueText)
+            || rightIdentifier.Identifier.ValueText != leftText)
         {
             return;
         }
@@ -155,7 +170,7 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(
             DiagnosticDescriptors.UnguardedBaseClassWalk,
             assignment.GetLocation(),
-            leftIdentifier.Identifier.ValueText));
+            leftText));
     }
 
     /// <summary>
@@ -173,12 +188,32 @@ public sealed class BaseClassCycleUnsafeWalkAnalyzer : DiagnosticAnalyzer
         if (expression is MemberAccessExpressionSyntax memberAccess
             && memberAccess.Name.Identifier.ValueText == BaseClassPropertyName)
         {
-            receiver = memberAccess.Expression;
+            // Issue #4173: cs2gs's nullable-lifting inserts a null-forgiving
+            // wrapper around a nullable receiver that has no equivalent
+            // narrowing in G#'s flow analysis, so the migrated form of even
+            // an unwrapped `current.BaseClass` receiver becomes
+            // `current!!.BaseClass` — a real, structural difference from the
+            // C# source this rule never sees written explicitly here, but
+            // must still recognize once translated. Unwrapping a leading
+            // null-forgiving operator on the receiver is also correct for
+            // real C# source that spells it explicitly (`current!.BaseClass`),
+            // which is a legitimate shape this rule should catch too.
+            receiver = UnwrapNullForgiving(memberAccess.Expression);
             return memberAccess;
         }
 
         receiver = null;
         return null;
+    }
+
+    private static ExpressionSyntax UnwrapNullForgiving(ExpressionSyntax expression)
+    {
+        while (expression is PostfixUnaryExpressionSyntax postfixUnary)
+        {
+            expression = postfixUnary.Operand;
+        }
+
+        return expression;
     }
 
     private static bool IsInsideLoop(SyntaxNode node)

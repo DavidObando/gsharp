@@ -153,6 +153,24 @@ internal static class RoslynAnalyzerApiMap
             "StructDeclarationSyntax",
             "Roslyn's TypeDeclarationSyntax is the abstract base for class/struct/interface/record declarations; G# splits these into distinct node types (StructDeclarationSyntax for class/struct, InterfaceDeclarationSyntax for interfaces) with no shared base of their own. This picks the class/struct case; an ancestor walk that also needs to match an interface declaration needs review."),
 
+        // Issue #4173: found analyzing a nullable receiver. G# has a single
+        // UnaryExpressionSyntax (OperatorToken + Operand) for every unary
+        // operator, prefix or postfix, so both Roslyn shapes collapse onto
+        // it; the operator itself is told apart by OperatorToken.Kind, not by
+        // a distinct node type. Also the shape cs2gs's nullable-lifting
+        // itself inserts around a nullable receiver with no G#-side flow
+        // narrowing to fall back on (G#'s own `!!` null-forgiving operator)
+        // — an analyzer walking a receiver expression may need to see
+        // through it even when the ORIGINAL C# never wrote one explicitly.
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.PostfixUnaryExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "UnaryExpressionSyntax",
+            "G# has one unary-expression node for prefix and postfix operators alike; distinguish by OperatorToken.Kind, not node type."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "UnaryExpressionSyntax",
+            "G# has one unary-expression node for prefix and postfix operators alike; distinguish by OperatorToken.Kind, not node type."),
+
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),
         ["Microsoft.CodeAnalysis.IFieldSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "FieldSymbol"),

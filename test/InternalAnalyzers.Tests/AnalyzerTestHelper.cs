@@ -26,9 +26,10 @@ internal static class AnalyzerTestHelper
         // Force every diagnostic the analyzer under test supports to report
         // as its declared default severity, regardless of the descriptor's
         // own IsEnabledByDefault. Without this, a rule shipped disabled by
-        // default (e.g. GSA0006, parked pending a follow-up cleanup) would
-        // silently report nothing here, and a positive test asserting it
-        // fires would fail for a reason unrelated to the analyzer's logic.
+        // default (e.g. one parked pending a follow-up cleanup before it can
+        // be turned on repo-wide) would silently report nothing here, and a
+        // positive test asserting it fires would fail for a reason unrelated
+        // to the analyzer's logic.
         var specificOptions = analyzer.SupportedDiagnostics.ToImmutableDictionary(d => d.Id, d => ToReportDiagnostic(d.DefaultSeverity));
         var compilation = CSharpCompilation.Create(
             "AnalyzerTests",
