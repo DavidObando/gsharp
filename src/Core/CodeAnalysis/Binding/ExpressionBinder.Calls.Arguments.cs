@@ -3855,6 +3855,28 @@ internal sealed partial class ExpressionBinder
             parameters,
             downstreamMapping,
             isExpanded: resolution.IsExpanded);
+
+        // Reviewer finding on #4142: expanded resolution can select a
+        // `params Handler[]` candidate for a custom
+        // [InterpolatedStringHandler] element, but this constrained path
+        // only rebound FormattableString above. Without this step a
+        // handler-typed params element still carries an ordinary string
+        // interpolation into ExpandParamsArguments and fails conversion
+        // (measured: GS0155 "Cannot convert type 'string' to
+        // '<Handler>'"). Route it through the shared rewrite, BEFORE
+        // expansion, same as every other resolved CLR call dispatch
+        // (BuildResolvedClrCallArguments). The receiver here is the real
+        // instance expression, not a synthesized one, so the
+        // prelude/updated-receiver outputs (relevant only to a synthesized
+        // extension receiver forwarded into a handler constructor) are
+        // discarded through the convenience overload.
+        arguments = ApplyInterpolatedStringHandlers(
+            parameters,
+            arguments,
+            receiver,
+            ce.Location,
+            downstreamMapping,
+            resolution.IsExpanded);
         if (resolution.IsExpanded)
         {
             var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
@@ -3877,17 +3899,16 @@ internal sealed partial class ExpressionBinder
         // Issue #1852: interpolated-string arguments are re-lowered above
         // before params expansion keeps source syntax and source slots aligned,
         // WITHOUT routing through the rest of
-        // BuildResolvedClrCallArguments (ApplyInterpolatedStringHandlers,
-        // delegate rebind, BindClrParameterConversions). This path
-        // deliberately skips the CLR boxing/conversion pass below (see the
-        // "deliberately skip" comment on orderedArgs): the emitted MemberRef
-        // parameter is the interface type-variable `!0`, passed unconverted,
-        // so routing every argument through the conversion pipeline would
-        // risk an ilverify mismatch. Only the specific interpolated-string
-        // arguments actually bound to a handler parameter are touched; every
-        // other argument (and the overload choice itself, unaffected unless a
-        // candidate's applicability actually depended on the flag) is
-        // unchanged.
+        // BuildResolvedClrCallArguments (delegate rebind,
+        // BindClrParameterConversions). This path deliberately skips the CLR
+        // boxing/conversion pass below (see the "deliberately skip" comment
+        // on orderedArgs): the emitted MemberRef parameter is the interface
+        // type-variable `!0`, passed unconverted, so routing every argument
+        // through the conversion pipeline would risk an ilverify mismatch.
+        // Only the specific interpolated-string arguments actually bound to
+        // a handler parameter are touched; every other argument (and the
+        // overload choice itself, unaffected unless a candidate's
+        // applicability actually depended on the flag) is unchanged.
         arguments = ApplySymbolicClrArgumentConversions(
             arguments,
             parameters,

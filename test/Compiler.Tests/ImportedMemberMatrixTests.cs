@@ -41,6 +41,12 @@ public class ImportedMemberMatrixTests
             string Take(object value);
             string Choose<T>(T value, System.Func<T> factory);
             string ChooseParams<T>(T value, params System.Func<T>[] factories);
+
+            // Reviewer finding on #4142: a constrained-instance dispatch
+            // through a type-parameter receiver selecting an expanded
+            // `params Handler[]` candidate for a custom
+            // [InterpolatedStringHandler] element.
+            string HandlerParams(int value, params MethodGroupOutputInference.MatrixHandler[] handlers);
         }
 
         public class InstanceOverloads : IInstanceOverloads
@@ -57,6 +63,9 @@ public class ImportedMemberMatrixTests
 
             public string ChooseParams<T>(T value, params System.Func<T>[] factories)
                 => typeof(T).Name;
+
+            public string HandlerParams(int value, params MethodGroupOutputInference.MatrixHandler[] handlers)
+                => value + ":" + string.Join(",", handlers);
         }
 
         public sealed class DerivedInstanceOverloads : InstanceOverloads
@@ -74,6 +83,10 @@ public class ImportedMemberMatrixTests
             static abstract string Pick<T>(T first, T second);
             static abstract string Choose<T>(T value, System.Func<T> factory);
             static abstract string ChooseParams<T>(T value, params System.Func<T>[] factories);
+
+            // Reviewer finding on #4142: the constrained-STATIC sibling of
+            // IInstanceOverloads.HandlerParams above.
+            static abstract string HandlerParams(int value, params MethodGroupOutputInference.MatrixHandler[] handlers);
         }
 
         public sealed class StaticOverloads : IStaticOverloads<StaticOverloads>
@@ -93,6 +106,9 @@ public class ImportedMemberMatrixTests
 
             public static string ChooseParams<T>(T value, params System.Func<T>[] factories)
                 => typeof(T).Name;
+
+            public static string HandlerParams(int value, params MethodGroupOutputInference.MatrixHandler[] handlers)
+                => value + ":" + string.Join(",", handlers);
         }
 
         public interface IAsyncStaticOverloads
@@ -1056,6 +1072,52 @@ public class ImportedMemberMatrixTests
                 + $"first|ref|12:first{Environment.NewLine}"
                 + $"12{Environment.NewLine}",
             CompileAndRunWithSiblingCs(Issue4086CsSource, source, "Issue4086.CSharp"));
+    }
+
+    /// <summary>
+    /// Reviewer finding on #4142: expanded overload resolution can select a
+    /// <c>params Handler[]</c> candidate through a CONSTRAINED receiver — both
+    /// the instance and the static-abstract-interface spelling — for a custom
+    /// <c>[InterpolatedStringHandler]</c> element. Both constrained dispatch
+    /// paths rebound only <c>FormattableString</c>, so the selected handler
+    /// type and the argument actually packed into the expanded array
+    /// disagreed and conversion failed.
+    /// </summary>
+    /// <remarks>
+    /// Measured on the parent of the fix: <c>GS0155 Cannot convert type
+    /// 'string' to 'HelperLib2.MatrixHandler'</c>, twice, for both the
+    /// constrained-instance and the constrained-static spelling. Both are
+    /// covered in one fact because the fix is one helper call added at both
+    /// sites, not two divergent patches.
+    /// </remarks>
+    [Fact]
+    public void Issue4142_ConstrainedDispatchRebindsCustomHandlersBeforeParamsExpansion()
+    {
+        const string source = """
+            package Issue4142.ConstrainedHandler
+            import System
+            import Issue4086.CSharp
+
+            func viaConstrainedInstance[TRecv IInstanceOverloads](recv TRecv) string {
+                return recv.HandlerParams(3, "first=${7}", "second=${8}")
+            }
+
+            func viaConstrainedStatic[TRecv IStaticOverloads[TRecv]]() string {
+                return TRecv.HandlerParams(3, "first=${7}", "second=${8}")
+            }
+
+            Console.WriteLine(viaConstrainedInstance[InstanceOverloads](InstanceOverloads()))
+            Console.WriteLine(viaConstrainedStatic[StaticOverloads]())
+            """;
+
+        Assert.Equal(
+            $"3:first=7,second=8{Environment.NewLine}"
+                + $"3:first=7,second=8{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(
+                Issue4086CsSource,
+                source,
+                "Issue4086.CSharp",
+                ignoredErrorScope: "viaConstrainedStatic"));
     }
 
     /// <summary>

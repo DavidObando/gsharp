@@ -4273,6 +4273,26 @@ internal sealed partial class ExpressionBinder
             parameters,
             downstreamMapping,
             isExpanded: resolution.IsExpanded);
+
+        // Reviewer finding on #4142: the same gap as constrained instance
+        // dispatch (ExpressionBinder.Calls.Arguments.cs,
+        // TryBindConstrainedClrCall) — expanded resolution can select a
+        // `params Handler[]` candidate for a custom
+        // [InterpolatedStringHandler] element, but only FormattableString
+        // rebinding ran here, so a handler-typed params element was packed
+        // with an ordinary string interpolation and failed conversion
+        // (measured: GS0155 "Cannot convert type 'string' to '<Handler>'").
+        // Route it through the shared rewrite, BEFORE expansion, same as
+        // every other resolved CLR call dispatch. There is no receiver at
+        // all here (a constrained STATIC call), so the prelude/updated-
+        // receiver outputs are discarded through the convenience overload.
+        arguments = ApplyInterpolatedStringHandlers(
+            parameters,
+            arguments,
+            receiver: null,
+            callSyntax.Location,
+            downstreamMapping,
+            resolution.IsExpanded);
         if (resolution.IsExpanded)
         {
             var symbolicParamsType = MemberLookup.GetClrMethodParameterTypeSymbol(
