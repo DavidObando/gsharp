@@ -1656,12 +1656,15 @@ public sealed class BoundScope
         // (Binder.LookupType -> BinderContext.TryLookupSourceType ->
         // TryLookupLexicalNestedTypeAlias -> here), before that detector has
         // run. Without a visited guard, a cyclic BaseClass chain makes this
-        // loop forever (B -> C -> B -> C -> ...), growing memory without
-        // bound until the process OOMs — the same shape #4162 fixed in
-        // StructSymbol.GetHierarchy(). `visited.Add` returning false on a
-        // repeat both detects the cycle and stops the walk; this only
-        // changes behavior for an already-invalid (cyclic) program, since an
-        // acyclic chain can never revisit a node.
+        // loop forever (B -> C -> B -> C -> ...). Unlike #4162's
+        // StructSymbol.GetHierarchy() (which grew an unbounded List and OOMed
+        // the process), this loop allocates nothing per iteration, so
+        // unguarded it spins the CPU indefinitely at roughly stable RSS
+        // rather than growing memory — measured ~80 MB RSS, no growth, over
+        // a 30s hang. `visited.Add` returning false on a repeat both detects
+        // the cycle and stops the walk; this only changes behavior for an
+        // already-invalid (cyclic) program, since an acyclic chain can never
+        // revisit a node.
         var visited = new HashSet<StructSymbol>();
         for (var c = container.BaseClass; c != null && visited.Add(c); c = c.BaseClass)
         {
