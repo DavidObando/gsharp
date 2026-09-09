@@ -177,6 +177,32 @@ selfmig_apply_baseline() {
       'Breakdown only — the gated numbers are the table above; nothing here changes the verdict.' || true
   fi
 
+  # Issue #3501 Track C: the third job-summary table — one row per app in the
+  # corpus (all of them, not just the red ones), showing the stage each app
+  # reached and how that compares to its tools/cs2gs/selfmig-baseline.json
+  # entry (stageFloor for red apps, greenApps membership for green ones), plus
+  # the failure category for red apps. Deliberately delegated to a Python
+  # script rather than written inline: it needs check-selfmig-stage-floor.py's
+  # own reached_stage() so this table can NEVER disagree with that script
+  # about what stage an app reached (see build/selfmig-app-table.py's module
+  # docstring for why a second, independently-written copy of that logic
+  # would be a correctness hazard here, not just duplication).
+  #
+  # Purely additive, exactly like the counters table above: only appended to
+  # the summary when the subprocess exits 0, never touches `status`, and (like
+  # the greenApps/stageFloor sections below) is skipped outright when run_json
+  # was not passed — some callers invoke this function with only 3 args.
+  if [[ -n "$run_json" && -f "$run_json" ]]; then
+    local app_table
+    if app_table=$(python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/selfmig-app-table.py" \
+      --baseline "$baseline" --run "$run_json"); then
+      printf '%s\n' "$app_table"
+      if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+        printf '%s\n' "$app_table" >> "$GITHUB_STEP_SUMMARY"
+      fi
+    fi
+  fi
+
   local status=0
   if (( green < green_floor )); then
     echo "GATE: green count $green fell below floor $green_floor." >&2
