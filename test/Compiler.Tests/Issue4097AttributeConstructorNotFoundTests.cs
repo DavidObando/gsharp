@@ -248,6 +248,26 @@ public class Issue4097AttributeConstructorNotFoundTests
             "UserAttributeWrongScalarType",
             "@Note(1)",
         };
+
+        // Review feedback on PR #4137: `ManyAttribute(Type[] values)` declares
+        // an ORDINARY array parameter, not `params`. Supplying two arguments
+        // must not be absorbed into it — `csc` reports CS1729 for the same
+        // program. Before the fix the matcher tested the parameter's shape
+        // rather than `ParamArrayAttribute` and emitted a call the source
+        // cannot write.
+        yield return new object[]
+        {
+            "NonParamsArrayAbsorbingArguments",
+            "@Many(typeof(Status), typeof(Status))",
+        };
+
+        // The same rule with one argument: a bare scalar at an ordinary array
+        // parameter is not a one-element params call either.
+        yield return new object[]
+        {
+            "NonParamsArraySingleArgument",
+            "@Many(typeof(Status))",
+        };
     }
 
     /// <summary>
@@ -480,6 +500,65 @@ public class Issue4097AttributeConstructorNotFoundTests
             // been written as a default rather than as what the source named.
             Assert.Equal(new[] { "NoteAttribute" }, EmittedAttributeNames(appPath, libPath, "Widget"));
             Assert.Equal(new object[] { 1 }, ConstructorArguments(appPath, libPath, "Widget"));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Review feedback on PR #4137: an unprojectable parameter used to be
+    /// recorded on ARITY alone, before applicability was settled, so it could
+    /// outrank a constructor that projected fine and that the ARGUMENTS simply
+    /// did not match.
+    /// </summary>
+    /// <remarks>
+    /// Here <c>PairAttribute</c> has two single-argument constructors: one
+    /// taking a same-compilation class (unprojectable, and not a valid
+    /// attribute parameter type), one taking a <c>string</c>. Passing an
+    /// <c>int32</c> matches neither — but the author's problem is the argument,
+    /// so the diagnostic must be GS0583 and not a complaint about a parameter
+    /// on the constructor that was never going to be chosen.
+    /// </remarks>
+    [Fact]
+    public void AnApplicableConstructorOutranksAnUnprojectableOne()
+    {
+        const string ProbeSource = """
+            package P
+            import System
+
+            class Holder {
+            }
+
+            class PairAttribute : Attribute {
+                init(value Holder) {
+                }
+
+                init(text string) {
+                }
+            }
+
+            @Pair(1)
+            class Target {
+            }
+
+            Console.WriteLine("ok")
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4097_rank_").FullName;
+        try
+        {
+            var libPath = CompileCSharpLibrary(tempDir);
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var log = Compile(tempDir, "App.gs", ProbeSource + "\n", appPath, "/target:exe", "/reference:" + libPath);
+
+            var ids = ErrorIds(log);
+            Assert.True(
+                ids.Contains(ExpectedId, StringComparer.Ordinal),
+                $"must report {ExpectedId} (the arguments), not GS0584 (a parameter on an "
+                    + $"unchosen constructor). Reported: [{string.Join(", ", ids)}]\nLog:\n{log}");
+            Assert.DoesNotContain("GS0584", ids);
         }
         finally
         {

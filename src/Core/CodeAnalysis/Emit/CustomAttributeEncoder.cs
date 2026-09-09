@@ -754,6 +754,7 @@ internal sealed class CustomAttributeEncoder
         ctorToken = default;
         paramTypes = null;
         unsupportedParameter = null;
+        var sawProjectableCandidate = false;
 
         if (attributeType.HasPrimaryConstructor
             && attributeType.PrimaryConstructorParameters.Length == argCount
@@ -763,7 +764,8 @@ internal sealed class CustomAttributeEncoder
             {
                 unsupportedParameter = offending;
             }
-            else if (ArgumentsAssignable(attr.PositionalArguments, paramTypes))
+            else if (SawProjectable(ref sawProjectableCandidate)
+                && ArgumentsAssignable(attr.PositionalArguments, paramTypes))
             {
                 ctorToken = this.resolvePrimaryCtorToken(attributeType);
                 return true;
@@ -796,6 +798,8 @@ internal sealed class CustomAttributeEncoder
 
                 if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending))
                 {
+                    // Recorded, but only provisionally — see the
+                    // `sawProjectableCandidate` reset below.
                     // First unencodable parameter wins, and an already-recorded
                     // one from the primary constructor is kept. Where BOTH a
                     // primary constructor of this arity rejected the arguments
@@ -807,6 +811,7 @@ internal sealed class CustomAttributeEncoder
                     continue;
                 }
 
+                sawProjectableCandidate = true;
                 if (!ArgumentsAssignable(attr.PositionalArguments, candidateParamTypes))
                 {
                     continue;
@@ -835,6 +840,19 @@ internal sealed class CustomAttributeEncoder
                 paramTypes = matchedParamTypes;
                 return true;
             }
+        }
+
+        if (sawProjectableCandidate)
+        {
+            // Review feedback on PR #4137: an unprojectable parameter was
+            // recorded on ARITY alone, before applicability was settled. If
+            // some other constructor of the same arity projected fine and the
+            // arguments simply did not match it, the author's problem is the
+            // arguments (GS0583), not a parameter type on a constructor that
+            // was never going to be chosen (GS0584). Clearing the record here
+            // keeps GS0584 for the case where EVERY arity-matching candidate
+            // failed to project.
+            unsupportedParameter = null;
         }
 
         if (argCount == 0 && this.resolveDefaultCtorToken != null)
@@ -1013,10 +1031,20 @@ internal sealed class CustomAttributeEncoder
         }
 
         // Third pass: params-array expansion. A constructor whose last
-        // parameter is a single-dimensional array can absorb zero or more
-        // trailing positional arguments, each assignable to the element type —
-        // e.g. xUnit's InlineData(params object[] data). The exact-arity pass
-        // above already handles passing the array directly.
+        // parameter is a PARAMS array can absorb zero or more trailing
+        // positional arguments, each assignable to the element type — e.g.
+        // xUnit's InlineData(params object[] data). The exact-arity pass above
+        // already handles passing the array directly.
+        //
+        // Review feedback on PR #4137: this used to test the parameter's SHAPE
+        // (one-dimensional array) rather than whether it is actually declared
+        // `params`, so an ordinary array parameter absorbed trailing arguments
+        // too. `@Many(typeof(A), typeof(B))` at `ManyAttribute(Type[] values)`
+        // matched and emitted a constructor call the source cannot write — C#
+        // reports CS1729 for the same program. That is the soundness rule
+        // PR #4087 established for `ArgAssignable`: anything the matcher admits
+        // is a call the emitter is willing to write, so it must admit only
+        // calls the language accepts.
         foreach (var ctor in ctors)
         {
             var pars = ctor.GetParameters();
@@ -1025,8 +1053,7 @@ internal sealed class CustomAttributeEncoder
                 continue;
             }
 
-            var lastType = pars[pars.Length - 1].ParameterType;
-            if (!lastType.IsArray || lastType.GetArrayRank() != 1)
+            if (!IsParamsArray(pars[pars.Length - 1]))
             {
                 continue;
             }
@@ -1109,6 +1136,56 @@ internal sealed class CustomAttributeEncoder
 
         value = raw;
         return true;
+    }
+
+    /// <summary>Marks that an arity-matching constructor projected, and returns true.</summary>
+    /// <param name="seen">The flag to set.</param>
+    /// <returns>Always <see langword="true"/>, so it can chain into a condition.</returns>
+    private static bool SawProjectable(ref bool seen)
+    {
+        seen = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a parameter is a genuine <c>params</c> array — asked of
+    /// <c>ParamArrayAttribute</c>, which is the authority, rather than inferred
+    /// from the parameter being a one-dimensional array.
+    /// </summary>
+    /// <remarks>
+    /// Read through <see cref="ParameterInfo.CustomAttributes"/> and compared by
+    /// full name because a third-party attribute is routinely resolved through
+    /// a <see cref="MetadataLoadContext"/>, where the loaded
+    /// <c>ParamArrayAttribute</c> is not the executing runtime's and
+    /// <c>GetCustomAttributes(Type, bool)</c> would not match it.
+    /// </remarks>
+    /// <param name="parameter">The candidate trailing parameter.</param>
+    /// <returns>Whether the parameter may absorb trailing arguments.</returns>
+    private static bool IsParamsArray(ParameterInfo parameter)
+    {
+        if (!parameter.ParameterType.IsArray || parameter.ParameterType.GetArrayRank() != 1)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var attribute in parameter.CustomAttributes)
+            {
+                if (attribute.AttributeType.FullName == "System.ParamArrayAttribute")
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // A metadata-loaded parameter whose custom attributes cannot be
+            // decoded: treat it as an ordinary array rather than guessing.
+            return false;
+        }
+
+        return false;
     }
 
     private static bool ParametersMatch(ParameterInfo[] pars, ImmutableArray<BoundAttributeArgument> positional, bool expandLast)
@@ -1272,8 +1349,7 @@ internal sealed class CustomAttributeEncoder
     private static object?[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
     {
         var lastIsArray = ctorParams.Length > 0
-            && ctorParams[ctorParams.Length - 1].ParameterType.IsArray
-            && ctorParams[ctorParams.Length - 1].ParameterType.GetArrayRank() == 1;
+            && IsParamsArray(ctorParams[ctorParams.Length - 1]);
 
         // Direct (non-expanded) form: arity matches and the final argument is
         // itself assignable to the array parameter (or there is no array tail).
