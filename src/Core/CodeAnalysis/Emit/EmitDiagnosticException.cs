@@ -81,6 +81,78 @@ internal sealed class EmitDiagnosticException : Exception
     }
 
     /// <summary>
+    /// Throws a failure that surfaces as <c>GS0583</c>: an attribute whose
+    /// arguments match no constructor of the attribute type.
+    /// </summary>
+    /// <remarks>
+    /// Issue #4097: the emitter used to treat "no candidate matched" as
+    /// "nothing to emit" and dropped the whole CustomAttribute row with no
+    /// diagnostic at all, so the author asked for metadata and got silence.
+    /// Constructor SELECTION is the emitter's own applicability rule
+    /// (<c>ArgAssignable</c> over the resolved constructor set, including
+    /// params-array expansion) and the emit pipeline has no
+    /// <c>DiagnosticBag</c> in scope, so the failure travels this channel the
+    /// way GS0546 does.
+    /// </remarks>
+    /// <param name="anchor">The annotation, or <c>null</c>.</param>
+    /// <param name="attributeName">The attribute type's name.</param>
+    /// <param name="argumentList">The supplied argument types, comma-separated.</param>
+    [DoesNotReturn]
+    public static void ThrowAttributeConstructorNotFound(SyntaxNode? anchor, string attributeName, string argumentList)
+    {
+        var descriptor = DiagnosticDescriptors.AttributeConstructorNotFound;
+        throw new EmitDiagnosticException(
+            descriptor.Id,
+            string.Format(System.Globalization.CultureInfo.InvariantCulture, descriptor.MessageFormat, attributeName, argumentList),
+            anchor);
+    }
+
+    /// <summary>
+    /// Throws a failure that surfaces as <c>GS0584</c>: a user-defined
+    /// attribute one of whose constructor parameters is not a valid attribute
+    /// parameter type.
+    /// </summary>
+    /// <remarks>
+    /// <para>Issue #4097's sibling cause. The row used to be dropped in
+    /// silence; this is the last line that stops it vanishing.</para>
+    /// <para>Its population was MEASURED rather than assumed, over a probe
+    /// comparing gsc against csc on the same shapes: every shape that reaches
+    /// here is one C# rejects as CS0181 — a same-compilation class, interface,
+    /// delegate, or a structural type. There is no legal-but-unencodable
+    /// residue, so this does NOT claim an encoder limit. The one shape that
+    /// looked like one, a same-compilation enum parameter, is encoded through
+    /// its underlying primitive instead (issue #4135); the Oahu corpus carries
+    /// it, and reporting it here took four of that corpus's apps red.</para>
+    /// <para>Emit is the wrong PLACE for this check — it belongs on the
+    /// attribute's declaration, once, the way csc reports CS0181 — but G# has
+    /// no such bind-time rule today, so these programs reach emit unchecked.
+    /// Filed as issue #4143; when it lands this becomes unreachable and can
+    /// retire.</para>
+    /// </remarks>
+    /// <param name="anchor">The annotation, or <c>null</c>.</param>
+    /// <param name="parameterName">The offending constructor parameter.</param>
+    /// <param name="attributeName">The attribute type's name.</param>
+    /// <param name="parameterTypeName">The parameter's declared type.</param>
+    [DoesNotReturn]
+    public static void ThrowAttributeConstructorParameterTypeNotSupported(
+        SyntaxNode? anchor,
+        string parameterName,
+        string attributeName,
+        string parameterTypeName)
+    {
+        var descriptor = DiagnosticDescriptors.AttributeConstructorParameterTypeNotSupported;
+        throw new EmitDiagnosticException(
+            descriptor.Id,
+            string.Format(
+                System.Globalization.CultureInfo.InvariantCulture,
+                descriptor.MessageFormat,
+                parameterName,
+                attributeName,
+                parameterTypeName),
+            anchor);
+    }
+
+    /// <summary>
     /// Throws an <see cref="EmitDiagnosticException"/> anchored at the given
     /// syntax node. Use this helper at call sites that previously threw
     /// <see cref="InvalidOperationException"/> or <see cref="NotSupportedException"/>.

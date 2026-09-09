@@ -590,7 +590,15 @@ internal sealed class CustomAttributeEncoder
         var ctor = ResolveAttributeConstructor(resolved, positional);
         if (ctor == null)
         {
-            return;
+            // Issue #4097: "no candidate matched" is the right ANSWER for this
+            // program; treating it as "nothing to emit" was the bug. Dropping
+            // the row here compiled clean, IL-verified and ran, and the
+            // annotation the author wrote was simply absent from the metadata.
+            // That silence is how issue #4073's `Type[]` half stayed invisible.
+            EmitDiagnosticException.ThrowAttributeConstructorNotFound(
+                attr.Syntax,
+                attr.AttributeType.Name,
+                DescribeArgumentList(positional));
         }
 
         var ctorParams = ctor.GetParameters();
@@ -671,9 +679,33 @@ internal sealed class CustomAttributeEncoder
     /// </remarks>
     private void EmitUserBoundAttribute(EntityHandle parent, StructSymbol attributeType, BoundAttribute attr)
     {
-        if (!this.TryResolveUserAttributeConstructor(attributeType, attr, out var ctorToken, out var paramTypes))
+        if (!this.TryResolveUserAttributeConstructor(
+                attributeType,
+                attr,
+                out var ctorToken,
+                out var paramTypes,
+                out var unsupportedParameter))
         {
-            return;
+            // Issue #4097: both failure modes used to drop the row silently.
+            // They are genuinely different and must not share one message. An
+            // invalid PARAMETER type means the attribute DECLARATION is
+            // ill-formed — measured: every shape that reaches here is one csc
+            // rejects as CS0181 — so the arguments are not what to talk about
+            // (GS0584). Anything else means no constructor accepts what was
+            // written (GS0583).
+            if (unsupportedParameter is { } offending)
+            {
+                EmitDiagnosticException.ThrowAttributeConstructorParameterTypeNotSupported(
+                    attr.Syntax,
+                    offending.Name,
+                    attributeType.Name,
+                    offending.Type?.Name ?? "?");
+            }
+
+            EmitDiagnosticException.ThrowAttributeConstructorNotFound(
+                attr.Syntax,
+                attributeType.Name,
+                DescribeArgumentList(attr.PositionalArguments));
         }
 
         var valueBlob = new BlobBuilder();
@@ -715,19 +747,40 @@ internal sealed class CustomAttributeEncoder
         StructSymbol attributeType,
         BoundAttribute attr,
         out EntityHandle ctorToken,
-        [NotNullWhen(true)] out Type[]? paramTypes)
+        [NotNullWhen(true)] out Type[]? paramTypes,
+        out ParameterSymbol? unsupportedParameter)
     {
         var argCount = attr.PositionalArguments.Length;
         ctorToken = default;
         paramTypes = null;
+        unsupportedParameter = null;
+        var sawProjectableCandidate = false;
 
         if (attributeType.HasPrimaryConstructor
             && attributeType.PrimaryConstructorParameters.Length == argCount
-            && this.resolvePrimaryCtorToken != null
-            && TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes))
+            && this.resolvePrimaryCtorToken != null)
         {
-            ctorToken = this.resolvePrimaryCtorToken(attributeType);
-            return true;
+            if (!TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes, out var offending))
+            {
+                unsupportedParameter = offending;
+            }
+            else if (SawProjectable(ref sawProjectableCandidate)
+                && ArgumentsAssignable(attr.PositionalArguments, paramTypes))
+            {
+                ctorToken = this.resolvePrimaryCtorToken(attributeType);
+                return true;
+            }
+            else
+            {
+                // Issue #4097: this arm used to be missing entirely. A primary
+                // constructor was accepted on ARITY alone, so `@Note(1)` at
+                // `NoteAttribute(Text string)` reached the blob writer with an
+                // int for a string slot and came out as GS9998 — an internal
+                // compiler error for a plain argument-type mistake. The
+                // CLR-imported path has always applied this rule via
+                // `ParametersMatch`.
+                paramTypes = null;
+            }
         }
 
         if (this.resolveExplicitCtorToken != null)
@@ -743,11 +796,22 @@ internal sealed class CustomAttributeEncoder
                     continue;
                 }
 
-                if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes))
+                if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending))
                 {
+                    // Recorded, but only provisionally — see the
+                    // `sawProjectableCandidate` reset below.
+                    // First unencodable parameter wins, and an already-recorded
+                    // one from the primary constructor is kept. Where BOTH a
+                    // primary constructor of this arity rejected the arguments
+                    // and an explicit one of the same arity has an unencodable
+                    // parameter, GS0584 is reported rather than GS0583 — it
+                    // names a real obstacle to emitting this attribute at all,
+                    // so fixing the arguments alone would not help.
+                    unsupportedParameter ??= offending;
                     continue;
                 }
 
+                sawProjectableCandidate = true;
                 if (!ArgumentsAssignable(attr.PositionalArguments, candidateParamTypes))
                 {
                     continue;
@@ -778,6 +842,19 @@ internal sealed class CustomAttributeEncoder
             }
         }
 
+        if (sawProjectableCandidate)
+        {
+            // Review feedback on PR #4137: an unprojectable parameter was
+            // recorded on ARITY alone, before applicability was settled. If
+            // some other constructor of the same arity projected fine and the
+            // arguments simply did not match it, the author's problem is the
+            // arguments (GS0583), not a parameter type on a constructor that
+            // was never going to be chosen (GS0584). Clearing the record here
+            // keeps GS0584 for the case where EVERY arity-matching candidate
+            // failed to project.
+            unsupportedParameter = null;
+        }
+
         if (argCount == 0 && this.resolveDefaultCtorToken != null)
         {
             try
@@ -800,15 +877,32 @@ internal sealed class CustomAttributeEncoder
         return false;
     }
 
-    private static bool TryGetClrParameterTypes(ImmutableArray<ParameterSymbol> parameters, [NotNullWhen(true)] out Type[]? clrTypes)
+    /// <summary>
+    /// Projects a same-compilation constructor's parameter types onto CLR
+    /// types, naming the first parameter that has none.
+    /// </summary>
+    /// <param name="parameters">The constructor's parameters.</param>
+    /// <param name="clrTypes">The projected types, when every parameter has one.</param>
+    /// <param name="unsupported">
+    /// Issue #4097: the first parameter whose type has no <c>ClrType</c> — a
+    /// same-compilation type, whose TypeDef only exists at emit. The caller
+    /// needs to know WHICH parameter so it can say so instead of reporting the
+    /// unrelated "no constructor accepts these arguments".
+    /// </param>
+    /// <returns>Whether every parameter projected.</returns>
+    private static bool TryGetClrParameterTypes(
+        ImmutableArray<ParameterSymbol> parameters,
+        [NotNullWhen(true)] out Type[]? clrTypes,
+        out ParameterSymbol? unsupported)
     {
         clrTypes = new Type[parameters.Length];
+        unsupported = null;
         for (int i = 0; i < parameters.Length; i++)
         {
-            var clr = parameters[i].Type?.ClrType;
-            if (clr == null)
+            if (!TryGetAttributeParameterWriteType(parameters[i].Type, out var clr))
             {
                 clrTypes = null;
+                unsupported = parameters[i];
                 return false;
             }
 
@@ -817,6 +911,61 @@ internal sealed class CustomAttributeEncoder
 
         return true;
     }
+
+    /// <summary>
+    /// The CLR type the fixed-argument writer should encode one same-compilation
+    /// constructor parameter AS.
+    /// </summary>
+    /// <remarks>
+    /// <para>Issue #4097, found in the Oahu corpus: a user attribute whose
+    /// constructor parameter is a same-compilation ENUM —
+    /// <c>@OahuCapability(CapabilityClass.Safe)</c> — has no <c>ClrType</c>
+    /// while the blob is built, because the enum's TypeDef only exists at emit.
+    /// The whole attribute used to be dropped in silence, and a first pass at
+    /// this issue reported it as unsupported. Both are wrong: the program is
+    /// legal, and ECMA-335 II.23.3 writes an enum-typed fixed argument as its
+    /// UNDERLYING primitive, which is available here.</para>
+    /// <para>Three facts make this a substitution rather than a feature. The
+    /// underlying type of a G# enum is always <c>int32</c>; the bound argument
+    /// value is already that underlying constant, not a symbol (the binder's
+    /// enum-literal arm stores <c>lit.Value</c>); and the constructor's own
+    /// token and signature come from the emitted <c>MethodDef</c> via the
+    /// injected resolvers, so nothing on this path has to encode the enum type
+    /// itself. Only the value's WIDTH was ever missing.</para>
+    /// </remarks>
+    /// <param name="type">The declared parameter type.</param>
+    /// <param name="writeType">The CLR type to encode the argument as.</param>
+    /// <returns>Whether the parameter can be encoded at all.</returns>
+    private static bool TryGetAttributeParameterWriteType(TypeSymbol? type, [NotNullWhen(true)] out Type? writeType)
+    {
+        if (type?.ClrType is { } declared)
+        {
+            writeType = declared;
+            return true;
+        }
+
+        if (type is EnumSymbol sourceEnum && sourceEnum.UnderlyingType.ClrType is { } underlying)
+        {
+            writeType = underlying;
+            return true;
+        }
+
+        writeType = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Describes the supplied positional arguments by their SOURCE types, for
+    /// the GS0583 message — the same information C# puts in CS1503.
+    /// </summary>
+    /// <param name="positional">The bound positional arguments.</param>
+    /// <returns>A comma-separated list of type names, empty for no arguments.</returns>
+    private static string DescribeArgumentList(ImmutableArray<BoundAttributeArgument> positional)
+        => string.Join(
+            ", ",
+            positional.Select(argument =>
+                argument.Type?.Name
+                    ?? (argument.Value is { } value ? value.GetType().Name : "nil")));
 
     private static ConstructorInfo? ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
     {
@@ -837,11 +986,65 @@ internal sealed class CustomAttributeEncoder
             }
         }
 
-        // Second pass: params-array expansion. A constructor whose last
-        // parameter is a single-dimensional array can absorb zero or more
-        // trailing positional arguments, each assignable to the element type —
-        // e.g. xUnit's InlineData(params object[] data). The exact-arity pass
-        // above already handles passing the array directly.
+        // Second pass: trailing OPTIONAL parameters. `ToStringAttribute(Type
+        // type, string format = null)` applied as `@ToString(typeof(X))` is
+        // legal C# and legal G#, and the blob still carries a value for every
+        // constructor parameter — the defaulted one included.
+        //
+        // Issue #4097 found this in the Oahu corpus rather than by reasoning:
+        // no pass admitted it, so the attribute was DROPPED from every Oahu
+        // assembly that used it, silently, and had been for as long as the
+        // corpus has been pinned. That is the defect this issue is about, seen
+        // from the other side — the silence was hiding a matcher gap, not just
+        // a user error. Reporting GS0583 here would be wrong: the program is
+        // one the language accepts.
+        //
+        // Placed before the params-array pass because normal form beats
+        // expanded form, which is also what C# overload resolution does.
+        foreach (var ctor in ctors)
+        {
+            var pars = ctor.GetParameters();
+            if (pars.Length <= positional.Length)
+            {
+                continue;
+            }
+
+            if (!TrailingParametersAreOptional(pars, positional.Length))
+            {
+                continue;
+            }
+
+            var applicable = true;
+            for (int i = 0; i < positional.Length; i++)
+            {
+                if (!ArgAssignable(positional[i].Value, pars[i].ParameterType, positional[i].Type))
+                {
+                    applicable = false;
+                    break;
+                }
+            }
+
+            if (applicable)
+            {
+                return ctor;
+            }
+        }
+
+        // Third pass: params-array expansion. A constructor whose last
+        // parameter is a PARAMS array can absorb zero or more trailing
+        // positional arguments, each assignable to the element type — e.g.
+        // xUnit's InlineData(params object[] data). The exact-arity pass above
+        // already handles passing the array directly.
+        //
+        // Review feedback on PR #4137: this used to test the parameter's SHAPE
+        // (one-dimensional array) rather than whether it is actually declared
+        // `params`, so an ordinary array parameter absorbed trailing arguments
+        // too. `@Many(typeof(A), typeof(B))` at `ManyAttribute(Type[] values)`
+        // matched and emitted a constructor call the source cannot write — C#
+        // reports CS1729 for the same program. That is the soundness rule
+        // PR #4087 established for `ArgAssignable`: anything the matcher admits
+        // is a call the emitter is willing to write, so it must admit only
+        // calls the language accepts.
         foreach (var ctor in ctors)
         {
             var pars = ctor.GetParameters();
@@ -850,8 +1053,7 @@ internal sealed class CustomAttributeEncoder
                 continue;
             }
 
-            var lastType = pars[pars.Length - 1].ParameterType;
-            if (!lastType.IsArray || lastType.GetArrayRank() != 1)
+            if (!IsParamsArray(pars[pars.Length - 1]))
             {
                 continue;
             }
@@ -868,6 +1070,122 @@ internal sealed class CustomAttributeEncoder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Whether every parameter from <paramref name="suppliedCount"/> onward is
+    /// optional AND carries a default the attribute blob can actually write.
+    /// </summary>
+    /// <remarks>
+    /// An ECMA-335 II.23.3 fixed-argument list has one entry per constructor
+    /// parameter, so "the caller may omit it" is not enough — a value has to be
+    /// produced. A parameter marked <c>[Optional]</c> with no constant gives
+    /// nothing to write for a value type, so it is refused rather than guessed
+    /// at; a reference type takes <c>nil</c>, which is what the CLR would pass.
+    /// </remarks>
+    /// <param name="pars">The candidate constructor's parameters.</param>
+    /// <param name="suppliedCount">How many arguments the source supplied.</param>
+    /// <returns>Whether the omitted tail can be defaulted.</returns>
+    private static bool TrailingParametersAreOptional(ParameterInfo[] pars, int suppliedCount)
+    {
+        for (int i = suppliedCount; i < pars.Length; i++)
+        {
+            if (!TryGetOptionalDefault(pars[i], out _))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reads an omitted parameter's default. Uses <c>RawDefaultValue</c> rather
+    /// than <c>DefaultValue</c> because a third-party attribute is routinely
+    /// resolved through a <see cref="MetadataLoadContext"/>, where the latter
+    /// is not available.
+    /// </summary>
+    /// <param name="parameter">The omitted parameter.</param>
+    /// <param name="value">The value to encode for it.</param>
+    /// <returns>Whether a writable default exists.</returns>
+    private static bool TryGetOptionalDefault(ParameterInfo parameter, out object? value)
+    {
+        value = null;
+        if (!parameter.IsOptional)
+        {
+            return false;
+        }
+
+        object? raw;
+        try
+        {
+            raw = parameter.RawDefaultValue;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // A metadata-loaded parameter whose Constant row cannot be decoded.
+            return false;
+        }
+
+        if (raw is DBNull or Missing)
+        {
+            // `[Optional]` with no Constant row. A reference slot takes nil; a
+            // value slot has no answer this encoder may invent.
+            return !parameter.ParameterType.IsValueType;
+        }
+
+        value = raw;
+        return true;
+    }
+
+    /// <summary>Marks that an arity-matching constructor projected, and returns true.</summary>
+    /// <param name="seen">The flag to set.</param>
+    /// <returns>Always <see langword="true"/>, so it can chain into a condition.</returns>
+    private static bool SawProjectable(ref bool seen)
+    {
+        seen = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Whether a parameter is a genuine <c>params</c> array — asked of
+    /// <c>ParamArrayAttribute</c>, which is the authority, rather than inferred
+    /// from the parameter being a one-dimensional array.
+    /// </summary>
+    /// <remarks>
+    /// Read through <see cref="ParameterInfo.CustomAttributes"/> and compared by
+    /// full name because a third-party attribute is routinely resolved through
+    /// a <see cref="MetadataLoadContext"/>, where the loaded
+    /// <c>ParamArrayAttribute</c> is not the executing runtime's and
+    /// <c>GetCustomAttributes(Type, bool)</c> would not match it.
+    /// </remarks>
+    /// <param name="parameter">The candidate trailing parameter.</param>
+    /// <returns>Whether the parameter may absorb trailing arguments.</returns>
+    private static bool IsParamsArray(ParameterInfo parameter)
+    {
+        if (!parameter.ParameterType.IsArray || parameter.ParameterType.GetArrayRank() != 1)
+        {
+            return false;
+        }
+
+        try
+        {
+            foreach (var attribute in parameter.CustomAttributes)
+            {
+                if (attribute.AttributeType.FullName == "System.ParamArrayAttribute")
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            // A metadata-loaded parameter whose custom attributes cannot be
+            // decoded: treat it as an ordinary array rather than guessing.
+            return false;
+        }
+
+        return false;
     }
 
     private static bool ParametersMatch(ParameterInfo[] pars, ImmutableArray<BoundAttributeArgument> positional, bool expandLast)
@@ -1031,15 +1349,35 @@ internal sealed class CustomAttributeEncoder
     private static object?[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
     {
         var lastIsArray = ctorParams.Length > 0
-            && ctorParams[ctorParams.Length - 1].ParameterType.IsArray
-            && ctorParams[ctorParams.Length - 1].ParameterType.GetArrayRank() == 1;
+            && IsParamsArray(ctorParams[ctorParams.Length - 1]);
 
         // Direct (non-expanded) form: arity matches and the final argument is
         // itself assignable to the array parameter (or there is no array tail).
         var lastSupplied = positional.Length == ctorParams.Length && positional.Length > 0
             ? positional[positional.Length - 1].Value
             : null;
-        var direct = !lastIsArray
+
+        // Issue #4097: a constructor selected through its trailing OPTIONAL
+        // parameters supplies fewer arguments than it has slots, and the blob
+        // needs one entry per slot. That is the normal form, never the expanded
+        // one, so it short-circuits the params-array reasoning below.
+        //
+        // The `TrailingParametersAreOptional` half is NOT redundant, and the
+        // first version of this fix omitted it. "Fewer arguments than slots" is
+        // ALSO true of a params tail absorbing zero trailing elements —
+        // `@MemberData("ShapeAreas")` at
+        // `MemberDataAttribute(string, params object[])` supplies one argument
+        // for two slots. Without the guard that took the direct path, and since
+        // a params array is not `IsOptional` (measured), nothing filled the
+        // slot: the blob got `nil` where the expanded form writes an EMPTY
+        // ARRAY. Well-formed blob, wrong content — it compiled, IL-verified,
+        // and xunit then found a theory with no data rows, reporting one
+        // dataless test instead of three cases. Caught by the cs2gs corpus
+        // gate, which is the only gate that runs the migrated tests.
+        var defaulted = positional.Length < ctorParams.Length
+            && TrailingParametersAreOptional(ctorParams, positional.Length);
+        var direct = defaulted
+            || !lastIsArray
             || (positional.Length == ctorParams.Length
                 && (lastSupplied == null
                     || ctorParams[ctorParams.Length - 1].ParameterType.IsInstanceOfType(lastSupplied)
@@ -1050,7 +1388,14 @@ internal sealed class CustomAttributeEncoder
             var values = new object?[ctorParams.Length];
             for (int i = 0; i < ctorParams.Length; i++)
             {
-                values[i] = positional[i].Value;
+                if (i < positional.Length)
+                {
+                    values[i] = positional[i].Value;
+                }
+                else if (TryGetOptionalDefault(ctorParams[i], out var fallback))
+                {
+                    values[i] = fallback;
+                }
             }
 
             return values;

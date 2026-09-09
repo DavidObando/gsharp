@@ -104,8 +104,13 @@ namespace GSharp.Compiler.Tests;
 /// so. The same kinds over an IMPORTED component already serialise correctly,
 /// which is what identifies the trigger. Repaired since, in
 /// <see cref="Issue4098StructuralAttributeTypeArgumentTests"/>.</para>
-/// <para><b>No new diagnostic.</b> Every program here is legal and was accepted
-/// before; only the metadata it emitted was wrong.</para>
+/// <para><b>Almost no new diagnostic.</b> Every program in this file's
+/// <see cref="AnAttributeTypeArgument_ReifiesToTheTypeTheSourceNames"/> rows is
+/// legal and was accepted before; only the metadata it emitted was wrong. The
+/// two source-illegal rows in
+/// <see cref="OnlyTheWidenedTypeArrayContainerSatisfiesAnArrayConstructor"/>
+/// are the exception: they used to be dropped silently and now report GS0583
+/// (issue #4097).</para>
 /// </remarks>
 public class Issue4073GenericAttributeTypeArgumentTests
 {
@@ -630,31 +635,31 @@ public class Issue4073GenericAttributeTypeArgumentTests
     /// ones is.
     /// </summary>
     /// <remarks>
-    /// The two rejected shapes are dropped SILENTLY, with no diagnostic — that
-    /// is the pre-existing behaviour of an attribute matching no constructor
-    /// (filed as issue #4097, and the reason this issue's own <c>Type[]</c> half
-    /// went unnoticed). This test asserts the drop rather than a diagnostic
-    /// because the drop is what the compiler does today; when #4097 lands these
-    /// rows become diagnostics.
+    /// <para>The two rejected shapes used to be dropped SILENTLY, with no
+    /// diagnostic — the pre-existing behaviour of an attribute matching no
+    /// constructor, and the reason this issue's own <c>Type[]</c> half went
+    /// unnoticed. That was filed as issue #4097 and this test asserted the drop
+    /// with a note saying the rows would become diagnostics when #4097 landed.
+    /// It has: they now report GS0583, and
+    /// <see cref="Issue4097AttributeConstructorNotFoundTests"/> owns the
+    /// diagnostic's own coverage.</para>
+    /// <para>The rejected rows moved into compilations of their own because the
+    /// GS0583 channel is emit-time and aborts on the first offending attribute,
+    /// so one source file can no longer carry an accepted row and a rejected
+    /// one at once. What this test asserts is unchanged in substance: the arm
+    /// fires for the container the compiler itself widened and for nothing
+    /// else.</para>
     /// </remarks>
     [Fact]
     public void OnlyTheWidenedTypeArrayContainerSatisfiesAnArrayConstructor()
     {
-        const string Declaration = """
+        const string Accepted = """
             @Names([]string{"x"})
             class Faithful {
             }
 
-            @Names([]object{"x"})
-            class WidenedStrings {
-            }
-
             @Many([]Type{typeof(Status)})
             class WidenedTypes {
-            }
-
-            @Many([]object{typeof(Status)})
-            class ObjectTypes {
             }
             """;
 
@@ -663,7 +668,7 @@ public class Issue4073GenericAttributeTypeArgumentTests
         {
             var libPath = CompileCSharpLibrary(tempDir);
             var appPath = Path.Combine(tempDir, "P.dll");
-            var source = Preamble + Declaration + "\n\nConsole.WriteLine(\"ok\")\n";
+            var source = Preamble + Accepted + "\n\nConsole.WriteLine(\"ok\")\n";
             var appLog = Compile(tempDir, "App.gs", source, appPath, "/target:exe", "/reference:" + libPath);
 
             Assert.Empty(ErrorIds(appLog));
@@ -682,9 +687,25 @@ public class Issue4073GenericAttributeTypeArgumentTests
                 ReifiedAttributeArguments(appPath, libPath, "WidenedTypes"));
 
             // Source-illegal: the declared element type is `object`, not the
-            // parameter's. Neither may be encoded.
-            Assert.Empty(HelperAttributeNames(appPath, libPath, "WidenedStrings"));
-            Assert.Empty(HelperAttributeNames(appPath, libPath, "ObjectTypes"));
+            // parameter's. Neither may be encoded — and, since #4097, neither
+            // may be waved through in silence.
+            foreach (var rejected in new[]
+            {
+                "@Names([]object{\"x\"})\nclass WidenedStrings {\n}",
+                "@Many([]object{typeof(Status)})\nclass ObjectTypes {\n}",
+            })
+            {
+                var rejectedPath = Path.Combine(tempDir, "Rejected.dll");
+                var rejectedLog = Compile(
+                    tempDir,
+                    "Rejected.gs",
+                    Preamble + rejected + "\n\nConsole.WriteLine(\"ok\")\n",
+                    rejectedPath,
+                    "/target:exe",
+                    "/reference:" + libPath);
+
+                Assert.Contains("GS0583", ErrorIds(rejectedLog));
+            }
         }
         finally
         {

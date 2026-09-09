@@ -495,6 +495,10 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor CircularConstraintDependency = new("GS0581", DiagnosticSeverity.Error, "Circular constraint dependency involving '{0}' and '{1}'. A type parameter cannot, directly or through a chain of type-parameter constraints, be constrained by itself.");
     internal static readonly DiagnosticDescriptor MethodGroupRequiresTarget = new("GS0582", DiagnosticSeverity.Error, "The {0} '{1}' cannot be used as a value without a target delegate type. Invoke it with '(...)' or convert it to a delegate.");
 
+    internal static readonly DiagnosticDescriptor AttributeConstructorNotFound = new("GS0583", DiagnosticSeverity.Error, "Attribute '{0}' has no constructor that accepts the argument list ({1}). Change the arguments to match one of its constructors (issue #4097; C# spells the same rule CS1729 and CS1503).");
+
+    internal static readonly DiagnosticDescriptor AttributeConstructorParameterTypeNotSupported = new("GS0584", DiagnosticSeverity.Error, "Constructor parameter '{0}' of user-defined attribute '{1}' has type '{2}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, an enum, or a 1-D array thereof (issue #4097; C# spells the same rule CS0181, and reports it on the attribute's declaration rather than on each use).");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");
