@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -114,6 +115,53 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
             CheckBareDriver(bare, expectedOutput, failures);
             CheckDriver("gsc /out:", emitted, expectedOutput, failures);
             CheckDriver("gsi", script, expectedOutput, failures);
+            Assert.True(failures.Count == 0, string.Join("\n\n", failures));
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// Issue #4130 regression: a driver that exits 0 with the right program
+    /// output must still pass even when it also prints a legitimate
+    /// WARNING-severity diagnostic. This is deliberately independent of the
+    /// self-hosting nondeterminism that originally surfaced the bug —
+    /// GS0536 ("Redundant '!!'", reported by ExpressionBinder's
+    /// <c>ReportNullAssertionIfRedundant</c>) fires unconditionally whenever
+    /// <c>!!</c> is applied to a statically non-nullable value, so a plain
+    /// <c>int</c> reproduces the same "warning alongside a successful run"
+    /// shape deterministically under the *native* compiler, with no need to
+    /// reproduce the self-hosted build that #4130 actually hit. Before
+    /// #4130's fix to <see cref="CheckDriver"/>, this test fails because the
+    /// warning's text pollutes the bare driver's stdout / breaks the
+    /// exact-output-equality check.
+    /// </summary>
+    [Fact]
+    public void BareDriverWarning_RedundantNullAssertion_DoesNotFailDriverCheck()
+    {
+        var directory = CreateEmptyTestDirectory("RedundantBangBang");
+        try
+        {
+            var sourcePath = WriteSource(
+                directory,
+                "warn.gs",
+                """
+                import System
+                let value = 41
+                Console.WriteLine(value!! + 1)
+                """);
+
+            var bare = RunCompiler(sourcePath);
+
+            // The warning must actually have fired — otherwise this test
+            // would pass whether or not #4130's CheckDriver fix is present,
+            // and would not be discriminating between the two.
+            Assert.Contains("GS0536", bare.StandardOutput, StringComparison.Ordinal);
+
+            var failures = new List<string>();
+            CheckBareDriver(bare, "42" + Environment.NewLine, failures);
             Assert.True(failures.Count == 0, string.Join("\n\n", failures));
         }
         finally
@@ -353,15 +401,40 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
         List<string> failures) =>
         CheckDriver("gsc", result, expectedOutput + "Success.\n", failures);
 
+    // Issue #4130: bare `gsc` and `gsi` both document that a *successful*
+    // run may still print diagnostics — bare `gsc`'s ExecuteInMemory
+    // (src/Compiler/Program.cs) prints warnings to stdout ahead of its
+    // "Success." trailer, and gsi's RunScript (src/Repl/Program.cs) always
+    // "renders [diagnostics] to standard error, the program's output
+    // streams straight through" regardless of severity. Neither driver's
+    // success contract is "diagnostic-free" — it is "exit code 0", which
+    // both already gate on the absence of an ERROR-severity diagnostic
+    // (ExecuteInMemory returns non-zero when `effective.Any(d => d.IsError)`;
+    // RunScript returns 1 when `!result.Success`). Requiring the raw
+    // stdout/stderr text to be byte-for-byte diagnostic-free — as this check
+    // did before #4130 — turns a legitimate warning into a false "driver
+    // failed", which is exactly what happened here: the reified open-generic
+    // delegate case (`selectOpen: true`) triggers GS0536 ("Redundant '!!':
+    // the value is already non-null here") on `callback!!("abc")` under a
+    // self-hosted gsc whose nullability inference for the mixed open/closed
+    // overload is tighter than the native compiler's, even though the actual
+    // program output — the whole point of this test — is unaffected. Strip
+    // the compiler's own diagnostic blocks (recognisable by
+    // TextWriterExtensions.WriteDiagnostics's fixed shape) before comparing,
+    // so a driver that exits 0 with the right program output only fails here
+    // when its OWN output is actually wrong.
     private static void CheckDriver(
         string name,
         DriverResult result,
         string expectedOutput,
         List<string> failures)
     {
+        var actualOutput = StripDiagnosticNoise(result.StandardOutput);
+        var actualError = StripDiagnosticNoise(result.StandardError);
+
         if (result.ExitCode != 0
-            || !string.Equals(Normalize(result.StandardOutput), expectedOutput, StringComparison.Ordinal)
-            || result.StandardError.Length != 0)
+            || !string.Equals(Normalize(actualOutput), expectedOutput, StringComparison.Ordinal)
+            || actualError.Length != 0)
         {
             failures.Add(
                 $"{name} failed:"
@@ -370,6 +443,23 @@ public sealed class Issue3149NamedDelegateReificationDriverTests
                 + $"\n  stderr:\n{result.StandardError}");
         }
     }
+
+    // Matches one full TextWriterExtensions.WriteDiagnostics dump: one or
+    // more diagnostic entries, each a blank separator line followed by
+    // either a located header ("<file>(sl,sc,el,ec): <severity> <id>:
+    // <message>") plus its one-line source snippet, or a location-less
+    // header ("<severity> <id>: <message>") alone — then the single extra
+    // blank line WriteDiagnostics always appends after the last entry.
+    // Matching (and removing) the run as one unit, rather than per-line,
+    // keeps that shared trailing blank line from being left behind as
+    // stray whitespace once the diagnostics themselves are stripped.
+    private static readonly Regex CompilerDiagnosticsBlock = new(
+        @"(?:\r?\n(?:.*\(\d+,\d+,\d+,\d+\):\ (?:error|warning|info)\ [A-Za-z0-9]+:\ .*\r?\n.*\r?\n" +
+        @"|(?:error|warning|info)\ [A-Za-z0-9]+:\ .*\r?\n))+\r?\n",
+        RegexOptions.Compiled);
+
+    private static string StripDiagnosticNoise(string text) =>
+        string.IsNullOrEmpty(text) ? text : CompilerDiagnosticsBlock.Replace(text, string.Empty);
 
     private static DriverResult RunCompiler(params string[] arguments) =>
         Capture(() => GSharp.Compiler.Program.Main(arguments));
