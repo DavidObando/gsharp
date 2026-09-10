@@ -3235,12 +3235,26 @@ internal sealed partial class DeclarationBinder
         var syntaxTree = parameterSyntax.SyntaxTree;
         var enclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType);
         var ownTypeParameters = structSymbol.TypeParameters;
+        var capturedInUnsafeContext = binderCtx.InUnsafeContext;
         pendingParameterDefaultValueBindings.Add(() =>
         {
             var outerScope = scope;
             var outerTypeParameters = binderCtx.CurrentTypeParameters;
             var outerFunction = getCurrentFunction();
             scope = capturedScope;
+
+            // Issue #4192 (Copilot finding on #4183): this closure runs after
+            // the enclosing `unsafe class` / `unsafe func` scope that was
+            // active when the parameter was declared has already unwound
+            // (PushUnsafeContext's token is disposed at the end of the
+            // per-struct declaration-body pass). An explicit default such as
+            // `default(*int32)` re-binds its type clause against
+            // binderCtx.InUnsafeContext (see Binder.cs's pointer-type
+            // handling), so without restoring it here a pointer-typed default
+            // that was valid when declared would be rebound as managed
+            // by-ref syntax instead of the raw-pointer type already assigned
+            // to the parameter.
+            using var unsafeContext = binderCtx.PushUnsafeContext(capturedInUnsafeContext);
 
             // Issue #2342: re-establish this type's OWN owning package as the
             // ambient lookup preference (mirrors the field-initializer and

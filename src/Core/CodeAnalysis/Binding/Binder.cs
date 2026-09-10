@@ -1340,6 +1340,27 @@ public sealed class Binder
         binder.declarations.DetectClassInheritanceCycles(
             declaredStructs.Where(d => d.Symbol.IsClass).Select(d => d.Symbol));
 
+        // Issue #4183 (Copilot finding on PR #4192): drain default-parameter-
+        // value expressions HERE, before interfaces and top-level functions
+        // bind their own members below, rather than after (as originally
+        // landed). Every struct's static-member surface already exists at
+        // this point (that is what let #4183 defer past the per-struct
+        // declaration-body pass at all), so moving the drain earlier loses
+        // nothing a class default value could legitimately reach — a default
+        // value was never able to call a not-yet-declared top-level function
+        // either before or after #4183, since eager binding originally ran
+        // during the per-struct pass, well before any top-level function
+        // exists. What the LATER drain position broke: BindInterfaceMembers
+        // and BindFunctionDeclaration below still bind their OWN parameters'
+        // default values eagerly (inline), and an eager default expression
+        // that resolves a call against a class method/constructor (e.g.
+        // `C.F()` where `F(x int32 = 1)`) reads
+        // ParameterSymbol.HasExplicitDefaultValue during overload resolution.
+        // Draining after those loops left that flag false for every
+        // not-yet-drained class parameter, so such a call was wrongly
+        // rejected instead of reaching the intended diagnostic.
+        binder.declarations.BindPendingParameterDefaultValues();
+
         foreach (var (ifaceSyntax, ifaceSymbol) in declaredInterfaces)
         {
             var owningPackage = packageByTree[ifaceSyntax.SyntaxTree];
@@ -1361,16 +1382,8 @@ public sealed class Binder
         // field-initializer expressions. Deferring past function declaration
         // lets these expressions resolve unqualified free-function and sibling
         // static-member calls, matching the visibility a constructor body has.
-        // Issue #4183: default-parameter-value expressions are deferred for the
-        // same forward-reference reason as field/const initializers above (see
-        // pendingParameterDefaultValueBindings). This MUST drain before
-        // BindPendingBaseInitializers immediately below: DeclarationBinder.
-        // Constructors.cs reads ParameterSymbol.HasExplicitDefaultValue while
-        // resolving a `: base(...)` initializer against a base constructor's
-        // optional trailing parameters, and that would otherwise see
-        // HasExplicitDefaultValue == false for a parameter whose default value
-        // hasn't been bound yet.
-        binder.declarations.BindPendingParameterDefaultValues();
+        // (Parameter default values already drained above, before this
+        // point — see the #4183/#4192 comment above DetectClassInheritanceCycles.)
         binder.declarations.BindPendingBaseInitializers();
         binder.declarations.BindPendingFieldInitializers();
 
