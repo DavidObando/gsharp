@@ -902,7 +902,7 @@ public sealed class Conversion
         // accept func → delegate conversions (Action/Func/Predicate and named
         // delegate types alike).
         if (from is FunctionTypeSymbol fnSource && to?.ClrType != null
-            && IsFunctionToDelegateConvertible(fnSource, to.ClrType))
+            && IsFunctionToDelegateConvertible(fnSource, to.ClrType, to))
         {
             return Conversion.Implicit;
         }
@@ -3194,12 +3194,45 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// Issue #4165: unwraps a <see cref="NullableTypeSymbol"/> before an
+    /// <see cref="IsImplicitReferenceVariantSlot"/> query. Neither that
+    /// method nor <see cref="IsReferenceLikeTarget"/> looks through a
+    /// <c>Base?</c> wrapper, so a nullable-annotated same-compilation
+    /// class/interface slot (e.g. a bare method group's <c>x Base?</c>
+    /// parameter) was never recognised as reference-like at all — CLR
+    /// delegate variance doesn't distinguish <c>Base</c> from <c>Base?</c>
+    /// anyway (every reference type is nullable at the CLR level regardless
+    /// of G#'s own annotation), so unwrapping here only widens what this
+    /// reference-only check accepts.
+    /// </summary>
+    /// <param name="type">The type to unwrap, possibly <see langword="null"/>.</param>
+    /// <returns>The underlying type when <paramref name="type"/> is nullable-wrapped; otherwise <paramref name="type"/> itself.</returns>
+    private static TypeSymbol? UnwrapNullableForVariance(TypeSymbol? type)
+        => type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+
+    /// <summary>
     /// Determines whether a GSharp function type is convertible to a CLR
     /// delegate type by matching parameter arity / assignability and the
     /// return type. Uses metadata-safe (name-based) checks so it works for
     /// delegate types loaded through a MetadataLoadContext.
     /// </summary>
-    private static bool IsFunctionToDelegateConvertible(FunctionTypeSymbol fn, Type delegateType)
+    /// <param name="fn">The candidate function shape.</param>
+    /// <param name="delegateType">The target delegate's CLR type.</param>
+    /// <param name="delegateTypeSymbol">
+    /// Issue #4165: the target delegate's own <see cref="TypeSymbol"/>, when
+    /// available. A delegate closed over a same-compilation type argument
+    /// (e.g. <c>Func[Derived, string]</c>) erases that argument to
+    /// <c>object</c> in <paramref name="delegateType"/>'s reflected generic
+    /// arguments (its <c>TypeBuilder</c> doesn't exist as a real CLR type
+    /// yet) — <see cref="TypeSymbol.ConstructedTypeArguments"/> on the
+    /// SYMBOL, not the erased CLR shape, is the only place the real argument
+    /// (e.g. <c>Derived</c>) survives mid-binding, and is needed to classify
+    /// a same-compilation base/derived contravariant parameter correctly.
+    /// </param>
+    private static bool IsFunctionToDelegateConvertible(
+        FunctionTypeSymbol fn,
+        Type delegateType,
+        TypeSymbol? delegateTypeSymbol = null)
     {
         if (!ClrTypeUtilities.IsDelegateType(delegateType))
         {
@@ -3224,6 +3257,61 @@ public sealed class Conversion
             return false;
         }
 
+        // Issue #4165: when the delegate is closed over a same-compilation
+        // type argument, `invokeParamTypes`/`invokeReturnType` above are the
+        // ERASED CLR shape (the argument's `TypeBuilder` isn't a real,
+        // reflectible closed type mid-binding — see the #1100 note above),
+        // so a downstream `TypeSymbol.FromClrType` call on them can only ever
+        // recover `object`. Recover the REAL per-position symbolic type
+        // arguments from `delegateTypeSymbol.ConstructedTypeArguments`
+        // (which prefers the symbolic — same-compilation-aware — arguments
+        // over the erased CLR ones, see `ImportedTypeSymbol.ConstructedTypeArguments`)
+        // by matching each Invoke parameter/return position, on the OPEN
+        // delegate definition, to the generic-parameter position it
+        // directly is — true for every single-purpose CLR delegate shape
+        // (`Func[...]`, `Action[...]`, and any named delegate whose `Invoke`
+        // signature is spelled directly in terms of its own type parameters).
+        var symbolicParamTypes = new TypeSymbol?[invokeParamTypes.Length];
+        TypeSymbol? symbolicReturnType = null;
+        var symbolicArgs = delegateTypeSymbol?.ConstructedTypeArguments ?? ImmutableArray<TypeSymbol>.Empty;
+        if (!symbolicArgs.IsDefaultOrEmpty && delegateType.IsGenericType)
+        {
+            Type? openDef = null;
+            try
+            {
+                openDef = delegateType.IsGenericTypeDefinition ? delegateType : delegateType.GetGenericTypeDefinition();
+            }
+            catch (NotSupportedException)
+            {
+                // TypeBuilderInstantiation — fall through with openDef null.
+            }
+
+            var openInvoke = openDef?.GetMethodSafe("Invoke");
+            if (openInvoke != null)
+            {
+                var openParams = openInvoke.GetParameters();
+                if (openParams.Length == symbolicParamTypes.Length)
+                {
+                    for (var i = 0; i < openParams.Length; i++)
+                    {
+                        var openParamType = openParams[i].ParameterType;
+                        if (openParamType.IsGenericParameter
+                            && (uint)openParamType.GenericParameterPosition < (uint)symbolicArgs.Length)
+                        {
+                            symbolicParamTypes[i] = symbolicArgs[openParamType.GenericParameterPosition];
+                        }
+                    }
+                }
+
+                var openReturnType = openInvoke.ReturnType;
+                if (openReturnType.IsGenericParameter
+                    && (uint)openReturnType.GenericParameterPosition < (uint)symbolicArgs.Length)
+                {
+                    symbolicReturnType = symbolicArgs[openReturnType.GenericParameterPosition];
+                }
+            }
+        }
+
         for (var i = 0; i < invokeParamTypes.Length; i++)
         {
             if (fn.ParameterTypes[i] is FunctionTypeSymbol nestedFunction
@@ -3232,11 +3320,46 @@ public sealed class Conversion
                 continue;
             }
 
-            var fnParamClr = fn.ParameterTypes[i]?.ClrType;
-            if (fnParamClr == null || !ClrTypeUtilities.IsAssignableByName(invokeParamTypes[i], fnParamClr))
+            var fnParamType = fn.ParameterTypes[i];
+            var fnParamClr = fnParamType?.ClrType;
+            if (fnParamClr != null && ClrTypeUtilities.IsAssignableByName(invokeParamTypes[i], fnParamClr))
             {
-                return false;
+                continue;
             }
+
+            // Issue #4165: a bare method group's own declared parameter type
+            // may be a BASE class/interface of the delegate's declared
+            // (DERIVED) element type — a legal contravariant method-group
+            // conversion `csc` accepts (the callee only ever supplies a
+            // DERIVED-typed argument, and a method that accepts the wider
+            // BASE naturally accepts that). The CLR-type check above can
+            // only ever fire when `fnParamClr` is non-null, but a
+            // same-compilation `class`/`interface` parameter type has NO
+            // `ClrType` mid-binding (its `TypeBuilder` doesn't exist yet),
+            // so it bailed out here unconditionally — matching `csc` only by
+            // accident, for CLR-imported parameter types. Classify the slot
+            // symbolically instead: `IsImplicitReferenceVariantSlot` already
+            // knows how to walk a same-compilation class/interface hierarchy
+            // (via `Conversion.Classify`'s own upcast rules) as well as a
+            // CLR one, and is restricted to reference-only conversions —
+            // exactly what a direct `ldftn`+`newobj` delegate creation can
+            // honor. Prefer the recovered symbolic delegate-side type (the
+            // real `Derived`) over the erased CLR one (`object`) so this
+            // works for a same-compilation delegate element type too.
+            // `IsImplicitReferenceVariantSlot`/`IsReferenceLikeTarget` don't
+            // unwrap a `NullableTypeSymbol` (`Base?`), so unwrap here before
+            // asking — CLR reference variance doesn't distinguish `Base`
+            // from `Base?` anyway (every reference type is nullable at the
+            // CLR level regardless of G#'s own annotation).
+            if (fnParamType != null
+                && IsImplicitReferenceVariantSlot(
+                    UnwrapNullableForVariance(symbolicParamTypes[i]) ?? TypeSymbol.FromClrType(invokeParamTypes[i]),
+                    UnwrapNullableForVariance(fnParamType)!))
+            {
+                continue;
+            }
+
+            return false;
         }
 
         var invokeReturnIsVoid = invokeReturnType == null
@@ -3257,16 +3380,54 @@ public sealed class Conversion
         }
 
         var fnReturnClr = fn.ReturnType.ClrType;
-        if (fnReturnClr == null)
-        {
-            return false;
-        }
 
         // Identity / reference-assignable return (covers exact match and
         // reference covariance).
-        if (ClrTypeUtilities.IsAssignableByName(invokeReturnType, fnReturnClr))
+        //
+        // Issue #4165 regression (caught by the pre-existing
+        // Issue1518NullableDelegateInferenceEmitTests suite): `NullableTypeSymbol.ClrType`
+        // is the bare underlying VALUE type (see that type's own constructor),
+        // so `bool?` and `bool` are indistinguishable through `fnReturnClr`
+        // alone -- comparing that erased shape against `invokeReturnType`
+        // let a lambda that actually returns `bool?` satisfy a delegate
+        // candidate declared to return the bare `bool` during output-type
+        // inference (e.g. `Select`'s `TResult` being probed against `Func[S,
+        // bool]` as well as `Func[S, bool?]`), which used to be unreachable
+        // here only because the PARAMETER loop above unconditionally
+        // rejected any same-compilation parameter type before this return
+        // check ever ran -- this fix's own parameter-side fallback removed
+        // that accidental guard. `NullableLifting.GetEffectiveClrType`
+        // re-wraps a value-type underlying in `Nullable[T]` (identity for
+        // every other shape, including reference types, so the existing
+        // reference-covariance behavior is unchanged), which is exactly what
+        // `FunctionTypeSymbol.BuildClrType` already uses to avoid this same
+        // erasure for the emitted delegate shape itself -- using it here too
+        // makes this probe agree with what the emitter actually builds.
+        var fnReturnEffectiveClr = NullableLifting.GetEffectiveClrType(fn.ReturnType);
+        if (fnReturnEffectiveClr != null && ClrTypeUtilities.IsAssignableByName(invokeReturnType, fnReturnEffectiveClr))
         {
             return true;
+        }
+
+        // Issue #4165's sibling gap: a same-compilation class/interface
+        // return type has no `ClrType` mid-binding either, so a method
+        // group returning a same-compilation DERIVED type could not convert
+        // to a delegate declared over its BASE return type (covariant
+        // return — legal, `csc` accepts it) even though the reference-only
+        // symbolic check below already knows how to classify it. Prefer the
+        // recovered symbolic delegate-side return type over the erased CLR
+        // one, same as the parameter loop above.
+        var effectiveReturnType = symbolicReturnType
+            ?? TypeSymbol.FromClrType(Invariant.Required(invokeReturnType, "a resolved delegate Invoke method has a return type"));
+        if (fnReturnClr == null
+            && IsImplicitReferenceVariantSlot(UnwrapNullableForVariance(fn.ReturnType)!, UnwrapNullableForVariance(effectiveReturnType)!))
+        {
+            return true;
+        }
+
+        if (fnReturnClr == null)
+        {
+            return false;
         }
 
         // Issue #1150: the function's numeric return type implicitly, losslessly

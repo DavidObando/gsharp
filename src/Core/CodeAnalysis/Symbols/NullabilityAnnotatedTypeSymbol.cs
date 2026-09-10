@@ -140,6 +140,25 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
 
         int offset = 1; // byte 0 = outer type
 
+        // Issue #4159 (Copilot review finding on this PR): matching by
+        // CLOSED CLR type alone is ambiguous for a custom awaitable — this
+        // method is reached from ANY type with a conforming duck-typed
+        // GetAwaiter/GetResult (see AwaitableShape.Resolve, C# spec
+        // §12.9.8), not just Task[T]/ValueTask[T], which only ever have ONE
+        // outer type argument — whenever two or more of the outer type's
+        // own generic arguments happen to close over the exact same CLR
+        // type (e.g. `Awaitable[string, string?]`, where `GetResult()`
+        // returns the SECOND parameter): the first (by position) match
+        // would silently recover the WRONG argument's nullability. Scan
+        // every argument before deciding, and refuse to guess — falling
+        // back to the unannotated result, same as a genuine no-match — the
+        // instant more than one argument could be the answer, rather than
+        // ever return a nullability annotation that might belong to a
+        // different type parameter.
+        var matchIndex = -1;
+        var matchOffset = 0;
+        var ambiguous = false;
+
         for (int i = 0; i < args.Length; i++)
         {
             var arg = args[i];
@@ -147,42 +166,180 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
             // Compare by FullName so MetadataLoadContext types match runtime types.
             if (arg == targetClrType || (!arg.IsGenericParameter && arg.FullName == targetClrType.FullName))
             {
-                var flagged = ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, offset);
-
-                // ADR-0172: transfer tuple element names from the wrapped
-                // symbolic base's matching argument (the flags-derived symbol
-                // is rebuilt from the CLR shape and cannot carry them).
-                if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
-                    && (uint)i < (uint)symbolicBase.TypeArguments.Length)
+                if (matchIndex >= 0)
                 {
-                    flagged = TransferTupleNames(symbolicBase.TypeArguments[i], flagged);
+                    ambiguous = true;
                 }
-
-                return flagged;
+                else
+                {
+                    matchIndex = i;
+                    matchOffset = offset;
+                }
             }
 
             offset += ClrNullability.CountNullabilityBytes(arg);
         }
 
+        if (matchIndex >= 0 && !ambiguous)
+        {
+            var arg = args[matchIndex];
+            var flagged = ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, matchOffset);
+
+            // ADR-0172: transfer tuple element names from the wrapped
+            // symbolic base's matching argument (the flags-derived symbol
+            // is rebuilt from the CLR shape and cannot carry them).
+            if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
+                && (uint)matchIndex < (uint)symbolicBase.TypeArguments.Length)
+            {
+                flagged = TransferTupleNames(symbolicBase.TypeArguments[matchIndex], flagged);
+            }
+
+            return flagged;
+        }
+
         return TypeSymbol.FromClrType(targetClrType);
     }
 
+    /// <summary>
+    /// Issue #4159: grafts tuple element names from <paramref name="source"/>
+    /// (the naive, name-bearing symbolic type — see
+    /// <see cref="TypeSymbol.ContainsNamedTupleElements"/>) onto
+    /// <paramref name="target"/> (the flags-derived, nullability-correct but
+    /// unnamed type built by <see cref="ClrNullability.SymbolFromFlagsOffset"/>),
+    /// recursing through every shape the CLR-import symbol tree can produce.
+    /// <para>
+    /// A prior version of this method only matched a tuple sitting DIRECTLY at
+    /// the top of the position being merged (optionally under one
+    /// <c>Nullable</c> wrapper) — so a named tuple nested one level deeper,
+    /// e.g. <c>IReadOnlyList[(string Key, string? Value)]</c> reached through
+    /// an <c>async Task[...]</c> return, was silently left unnamed: this
+    /// method returned <paramref name="target"/> unchanged because the
+    /// top-level shape (<see cref="ImportedTypeSymbol"/>) didn't match either
+    /// pattern, even though <see cref="TypeSymbol.ContainsNamedTupleElements"/>
+    /// (which recurses) correctly said "yes, look deeper" to the caller.
+    /// </para>
+    /// </summary>
+    /// <param name="source">The naive, name-bearing symbolic type at this position.</param>
+    /// <param name="target">The flags-derived, correctly-nullable but unnamed type at this position.</param>
+    /// <returns><paramref name="target"/>'s shape with tuple names grafted in wherever <paramref name="source"/> has them.</returns>
     private static TypeSymbol TransferTupleNames(TypeSymbol source, TypeSymbol target)
     {
-        if (source is TupleTypeSymbol { HasNames: true } namedSource
-            && target is TupleTypeSymbol unnamedTarget
-            && namedSource.Arity == unnamedTarget.Arity
-            && !unnamedTarget.HasNames)
+        // Issue #4159 (Copilot review finding on this PR): `target` alone
+        // decides whether this position is nullable — `source` is the
+        // naive, pre-flags symbolic tree and, unlike `target`, does NOT
+        // reliably wrap a nullable REFERENCE type (e.g. an argument typed
+        // `IReadOnlyList[...]?`) in `NullableTypeSymbol`, since determining
+        // reference nullability is exactly the flags-based job `target`'s
+        // own construction (`ClrNullability.SymbolFromFlagsOffset`) does
+        // that `source`'s construction does not. Requiring BOTH sides
+        // wrapped — the previous condition — only ever fired for a
+        // genuine value-type `Nullable[T]` (where raw CLR reflection alone
+        // already makes `source` nullable-wrapped too) and silently
+        // skipped grafting whenever `target` was nullable-wrapped ONLY
+        // because of `[NullableAttribute]` metadata, dropping tuple names
+        // one level under a nullable reference generic argument (e.g.
+        // `Task[IReadOnlyList[(...)]?]`). Unwrap `source` too when it
+        // happens to also be wrapped (preserves the original value-type
+        // behavior exactly); otherwise recurse with `source` itself
+        // against `target`'s underlying type.
+        if (target is NullableTypeSymbol targetNullable)
         {
-            return TupleTypeSymbol.Get(unnamedTarget.ElementTypes, namedSource.ElementNames);
+            var sourceForUnderlying = source is NullableTypeSymbol namedNullable
+                ? namedNullable.UnderlyingType
+                : source;
+            return NullableTypeSymbol.Get(TransferTupleNames(sourceForUnderlying, targetNullable.UnderlyingType));
         }
 
-        if (source is NullableTypeSymbol { UnderlyingType: TupleTypeSymbol { HasNames: true } namedUnderlying }
-            && target is NullableTypeSymbol { UnderlyingType: TupleTypeSymbol unnamedUnderlying }
-            && namedUnderlying.Arity == unnamedUnderlying.Arity
-            && !unnamedUnderlying.HasNames)
+        if (source is TupleTypeSymbol namedTuple
+            && target is TupleTypeSymbol unnamedTuple
+            && namedTuple.Arity == unnamedTuple.Arity)
         {
-            return NullableTypeSymbol.Get(TupleTypeSymbol.Get(unnamedUnderlying.ElementTypes, namedUnderlying.ElementNames));
+            var elements = ImmutableArray.CreateBuilder<TypeSymbol>(unnamedTuple.ElementTypes.Length);
+            for (var i = 0; i < unnamedTuple.ElementTypes.Length; i++)
+            {
+                elements.Add(TransferTupleNames(namedTuple.ElementTypes[i], unnamedTuple.ElementTypes[i]));
+            }
+
+            return unnamedTuple.HasNames
+                ? TupleTypeSymbol.Get(elements.MoveToImmutable(), unnamedTuple.ElementNames)
+                : TupleTypeSymbol.Get(elements.MoveToImmutable(), namedTuple.ElementNames);
+        }
+
+        if (source is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } namedImported
+            && target is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } unnamedImported
+            && unnamedImported.ClrType is Type unnamedImportedClr
+            && namedImported.TypeArguments.Length == unnamedImported.TypeArguments.Length
+            && TypeSymbol.ContainsNamedTupleElements(namedImported))
+        {
+            var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(unnamedImported.TypeArguments.Length);
+            for (var i = 0; i < unnamedImported.TypeArguments.Length; i++)
+            {
+                arguments.Add(TransferTupleNames(namedImported.TypeArguments[i], unnamedImported.TypeArguments[i]));
+            }
+
+            return ImportedTypeSymbol.GetConstructed(
+                unnamedImportedClr,
+                unnamedImported.OpenDefinition ?? namedImported.OpenDefinition,
+                arguments.MoveToImmutable());
+        }
+
+        // Issue #4159: `target` at a NESTED generic position (e.g. the
+        // `IReadOnlyList[...]` argument of `Task[IReadOnlyList[...]]`) is
+        // usually LAZY — `ClrNullability.SymbolFromFlagsOffset` wraps a
+        // "plain" (`ImportedTypeSymbol.Get`, EMPTY `TypeArguments`) symbol in
+        // a `NullabilityAnnotatedTypeSymbol` carrying only a sliced flags
+        // array, deferring each argument's own nullability/name derivation
+        // to `GetTypeArgumentSymbol`/`GetTypeArgumentSymbolForClrType` rather
+        // than eagerly rebuilding the whole subtree. The two `ImportedTypeSymbol`
+        // cases above never fire here because `target` isn't directly an
+        // `ImportedTypeSymbol` — it's this wrapper — and neither `source`
+        // (the eagerly name-rebuilt symbolic argument) is lazy the same way.
+        // Materialize `target` into a fully eager `ImportedTypeSymbol` by
+        // deriving each of ITS generic arguments (nullability-correct, via
+        // its own accessor) and grafting `source`'s corresponding argument's
+        // names onto each, one recursive level at a time.
+        if (target is NullabilityAnnotatedTypeSymbol annotatedTarget
+            && source is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } namedSourceGeneric
+            && annotatedTarget.ClrType is Type annotatedTargetClr
+            && annotatedTargetClr.IsGenericType
+            && !annotatedTargetClr.IsGenericTypeDefinition
+            && TypeSymbol.ContainsNamedTupleElements(namedSourceGeneric))
+        {
+            var clrArguments = annotatedTargetClr.GetGenericArguments();
+            if (namedSourceGeneric.TypeArguments.Length == clrArguments.Length)
+            {
+                var openDefinition = (annotatedTarget.BaseType as ImportedTypeSymbol)?.OpenDefinition
+                    ?? annotatedTargetClr.GetGenericTypeDefinition();
+                var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(clrArguments.Length);
+                for (var i = 0; i < clrArguments.Length; i++)
+                {
+                    var materialized = annotatedTarget.GetTypeArgumentSymbol(i);
+                    arguments.Add(TransferTupleNames(namedSourceGeneric.TypeArguments[i], materialized));
+                }
+
+                return ImportedTypeSymbol.GetConstructed(annotatedTargetClr, openDefinition, arguments.MoveToImmutable());
+            }
+        }
+
+        if (source is SliceTypeSymbol namedSlice && target is SliceTypeSymbol unnamedSlice)
+        {
+            return SliceTypeSymbol.Get(TransferTupleNames(namedSlice.ElementType, unnamedSlice.ElementType));
+        }
+
+        if (source is ArrayTypeSymbol namedArray
+            && target is ArrayTypeSymbol unnamedArray
+            && namedArray.Length == unnamedArray.Length)
+        {
+            return ArrayTypeSymbol.Get(TransferTupleNames(namedArray.ElementType, unnamedArray.ElementType), unnamedArray.Length);
+        }
+
+        if (source is RectangularArrayTypeSymbol namedRectangular
+            && target is RectangularArrayTypeSymbol unnamedRectangular
+            && namedRectangular.Rank == unnamedRectangular.Rank)
+        {
+            return RectangularArrayTypeSymbol.Get(
+                TransferTupleNames(namedRectangular.ElementType, unnamedRectangular.ElementType),
+                unnamedRectangular.Rank);
         }
 
         return target;

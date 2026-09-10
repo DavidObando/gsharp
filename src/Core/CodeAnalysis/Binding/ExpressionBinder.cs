@@ -1786,19 +1786,24 @@ internal sealed partial class ExpressionBinder
     {
         element = null;
 
-        // ADR-0172: an imported awaitable whose signature carries reference-
-        // nullability metadata arrives wrapped in a
+        // ADR-0172 / issue #4159: an imported awaitable whose signature
+        // carries reference-nullability metadata arrives wrapped in a
         // NullabilityAnnotatedTypeSymbol, hiding the symbolic constructed
-        // base from the fast path below — and the CLR fallback would erase a
-        // named-tuple element's names (they share the unnamed CLR backing).
-        // Unwrap to the symbolic base exactly when names are at stake; the
-        // base's arguments already carry their element nullability.
-        if (type is NullabilityAnnotatedTypeSymbol annotatedAwaitable
-            && annotatedAwaitable.BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicAwaitable
-            && symbolicAwaitable.TypeArguments.Any(TypeSymbol.ContainsNamedTupleElements))
-        {
-            type = symbolicAwaitable;
-        }
+        // base from the fast path below. A prior version of this method
+        // unwrapped straight to that symbolic base whenever a type argument
+        // happened to be a named tuple (reasoning that "the base's arguments
+        // already carry their element nullability") — but the symbolic
+        // base's TypeArguments are built by a naive TypeSymbol.FromClrType
+        // walk and carry NO nullability at all; only NullabilityAnnotatedTypeSymbol
+        // itself (via GetTypeArgumentSymbol, which both applies the
+        // [NullableAttribute] flags AND transfers tuple element names from
+        // the symbolic base) can answer both concerns together. Unwrapping
+        // and indexing the raw TypeArguments silently dropped nullability on
+        // every reference-typed awaited element that needed the wrapper at
+        // all (a named tuple element being only the case that surfaced it in
+        // practice) — this is the actual fix for #4159, not a tuple-only fix.
+        var annotatedAwaitable = type as NullabilityAnnotatedTypeSymbol;
+        var symbolicAwaitableCandidate = annotatedAwaitable?.BaseType ?? type;
 
         // Issue #2195: for an imported generic awaitable (e.g. `Task[T]`,
         // `ValueTask[T]`) recover the awaited ELEMENT type from the SYMBOLIC
@@ -1813,9 +1818,32 @@ internal sealed partial class ExpressionBinder
         // former `Task`1`-only fast path to every generic awaitable whose
         // `GetResult()` returns its own type parameter (covers `Task[T]` and
         // `ValueTask[T]` without special-casing either).
-        if (type is ImportedTypeSymbol importedTask
-            && !importedTask.TypeArguments.IsDefaultOrEmpty
-            && importedTask.ClrType is System.Type importedTaskClr
+        //
+        // Issue #4159 correction (measured, not assumed — a prior version of
+        // this comment claimed this branch "never fires for Task[T]/ValueTask[T]
+        // because GetResult() is declared on the awaiter type", reasoning
+        // that the awaiter's substituted return type's `DeclaringType` would
+        // never equal `openDef`; traced directly and that reasoning is
+        // WRONG — `DeclaringType` DOES equal `openDef` for a real `Task[T]`
+        // once this branch's OWN guard below is satisfied. The actual gate
+        // is `TypeArguments.IsDefaultOrEmpty: false` on the line directly
+        // below: `symbolicAwaitableCandidate`'s `TypeArguments` stay EMPTY
+        // for a PLAIN (non-tuple-containing) awaitable — nothing eagerly
+        // rebuilds them — so this whole block is skipped for e.g. plain
+        // `Task[string]`/`Task[string?]`, which fall through to the
+        // CLR-fallback branch below instead. A TUPLE-containing awaitable
+        // (e.g. `Task[IReadOnlyList[(Key string, Value string?)]]`) DOES
+        // have non-empty `TypeArguments` (eagerly rebuilt to carry tuple
+        // element names — see `ImportedTypeSymbol.GetConstructed`), so THIS
+        // branch fires for it instead, via `GetTypeArgumentSymbol` below —
+        // not the CLR-fallback branch's `GetTypeArgumentSymbolForClrType`.
+        // Both routes call into the same `NullabilityAnnotatedTypeSymbol.TransferTupleNames`
+        // fix, so either path preserves nullability and tuple names
+        // correctly; which one actually runs for a given awaitable depends
+        // on whether ANYTHING in its type-argument tree needed eager
+        // reconstruction for tuple names, not on Task-vs-custom-awaitable.
+        if (symbolicAwaitableCandidate is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicAwaitable
+            && symbolicAwaitable.ClrType is System.Type importedTaskClr
             && importedTaskClr.IsGenericType
             && !importedTaskClr.IsGenericTypeDefinition)
         {
@@ -1825,9 +1853,11 @@ internal sealed partial class ExpressionBinder
                 && openResult.IsGenericParameter
                 && ClrTypeUtilities.IsSameAs(openResult.DeclaringType, openDef)
                 && openResult.GenericParameterPosition >= 0
-                && openResult.GenericParameterPosition < importedTask.TypeArguments.Length)
+                && openResult.GenericParameterPosition < symbolicAwaitable.TypeArguments.Length)
             {
-                element = importedTask.TypeArguments[openResult.GenericParameterPosition];
+                element = annotatedAwaitable != null
+                    ? annotatedAwaitable.GetTypeArgumentSymbol(openResult.GenericParameterPosition)
+                    : symbolicAwaitable.TypeArguments[openResult.GenericParameterPosition];
                 return true;
             }
         }
@@ -1850,6 +1880,37 @@ internal sealed partial class ExpressionBinder
         if (resultClrType.IsSameAs(typeof(void)))
         {
             element = TypeSymbol.Void;
+        }
+        else if (annotatedAwaitable != null)
+        {
+            // Issue #4159: this is the branch a PLAIN (non-tuple-containing)
+            // BCL `Task[T]`/`ValueTask[T]` await takes — measured, not
+            // assumed: the `openDef` branch above requires
+            // `symbolicAwaitableCandidate`'s `TypeArguments` to be
+            // non-empty, and nothing eagerly rebuilds them for a plain
+            // awaitable (e.g. `Task[string]`, `Task[string?]`), so that
+            // branch is skipped and execution falls through to here. A
+            // TUPLE-containing awaitable (e.g. the original #4159 repro,
+            // `Task[IReadOnlyList[(Key string, Value string?)]]`) instead
+            // takes the `openDef` branch above via `GetTypeArgumentSymbol`
+            // — its `TypeArguments` ARE eagerly rebuilt to carry tuple
+            // element names, which also happens to satisfy that branch's
+            // `DeclaringType == openDef` check for a real `Task[T]` (that
+            // check is NOT awaiter-type-specific the way an earlier version
+            // of this comment claimed). `resultClrType` here is a CLOSED
+            // reflected type (e.g. `System.String`) with no nullability
+            // metadata of its own — nullability lives only on
+            // NullabilityAnnotatedTypeSymbol's flags array, keyed by the
+            // OUTER awaitable's generic argument position.
+            // GetTypeArgumentSymbolForClrType finds which of the outer
+            // awaitable's own generic arguments this result type
+            // structurally corresponds to and derives the correctly-nullable
+            // symbol from there — falling back to the prior naive behavior
+            // when no argument matches, or when more than one argument
+            // could match (an ambiguous custom awaitable with a repeated
+            // CLR type among its own arguments — Copilot review finding on
+            // this PR — rather than ever guess which one is right).
+            element = annotatedAwaitable.GetTypeArgumentSymbolForClrType(resultClrType);
         }
         else
         {

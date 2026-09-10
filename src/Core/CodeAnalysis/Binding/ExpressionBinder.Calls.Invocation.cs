@@ -3280,7 +3280,31 @@ internal sealed partial class ExpressionBinder
             // An argument that already failed to bind cannot participate in
             // overload resolution. Preserve its primary diagnostic instead of
             // adding a misleading "cannot find function" cascade at this call.
-            if (arguments.Any(static argument => argument.Type == TypeSymbol.Error))
+            //
+            // Issue #4171: an UNRESOLVED bare method group (e.g. a static CLR
+            // method reference passed where a delegate parameter's type
+            // depends on generic inference — `Pick(items, Handler)` closing
+            // `Action[Action[T]]` over an inferred `T`) is NOT a prior
+            // failure. `ClrOverloadResolution.IsUnresolvedMethodGroupArgument`
+            // deliberately types it `TypeSymbol.Error` as a "defer me" sentinel
+            // (see that method's doc) — no diagnostic was ever reported for it.
+            // When resolution reaches here with no candidate accepting the
+            // call (e.g. because the group's own parameter type does not
+            // actually satisfy the delegate slot after the type argument is
+            // correctly inferred — the doubly-nested contravariant case naive
+            // resolution cannot determine a concrete answer for), the OLD
+            // unconditional bailout silently swallowed the failure: the call
+            // returned an error expression with NO diagnostic ever reported,
+            // so the caller's declared type became the bare `TypeSymbol.Error`
+            // sentinel unnoticed, and it later reached the emitter, which
+            // crashed with an internal GS9998 trying to encode a signature for
+            // it. Only treat a REAL prior failure (any other Error-typed
+            // argument) as already-diagnosed; an unresolved method group must
+            // still fall through to the "cannot find function" diagnostic
+            // below so the failure is reported once, cleanly, here.
+            if (arguments.Any(static argument =>
+                argument.Type == TypeSymbol.Error
+                && !ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
             {
                 return new BoundErrorExpression(ce);
             }
