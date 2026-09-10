@@ -2078,10 +2078,16 @@ public sealed partial class CSharpToGSharpTranslator
             var statements = new List<GStatement>();
             IReadOnlyList<StatementSyntax> ordered = this.HoistCallBeforeDeclLocalFunctions(block);
 
-            // Issue #3399: registering the capturing recursive local function
-            // groups first lets `RegisterRecursiveLocalFunctionLifts` skip SCC
-            // members — those lower to nullable function locals instead of
-            // synthesized instance helpers.
+            // Issue #3399 / #4197: registering the capturing recursive local
+            // function groups first lets `RegisterRecursiveLocalFunctionLifts`
+            // skip everything the capturing pass claims — every mutual-
+            // recursion SCC member (`group.Count > 1`, capturing or not, since
+            // #4197 widened the gate) plus any non-recursive callee folded into
+            // that SCC's group (`RegisterCapturingRecursiveLocalFunctions`'s
+            // fold-BFS) — via `IsCapturingRecursiveGroupMember`'s direct lookup
+            // into `state.RecursiveLocalFunctionGroups`. Those lower to nullable
+            // function locals with their real names instead of synthesized
+            // `__local_` instance/static helpers.
             this.RegisterCapturingRecursiveLocalFunctions(ordered);
             this.RegisterRecursiveLocalFunctionLifts(ordered);
             foreach (StatementSyntax statement in ordered)
@@ -2095,12 +2101,13 @@ public sealed partial class CSharpToGSharpTranslator
 
         private void RegisterRecursiveLocalFunctionLifts(IEnumerable<StatementSyntax> statements)
         {
-            // Issue #3399 (hybrid lowering): members of a registering SCC of
-            // capturing local functions lower to G# nullable function locals
-            // (see `RegisterCapturingRecursiveLocalFunctions`, which runs first)
-            // instead of synthetic instance helpers — skip them here so both
-            // the registration and the `TranslateLocalFunction` helper emission
-            // stay out of the way.
+            // Issue #3399 (hybrid lowering) / #4197 (widened): a registering
+            // mutual-recursion SCC's members — and any non-recursive callee
+            // folded into that same group — lower to G# nullable function
+            // locals (see `RegisterCapturingRecursiveLocalFunctions`, which
+            // runs first) instead of synthetic instance/static helpers — skip
+            // them here so both the registration below and the
+            // `TranslateLocalFunction` helper emission stay out of the way.
             bool IsCapturingRecursiveGroupMember(IMethodSymbol symbol) =>
                 this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol);
 
@@ -2335,20 +2342,34 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        // Issue #3399: recursive or mutually recursive C# local functions that
-        // CAPTURE locals cannot be lifted as static helpers (they need the
-        // captured values), and G#'s non-recursive `let` binding fails when the
-        // body calls the binding itself (GS0130 "Function 'Foo' doesn't exist"
-        // / GS0125). Each strongly-connected component is instead registered so
-        // <see cref="TranslateLocalFunction"/> lowers it to G#'s
-        // nullable-function-local scheme: every member is first declared
-        // nil-initialized as `var Name (… -> R)? = nil` (a G# closure body cannot
-        // reference a sibling local that is not yet declared, so the whole SCC's
-        // declarations must precede its first assignment), then each member binds
-        // its function literal (`Name = func …`); SCC partners are reached from a
-        // closure body through the nullable local via a null assertion
-        // (`Partner!!(…)` — ADR-0069/ADR-0137). G#'s capture-by-reference
-        // closures preserve C#'s shared mutation of the captured sibling locals.
+        // Issue #3399: mutually recursive C# local functions that CAPTURE
+        // locals cannot be lifted as static helpers (they need the captured
+        // values), and G#'s non-recursive `let` binding fails when the body
+        // calls the binding itself (GS0130 "Function 'Foo' doesn't exist" /
+        // GS0125). Each strongly-connected component with more than one
+        // member is instead registered so <see cref="TranslateLocalFunction"/>
+        // lowers it to G#'s nullable-function-local scheme: every member is
+        // first declared nil-initialized as `var Name (… -> R)? = nil` (a G#
+        // closure body cannot reference a sibling local that is not yet
+        // declared, so the whole SCC's declarations must precede its first
+        // assignment), then each member binds its function literal
+        // (`Name = func …`); SCC partners are reached from a closure body
+        // through the nullable local via a null assertion (`Partner!!(…)` —
+        // ADR-0069/ADR-0137). G#'s capture-by-reference closures preserve C#'s
+        // shared mutation of the captured sibling locals.
+        //
+        // Issue #4197: this scheme is no longer gated on capturing — every
+        // `group.Count > 1` SCC uses it, because nothing about the mechanism
+        // above actually requires a capture (a plain closure with no free
+        // variables lowers the same way). A non-recursive callee reachable
+        // ONLY from a claimed SCC also folds into that SAME group with its
+        // real name (see the fold-BFS below) instead of being lifted to
+        // `__local_` by `RegisterRecursiveLocalFunctionLifts` purely because
+        // it happened to be reachable. Only a cycle that itself passes through
+        // a generic or ref-returning local function stays on the `__local_`
+        // path (those members never enter the `functions`/`edges` graph below,
+        // so this pass never even sees the cycle — see the carve-out further
+        // down).
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
             // `DescendantNodes()` excludes the node itself — local functions that
@@ -2466,20 +2487,110 @@ public sealed partial class CSharpToGSharpTranslator
                 group.Add((syntax, symbol));
             }
 
+            // Issue #4197: every member of a genuinely recursive SCC now gets
+            // the group; capturing is no longer the gate (see the removed
+            // per-group check below). `sccMembers` is every symbol that is
+            // itself part of SOME cycle (including single-member self-recursion,
+            // which still keeps the plain `let` path) — used below to keep a
+            // cycle member of a DIFFERENT SCC from being folded into this one.
+            var sccMembers = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             foreach (List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> group in groups)
             {
-                // G#'s plain `let`/hoisting path supports SELF- and MUTUAL
-                // recursion of local functions (sibling letrec visibility — the
-                // pre-#3399 canonical lowering, left intact). The GS0130/GS0125
-                // failure #3399 hits appears only when a member CAPTURES outer
-                // locals: gsc's closure lowering loses the shared sibling
-                // visibility. SCCs with no capturing member therefore keep the
-                // canonical `let`/hoist path entirely.
-                if (!group.Any(f => this.CapturesOuterState(f.Syntax, f.Symbol)))
+                foreach ((_, IMethodSymbol symbol) in group)
                 {
-                    continue;
+                    sccMembers.Add(symbol);
+                }
+            }
+
+            // Issue #4197: a non-recursive callee reached only from a claimed
+            // SCC (e.g. `ControlFlowGraph.cs`'s `ProjectRegionsForDefiniteReturn`
+            // — the cycle `Add`/`AddPatternSwitch`/`AddTry` calls the
+            // non-recursive `CollectLabels`/`NewLabel`/`NewChoice`) folds into
+            // the SAME forward-declared group with its real name instead of
+            // diverting to `RegisterRecursiveLocalFunctionLifts`'s `__local_`
+            // path. Folding must stay safe for a `__local_`-lifted caller,
+            // which is emitted as a real class member with NO visibility into
+            // this block's locals (including the group's own nullable
+            // function-typed locals): a candidate is only folded when EVERY
+            // caller of it — computed over the FULL local-function inventory
+            // of this block, generic/ref-returning callers included — is
+            // itself already inside the group (core member or previously
+            // folded). That single "callers ⊆ group" rule also resolves the
+            // "reachable from two different claimed SCCs" case for free: such
+            // a candidate has a caller outside either group, so it satisfies
+            // neither and is left on the existing lift path (never a
+            // regression — that is exactly today's behavior).
+            var allFunctionPairs = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
+            foreach (LocalFunctionStatementSyntax lf in localFunctionStatements.OfType<LocalFunctionStatementSyntax>())
+            {
+                using IDisposable modelScope = this.context.UseSemanticModelFor(lf.SyntaxTree);
+                if (this.context.GetDeclaredSymbol(lf) is IMethodSymbol allSymbol)
+                {
+                    allFunctionPairs.Add((lf, allSymbol));
+                }
+            }
+
+            var allSymbols = new HashSet<IMethodSymbol>(
+                allFunctionPairs.Select(pair => pair.Symbol), SymbolEqualityComparer.Default);
+            var callers = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(SymbolEqualityComparer.Default);
+            foreach ((LocalFunctionStatementSyntax syntax, IMethodSymbol symbol) in allFunctionPairs)
+            {
+                using IDisposable modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree);
+                foreach (SyntaxNode node in syntax.DescendantNodes())
+                {
+                    if (this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency
+                        && allSymbols.Contains(dependency)
+                        && !SymbolEqualityComparer.Default.Equals(dependency, symbol))
+                    {
+                        if (!callers.TryGetValue(dependency, out HashSet<IMethodSymbol> callerSet))
+                        {
+                            callerSet = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                            callers[dependency] = callerSet;
+                        }
+
+                        callerSet.Add(symbol);
+                    }
+                }
+            }
+
+            void AddGroupMember(
+                LocalFunctionStatementSyntax syntax,
+                IMethodSymbol symbol,
+                List<IMethodSymbol> members,
+                List<string> names,
+                List<GStatement> declarations)
+            {
+                using IDisposable modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree);
+                var parameterTypes = new List<GTypeReference>();
+                foreach (ParameterSyntax parameter in syntax.ParameterList.Parameters)
+                {
+                    parameterTypes.Add(this.MapLambdaParameter(parameter).Type);
                 }
 
+                bool isAsync = syntax.Modifiers.Any(SyntaxKind.AsyncKeyword);
+                var returns = new List<GTypeReference>();
+                if (!symbol.ReturnsVoid)
+                {
+                    GTypeReference returnType = this.MapDelegateLikeReturnType(
+                        symbol, isAsync, syntax.ReturnType.GetLocation());
+                    if (returnType != null)
+                    {
+                        returns.Add(returnType);
+                    }
+                }
+
+                string name = this.EmittedName(symbol, syntax.Identifier.ValueText);
+                members.Add(symbol);
+                names.Add(name);
+                declarations.Add(new LocalDeclarationStatement(
+                    BindingKind.Var,
+                    name,
+                    new ArrowTypeReference(parameterTypes, returns, isAsync) { IsNullable = true },
+                    initializer: LiteralExpression.Null()));
+            }
+
+            foreach (List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> group in groups)
+            {
                 // Issue #3501 A2: gsc `let`-bound literals now see their own
                 // binding, so a single-member SCC (direct self-recursion) works
                 // on the canonical `let name = func …` path even when it
@@ -2499,38 +2610,54 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                var claimed = new HashSet<IMethodSymbol>(
+                    group.Select(f => f.Symbol), SymbolEqualityComparer.Default);
+
+                // Fixed-point BFS: a non-recursive candidate joins the fold set
+                // once every one of its callers is already claimed (a core SCC
+                // member or a previously folded candidate) — this also lets a
+                // folded helper's OWN non-recursive callee fold in behind it.
+                var foldSet = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
+                var foldSymbols = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+                bool grew = true;
+                while (grew)
+                {
+                    grew = false;
+                    foreach ((LocalFunctionStatementSyntax syntax, IMethodSymbol symbol) in functions)
+                    {
+                        if (claimed.Contains(symbol)
+                            || foldSymbols.Contains(symbol)
+                            || sccMembers.Contains(symbol)
+                            || this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol))
+                        {
+                            continue;
+                        }
+
+                        if (!callers.TryGetValue(symbol, out HashSet<IMethodSymbol> symbolCallers)
+                            || symbolCallers.Count == 0
+                            || !symbolCallers.All(c => claimed.Contains(c) || foldSymbols.Contains(c)))
+                        {
+                            continue;
+                        }
+
+                        foldSymbols.Add(symbol);
+                        foldSet.Add((syntax, symbol));
+                        grew = true;
+                    }
+                }
+
                 var members = new List<IMethodSymbol>();
                 var names = new List<string>();
                 var declarations = new List<GStatement>();
                 foreach ((LocalFunctionStatementSyntax syntax, IMethodSymbol symbol) in group)
                 {
-                    using IDisposable modelScope = this.context.UseSemanticModelFor(syntax.SyntaxTree);
-                    var parameterTypes = new List<GTypeReference>();
-                    foreach (ParameterSyntax parameter in syntax.ParameterList.Parameters)
-                    {
-                        parameterTypes.Add(this.MapLambdaParameter(parameter).Type);
-                    }
+                    AddGroupMember(syntax, symbol, members, names, declarations);
+                }
 
-                    bool isAsync = syntax.Modifiers.Any(SyntaxKind.AsyncKeyword);
-                    var returns = new List<GTypeReference>();
-                    if (!symbol.ReturnsVoid)
-                    {
-                        GTypeReference returnType = this.MapDelegateLikeReturnType(
-                            symbol, isAsync, syntax.ReturnType.GetLocation());
-                        if (returnType != null)
-                        {
-                            returns.Add(returnType);
-                        }
-                    }
-
-                    string name = this.EmittedName(symbol, syntax.Identifier.ValueText);
-                    members.Add(symbol);
-                    names.Add(name);
-                    declarations.Add(new LocalDeclarationStatement(
-                        BindingKind.Var,
-                        name,
-                        new ArrowTypeReference(parameterTypes, returns, isAsync) { IsNullable = true },
-                        initializer: LiteralExpression.Null()));
+                foreach ((LocalFunctionStatementSyntax syntax, IMethodSymbol symbol) in foldSet
+                    .OrderBy(f => f.Syntax.SpanStart))
+                {
+                    AddGroupMember(syntax, symbol, members, names, declarations);
                 }
 
                 foreach (IMethodSymbol member in members)
@@ -2539,59 +2666,6 @@ public sealed partial class CSharpToGSharpTranslator
                         new RecursiveLocalFunctionGroup(members, names, declarations);
                 }
             }
-        }
-
-        /// <summary>
-        /// Issue #3399: true when the local function body reads state declared
-        /// OUTSIDE the function itself — an enclosing local or an enclosing
-        /// method parameter. Such a function becomes a gsc closure, which is
-        /// the shape that breaks G#'s shared sibling <c>let</c> visibility
-        /// (GS0130/GS0125) — it must take the nullable-function-local path.
-        /// References to the function's own parameters/locals and SCC siblings
-        /// (method symbols) are not captures; lambda parameters are fresh
-        /// locals born inside the body, so lambda-kind containing methods are
-        /// excluded (a <c>this</c> access resolves to member symbols, not to
-        /// locals/parameters, so it does not change the <c>let</c> path —
-        /// instance-member recursion is the #1757 shape that works as-is).
-        /// </summary>
-        private bool CapturesOuterState(LocalFunctionStatementSyntax syntax, IMethodSymbol functionSymbol)
-        {
-            foreach (IdentifierNameSyntax identifier in syntax.DescendantNodes().OfType<IdentifierNameSyntax>())
-            {
-                ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
-                if (symbol is null || symbol.Kind == SymbolKind.Alias)
-                {
-                    continue;
-                }
-
-                // Note: `this` is a ThisExpressionSyntax (not an IdentifierName)
-                // and resolves to member symbols — instance capture needs no
-                // check in this loop.
-                if (symbol is ILocalSymbol local && IsOuterCapture(local.ContainingSymbol, functionSymbol))
-                {
-                    return true;
-                }
-
-                if (symbol is IParameterSymbol parameter && IsOuterCapture(parameter.ContainingSymbol, functionSymbol))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Issue #3399: the containing method of a local/parameter is an OUTER
-        /// method (not the local function under inspection) and not a lambda —
-        /// lambda parameters are fresh locals born inside the body, so a
-        /// lambda-kind containing method is not a capture.
-        /// </summary>
-        private static bool IsOuterCapture(ISymbol containing, IMethodSymbol functionSymbol)
-        {
-            return containing is IMethodSymbol parent
-                && !SymbolEqualityComparer.Default.Equals(parent, functionSymbol)
-                && parent.MethodKind is not MethodKind.LambdaMethod;
         }
 
         // C# local functions are hoisted (callable before their lexical

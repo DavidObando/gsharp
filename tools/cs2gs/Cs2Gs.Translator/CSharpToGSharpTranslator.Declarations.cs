@@ -256,7 +256,6 @@ public sealed partial class CSharpToGSharpTranslator
             List<StatementSyntax> flatStatements = globalStatements.Select(gs => gs.Statement).ToList();
             TextSpan enclosingSpan = TextSpan.FromBounds(flatStatements[0].SpanStart, flatStatements[^1].Span.End);
             IReadOnlyList<StatementSyntax> ordered = this.HoistCallBeforeDeclLocalFunctions(flatStatements, enclosingSpan);
-            this.RegisterCapturingRecursiveLocalFunctions(ordered);
 
             // Issue #1904 (mirrored here): the synthesized top-level entry
             // point's own implicit parameter is always literally named "args"
@@ -266,6 +265,25 @@ public sealed partial class CSharpToGSharpTranslator
             // defense-in-depth in case a future Roslyn version ever changes
             // that assumption.
             IParameterSymbol argsParameter = entryPoint.Parameters.FirstOrDefault();
+
+            // Issue #4197: a top-level local function that
+            // `IsTopLevelLocalFunctionCaptureFree` will hoist to its own
+            // top-level `func` (below) must NEVER be claimed by the capturing
+            // registration pass — that pass's nullable-function-local scheme
+            // (`var Name (…)? = nil` + `Name!!(…)` call sites) is for locals
+            // that stay `let`-bound among the statements; a hoisted sibling
+            // `func` is natively pre-declared (ADR-0066) and needs no such
+            // scheme, and mixing the two rewrites the call site to `!!`
+            // against a plain `func` declaration (GS0582). Filtering these
+            // out here is exactly right, not just a workaround: once hoisted,
+            // such a function is never at risk of the forward-reference
+            // problem the nullable scheme exists to solve, so it plays no
+            // part in ANY partner's SCC/reachability analysis either.
+            var topLevelHoistedStatements = new HashSet<StatementSyntax>(ordered.Where(statement =>
+                statement is LocalFunctionStatementSyntax hoistCandidate
+                && this.IsTopLevelLocalFunctionCaptureFree(hoistCandidate, argsParameter, enclosingSpan)));
+            this.RegisterCapturingRecursiveLocalFunctions(
+                ordered.Where(statement => !topLevelHoistedStatements.Contains(statement)).ToList());
             bool renamedArgs = argsParameter != null && argsParameter.Name != "args";
             if (renamedArgs)
             {
