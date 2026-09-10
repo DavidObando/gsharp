@@ -1227,20 +1227,23 @@ public class ImportedMemberMatrixTests
     /// RED (measured, before the fix): compiled with no diagnostic at all —
     /// <c>rows[0].Value</c> was typed as non-nullable <c>string</c>, so
     /// <c>let x string = rows[0].Value</c> silently accepted a nullable value.
-    /// Root cause: <c>ExpressionBinder.TryGetTaskElementType</c> resolved the
-    /// awaited element from the awaiter's CLR <c>GetResult()</c> return type
-    /// (a closed, un-annotated reflected type) via a naive
-    /// <c>TypeSymbol.FromClrType</c> instead of
-    /// <c>NullabilityAnnotatedTypeSymbol.GetTypeArgumentSymbolForClrType</c>,
-    /// which is the only accessor that recovers BOTH the per-position
-    /// nullability flags and (via
-    /// <c>NullabilityAnnotatedTypeSymbol.TransferTupleNames</c>) the tuple
-    /// element names for a nested generic argument. <c>TransferTupleNames</c>
-    /// itself only matched a tuple sitting directly under one <c>Nullable</c>
-    /// wrapper or a top-level <c>ImportedTypeSymbol</c>, so it also needed a
-    /// case for a LAZY <c>NullabilityAnnotatedTypeSymbol</c>-wrapped nested
-    /// generic (the shape <c>IReadOnlyList[(...)]</c> takes one level inside
-    /// <c>Task[...]</c>), materializing it eagerly before grafting names.
+    /// Root cause: this repro's outer <c>Task[IReadOnlyList[(...)]]</c> has a
+    /// named tuple nested inside its own type argument, which is eagerly
+    /// rebuilt for tuple-name preservation (see
+    /// <c>ImportedTypeSymbol.GetConstructed</c>) — traced directly, that
+    /// eager rebuild is what routes THIS specific repro through
+    /// <c>ExpressionBinder.TryGetTaskElementType</c>'s symbolic
+    /// <c>NullabilityAnnotatedTypeSymbol.GetTypeArgumentSymbol</c> path
+    /// (not the CLR-fallback <c>GetTypeArgumentSymbolForClrType</c>, which a
+    /// PLAIN, non-tuple-containing await like <c>Task[string?]</c> uses
+    /// instead — see the sibling scope-witness test below). Both paths
+    /// route into <c>NullabilityAnnotatedTypeSymbol.TransferTupleNames</c>,
+    /// which only matched a tuple sitting directly under one
+    /// <c>Nullable</c> wrapper or a top-level <c>ImportedTypeSymbol</c>, so
+    /// it needed a case for a LAZY <c>NullabilityAnnotatedTypeSymbol</c>-wrapped
+    /// nested generic (the shape <c>IReadOnlyList[(...)]</c> takes one level
+    /// inside <c>Task[...]</c>), materializing it eagerly before grafting
+    /// names.
     /// </para>
     /// GREEN (this test): reports <c>GS0155</c>, exactly like the
     /// same-compilation control elsewhere in this file's nullable-tuple
@@ -1444,30 +1447,40 @@ public class ImportedMemberMatrixTests
     /// a custom (non-<c>Task</c>) awaitable with TWO type parameters,
     /// <c>Awaitable[string, string?]</c>, where <c>GetResult()</c> returns
     /// the SECOND (nullable) parameter but both parameters erase to the
-    /// identical CLR type <c>System.String</c>. This is reachable because
-    /// the awaited-element recovery is driven by the general duck-typed
-    /// <c>GetAwaiter</c>/<c>GetResult</c> shape resolver (C# spec §12.9.8),
-    /// not a <c>Task</c>/<c>ValueTask</c> special case — real BCL awaitables
-    /// only ever have ONE outer type argument, so this shape is exactly
-    /// where the ambiguity was reachable and BCL usage could not surface
-    /// it.
+    /// identical CLR type <c>System.String</c>.
     /// <para>
-    /// Measured (not assumed): a direct <c>let x string = value</c> (no
-    /// null-check) compiles with NO diagnostic both BEFORE this follow-up
-    /// (the first-match bug recovers <c>T1</c>'s own non-null annotation)
-    /// AND AFTER it (the safe "refuse to guess" fallback recovers an
-    /// unannotated/oblivious type, which G#'s null-safety gate treats
-    /// leniently) — so a missing-GS0155 assertion would NOT actually
-    /// discriminate the bug from the fix here, and this test does not claim
-    /// one. What DOES change, and what this test asserts: before this
-    /// follow-up, a genuinely nullable value (<c>T2</c> is <c>string?</c>
-    /// and this factory returns <c>null</c>) that got silently mismatched
-    /// to <c>T1</c>'s non-null annotation risked the compiler trusting a
-    /// non-null claim that was actually false — this test proves the
-    /// runtime value survives this exact ambiguous-match code path intact
-    /// (arrives as genuinely nil, observable via <c>value == nil</c>, and
-    /// the emitted code doesn't crash or corrupt the delegate/call shape),
-    /// which is what a wrong silent match risked breaking.
+    /// This method is only reached at all when the outer awaitable's
+    /// symbolic base has EMPTY <c>TypeArguments</c> — <c>TryGetTaskElementType</c>'s
+    /// earlier "openDef" fast path requires non-empty <c>TypeArguments</c>
+    /// even to attempt matching, and a plain (non-tuple-containing)
+    /// awaitable's symbolic base is never eagerly rebuilt the way a
+    /// tuple-containing one is (see <c>ImportedTypeSymbol.GetConstructed</c>
+    /// / <c>TupleElementNamesReader.ApplyNames</c>), so it stays empty. This
+    /// is measured, not assumed: adding a NAMED TUPLE to this repro's own
+    /// type arguments (to make the wrong-index risk independently
+    /// observable via tuple element names, not just nullability) makes the
+    /// symbolic base eagerly rebuilt too, which flips the "openDef" gate on
+    /// and routes the whole repro through the (inherently unambiguous,
+    /// position-based) <c>GetTypeArgumentSymbol</c> path instead — never
+    /// reaching the very code this test targets. So this repro deliberately
+    /// stays scalar (no tuples) to keep exercising
+    /// <c>GetTypeArgumentSymbolForClrType</c> at all, which in turn means a
+    /// direct <c>let x string = value</c> (no null-check) compiles with NO
+    /// diagnostic both BEFORE this follow-up (the first-match bug recovers
+    /// <c>T1</c>'s own non-null annotation) AND AFTER it (the safe "refuse
+    /// to guess" fallback recovers an unannotated/oblivious type, which
+    /// G#'s null-safety gate treats leniently) — so a missing-GS0155
+    /// assertion would NOT actually discriminate the bug from the fix here,
+    /// and this test does not claim one. What DOES change, and what this
+    /// test asserts: before this follow-up, a genuinely nullable value
+    /// (<c>T2</c> is <c>string?</c> and this factory returns <c>null</c>)
+    /// that got silently mismatched to <c>T1</c>'s non-null annotation
+    /// risked the compiler trusting a non-null claim that was actually
+    /// false — this test proves the runtime value survives this exact
+    /// ambiguous-match code path intact (arrives as genuinely nil,
+    /// observable via <c>value == nil</c>, and the emitted code doesn't
+    /// crash or corrupt the delegate/call shape), which is what a wrong
+    /// silent match risked breaking.
     /// </para>
     /// </summary>
     [Fact]
