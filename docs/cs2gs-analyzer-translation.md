@@ -309,6 +309,20 @@ with the ordinal measured in the equally re-spelled source so a repeated marker
 still lands on the right occurrence. A marker that still cannot be placed stays
 loud.
 
+**A tolerated `!!` bridge (issue #4190).** cs2gs's oblivious-mode nullable
+bridge inserts a runtime `!!` assertion on a reassigned receiver whose
+narrowing it cannot prove flow-sensitively — `current = current.BaseClass`
+prints as `current = current!!.BaseClass` — which is not a translation defect
+(a `do`/`while` loop's post-test guard narrows nothing G#'s own binder
+recognizes either, so the assertion is sometimes *required* for the
+translated code to bind, not merely conservative) but is exactly the kind of
+re-spelling neither plain ordinal placement nor the #3797 lexical rename can
+anticipate: the decision depends on flow analysis of the whole surrounding
+method, invisible from inside the marked region alone. Placement retries a
+third way — the marked text is matched with an *optional* `!!` tolerated
+after every identifier, every other character still an exact literal match —
+before a marker is finally dropped as unplaceable.
+
 ## Project and consumer transform
 
 `Cs2Gs.Pipeline/GSharpProjectTransformer.cs` gains an analyzer branch

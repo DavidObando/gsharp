@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
@@ -164,6 +165,13 @@ public static class SnippetTranslator
                     index = NthOccurrence(printed, renamed.Text, renamedOrdinal);
                     length = renamed.Text.Length;
                 }
+            }
+
+            if (index < 0
+                && TryNullForgivingTolerantOccurrence(printed, marked.Text, ordinal, out int toleratedIndex, out int toleratedLength))
+            {
+                index = toleratedIndex;
+                length = toleratedLength;
             }
 
             if (index < 0)
@@ -353,6 +361,88 @@ public static class SnippetTranslator
         }
 
         return index;
+    }
+
+    /// <summary>
+    /// Issue #4190: retries placement tolerating a <c>!!</c> RUNTIME
+    /// null-assertion cs2gs inserts immediately after an identifier the
+    /// marked text reads — e.g. a guarded reassignment walk,
+    /// <c>current = current.BaseClass</c>, whose receiver's nullability
+    /// cs2gs's flow-sensitive analysis cannot always prove narrowed (a
+    /// <c>do</c>/<c>while</c> loop's post-test guard, in particular, narrows
+    /// nothing the G# binder itself recognizes — see
+    /// <c>StatementBinder.Loops.BindDoWhileStatementCore</c> — so the
+    /// bridging <c>!!</c> is not merely conservative there; it is required
+    /// for the translated G# to bind at all), prints as
+    /// <c>current = current!!.BaseClass</c>. Unlike <see cref="PredefinedRenaming"/>
+    /// (a lexical rename computed from the marked region's own syntax), the
+    /// `!!` decision depends on flow analysis of the FULL surrounding method
+    /// body, invisible from inside the marked region alone — so instead of
+    /// predicting the exact re-spelling, this searches for the marked text
+    /// with an OPTIONAL <c>!!</c> tolerated after every identifier, keeping
+    /// every other character an exact literal match. The same
+    /// occurrence-ordinal counted over the UNMODIFIED marker text in the
+    /// clean C# source (shared with the plain-match stage above) selects
+    /// which tolerant match is the right one, so a repeated marker still
+    /// lands on its own occurrence.
+    /// </summary>
+    /// <param name="printed">The printed G#.</param>
+    /// <param name="markedText">The marker's original C# text.</param>
+    /// <param name="ordinal">The zero-based occurrence to find.</param>
+    /// <param name="index">The matched span's start index, when found.</param>
+    /// <param name="length">The matched span's length, when found.</param>
+    /// <returns>True when a tolerant match was found.</returns>
+    private static bool TryNullForgivingTolerantOccurrence(
+        string printed, string markedText, int ordinal, out int index, out int length)
+    {
+        var pattern = new Regex(BuildNullForgivingTolerantPattern(markedText), RegexOptions.None);
+        var seen = 0;
+        for (Match match = pattern.Match(printed); match.Success; match = match.NextMatch())
+        {
+            if (seen == ordinal)
+            {
+                index = match.Index;
+                length = match.Length;
+                return true;
+            }
+
+            seen++;
+        }
+
+        index = -1;
+        length = 0;
+        return false;
+    }
+
+    // Builds a regex that matches `text` literally except that an optional
+    // `(?:!!)?` is tolerated immediately after every maximal identifier run —
+    // the one place cs2gs's runtime null-assertion can be inserted into an
+    // otherwise-verbatim expression.
+    private static string BuildNullForgivingTolerantPattern(string text)
+    {
+        var pattern = new StringBuilder(text.Length * 2);
+        var i = 0;
+        while (i < text.Length)
+        {
+            if (IsIdentifierChar(text[i]))
+            {
+                int start = i;
+                while (i < text.Length && IsIdentifierChar(text[i]))
+                {
+                    i++;
+                }
+
+                pattern.Append(Regex.Escape(text.Substring(start, i - start)));
+                pattern.Append("(?:!!)?");
+            }
+            else
+            {
+                pattern.Append(Regex.Escape(text[i].ToString()));
+                i++;
+            }
+        }
+
+        return pattern.ToString();
     }
 
     private static string StripMarkers(string source, List<MarkedText> markedTexts)
