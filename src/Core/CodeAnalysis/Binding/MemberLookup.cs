@@ -3470,7 +3470,12 @@ internal sealed class MemberLookup
                     NullableLifting.GetEffectiveClrType(classConstraint));
             }
 
-            for (StructSymbol? current = type as StructSymbol; current != null; current = current.BaseClass)
+            if (type is not StructSymbol structType)
+            {
+                return false;
+            }
+
+            foreach (var current in structType.GetHierarchy())
             {
                 var importedBaseClr = NullableLifting.GetEffectiveClrType(current.ImportedBaseType);
                 if (importedBaseClr != null

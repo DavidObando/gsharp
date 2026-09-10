@@ -276,8 +276,10 @@ public static class ExhaustivenessAnalyzer
 
     private static bool IsSubclassOf(StructSymbol candidate, StructSymbol baseClass)
     {
-        for (var current = candidate.BaseClass; current != null; current = current.BaseClass)
+        var chain = candidate.GetHierarchy();
+        for (var level = 1; level < chain.Count; level++)
         {
+            var current = chain[level];
             if (current == baseClass || current.Definition == baseClass || current == baseClass.Definition || current.Definition == baseClass.Definition)
             {
                 return true;

@@ -2853,16 +2853,13 @@ internal sealed partial class ExpressionBinder
     /// <returns>The inherited CLR base type, or <see langword="null"/> when there is none.</returns>
     internal static Type? GetInheritedClrBaseType(StructSymbol structSymbol)
     {
-        StructSymbol? current = structSymbol;
-        while (current != null)
+        foreach (var current in structSymbol.GetHierarchy())
         {
             var clr = current.ImportedBaseType?.ClrType;
             if (clr != null)
             {
                 return clr;
             }
-
-            current = current.BaseClass;
         }
 
         return null;

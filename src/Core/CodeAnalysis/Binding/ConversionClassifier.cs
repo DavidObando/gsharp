@@ -3106,7 +3106,7 @@ internal sealed class ConversionClassifier
     {
         if (type is StructSymbol structSymbol)
         {
-            for (var current = structSymbol; current != null; current = current.BaseClass)
+            foreach (var current in structSymbol.GetHierarchy())
             {
                 if (current.ClrType != null)
                 {

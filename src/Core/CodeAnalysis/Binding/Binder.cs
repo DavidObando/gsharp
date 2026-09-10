@@ -478,10 +478,8 @@ public sealed class Binder
                 // also accessible via bare name. Derived shadowing wins.
                 if (function.ReceiverType is StructSymbol receiverStruct)
                 {
-                    StructSymbol? currentReceiverType = receiverStruct;
-                    while (currentReceiverType != null)
+                    foreach (var t in receiverStruct.GetHierarchy())
                     {
-                        var t = currentReceiverType;
                         if (!t.Fields.IsDefaultOrEmpty)
                         {
                             foreach (var fld in t.Fields)
@@ -577,8 +575,6 @@ public sealed class Binder
                                 }
                             }
                         }
-
-                        currentReceiverType = t.BaseClass;
                     }
                 }
             }
@@ -7930,7 +7926,7 @@ public sealed class Binder
     {
         if (symbol is StructSymbol aggregate)
         {
-            for (StructSymbol? current = aggregate; current != null; current = current.BaseClass)
+            foreach (var current in aggregate.GetHierarchy())
             {
                 foreach (var implemented in current.ImplementedClrInterfaces)
                 {
@@ -8053,7 +8049,7 @@ public sealed class Binder
             var constraintDef = classDef.Definition ?? classDef;
             if (typeArgument is StructSymbol argClass)
             {
-                for (var current = argClass; current != null; current = current.BaseClass)
+                foreach (var current in argClass.GetHierarchy())
                 {
                     var currentDef = current.Definition ?? current;
                     if (ReferenceEquals(currentDef, constraintDef) || ReferenceEquals(current, classConstraint))
@@ -8086,7 +8082,7 @@ public sealed class Binder
             // must satisfy `[T ImportedBase]`).
             if (typeArgument is StructSymbol sourceClass)
             {
-                for (var current = sourceClass; current != null; current = current.BaseClass)
+                foreach (var current in sourceClass.GetHierarchy())
                 {
                     if (current.ImportedBaseType?.ClrType is { } importedBaseClr
                         && ClrLoadContext.IsAssignable(constraintClr, importedBaseClr))
@@ -8315,8 +8311,7 @@ public sealed class Binder
         // for every interface encountered, its transitive base-interface closure.
         if (typeArgument is StructSymbol s)
         {
-            StructSymbol? current = s;
-            while (current != null)
+            foreach (var current in s.GetHierarchy())
             {
                 foreach (var implemented in current.Interfaces)
                 {
@@ -8333,8 +8328,6 @@ public sealed class Binder
                         }
                     }
                 }
-
-                current = current.BaseClass;
             }
         }
 

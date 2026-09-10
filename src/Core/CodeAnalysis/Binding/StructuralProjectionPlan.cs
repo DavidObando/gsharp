@@ -264,8 +264,7 @@ internal static class StructuralProjectionPlanner
 
         var initializerSlots = ImmutableArray.CreateBuilder<StructuralProjectionSlot>();
         var targetNames = new HashSet<string>(constructorNames, StringComparer.Ordinal);
-        StructSymbol? current = target;
-        while (current != null)
+        foreach (var current in target.GetHierarchy())
         {
             foreach (var field in current.Fields)
             {
@@ -316,8 +315,6 @@ internal static class StructuralProjectionPlanner
                         targetProperty: property));
                 }
             }
-
-            current = current.BaseClass;
         }
 
         plan = new StructuralProjectionPlan(
@@ -930,7 +927,7 @@ internal static class StructuralProjectionPlanner
         var result = new Dictionary<string, StructuralProjectionSourceMember>(StringComparer.Ordinal);
         if (source is StructSymbol structSource)
         {
-            for (StructSymbol? current = structSource; current != null; current = current.BaseClass)
+            foreach (var current in structSource.GetHierarchy())
             {
                 foreach (var property in current.Properties)
                 {

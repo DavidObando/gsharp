@@ -269,6 +269,21 @@ public abstract class SyntaxNode
         return GetChildren().Last().GetLastToken();
     }
 
+    /// <summary>
+    /// Gets the first token in this syntax node.
+    /// </summary>
+    /// <returns>A <see cref="SyntaxToken"/>.</returns>
+    public SyntaxToken GetFirstToken()
+    {
+        if (this is SyntaxToken token)
+        {
+            return token;
+        }
+
+        // A syntax node should always contain at least 1 token.
+        return GetChildren().First().GetFirstToken();
+    }
+
     /// <inheritdoc/>
     public override string ToString()
     {

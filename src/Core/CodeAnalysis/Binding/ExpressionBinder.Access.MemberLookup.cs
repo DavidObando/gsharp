@@ -474,8 +474,7 @@ internal sealed partial class ExpressionBinder
                     // unaffected.
                     if (IsWithinType(structSym))
                     {
-                        StructSymbol? evtDeclType = structSym;
-                        while (evtDeclType != null)
+                        foreach (var evtDeclType in structSym.GetHierarchy())
                         {
                             var evt = evtDeclType.Events.FirstOrDefault(e =>
                                 e.Name == ne.IdentifierToken.ValueText && e.IsFieldLike && e.BackingField != null);
@@ -483,8 +482,6 @@ internal sealed partial class ExpressionBinder
                             {
                                 return ApplyMemberNarrowing(new BoundFieldAccessExpression(null, receiver, evtDeclType, evt.BackingField!));
                             }
-
-                            evtDeclType = evtDeclType.BaseClass;
                         }
                     }
 
@@ -2639,7 +2636,7 @@ internal sealed partial class ExpressionBinder
         substitution = null;
 
         var definition = target.Definition ?? target;
-        for (var c = definition; c != null; c = c.BaseClass)
+        foreach (var c in definition.GetHierarchy())
         {
             foreach (var p in c.Properties)
             {

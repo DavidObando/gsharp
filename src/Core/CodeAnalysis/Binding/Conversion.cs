@@ -2975,18 +2975,12 @@ public sealed class Conversion
         }
     }
 
-    private static List<StructSymbol> GetStructHierarchy(StructSymbol type)
-    {
-        var hierarchy = new List<StructSymbol>();
-        StructSymbol? current = type;
-        while (current != null)
-        {
-            hierarchy.Add(current);
-            current = current.BaseClass;
-        }
-
-        return hierarchy;
-    }
+    // Issue #4172: this used to be its own unguarded copy of the hierarchy
+    // walk. Forwards to StructSymbol's single guarded walk (fixed by #4162,
+    // and the pattern PR #4170 already applied to ExternalClrOverrideResolver's
+    // near-identical duplicate) instead of keeping a second copy that can
+    // drift out of sync with its fix again.
+    private static List<StructSymbol> GetStructHierarchy(StructSymbol type) => type.GetHierarchy();
 
     /// <summary>
     /// Issue #1248: determines whether a (possibly constructed generic) class

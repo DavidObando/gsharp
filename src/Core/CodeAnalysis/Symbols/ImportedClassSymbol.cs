@@ -802,7 +802,7 @@ public sealed class ImportedClassSymbol : Symbol
 
             if (boundArguments[i].Type is StructSymbol { IsClass: true } ss)
             {
-                for (var current = ss; current != null; current = current.BaseClass)
+                foreach (var current in ss.GetHierarchy())
                 {
                     foreach (var iface in current.ImplementedClrInterfaces)
                     {

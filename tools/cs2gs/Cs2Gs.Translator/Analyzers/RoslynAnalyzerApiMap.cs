@@ -130,6 +130,47 @@ internal static class RoslynAnalyzerApiMap
             "PatternSyntax",
             "G# stores a pattern's optional binding token on the pattern node itself; designation walks filter PatternSyntax.BindingIdentifier."),
 
+        // Issue #4173: loop/lambda/type-declaration statement syntax, found
+        // missing by GSA0006's IsInsideLoop/IsInsideExemptMethod ancestor
+        // walks (issue #4172's self-migration guard run).
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.WhileStatementSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "WhileStatementSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.DoStatementSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "DoWhileStatementSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.ForStatementSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "ForClauseStatementSyntax",
+            "A C-style for-loop with a single declarator/initializer/incrementor and no condition needing clause hoisting translates directly to ForClauseStatementSyntax; TranslateForStatement lowers every other shape (multiple declarators/initializers/incrementors, or a hoisted condition) to a block + WhileStatementSyntax instead (issues #914, #1723) — an ancestor walk checking only ForClauseStatementSyntax misses that lowered shape (though WhileStatementSyntax, separately mapped, still recognizes it as a loop)."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.LambdaExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "LambdaExpressionSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.AnonymousMethodExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "LambdaExpressionSyntax",
+            "G# has no legacy delegate(...){...} anonymous-method syntax; cs2gs translates a C# anonymous method the same way it translates a lambda, so both collapse onto LambdaExpressionSyntax."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.LocalFunctionStatementSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "FunctionDeclarationSyntax",
+            "Same target as MethodDeclarationSyntax above: FunctionDeclarationSyntax covers C# methods and local functions alike; review kind checks that distinguished them."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "StructDeclarationSyntax",
+            "Roslyn's TypeDeclarationSyntax is the abstract base for class/struct/interface/record declarations; G# splits these into distinct node types (StructDeclarationSyntax for class/struct, InterfaceDeclarationSyntax for interfaces) with no shared base of their own. This picks the class/struct case; an ancestor walk that also needs to match an interface declaration needs review."),
+
+        // Issue #4173: found analyzing a nullable receiver. G# has a single
+        // UnaryExpressionSyntax (OperatorToken + Operand) for every unary
+        // operator, prefix or postfix, so both Roslyn shapes collapse onto
+        // it; the operator itself is told apart by OperatorToken.Kind, not by
+        // a distinct node type. Also the shape cs2gs's nullable-lifting
+        // itself inserts around a nullable receiver with no G#-side flow
+        // narrowing to fall back on (G#'s own `!!` null-forgiving operator)
+        // — an analyzer walking a receiver expression may need to see
+        // through it even when the ORIGINAL C# never wrote one explicitly.
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.PostfixUnaryExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "UnaryExpressionSyntax",
+            "G# has one unary-expression node for prefix and postfix operators alike; distinguish by OperatorToken.Kind, not node type."),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.PrefixUnaryExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "UnaryExpressionSyntax",
+            "G# has one unary-expression node for prefix and postfix operators alike; distinguish by OperatorToken.Kind, not node type."),
+
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),
         ["Microsoft.CodeAnalysis.IFieldSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "FieldSymbol"),
@@ -214,6 +255,8 @@ internal static class RoslynAnalyzerApiMap
     {
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "ElementAccessExpression")] = new(null, "IndexExpression"),
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "SimpleMemberAccessExpression")] = new(null, "AccessorExpression"),
+        [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "SimpleAssignmentExpression")] = new(null, "AssignmentExpression"),
+        [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "IdentifierName")] = new(null, "NameExpression"),
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "InvocationExpression")] = new(null, "CallExpression"),
         [("Microsoft.CodeAnalysis.CSharp.SyntaxKind", "MethodDeclaration")] = new(
             null,
@@ -330,6 +373,10 @@ internal static class RoslynAnalyzerApiMap
             null,
             null,
             "G# index/member writes parse as Index/MemberIndexAssignmentExpression, never as a read node on an assignment's left; the C# assignment-LHS check has no G# counterpart, so comparisons against it lower to 'false'."),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax", "Right")] = new(
+            null,
+            "Expression",
+            "G# simple assignment has a single IdentifierToken target and one Expression value (no Left/Right split); the RHS is Expression directly."),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.CasePatternSwitchLabelSyntax", "Pattern")] = new(null, "Value"),
         [("Microsoft.CodeAnalysis.CSharp.Syntax.SubpatternSyntax", "ExpressionColon")] = new(
             null,

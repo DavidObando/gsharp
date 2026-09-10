@@ -884,8 +884,10 @@ internal sealed partial class MethodBodyEmitter
             // of type arguments, and the binder already validated argument
             // compatibility, so matching by generic definition along the base
             // chain correctly recognises it.
-            for (var c = aClass.BaseClass; c != null; c = c.BaseClass)
+            var aClassChain = aClass.GetHierarchy();
+            for (var level = 1; level < aClassChain.Count; level++)
             {
+                var c = aClassChain[level];
                 if (c == bClass || ReferenceEquals(c.Definition, bClass.Definition))
                 {
                     return true;
@@ -900,7 +902,7 @@ internal sealed partial class MethodBodyEmitter
         // is also recognised on the derived class.
         if (a is StructSymbol srcClass && srcClass.IsClass && b is InterfaceSymbol targetIface)
         {
-            for (var c = srcClass; c != null; c = c.BaseClass)
+            foreach (var c in srcClass.GetHierarchy())
             {
                 foreach (var iface in c.Interfaces)
                 {
@@ -933,7 +935,7 @@ internal sealed partial class MethodBodyEmitter
         if (a is StructSymbol srcClass2 && srcClass2.IsClass
             && b?.ClrType != null && b.ClrType.IsInterface)
         {
-            for (var c = srcClass2; c != null; c = c.BaseClass)
+            foreach (var c in srcClass2.GetHierarchy())
             {
                 foreach (var iface in c.ImplementedClrInterfaces)
                 {
@@ -965,7 +967,7 @@ internal sealed partial class MethodBodyEmitter
             && b?.ClrType is System.Type bClrClass
             && !bClrClass.IsInterface && !bClrClass.IsValueType)
         {
-            for (var c = srcClass3; c != null; c = c.BaseClass)
+            foreach (var c in srcClass3.GetHierarchy())
             {
                 if (c.ImportedBaseType?.ClrType is System.Type importedBaseClr
                     && ClrTypeUtilities.IsAssignableByName(bClrClass, importedBaseClr))

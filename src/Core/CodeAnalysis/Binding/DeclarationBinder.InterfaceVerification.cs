@@ -819,7 +819,7 @@ internal sealed partial class DeclarationBinder
         out PropertySymbol? typeMismatch)
     {
         typeMismatch = null;
-        for (StructSymbol? current = structSymbol; current != null; current = current.BaseClass)
+        foreach (var current in structSymbol.GetHierarchy())
         {
             foreach (var candidate in current.Properties)
             {
@@ -1000,9 +1000,13 @@ internal sealed partial class DeclarationBinder
             }
 
             EventSymbol? implementation = null;
-            StructSymbol? type = structSymbol;
-            while (type != null && implementation == null)
+            foreach (var type in structSymbol.GetHierarchy())
             {
+                if (implementation != null)
+                {
+                    break;
+                }
+
                 foreach (var candidate in type.Events)
                 {
                     if (candidate.HasExplicitInterfaceClause
@@ -1016,8 +1020,6 @@ internal sealed partial class DeclarationBinder
                     implementation = candidate;
                     break;
                 }
-
-                type = type.BaseClass;
             }
 
             if (implementation == null)
@@ -1904,12 +1906,10 @@ internal sealed partial class DeclarationBinder
         // type), which would hide the non-generic covariant bridge method that
         // shares the generic method's name and (empty) parameter list. Walk the
         // class and its base chain directly so both overloads are visible.
-        StructSymbol? c = structSymbol;
-        while (c != null)
+        foreach (var c in structSymbol.GetHierarchy())
         {
             if (c.Methods.IsDefaultOrEmpty)
             {
-                c = c.BaseClass;
                 continue;
             }
 
@@ -1921,8 +1921,6 @@ internal sealed partial class DeclarationBinder
                     return true;
                 }
             }
-
-            c = c.BaseClass;
         }
 
         return false;

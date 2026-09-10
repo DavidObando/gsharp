@@ -7,3 +7,4 @@ GSA0002 | GSharp.InternalAnalyzers | Warning | Compare CLR Type identities with 
 GSA0003 | GSharp.InternalAnalyzers | Warning | Use weak storage for static reflection identity caches
 GSA0004 | GSharp.InternalAnalyzers | Warning | Emit caches keyed on symbols producing metadata references must include RemapScope
 GSA0005 | GSharp.InternalAnalyzers | Warning | Preserve every member the base rewriter preserves when cloning a bound node
+GSA0006 | GSharp.InternalAnalyzers | Warning | Walk StructSymbol.BaseClass through GetHierarchy() instead of by hand

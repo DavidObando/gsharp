@@ -72,4 +72,23 @@ public static class DiagnosticDescriptors
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true,
         description: "Bound nodes are discriminated unions over their constructors, so a member one constructor omits is silently lost when a rewriter rebuilds the node through the wrong one. The base BoundTreeRewriter branches on the discriminator; an override that does not drops it and mis-codegens (issues #1644, #3333).");
+
+    /// <summary>
+    /// Reports a loop that walks <c>StructSymbol.BaseClass</c> by hand
+    /// instead of through the guarded <c>GetHierarchy()</c> helper.
+    /// </summary>
+    public static readonly DiagnosticDescriptor UnguardedBaseClassWalk = new(
+        "GSA0006",
+        "Walk StructSymbol.BaseClass through GetHierarchy() instead of by hand",
+        "'{0}' is reassigned from '{0}.BaseClass' inside a loop; call GetHierarchy() instead so a base-class cycle cannot hang or exhaust memory",
+        "GSharp.InternalAnalyzers",
+        DiagnosticSeverity.Warning,
+
+        // Issue #4172: the follow-up cleanup migrated every remaining
+        // hand-rolled walk found by the real-tree run onto GetHierarchy()
+        // (or deleted the one that was dead code), so the rule is now
+        // enabled by default — a real, scoped build break is no longer a
+        // risk, and every walk added from here on gets caught immediately.
+        isEnabledByDefault: true,
+        description: "A genuine base-class cycle (`class B : C` / `class C : B`) is normally caught by the post-bind cycle detector (issue #973), but any loop that re-walks the symbol-level BaseClass chain by hand runs before that detector on every struct's declaration body, and will spin or OOM if it lacks its own cycle guard. This recurred at least six times (issues #4162 and #4164's five call sites) as independent, unguarded copies of the same loop shape. StructSymbol.GetHierarchy() is the single already-guarded walk; every caller should go through it instead of re-deriving its own guard.");
 }

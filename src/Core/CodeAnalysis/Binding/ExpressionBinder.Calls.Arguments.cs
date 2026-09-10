@@ -394,11 +394,9 @@ internal sealed partial class ExpressionBinder
         CallExpressionSyntax ce,
         ImmutableArray<string> argumentNames)
     {
-        StructSymbol? current = receiverClass;
-        while (current != null)
+        foreach (var current in receiverClass.GetHierarchy())
         {
-            var c = current;
-            foreach (var iface in c.Interfaces)
+            foreach (var iface in current.Interfaces)
             {
                 if (iface == null)
                 {
@@ -426,8 +424,6 @@ internal sealed partial class ExpressionBinder
                     return selected;
                 }
             }
-
-            current = c.BaseClass;
         }
 
         return null;
@@ -473,8 +469,7 @@ internal sealed partial class ExpressionBinder
         {
             // Walk the base chain so an inherited callable field on a base class
             // is invokable on a derived instance.
-            StructSymbol? current = receiverStruct;
-            while (current != null)
+            foreach (var current in receiverStruct.GetHierarchy())
             {
                 if (current.TryGetField(methodName, out var f))
                 {
@@ -483,8 +478,6 @@ internal sealed partial class ExpressionBinder
                     declaringOwner = current;
                     break;
                 }
-
-                current = current.BaseClass;
             }
         }
 
@@ -841,7 +834,7 @@ internal sealed partial class ExpressionBinder
     {
         if (receiverType is StructSymbol structSymbol)
         {
-            for (StructSymbol? current = structSymbol; current != null; current = current.BaseClass)
+            foreach (var current in structSymbol.GetHierarchy())
             {
                 if (current.TryGetField(memberName, out _))
                 {
@@ -2690,8 +2683,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private static bool UserClassImplementsInterface(StructSymbol ss, System.Type target)
     {
-        StructSymbol? current = ss;
-        while (current != null)
+        foreach (var current in ss.GetHierarchy())
         {
             foreach (var iface in current.ImplementedClrInterfaces)
             {
@@ -2712,8 +2704,6 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
             }
-
-            current = current.BaseClass;
         }
 
         // Also check the imported CLR base type (if any) — it may implement
@@ -3010,8 +3000,7 @@ internal sealed partial class ExpressionBinder
     private static bool EnclosingTypeImplements(StructSymbol enclosingType, InterfaceSymbol ifaceSym)
     {
         var ifaceDef = ifaceSym.Definition ?? ifaceSym;
-        StructSymbol? t = enclosingType;
-        while (t != null)
+        foreach (var t in enclosingType.GetHierarchy())
         {
             foreach (var iface in t.Interfaces)
             {
@@ -3021,8 +3010,6 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
             }
-
-            t = t.BaseClass;
         }
 
         return false;
@@ -3390,16 +3377,13 @@ internal sealed partial class ExpressionBinder
     /// <returns>The CLR base type for inherited-member lookup.</returns>
     private static System.Type ResolveClrBaseSearchType(StructSymbol from)
     {
-        StructSymbol? current = from;
-        while (current != null)
+        foreach (var current in from.GetHierarchy())
         {
             var clr = current.ImportedBaseType?.ClrType;
             if (clr != null)
             {
                 return clr;
             }
-
-            current = current.BaseClass;
         }
 
         return typeof(object);
@@ -3754,16 +3738,15 @@ internal sealed partial class ExpressionBinder
     private static bool IsBaseClassOf(StructSymbol derived, StructSymbol candidate)
     {
         var candidateDef = candidate.Definition ?? candidate;
-        var current = derived.BaseClass;
-        while (current != null)
+        var chain = derived.GetHierarchy();
+        for (var level = 1; level < chain.Count; level++)
         {
+            var current = chain[level];
             var currentDef = current.Definition ?? current;
             if (ReferenceEquals(currentDef, candidateDef) || ReferenceEquals(current, candidate))
             {
                 return true;
             }
-
-            current = current.BaseClass;
         }
 
         return false;
