@@ -3211,10 +3211,10 @@ public sealed class Conversion
         => type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
 
     /// <summary>
-    /// Issue #4184: true when accepting <paramref name="source"/> for
-    /// <paramref name="target"/> would rely SOLELY on
-    /// <see cref="Type.IsAssignableFrom"/>'s CLR-level special case for
-    /// value types — <c>Nullable&lt;T&gt;.IsAssignableFrom(T)</c> returns
+    /// Issue #4184 (and its return-side sibling, #4186): true when accepting
+    /// <paramref name="source"/> for <paramref name="target"/> would rely
+    /// SOLELY on <see cref="Type.IsAssignableFrom"/>'s CLR-level special case
+    /// for value types — <c>Nullable&lt;T&gt;.IsAssignableFrom(T)</c> returns
     /// <see langword="true"/> even though no G#/C# implicit conversion
     /// permits a bare <c>T</c> to satisfy a <c>T?</c> method-group parameter
     /// or delegate-return slot (identity is required for a value-type slot;
@@ -3465,8 +3465,34 @@ public sealed class Conversion
         // `FunctionTypeSymbol.BuildClrType` already uses to avoid this same
         // erasure for the emitted delegate shape itself -- using it here too
         // makes this probe agree with what the emitter actually builds.
+        // Issue #4186: the return-side, reverse-direction sibling of #4184's
+        // parameter-side guard, for this method's REFLECTIVE fallback path
+        // (this whole method only runs when the earlier, preferred symbolic
+        // route — `Conversion.Classify`'s `TryGetDelegateFunctionTypeFromSymbol`
+        // + `IsFunctionShapeAssignable` — cannot recover a symbolic delegate
+        // shape, e.g. no `delegateTypeSymbol`, or an `Invoke` shape that
+        // doesn't map directly onto the delegate's own type parameters; the
+        // #4186 repro's own RED witness was actually caught by that earlier
+        // symbolic route's `ReturnTypeWidens`, guarded separately below).
+        // `IsAssignableByName` here would otherwise accept a bare
+        // `T`-returning method group against a delegate slot declared `T?`,
+        // relying solely on `Type.IsAssignableFrom`'s CLR special case
+        // (`Nullable<T>.IsAssignableFrom(T) == true`) — `csc` rejects this
+        // with `CS0407`. Safe for the legitimate lambda shape `csc` DOES
+        // accept (`x => x != 0` target-typed against `Func<int, bool?>`):
+        // measured directly against `LambdaBinder.BindLambdaExpression`/
+        // `InferLambdaReturnType`, such a lambda's own `FunctionTypeSymbol.ReturnType`
+        // is ALREADY `bool?` (the delegate's exact return type) by the time
+        // this method runs, not the body's bare `bool` — so it satisfies the
+        // identity comparison inside `IsClrNullableWideningMismatch`
+        // (`AreSame(target, source)`) and never reaches the CLR quirk this
+        // guard closes. No method-group/lambda discriminator is needed here.
         var fnReturnEffectiveClr = NullableLifting.GetEffectiveClrType(fn.ReturnType);
-        if (fnReturnEffectiveClr != null && ClrTypeUtilities.IsAssignableByName(invokeReturnType, fnReturnEffectiveClr))
+        if (fnReturnEffectiveClr != null
+            && !IsClrNullableWideningMismatch(
+                Invariant.Required(invokeReturnType, "a resolved delegate Invoke method has a return type"),
+                fnReturnEffectiveClr)
+            && ClrTypeUtilities.IsAssignableByName(invokeReturnType, fnReturnEffectiveClr))
         {
             return true;
         }
@@ -4303,8 +4329,37 @@ public sealed class Conversion
         // The reverse direction (`T? → T`, a null-dropping narrowing) is
         // intentionally NOT recognized here — it requires the bang operator — so
         // an unsafe `(T) -> T?` to `(T) -> T` conversion stays rejected.
+        //
+        // Issue #4186: restricted to an unconstrained type parameter or a
+        // reference-type underlying (see this rule's own
+        // Issue1356FuncReturnNullableWideningConversionTests /
+        // Issue1356FuncReturnCovarianceEmitTests coverage — neither pins a
+        // concrete VALUE-type case). A concrete value-type underlying (e.g.
+        // `bool` → `bool?`) is exactly the shape #4186 rejects: a method
+        // group's own `Invoke`-compatible signature is the method's bare
+        // return type, and the CLR has no implicit `T` → `Nullable<T>`
+        // delegate-return conversion for a direct `ldftn`+`newobj` binding
+        // (`csc` measured: `CS0407`) — only a synthesized wrapper method
+        // (e.g. a lambda's or a func-literal's compiler-generated body,
+        // already target-typed to `T?` before it ever reaches this check —
+        // see `IsFunctionShapeAssignable`'s
+        // `AreRuntimeEquivalentIgnoringReferenceNullability` identity check,
+        // which such a literal already satisfies before this widening rule
+        // is even consulted) can perform that lift. Uses
+        // `NullableLifting.IsAnyValueTypeNullable` rather than the narrower
+        // `IsValueTypeNullable` alone: a same-compilation user `struct`/`enum`
+        // underlying has no `ClrType` mid-binding, so `IsValueTypeNullable`'s
+        // `ClrType.IsValueType` probe misses it, which would have left this
+        // exact gap open for a same-compilation value type's bare-`S` return
+        // (only a BCL/open-struct-constrained value type would have been
+        // caught). `IsAnyValueTypeNullable` unifies both the CLR-backed and
+        // the same-compilation user-struct/enum cases. `false` for an open
+        // (non-struct-constrained) type-parameter underlying and for any
+        // reference type, so both of this rule's own pinned cases are
+        // unaffected.
         if (toReturn is NullableTypeSymbol toNullable
-            && toNullable.UnderlyingType == fromReturn)
+            && toNullable.UnderlyingType == fromReturn
+            && !NullableLifting.IsAnyValueTypeNullable(toNullable))
         {
             return true;
         }
