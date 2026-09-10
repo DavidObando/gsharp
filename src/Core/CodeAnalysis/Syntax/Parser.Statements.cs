@@ -1266,13 +1266,27 @@ public partial class Parser
             // `{`. Suppress trailing object-initializer wrapping so an indexer-
             // or call-tailed post (`s += arr[s] { … }`) does not consume the
             // loop body's opening brace as a composite literal.
+            //
+            // Issue #4177: #1023's fix only covered the object-initializer
+            // wrap — a bare-identifier-tailed post (`c = c.Next { … }`, the
+            // assignment-expression-increment shape) is ALSO ambiguous with a
+            // struct literal (`ParseNameOrCallExpression`'s `Identifier {`
+            // check), and that check keys off the separate
+            // `suppressStructLiteral` counter. Every other body-header
+            // expression (if/while conditions, for-in collections) suppresses
+            // BOTH counters via `ParseExpressionInBodyHeader`; the post clause
+            // must do the same so an empty body (or one starting with `...`/
+            // `Identifier:`) right after the post expression isn't swallowed
+            // as that identifier's struct-literal initializer.
             suppressTrailingObjectInitializer++;
+            suppressStructLiteral++;
             try
             {
                 post = ParseSimpleStatement();
             }
             finally
             {
+                suppressStructLiteral--;
                 suppressTrailingObjectInitializer--;
             }
         }

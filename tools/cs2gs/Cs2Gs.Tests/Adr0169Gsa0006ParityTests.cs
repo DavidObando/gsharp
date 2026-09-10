@@ -60,13 +60,28 @@ class Walker
 }
 """;
 
-    // Issue #4177: a C-style for-loop whose increment clause is a general
-    // assignment (not `++`/`--`) — exactly this shape — translates to
-    // invalid G# in cs2gs's ordinary (non-analyzer) mode, a pre-existing,
-    // unrelated gap discovered while writing this fixture. No known site
-    // in src/Core hits it (every migrated for-loop increments by `level++`,
-    // never by a general assignment), so it is not exercised here; add a
-    // `ForLoopWalk` case back once #4177 is fixed.
+    // Issue #4177 (fixed): a C-style for-loop whose increment clause is a
+    // general assignment (not `++`/`--`) — exactly this shape — used to
+    // translate to invalid G# (a gsc parser gap: the for-clause post/
+    // increment header suppressed the object-initializer struct-literal
+    // ambiguity for a call-/indexer-tailed post (#1023) but not the sibling
+    // bare-identifier-tailed one, so `current = current.BaseClass` directly
+    // before this loop's empty body was mis-parsed as `BaseClass`'s
+    // struct-literal initializer). Restored here now that the parser fix
+    // lands.
+    private const string ForLoopWalk = """
+
+class Walker
+{
+    void Walk(StructSymbol s)
+    {
+        for (var current = s; current != null; current = current.BaseClass)
+        {
+        }
+    }
+}
+""";
+
     private const string DoWhileLoopWalk = """
 
 class Walker
@@ -147,6 +162,7 @@ class Walker
     public static TheoryData<string, string, int> Snippets() => new()
     {
         { "ReportsWhileLoopWalk", Model + WhileLoopWalk, 1 },
+        { "ReportsForLoopWalk", Model + ForLoopWalk, 1 },
         { "ReportsDoWhileLoopWalk", Model + DoWhileLoopWalk, 1 },
         { "IgnoresSingleHopFetchIntoNewVariable", Model + SingleHopFetchIntoNewVariable, 0 },
         { "IgnoresGuardedWalkThroughHierarchyHelper", GuardedWalkThroughHierarchyHelperModel + GuardedWalkThroughHierarchyHelper, 0 },
