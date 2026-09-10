@@ -349,7 +349,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 var primaryCtorParam = new ParameterSymbol(paramName, paramType, isVariadic, declaringSyntax: paramSyntax.Identifier, isScoped: paramSyntax.IsScoped);
-                conversions.BindAndAttachParameterDefaultValue(paramSyntax, primaryCtorParam);
+                DeferParameterDefaultValueBinding(paramSyntax, primaryCtorParam, structSymbol, package);
 
                 // Issue #1913: primary-constructor parameters can carry
                 // `@Attr` annotations same as any other parameter list.
@@ -1074,7 +1074,7 @@ internal sealed partial class DeclarationBinder
                         else
                         {
                             var classMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                            conversions.BindAndAttachParameterDefaultValue(parameterSyntax, classMethodParam);
+                            DeferParameterDefaultValueBinding(parameterSyntax, classMethodParam, structSymbol, package, methodTypeParameters);
                             BindAndAttachParameterAttributes(parameterSyntax, classMethodParam);
                             parameters.Add(classMethodParam);
                         }
@@ -2509,7 +2509,7 @@ internal sealed partial class DeclarationBinder
                         else
                         {
                             var staticMethodParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                            conversions.BindAndAttachParameterDefaultValue(parameterSyntax, staticMethodParam);
+                            DeferParameterDefaultValueBinding(parameterSyntax, staticMethodParam, structSymbol, package, methodTypeParameters);
                             BindAndAttachParameterAttributes(parameterSyntax, staticMethodParam);
                             parameters.Add(staticMethodParam);
                         }
@@ -3192,6 +3192,142 @@ internal sealed partial class DeclarationBinder
                 setCurrentFunction(savedFieldInitFunction);
             }
         });
+    }
+
+    /// <summary>
+    /// Issue #4183: queues a parameter's default-value expression for deferred
+    /// binding instead of calling <see
+    /// cref="ConversionClassifier.BindAndAttachParameterDefaultValue"/>
+    /// immediately. Called from every site that used to bind a default value
+    /// inline during the per-struct declaration-body pass (primary-constructor
+    /// parameters, instance/static method parameters, explicit constructor
+    /// parameters) — see <see cref="pendingParameterDefaultValueBindings"/> for
+    /// the full rationale and the ordering constraint the drain
+    /// (<see cref="BindPendingParameterDefaultValues"/>) must respect.
+    /// </summary>
+    /// <param name="parameterSyntax">The parameter syntax carrying the default
+    /// clause.</param>
+    /// <param name="parameter">The bound parameter symbol to attach the
+    /// default to.</param>
+    /// <param name="structSymbol">The type declaring the parameter's owning
+    /// member; supplies the accessibility context and enclosing/own type
+    /// parameters the default-value expression may reference (e.g.
+    /// `default(T)`).</param>
+    /// <param name="package">The package the declaration belongs to.</param>
+    /// <param name="methodTypeParameters">The owning method's OWN generic
+    /// type parameters (empty for a non-generic method, a primary
+    /// constructor, or an explicit constructor), so a default value may
+    /// reference them (e.g. `func M[U](x U = default(U))`).</param>
+    private void DeferParameterDefaultValueBinding(
+        ParameterSyntax parameterSyntax,
+        ParameterSymbol parameter,
+        StructSymbol structSymbol,
+        PackageSymbol package,
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters = default)
+    {
+        if (parameterSyntax == null || !parameterSyntax.HasDefaultValue || parameter == null)
+        {
+            return;
+        }
+
+        var capturedScope = scope;
+        var packageName = package.Name;
+        var syntaxTree = parameterSyntax.SyntaxTree;
+        var enclosingTypeParameters = CollectEnclosingTypeParameters(structSymbol.ContainingType);
+        var ownTypeParameters = structSymbol.TypeParameters;
+        pendingParameterDefaultValueBindings.Add(() =>
+        {
+            var outerScope = scope;
+            var outerTypeParameters = binderCtx.CurrentTypeParameters;
+            var outerFunction = getCurrentFunction();
+            scope = capturedScope;
+
+            // Issue #2342: re-establish this type's OWN owning package as the
+            // ambient lookup preference (mirrors the field-initializer and
+            // base-initializer closures above) for the duration of this
+            // deferred bind.
+            var savedPackage = scope.SetCurrentDeclaringPackage(packageName);
+            var savedTree = scope.SetCurrentReferencingSyntaxTree(syntaxTree);
+
+            // Issue #2111: install the enclosing type as the accessibility
+            // context, mirroring CreateFieldInitializerAccessibilityContext,
+            // so a `private`/`protected` static member of the enclosing (or a
+            // sibling) type reached from this default-value expression is
+            // evaluated against the RIGHT owner instead of whatever function
+            // happened to be "current" when this closure eventually runs.
+            setCurrentFunction(CreateFieldInitializerAccessibilityContext(structSymbol));
+
+            // Issue #3812: rebuild the type-parameter scope the same way the
+            // deferred field-initializer closure does — outermost-enclosing
+            // first, then this type's own, then (uniquely for a parameter
+            // default) the owning method's own generic type parameters — so a
+            // default value referencing `default(T)` / `default(U)` resolves
+            // regardless of how long after the original declaration-body pass
+            // this closure runs.
+            if (enclosingTypeParameters.Count > 0 || !ownTypeParameters.IsDefaultOrEmpty || !methodTypeParameters.IsDefaultOrEmpty)
+            {
+                var typeParameterScope = new Dictionary<string, TypeParameterSymbol>();
+                foreach (var tp in enclosingTypeParameters)
+                {
+                    typeParameterScope[tp.Name] = tp;
+                }
+
+                if (!ownTypeParameters.IsDefaultOrEmpty)
+                {
+                    foreach (var tp in ownTypeParameters)
+                    {
+                        typeParameterScope[tp.Name] = tp;
+                    }
+                }
+
+                if (!methodTypeParameters.IsDefaultOrEmpty)
+                {
+                    foreach (var tp in methodTypeParameters)
+                    {
+                        typeParameterScope[tp.Name] = tp;
+                    }
+                }
+
+                binderCtx.CurrentTypeParameters = typeParameterScope;
+            }
+            else
+            {
+                binderCtx.CurrentTypeParameters = null;
+            }
+
+            try
+            {
+                conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter);
+            }
+            finally
+            {
+                scope.SetCurrentDeclaringPackage(savedPackage);
+                scope.SetCurrentReferencingSyntaxTree(savedTree);
+                scope = outerScope;
+                binderCtx.CurrentTypeParameters = outerTypeParameters;
+                setCurrentFunction(outerFunction);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Issue #4183: binds every deferred parameter default-value expression,
+    /// run from <c>Binder.BindGlobalScope</c> after every struct's static-member
+    /// surface exists compilation-wide (alongside — immediately before —
+    /// <see cref="BindPendingFieldInitializers"/>), and BEFORE
+    /// <c>BindPendingBaseInitializers</c> so that
+    /// <see cref="ParameterSymbol.HasExplicitDefaultValue"/> is already
+    /// populated by the time a `: base(...)` initializer resolves against a
+    /// base constructor's optional trailing parameters.
+    /// </summary>
+    internal void BindPendingParameterDefaultValues()
+    {
+        foreach (var bind in pendingParameterDefaultValueBindings)
+        {
+            bind();
+        }
+
+        pendingParameterDefaultValueBindings.Clear();
     }
 
     private void RegisterStructInterfaceChecks(

@@ -1379,7 +1379,7 @@ internal sealed partial class DeclarationBinder
             else
             {
                 var ctorParam = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
-                conversions.BindAndAttachParameterDefaultValue(parameterSyntax, ctorParam);
+                DeferParameterDefaultValueBinding(parameterSyntax, ctorParam, structSymbol, package);
                 BindAndAttachParameterAttributes(parameterSyntax, ctorParam);
                 parameters.Add(ctorParam);
             }

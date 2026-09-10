@@ -1361,6 +1361,16 @@ public sealed class Binder
         // field-initializer expressions. Deferring past function declaration
         // lets these expressions resolve unqualified free-function and sibling
         // static-member calls, matching the visibility a constructor body has.
+        // Issue #4183: default-parameter-value expressions are deferred for the
+        // same forward-reference reason as field/const initializers above (see
+        // pendingParameterDefaultValueBindings). This MUST drain before
+        // BindPendingBaseInitializers immediately below: DeclarationBinder.
+        // Constructors.cs reads ParameterSymbol.HasExplicitDefaultValue while
+        // resolving a `: base(...)` initializer against a base constructor's
+        // optional trailing parameters, and that would otherwise see
+        // HasExplicitDefaultValue == false for a parameter whose default value
+        // hasn't been bound yet.
+        binder.declarations.BindPendingParameterDefaultValues();
         binder.declarations.BindPendingBaseInitializers();
         binder.declarations.BindPendingFieldInitializers();
 

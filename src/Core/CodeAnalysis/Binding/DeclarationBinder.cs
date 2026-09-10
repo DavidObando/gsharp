@@ -119,6 +119,29 @@ internal sealed partial class DeclarationBinder
     // scope and the enclosing type's static-member scope before binding.
     private readonly List<Action> pendingFieldInitializerBindings = new List<Action>();
 
+    // Issue #4183: default-parameter-value expressions (`func M(x T = expr)`,
+    // including on primary/explicit constructors and static methods) are
+    // deferred for the SAME forward-reference reason field/const initializers
+    // were deferred above (#1070/#1194): ConversionClassifier.
+    // BindAndAttachParameterDefaultValue used to run eagerly, inline, during
+    // Binder.BindGlobalScope's single per-struct declaration-body pass. When a
+    // default value referenced a SIBLING type's static member (e.g.
+    // `x int32 = B.Value`) and that sibling type had not yet had its own body
+    // (in particular its `shared` block) bound, the reference failed to
+    // resolve — not because the member doesn't exist, but because it hadn't
+    // been bound onto the symbol yet — giving a misleading diagnostic purely
+    // as a function of unrelated declaration order. Each entry re-establishes
+    // the captured scope, package, syntax tree, and type-parameter context
+    // before binding (see DeferParameterDefaultValueBinding).
+    //
+    // Ordering constraint: this MUST drain before BindPendingBaseInitializers
+    // (Binder.cs), because DeclarationBinder.Constructors.cs reads
+    // ParameterSymbol.HasExplicitDefaultValue while resolving a `: base(...)`
+    // initializer against a base constructor's optional trailing parameters —
+    // draining after would make that resolution see HasExplicitDefaultValue
+    // == false for a parameter whose default hasn't been bound yet.
+    private readonly List<Action> pendingParameterDefaultValueBindings = new List<Action>();
+
     // Issue #3896: const initializers a type's own #1193 fixpoint could not
     // fold, because the const they reference belongs to a type bound later.
     // BindPendingFieldInitializers retries these across the whole compilation
