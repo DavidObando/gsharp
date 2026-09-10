@@ -3397,6 +3397,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || this.LambdaResultFeedsNullableObservedInvocation(use)
                 || this.FindResultLambda(use) is not { } lambda
                 || this.LambdaResultFlowsToNullableSink(lambda)
+                || this.LambdaResultFeedsUnobservedTaskRun(use)
                 || this.GetLambdaTargetDelegateType(lambda) is not { DelegateInvokeMethod: { } invoke }
                 || invoke.ReturnType is not { IsReferenceType: true }
                 || invoke.ReturnType.NullableAnnotation == NullableAnnotation.Annotated)
@@ -3415,6 +3416,97 @@ public sealed partial class CSharpToGSharpTranslator
             return this.IsNullablePromotedValue(use)
                 || this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(use).Symbol);
         }
+
+        // Issue #4179: `Task.Run<TResult>(Func<TResult> function)` (and its
+        // `Task.Factory.StartNew` sibling) infers TResult purely to carry the
+        // delegate's completion value back to whoever later reads `.Result` /
+        // awaits it. When nothing in scope ever does — the "run this on the
+        // thread pool, synchronize only via Wait()" idiom the self-hosting
+        // emit-test harnesses use to drive a freshly compiled assembly's entry
+        // point through `MethodInfo.Invoke` — TResult's nullability was never
+        // load-bearing for the original C#, which happily produced e.g.
+        // `Task<object?>` with nobody the wiser: a void-returning `Invoke`
+        // legitimately returns null every time. Forcing `!!` at the lambda's
+        // own result seam here throws the instant the delegate returns null, a
+        // risk the un-migrated program never took. This is narrower than (and
+        // does not touch) #3644/#4046's LINQ-selector reasoning: a `Select`/
+        // `Where` result IS observed by its downstream enumeration, so that
+        // family keeps asserting — only the two BCL entry points whose entire
+        // contract is "run this", not "project this", are exempted here.
+        private bool LambdaResultFeedsUnobservedTaskRun(ExpressionSyntax use)
+        {
+            if (this.FindResultLambda(use) is not { } lambda)
+            {
+                return false;
+            }
+
+            SyntaxNode node = lambda;
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            return node.Parent is ArgumentSyntax argument
+                && argument.Parent?.Parent is InvocationExpressionSyntax invocation
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol method
+                && IsTaskRunEntryPoint(method)
+                && !this.TaskInvocationResultIsEverUnwrapped(invocation);
+        }
+
+        private static bool IsTaskRunEntryPoint(IMethodSymbol method)
+        {
+            IMethodSymbol original = method.OriginalDefinition;
+            return original.Name is "Run" or "StartNew"
+                && original.ContainingType is { Name: "Task" or "TaskFactory" } containingType
+                && containingType.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks";
+        }
+
+        // True when the `Task<TResult>`/`ValueTask<TResult>` produced by
+        // <paramref name="invocation"/> is ever unwrapped — a direct fluent
+        // `.Result`/`.GetAwaiter()` off the call, an `await` of it, or (once
+        // bound to a local via <see cref="ResolveValueSink"/>) the same off
+        // that local anywhere in its declaring block. A sink this translator
+        // cannot trace (fire-and-forget as a bare statement, forwarded as an
+        // argument, etc.) is treated conservatively as unwrapped, so the
+        // exemption only ever fires for the narrow, syntactically provable
+        // "declared, then only Wait()/observed for completion" shape.
+        private bool TaskInvocationResultIsEverUnwrapped(InvocationExpressionSyntax invocation)
+        {
+            SyntaxNode value = invocation;
+            while (value.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                value = value.Parent;
+            }
+
+            if (value.Parent is AwaitExpressionSyntax
+                || (value.Parent is MemberAccessExpressionSyntax fluentAccess
+                    && fluentAccess.Expression == value
+                    && IsTaskResultUnwrapMember(fluentAccess.Name.Identifier.Text)))
+            {
+                return true;
+            }
+
+            if (this.ResolveValueSink(invocation) is not ILocalSymbol local)
+            {
+                return true;
+            }
+
+            SyntaxNode scope = this.GetNullabilityScope(local);
+            if (scope == null)
+            {
+                return true;
+            }
+
+            return scope.DescendantNodes()
+                    .OfType<MemberAccessExpressionSyntax>()
+                    .Any(member => this.BindsTo(member.Expression, local)
+                        && IsTaskResultUnwrapMember(member.Name.Identifier.Text))
+                || scope.DescendantNodes()
+                    .OfType<AwaitExpressionSyntax>()
+                    .Any(awaitExpression => this.BindsTo(awaitExpression.Expression, local));
+        }
+
+        private static bool IsTaskResultUnwrapMember(string name) => name is "Result" or "GetAwaiter";
 
         private bool LambdaResultFlowsToNullableSink(AnonymousFunctionExpressionSyntax lambda)
         {
