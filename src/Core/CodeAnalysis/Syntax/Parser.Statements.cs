@@ -1266,14 +1266,37 @@ public partial class Parser
             // `{`. Suppress trailing object-initializer wrapping so an indexer-
             // or call-tailed post (`s += arr[s] { … }`) does not consume the
             // loop body's opening brace as a composite literal.
+            //
+            // Issue #4177: also suppress the BARE struct-literal form (mirrors
+            // ParseExpressionInBodyHeader's #1575 fix for if/while/for-range
+            // headers). Without this, an assignment-expression post whose RHS
+            // ends in a plain member name immediately followed by an EMPTY loop
+            // body (`c = c.Next { }`) misparses `Next { }` as an empty struct
+            // literal applied to `Next`, swallowing the loop's own body brace
+            // and desyncing the parser on whatever follows. A NON-empty struct
+            // literal post (`result = Pt{X: i} { … }`) stays unaffected —
+            // StructLiteralAllowedInSuppressedHeader still admits it.
+            //
+            // A for-clause post sits in the same "collection vs body" position
+            // as a for-range collection, not an if/while condition: an EMPTY
+            // struct literal immediately followed by a genuine body `{` should
+            // still be recognized as a struct literal (`result = Pt{} { }`), so
+            // allowEmptyStructLiteralInHeader is set here too (mirrors
+            // ParseExpressionInBodyHeader's save/set/restore for for-range
+            // callers, which pass allowEmptyStructLiteralCollection: true).
             suppressTrailingObjectInitializer++;
+            suppressStructLiteral++;
+            var savedAllowEmptyStructLiteral = allowEmptyStructLiteralInHeader;
+            allowEmptyStructLiteralInHeader = true;
             try
             {
                 post = ParseSimpleStatement();
             }
             finally
             {
+                allowEmptyStructLiteralInHeader = savedAllowEmptyStructLiteral;
                 suppressTrailingObjectInitializer--;
+                suppressStructLiteral--;
             }
         }
 
