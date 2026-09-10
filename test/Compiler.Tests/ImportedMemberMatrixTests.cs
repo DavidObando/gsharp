@@ -1218,6 +1218,370 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
+    /// Issue #4159: a nullable-reference annotation on a tuple element nested
+    /// inside an <c>async Task[...]</c> return type, imported from a
+    /// referenced (already-compiled) assembly, must survive the CLR-metadata
+    /// import path — matching the same-compilation (symbolic) named-tuple
+    /// case, which already preserved it.
+    /// <para>
+    /// RED (measured, before the fix): compiled with no diagnostic at all —
+    /// <c>rows[0].Value</c> was typed as non-nullable <c>string</c>, so
+    /// <c>let x string = rows[0].Value</c> silently accepted a nullable value.
+    /// Root cause: <c>ExpressionBinder.TryGetTaskElementType</c> resolved the
+    /// awaited element from the awaiter's CLR <c>GetResult()</c> return type
+    /// (a closed, un-annotated reflected type) via a naive
+    /// <c>TypeSymbol.FromClrType</c> instead of
+    /// <c>NullabilityAnnotatedTypeSymbol.GetTypeArgumentSymbolForClrType</c>,
+    /// which is the only accessor that recovers BOTH the per-position
+    /// nullability flags and (via
+    /// <c>NullabilityAnnotatedTypeSymbol.TransferTupleNames</c>) the tuple
+    /// element names for a nested generic argument. <c>TransferTupleNames</c>
+    /// itself only matched a tuple sitting directly under one <c>Nullable</c>
+    /// wrapper or a top-level <c>ImportedTypeSymbol</c>, so it also needed a
+    /// case for a LAZY <c>NullabilityAnnotatedTypeSymbol</c>-wrapped nested
+    /// generic (the shape <c>IReadOnlyList[(...)]</c> takes one level inside
+    /// <c>Task[...]</c>), materializing it eagerly before grafting names.
+    /// </para>
+    /// GREEN (this test): reports <c>GS0155</c>, exactly like the
+    /// same-compilation control elsewhere in this file's nullable-tuple
+    /// coverage.
+    /// </summary>
+    [Fact]
+    public void Issue4159_AsyncImportedNullableTupleElementPreservesNullability()
+    {
+        const string csSource = """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            namespace Issue4159.CSharp
+            {
+                public class Store
+                {
+                    public async Task<IReadOnlyList<(string Key, string? Value)>> GetNullableAsync()
+                    {
+                        await Task.Yield();
+                        return new List<(string, string?)> { ("k", null) };
+                    }
+                }
+            }
+            """;
+
+        const string gSource = """
+            package Issue4159.Repro
+            import System
+            import Issue4159.CSharp
+
+            async func run(store Store) {
+                let rows = await store.GetNullableAsync()
+                let x string = rows[0].Value
+                Console.WriteLine(x)
+            }
+
+            run(Store()).GetAwaiter().GetResult()
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(csSource, gSource, "Issue4159.CSharp");
+        Assert.Contains(GetDiagnosticIds(diagnostics), id => id == "GS0155");
+    }
+
+    /// <summary>
+    /// Issue #4159 negative control: the SAME shape without a nullable
+    /// element must keep compiling — the fix must not start rejecting a
+    /// genuinely non-nullable imported async tuple element.
+    /// </summary>
+    [Fact]
+    public void Issue4159_AsyncImportedNonNullableTupleElementStillCompiles()
+    {
+        const string csSource = """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            namespace Issue4159Control.CSharp
+            {
+                public class Store
+                {
+                    public async Task<IReadOnlyList<(string Key, string Value)>> GetAsync()
+                    {
+                        await Task.Yield();
+                        return new List<(string, string)> { ("k", "v") };
+                    }
+                }
+            }
+            """;
+
+        const string gSource = """
+            package Issue4159.Control
+            import System
+            import Issue4159Control.CSharp
+
+            async func run(store Store) {
+                let rows = await store.GetAsync()
+                let x string = rows[0].Value
+                Console.WriteLine(x)
+            }
+
+            run(Store()).GetAwaiter().GetResult()
+            """;
+
+        Assert.Equal(
+            $"v{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(csSource, gSource, "Issue4159Control.CSharp"));
+    }
+
+    /// <summary>
+    /// Issue #4159, scope witness: the underlying defect (<c>TryGetTaskElementType</c>'s
+    /// CLR-fallback path recovering the awaited element via a naive
+    /// <c>TypeSymbol.FromClrType</c> instead of the nullability-aware
+    /// <c>NullabilityAnnotatedTypeSymbol</c> accessor) is general to ANY
+    /// reference-typed awaited element — not tuple-specific — so this fix is
+    /// a real behavior change beyond the tuple shape the issue was filed
+    /// against: a plain <c>Task[string?]</c>, with no tuple involved at all,
+    /// now also correctly rejects an unguarded assignment to a non-null
+    /// local. RED (measured, before the fix): compiled with no diagnostic.
+    /// GREEN (this test): reports <c>GS0155</c>.
+    /// </summary>
+    [Fact]
+    public void Issue4159_AsyncImportedNullablePlainReturnPreservesNullability()
+    {
+        const string csSource = """
+            using System.Threading.Tasks;
+
+            namespace Issue4159Plain.CSharp
+            {
+                public class Store
+                {
+                    public async Task<string?> GetNullableStringAsync()
+                    {
+                        await Task.Yield();
+                        return null;
+                    }
+                }
+            }
+            """;
+
+        const string gSource = """
+            package Issue4159.Plain
+            import System
+            import Issue4159Plain.CSharp
+
+            async func run(store Store) {
+                let value = await store.GetNullableStringAsync()
+                let x string = value
+                Console.WriteLine(x)
+            }
+
+            run(Store()).GetAwaiter().GetResult()
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(csSource, gSource, "Issue4159Plain.CSharp");
+        Assert.Contains(GetDiagnosticIds(diagnostics), id => id == "GS0155");
+    }
+
+    /// <summary>
+    /// Issue #4165: a bare method group whose declared parameter type is a
+    /// BASE class is a legal contravariant method-group conversion to a
+    /// delegate over a DERIVED element type — <c>csc</c> accepts
+    /// <c>Func&lt;Derived,string&gt; f = Name;</c> when <c>Name(Base? x)</c>.
+    /// <para>
+    /// RED (measured, before the fix): <c>GS0155: Cannot convert type
+    /// '(Base?) -&gt; string' to 'System.Func[Derived, string]'.</c> Root
+    /// cause: <c>Conversion.IsFunctionToDelegateConvertible</c> rejected the
+    /// parameter slot whenever the method group's own parameter type had no
+    /// <c>ClrType</c> (true for any same-compilation class/interface
+    /// mid-binding) — the CLR-assignability check could not even ask the
+    /// question. Measured (via tracing, not assumed): a CLR-imported
+    /// base/derived pair (e.g. Roslyn's <c>ISymbol</c>/<c>INamespaceOrTypeSymbol</c>)
+    /// never reaches <c>IsFunctionToDelegateConvertible</c> at all for either
+    /// a <c>.Select(...)</c> argument or a direct delegate-variable
+    /// assignment — some other resolution path handles that shape, which is
+    /// why this defect was only ever visible for a same-compilation
+    /// parameter type, never an imported one.
+    /// </para>
+    /// GREEN (this test): compiles and runs, printing the derived instance's
+    /// name, matching <c>csc</c>. Fixing the parameter loop's unconditional
+    /// rejection also surfaced a dormant, unrelated erasure bug in the
+    /// RETURN-type check that this fix's own validation caught as a
+    /// regression in <c>Issue1518NullableDelegateInferenceEmitTests</c> (a
+    /// nullable-VALUE-type return, e.g. <c>bool?</c>, became indistinguishable
+    /// from the bare <c>bool</c> once the parameter gate that used to reject
+    /// every same-compilation-parameter candidate outright stopped masking
+    /// it) — fixed alongside this one via <c>NullableLifting.GetEffectiveClrType</c>
+    /// on the return-type identity check. The identical erasure gap on the
+    /// PARAMETER side (untouched, since no currently-passing test reaches
+    /// it) is tracked separately as issue #4184.
+    /// </summary>
+    [Fact]
+    public void Issue4165_BareMethodGroupWithBaseParameterConvertsToDerivedElementDelegate()
+    {
+        const string gSource = """
+            package Issue4165.Repro
+            import System
+            import System.Collections.Generic
+            import System.Linq
+
+            open class Base {
+                init(name string) {
+                    this.Name = name
+                }
+                prop Name string {
+                    get;
+                    init;
+                }
+            }
+            class Derived : Base {
+                init(name string) : base(name) {
+                }
+            }
+
+            func Name(x Base?) string -> x!!.Name
+
+            func namesOf(items IEnumerable[Derived]) List[string] {
+                return items.Select(Name).ToList()
+            }
+
+            let xs = List[Derived]()
+            xs.Add(Derived("hello"))
+            let result = namesOf(xs)
+            Console.WriteLine(result[0])
+            """;
+
+        Assert.Equal(
+            $"hello{Environment.NewLine}",
+            CompileAndRun(gSource));
+    }
+
+    /// <summary>
+    /// Issue #4171: a bare method group passed to a doubly-nested
+    /// contravariant delegate parameter (<c>Action[Action[T]]</c>) whose own
+    /// declared parameter type does NOT actually satisfy the delegate once
+    /// <c>T</c> is correctly inferred must report a clean diagnostic — never
+    /// crash.
+    /// <para>
+    /// RED (measured, before the fix): <c>error GS9998:
+    /// NotSupportedException: Cannot encode signature for type '?' yet.</c> —
+    /// an internal-compiler-error crash during PE emission. Root cause: when
+    /// a static imported generic method call's arguments include an
+    /// unresolved bare method group (typed <c>TypeSymbol.Error</c> by design,
+    /// per <c>ClrOverloadResolution.IsUnresolvedMethodGroupArgument</c>'s
+    /// deliberate "defer me" sentinel) and NO candidate ultimately accepts the
+    /// call, <c>ExpressionBinder.Calls.Invocation.cs</c>'s "an argument that
+    /// already failed to bind cannot participate in overload resolution"
+    /// guard unconditionally treated ANY <c>TypeSymbol.Error</c>-typed
+    /// argument as already-diagnosed and silently returned an undiagnosed
+    /// <c>BoundErrorExpression</c> — even though an unresolved method group is
+    /// never a prior failure. The top-level <c>let</c>'s declared type became
+    /// the bare <c>TypeSymbol.Error</c> sentinel with zero diagnostics
+    /// reported, and it reached the emitter, which crashed trying to encode a
+    /// signature for it.
+    /// </para>
+    /// GREEN (this test): reports <c>GS0159</c> ("Cannot find function
+    /// Pick"), matching <c>csc</c>'s own rejection (CS1503) in spirit — no
+    /// crash, no silent failure.
+    /// </summary>
+    [Fact]
+    public void Issue4171_DoublyNestedContravariantDelegateWithUnsatisfiableMethodGroupReportsCleanDiagnostic()
+    {
+        const string csSource = """
+            using System;
+            using System.Collections.Generic;
+
+            namespace Issue4171.CSharp
+            {
+                public static class NestedVariance
+                {
+                    public static T Pick<T>(IEnumerable<T> items, Action<Action<T>> handler)
+                    {
+                        T result = default!;
+                        foreach (var item in items)
+                        {
+                            result = item;
+                        }
+
+                        handler(_ => { });
+                        return result;
+                    }
+
+                    public static void Handler(Action<object> x)
+                    {
+                    }
+                }
+            }
+            """;
+
+        const string gSource = """
+            package Issue4171.Repro
+            import System
+            import System.Collections.Generic
+            import Issue4171.CSharp
+
+            let strings = List[string]()
+            strings.Add("a")
+            strings.Add("b")
+            let result = NestedVariance.Pick(strings, NestedVariance.Handler)
+            Console.WriteLine(result)
+            """;
+
+        var diagnostics = CompileExpectingErrorsWithSiblingCs(csSource, gSource, "Issue4171.CSharp");
+        Assert.DoesNotContain(GetDiagnosticIds(diagnostics), id => id == "GS9998");
+        Assert.Contains(GetDiagnosticIds(diagnostics), id => id == "GS0159");
+    }
+
+    /// <summary>
+    /// Issue #4171 positive control: the SAME nested-variance shape, but with
+    /// a handler whose declared parameter genuinely satisfies the inferred
+    /// delegate (<c>Action[string]</c>, not <c>Action[object]</c>), must
+    /// still compile and run — measured directly against <c>csc</c>, which
+    /// accepts it and infers <c>T = string</c> from the receiver alone.
+    /// </summary>
+    [Fact]
+    public void Issue4171_DoublyNestedContravariantDelegateWithSatisfiableMethodGroupCompilesAndRuns()
+    {
+        const string csSource = """
+            using System;
+            using System.Collections.Generic;
+
+            namespace Issue4171Control.CSharp
+            {
+                public static class NestedVariance
+                {
+                    public static T Pick<T>(IEnumerable<T> items, Action<Action<T>> handler)
+                    {
+                        T result = default!;
+                        foreach (var item in items)
+                        {
+                            result = item;
+                        }
+
+                        handler(_ => { });
+                        return result;
+                    }
+
+                    public static void Handler(Action<string> x)
+                    {
+                    }
+                }
+            }
+            """;
+
+        const string gSource = """
+            package Issue4171.Control
+            import System
+            import System.Collections.Generic
+            import Issue4171Control.CSharp
+
+            let strings = List[string]()
+            strings.Add("a")
+            strings.Add("b")
+            let result = NestedVariance.Pick(strings, NestedVariance.Handler)
+            Console.WriteLine(result)
+            """;
+
+        Assert.Equal(
+            $"b{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(csSource, gSource, "Issue4171Control.CSharp"));
+    }
+
+    /// <summary>
     /// <c>List&lt;T&gt;</c> is invariant, so <c>List&lt;object&gt;</c> and
     /// <c>List&lt;T&gt;</c> cannot both fix one method slot; the non-generic
     /// candidate wins, in the fixed and expanded spellings alike. On the
@@ -2987,7 +3351,7 @@ public class ImportedMemberMatrixTests
             """;
     }
 
-    private static List<string> CompileExpectingErrorsWithSiblingCs(string csSource, string gSource, string siblingName)
+    internal static List<string> CompileExpectingErrorsWithSiblingCs(string csSource, string gSource, string siblingName)
     {
         var workDir = CreateWorkDir("imported_member_matrix_err_");
         try
@@ -3001,7 +3365,7 @@ public class ImportedMemberMatrixTests
         }
     }
 
-    private static string CompileAndRun(string source)
+    internal static string CompileAndRun(string source)
     {
         var workDir = CreateWorkDir("imported_member_matrix_source_");
         try
