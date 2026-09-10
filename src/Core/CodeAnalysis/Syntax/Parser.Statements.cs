@@ -1275,9 +1275,16 @@ public partial class Parser
             // `suppressStructLiteral` counter. Every other body-header
             // expression (if/while conditions, for-in collections) suppresses
             // BOTH counters via `ParseExpressionInBodyHeader`; the post clause
-            // must do the same so an empty body (or one starting with `...`/
-            // `Identifier:`) right after the post expression isn't swallowed
-            // as that identifier's struct-literal initializer.
+            // must do the same so an EMPTY body right after the post
+            // expression isn't swallowed as that identifier's (empty)
+            // struct-literal initializer. This does not close the sibling
+            // ambiguity for a body whose first statement happens to look like
+            // a struct-literal field (a label, `retry:`, or a spread, `...`)
+            // — `StructLiteralAllowedInSuppressedHeader` still treats ANY
+            // non-empty brace content as an unambiguous struct literal, a
+            // pre-existing limitation shared identically by if/while/for-in
+            // and tracked separately (issue #4189), not narrowed or
+            // introduced by this fix.
             suppressTrailingObjectInitializer++;
             suppressStructLiteral++;
             try

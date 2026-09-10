@@ -11,17 +11,23 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 
 /// <summary>
 /// Issue #4177: a C-style <c>for</c> whose increment (post) clause is a
-/// general assignment expression (not <c>++</c>/<c>--</c>/compound-assign)
-/// and ends in a bare identifier — <c>c = c.Next</c>, <c>c = s</c> — must let
-/// the loop body's <c>{</c> open the body. #1023 already suppressed the
-/// OBJECT-initializer wrap for an indexer-/call-tailed post
-/// (<see cref="Issue1023ForIndexerHeaderParserTests"/>), but left the sibling
-/// STRUCT-literal check (<c>ParseNameOrCallExpression</c>'s
+/// general assignment expression (not <c>++</c>/<c>--</c>, including a
+/// compound assignment such as <c>+=</c>) and ends in a bare identifier —
+/// <c>c = c.Next</c>, <c>c = s</c>, <c>c += d</c> — must let the loop body's
+/// <c>{</c> open the body. #1023 already suppressed the OBJECT-initializer
+/// wrap for an indexer-/call-tailed post (<see cref="Issue1023ForIndexerHeaderParserTests"/>),
+/// but left the sibling STRUCT-literal check (<c>ParseNameOrCallExpression</c>'s
 /// <c>Identifier {</c> shape, gated by the separate <c>suppressStructLiteral</c>
-/// counter) unsuppressed. An empty body (or one starting with <c>...</c> or
-/// <c>Identifier:</c>) right after such a post clause was mis-parsed as that
-/// identifier's struct-literal initializer, swallowing the body's opening
-/// brace and producing a stray, unparseable closing brace downstream.
+/// counter) unsuppressed. An EMPTY body right after such a post clause was
+/// mis-parsed as that identifier's (empty) struct-literal initializer,
+/// swallowing the body's opening brace and producing a stray, unparseable
+/// closing brace downstream. A body whose first statement happens to look
+/// like a struct-literal field (a label, <c>retry:</c>, or a spread,
+/// <c>...</c>) is a DIFFERENT, pre-existing ambiguity this fix does not
+/// close — <c>StructLiteralAllowedInSuppressedHeader</c> treats any
+/// non-empty brace content as unambiguously a struct literal regardless of
+/// suppression, identically for <c>if</c>/<c>while</c>/<c>for</c>-in too;
+/// tracked separately as issue #4189.
 /// </summary>
 public sealed class Issue4177ForClauseAssignmentIncrementParserTests
 {
