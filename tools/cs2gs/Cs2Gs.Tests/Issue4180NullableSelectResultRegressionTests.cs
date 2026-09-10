@@ -149,6 +149,108 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         }
     }
 
+    // The COVARIANT sibling shape flagged on this PR's own review (Copilot,
+    // on the original `SymbolEqualityComparer.Default.Equals(resultType,
+    // sinkElement...)` fix): the sink's nullable-annotated element type need
+    // not be IDENTICAL to the selector's result type, only ASSIGNABLE to it
+    // through an implicit reference conversion. `Consume(IEnumerable<object?>
+    // values)` accepts `types.Select(t => t.FullName)`'s `IEnumerable<string?>`
+    // through `IEnumerable<T>`'s covariance — `string` is not symbol-equal to
+    // `object`, but every `string` IS an `object`. Exact-identity missed this:
+    // the selector result stayed `!!`-asserted and threw on a null
+    // `FullName` even though the sink tolerates it exactly like #4180's
+    // `string.Join` case.
+    private const string CovariantSource = """
+        using System;
+        using System.Collections.Generic;
+        using System.Linq;
+
+        public static class Probe
+        {
+            public static string Consume(IEnumerable<object?> values)
+            {
+                return string.Join(", ", values);
+            }
+
+            public static string Describe(IEnumerable<Type> types)
+            {
+                return Consume(types.Select(t => t.FullName));
+            }
+
+            public static void Main()
+            {
+                Type[] typeParameters = typeof(List<>).GetGenericArguments();
+                string described = Describe(typeParameters);
+                Console.WriteLine("OK:" + described);
+            }
+        }
+        """;
+
+    /// <summary>
+    /// Translates the covariant reproduction snippet and asserts the emitted
+    /// G# no longer asserts the selector's nullable result — the cheap,
+    /// syntactic guard that discriminates the review fix (reverting the
+    /// element-conversion check back to exact identity turns this test red;
+    /// see
+    /// <see cref="SelfHostedNullableSelectResult_DoesNotThrowWhenForwardedThroughCovariantSink"/>
+    /// for the full functional proof).
+    /// </summary>
+    [Fact]
+    public void TranslatedSnippet_NoLongerAssertsTheSelectResultForwardedThroughCovariantSink()
+    {
+        string printed = Translate(CovariantSource);
+
+        Assert.DoesNotContain("t.FullName!!", printed, StringComparison.Ordinal);
+        Assert.Contains("types.Select((t Type) -> t.FullName)", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The functional proof that the covariant shape actually survives
+    /// self-hosting: translates the covariant reproduction snippet, compiles
+    /// the result with the REAL <c>gsc.dll</c>, and runs it. With the
+    /// pre-review exact-identity check this throws
+    /// <see cref="NullReferenceException"/> from inside the <c>Select</c>
+    /// lambda (the same shape of crash as #4180's report, but through a
+    /// covariant sink rather than an identical one); after the fix it prints
+    /// <c>OK:</c> with an empty joined segment for the null <c>FullName</c>.
+    /// </summary>
+    [Fact]
+    public void SelfHostedNullableSelectResult_DoesNotThrowWhenForwardedThroughCovariantSink()
+    {
+        string printed = Translate(CovariantSource);
+        string compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue4180NullableSelectResultRegressionTests),
+            Guid.NewGuid().ToString("N") + "-covariant");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Probe.gs");
+            string dllPath = Path.Combine(workDir, "Probe.dll");
+            File.WriteAllText(gsPath, printed);
+
+            (int compileExit, string compileOutput) = RunDotnet(
+                $"\"{compiler}\" /target:exe /targetframework:net10.0 /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0,
+                "gsc must compile the translated probe. Output:\n" + compileOutput
+                    + "\n\nTranslated G#:\n" + printed);
+
+            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(
+                runExit == 0,
+                "the compiled probe must run without throwing. Output:\n" + output);
+            Assert.Equal("OK:", output.Trim());
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

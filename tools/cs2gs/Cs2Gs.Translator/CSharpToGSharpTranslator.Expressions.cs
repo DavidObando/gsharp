@@ -3501,11 +3501,26 @@ public sealed partial class CSharpToGSharpTranslator
             // reified open-generic interface row, #4180's reported crash), even
             // though the ORIGINAL C# `string.Join`/`.Select` pipeline tolerates
             // null elements silently.
-            return sinkType is INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } sinkCollection
-                && sinkCollection.TypeArguments[0] is { NullableAnnotation: NullableAnnotation.Annotated } sinkElement
-                && SymbolEqualityComparer.Default.Equals(
-                    resultType,
-                    sinkElement.WithNullableAnnotation(NullableAnnotation.None));
+            if (sinkType is not INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } sinkCollection
+                || sinkCollection.TypeArguments[0] is not { NullableAnnotation: NullableAnnotation.Annotated } sinkElement
+                || resultType == null)
+            {
+                return false;
+            }
+
+            // Element compatibility is an ASSIGNABILITY check, not identity: the
+            // sink accepts the selector's result through an implicit reference
+            // conversion (including IEnumerable<T> covariance), e.g.
+            // `Consume(IEnumerable<object?> values)` called with
+            // `types.Select(t => t.FullName)` -- `string` is not symbol-equal
+            // to `object`, but every `string` IS an `object`. Exact identity
+            // missed this: the selector result stayed `!!`-asserted and threw
+            // on a null `FullName` even though the sink tolerates it.
+            ITypeSymbol sinkElementType = sinkElement.WithNullableAnnotation(NullableAnnotation.None);
+            Microsoft.CodeAnalysis.CSharp.Conversion elementConversion =
+                this.context.Compilation.ClassifyConversion(resultType, sinkElementType);
+            return elementConversion.IsImplicit
+                && (elementConversion.IsReference || elementConversion.IsIdentity);
 
             static bool ReturnsGenericSelectorResult(
                 IMethodSymbol genericMethod,
