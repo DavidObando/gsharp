@@ -1378,6 +1378,165 @@ public class ImportedMemberMatrixTests
     }
 
     /// <summary>
+    /// Issue #4159, Copilot review finding on this PR:
+    /// <c>NullabilityAnnotatedTypeSymbol.TransferTupleNames</c>'s
+    /// <c>NullableTypeSymbol</c> case originally required BOTH sides
+    /// already nullable-wrapped to recurse. The naive, name-bearing
+    /// <c>source</c> tree does not reliably wrap a nullable REFERENCE
+    /// generic argument the way the flags-derived <c>target</c> tree does
+    /// (only <c>target</c>'s construction consults
+    /// <c>[NullableAttribute]</c>), so a tuple nested inside a NULLABLE
+    /// reference generic argument — <c>IReadOnlyList[(...)]?</c>, the LIST
+    /// itself nullable, one level inside <c>Task[...]</c> — fell through
+    /// every case and kept its names dropped even after the original
+    /// #4159 fix landed. RED (measured, before this follow-up): the tuple
+    /// arrives unnamed, so <c>rows!!.[0].Value</c> fails to bind (no
+    /// <c>GS0155</c> for the nullability defect this test isn't about —
+    /// the point is the NAMES, which either exist or don't). GREEN (this
+    /// test): the named access compiles and runs, proving the names
+    /// survived the nullable-reference wrapper asymmetry.
+    /// </summary>
+    [Fact]
+    public void Issue4159_AsyncImportedNullableListOfNamedTuplePreservesNames()
+    {
+        const string csSource = """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+
+            namespace Issue4159NullableList.CSharp
+            {
+                public class Store
+                {
+                    public async Task<IReadOnlyList<(string Key, string Value)>?> GetNullableListAsync()
+                    {
+                        await Task.Yield();
+                        return new List<(string, string)> { ("k", "v") };
+                    }
+                }
+            }
+            """;
+
+        const string gSource = """
+            package Issue4159.NullableList
+            import System
+            import Issue4159NullableList.CSharp
+
+            async func run(store Store) {
+                let rows = await store.GetNullableListAsync()
+                let x string = rows!![0].Value
+                Console.WriteLine(x)
+            }
+
+            run(Store()).GetAwaiter().GetResult()
+            """;
+
+        Assert.Equal(
+            $"v{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(csSource, gSource, "Issue4159NullableList.CSharp"));
+    }
+
+    /// <summary>
+    /// Issue #4159, Copilot review finding on this PR:
+    /// <c>NullabilityAnnotatedTypeSymbol.GetTypeArgumentSymbolForClrType</c>
+    /// located the outer awaitable's matching generic argument by comparing
+    /// CLOSED CLR types, which is ambiguous whenever two or more of the
+    /// outer type's own arguments close over the exact same CLR type — here,
+    /// a custom (non-<c>Task</c>) awaitable with TWO type parameters,
+    /// <c>Awaitable[string, string?]</c>, where <c>GetResult()</c> returns
+    /// the SECOND (nullable) parameter but both parameters erase to the
+    /// identical CLR type <c>System.String</c>. This is reachable because
+    /// the awaited-element recovery is driven by the general duck-typed
+    /// <c>GetAwaiter</c>/<c>GetResult</c> shape resolver (C# spec §12.9.8),
+    /// not a <c>Task</c>/<c>ValueTask</c> special case — real BCL awaitables
+    /// only ever have ONE outer type argument, so this shape is exactly
+    /// where the ambiguity was reachable and BCL usage could not surface
+    /// it.
+    /// <para>
+    /// Measured (not assumed): a direct <c>let x string = value</c> (no
+    /// null-check) compiles with NO diagnostic both BEFORE this follow-up
+    /// (the first-match bug recovers <c>T1</c>'s own non-null annotation)
+    /// AND AFTER it (the safe "refuse to guess" fallback recovers an
+    /// unannotated/oblivious type, which G#'s null-safety gate treats
+    /// leniently) — so a missing-GS0155 assertion would NOT actually
+    /// discriminate the bug from the fix here, and this test does not claim
+    /// one. What DOES change, and what this test asserts: before this
+    /// follow-up, a genuinely nullable value (<c>T2</c> is <c>string?</c>
+    /// and this factory returns <c>null</c>) that got silently mismatched
+    /// to <c>T1</c>'s non-null annotation risked the compiler trusting a
+    /// non-null claim that was actually false — this test proves the
+    /// runtime value survives this exact ambiguous-match code path intact
+    /// (arrives as genuinely nil, observable via <c>value == nil</c>, and
+    /// the emitted code doesn't crash or corrupt the delegate/call shape),
+    /// which is what a wrong silent match risked breaking.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Issue4159_AmbiguousAwaitableTypeArgumentsDoesNotMisattributeNullability()
+    {
+        const string csSource = """
+            using System;
+            using System.Runtime.CompilerServices;
+
+            namespace Issue4159Ambiguous.CSharp
+            {
+                public class Awaitable<T1, T2>
+                {
+                    private readonly T2 _value;
+
+                    public Awaitable(T2 value)
+                    {
+                        _value = value;
+                    }
+
+                    public Awaiter GetAwaiter() => new Awaiter(_value);
+
+                    public struct Awaiter : INotifyCompletion
+                    {
+                        private readonly T2 _value;
+
+                        public Awaiter(T2 value)
+                        {
+                            _value = value;
+                        }
+
+                        public bool IsCompleted => true;
+
+                        public T2 GetResult() => _value;
+
+                        public void OnCompleted(Action continuation) => continuation();
+                    }
+                }
+
+                public static class Factory
+                {
+                    public static Awaitable<string, string?> MakeNullable() => new Awaitable<string, string?>(null);
+                }
+            }
+            """;
+
+        const string gSource = """
+            package Issue4159.Ambiguous
+            import System
+            import Issue4159Ambiguous.CSharp
+
+            async func run() {
+                let value = await Factory.MakeNullable()
+                if value == nil {
+                    Console.WriteLine("nil")
+                } else {
+                    Console.WriteLine(value)
+                }
+            }
+
+            run().GetAwaiter().GetResult()
+            """;
+
+        Assert.Equal(
+            $"nil{Environment.NewLine}",
+            CompileAndRunWithSiblingCs(csSource, gSource, "Issue4159Ambiguous.CSharp"));
+    }
+
+    /// <summary>
     /// Issue #4165: a bare method group whose declared parameter type is a
     /// BASE class is a legal contravariant method-group conversion to a
     /// delegate over a DERIVED element type — <c>csc</c> accepts

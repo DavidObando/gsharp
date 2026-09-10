@@ -140,6 +140,25 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
 
         int offset = 1; // byte 0 = outer type
 
+        // Issue #4159 (Copilot review finding on this PR): matching by
+        // CLOSED CLR type alone is ambiguous for a custom awaitable — this
+        // method is reached from ANY type with a conforming duck-typed
+        // GetAwaiter/GetResult (see AwaitableShape.Resolve, C# spec
+        // §12.9.8), not just Task[T]/ValueTask[T], which only ever have ONE
+        // outer type argument — whenever two or more of the outer type's
+        // own generic arguments happen to close over the exact same CLR
+        // type (e.g. `Awaitable[string, string?]`, where `GetResult()`
+        // returns the SECOND parameter): the first (by position) match
+        // would silently recover the WRONG argument's nullability. Scan
+        // every argument before deciding, and refuse to guess — falling
+        // back to the unannotated result, same as a genuine no-match — the
+        // instant more than one argument could be the answer, rather than
+        // ever return a nullability annotation that might belong to a
+        // different type parameter.
+        var matchIndex = -1;
+        var matchOffset = 0;
+        var ambiguous = false;
+
         for (int i = 0; i < args.Length; i++)
         {
             var arg = args[i];
@@ -147,21 +166,35 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
             // Compare by FullName so MetadataLoadContext types match runtime types.
             if (arg == targetClrType || (!arg.IsGenericParameter && arg.FullName == targetClrType.FullName))
             {
-                var flagged = ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, offset);
-
-                // ADR-0172: transfer tuple element names from the wrapped
-                // symbolic base's matching argument (the flags-derived symbol
-                // is rebuilt from the CLR shape and cannot carry them).
-                if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
-                    && (uint)i < (uint)symbolicBase.TypeArguments.Length)
+                if (matchIndex >= 0)
                 {
-                    flagged = TransferTupleNames(symbolicBase.TypeArguments[i], flagged);
+                    ambiguous = true;
                 }
-
-                return flagged;
+                else
+                {
+                    matchIndex = i;
+                    matchOffset = offset;
+                }
             }
 
             offset += ClrNullability.CountNullabilityBytes(arg);
+        }
+
+        if (matchIndex >= 0 && !ambiguous)
+        {
+            var arg = args[matchIndex];
+            var flagged = ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, matchOffset);
+
+            // ADR-0172: transfer tuple element names from the wrapped
+            // symbolic base's matching argument (the flags-derived symbol
+            // is rebuilt from the CLR shape and cannot carry them).
+            if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
+                && (uint)matchIndex < (uint)symbolicBase.TypeArguments.Length)
+            {
+                flagged = TransferTupleNames(symbolicBase.TypeArguments[matchIndex], flagged);
+            }
+
+            return flagged;
         }
 
         return TypeSymbol.FromClrType(targetClrType);
@@ -191,9 +224,30 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     /// <returns><paramref name="target"/>'s shape with tuple names grafted in wherever <paramref name="source"/> has them.</returns>
     private static TypeSymbol TransferTupleNames(TypeSymbol source, TypeSymbol target)
     {
-        if (source is NullableTypeSymbol namedNullable && target is NullableTypeSymbol targetNullable)
+        // Issue #4159 (Copilot review finding on this PR): `target` alone
+        // decides whether this position is nullable — `source` is the
+        // naive, pre-flags symbolic tree and, unlike `target`, does NOT
+        // reliably wrap a nullable REFERENCE type (e.g. an argument typed
+        // `IReadOnlyList[...]?`) in `NullableTypeSymbol`, since determining
+        // reference nullability is exactly the flags-based job `target`'s
+        // own construction (`ClrNullability.SymbolFromFlagsOffset`) does
+        // that `source`'s construction does not. Requiring BOTH sides
+        // wrapped — the previous condition — only ever fired for a
+        // genuine value-type `Nullable[T]` (where raw CLR reflection alone
+        // already makes `source` nullable-wrapped too) and silently
+        // skipped grafting whenever `target` was nullable-wrapped ONLY
+        // because of `[NullableAttribute]` metadata, dropping tuple names
+        // one level under a nullable reference generic argument (e.g.
+        // `Task[IReadOnlyList[(...)]?]`). Unwrap `source` too when it
+        // happens to also be wrapped (preserves the original value-type
+        // behavior exactly); otherwise recurse with `source` itself
+        // against `target`'s underlying type.
+        if (target is NullableTypeSymbol targetNullable)
         {
-            return NullableTypeSymbol.Get(TransferTupleNames(namedNullable.UnderlyingType, targetNullable.UnderlyingType));
+            var sourceForUnderlying = source is NullableTypeSymbol namedNullable
+                ? namedNullable.UnderlyingType
+                : source;
+            return NullableTypeSymbol.Get(TransferTupleNames(sourceForUnderlying, targetNullable.UnderlyingType));
         }
 
         if (source is TupleTypeSymbol namedTuple
