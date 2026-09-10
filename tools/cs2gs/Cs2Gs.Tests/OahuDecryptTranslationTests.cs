@@ -340,6 +340,46 @@ namespace Demo
         Assert.Equal(2, CountOccurrences(printed, "H(x++)"));
     }
 
+    /// <summary>
+    /// Issue #4114 follow-up (Copilot review of PR #4196): an array-element
+    /// postfix increment (<c>a[0]++</c>) has no target <c>ISymbol</c> via
+    /// <c>GetSymbolInfo</c> — element access is a built-in operation, not a
+    /// symbol reference — so aliasing between two occurrences can never be
+    /// ruled out. The original fix's <c>target == null</c> branch treated an
+    /// unresolved target as safely hoistable (mirroring pre-#4114 behavior),
+    /// which reintroduces exactly the bug #4114 fixed whenever the repeated
+    /// target is unresolvable rather than a plain local: both occurrences of
+    /// <c>a[0]++</c> would still be independently hoisted, again observing
+    /// the same pre-increment value. An unresolved target must now stay
+    /// inline unconditionally.
+    /// </summary>
+    [Fact]
+    public void PostIncrement_ArrayElementTargetTwiceInOneStatement_PreservesLeftToRightSequencing()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class C
+    {
+        public static void Record(int a, int b) { }
+
+        public static void Pair(int[] arr)
+        {
+            Record(H(arr[0]++), H(arr[0]++));
+        }
+
+        private static int H(int n) => n;
+    }
+}");
+
+        // Neither occurrence may be hoisted to a trailing statement: an
+        // unresolved target (array-element access) can never be proven
+        // single-occurrence, so it must stay inline exactly like a repeated
+        // resolvable target does.
+        Assert.DoesNotContain("H(arr[0]), H(arr[0])", printed);
+        Assert.Equal(2, CountOccurrences(printed, "H(arr[0]++)"));
+    }
+
     private static int CountOccurrences(string text, string value)
     {
         int count = 0;

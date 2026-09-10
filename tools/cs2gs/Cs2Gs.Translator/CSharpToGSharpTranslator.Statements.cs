@@ -2350,15 +2350,20 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            // A node whose operand's symbol could not be resolved has no
+            // A node whose operand's symbol could not be resolved (e.g. an
+            // array-element access like `a[0]++` — a built-in indexer
+            // operation with no target symbol via GetSymbolInfo) has no
             // reliable way to detect aliasing with another occurrence, so it
-            // is conservatively treated as its own single-occurrence target
-            // (matching this method's pre-#4114 behavior for such nodes).
+            // must stay inline rather than be hoisted: hoisting is only safe
+            // once a repeat is ruled out, and an unresolved target can never
+            // rule one out. `Record(a[0]++, a[0]++)` therefore falls through
+            // to G#'s native inline postfix, which evaluates each occurrence
+            // in true left-to-right order regardless of aliasing.
             List<PostfixUnaryExpressionSyntax> hoistable = embedded
                 .Where(node =>
                 {
                     ISymbol target = this.context.GetSymbolInfo(node.Operand).Symbol;
-                    return target == null || targetOccurrences[target] == 1;
+                    return target != null && targetOccurrences[target] == 1;
                 })
                 .ToList();
 
