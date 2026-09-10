@@ -97,6 +97,46 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #4111 (a subset of #4179's 48 rows: the "AcceptedFiniteShape_
+    /// VerifiesLoadsAndRuns — 30 rows" line item): the REAL
+    /// <c>CompileVerifyLoadAndRun</c> helper does not pass a bare
+    /// <see langword="null"/> as <c>MethodInfo.Invoke</c>'s second argument —
+    /// it passes a conditional (ternary) expression,
+    /// <c>entry.GetParameters().Length == 0 ? null : new object[] { ... }</c>.
+    /// The positive test above only pins the bare-<see langword="null"/>
+    /// shape, so a future regression in how
+    /// <c>LambdaResultFeedsUnobservedTaskRun</c> handles a non-trivial
+    /// argument expression at the call site would not be caught by it. This
+    /// test pins the actual shape verbatim, closing that gap.
+    /// </summary>
+    [Fact]
+    public void TaskRun_ReflectionInvokeWithConditionalArgumentObservedOnlyThroughWait_StaysBare()
+    {
+        string printed = TranslateOblivious(@"
+using System;
+using System.Reflection;
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public static class Runner
+    {
+        public static void Run(MethodInfo entry)
+        {
+            var execution = Task.Run(
+                () => entry.Invoke(null, entry.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() }));
+            bool completed = execution.Wait(TimeSpan.FromSeconds(10));
+            Console.WriteLine(completed);
+        }
+    }
+}");
+
+        Assert.Contains("entry.Invoke(", printed, StringComparison.Ordinal);
+        Assert.Contains("GetParameters().Length == 0", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(")!!", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The general shape underlying #4179, without reflection: ANY
     /// nullable-returning call as an unobserved <c>Task.Run</c> lambda result
     /// must stay bare, not just <c>MethodInfo.Invoke</c>.
