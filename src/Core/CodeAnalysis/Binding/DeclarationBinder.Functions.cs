@@ -544,6 +544,41 @@ internal sealed partial class DeclarationBinder
             {
                 clone.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
             }
+            else if (parameter.DeclaringSyntax?.Parent is ParameterSyntax { HasDefaultValue: true })
+            {
+                // Issue #4192 (Copilot finding on #4183): a struct/class
+                // method's own default-value expressions are bound lazily
+                // (pendingParameterDefaultValueBindings), so `parameter`'s
+                // default is still PENDING here — specialization runs during
+                // the same per-struct declaration-body pass that registers
+                // the deferred closure, well before
+                // BindPendingParameterDefaultValues drains it. `parameter`
+                // itself is discarded once specialization replaces the
+                // original method with its clones (the caller `continue`s
+                // past adding it), so the original's own deferred closure
+                // would resolve a default value nobody reads. Queue a
+                // follow-up copy from the original onto this clone; it is
+                // appended to the SAME list after the original's own
+                // deferred bind (registered earlier, in the parameter-
+                // creation loop above this method's caller), so drain order
+                // guarantees `parameter.HasExplicitDefaultValue` is already
+                // true by the time this runs.
+                //
+                // `parameter.DeclaringSyntax` is set to the parameter's
+                // IDENTIFIER token, not the enclosing `ParameterSyntax` (see
+                // the ParameterSymbol construction sites in
+                // DeclarationBinder.Structs.cs), so the default-value clause
+                // is found via the token's parent, not the token itself.
+                var originalParameter = parameter;
+                var clonedParameter = clone;
+                pendingParameterDefaultValueBindings.Add(() =>
+                {
+                    if (originalParameter.HasExplicitDefaultValue)
+                    {
+                        clonedParameter.SetExplicitDefaultValue(originalParameter.ExplicitDefaultValue);
+                    }
+                });
+            }
 
             clone.SetAttributes(parameter.Attributes);
             parameters.Add(clone);
