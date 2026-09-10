@@ -415,6 +415,42 @@ public sealed class Issue4186NullableReturnDelegateErasureTests
         Assert.Equal("GS0155", diagnostic.Id);
     }
 
+    [Fact]
+    public void MethodGroup_SameCompilationStructReturn_ToNullableClrDelegateReturn_IsRejected()
+    {
+        // Same shape as the struct case above, spelled with the imported CLR
+        // `Func[...]` delegate instead of a native function type -- the shape
+        // closest to the issue's own literal repro. Both spellings converge
+        // on the same `IsFunctionShapeAssignable`/`ReturnTypeWidens` symbolic
+        // route (`MemberLookup.TryGetDelegateFunctionTypeFromSymbol` recovers
+        // a structural shape for `Func[...]` too), so this is a same-root
+        // confirmation rather than an independent code path.
+        var diagnostic = Assert.Single(Errors("""
+            package Issue4186StructReturnClrDelegate
+            import System
+
+            struct Point {
+                var X int32
+                var Y int32
+
+                init(x int32) {
+                    this.X = x
+                    this.Y = x
+                }
+            }
+
+            func MakePoint(x int32) Point {
+                return Point(x)
+            }
+
+            func Main() {
+                var f Func[int32, Point?] = MakePoint
+            }
+            """));
+
+        Assert.Equal("GS0155", diagnostic.Id);
+    }
+
     private static Diagnostic[] Errors(string source)
     {
         var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
