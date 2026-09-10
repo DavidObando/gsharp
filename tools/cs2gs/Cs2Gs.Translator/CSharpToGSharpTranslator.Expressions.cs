@@ -3475,9 +3475,37 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol resultType =
                 (this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol)?.ReturnType;
-            return sinkType is { IsReferenceType: true }
-                && SymbolEqualityComparer.Default.Equals(resultType, sinkType)
-                && !this.TargetWillRemainNonNullableReference(sinkType, sink);
+            if (sinkType is not { IsReferenceType: true })
+            {
+                return false;
+            }
+
+            if (SymbolEqualityComparer.Default.Equals(resultType, sinkType))
+            {
+                // The #4046 shape: the chain collapses back to the SAME scalar
+                // type as the selector's own result (`.Select(...).FirstOrDefault()`).
+                return !this.TargetWillRemainNonNullableReference(sinkType, sink);
+            }
+
+            // Issue #4180: `current` never left the Select-shaped invocation itself
+            // (e.g. `string.Join(sep, xs.Select(i => i.FullName))` — the selector's
+            // result is passed WHOLE as a collection argument rather than chained
+            // into a further scalar-returning call), so `sinkType` is the SINK
+            // PARAMETER'S OWN type (`IEnumerable<TResult?>`), not `resultType`
+            // itself; the equality check above can never match a collection type
+            // against a scalar one. Unwrap one generic type argument and compare
+            // ELEMENT-to-element instead — an already-nullable-ANNOTATED element
+            // (e.g. `string.Join`'s BCL-declared `IEnumerable<string?>`) accepts a
+            // nullable selector result with no bridge; asserting `!!` here throws
+            // whenever the selector legitimately returns null (`Type.FullName` on a
+            // reified open-generic interface row, #4180's reported crash), even
+            // though the ORIGINAL C# `string.Join`/`.Select` pipeline tolerates
+            // null elements silently.
+            return sinkType is INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } sinkCollection
+                && sinkCollection.TypeArguments[0] is { NullableAnnotation: NullableAnnotation.Annotated } sinkElement
+                && SymbolEqualityComparer.Default.Equals(
+                    resultType,
+                    sinkElement.WithNullableAnnotation(NullableAnnotation.None));
 
             static bool ReturnsGenericSelectorResult(
                 IMethodSymbol genericMethod,
