@@ -303,10 +303,16 @@ public sealed class Issue4186NullableReturnDelegateErasureTests
         // types), so it is a pure `Conversion.Classify`
         // `FunctionTypeSymbol`-to-`FunctionTypeSymbol` comparison. Measured
         // directly against a pre-fix build (`Conversion.cs` reverted to the
-        // commit immediately before this fix): this source compiled CLEAN
-        // before this fix. It is correctly rejected after it, for the same
-        // underlying reason as the method-group repro — `src` is a
-        // fixed-signature callable, not a literal that can absorb the lift.
+        // commit immediately before this fix): this source not only compiled
+        // clean before this fix, it EXECUTED and printed the wrong answer --
+        // `Console.WriteLine(g(5))` printed `False` (the correct answer for
+        // `5 != 0` is `True`) -- because invoking through a mismatched CLR
+        // signature (`bool` vs. `Nullable<bool>` have different runtime
+        // layouts) silently reads the wrong bytes. This was not merely an
+        // overly permissive compile-time check; it was a genuine runtime
+        // unsoundness, which is why this fix closes it at the native
+        // function-type level too rather than restricting the guard to the
+        // CLR-delegate path the issue's own repro used.
         var diagnostic = Assert.Single(Errors("""
             package Issue4186StoredFunctionValue
             import System
@@ -317,6 +323,31 @@ public sealed class Issue4186NullableReturnDelegateErasureTests
                 let src (int32) -> bool = TT
                 let g (int32) -> bool? = src
                 Console.WriteLine(g(5))
+            }
+            """));
+
+        Assert.Equal("GS0155", diagnostic.Id);
+    }
+
+    [Fact]
+    public void StoredFunctionValue_StructConstrainedTypeParameterReturn_IsRejected()
+    {
+        // A struct-constrained `T` (unlike #1356's own UNCONSTRAINED `T` case
+        // pinned in Issue1356FuncReturnNullableWideningConversionTests /
+        // Issue1356FuncReturnCovarianceEmitTests) closes `T?` over
+        // `Nullable<T>` at the IL level -- a distinct value type with its own
+        // layout, exactly the same class of mismatch as `bool` -> `bool?`
+        // above. `NullableLifting.IsValueTypeNullable` returns true for this
+        // shape (it checks `TypeParameterSymbol.HasValueTypeConstraint`), so
+        // this guard correctly extends to it too.
+        var diagnostic = Assert.Single(Errors("""
+            package Issue4186StructConstrained
+
+            class Box[T struct] {
+                let f (T) -> T?
+                init(g (T) -> T) {
+                    this.f = g
+                }
             }
             """));
 
