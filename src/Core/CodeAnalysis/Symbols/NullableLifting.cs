@@ -272,13 +272,26 @@ public static class NullableLifting
             // MetadataLoadContext types cannot be passed to runtime Nullable APIs.
         }
 
-        return type.IsGenericType
-            && !type.IsGenericTypeDefinition
-            && string.Equals(
+        if (!type.IsGenericType || type.IsGenericTypeDefinition)
+        {
+            return null;
+        }
+
+        try
+        {
+            return string.Equals(
                 type.GetGenericTypeDefinition().FullName,
                 "System.Nullable`1",
                 StringComparison.Ordinal)
-            ? type.GetGenericArguments()[0]
-            : null;
+                ? type.GetGenericArguments()[0]
+                : null;
+        }
+        catch (NotSupportedException)
+        {
+            // A TypeBuilderInstantiation (a same-compilation type mid-binding)
+            // throws here; such a type is never a real Nullable<T> for this
+            // probe's purposes anyway (issue #4184).
+            return null;
+        }
     }
 }

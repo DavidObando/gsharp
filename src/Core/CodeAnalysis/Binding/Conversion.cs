@@ -3211,38 +3211,6 @@ public sealed class Conversion
         => type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
 
     /// <summary>
-    /// Issue #4184: true when <paramref name="type"/> is a closed CLR
-    /// <c>System.Nullable&lt;T&gt;</c> — checked by name (not
-    /// <c>typeof(Nullable&lt;&gt;)</c> reference equality) so it also
-    /// recognizes a <c>Nullable&lt;T&gt;</c> loaded through a
-    /// <c>MetadataLoadContext</c>, matching the by-name pattern
-    /// <see cref="ClrTypeUtilities"/> uses throughout. Guards
-    /// <see cref="Type.GetGenericTypeDefinition"/> against
-    /// <see cref="NotSupportedException"/>, which a
-    /// <c>TypeBuilderInstantiation</c> (a same-compilation type mid-binding)
-    /// throws — such a type is never a real <c>Nullable&lt;T&gt;</c> for this
-    /// probe's purposes anyway.
-    /// </summary>
-    /// <param name="type">The candidate CLR type.</param>
-    /// <returns><see langword="true"/> when <paramref name="type"/> is a constructed <c>Nullable&lt;T&gt;</c>.</returns>
-    private static bool IsClrNullableValueType(Type type)
-    {
-        if (!type.IsGenericType || type.IsGenericTypeDefinition)
-        {
-            return false;
-        }
-
-        try
-        {
-            return string.Equals(type.GetGenericTypeDefinition().FullName, "System.Nullable`1", StringComparison.Ordinal);
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
     /// Issue #4184: true when accepting <paramref name="source"/> for
     /// <paramref name="target"/> would rely SOLELY on
     /// <see cref="Type.IsAssignableFrom"/>'s CLR-level special case for
@@ -3254,13 +3222,15 @@ public sealed class Conversion
     /// is a shared utility used for many other assignability probes where
     /// that CLR lift IS the wanted behavior, so this gates the two narrow
     /// call sites that must reject it rather than narrowing the shared
-    /// utility itself.
+    /// utility itself. Uses <see cref="NullableLifting.IsValueTypeNullableClr"/>
+    /// — the single seam for every <c>Nullable&lt;T&gt;</c> probe — rather than
+    /// a second by-name detector.
     /// </summary>
     /// <param name="target">The delegate-side (Invoke parameter or return) CLR type.</param>
     /// <param name="source">The function's effective CLR type for the same slot.</param>
     /// <returns><see langword="true"/> when this pairing is only assignable via the CLR's implicit-nullable-lift special case.</returns>
     private static bool IsClrNullableWideningMismatch(Type target, Type source)
-        => IsClrNullableValueType(target) && !ClrTypeUtilities.AreSame(target, source);
+        => NullableLifting.IsValueTypeNullableClr(target) && !ClrTypeUtilities.AreSame(target, source);
 
     /// <summary>
     /// Determines whether a GSharp function type is convertible to a CLR
