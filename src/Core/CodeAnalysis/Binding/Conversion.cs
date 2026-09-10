@@ -4345,13 +4345,21 @@ public sealed class Conversion
         // see `IsFunctionShapeAssignable`'s
         // `AreRuntimeEquivalentIgnoringReferenceNullability` identity check,
         // which such a literal already satisfies before this widening rule
-        // is even consulted) can perform that lift. `NullableLifting.IsValueTypeNullable`
-        // is `false` for an open type-parameter underlying (no CLR backing
-        // mid-binding unless struct-constrained) and for any reference type,
-        // so both of this rule's own pinned cases are unaffected.
+        // is even consulted) can perform that lift. Uses
+        // `NullableLifting.IsAnyValueTypeNullable` rather than the narrower
+        // `IsValueTypeNullable` alone: a same-compilation user `struct`/`enum`
+        // underlying has no `ClrType` mid-binding, so `IsValueTypeNullable`'s
+        // `ClrType.IsValueType` probe misses it, which would have left this
+        // exact gap open for a same-compilation value type's bare-`S` return
+        // (only a BCL/open-struct-constrained value type would have been
+        // caught). `IsAnyValueTypeNullable` unifies both the CLR-backed and
+        // the same-compilation user-struct/enum cases. `false` for an open
+        // (non-struct-constrained) type-parameter underlying and for any
+        // reference type, so both of this rule's own pinned cases are
+        // unaffected.
         if (toReturn is NullableTypeSymbol toNullable
             && toNullable.UnderlyingType == fromReturn
-            && !NullableLifting.IsValueTypeNullable(toNullable))
+            && !NullableLifting.IsAnyValueTypeNullable(toNullable))
         {
             return true;
         }

@@ -31,8 +31,12 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <c>Issue1356FuncReturnCovarianceEmitTests</c> pin only those two shapes) but
 /// applied unconditionally, so it also silently widened a concrete VALUE
 /// type's bare-<c>T</c> return — exactly this issue's gap. Now gated by
-/// <c>NullableLifting.IsValueTypeNullable</c>, which is <see langword="false"/>
-/// for both of that rule's own pinned shapes.</description></item>
+/// <c>NullableLifting.IsAnyValueTypeNullable</c> (which covers both a
+/// CLR-backed value type AND a same-compilation user <c>struct</c>/<c>enum</c>
+/// — a Copilot review finding on this PR caught that the narrower
+/// <c>IsValueTypeNullable</c> alone missed the latter, since such a type has
+/// no <c>ClrType</c> mid-binding), which is <see langword="false"/> for both
+/// of that rule's own pinned shapes.</description></item>
 /// <item><description><b>The reflective fallback:</b> <c>IsFunctionToDelegateConvertible</c>'s
 /// own return-type identity check (reached when the symbolic route above
 /// can't recover a shape — e.g. a nested function-typed parameter position,
@@ -348,6 +352,63 @@ public sealed class Issue4186NullableReturnDelegateErasureTests
                 init(g (T) -> T) {
                     this.f = g
                 }
+            }
+            """));
+
+        Assert.Equal("GS0155", diagnostic.Id);
+    }
+
+    [Fact]
+    public void MethodGroup_SameCompilationStructReturn_ToNullableNativeFunctionTypeReturn_IsRejected()
+    {
+        // Copilot review finding on this PR: a same-compilation user `struct`
+        // has no `ClrType` mid-binding, so `NullableLifting.IsValueTypeNullable`
+        // alone (which probes `UnderlyingType.ClrType.IsValueType`) misses it,
+        // leaving this exact gap open for a concrete same-compilation value
+        // type's bare return. Fixed by using
+        // `NullableLifting.IsAnyValueTypeNullable`, which also covers
+        // `StructSymbol { IsClass: false }` via `IsUserValueTypeNullable`.
+        var diagnostic = Assert.Single(Errors("""
+            package Issue4186StructReturn
+            import System
+
+            struct Point {
+                var X int32
+                var Y int32
+
+                init(x int32) {
+                    this.X = x
+                    this.Y = x
+                }
+            }
+
+            func MakePoint(x int32) Point {
+                return Point(x)
+            }
+
+            func Main() {
+                var f (int32) -> Point? = MakePoint
+            }
+            """));
+
+        Assert.Equal("GS0155", diagnostic.Id);
+    }
+
+    [Fact]
+    public void MethodGroup_SameCompilationEnumReturn_ToNullableNativeFunctionTypeReturn_IsRejected()
+    {
+        // Same shape as the struct case above, for the `EnumSymbol` half of
+        // `NullableLifting.IsUserValueTypeNullable`.
+        var diagnostic = Assert.Single(Errors("""
+            package Issue4186EnumReturn
+            import System
+
+            enum Color { Red, Green, Blue }
+
+            func FirstColor(x int32) Color -> Color.Red
+
+            func Main() {
+                var f (int32) -> Color? = FirstColor
             }
             """));
 
