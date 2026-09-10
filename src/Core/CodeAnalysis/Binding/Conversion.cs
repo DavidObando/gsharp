@@ -3211,6 +3211,58 @@ public sealed class Conversion
         => type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
 
     /// <summary>
+    /// Issue #4184: true when <paramref name="type"/> is a closed CLR
+    /// <c>System.Nullable&lt;T&gt;</c> — checked by name (not
+    /// <c>typeof(Nullable&lt;&gt;)</c> reference equality) so it also
+    /// recognizes a <c>Nullable&lt;T&gt;</c> loaded through a
+    /// <c>MetadataLoadContext</c>, matching the by-name pattern
+    /// <see cref="ClrTypeUtilities"/> uses throughout. Guards
+    /// <see cref="Type.GetGenericTypeDefinition"/> against
+    /// <see cref="NotSupportedException"/>, which a
+    /// <c>TypeBuilderInstantiation</c> (a same-compilation type mid-binding)
+    /// throws — such a type is never a real <c>Nullable&lt;T&gt;</c> for this
+    /// probe's purposes anyway.
+    /// </summary>
+    /// <param name="type">The candidate CLR type.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> is a constructed <c>Nullable&lt;T&gt;</c>.</returns>
+    private static bool IsClrNullableValueType(Type type)
+    {
+        if (!type.IsGenericType || type.IsGenericTypeDefinition)
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(type.GetGenericTypeDefinition().FullName, "System.Nullable`1", StringComparison.Ordinal);
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4184: true when accepting <paramref name="source"/> for
+    /// <paramref name="target"/> would rely SOLELY on
+    /// <see cref="Type.IsAssignableFrom"/>'s CLR-level special case for
+    /// value types — <c>Nullable&lt;T&gt;.IsAssignableFrom(T)</c> returns
+    /// <see langword="true"/> even though no G#/C# implicit conversion
+    /// permits a bare <c>T</c> to satisfy a <c>T?</c> method-group parameter
+    /// or delegate-return slot (identity is required for a value-type slot;
+    /// see this method's callers). <see cref="ClrTypeUtilities.IsAssignableByName"/>
+    /// is a shared utility used for many other assignability probes where
+    /// that CLR lift IS the wanted behavior, so this gates the two narrow
+    /// call sites that must reject it rather than narrowing the shared
+    /// utility itself.
+    /// </summary>
+    /// <param name="target">The delegate-side (Invoke parameter or return) CLR type.</param>
+    /// <param name="source">The function's effective CLR type for the same slot.</param>
+    /// <returns><see langword="true"/> when this pairing is only assignable via the CLR's implicit-nullable-lift special case.</returns>
+    private static bool IsClrNullableWideningMismatch(Type target, Type source)
+        => IsClrNullableValueType(target) && !ClrTypeUtilities.AreSame(target, source);
+
+    /// <summary>
     /// Determines whether a GSharp function type is convertible to a CLR
     /// delegate type by matching parameter arity / assignability and the
     /// return type. Uses metadata-safe (name-based) checks so it works for
@@ -3321,8 +3373,48 @@ public sealed class Conversion
             }
 
             var fnParamType = fn.ParameterTypes[i];
-            var fnParamClr = fnParamType?.ClrType;
-            if (fnParamClr != null && ClrTypeUtilities.IsAssignableByName(invokeParamTypes[i], fnParamClr))
+
+            // Issue #4184: `fnParamType?.ClrType` erases a nullable VALUE
+            // type (`int32?`) to its bare underlying type (`int32`) -- see
+            // `NullableTypeSymbol`'s own constructor -- so comparing that
+            // erased shape against the delegate's declared parameter type
+            // (also bare `int32`) reported an exact match and silently
+            // accepted a method-group parameter mismatch `csc` rejects with
+            // `CS0123` (a method declaring `T?` does not satisfy a delegate
+            // slot declared as bare `T`). `NullableLifting.GetEffectiveClrType`
+            // re-wraps a value-type underlying in `Nullable[T]` (identity for
+            // every other shape, including reference types, so existing
+            // reference-covariance/contravariance behavior below is
+            // unchanged) -- the same helper already used for the analogous
+            // RETURN-type erasure fixed for issue #4165, applied here to keep
+            // both sides of this check symmetric.
+            var fnParamEffectiveClr = NullableLifting.GetEffectiveClrType(fnParamType);
+
+            // Issue #4184 (reverse direction, found while building this
+            // fix's own csc-measured T/T? matrix): `Type.IsAssignableFrom`
+            // has its own CLR-level special case where
+            // `Nullable<T>.IsAssignableFrom(T) == true` (measured directly --
+            // `typeof(int?).IsAssignableFrom(typeof(int))` is `true` even
+            // though `typeof(int).IsAssignableFrom(typeof(int?))` is
+            // `false`), which exists to support the implicit `T -> T?` lift
+            // used in ordinary expression contexts. C#'s method-group
+            // parameter matching does NOT honor that lift for value types --
+            // a method declaring bare `T` does not satisfy a delegate slot
+            // declared `T?` either (`csc` rejects this with `CS0123` too,
+            // the same diagnostic as the forward direction) -- so
+            // `IsAssignableByName` below would silently re-introduce this
+            // issue's exact bug in the opposite direction once the erasure
+            // above stopped masking it. `IsClrNullableWideningMismatch`
+            // detects precisely this shape (delegate slot is `Nullable<X>`,
+            // the method's effective type is anything other than that same
+            // `Nullable<X>`) and gates it out here rather than widening
+            // `IsAssignableByName` itself, which is a shared utility used
+            // for many unrelated assignability probes across the binder and
+            // emitter where this CLR nullable-lift behavior may be exactly
+            // what's wanted.
+            if (fnParamEffectiveClr != null
+                && !IsClrNullableWideningMismatch(invokeParamTypes[i], fnParamEffectiveClr)
+                && ClrTypeUtilities.IsAssignableByName(invokeParamTypes[i], fnParamEffectiveClr))
             {
                 continue;
             }
@@ -3333,7 +3425,7 @@ public sealed class Conversion
             // conversion `csc` accepts (the callee only ever supplies a
             // DERIVED-typed argument, and a method that accepts the wider
             // BASE naturally accepts that). The CLR-type check above can
-            // only ever fire when `fnParamClr` is non-null, but a
+            // only ever fire when `fnParamEffectiveClr` is non-null, but a
             // same-compilation `class`/`interface` parameter type has NO
             // `ClrType` mid-binding (its `TypeBuilder` doesn't exist yet),
             // so it bailed out here unconditionally — matching `csc` only by
