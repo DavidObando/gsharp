@@ -660,10 +660,26 @@ internal sealed class InterfaceImplEmitter
                 }
             }
 
-            bridges.Add(new InheritedEventBridge(
-                ev,
-                MetadataTokens.MethodDefinitionHandle(nextMethodRow++),
-                MetadataTokens.MethodDefinitionHandle(nextMethodRow++)));
+            // Issue #4114: one MethodDef row each for add_/remove_, assigned to
+            // named locals across separate statements (matching every other
+            // row-reservation loop in ReflectionMetadataEmitter.cs, e.g. the
+            // property-getter/setter and class-event add/remove/raise loops)
+            // rather than as two `nextMethodRow++` post-increments inline in
+            // one constructor call. The two forms are equivalent C#, but the
+            // cs2gs-translated build of this method once collapsed the inline
+            // form's two increments into one read of the pre-increment value
+            // used twice, handing add_ and remove_ the SAME planned row and
+            // tripping "Inherited event bridge MethodDef row was not emitted
+            // in planned order" (GS9998) the first time this method itself
+            // ran self-hosted. The root cause was cs2gs's postfix-hoist
+            // lowering (fixed in CSharpToGSharpTranslator.Statements.cs'
+            // WithHoistedPostfix); this shape is kept as defense in depth so
+            // a future translator change can't reopen the same trap here.
+            var addHandle = MetadataTokens.MethodDefinitionHandle(nextMethodRow);
+            nextMethodRow++;
+            var removeHandle = MetadataTokens.MethodDefinitionHandle(nextMethodRow);
+            nextMethodRow++;
+            bridges.Add(new InheritedEventBridge(ev, addHandle, removeHandle));
         }
     }
 

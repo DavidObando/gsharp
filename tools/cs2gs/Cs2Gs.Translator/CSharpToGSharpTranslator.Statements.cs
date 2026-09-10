@@ -2309,6 +2309,27 @@ public sealed partial class CSharpToGSharpTranslator
         /// the sub-expression is suppressed (read as its pre-increment value) and
         /// the mutation is appended after the main statement (ADR-0115 §B).
         /// </summary>
+        /// <remarks>
+        /// Issue #4114: this hoist-to-trailing-statement strategy is only sound
+        /// when a target is mutated at most ONCE in the statement. C# sequences
+        /// repeated postfix operators on the SAME target left-to-right — each
+        /// occurrence of `x++` in `H(x++), H(x++)` observes a DIFFERENT value
+        /// (the first reads the original, the second reads it already
+        /// incremented). Suppressing every occurrence and deferring every
+        /// mutation to AFTER the whole statement collapses that sequencing:
+        /// none of the mutations has run when either suppressed read happens,
+        /// so both read the same (original) value, and the compiler's own
+        /// metadata row planner discovered this the hard way — two inherited
+        /// event-bridge MethodDef rows were planned as `H(nextMethodRow++),
+        /// H(nextMethodRow++))` and came out numerically identical, so the
+        /// second emitted row landed one past its plan and tripped the
+        /// self-hosted compiler's "not emitted in planned order" guard
+        /// (GS9998). A target with more than one embedded occurrence is left
+        /// un-hoisted here; those occurrences fall through to G#'s native
+        /// inline inc/dec expression (gsc issue #1027), which evaluates each
+        /// occurrence in true left-to-right order without needing a statement
+        /// seam. Single-occurrence targets keep the existing hoisted form.
+        /// </remarks>
         private IEnumerable<GStatement> WithHoistedPostfix(
             ExpressionSyntax expression,
             Func<IEnumerable<GStatement>> buildMain)
@@ -2319,7 +2340,34 @@ public sealed partial class CSharpToGSharpTranslator
                 return buildMain();
             }
 
+            var targetOccurrences = new Dictionary<ISymbol, int>(SymbolEqualityComparer.Default);
             foreach (PostfixUnaryExpressionSyntax node in embedded)
+            {
+                ISymbol target = this.context.GetSymbolInfo(node.Operand).Symbol;
+                if (target != null)
+                {
+                    targetOccurrences[target] = targetOccurrences.TryGetValue(target, out int count) ? count + 1 : 1;
+                }
+            }
+
+            // A node whose operand's symbol could not be resolved has no
+            // reliable way to detect aliasing with another occurrence, so it
+            // is conservatively treated as its own single-occurrence target
+            // (matching this method's pre-#4114 behavior for such nodes).
+            List<PostfixUnaryExpressionSyntax> hoistable = embedded
+                .Where(node =>
+                {
+                    ISymbol target = this.context.GetSymbolInfo(node.Operand).Symbol;
+                    return target == null || targetOccurrences[target] == 1;
+                })
+                .ToList();
+
+            if (hoistable.Count == 0)
+            {
+                return buildMain();
+            }
+
+            foreach (PostfixUnaryExpressionSyntax node in hoistable)
             {
                 this.state.SuppressedPostfix.Add(node);
             }
@@ -2331,13 +2379,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
-                foreach (PostfixUnaryExpressionSyntax node in embedded)
+                foreach (PostfixUnaryExpressionSyntax node in hoistable)
                 {
                     this.state.SuppressedPostfix.Remove(node);
                 }
             }
 
-            foreach (PostfixUnaryExpressionSyntax node in embedded)
+            foreach (PostfixUnaryExpressionSyntax node in hoistable)
             {
                 statements.Add(new IncrementDecrementStatement(
                     this.TranslateExpression(node.Operand),
