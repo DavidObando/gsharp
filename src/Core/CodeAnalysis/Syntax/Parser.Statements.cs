@@ -1276,14 +1276,25 @@ public partial class Parser
             // and desyncing the parser on whatever follows. A NON-empty struct
             // literal post (`result = Pt{X: i} { … }`) stays unaffected —
             // StructLiteralAllowedInSuppressedHeader still admits it.
+            //
+            // A for-clause post sits in the same "collection vs body" position
+            // as a for-range collection, not an if/while condition: an EMPTY
+            // struct literal immediately followed by a genuine body `{` should
+            // still be recognized as a struct literal (`result = Pt{} { }`), so
+            // allowEmptyStructLiteralInHeader is set here too (mirrors
+            // ParseExpressionInBodyHeader's save/set/restore for for-range
+            // callers, which pass allowEmptyStructLiteralCollection: true).
             suppressTrailingObjectInitializer++;
             suppressStructLiteral++;
+            var savedAllowEmptyStructLiteral = allowEmptyStructLiteralInHeader;
+            allowEmptyStructLiteralInHeader = true;
             try
             {
                 post = ParseSimpleStatement();
             }
             finally
             {
+                allowEmptyStructLiteralInHeader = savedAllowEmptyStructLiteral;
                 suppressTrailingObjectInitializer--;
                 suppressStructLiteral--;
             }

@@ -231,4 +231,82 @@ class Walker
 
         GSharpAnalyzerVerifier.VerifyAnalyzer(analyzer, result.GsWithMarkers, new[] { "GSA0006" });
     }
+
+    // Copilot review follow-up on PR #4191: TWO occurrences of the exact same
+    // marker text (`Path.GetFullPath(x.F)`), where translation bridges only
+    // the FIRST with `!!` (x.F is `string?` on NullHolder) and leaves the
+    // SECOND, later occurrence exact (x.F is non-null `string` on
+    // NonNullHolder — a different, unrelated declaration, so nothing narrows
+    // it, it is simply never nullable). This is the mixed-context shape the
+    // review flagged: the earlier occurrence "drops out" of the exact-text
+    // sequence once bridged, while the later one does not, so an exact-only
+    // ordinal search computed from the C# source no longer lines up with an
+    // exact-only search over the printed G#.
+    private const string MixedBridgedAndExactBaseClassAccess = """
+    using System.IO;
+
+    class NullHolder
+    {
+        public string? F;
+    }
+
+    class NonNullHolder
+    {
+        public string F = "";
+    }
+
+    class Walker
+    {
+        public void M1(NullHolder x)
+        {
+            [|Path.GetFullPath(x.F)|].ToString();
+        }
+
+        public void M2(NonNullHolder x)
+        {
+            [|Path.GetFullPath(x.F)|].ToString();
+        }
+    }
+    """;
+
+    /// <summary>
+    /// Before the fix, the plain exact-only search silently SUCCEEDS at the
+    /// wrong occurrence instead of failing over to the tolerant fallback:
+    /// the FIRST marker (M1, whose own occurrence gets bridged) steals the
+    /// SECOND marker's (M2's) exact span via <c>NthOccurrence</c>, and the
+    /// SECOND marker then also resolves onto M2's span via the tolerant
+    /// fallback — both markers land on the SAME (M2's) span, nested
+    /// (<c>[|[|Path.GetFullPath(x.|]F)|]</c>), and M1's own occurrence gets
+    /// no marker at all. The fix (a single unified exact-or-tolerant ordinal
+    /// sequence for non-declaration markers) must place each marker on its
+    /// own, distinct, correct span instead.
+    /// </summary>
+    [Fact]
+    public void MixedBridgedAndExactOccurrences_PlaceEachMarkerOnItsOwnDistinctSpan()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate(MixedBridgedAndExactBaseClassAccess);
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Empty(result.UnplacedMarkers);
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            d => d.DiagnosticId == SnippetTranslator.SnippetDiagnosticId
+                && d.Message.Contains("does not survive translation verbatim", StringComparison.Ordinal));
+
+        // Exactly two markers, each wrapping its own method's call — never
+        // both wrapping the same span, and never nested/overlapping.
+        int m1Index = result.GsWithMarkers.IndexOf("func M1(", StringComparison.Ordinal);
+        int m2Index = result.GsWithMarkers.IndexOf("func M2(", StringComparison.Ordinal);
+        Assert.True(m1Index >= 0 && m2Index > m1Index);
+
+        string m1Body = result.GsWithMarkers.Substring(m1Index, m2Index - m1Index);
+        string m2Body = result.GsWithMarkers.Substring(m2Index);
+
+        Assert.Contains("[|Path.GetFullPath(x.F!!)|]", m1Body);
+        Assert.Contains("[|Path.GetFullPath(x.F)|]", m2Body);
+
+        // M2's span (the non-bridged one) must never itself contain a `!!` —
+        // the bug's symptom was M1's marker stealing M2's un-bridged span.
+        Assert.DoesNotContain("!!", m2Body.Substring(0, m2Body.IndexOf("].ToString()", StringComparison.Ordinal)));
+    }
 }

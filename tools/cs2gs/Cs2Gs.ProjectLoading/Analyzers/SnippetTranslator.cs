@@ -139,12 +139,46 @@ public static class SnippetTranslator
             // is a fact about the C# node, and "is preceded by a declaration
             // keyword" is the printed G# counterpart, so the two ordinals are
             // counted over declarations only and agree again.
-            int index = DeclarationOrdinal(document, marked) is { } declarationOrdinal
-                ? NthDeclarationOccurrence(printed, marked.Text, declarationOrdinal)
+            int? declarationOrdinal = DeclarationOrdinal(document, marked);
+            int index = declarationOrdinal is { } d
+                ? NthDeclarationOccurrence(printed, marked.Text, d)
                 : -1;
             if (index < 0)
             {
-                index = NthOccurrence(printed, marked.Text, ordinal);
+                if (declarationOrdinal is null)
+                {
+                    // Issue #4191 (Copilot review of #4190): a NON-declaration
+                    // marker is placed by ONE unified exact-or-bridged ordinal
+                    // sequence, not by an exact-only search that falls back to
+                    // a wholly separate tolerant-only search only when the
+                    // exact search finds NOTHING. When translation inserts a
+                    // `!!` bridge on only SOME occurrences of the marked text
+                    // (e.g. a `do`-loop walk that needs it, alongside an
+                    // unrelated, narrowed `while`-loop walk of the same text
+                    // that stays exact), one occurrence "drops out" of the
+                    // exact-match sequence while the other does not, so the
+                    // exact-only ordinal computed from the C# source no longer
+                    // lines up with the exact-only ordinal in the printed G# —
+                    // and a plain exact search can then silently SUCCEED at
+                    // the wrong occurrence, never even reaching the tolerant
+                    // fallback below (which only runs once the exact search
+                    // returns -1). `TryNullForgivingTolerantOccurrence`'s
+                    // pattern already tolerates an optional `!!` after every
+                    // identifier — an exact occurrence matches it too, with
+                    // zero `!!`s — so using it here counts exact and bridged
+                    // forms together, in the one order they actually appear
+                    // in `printed`. `ordinal` itself (computed above via exact
+                    // matching over `cleanSource`) is unaffected by this: the
+                    // clean C# source never itself contains a `!!` bridge —
+                    // that is purely a translation artifact — so its exact
+                    // ordinal already agrees with what the tolerant matcher
+                    // would compute there.
+                    TryNullForgivingTolerantOccurrence(printed, marked.Text, ordinal, out index, out length);
+                }
+                else
+                {
+                    index = NthOccurrence(printed, marked.Text, ordinal);
+                }
             }
 
             if (index < 0)

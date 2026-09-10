@@ -126,6 +126,53 @@ class C { func M() { for var i = 0; i < 3; result = Pt{X: i} { } } var result Pt
     }
 
     [Fact]
+    public void ForClause_Post_Empty_StructLiteral_With_EmptyBody_StillParses_AsStructLiteral()
+    {
+        // Copilot review follow-up on PR #4191: the EMPTY struct-literal
+        // counterpart to ForClause_Post_NonEmpty_StructLiteral_StillParses_
+        // AsStructLiteral. Suppressing the bare struct-literal form via
+        // suppressStructLiteral alone (without also honoring
+        // allowEmptyStructLiteralInHeader, mirroring for-range headers) would
+        // make StructLiteralAllowedInSuppressedHeader reject the EMPTY
+        // `Pt{}` post outright, so the first `{}` would be consumed as the
+        // loop body instead of the struct literal, leaving the real body `{ }`
+        // to desync the parser. An empty struct literal immediately followed
+        // by a genuine body `{` must still be recognized as a struct literal.
+        const string source = @"
+package p
+class Pt { var X int32 }
+class C { func M() { for var i = 0; i < 3; result = Pt{} { } } var result Pt }
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var forClause = Descendants(tree.Root).OfType<ForClauseStatementSyntax>().Single();
+        Assert.IsType<BlockStatementSyntax>(forClause.Body);
+        Assert.Empty(((BlockStatementSyntax)forClause.Body).Statements);
+        Assert.Contains(Descendants(forClause.Post), n => n is StructLiteralExpressionSyntax);
+    }
+
+    [Fact]
+    public void ForClause_Post_Empty_StructLiteral_With_NonEmptyBody_StillParses_AsStructLiteral()
+    {
+        // Same shape as above, but with a non-empty body — locks in that the
+        // struct literal is recognized regardless of what the (separate)
+        // real body contains.
+        const string source = @"
+package p
+class Pt { var X int32 }
+class C { func M() { for var i = 0; i < 3; result = Pt{} { Console.WriteLine(1) } } var result Pt }
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var forClause = Descendants(tree.Root).OfType<ForClauseStatementSyntax>().Single();
+        Assert.IsType<BlockStatementSyntax>(forClause.Body);
+        Assert.Single(((BlockStatementSyntax)forClause.Body).Statements);
+        Assert.Contains(Descendants(forClause.Post), n => n is StructLiteralExpressionSyntax);
+    }
+
+    [Fact]
     public void ForClause_Post_Indexer_Tailed_StillParses_AsIndexer()
     {
         // Regression guard for the pre-existing #1023 fix this shares a
