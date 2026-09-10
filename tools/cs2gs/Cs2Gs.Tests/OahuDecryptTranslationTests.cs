@@ -298,6 +298,102 @@ namespace Demo
     }
 
     /// <summary>
+    /// Issue #4114: TWO postfix increments of the SAME target within one
+    /// statement (<c>H(x++), H(x++)</c>) are NOT both hoisted to trailing
+    /// statements. C# sequences them left-to-right — the first call observes
+    /// the original value, the second observes it already incremented — and
+    /// deferring both mutations to after the whole statement would collapse
+    /// that sequencing, so every hoisted read would observe the same
+    /// (original) value. This is exactly how the self-hosted compiler's
+    /// inherited event-bridge MethodDef row planner (<c>PlanBridge</c> in
+    /// <c>InterfaceImplEmitter.cs</c>) built two numerically identical
+    /// planned handles from <c>H(nextMethodRow++), H(nextMethodRow++)</c>,
+    /// which then tripped its "not emitted in planned order" guard (GS9998)
+    /// once self-hosted. The repeated target's occurrences must fall through
+    /// to G#'s native inline inc/dec expression instead, which evaluates
+    /// each occurrence in true left-to-right order.
+    /// </summary>
+    [Fact]
+    public void PostIncrement_SameTargetTwiceInOneStatement_PreservesLeftToRightSequencing()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class C
+    {
+        public static void Record(int a, int b) { }
+
+        public static void Pair(int x)
+        {
+            Record(H(x++), H(x++));
+        }
+
+        private static int H(int n) => n;
+    }
+}");
+
+        // Neither occurrence may be hoisted to a trailing statement: that
+        // would print `x` (a bare read) at BOTH call sites and defer both
+        // mutations to the end, losing the first call's distinct
+        // pre-increment value. Each call site keeps its own inline `x++`.
+        Assert.DoesNotContain("H(x), H(x)", printed);
+        Assert.Equal(2, CountOccurrences(printed, "H(x++)"));
+    }
+
+    /// <summary>
+    /// Issue #4114 follow-up (Copilot review of PR #4196): an array-element
+    /// postfix increment (<c>a[0]++</c>) has no target <c>ISymbol</c> via
+    /// <c>GetSymbolInfo</c> — element access is a built-in operation, not a
+    /// symbol reference — so aliasing between two occurrences can never be
+    /// ruled out. The original fix's <c>target == null</c> branch treated an
+    /// unresolved target as safely hoistable (mirroring pre-#4114 behavior),
+    /// which reintroduces exactly the bug #4114 fixed whenever the repeated
+    /// target is unresolvable rather than a plain local: both occurrences of
+    /// <c>a[0]++</c> would still be independently hoisted, again observing
+    /// the same pre-increment value. An unresolved target must now stay
+    /// inline unconditionally.
+    /// </summary>
+    [Fact]
+    public void PostIncrement_ArrayElementTargetTwiceInOneStatement_PreservesLeftToRightSequencing()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public static class C
+    {
+        public static void Record(int a, int b) { }
+
+        public static void Pair(int[] arr)
+        {
+            Record(H(arr[0]++), H(arr[0]++));
+        }
+
+        private static int H(int n) => n;
+    }
+}");
+
+        // Neither occurrence may be hoisted to a trailing statement: an
+        // unresolved target (array-element access) can never be proven
+        // single-occurrence, so it must stay inline exactly like a repeated
+        // resolvable target does.
+        Assert.DoesNotContain("H(arr[0]), H(arr[0])", printed);
+        Assert.Equal(2, CountOccurrences(printed, "H(arr[0]++)"));
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        int index = 0;
+        while ((index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
+    }
+
+    /// <summary>
     /// <c>yield break</c> maps to G#'s native <c>yield break</c> statement
     /// (issue #3501 A1), which terminates the iterator from any depth.
     /// </summary>
