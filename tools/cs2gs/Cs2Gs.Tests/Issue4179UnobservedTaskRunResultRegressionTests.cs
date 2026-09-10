@@ -127,6 +127,41 @@ namespace Demo
     }
 
     /// <summary>
+    /// The <c>Task.Factory.StartNew</c> sibling of
+    /// <see cref="TaskRun_LocalNullableMethodObservedOnlyThroughWait_StaysBare"/>.
+    /// <c>Task.Factory.StartNew</c> is a meaningfully different call shape than
+    /// <c>Task.Run</c> — a different containing type (<c>TaskFactory</c>, reached
+    /// through the <c>Task.Factory</c> static property rather than a direct
+    /// static method call) resolving to a distinct, heavily-overloaded method
+    /// group — so this exercises <c>IsTaskRunEntryPoint</c>'s <c>"TaskFactory"</c>
+    /// branch, which no prior test in this file touched.
+    /// </summary>
+    [Fact]
+    public void TaskFactoryStartNew_LocalNullableMethodObservedOnlyThroughWait_StaysBare()
+    {
+        string printed = TranslateOblivious(@"
+using System;
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public static class Runner
+    {
+        public static void Run()
+        {
+            var execution = Task.Factory.StartNew(() => GetNullableObject());
+            execution.Wait(TimeSpan.FromSeconds(10));
+        }
+
+        private static object GetNullableObject() => null;
+    }
+}");
+
+        Assert.Contains("GetNullableObject()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetNullableObject()!!", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Precision guard: when the <c>Task.Run</c> result IS later unwrapped via
     /// <c>.Result</c>, the assertion must still fire — #4179's fix is scoped to
     /// values that are genuinely never observed, not to <c>Task.Run</c> as a
@@ -146,6 +181,38 @@ namespace Demo
         public static void Run()
         {
             var execution = Task.Run(() => GetNullableObject());
+            object value = execution.Result;
+            Console.WriteLine(value);
+        }
+
+        private static object GetNullableObject() => null;
+    }
+}");
+
+        Assert.Contains("GetNullableObject()!!", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The <c>Task.Factory.StartNew</c> sibling of
+    /// <see cref="TaskRun_ResultReadFromLocal_StillAssertsNonNull"/>: proves the
+    /// exemption is properly scoped for this call shape too, not just
+    /// permissive — when the <c>StartNew</c> result IS unwrapped via
+    /// <c>.Result</c>, the assertion must still fire.
+    /// </summary>
+    [Fact]
+    public void TaskFactoryStartNew_ResultReadFromLocal_StillAssertsNonNull()
+    {
+        string printed = TranslateOblivious(@"
+using System;
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public static class Runner
+    {
+        public static void Run()
+        {
+            var execution = Task.Factory.StartNew(() => GetNullableObject());
             object value = execution.Result;
             Console.WriteLine(value);
         }
@@ -282,6 +349,79 @@ namespace Demo
             "the reverted (!!-asserted) shape must reproduce the reported NullReferenceException. Output:\n"
                 + buggyOutput);
     }
+
+    /// <summary>
+    /// The <c>Task.Factory.StartNew</c> sibling of
+    /// <see cref="SelfHostedShape_BareVersionRunsCleanly_BangBangVersionThrowsNre"/>,
+    /// proving <c>IsTaskRunEntryPoint</c>'s <c>"TaskFactory"</c> branch holds up
+    /// under the real emitter/runtime, not just in printed-text assertions.
+    /// </summary>
+    [Fact]
+    public void SelfHostedShape_StartNew_BareVersionRunsCleanly_BangBangVersionThrowsNre()
+    {
+        string compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+
+        (int bareExit, string bareOutput) = CompileAndRun(compiler, StartNewBareSource);
+        Assert.True(bareExit == 0, "the bare (fixed) shape must run cleanly. Output:\n" + bareOutput);
+        Assert.Contains("done", bareOutput, StringComparison.Ordinal);
+
+        (int buggyExit, string buggyOutput) = CompileAndRun(compiler, StartNewBangBangSource);
+        Assert.True(
+            buggyExit != 0 && buggyOutput.Contains("NullReferenceException", StringComparison.Ordinal),
+            "the reverted (!!-asserted) shape must reproduce the reported NullReferenceException. Output:\n"
+                + buggyOutput);
+    }
+
+    private const string StartNewBareSource = """
+        package Issue4179.StartNewBare
+
+        import System
+        import System.Reflection
+        import System.Threading.Tasks
+
+        class Runner {
+            shared {
+                func VoidMethod() {
+                }
+
+                func Main() {
+                    let entry = Runner().GetType().GetMethod(
+                        "VoidMethod",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+                    )!!
+                    let execution = Task.Factory.StartNew(() -> entry.Invoke(nil, nil))
+                    let completed = execution.Wait(TimeSpan.FromSeconds(10))
+                    Console.WriteLine(if completed { "done" } else { "timed-out" })
+                }
+            }
+        }
+        """;
+
+    private const string StartNewBangBangSource = """
+        package Issue4179.StartNewBangBang
+
+        import System
+        import System.Reflection
+        import System.Threading.Tasks
+
+        class Runner {
+            shared {
+                func VoidMethod() {
+                }
+
+                func Main() {
+                    let entry = Runner().GetType().GetMethod(
+                        "VoidMethod",
+                        BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+                    )!!
+                    let execution = Task.Factory.StartNew(() -> entry.Invoke(nil, nil)!!)
+                    let completed = execution.Wait(TimeSpan.FromSeconds(10))
+                    Console.WriteLine(if completed { "done" } else { "timed-out" })
+                }
+            }
+        }
+        """;
 
     private const string BareSource = """
         package Issue4179.Bare
