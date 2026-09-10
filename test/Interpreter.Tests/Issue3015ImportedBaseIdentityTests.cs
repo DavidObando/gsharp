@@ -447,6 +447,37 @@ public class Issue3015OverloadedBase
     public string Label { get; }
 }
 
+/// <summary>
+/// Issue #4130: a real (never-instantiated) C# subclass of
+/// <see cref="Issue3015OverloadedBase"/>. <see cref="OverloadedBaseConstructors_ShareOneDerivedRuntimeType"/>'s
+/// actual subclass (<c>OverloadedSentinel</c>) exists only inside the G#
+/// source string that <c>EmittedOracle.Evaluate</c> compiles at test time
+/// — invisible to Roslyn, and therefore invisible to cs2gs's
+/// <c>subclassedBases</c> heuristic (<c>CSharpToGSharpTranslator.
+/// Declarations.cs</c>) for deciding whether a translated class needs G#'s
+/// <c>open</c> modifier. <see cref="Issue3015ProtectedParameterizedBase"/>
+/// escapes this gap by accident — its constructor is <see langword="protected"/>,
+/// a second, independent signal the same heuristic honors — but
+/// <see cref="Issue3015OverloadedBase"/> has only <see langword="public"/> members,
+/// so without a real subclass the migrated build compiles it as a plain
+/// (ADR-0017 default CLR-<see langword="sealed"/>) class. The G# fixture's
+/// <c>class OverloadedSentinel : Issue3015OverloadedBase</c> then fails to
+/// resolve its base: <c>DeclarationBinder.Structs.cs</c>'s imported-base-type
+/// branch only accepts <c>clrType.IsClass &amp;&amp; !clrType.IsSealed</c>, and a
+/// sealed imported class falls through every explicit case to the generic
+/// <c>GS0157</c> diagnostic — "Cannot find type Issue3015OverloadedBase. Are
+/// you missing an import?" — exactly the failure #4130 reported, cascading
+/// into "requires an explicit base class" and "Cannot find member Label".
+/// This type's only job is to give cs2gs the same signal
+/// <see cref="Issue3015ProtectedParameterizedBase"/> gets for free, so the
+/// migrated <c>Issue3015OverloadedBase</c> is translated <c>open class</c>
+/// and stays subclassable at runtime, matching the fixture it actually has
+/// to support.
+/// </summary>
+internal sealed class Issue3015OverloadedBaseOpenSignal : Issue3015OverloadedBase
+{
+}
+
 /// <summary>Imported protected-constructor probe for issue #3015.</summary>
 public class Issue3015ProtectedParameterizedBase
 {
