@@ -2146,11 +2146,32 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #4116: `Assert.Equal<T>(T, T)`/`Assert.NotEqual<T>(T, T)`
+            // carry no non-null constraint on `T` in xunit's own signature —
+            // comparing a value against a legitimately-null expected/actual
+            // result (e.g. a reflected `ParameterInfo.DefaultValue` for a
+            // nilable-defaulted parameter) is exactly what they exist to do.
+            // Before this, only `Assert.Null`/`Assert.NotNull` were exempted
+            // here, so gsc's oblivious-forwarding bridge treated `Equal`'s
+            // arguments as flowing into a non-null sink and forced a G# `!!`
+            // runtime assertion on a value that is null by design — throwing
+            // an NRE instead of comparing the legitimate `nil`.
+            // The namespace check must pin the EXACT top-level `Xunit`
+            // namespace (`global::Xunit`), not merely a namespace whose last
+            // segment happens to be named "Xunit" (e.g. `Company.Xunit`,
+            // some other vendor's assertion library). Matching by leaf
+            // `.Name` alone would exempt an unrelated imported
+            // `Company.Xunit.Assert.Equal`'s non-null parameter from the
+            // forced-bridge, silently leaving a nullable G# value passed to
+            // whatever real non-null sink that method has. Mirrors the same
+            // "outer namespace is global" check CSharpTypeMapper already
+            // applies for an exact `System` match.
             return this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
             {
-                Name: "Null" or "NotNull",
+                Name: "Null" or "NotNull" or "Equal" or "NotEqual",
                 ContainingType.Name: "Assert",
                 ContainingNamespace.Name: "Xunit",
+                ContainingNamespace.ContainingNamespace.IsGlobalNamespace: true,
             };
         }
 
