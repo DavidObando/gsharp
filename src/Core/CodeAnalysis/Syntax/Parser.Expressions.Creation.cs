@@ -750,8 +750,15 @@ public partial class Parser
         }
         else if (Current.Kind == SyntaxKind.IdentifierToken
             && Peek(1).Kind == SyntaxKind.OpenBraceToken
-            && (suppressStructLiteral == 0 || StructLiteralAllowedInSuppressedHeader(1))
-            && IsStructLiteralFollowingBrace(2))
+
+            // Issue #4189: IsStructLiteralFollowingBrace is checked FIRST —
+            // StructLiteralAllowedInSuppressedHeader's bounded scan to the
+            // matching close brace only ever changes the outcome for the
+            // empty/label/spread shapes that predicate admits, so evaluating
+            // it first both documents that scoping and skips the scan
+            // entirely for the common case (an ordinary body statement).
+            && IsStructLiteralFollowingBrace(2)
+            && (suppressStructLiteral == 0 || StructLiteralAllowedInSuppressedHeader(1)))
         {
             current = ParseStructLiteralExpression();
         }
