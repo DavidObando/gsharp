@@ -638,29 +638,45 @@ public sealed partial class CSharpToGSharpTranslator
             AssignmentExpressionSyntax assignment, GExpression translatedRhs)
         {
             if (!this.IsObliviousCompilation()
-                || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
                 || translatedRhs is NonNullAssertionExpression
                 || IsNullOrSuppressedNull(assignment.Right)
-                || assignment.Left is not ElementAccessExpressionSyntax
+                || !this.ElementAccessAssignmentRequiresNonNullReference(assignment)
                 || !this.IsNullablePromotedValue(assignment.Right))
             {
                 return translatedRhs;
+            }
+
+            return EnsureNonNullAssertion(translatedRhs);
+        }
+
+        // Issue #4211: the SINK half of the #2259 rule above, factored out so the
+        // whole-RHS rule and its per-ARM sibling
+        // (<see cref="IsNullableTaintedArmOfElementAccessAssignment"/>) share a
+        // single definition of "this element-access write genuinely demands a
+        // non-null reference": a SIMPLE assignment into an element-access target
+        // whose own type is a non-annotated reference type and whose resolved
+        // indexer (arrays resolve to no symbol at all) is not itself promoted to
+        // `T?` by the taint fixpoint. An already-nullable sink has nothing to
+        // forgive, and a compound assignment is a different shape entirely.
+        private bool ElementAccessAssignmentRequiresNonNullReference(
+            AssignmentExpressionSyntax assignment)
+        {
+            if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                || assignment.Left is not ElementAccessExpressionSyntax)
+            {
+                return false;
             }
 
             ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
             if (leftType is not { IsReferenceType: true }
                 || leftType.NullableAnnotation == NullableAnnotation.Annotated)
             {
-                return translatedRhs;
+                return false;
             }
 
-            if (this.context.GetSymbolInfo(assignment.Left).Symbol is IPropertySymbol indexer
-                && this.ShouldPromoteToNullableReference(indexer))
-            {
-                return translatedRhs;
-            }
-
-            return EnsureNonNullAssertion(translatedRhs);
+            return this.context.GetSymbolInfo(assignment.Left).Symbol
+                    is not IPropertySymbol indexer
+                || !this.ShouldPromoteToNullableReference(indexer);
         }
 
         // Issue #2427 (oblivious sink): a plain REASSIGNMENT (`path = (pathStub +
