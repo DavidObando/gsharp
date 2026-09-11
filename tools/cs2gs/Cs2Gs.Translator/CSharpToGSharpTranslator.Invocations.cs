@@ -1212,6 +1212,28 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateDelegateInvokeArgumentsWithDefaults(callSyntax, arguments, operationArguments);
             }
 
+            // Issue #4197 follow-up: a local function claimed by the #3399
+            // nullable-function-local scheme is called as `Name!!(args)` — a
+            // structural function-type invocation that, exactly like the
+            // delegate-invoke case above, cannot fall back to a C#-level
+            // default (GS0144 "requires N arguments but was given M"). Roslyn
+            // has already resolved the omitted argument to its constant
+            // default, so materialize it here rather than dropping it. Only a
+            // call site that actually OMITTED something takes this path, so a
+            // claimed member called at full arity keeps its existing output
+            // byte for byte.
+            if (targetMethod is { MethodKind: MethodKind.LocalFunction }
+                && this.state.RecursiveLocalFunctionGroups.TryGetValue(
+                    targetMethod, out RecursiveLocalFunctionGroup claimedGroup)
+                && claimedGroup.Members.Contains(targetMethod, SymbolEqualityComparer.Default)
+                && operationArguments.Any(a => a.ArgumentKind == ArgumentKind.DefaultValue)
+                && operationArguments.All(a => a.ArgumentKind == ArgumentKind.DefaultValue
+                    || (a.ArgumentKind == ArgumentKind.Explicit && a.Syntax is ArgumentSyntax)))
+            {
+                return this.TranslateClaimedLocalFunctionArgumentsWithDefaults(
+                    callSyntax, operationArguments);
+            }
+
             IArgumentOperation paramsCollectionArg =
                 operationArguments.FirstOrDefault(a => a.ArgumentKind == ArgumentKind.ParamCollection);
 
@@ -1419,6 +1441,58 @@ public sealed partial class CSharpToGSharpTranslator
 
                 result.Add(this.TranslateArgument(arguments[nextSyntaxArgument]));
                 nextSyntaxArgument++;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Rebuilds the full argument list of a call to a local function claimed
+        /// by the #3399 nullable-function-local scheme (issue #4197 follow-up),
+        /// when the C# call site omitted a defaulted argument. Roslyn's
+        /// <paramref name="operationArguments"/> are already in PARAMETER order,
+        /// so walking them positionally both materializes the omitted default
+        /// (which the rewritten `Name!!(…)` function-type call has no other way
+        /// to supply) and normalizes a named-argument call site into the
+        /// positional form that call shape requires — a named argument carries
+        /// no meaning through a structural arrow type, whose parameters have
+        /// types but no names. The argument VALUE is translated (never the
+        /// `name:` wrapper) for that reason; `ref`/`out` argument forms are
+        /// unaffected, since they live on the value translation.
+        /// </summary>
+        /// <remarks>
+        /// Re-ordering an out-of-order named-argument call site evaluates its
+        /// arguments in parameter order rather than source order, which is
+        /// observable only when two arguments of one such call site both have
+        /// side effects. That is strictly rarer than the GS0144 this closes, and
+        /// the alternative — keeping the source order — would emit arguments
+        /// against the wrong parameters entirely.
+        /// </remarks>
+        private List<GExpression> TranslateClaimedLocalFunctionArgumentsWithDefaults(
+            SyntaxNode callSyntax,
+            ImmutableArray<IArgumentOperation> operationArguments)
+        {
+            var result = new List<GExpression>(operationArguments.Length);
+            foreach (IArgumentOperation argumentOperation in operationArguments)
+            {
+                if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
+                {
+                    // Not coerced to the parameter type: `MapConstantValue`
+                    // already maps the constant AGAINST that type, and the
+                    // target here is a structural arrow whose parameter types
+                    // are exactly the declaration's — the same reasoning that
+                    // keeps the delegate-invoke path above uncoerced, and
+                    // what makes a `nil` default print as `nil` rather than a
+                    // `default(((T) -> R)?)` envelope.
+                    result.Add(this.TranslateOperationDefaultArgument(
+                        callSyntax,
+                        argumentOperation,
+                        "local function parameter",
+                        coerceToParameterType: false));
+                    continue;
+                }
+
+                result.Add(this.TranslateArgumentValue((ArgumentSyntax)argumentOperation.Syntax));
             }
 
             return result;

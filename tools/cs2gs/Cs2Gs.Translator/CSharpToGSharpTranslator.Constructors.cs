@@ -2366,16 +2366,34 @@ public sealed partial class CSharpToGSharpTranslator
         // real name (see the fold-BFS below) instead of being lifted to
         // `__local_` by `RegisterRecursiveLocalFunctionLifts` purely because
         // it happened to be reachable. Only a cycle (or fold candidate) that
-        // itself passes through a generic, ref-returning, or default-
-        // parameter-carrying local function stays on the `__local_` path
-        // (those members never enter the `functions`/`edges` graph below, so
-        // this pass never even sees the cycle — see the carve-out further
-        // down). PR #4200's CI run found the default-parameter gap: a
-        // non-recursive callee folded into a group has every call site
-        // rewritten to `Name!!(args)`, and a delegate-typed call site cannot
-        // fall back to a default the way a real method call can, so a caller
-        // that relied on the C#-level default would end up short an argument
-        // (GS0144).
+        // itself passes through a generic or ref-returning local function
+        // stays on the `__local_` path (those members never enter the
+        // `functions`/`edges` graph below, so this pass never even sees the
+        // cycle — see the carve-out further down).
+        //
+        // A DEFAULT PARAMETER VALUE is deliberately NOT one of those graph
+        // carve-outs, and the distinction is the point (issue #4197
+        // follow-up). Generic and ref-returning are DECLARATION-side
+        // impossibilities: the arrow type `((Params) -> R)?` cannot express a
+        // type parameter or a `ref` return at all, so the whole cycle has to
+        // stay off the scheme. A default is declaration-EXPRESSIBLE — the
+        // arrow type simply drops it — and only breaks at a CALL SITE that
+        // omitted the defaulted argument, since the rewritten `Name!!(args)`
+        // is a delegate-typed invocation that cannot fall back to a default
+        // the way a real method call can (PR #4200's CI run found exactly
+        // that: GS0144 "requires 3 arguments but was given 2"). Call sites of
+        // a claimed member are entirely translator-controlled, so that gap is
+        // closed where it lives — `TranslateCallArguments` materializes the
+        // omitted default explicitly, exactly as the `__local_` lift path
+        // already does for its own rewritten call sites. Excluding a
+        // default-carrying local function from this graph instead would erase
+        // it from cycle detection, and with it any cycle it is a CORE MEMBER
+        // of: `ControlFlowGraph.cs`'s `ProjectRegionsForDefiniteReturn` lost
+        // its whole `Add`/`AddPatternSwitch`/`AddTry` group (7 lifted helpers
+        // where 0 were wanted) that way. The fold-BFS below still skips a
+        // default-carrying candidate, because THERE the `__local_` lift is a
+        // strictly better answer — a real method declaration carries the
+        // default natively — and no cycle is sacrificed by declining it.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
             // `DescendantNodes()` excludes the node itself — local functions that
@@ -2398,25 +2416,16 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     // A generic local function's type parameters cannot be
-                    // expressed on a function-typed local, a ref-returning
-                    // local is an unsupported gap either way, and a
-                    // DEFAULT PARAMETER VALUE has no expression on a
-                    // function-typed local either — `(Params) -> R)?` is a
-                    // structural arrow/delegate type, not a full method
-                    // declaration, so it cannot carry a default. Once a
-                    // function is rewritten to that shape, every call site
-                    // is rewritten to `Name!!(args)` too — a call site that
-                    // relied on the C#-level default (supplying fewer
-                    // arguments than the parameter list) would then be
-                    // missing a required argument (GS0144), since a
-                    // delegate-typed call site cannot fall back to a
-                    // default the way a real method call can. All three
-                    // carve-outs stay on the existing `__local_` lift path,
-                    // which lifts to a REAL method declaration that natively
-                    // supports default parameter values.
+                    // expressed on a function-typed local, and a
+                    // ref-returning local is an unsupported gap either way.
+                    // Both carve-outs stay on the existing `__local_` lift
+                    // path, which lifts to a REAL method declaration. A
+                    // default parameter value is NOT a carve-out here — see
+                    // the header comment: it is expressible on the
+                    // declaration side and only constrains call sites, which
+                    // this scheme fully controls.
                     if (localFunction.TypeParameterList != null
-                        || symbol.ReturnsByRef
-                        || symbol.Parameters.Any(parameter => parameter.HasExplicitDefaultValue))
+                        || symbol.ReturnsByRef)
                     {
                         continue;
                     }
@@ -2651,6 +2660,25 @@ public sealed partial class CSharpToGSharpTranslator
                             || foldSymbols.Contains(symbol)
                             || sccMembers.Contains(symbol)
                             || this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol))
+                        {
+                            continue;
+                        }
+
+                        // PR #4200's CI run: a fold candidate that declares a
+                        // DEFAULT PARAMETER VALUE is left on the `__local_`
+                        // lift path on purpose (`Binder.cs`'s
+                        // `FindTopLevelBaseIndex`, whose `AddBaseFirst` call
+                        // site omits the third argument). Folding is an
+                        // optional readability win, never a correctness
+                        // requirement, and the lift produces a REAL method
+                        // declaration that carries the default natively —
+                        // strictly better than a delegate-typed local whose
+                        // every call site has to have the default
+                        // materialized back in. A cycle member is the
+                        // opposite case and stays claimed: declining it would
+                        // cost the whole cycle its real names (see the header
+                        // comment).
+                        if (symbol.Parameters.Any(parameter => parameter.HasExplicitDefaultValue))
                         {
                             continue;
                         }

@@ -319,4 +319,142 @@ namespace Demo
         // AddPatternSwitch(0): depth not > 0, stop. Final total = 28.
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(3)", "28");
     }
+
+    [Fact]
+    public void DefaultParameterCycleMember_KeepsRealNames_WholeGroupIncluded()
+    {
+        // Regression for the #4200 follow-up: the default-parameter carve-out
+        // that `DefaultParameterNonRecursiveDependency_StaysLiftedNotFolded`
+        // pins was applied to the SCC-detection graph itself, not just to the
+        // fold-BFS — so a default-parameter local function that is a CORE
+        // MEMBER of a cycle vanished from cycle detection, and the ENTIRE
+        // connected component (cycle members and their folded helpers alike)
+        // fell through to the `__local_` lift path.
+        //
+        // Real corpus shape, measured on the nightly gate after #4200 merged
+        // (`src/Core/CodeAnalysis/Binding/ControlFlowGraph.cs`'s
+        // `ProjectRegionsForDefiniteReturn`): `void Add(BoundStatement, Action<BoundStatement>? routeTransfer = null)`
+        // is mutually recursive with `AddPatternSwitch`/`AddTry` and captures
+        // outer state — the ORIGINAL #3399 shape, correctly on the nullable
+        // scheme since long before #4197. Every one of its call sites already
+        // passes both arguments explicitly, so the default is never actually
+        // exercised by omission; declaring one was enough to lift all SEVEN
+        // functions in that method (`ControlFlowGraph.gs` went from 4
+        // `__local_` helpers to 7, breaching the corpus `liftedLocalCeiling`).
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+
+            void Add(int depth, int bonus = 10)
+            {
+                total += bonus + NewLabel(depth);
+                if (depth > 0)
+                {
+                    AddPatternSwitch(depth - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1, 0);
+                }
+            }
+
+            int NewLabel(int depth)
+            {
+                return depth * 2;
+            }
+
+            Add(seed, 5);
+            System.Console.WriteLine(total);
+            return total;
+        }
+    }
+}");
+
+        // The whole component keeps its real names: the two cycle members AND
+        // the non-recursive helper folded in behind them.
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("var Add", printed, StringComparison.Ordinal);
+        Assert.Contains("var AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.Contains("var NewLabel", printed, StringComparison.Ordinal);
+        Assert.Contains("Add!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("AddPatternSwitch!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("NewLabel!!(", printed, StringComparison.Ordinal);
+
+        // Add(3, 5): total += 5 + NewLabel(3)=6 (total=11) ->
+        // AddPatternSwitch(2) -> Add(1, 0): total += 0 + NewLabel(1)=2
+        // (total=13) -> AddPatternSwitch(0): depth not > 0, stop. Total = 13.
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(3)", "13");
+    }
+
+    [Fact]
+    public void DefaultParameterCycleMember_OmittedArgumentIsMaterializedAtCallSite()
+    {
+        // The other half of the same fix: a claimed cycle member whose default
+        // IS relied upon by omission. `Name!!(args)` is a structural
+        // function-type invocation — gsc's arrow type carries parameter TYPES
+        // only, never defaults — so the omitted argument cannot fall back the
+        // way a real method call can (GS0144 "requires 2 arguments but was
+        // given 1"). Roslyn has already resolved the omission to the constant
+        // default, so the call site materializes it explicitly, exactly as the
+        // `__local_` lift path and the #1901 lambda-default path already do.
+        // A NAMED call site normalizes to the same positional form, since a
+        // structural arrow type has no parameter names to bind against.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+
+            void Add(int depth, int bonus = 10)
+            {
+                total += bonus;
+                if (depth > 0)
+                {
+                    AddPatternSwitch(depth - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1);
+                }
+            }
+
+            Add(seed, 5);
+            Add(depth: 0);
+            System.Console.WriteLine(total);
+            return total;
+        }
+    }
+}");
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("var Add", printed, StringComparison.Ordinal);
+        Assert.Contains("var AddPatternSwitch", printed, StringComparison.Ordinal);
+
+        // Both omitting call sites carry the materialized default, and the
+        // named one is positional (no `depth:`/`bonus:` through the arrow).
+        Assert.Contains("Add!!(depth - 1, 10)", printed, StringComparison.Ordinal);
+        Assert.Contains("Add!!(0, 10)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("depth:", printed, StringComparison.Ordinal);
+
+        // Add(2, 5): total = 5 -> AddPatternSwitch(1) -> Add(0) [default 10]:
+        // total = 15, depth not > 0, stop. Then Add(depth: 0) [default 10]:
+        // total = 25.
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(2)", "25");
+    }
 }
