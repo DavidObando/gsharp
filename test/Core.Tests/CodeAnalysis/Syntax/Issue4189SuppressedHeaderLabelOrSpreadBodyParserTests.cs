@@ -13,9 +13,13 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// Issue #4189: a suppressed body-header identifier (an <c>if</c>/<c>while</c>
 /// condition, a <c>for-in</c> collection, or a C-style <c>for</c>'s post
 /// clause) immediately followed by a NON-empty <c>{ ... }</c> whose first
-/// token happens to look like a struct-literal field — a label
-/// (<c>retry:</c>) or a spread (<c>...</c>) — must still parse that brace as
-/// the statement's own body, not as a struct literal.
+/// token happens to look like a struct-literal field must be disambiguated
+/// correctly, in OPPOSITE directions for the two colliding shapes: a label
+/// (<c>retry:</c>) must parse as the statement's own body (a label can never
+/// legally begin a struct-literal field-value position the way it can begin
+/// a statement), while a spread (<c>...</c>) must continue to parse as a
+/// struct literal (bare <c>...</c> can never legally begin a statement, so
+/// there is no body reading to prefer it over).
 /// <para>
 /// <see cref="Parser.StructLiteralAllowedInSuppressedHeader"/> previously
 /// treated ANY non-empty brace content as unambiguously a struct literal
@@ -289,6 +293,40 @@ class C { func F(flag bool) { if flag { retry: break } else { } } }
 
         var ifStatement = Descendants(tree.Root).OfType<IfStatementSyntax>().Single();
         Assert.NotNull(ifStatement.ElseClause);
+        Assert.Empty(Descendants(ifStatement.Condition).OfType<StructLiteralExpressionSyntax>());
+
+        var labeled = Descendants(ifStatement.ThenStatement).OfType<LabeledStatementSyntax>().Single();
+        Assert.Equal("retry", labeled.LabelIdentifier.Text);
+    }
+
+    [Fact]
+    public void If_Condition_With_LabeledBreak_Body_Followed_By_Second_Block_Still_Parses()
+    {
+        // Copilot review of PR #4203: IsSafeStructLiteralContinuationAfterBrace
+        // originally accepted an unconditional following `{` as proof of the
+        // two-brace struct-literal-then-body shape — but TWO CONSECUTIVE
+        // BLOCK STATEMENTS is itself legal G# for if/while (a labeled body
+        // immediately followed by an unrelated sibling block), and this
+        // shares the exact same "candidate brace, then another `{`" token
+        // shape as a genuine two-brace struct-literal/property-pattern
+        // (`if value is string { Length: > 0 } { }`, pinned by
+        // Issue3351IsPatternParserTests — gating on brace count or
+        // suppressed-header kind alone broke that unrelated, pre-existing
+        // case, since it shares the same if-condition context as this one).
+        // The real discriminator is the CANDIDATE content, not what follows
+        // it: StartsWithUnambiguousLabel recognizes a label whose target is
+        // a jump keyword (`break`/`continue`/`goto`/`return` — none of which
+        // can ever open a struct-literal field's value or a property
+        // pattern) and unconditionally prefers the body reading for it,
+        // regardless of brace count.
+        const string source = @"
+package p
+class C { func F(flag bool) { if flag { retry: break } { var y int32 = 1 } } }
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var ifStatement = Descendants(tree.Root).OfType<IfStatementSyntax>().Single();
         Assert.Empty(Descendants(ifStatement.Condition).OfType<StructLiteralExpressionSyntax>());
 
         var labeled = Descendants(ifStatement.ThenStatement).OfType<LabeledStatementSyntax>().Single();

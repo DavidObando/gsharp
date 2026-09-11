@@ -1386,6 +1386,15 @@ public partial class Parser
                 && Peek(braceOffset + 2).Kind == SyntaxKind.OpenBraceToken;
         }
 
+        if (StartsWithUnambiguousLabel(braceOffset))
+        {
+            // See StartsWithUnambiguousLabel: a jump-keyword label can never
+            // be a struct-literal field or property-pattern entry, so this
+            // is unconditionally the header's own body regardless of brace
+            // count or what follows it.
+            return false;
+        }
+
         if (!TryFindMatchingCloseBraceOffset(braceOffset, out var closeBraceOffset))
         {
             // Bounded lookahead exhausted without finding the matching `}`
@@ -1463,6 +1472,40 @@ public partial class Parser
             || kind == SyntaxKind.ColonToken
             || IsExpressionContinuationAfterBraceAt(afterOffset, Peek(closeBraceOffset));
     }
+
+    // Issue #4189 follow-up (Copilot review of PR #4203): a following `{`
+    // after the candidate's matching close is NOT on its own proof of a
+    // two-brace struct-literal-then-body shape — a genuinely LABELED body
+    // (`retry: break`) immediately followed by an unrelated second block
+    // (`if flag { retry: break } { var y = 1 }`, itself legal G# — two
+    // consecutive block statements) hits that exact branch and was
+    // misclassified as a struct literal, reproducing #4189's original bug.
+    // But the two-brace branch is equally load-bearing for a genuine
+    // field/property-pattern whose first field's spelling only coincides
+    // with a label (`if value is string { Length: > 0 } { }` — a type
+    // pattern's property-pattern content, unrelated to #4189, pinned by
+    // Issue3351IsPatternParserTests and Adr0174SelectArmOperandParserTests):
+    // gating the branch broadly (e.g. by suppressed-header kind) breaks
+    // those, since they share the exact same if-condition context as the
+    // label case.
+    //
+    // The two shapes differ only in what follows the label-shaped colon: a
+    // label's target is a STATEMENT (`break`/`continue`/`goto`/`return` are
+    // the jump keywords this fix's own repro and issue text use, and none of
+    // them can ever open a struct-literal field's VALUE or a property
+    // pattern's own pattern), while a field/property-pattern's value is an
+    // EXPRESSION or nested PATTERN, which never starts with one of those
+    // keywords. So this check runs BEFORE the matching-close scan even
+    // starts, unconditionally overriding it as soon as the candidate's very
+    // first token is unambiguously a label rather than a field: neither
+    // brace count nor what follows the close matters once this is true.
+    private bool StartsWithUnambiguousLabel(int braceOffset)
+        => Peek(braceOffset + 1).Kind == SyntaxKind.IdentifierToken
+            && Peek(braceOffset + 2).Kind == SyntaxKind.ColonToken
+            && Peek(braceOffset + 3).Kind is SyntaxKind.BreakKeyword
+                or SyntaxKind.ContinueKeyword
+                or SyntaxKind.GotoKeyword
+                or SyntaxKind.ReturnKeyword;
 
     private ExpressionSyntax ParseStructLiteralExpression()
     {
