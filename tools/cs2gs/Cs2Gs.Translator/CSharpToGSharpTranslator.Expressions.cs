@@ -2564,6 +2564,25 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #4211: the ELEMENT-ACCESS-SINK sibling of the rule just
+            // above. #2259 already bridges `arr[i] = <promoted nullable>` with
+            // `!!` — but only when the WHOLE right-hand side is recognizably
+            // promoted. A conditional/switch RHS is not: `IsNullablePromotedValue`
+            // routes a ternary through `IsNullableInitializer`, which recurses
+            // into the arms but consults only their DECLARED annotations, never
+            // the whole-program taint fixpoint — so `arr[i] = cond ? a : b` with
+            // a taint-promoted arm was invisible to the sink rule and emitted a
+            // bare `T?` arm into a `T` element slot (GS0155). Each arm is
+            // translated through `TranslateValueWithNullForgiveness`, so
+            // answering per-arm here bridges exactly the arms that need it and
+            // leaves an already-non-null sibling arm byte-identical — the same
+            // shape the return-preserving rule above uses, pointed at the one
+            // other sink the taint fixpoint structurally cannot widen.
+            if (this.IsNullableTaintedArmOfElementAccessAssignment(recv))
+            {
+                return true;
+            }
+
             // Issue #2432: an UNCONDITIONAL (no ternary/switch, no null-check
             // guard) forward of a same-project promoted-nullable field / property
             // / local / parameter / method as the ENTIRE (possibly parenthesized)
@@ -3214,6 +3233,114 @@ public sealed partial class CSharpToGSharpTranslator
             // return type must NOT be promoted to nullable by the oblivious
             // analyzer (i.e., it was deliberately kept non-null).
             return this.IsBodyOfReturnPreservingMember(conditional);
+        }
+
+        /// <summary>
+        /// Issue #4211: true when <paramref name="use"/> is a promoted-nullable
+        /// value read as an ARM of a conditional/switch expression whose result
+        /// is assigned into an element-access target that genuinely requires a
+        /// non-null reference (<see cref="ElementAccessAssignmentRequiresNonNullReference"/>).
+        /// </summary>
+        /// <remarks>
+        /// This is the arm-level completion of issue #2259's element-access sink
+        /// rule. That rule asks <c>IsNullablePromotedValue</c> about the WHOLE
+        /// right-hand side; for a ternary that question is answered by
+        /// <c>IsNullableInitializer</c>, which recurses into the arms but only
+        /// ever reads their DECLARED annotation — the taint fixpoint's promotion
+        /// is invisible to it. So the exact corpus shape
+        /// <c>slots[ordinal] = permutes ? this.SpillOperand(value, …) : value</c>
+        /// (cs2gs's own <c>TranslateClaimedLocalFunctionArgumentsWithDefaults</c>,
+        /// where <c>value</c> is a local the fixpoint promoted to
+        /// <c>GExpression?</c>) emitted a bare <c>T?</c> arm into a <c>T</c>
+        /// element slot and failed to compile with GS0155.
+        /// <para>
+        /// Scoping, mirroring
+        /// <see cref="IsNullableTaintedArmOfReturnPreservingConditional"/>:
+        /// oblivious compilations only; the use must really be an ARM (the walk
+        /// requires at least one conditional/switch level, so a DIRECT RHS keeps
+        /// flowing through #2259's whole-RHS rule and stays byte-identical); the
+        /// sink must be an element access the taint fixpoint structurally cannot
+        /// widen (unlike a local/field/property/parameter target, which it widens
+        /// at the target's own declaration); and a local/parameter narrowed by a
+        /// dominating null-check guard is skipped because gsc's own Kotlin-style
+        /// smart-cast — including the conditional's own condition when it guards
+        /// that arm — has already made the read non-null.
+        /// </para>
+        /// </remarks>
+        private bool IsNullableTaintedArmOfElementAccessAssignment(ExpressionSyntax use)
+        {
+            if (!this.IsObliviousCompilation()
+                || !TryGetElementAccessAssignmentThroughConditionalArms(
+                    use,
+                    out AssignmentExpressionSyntax assignment)
+                || !this.ElementAccessAssignmentRequiresNonNullReference(assignment))
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(use).Symbol;
+            if (symbol is ILocalSymbol or IParameterSymbol
+                && this.IsDominatedByNullCheckGuard(use, symbol))
+            {
+                return false;
+            }
+
+            return this.IsNullablePromotedValue(use);
+        }
+
+        // Walks outward from a conditional/switch ARM (through parentheses and
+        // any number of NESTED conditional/switch levels) to the simple
+        // assignment whose right-hand side that conditional ultimately is.
+        // Requires at least one conditional/switch level to have been crossed:
+        // a direct, unwrapped assignment RHS is issue #2259's whole-RHS rule's
+        // business and is deliberately left alone here. A use sitting in a
+        // conditional's CONDITION (rather than an arm) stops the walk, as does
+        // any other intervening expression — this is not a general "does this
+        // value eventually reach an element write" dataflow question.
+        private static bool TryGetElementAccessAssignmentThroughConditionalArms(
+            ExpressionSyntax use,
+            out AssignmentExpressionSyntax assignment)
+        {
+            assignment = null;
+            SyntaxNode current = use;
+            bool crossedConditional = false;
+
+            while (current != null)
+            {
+                switch (current.Parent)
+                {
+                    case ParenthesizedExpressionSyntax parenthesized:
+                        current = parenthesized;
+                        continue;
+
+                    case ConditionalExpressionSyntax ternary
+                        when current == ternary.WhenTrue || current == ternary.WhenFalse:
+                        crossedConditional = true;
+                        current = ternary;
+                        continue;
+
+                    case SwitchExpressionArmSyntax arm
+                        when current == arm.Expression
+                            && arm.Parent is SwitchExpressionSyntax switchExpression:
+                        crossedConditional = true;
+                        current = switchExpression;
+                        continue;
+
+                    case AssignmentExpressionSyntax candidate when current == candidate.Right:
+                        if (!crossedConditional)
+                        {
+                            return false;
+                        }
+
+                        assignment = candidate;
+                        return true;
+
+                    default:
+                        return false;
+                }
+            }
+
+            return false;
         }
 
         // Issue #2432: true when <paramref name="use"/> is a same-project

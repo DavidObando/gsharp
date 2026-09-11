@@ -1212,6 +1212,32 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateDelegateInvokeArgumentsWithDefaults(callSyntax, arguments, operationArguments);
             }
 
+            // Issue #4197 follow-up: a local function claimed by the #3399
+            // nullable-function-local scheme is called as `Name!!(args)` — a
+            // structural function-type invocation that, exactly like the
+            // delegate-invoke case above, cannot fall back to a C#-level
+            // default (GS0144 "requires N arguments but was given M"). Roslyn
+            // has already resolved the omitted argument to its constant
+            // default, so materialize it here rather than dropping it. Only a
+            // call site that actually OMITTED something takes this path, so a
+            // claimed member called at full arity keeps its existing output
+            // byte for byte. Every argument must also NAME the parameter it
+            // binds to, because the reassembly addresses slots by
+            // `Parameter.Ordinal` — `IInvocationOperation.Arguments` is in
+            // EVALUATION order, not parameter order (PR #4211 review).
+            if (targetMethod is { MethodKind: MethodKind.LocalFunction }
+                && this.state.RecursiveLocalFunctionGroups.TryGetValue(
+                    targetMethod, out RecursiveLocalFunctionGroup claimedGroup)
+                && claimedGroup.Members.Contains(targetMethod, SymbolEqualityComparer.Default)
+                && operationArguments.Any(a => a.ArgumentKind == ArgumentKind.DefaultValue)
+                && operationArguments.All(a => a.Parameter != null
+                    && (a.ArgumentKind == ArgumentKind.DefaultValue
+                        || (a.ArgumentKind == ArgumentKind.Explicit && a.Syntax is ArgumentSyntax))))
+            {
+                return this.TranslateClaimedLocalFunctionArgumentsWithDefaults(
+                    callSyntax, operationArguments);
+            }
+
             IArgumentOperation paramsCollectionArg =
                 operationArguments.FirstOrDefault(a => a.ArgumentKind == ArgumentKind.ParamCollection);
 
@@ -1393,11 +1419,22 @@ public sealed partial class CSharpToGSharpTranslator
         /// numeric coercion/spill behavior is unchanged), and a <c>DefaultValue</c>
         /// slot materializes that parameter's constant default directly — the
         /// explicit value gsc's structural function-type call has no other way to
-        /// supply. Named arguments are excluded up front: C# forbids a named
-        /// argument through a delegate/lambda invocation entirely (no parameter
-        /// names survive the natural delegate type), so <paramref name="arguments"/>
-        /// is always in positional/Explicit order already.
+        /// supply.
         /// </summary>
+        /// <remarks>
+        /// The "parameter order" above holds for a POSITIONAL call site only.
+        /// This comment used to assert that C# forbids a named argument through
+        /// a delegate invocation; it does not — a delegate DECLARATION keeps its
+        /// parameter names, so `D d; d(b: 5);` is legal C# and reaches here with
+        /// `Arguments` in EVALUATION order (`[b Explicit, a DefaultValue]`), the
+        /// same shape PR #4211's review found on the local-function path below.
+        /// The consequence differs though: this path keeps the `name:` wrapper
+        /// (<c>TranslateArgument</c>), so a named delegate-invoke call site emits
+        /// `f(b: 5, 10)` and gsc rejects it loudly ("Named argument 'b' does not
+        /// match any parameter") rather than binding the wrong parameter
+        /// silently. Left as a separate follow-up: the shape is unrepresented in
+        /// the corpus and the fix belongs with its own test, not with #4197's.
+        /// </remarks>
         private List<GExpression> TranslateDelegateInvokeArgumentsWithDefaults(
             SyntaxNode callSyntax,
             SeparatedSyntaxList<ArgumentSyntax> arguments,
@@ -1422,6 +1459,156 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Rebuilds the full argument list of a call to a local function claimed
+        /// by the #3399 nullable-function-local scheme (issue #4197 follow-up),
+        /// when the C# call site omitted a defaulted argument. Every argument is
+        /// placed in the slot named by its own
+        /// <see cref="IParameterSymbol.Ordinal"/>: that both materializes the
+        /// omitted default (which the rewritten `Name!!(…)` function-type call
+        /// has no other way to supply) and normalizes a named-argument call site
+        /// into the positional form that call shape requires — a named argument
+        /// carries no meaning through a structural arrow type, whose parameters
+        /// have types but no names. The argument VALUE is translated (never the
+        /// `name:` wrapper) for that reason. A ref-kind argument cannot occur
+        /// here at all: a local function with a `ref`/`out`/`in` parameter is
+        /// carved out of the scheme at registration time, since
+        /// `ArrowTypeReference` cannot declare a ref-kind.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <see cref="IInvocationOperation.Arguments"/> is in EVALUATION order,
+        /// not parameter order — PR #4211's review (Copilot) caught the original
+        /// version of this method assuming the opposite. For
+        /// <c>void Add(int a = 10, int b = 20)</c>, the call <c>Add(b: X())</c>
+        /// arrives as <c>[b Explicit, a DefaultValue]</c>, so a positional walk
+        /// emitted <c>Add!!(X(), 10)</c> — silently binding <c>X()</c> to
+        /// <c>a</c> and <c>10</c> to <c>b</c>. Addressing each slot by ordinal
+        /// is what makes the result correct regardless of source order.
+        /// </para>
+        /// <para>
+        /// Explicit operands are still TRANSLATED in the array's (source)
+        /// order, so any spill they hoist keeps its relative position. When the
+        /// ordinal permutation would additionally move one explicit operand
+        /// before another that was written first, EVERY explicit operand that
+        /// is not a literal or type name — a bare identifier very much
+        /// included, see
+        /// <see cref="SnapshotPermutedArgumentOperand"/> — is spilled to a
+        /// `let __spillN` in the enclosing statement
+        /// seam, so the emitted program still EVALUATES them in source order
+        /// (C# §12.6.2.2) and only the already-constant defaults move. A call
+        /// site whose explicit ordinals are already ascending — which includes
+        /// every purely POSITIONAL call site, the overwhelming majority — never
+        /// permutes and so spills nothing; those keep their previous output
+        /// byte for byte. A NAMED call site's output does change, because the
+        /// previous output was wrong.
+        /// </para>
+        /// </remarks>
+        private List<GExpression> TranslateClaimedLocalFunctionArgumentsWithDefaults(
+            SyntaxNode callSyntax,
+            ImmutableArray<IArgumentOperation> operationArguments)
+        {
+            bool permutesExplicitArguments = PermutesExplicitArguments(operationArguments);
+            var slots = new GExpression[operationArguments.Length];
+            foreach (IArgumentOperation argumentOperation in operationArguments)
+            {
+                int ordinal = argumentOperation.Parameter.Ordinal;
+                if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
+                {
+                    // Not coerced to the parameter type: `MapConstantValue`
+                    // already maps the constant AGAINST that type, and the
+                    // target here is a structural arrow whose parameter types
+                    // are exactly the declaration's — the same reasoning that
+                    // keeps the delegate-invoke path above uncoerced, and
+                    // what makes a `nil` default print as `nil` rather than a
+                    // `default(((T) -> R)?)` envelope.
+                    slots[ordinal] = this.TranslateOperationDefaultArgument(
+                        callSyntax,
+                        argumentOperation,
+                        "local function parameter",
+                        coerceToParameterType: false);
+                    continue;
+                }
+
+                var argumentSyntax = (ArgumentSyntax)argumentOperation.Syntax;
+                GExpression value = this.TranslateArgumentValue(argumentSyntax);
+
+                // A `ref`/`out`/`in` argument is left in place. Its translation
+                // is an ADDRESS form (`&x`), and binding that to a
+                // `let __spillN` would hand the callee the temp instead of the
+                // caller's variable. The branch is inert rather than a
+                // judgement call: a local function with ANY ref-kind parameter
+                // is carved out of the claimed-cycle scheme entirely
+                // (`RegisterCapturingRecursiveLocalFunctions`), because
+                // `ArrowTypeReference` has no ref-kind to declare — so no
+                // ref-kind argument ever reaches this method. It is kept as a
+                // guard so that loosening the carve-out cannot silently start
+                // rebinding an address to a temp. (PR #4211 review: the earlier
+                // claim here — that a ref lvalue "has no evaluation side effect
+                // of its own" — was simply false, e.g. `ref slots[Next()]`;
+                // the carve-out, not that claim, is what makes this safe.)
+                slots[ordinal] = permutesExplicitArguments
+                    && argumentSyntax.RefKindKeyword.IsKind(SyntaxKind.None)
+                    ? this.SnapshotPermutedArgumentOperand(value, argumentOperation.Syntax)
+                    : value;
+            }
+
+            return slots.ToList();
+        }
+
+        // Evaluates one explicit by-value operand of a PERMUTED claimed-cycle
+        // call into a `let __spillN` so that the emitted program still runs the
+        // explicit operands in source order (C# §12.6.2.2) even though the
+        // reassembled call lists them in parameter order.
+        //
+        // Unlike an ordinary spill this does NOT honor
+        // `IsTrivialOperand`. That shortcut exists for DUPLICATION ("reading
+        // this twice is the same as reading it once"), and duplication is not
+        // what happens here: the operand is read exactly once, but at a
+        // different POINT IN TIME relative to the other operands. A bare
+        // identifier is the exact shape that breaks — `Add(c: x, a: MutateX())`
+        // must read `x` before `MutateX()` runs, and leaving `x` embedded in
+        // the reassembled call `Add!!(__spill0, 2, x)` reads it after
+        // (PR #4211 review, verified end to end: the call printed 219 where C#
+        // prints 125).
+        //
+        // A literal or a type name is genuinely immune — nothing can change
+        // what it denotes — so those stay embedded and keep the output free of
+        // pointless temps. `this` is NOT assumed immune: a struct receiver is a
+        // value, and a later operand can mutate its fields.
+        private GExpression SnapshotPermutedArgumentOperand(GExpression value, SyntaxNode operandSyntax) =>
+            value is LiteralExpression or TypeExpression
+                ? value
+                : this.SpillOperand(value, operandSyntax, forceNonTrivial: true);
+
+        // True when reassembling `operationArguments` by parameter ordinal
+        // would emit two EXPLICIT operands in an order other than the one they
+        // were written in — i.e. the explicit arguments'
+        // ordinals are not ascending along the (evaluation-ordered) array.
+        // Omitted `DefaultValue` slots never count: Roslyn resolves them to a
+        // constant, which has no side effect to reorder.
+        private static bool PermutesExplicitArguments(
+            ImmutableArray<IArgumentOperation> operationArguments)
+        {
+            var previousOrdinal = -1;
+            foreach (IArgumentOperation argumentOperation in operationArguments)
+            {
+                if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
+                {
+                    continue;
+                }
+
+                if (argumentOperation.Parameter.Ordinal < previousOrdinal)
+                {
+                    return true;
+                }
+
+                previousOrdinal = argumentOperation.Parameter.Ordinal;
+            }
+
+            return false;
         }
 
         private GExpression TranslateOperationDefaultArgument(
