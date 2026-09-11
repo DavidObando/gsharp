@@ -108,6 +108,29 @@ namespace Demo
     /// <c>LambdaResultFeedsUnobservedTaskRun</c> handles a non-trivial
     /// argument expression at the call site would not be caught by it. This
     /// test pins the actual shape verbatim, closing that gap.
+    /// <para>
+    /// Issue #4112 is the REMAINING 18 of #4179's 48 rows, and this one test
+    /// covers those too — the four line items
+    /// <c>ExhaustiveSwitch_VerifiesLoadsAndRuns</c> (11 rows),
+    /// <c>ExhaustiveSwitchStatement_UnmatchedValueFallsThrough</c> (5), and
+    /// <c>ExhaustiveEnum_UnnamedRuntimeValue_ThrowsDefensively</c> /
+    /// <c>ExhaustiveEnum_UnnamedValueWithFixedReturn_ThrowsDefensively</c>
+    /// (1 each), so 30 + 18 = 48. They live in a SECOND test class, but no
+    /// second test is needed here: the faulting line in
+    /// <c>Issue2906ExhaustiveSwitchReturnEmitTests.cs</c> (lines 364-366) is
+    /// BYTE-IDENTICAL to the <c>Issue2891TryRegionFlowEmitTests.cs</c> line
+    /// (644-646) reproduced verbatim below, so the assertion already pins
+    /// both. The two <c>CompileVerifyLoadAndRun</c> helpers do differ
+    /// elsewhere — Issue2906 takes two optional <c>IlVerifier</c> parameters,
+    /// Issue2891 wraps <c>Emit</c> in <c>try</c>/<c>catch</c>, they format
+    /// diagnostics differently, and they use different temporary-assembly name
+    /// prefixes — but every one of those is surrounding context this heuristic
+    /// never inspects: it keys on the lambda result flowing into an unobserved
+    /// <c>Task.Run</c>, and that expression is common to both.
+    /// Recorded here because #4112's title blames gsc's
+    /// exhaustive-switch emit path, which #4182 exonerated by running all 46
+    /// snippet bodies from both files under a self-hosted gsc.
+    /// </para>
     /// </summary>
     [Fact]
     public void TaskRun_ReflectionInvokeWithConditionalArgumentObservedOnlyThroughWait_StaysBare()
