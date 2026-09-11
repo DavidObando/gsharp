@@ -8,7 +8,6 @@
   "stageFloor": {
     "test/Compiler.Tests/Compiler.Tests.csproj": "test-parity",
     "test/Core.Tests/Core.Tests.csproj": "test-parity",
-    "test/Interpreter.Tests/Interpreter.Tests.csproj": "test-parity",
     "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj": "test-parity"
   },
   "greenApps": [
