@@ -209,7 +209,7 @@ class StructSymbol
 {
     public StructSymbol? BaseClass;
 
-    List<StructSymbol> GetHierarchy()
+    public List<StructSymbol> GetHierarchy()
     {
         var hierarchy = new List<StructSymbol>();
         StructSymbol? current = this;
