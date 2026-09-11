@@ -398,6 +398,39 @@ public sealed partial class CSharpToGSharpTranslator
             // so `<<` / `>>` translate straight through with no count coercion.
             // (`<<` / `>>` are not numeric-promotion operators, so they fall
             // through to the plain binary form below.)
+            //
+            // Issue #4116: that reasoning covers the shift COUNT (the right
+            // operand) but not the shifted VALUE (the left operand). C# binary
+            // numeric promotion (§12.4.7) ALSO promotes a `sbyte`/`byte`/
+            // `short`/`ushort`/`char` left operand of `<<`/`>>`/`>>>` to `int`,
+            // unconditionally — independent of, and unrelated to, the right
+            // operand's own (separate) conversion to `int`. G#'s own shift
+            // operators deliberately do NOT do this for non-`char` integral
+            // types (gsc issue #2227 special-cased only `char`): `uint8 << n`
+            // stays `uint8`-typed, so a narrower left operand silently drops
+            // every bit shifted past its own width instead of promoting first.
+            // Left un-widened, a translated `byteValue << 24` collapses to 0
+            // instead of the C# value, corrupting anything built by OR-ing
+            // shifted bytes back together (issue #4116's metadata-token-decode
+            // failures). Widen ONLY the left operand here to the type Roslyn
+            // says C# actually promoted it to; the right operand is handled by
+            // #1232 above and must not be coerced to the (unrelated) left type.
+            if (binary.IsKind(SyntaxKind.LeftShiftExpression)
+                || binary.IsKind(SyntaxKind.RightShiftExpression)
+                || binary.IsKind(SyntaxKind.UnsignedRightShiftExpression))
+            {
+                ITypeSymbol shiftLeftType = this.context.GetTypeInfo(binary.Left).Type;
+                ITypeSymbol shiftLeftConverted = this.context.GetTypeInfo(binary.Left).ConvertedType;
+                if (TryGetNumericKind(shiftLeftType, out SpecialType shiftLeftUnderlying) &&
+                    TryGetNumericKind(shiftLeftConverted, out SpecialType shiftLeftConvUnderlying) &&
+                    shiftLeftUnderlying != shiftLeftConvUnderlying)
+                {
+                    left = this.CoerceOperandTo(left, shiftLeftConverted, binary.Left.GetLocation());
+                }
+
+                return new BinaryExpression(left, op, right);
+            }
+
             if (!IsNumericPromotionOperator(op))
             {
                 return new BinaryExpression(left, op, right);
