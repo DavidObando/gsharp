@@ -232,8 +232,30 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 else if (initializer != null &&
                     declarator.Initializer.Value is BaseObjectCreationExpressionSyntax { ArgumentList.Arguments.Count: 1 } &&
-                    this.context.GetDeclaredSymbol(declarator) is ILocalSymbol { Type: INamedTypeSymbol { TypeKind: TypeKind.Delegate } } delegateInferredLocal)
+                    this.context.GetDeclaredSymbol(declarator) is ILocalSymbol delegateInferredLocal &&
+                    delegateInferredLocal.Type is INamedTypeSymbol namedDelegateLocalType &&
+                    namedDelegateLocalType.TypeKind == TypeKind.Delegate)
                 {
+                    // Issue #4127/#4129 (self-hosting regression, #3501):
+                    // decomposed into a designation (`is ILocalSymbol
+                    // delegateInferredLocal`) plus a separate, PLAIN enum
+                    // comparison (`namedDelegateLocalType.TypeKind ==
+                    // TypeKind.Delegate`) — not a nested `{ Type:
+                    // INamedTypeSymbol { TypeKind: TypeKind.Delegate } }`
+                    // property pattern — because gsc's pattern matcher does
+                    // not reliably evaluate a property pattern containing an
+                    // enum-constant sub-pattern against an
+                    // imported-interface-typed scrutinee (`ILocalSymbol.Type`
+                    // is declared `ITypeSymbol`) once this exact translator
+                    // source is itself translated to G# and compiled by gsc
+                    // — the self-hosting pipeline issue #4116 exists to fix.
+                    // See CSharpTypeMapper.MapEventType and
+                    // CSharpToGSharpTranslator.Constructors.cs's
+                    // `explicitlyNamedDelegate` for the same workaround
+                    // already applied elsewhere in this translator (issue
+                    // #4153's own repro isolates the trigger to the enum
+                    // sub-pattern alone).
+                    //
                     // Issue #4116: a `var`-typed local initialized by a
                     // delegate-CREATION expression (`var handler = new
                     // Action(() => counter++);`) can lose its C# delegate
@@ -269,7 +291,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // coverage pins this; a broader condition here
                     // regressed it).
                     type = this.typeMapper.MapExplicitType(
-                        delegateInferredLocal.Type, this.context, declaration.Type.GetLocation());
+                        namedDelegateLocalType, this.context, declaration.Type.GetLocation());
                 }
 
                 results.Add(new LocalDeclarationStatement(
