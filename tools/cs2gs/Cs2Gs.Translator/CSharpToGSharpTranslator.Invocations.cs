@@ -3767,8 +3767,17 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol symbol = i < boundTypeArguments.Length
                     ? boundTypeArguments[i]
                     : this.context.GetTypeInfo(argument).Type;
+
+                // Issue #4113: an explicit type argument (`Assert.IsType<EventHandler>(x)`)
+                // is, like a variable's declared type, an EXPLICITLY WRITTEN source
+                // type — MapExplicitType's named-CLR-delegate-identity rule
+                // (issue #2835/#3841) applies here for the same reason: the general
+                // Map() pipeline's structural-arrow canonicalization silently
+                // rewrote `IsType<EventHandler>` into `IsType<Action<object,
+                // EventArgs>>`, a different runtime type, defeating exactly the
+                // identity check the call was making.
                 result.Add(symbol != null
-                    ? this.typeMapper.Map(symbol, this.context, argument.GetLocation())
+                    ? this.typeMapper.MapExplicitType(symbol, this.context, argument.GetLocation())
                     : new NamedTypeReference(argument.ToString()));
             }
 

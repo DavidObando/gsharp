@@ -1205,11 +1205,23 @@ public sealed class CSharpTypeMapper
     internal static string StripGlobalPrefix(string name) =>
         name.StartsWith("global::", System.StringComparison.Ordinal) ? name.Substring("global::".Length) : name;
 
+    // Issue #4113: a `typeof(...)` operand observes the CLR's actual runtime
+    // Type identity, so it needs the same "preserve named-delegate identity"
+    // treatment MapExplicitType already applies to an explicitly-typed
+    // declaration (issue #2835/#3841) — not the general Map() pipeline, whose
+    // structural-arrow canonicalization is a style choice appropriate for a
+    // *declaration*, not for an expression whose entire purpose is to name an
+    // exact runtime type. Routing through the general mapper silently turned
+    // `typeof(EventHandler)` into `typeof(Action<object, EventArgs>)`: a
+    // different CLR type, breaking every runtime identity comparison against
+    // it (reflection-based ABI assertions, and — once this very method's own
+    // source is self-hosted — gsc's own CanonicalizeWellKnownEventHandler,
+    // which returns `TypeSymbol.FromClrType(typeof(EventHandler))`).
     internal GTypeReference MapTypeOf(ITypeSymbol type, TranslationContext context, Location location)
     {
         return IsSystemIndexOrRange(type)
             ? this.MapCore(type, context, location)
-            : this.Map(type, context, location);
+            : this.MapExplicitType(type, context, location);
     }
 
     internal GTypeReference MapNominalDelegate(
