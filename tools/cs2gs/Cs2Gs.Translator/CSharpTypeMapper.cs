@@ -561,6 +561,70 @@ public sealed class CSharpTypeMapper
                 : mapped;
         }
 
+        // Issue #4113 follow-up (Copilot review of PR #4205): the delegate
+        // check above only catches a nominal delegate written DIRECTLY as
+        // the explicit type. One nested one level down — an array element
+        // (`typeof(EventHandler[])`) or a non-tuple generic type argument
+        // (`Observe<List<EventHandler>>()`) — still fell through to the
+        // general Map() pipeline for that nested position, which collapses
+        // it to the structural arrow form the same way the top-level case
+        // used to. Map() first gives the CORRECT baseline shape (name,
+        // namespace qualification, nested-containing-type handling, arity —
+        // none of that changes here), and only the nested slot(s) are
+        // rebuilt through MapExplicitType instead of Map.
+        //
+        // The guards on the generic branch are deliberate and each closes a
+        // measured false-positive, not a hypothetical one: `Nullable<T>`
+        // (`Memory<int>?`) is ITSELF a generic named type whose own single
+        // type argument is the WRAPPED type, not a sibling type argument
+        // list of the same shape — Map() special-cases it by unwrapping to
+        // `T`'s own mapped shape before ever reaching the generic tail this
+        // branch mirrors, so `structural` here is `T`'s reference (e.g.
+        // `Memory[int32]`), and its TypeArguments correspond to `T`'s OWN
+        // arguments, not `Nullable<T>`'s. Blindly zipping
+        // `genericNamed.TypeArguments` (`[Memory<int>]`, Nullable's own
+        // argument) onto that unrelated list — the count coincidentally
+        // matched, both being length 1 — silently produced
+        // `Memory[Memory[int32]]?`, corrupting an unrelated, correctly-typed
+        // declaration. The `structural.Name` suffix check is the general
+        // form of this same defense: it holds whenever Map() actually built
+        // `structural` FROM `genericNamed`'s own qualified name (the
+        // ordinary generic tail this substitution assumes), and fails
+        // whenever Map() took some OTHER special-cased early exit (Nullable
+        // unwrapping being the one this fix measured, not necessarily the
+        // only one) that produced a reference naming a different type
+        // entirely.
+        //
+        // A NESTED generic type (`Outer<T>.Inner<U>`) is excluded by the
+        // count guard for a related reason: it splits its arguments between
+        // TypeArguments and ContainingType in a way this substitution does
+        // not attempt to reproduce, so it is skipped (falls through
+        // unchanged) rather than risk zipping arguments against the wrong
+        // slot — narrower coverage than a fully general fix, but never
+        // wrong.
+        if (type is IArrayTypeSymbol array)
+        {
+            GTypeReference explicitElement = this.MapExplicitType(array.ElementType, context, location);
+            return new ArrayTypeReference(explicitElement, array.Rank) { IsNullable = type.NullableAnnotation == NullableAnnotation.Annotated };
+        }
+
+        if (type is INamedTypeSymbol genericNamed
+            && genericNamed.IsGenericType
+            && !genericNamed.IsTupleType
+            && !genericNamed.IsAnonymousType
+            && genericNamed.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
+            && this.Map(type, context, location) is NamedTypeReference structural
+            && structural.Name.EndsWith(genericNamed.Name, System.StringComparison.Ordinal)
+            && structural.TypeArguments.Count == genericNamed.TypeArguments.Length)
+        {
+            List<GTypeReference> explicitArgs = genericNamed.TypeArguments
+                .Select(a => this.MapExplicitType(a, context, location))
+                .ToList();
+            return explicitArgs.SequenceEqual(structural.TypeArguments)
+                ? structural
+                : new NamedTypeReference(structural.Name, explicitArgs, structural.ContainingType) { IsNullable = structural.IsNullable };
+        }
+
         return this.Map(type, context, location);
     }
 
