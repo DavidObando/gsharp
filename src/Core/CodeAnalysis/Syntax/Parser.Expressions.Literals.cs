@@ -1338,29 +1338,174 @@ public partial class Parser
     }
 
     // In a body-header controlling expression (`if`/`while`/`for` clauses, a
-    // `for-in` collection, …) bare struct literals are suppressed so a trailing
-    // `{` opens the statement body (issue #1575). A NON-empty struct literal
-    // (`Pt{X: 1}`) is unambiguous — `{ Ident : … }` cannot open a body — so it is
-    // still admitted (`if Pt{X: 1} == p { }`). Only an EMPTY `Ident{}` collides
-    // with an empty body: it is a struct literal solely when a real body `{`
-    // follows it (`for v in Numbers{} { … }`); otherwise the identifier is the
-    // controlling expression and the `{}` is the empty body (`if disposing { }`),
-    // which previously mis-parsed as an empty struct literal (GS0157).
+    // `for-in` collection, an `if let` initializer/guard, a `fixed` source, a
+    // `select` arm operand, …) bare struct literals are suppressed so a
+    // trailing `{` opens the statement body (issue #1575). The caller only
+    // reaches this method after `IsStructLiteralFollowingBrace` has already
+    // admitted the brace's content, i.e. only for content that is empty,
+    // spread-led (`...`), or starts `Identifier :` — and THAT last shape is
+    // exactly a label's spelling too (`retry: break`), so "the brace holds a
+    // struct-literal field list" cannot be decided from the first token
+    // alone. Issue #4189: an empty body already needed the same
+    // disambiguation (below); a non-empty one does too, generalized the same
+    // way — look at what follows the CANDIDATE brace's matching close:
+    //   * a further `{`            -> this brace was the struct literal, that
+    //                                 `{` is the real body (two-brace shape,
+    //                                 e.g. `for v in Numbers{X: 1} { … }`);
+    //   * an operator/`,`/`:` that lets the surrounding expression legitimately
+    //                                 continue (e.g. `Pt{X: 1} == p`, an
+    //                                 `if let` binding list's `,`, a ternary's
+    //                                 `:`) -> also a struct literal, just not
+    //                                 the WHOLE header;
+    //   * anything else            -> the header's own required body brace
+    //                                 would otherwise have nothing left to
+    //                                 open it, so THIS `{ … }` must be that
+    //                                 body instead (`if flag { retry: break }`,
+    //                                 where the label's shape previously got
+    //                                 mistaken for a struct-literal field and
+    //                                 swallowed the body, per #4189).
+    // A spread-led brace (`Ident{...expr}`) reaches the same check, but no G#
+    // statement can begin with a bare `...` (see ParseStatement's dispatch),
+    // so it can never actually collide with a body — the check still applies
+    // uniformly and simply always resolves in the struct literal's favor for
+    // that shape, exactly as before #4189.
     // <paramref name="braceOffset"/> is the offset of the opening `{`.
     private bool StructLiteralAllowedInSuppressedHeader(int braceOffset)
     {
-        if (Peek(braceOffset + 1).Kind != SyntaxKind.CloseBraceToken)
+        if (Peek(braceOffset + 1).Kind == SyntaxKind.CloseBraceToken)
         {
+            // Empty `Ident{}`: only a for-in / for-tuple-range collection and
+            // a C-style `for`'s post clause (the callers that pass
+            // allowEmptyStructLiteralCollection: true) may treat an empty
+            // struct literal immediately followed by a body `{` as a struct
+            // literal. Every other suppressed header (if/while conditions,
+            // `if let`, `fixed`, a `select` arm) never does: the identifier is
+            // the condition/operand and `{}` is the empty body
+            // (`if disposing {} { .. }`).
+            return allowEmptyStructLiteralInHeader
+                && Peek(braceOffset + 2).Kind == SyntaxKind.OpenBraceToken;
+        }
+
+        if (StartsWithUnambiguousLabel(braceOffset))
+        {
+            // See StartsWithUnambiguousLabel: a jump-keyword label can never
+            // be a struct-literal field or property-pattern entry, so this
+            // is unconditionally the header's own body regardless of brace
+            // count or what follows it.
+            return false;
+        }
+
+        if (!TryFindMatchingCloseBraceOffset(braceOffset, out var closeBraceOffset))
+        {
+            // Bounded lookahead exhausted without finding the matching `}`
+            // (a pathologically large brace body). Preserve the pre-#4189
+            // permissive default rather than risk misclassifying a
+            // legitimate struct literal as a statement body on a guess.
             return true;
         }
 
-        // Empty `Ident{}`: only a for-in collection may treat an empty struct
-        // literal immediately followed by a body `{` as a struct literal.
-        // In boolean if/while conditions the identifier is the condition and
-        // `{}` is the empty body (`if disposing {} { .. }`).
-        return allowEmptyStructLiteralInHeader
-            && Peek(braceOffset + 2).Kind == SyntaxKind.OpenBraceToken;
+        return IsSafeStructLiteralContinuationAfterBrace(closeBraceOffset);
     }
+
+    // Issue #4189: bounded-lookahead companion to the empty-brace check above,
+    // used only for the non-empty case. Scans forward from the CANDIDATE
+    // struct literal's opening `{` (at <paramref name="openBraceOffset"/>) to
+    // its own matching `}`, tracking brace depth so a nested block/collection
+    // literal inside the content does not end the scan early. Token-level
+    // scanning (rather than a text-based brace count) means a `{`/`}` inside a
+    // string or interpolated-string token is never mistaken for a real brace,
+    // since the lexer emits those as a single token.
+    private bool TryFindMatchingCloseBraceOffset(int openBraceOffset, out int closeBraceOffset)
+    {
+        var depth = 0;
+        var scanBound = openBraceOffset + LookaheadMaxScan;
+        for (var i = openBraceOffset; i <= scanBound; i++)
+        {
+            var kind = Peek(i).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                break;
+            }
+
+            if (kind == SyntaxKind.OpenBraceToken)
+            {
+                depth++;
+            }
+            else if (kind == SyntaxKind.CloseBraceToken)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    closeBraceOffset = i;
+                    return true;
+                }
+            }
+        }
+
+        closeBraceOffset = 0;
+        return false;
+    }
+
+    // Issue #4189: whether the token immediately after a candidate struct
+    // literal's matching close brace (at <paramref name="closeBraceOffset"/>)
+    // still lets the struct-literal reading stand — either a genuine second
+    // body brace (the two-brace shape) or a token under which the surrounding
+    // suppressed expression legitimately keeps going rather than having
+    // already ended. `,` and `:` are accepted alongside
+    // <see cref="IsExpressionContinuationAfterBraceAt"/>'s operators because
+    // they terminate a struct-literal sub-expression in call sites this
+    // helper also serves — an `if let` binding list's `,` between bindings,
+    // and a ternary's `:` between arms (`for v in flag ? Pt{X: 1} : other { … }`)
+    // — neither of which is itself a binary/postfix operator.
+    // Reusing IsExpressionContinuationAfterBraceAt (rather than the plain
+    // token-kind check) also keeps this in sync with the file's other
+    // brace-continuation callers on two edges: `with { … }` (a continuation
+    // its sibling <see cref="IsExpressionContinuation"/> alone does not know
+    // about) and a `++`/`--` on its own following line (never a continuation
+    // of what the brace just closed).
+    private bool IsSafeStructLiteralContinuationAfterBrace(int closeBraceOffset)
+    {
+        var afterOffset = closeBraceOffset + 1;
+        var kind = Peek(afterOffset).Kind;
+        return kind == SyntaxKind.OpenBraceToken
+            || kind == SyntaxKind.CommaToken
+            || kind == SyntaxKind.ColonToken
+            || IsExpressionContinuationAfterBraceAt(afterOffset, Peek(closeBraceOffset));
+    }
+
+    // Issue #4189 follow-up (Copilot review of PR #4203): a following `{`
+    // after the candidate's matching close is NOT on its own proof of a
+    // two-brace struct-literal-then-body shape — a genuinely LABELED body
+    // (`retry: break`) immediately followed by an unrelated second block
+    // (`if flag { retry: break } { var y = 1 }`, itself legal G# — two
+    // consecutive block statements) hits that exact branch and was
+    // misclassified as a struct literal, reproducing #4189's original bug.
+    // But the two-brace branch is equally load-bearing for a genuine
+    // field/property-pattern whose first field's spelling only coincides
+    // with a label (`if value is string { Length: > 0 } { }` — a type
+    // pattern's property-pattern content, unrelated to #4189, pinned by
+    // Issue3351IsPatternParserTests and Adr0174SelectArmOperandParserTests):
+    // gating the branch broadly (e.g. by suppressed-header kind) breaks
+    // those, since they share the exact same if-condition context as the
+    // label case.
+    //
+    // The two shapes differ only in what follows the label-shaped colon: a
+    // label's target is a STATEMENT (`break`/`continue`/`goto`/`return` are
+    // the jump keywords this fix's own repro and issue text use, and none of
+    // them can ever open a struct-literal field's VALUE or a property
+    // pattern's own pattern), while a field/property-pattern's value is an
+    // EXPRESSION or nested PATTERN, which never starts with one of those
+    // keywords. So this check runs BEFORE the matching-close scan even
+    // starts, unconditionally overriding it as soon as the candidate's very
+    // first token is unambiguously a label rather than a field: neither
+    // brace count nor what follows the close matters once this is true.
+    private bool StartsWithUnambiguousLabel(int braceOffset)
+        => Peek(braceOffset + 1).Kind == SyntaxKind.IdentifierToken
+            && Peek(braceOffset + 2).Kind == SyntaxKind.ColonToken
+            && Peek(braceOffset + 3).Kind is SyntaxKind.BreakKeyword
+                or SyntaxKind.ContinueKeyword
+                or SyntaxKind.GotoKeyword
+                or SyntaxKind.ReturnKeyword;
 
     private ExpressionSyntax ParseStructLiteralExpression()
     {
