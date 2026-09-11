@@ -141,18 +141,39 @@ namespace Cs2Gs.Tests
         {
             // Issue #3501: only a recursion cycle through ANOTHER local
             // function still lifts (ref-kind signatures now stay native
-            // literals), so the fixture uses a mutual pair.
+            // literals). Issue #4197 widened the capturing scheme to claim
+            // EVERY such mutual-recursion cycle by real name, so a plain
+            // (non-generic, non-ref-returning) mutual pair no longer lifts —
+            // this fixture must keep one of the two carve-outs
+            // (#4197/#4198 scope) that still forces the `__local_` path: a
+            // ref-returning local function has no G# function-literal form
+            // (#1900), so it (and its whole cycle) stays lifted.
             string printed = Translate("""
                 public class Labels
                 {
-                    public string Make()
+                    public int Make(int[] xs)
                     {
-                        return NewLabel("switchEnd", 2);
+                        return NewLabel(xs, 2);
 
-                        static string NewLabel(string prefix, int i) =>
-                            i <= 0 ? prefix : Other(prefix, i - 1);
+                        static ref int NewLabel(int[] a, int i)
+                        {
+                            if (i > 0)
+                            {
+                                Other(a, i - 1);
+                            }
 
-                        static string Other(string prefix, int i) => NewLabel(prefix + "x", i);
+                            return ref a[0];
+                        }
+
+                        static ref int Other(int[] a, int i)
+                        {
+                            if (i > 0)
+                            {
+                                NewLabel(a, i - 1);
+                            }
+
+                            return ref a[1];
+                        }
                     }
                 }
                 """);

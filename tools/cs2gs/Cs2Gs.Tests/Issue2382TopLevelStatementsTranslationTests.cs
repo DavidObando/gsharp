@@ -230,6 +230,65 @@ static bool IsOdd(int n) => n != 0 && IsEven(n - 1);
     }
 
     [Fact]
+    public void MixedCapturingAndCleanLookingMutualRecursion_BothUseNullableSchemeNotHoisted()
+    {
+        // Copilot review follow-up on PR #4200 (issue #4197's widening of
+        // `RegisterCapturingRecursiveLocalFunctions`): `IsTopLevelLocalFunctionCaptureFree`
+        // only inspects a CANDIDATE's own body for a captured sibling local/
+        // `args` — it has no idea whether the candidate CALLS another
+        // top-level local function that itself stays behind as a
+        // statement-local `let`/nullable-var (because THAT one genuinely
+        // captures). Here `A` captures the sibling top-level local `seed`;
+        // `B` looks capture-free in isolation (it only calls `A`, never
+        // `seed`/`args` itself) but is mutually recursive with `A`.
+        // <para>
+        // Before the fix: `B` alone was hoisted to an independent top-level
+        // `func` whose body referenced the bare name `A` — but `A` is a
+        // statement-scoped `let` (or, once part of a group, a nullable
+        // `var`), never a sibling `func`, so nothing actually declares `A`
+        // from `B`'s perspective. `A` itself, edge-severed from the SCC by
+        // `B`'s removal, was no longer recognized as recursive at all and
+        // fell back to a plain (non-nullable, unregistered) `let` binding.
+        // Depending on statement order this manifests anywhere from a
+        // fragile accidental pass to an outright runtime
+        // <c>NullReferenceException</c> (confirmed while diagnosing this
+        // fix: invoking `B` before `A`'s `let` has executed crashes, since
+        // `A` is still unassigned).
+        // </para>
+        // <para>
+        // After the fix: the per-function hoist set is shrunk to a fixed
+        // point (a candidate that calls a non-hoisted sibling drops out too),
+        // so neither `A` nor `B` is hoisted — both flow into the (#4197-
+        // widened) capturing-recursive registration pass together, which
+        // recognizes the genuine 2-cycle and lowers both to the #3399
+        // nullable-function-local scheme under their REAL names.
+        // </para>
+        string printed = Render(@"
+using System;
+
+int seed = 3;
+
+bool A(int n) => n <= 0 ? seed > 0 : B(n - 1);
+bool B(int n) => n <= 0 ? false : A(n - 1);
+
+Console.WriteLine(B(5));
+");
+
+        Assert.DoesNotContain("func A(", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("func B(", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("var A", printed, StringComparison.Ordinal);
+        Assert.Contains("var B", printed, StringComparison.Ordinal);
+        Assert.Contains("A!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("B!!(", printed, StringComparison.Ordinal);
+        AssertRoundTripParses(printed);
+
+        (int exit, string stdout) = CompileAndRunProgram(printed);
+        Assert.Equal(0, exit);
+        Assert.Equal("True", stdout.Trim());
+    }
+
+    [Fact]
     public void CapturingLocalFunction_StaysOrderedLetBinding()
     {
         // `Greet` reads `greeting`, a sibling top-level local — it must NOT be

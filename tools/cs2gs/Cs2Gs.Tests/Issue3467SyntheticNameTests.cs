@@ -143,27 +143,64 @@ namespace Cs2Gs.Tests
         [Fact]
         public void LiftedLocalFunctions_SuffixOnlyOnCollision()
         {
-            // A mutual-recursion cycle through ANOTHER local function still
-            // lifts (a `let`-bound literal cannot forward-reference its
-            // partner), so overloads sharing a lifted helper name exercise
-            // the collision suffix.
+            // Issue #4197 widened the capturing scheme to claim EVERY
+            // (non-generic, non-ref-returning) mutual-recursion cycle by real
+            // name, so a plain mutual pair no longer lifts. This fixture
+            // needs one of the two carve-outs that still force `__local_`
+            // (#4197/#4198 scope): a ref-returning local function has no G#
+            // function-literal form (#1900), so the whole cycle stays lifted
+            // — which is what exercises the collision suffix below.
             string printed = Translate("""
                 public class C
                 {
-                    public string Run(int value)
+                    public int Run(int[] xs, int value)
                     {
-                        return Helper(value);
+                        return Helper(xs, value);
 
-                        static string Helper(int n) => n <= 0 ? "a" : Other(n - 1);
-                        static string Other(int n) => Helper(n - 1);
+                        static ref int Helper(int[] a, int n)
+                        {
+                            if (n > 0)
+                            {
+                                Other(a, n - 1);
+                            }
+
+                            return ref a[0];
+                        }
+
+                        static ref int Other(int[] a, int n)
+                        {
+                            if (n > 0)
+                            {
+                                Helper(a, n - 1);
+                            }
+
+                            return ref a[1];
+                        }
                     }
 
-                    public string Run(string value)
+                    public int Run(int[] xs, string value)
                     {
-                        return Helper(value.Length);
+                        return Helper(xs, value.Length);
 
-                        static string Helper(int n) => n <= 0 ? "b" : Other(n - 1);
-                        static string Other(int n) => Helper(n - 1);
+                        static ref int Helper(int[] a, int n)
+                        {
+                            if (n > 0)
+                            {
+                                Other(a, n - 1);
+                            }
+
+                            return ref a[0];
+                        }
+
+                        static ref int Other(int[] a, int n)
+                        {
+                            if (n > 0)
+                            {
+                                Helper(a, n - 1);
+                            }
+
+                            return ref a[1];
+                        }
                     }
                 }
                 """);

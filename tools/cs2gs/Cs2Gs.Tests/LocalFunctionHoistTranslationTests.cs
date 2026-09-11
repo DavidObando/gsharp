@@ -202,6 +202,14 @@ namespace Demo
     [Fact]
     public void MutuallyRecursiveLocalFunctions_AreBothHoistedBeforeFirstExternalUse()
     {
+        // Issue #4197 widened `RegisterCapturingRecursiveLocalFunctions` to
+        // claim EVERY mutual-recursion cycle (through another local
+        // function), capturing or not — this non-capturing `A`/`B` pair no
+        // longer lifts to `__local_`; it lowers to the #3399 nullable
+        // function-local scheme instead. The hoist invariant under test still
+        // applies to that scheme: the nil-initialized declarations (emitted
+        // at the position of the first-hoisted group member) must precede the
+        // forward call site inside the `if`.
         string printed = TranslateUnit(@"
 namespace Demo
 {
@@ -227,10 +235,19 @@ namespace Demo
     }
 }");
 
-    Assert.DoesNotContain("let A", printed, StringComparison.Ordinal);
-    Assert.DoesNotContain("let B", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_M_A", printed, StringComparison.Ordinal);
-    Assert.Contains("__local_M_B", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let A", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let B", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("var A", printed, StringComparison.Ordinal);
+        Assert.Contains("var B", printed, StringComparison.Ordinal);
+        Assert.Contains("A!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("B!!(", printed, StringComparison.Ordinal);
+
+        int declIndexA = printed.IndexOf("var A", StringComparison.Ordinal);
+        int declIndexB = printed.IndexOf("var B", StringComparison.Ordinal);
+        int firstExternalUse = printed.IndexOf("A!!(", StringComparison.Ordinal);
+        Assert.True(declIndexA >= 0 && declIndexA < firstExternalUse, "var A must precede the forward call.\n" + printed);
+        Assert.True(declIndexB >= 0 && declIndexB < firstExternalUse, "var B must precede the forward call.\n" + printed);
     }
 
     [Fact]
