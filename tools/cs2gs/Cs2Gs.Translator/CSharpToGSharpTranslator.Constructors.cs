@@ -2366,10 +2366,10 @@ public sealed partial class CSharpToGSharpTranslator
         // real name (see the fold-BFS below) instead of being lifted to
         // `__local_` by `RegisterRecursiveLocalFunctionLifts` purely because
         // it happened to be reachable. Only a cycle (or fold candidate) that
-        // itself passes through a generic or ref-returning local function
-        // stays on the `__local_` path (those members never enter the
-        // `functions`/`edges` graph below, so this pass never even sees the
-        // cycle — see the carve-out further down).
+        // itself passes through a generic, ref-returning, or VARIADIC
+        // (`params`) local function stays on the `__local_` path (those
+        // members never enter the `functions`/`edges` graph below, so this
+        // pass never even sees the cycle — see the carve-out further down).
         //
         // A DEFAULT PARAMETER VALUE is deliberately NOT one of those graph
         // carve-outs, and the distinction is the point (issue #4197
@@ -2394,6 +2394,25 @@ public sealed partial class CSharpToGSharpTranslator
         // default-carrying candidate, because THERE the `__local_` lift is a
         // strictly better answer — a real method declaration carries the
         // default natively — and no cycle is sacrificed by declining it.
+        //
+        // A `params` PARAMETER, by contrast, IS a declaration-side carve-out —
+        // PR #4211's review found it, and the gap predates that PR (the old
+        // exclusion keyed on `HasExplicitDefaultValue` alone, so a
+        // `params`-only member was already admitted). gsc itself models a
+        // variadic function type fine (`((int32, ...int32) -> void)?` declares,
+        // binds and runs), but cs2gs's `ArrowTypeReference` carries parameter
+        // TYPES only and has no variadic flag, while `MapParameter` maps a
+        // `params T[]` to the ELEMENT type behind a `...` carrier. So
+        // `AddGroupMember` would declare `Add ((int32, int32) -> void)?` for a
+        // literal that is really `func (depth int32, xs ...int32)` — two
+        // distinct gsc function types ("Cannot convert type
+        // '(int32, ...int32) -> void' to '((int32, int32) -> void)?'"), and
+        // every expanded call site would overflow the declared arity
+        // ("Function 'Add!!' requires 2 arguments but was given 3"). Unlike the
+        // default-value case there is no call-site-only repair: the DECLARATION
+        // is already wrong. Until `ArrowTypeReference` models variadic shape,
+        // a variadic member keeps its whole cycle on the `__local_` path, whose
+        // real method declaration carries `params` natively.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
             // `DescendantNodes()` excludes the node itself — local functions that
@@ -2416,16 +2435,21 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     // A generic local function's type parameters cannot be
-                    // expressed on a function-typed local, and a
-                    // ref-returning local is an unsupported gap either way.
-                    // Both carve-outs stay on the existing `__local_` lift
-                    // path, which lifts to a REAL method declaration. A
-                    // default parameter value is NOT a carve-out here — see
-                    // the header comment: it is expressible on the
-                    // declaration side and only constrains call sites, which
-                    // this scheme fully controls.
+                    // expressed on a function-typed local, a ref-returning
+                    // local is an unsupported gap either way, and a `params`
+                    // parameter has no representation on cs2gs's
+                    // `ArrowTypeReference` (which carries parameter types
+                    // only), so the forward declaration and the function
+                    // literal assigned to it would be two different gsc
+                    // function types. All three carve-outs stay on the
+                    // existing `__local_` lift path, which lifts to a REAL
+                    // method declaration. A default parameter value is NOT a
+                    // carve-out here — see the header comment: it is
+                    // expressible on the declaration side and only constrains
+                    // call sites, which this scheme fully controls.
                     if (localFunction.TypeParameterList != null
-                        || symbol.ReturnsByRef)
+                        || symbol.ReturnsByRef
+                        || symbol.Parameters.Any(IsVariadicCarrierParameter))
                     {
                         continue;
                     }

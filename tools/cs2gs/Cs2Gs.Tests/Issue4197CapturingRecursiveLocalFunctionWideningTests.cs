@@ -457,4 +457,213 @@ namespace Demo
         // total = 25.
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(2)", "25");
     }
+
+    [Fact]
+    public void DefaultParameterCycleMember_OutOfOrderNamedArgumentBindsByParameterOrdinal()
+    {
+        // PR #4211 review (Copilot). `IInvocationOperation.Arguments` is in
+        // EVALUATION order, not parameter order. Verified directly against this
+        // repo's Roslyn (Microsoft.CodeAnalysis.CSharp 5.6.0): for
+        // `void Add(int depth = 0, int bonus = 10)`, the call `Add(bonus: X)`
+        // arrives as
+        //   [0] param=bonus ordinal=1 kind=Explicit
+        //   [1] param=depth ordinal=0 kind=DefaultValue
+        // so the ORIGINAL positional walk emitted `Add!!(X, 10)` — silently
+        // binding the caller's value to `depth` and the `depth` default to
+        // `bonus`. Nothing failed to compile; only the answer was wrong.
+        // Slots are now addressed by `IParameterSymbol.Ordinal`.
+        //
+        // `Next()` is side-effecting so the run also pins that the reordering
+        // neither drops nor duplicates the caller's expression.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+            int ticks = 0;
+
+            int Next()
+            {
+                ticks++;
+                return 7;
+            }
+
+            void Add(int depth = 0, int bonus = 10)
+            {
+                total = (total * 100) + (depth * 10) + bonus;
+                if (depth > 0)
+                {
+                    AddPatternSwitch(depth - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1);
+                }
+            }
+
+            Add(bonus: Next());
+            System.Console.WriteLine(total + "":"" + ticks);
+            return total;
+        }
+    }
+}");
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("var Add", printed, StringComparison.Ordinal);
+
+        // `Next()` lands in the `bonus` slot (ordinal 1), the omitted `depth`
+        // default in slot 0 — NOT the other way round.
+        Assert.Contains("Add!!(0, Next", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add!!(Next", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("bonus:", printed, StringComparison.Ordinal);
+
+        // depth = 0 (default), bonus = 7 -> total = 7; `Next()` ran once.
+        // The pre-fix emission `Add!!(Next!!(), 10)` instead recursed from
+        // depth = 7 and printed a completely different total.
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(0)", "7:1");
+    }
+
+    [Fact]
+    public void DefaultParameterCycleMember_PermutedNamedArgumentsKeepSourceEvaluationOrder()
+    {
+        // The same fix's other half. Reassembling by ordinal is only half the
+        // job: when TWO explicit arguments are named out of declared order,
+        // emitting them straight into their ordinal slots would also swap the
+        // order in which they EVALUATE, and C# §12.6.2.2 fixes that to source
+        // order. Each non-trivial explicit operand is therefore spilled to a
+        // `let __spillN` in source order first, and the positional call site
+        // references the spills.
+        //
+        // The two printed numbers separate the two failure modes exactly:
+        //   total pins WHICH PARAMETER each value bound to,
+        //   ticks pins the ORDER the two `Next` calls ran in.
+        // Pre-fix (positional walk) printed "792:79" — right order, wrong
+        // binding. A naive ordinal sort with no spill would print "927:97" —
+        // right binding, reversed side effects. Only "927:79" is C#.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+            int ticks = 0;
+
+            int Next(int weight)
+            {
+                ticks = (ticks * 10) + weight;
+                return weight;
+            }
+
+            void Add(int a = 1, int b = 2, int c = 3)
+            {
+                total = (total * 1000) + (a * 100) + (b * 10) + c;
+                if (a > 100)
+                {
+                    AddPatternSwitch(a - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1);
+                }
+            }
+
+            Add(c: Next(7), a: Next(9));
+            System.Console.WriteLine(total + "":"" + ticks);
+            return total;
+        }
+    }
+}");
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+
+        // Spilled in SOURCE order (`Next(7)` first), then bound by ordinal:
+        // a = __spill1 (9), b = the omitted default 2, c = __spill0 (7).
+        Assert.Contains("__spill0 = Next", printed, StringComparison.Ordinal);
+        Assert.Contains("__spill1 = Next", printed, StringComparison.Ordinal);
+        Assert.Contains("Add!!(__spill1, 2, __spill0)", printed, StringComparison.Ordinal);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(0)", "927:79");
+    }
+
+    [Fact]
+    public void VariadicCycleMember_StaysOnLiftPath()
+    {
+        // PR #4211 review (Copilot), the other finding. cs2gs's
+        // `ArrowTypeReference` carries parameter TYPES only — it has no
+        // variadic flag — and `MapParameter` maps a `params T[]` to its ELEMENT
+        // type behind a `...` carrier. So `AddGroupMember` would forward-declare
+        // `var Add ((int32, int32) -> void)?` for a literal that is really
+        // `func (depth int32, xs ...int32)`: two distinct gsc function types
+        // ("Cannot convert type '(int32, ...int32) -> void' to
+        // '((int32, int32) -> void)?'"), plus "Function 'Add!!' requires 2
+        // arguments but was given 3" at every expanded call site. Unlike a
+        // default parameter value this is not repairable at the call site — the
+        // DECLARATION is already the wrong type — so a variadic member keeps its
+        // whole cycle on the `__local_` lift path, whose real method declaration
+        // carries `params` natively.
+        //
+        // (gsc itself is not the limitation: a hand-written
+        // `var f ((int32, ...int32) -> void)? = nil` declares, binds and runs.
+        // Teaching `ArrowTypeReference` variadic shape is the follow-up.)
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int Add(int depth, params int[] xs)
+            {
+                int sum = 0;
+                foreach (int x in xs) { sum += x; }
+                if (depth > 0)
+                {
+                    sum += AddPatternSwitch(depth - 1);
+                }
+
+                return sum;
+            }
+
+            int AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    return Add(depth - 1, 1, 2);
+                }
+
+                return 0;
+            }
+
+            int result = Add(seed, 3, 4);
+            System.Console.WriteLine(result);
+            return result;
+        }
+    }
+}");
+
+        // The whole cycle stays on `__local_`, exactly as the generic and
+        // ref-returning carve-outs above do.
+        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Project_AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
+
+        // The lifted real method keeps the variadic parameter natively.
+        Assert.Contains("xs ...int32", printed, StringComparison.Ordinal);
+
+        // Add(2, 3, 4) = 7 + AddPatternSwitch(1) -> Add(0, 1, 2) = 3. Total 10.
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(2)", "10");
+    }
 }
