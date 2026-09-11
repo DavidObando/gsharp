@@ -666,4 +666,294 @@ namespace Demo
         // Add(2, 3, 4) = 7 + AddPatternSwitch(1) -> Add(0, 1, 2) = 3. Total 10.
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(2)", "10");
     }
+
+    [Fact]
+    public void RefParameterCycleMember_StaysOnLiftPath()
+    {
+        // PR #4211 review round 3 (Copilot), finding 1 — reported as an
+        // evaluation-order hazard in the claimed-cycle argument reassembly
+        // (`ref slots[NextIndex()]` moving relative to a spilled sibling).
+        // The reassembly is not where this breaks. A ref-kind parameter is a
+        // DECLARATION-side impossibility, exactly like `params` above:
+        // `ArrowTypeReference` carries parameter types only and has no
+        // ref-kind, so `AddGroupMember` declared
+        // `var Add ((int32, int32) -> void)?` for a literal that is really
+        // `func (depth int32, ref cell int32)` — `(int32, *int32) -> void`.
+        //
+        // Measured on this branch before the fix, gsc rejected it
+        // unconditionally:
+        //   Cannot convert type '(int32, int32) -> void'
+        //       to '((int32, int32) -> void)?'.
+        //   Cannot convert type '*int32' to 'int32'.   (x2, the `&x` call sites)
+        // for `ref`, `out` (`*?`) and `in` alike, with or without a default
+        // parameter and with or without a named call site. There is
+        // therefore no reachable "silently changing side effects": the program
+        // never compiles. The fix is the same carve-out `params` got, which
+        // additionally makes a ref-kind argument unreachable in
+        // `TranslateClaimedLocalFunctionArgumentsWithDefaults`.
+        //
+        // The call site below is Copilot's exact shape — a permuted named call
+        // passing `ref slots[Idx()]` alongside an omitted default. On the
+        // `__local_` path it now takes, the lift keeps the `name:` wrappers
+        // (a real method HAS parameter names), so the emitted call is
+        // `__local_Project_Add(cell: &slots[Idx()], a: Val(), 100)` and the
+        // binding is right: cell aliases slots[1], a = 5, b = 100 => 105.
+        //
+        // `order` prints 21, not C#'s 12, and that is a SEPARATE gsc-side gap
+        // with nothing to do with cs2gs: gsc evaluates an out-of-declared-order
+        // NAMED argument list in source order for by-value operands but
+        // evaluates a `&` operand at its PARAMETER position. Reduced to three
+        // SEPARATE hand-written G# programs, no translator involved, each with
+        // its own callee — `Idx`/`Val` fold a digit into `order`:
+        //   func Add(a int32, ref cell int32, b int32 = 100)
+        //     Add(cell: &slots[Idx()], a: Val(), 100)  => order 21  (WRONG)
+        //   func Add(a int32, c int32)
+        //     Add(c: Idx(), a: Val())                  => order 12  (by-value
+        //                                                            named, ok)
+        //   func RefFirst(ref cell int32, a int32)
+        //     RefFirst(&slots[Idx()], Val())           => order 12  (positional
+        //                                                            ref, ok)
+        // Pinned here as the tripwire for that follow-up: when gsc starts
+        // ordering `&` operands by source position this assertion flips to
+        // "105:12" and this comment comes out.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int order = 0;
+            int[] slots = new int[3];
+
+            int Idx()
+            {
+                order = (order * 10) + 1;
+                return 1;
+            }
+
+            int Val()
+            {
+                order = (order * 10) + 2;
+                return 5;
+            }
+
+            void Add(int a, ref int cell, int b = 100)
+            {
+                cell = a + b;
+                if (a > 1000)
+                {
+                    AddPatternSwitch(a - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    int t = 0;
+                    Add(depth - 1, ref t);
+                }
+            }
+
+            Add(cell: ref slots[Idx()], a: Val());
+            System.Console.WriteLine(slots[1] + "":"" + order);
+            return 0;
+        }
+    }
+}");
+
+        // The whole cycle stays on `__local_`, whose REAL method declaration
+        // carries `ref` natively — nothing ever declares an arrow type for it.
+        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Project_AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("ref cell int32", printed, StringComparison.Ordinal);
+
+        // a = 5, b = 100 (default), cell = slots[1] = 105 — the binding this
+        // carve-out exists to get right. `order` is the gsc-side tripwire
+        // documented above; before the carve-out this snippet did not compile
+        // at all, so there was no order to get wrong.
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(0)", "105:21");
+    }
+
+    [Fact]
+    public void OutParameterCycleMember_StaysOnLiftPath()
+    {
+        // The `out` half of the carve-out above: the erased arrow type made the
+        // call sites fail as "Cannot convert type '*?' to 'int32'" (the `out`
+        // address form has no declared pointee yet at the call site), on top of
+        // the same declaration mismatch. Kept separate because an `out`
+        // argument also flows a DECLARATION expression (`out int t`) through
+        // the `__local_` lift rewrite.
+        //
+        // It also carries NO default parameter, which makes it the half of the
+        // gap that PREDATES this PR: it fails identically against pre-PR
+        // e815bb76. The ref-plus-default shape in the test above does NOT fail
+        // there, because the blanket `HasExplicitDefaultValue` exclusion that
+        // #4197's fix (e1c4c1d9) correctly removed used to keep it off the
+        // scheme by accident — removing it exposed that shape for the first
+        // time. One carve-out closes both halves.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+
+            void Add(int depth, out int cell)
+            {
+                cell = depth;
+                total += cell;
+                if (depth > 0)
+                {
+                    AddPatternSwitch(depth - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1, out int t);
+                }
+            }
+
+            Add(seed, out int c);
+            System.Console.WriteLine(total + "":"" + c);
+            return total;
+        }
+    }
+}");
+
+        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
+
+        // Add(2) -> total 2 -> AddPatternSwitch(1) -> Add(0) -> total 2. c = 2.
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(2)", "2:2");
+    }
+
+    [Fact]
+    public void DefaultParameterCycleMember_PermutedNamedArgumentsSnapshotBareIdentifiers()
+    {
+        // PR #4211 review round 3 (Copilot), finding 2 — and the one the
+        // previous round's spill genuinely missed. `SpillOperand` short-circuits
+        // on `IsTrivialOperand`, which answers "is DUPLICATING this safe?". That
+        // is the wrong question when the reassembly REORDERS instead of
+        // duplicating: `x` is still read exactly once, just at the wrong time.
+        //
+        // `Add(c: x, a: MutateX())` must read `x` (5) before `MutateX()` sets it
+        // to 99, so C# binds a = 1 (default), b = 2 (default), c = 5 => 125.
+        // Before the fix this branch emitted
+        //     let __spill0 = MutateX()
+        //     Add!!(__spill0, 2, x)
+        // which compiled, ran, and printed 219 (c = 99) — a silently wrong
+        // answer, the exact failure mode Copilot described. Every explicit
+        // operand that is not a literal or a type name is now snapshotted.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+            int x = 5;
+
+            int MutateX()
+            {
+                x = 99;
+                return 1;
+            }
+
+            void Add(int a = 1, int b = 2, int c = 3)
+            {
+                total = (total * 1000) + (a * 100) + (b * 10) + c;
+                if (a > 100)
+                {
+                    AddPatternSwitch(a - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1);
+                }
+            }
+
+            Add(c: x, a: MutateX());
+            System.Console.WriteLine(total);
+            return total;
+        }
+    }
+}");
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+
+        // `x` is snapshotted FIRST (source order), then `MutateX()`; the
+        // reassembled call references both spills and no bare `x`.
+        Assert.Contains("let __spill0 = x", printed, StringComparison.Ordinal);
+        Assert.Contains("let __spill1 = MutateX", printed, StringComparison.Ordinal);
+        Assert.Contains("Add!!(__spill1, 2, __spill0)", printed, StringComparison.Ordinal);
+
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(0)", "125");
+    }
+
+    [Fact]
+    public void DefaultParameterCycleMember_PermutedNamedArgumentsKeepLiteralsEmbedded()
+    {
+        // The snapshot above is deliberately not universal: a literal cannot be
+        // observed changing, so it stays embedded and the output keeps only the
+        // temps it needs. `Add(c: 7, a: MutateX())` binds c = 7 regardless of
+        // when it is "read", so only `MutateX()` spills.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+            int x = 5;
+
+            int MutateX()
+            {
+                x = 99;
+                return 1;
+            }
+
+            void Add(int a = 1, int b = 2, int c = 3)
+            {
+                total = (total * 1000) + (a * 100) + (b * 10) + c;
+                if (a > 100)
+                {
+                    AddPatternSwitch(a - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1);
+                }
+            }
+
+            Add(c: 7, a: MutateX());
+            System.Console.WriteLine(total + "":"" + x);
+            return total;
+        }
+    }
+}");
+
+        Assert.Contains("Add!!(__spill0, 2, 7)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__spill1", printed, StringComparison.Ordinal);
+
+        // a = 1, b = 2, c = 7 => 127; `MutateX()` still ran (x = 99).
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(0)", "127:99");
+    }
 }

@@ -2413,6 +2413,36 @@ public sealed partial class CSharpToGSharpTranslator
         // is already wrong. Until `ArrowTypeReference` models variadic shape,
         // a variadic member keeps its whole cycle on the `__local_` path, whose
         // real method declaration carries `params` natively.
+        //
+        // A `ref`/`out`/`in` PARAMETER is a third declaration-side carve-out,
+        // for exactly the same reason and found the same way (PR #4211's third
+        // review round). `ArrowTypeReference` carries parameter
+        // types only and has no ref-kind, so `AddGroupMember` declares
+        // `var Add ((int32, int32) -> void)?` for a literal that is really
+        // `func (depth int32, ref cell int32)`, i.e. `(int32, *int32) -> void`.
+        // gsc rejects the whole shape loudly and unconditionally — "Cannot
+        // convert type '(int32, int32) -> void' to '((int32, int32) -> void)?'"
+        // on the assignment plus "Cannot convert type '*int32' to 'int32'" at
+        // every `&x` call site (`*?` for `out`) — for `ref`, `out` and `in`
+        // alike, with or without a default parameter and with or without a
+        // named call site.
+        //
+        // Half of that is older than this PR and half is this PR's own: a
+        // ref-kind member WITHOUT a default was already claimed (and already
+        // broken) at e815bb76, while one WITH a default used to be kept out of
+        // the whole scheme by the blanket `HasExplicitDefaultValue` exclusion
+        // that #4197's fix (e1c4c1d9) correctly removed — so removing it
+        // exposed this shape for the first time. Either way the answer is the
+        // same, and it is the one `params` got: there is no call-site-only
+        // repair, because the DECLARATION is already the wrong function type.
+        // Such a member keeps its whole cycle on the `__local_` lift path,
+        // whose real method declaration carries the ref-kind natively. That
+        // path also preserves the `name:` wrappers (a real method HAS parameter
+        // names), so the call site binds correctly. This also makes a
+        // ref-kind argument unreachable in
+        // <see cref="TranslateClaimedLocalFunctionArgumentsWithDefaults"/>,
+        // which is why that method's evaluation-order spill only ever has
+        // by-value operands to consider.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
             // `DescendantNodes()` excludes the node itself — local functions that
@@ -2436,20 +2466,22 @@ public sealed partial class CSharpToGSharpTranslator
 
                     // A generic local function's type parameters cannot be
                     // expressed on a function-typed local, a ref-returning
-                    // local is an unsupported gap either way, and a `params`
-                    // parameter has no representation on cs2gs's
-                    // `ArrowTypeReference` (which carries parameter types
-                    // only), so the forward declaration and the function
-                    // literal assigned to it would be two different gsc
-                    // function types. All three carve-outs stay on the
-                    // existing `__local_` lift path, which lifts to a REAL
-                    // method declaration. A default parameter value is NOT a
-                    // carve-out here — see the header comment: it is
-                    // expressible on the declaration side and only constrains
-                    // call sites, which this scheme fully controls.
+                    // local is an unsupported gap either way, and neither a
+                    // `params` parameter nor a `ref`/`out`/`in` parameter has
+                    // any representation on cs2gs's `ArrowTypeReference`
+                    // (which carries parameter types only), so the forward
+                    // declaration and the function literal assigned to it
+                    // would be two different gsc function types. All four
+                    // carve-outs stay on the existing `__local_` lift path,
+                    // which lifts to a REAL method declaration. A default
+                    // parameter value is NOT a carve-out here — see the header
+                    // comment: it is expressible on the declaration side and
+                    // only constrains call sites, which this scheme fully
+                    // controls.
                     if (localFunction.TypeParameterList != null
                         || symbol.ReturnsByRef
-                        || symbol.Parameters.Any(IsVariadicCarrierParameter))
+                        || symbol.Parameters.Any(IsVariadicCarrierParameter)
+                        || symbol.Parameters.Any(parameter => parameter.RefKind != RefKind.None))
                     {
                         continue;
                     }

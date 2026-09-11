@@ -1472,8 +1472,10 @@ public sealed partial class CSharpToGSharpTranslator
         /// into the positional form that call shape requires — a named argument
         /// carries no meaning through a structural arrow type, whose parameters
         /// have types but no names. The argument VALUE is translated (never the
-        /// `name:` wrapper) for that reason; `ref`/`out` argument forms are
-        /// unaffected, since they live on the value translation.
+        /// `name:` wrapper) for that reason. A ref-kind argument cannot occur
+        /// here at all: a local function with a `ref`/`out`/`in` parameter is
+        /// carved out of the scheme at registration time, since
+        /// `ArrowTypeReference` cannot declare a ref-kind.
         /// </summary>
         /// <remarks>
         /// <para>
@@ -1490,8 +1492,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// Explicit operands are still TRANSLATED in the array's (source)
         /// order, so any spill they hoist keeps its relative position. When the
         /// ordinal permutation would additionally move one explicit operand
-        /// before another that was written first, each non-trivial explicit
-        /// operand is spilled to a `let __spillN` in the enclosing statement
+        /// before another that was written first, EVERY explicit operand that
+        /// is not a literal or type name — a bare identifier very much
+        /// included, see
+        /// <see cref="SnapshotPermutedArgumentOperand"/> — is spilled to a
+        /// `let __spillN` in the enclosing statement
         /// seam, so the emitted program still EVALUATES them in source order
         /// (C# §12.6.2.2) and only the already-constant defaults move. A call
         /// site whose explicit ordinals are already ascending — which includes
@@ -1530,20 +1535,53 @@ public sealed partial class CSharpToGSharpTranslator
                 var argumentSyntax = (ArgumentSyntax)argumentOperation.Syntax;
                 GExpression value = this.TranslateArgumentValue(argumentSyntax);
 
-                // A `ref`/`out` argument is never spilled: its translation is an
-                // ADDRESS form (`&x` / `out x`), and binding that to a
+                // A `ref`/`out`/`in` argument is left in place. Its translation
+                // is an ADDRESS form (`&x`), and binding that to a
                 // `let __spillN` would hand the callee the temp instead of the
-                // caller's variable. Such an argument is a plain lvalue with no
-                // evaluation side effect of its own, so leaving it in place
-                // cannot reorder anything observable.
+                // caller's variable. The branch is inert rather than a
+                // judgement call: a local function with ANY ref-kind parameter
+                // is carved out of the claimed-cycle scheme entirely
+                // (`RegisterCapturingRecursiveLocalFunctions`), because
+                // `ArrowTypeReference` has no ref-kind to declare — so no
+                // ref-kind argument ever reaches this method. It is kept as a
+                // guard so that loosening the carve-out cannot silently start
+                // rebinding an address to a temp. (PR #4211 review: the earlier
+                // claim here — that a ref lvalue "has no evaluation side effect
+                // of its own" — was simply false, e.g. `ref slots[Next()]`;
+                // the carve-out, not that claim, is what makes this safe.)
                 slots[ordinal] = permutesExplicitArguments
                     && argumentSyntax.RefKindKeyword.IsKind(SyntaxKind.None)
-                    ? this.SpillOperand(value, argumentOperation.Syntax)
+                    ? this.SnapshotPermutedArgumentOperand(value, argumentOperation.Syntax)
                     : value;
             }
 
             return slots.ToList();
         }
+
+        // Evaluates one explicit by-value operand of a PERMUTED claimed-cycle
+        // call into a `let __spillN` so that the emitted program still runs the
+        // explicit operands in source order (C# §12.6.2.2) even though the
+        // reassembled call lists them in parameter order.
+        //
+        // Unlike an ordinary spill this does NOT honor
+        // `IsTrivialOperand`. That shortcut exists for DUPLICATION ("reading
+        // this twice is the same as reading it once"), and duplication is not
+        // what happens here: the operand is read exactly once, but at a
+        // different POINT IN TIME relative to the other operands. A bare
+        // identifier is the exact shape that breaks — `Add(c: x, a: MutateX())`
+        // must read `x` before `MutateX()` runs, and leaving `x` embedded in
+        // the reassembled call `Add!!(__spill0, 2, x)` reads it after
+        // (PR #4211 review, verified end to end: the call printed 219 where C#
+        // prints 125).
+        //
+        // A literal or a type name is genuinely immune — nothing can change
+        // what it denotes — so those stay embedded and keep the output free of
+        // pointless temps. `this` is NOT assumed immune: a struct receiver is a
+        // value, and a later operand can mutate its fields.
+        private GExpression SnapshotPermutedArgumentOperand(GExpression value, SyntaxNode operandSyntax) =>
+            value is LiteralExpression or TypeExpression
+                ? value
+                : this.SpillOperand(value, operandSyntax, forceNonTrivial: true);
 
         // True when reassembling `operationArguments` by parameter ordinal
         // would emit two EXPLICIT operands in an order other than the one they

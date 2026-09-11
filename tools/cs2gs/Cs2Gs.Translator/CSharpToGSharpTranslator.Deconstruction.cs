@@ -1285,14 +1285,27 @@ public sealed partial class CSharpToGSharpTranslator
         // see <see cref="TranslateLambda"/>/<see cref="TranslateLocalFunction"/>)
         // the operand is conservatively left embedded as-is rather than spilled
         // into an unrelated scope.
-        private GExpression SpillOperand(GExpression operand) => this.SpillOperand(operand, this.state.PendingSpillPrologue);
+        private GExpression SpillOperand(GExpression operand, bool forceNonTrivial = false) =>
+            this.SpillOperand(operand, this.state.PendingSpillPrologue, forceNonTrivial);
 
         // As above, but retains a loud fallback for a future expression-only
         // site that fails to open either a statement seam or issue #3355's
         // native block-expression seam.
-        private GExpression SpillOperand(GExpression operand, SyntaxNode operandSyntaxForDiagnostic)
+        //
+        // `forceNonTrivial` suppresses the <see cref="IsTrivialOperand"/>
+        // shortcut. That shortcut answers "is duplicating this expression
+        // safe?", which is the wrong question for a caller that is REORDERING
+        // evaluation rather than duplicating it: a bare identifier is safe to
+        // read twice, but it is NOT safe to read it LATER than written when
+        // another operand that moved ahead of it can mutate what it names
+        // (PR #4211's third review round — see
+        // <see cref="SnapshotPermutedArgumentOperand"/>).
+        private GExpression SpillOperand(
+            GExpression operand,
+            SyntaxNode operandSyntaxForDiagnostic,
+            bool forceNonTrivial = false)
         {
-            if (IsTrivialOperand(operand))
+            if (!forceNonTrivial && IsTrivialOperand(operand))
             {
                 return operand;
             }
@@ -1304,12 +1317,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (this.state.PendingSpillPrologue != null)
             {
-                return this.SpillOperand(operand);
+                return this.SpillOperand(operand, forceNonTrivial);
             }
 
             string message =
                 "a non-trivial operand reached an expression-only translation site without opening " +
-                "a native block-expression spill seam; emitting it would evaluate it more than once.";
+                "a native block-expression spill seam; emitting it in place would evaluate it more " +
+                "than once, or out of source order.";
             this.context.ReportUnsupported(operandSyntaxForDiagnostic, message);
             return operand;
         }
@@ -1446,9 +1460,12 @@ public sealed partial class CSharpToGSharpTranslator
         // <see cref="FlattenChainedAssignment"/>) that already build their own
         // ordered statement list and know exactly where the spill must land,
         // independent of whatever statement seam happens to be active.
-        private GExpression SpillOperand(GExpression operand, List<GStatement> prologue)
+        private GExpression SpillOperand(
+            GExpression operand,
+            List<GStatement> prologue,
+            bool forceNonTrivial = false)
         {
-            if (IsTrivialOperand(operand) || prologue == null)
+            if ((!forceNonTrivial && IsTrivialOperand(operand)) || prologue == null)
             {
                 return operand;
             }
