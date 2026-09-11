@@ -60,14 +60,21 @@ namespace Cs2Gs.Tests;
 /// <c>Issue1481MapFunctionIteratorEmitTests.cs</c>,
 /// <c>Issue813TupleSequenceReturnEmitTests.cs</c>) with the same
 /// <c>NullReferenceException</c>-while-inspecting-the-generated-interfaces
-/// signature, and the same count: of those three files' seven
-/// <c>AssertImplementsGenericOf</c>/<c>AssertImplementsEnumerableOf</c>
-/// reflection tests, exactly six assert an interface row closed over the
-/// state machine's own unresolved Var(0) type parameter (so
-/// <see cref="Type.FullName"/> is null on that row and the stray <c>!!</c>
-/// throws); the seventh —
-/// <c>StateMachineClass_MapOfListElement_StaysErased_AndVerifies</c> —
-/// asserts a fully-closed, erased row (<c>Dictionary&lt;string,
+/// signature, and the same count: of those three files' seven reflection
+/// tests — six sharing the <c>AssertImplementsGenericOf</c> helper
+/// (<c>Issue1489GenericAsyncIteratorEmitTests.cs</c>, three tests) /
+/// <c>AssertImplementsEnumerableOf</c> helper
+/// (<c>Issue1481MapFunctionIteratorEmitTests.cs</c>, three tests), plus a
+/// seventh in <c>Issue813TupleSequenceReturnEmitTests.cs</c>
+/// (<c>StateMachineClass_TupleElement_ImplementsIEnumerableOfValueTuple</c>)
+/// that performs the equivalent <c>smType.GetInterfaces()</c> scan inline
+/// rather than through either shared helper — exactly six assert an
+/// interface row closed over the state machine's own unresolved Var(0)
+/// type parameter (so <see cref="Type.FullName"/> is null on that row and
+/// the stray <c>!!</c> throws); the seventh —
+/// <c>StateMachineClass_MapOfListElement_StaysErased_AndVerifies</c>, one
+/// of the <c>AssertImplementsEnumerableOf</c>-based three — asserts a
+/// fully-closed, erased row (<c>Dictionary&lt;string,
 /// List&lt;object&gt;&gt;</c>) whose <c>FullName</c> is never null, so it
 /// was never among the failures. There is no defect left to fix for #4115
 /// either — this class's <c>TranslatedSnippet_*</c> and
