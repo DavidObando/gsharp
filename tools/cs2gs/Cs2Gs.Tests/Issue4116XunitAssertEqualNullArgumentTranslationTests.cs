@@ -3,10 +3,15 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -123,6 +128,81 @@ public static class Probe
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void CustomAssertEqual_InANamespaceOnlyEndingInXunit_StaysForcedNonNull()
+    {
+        // Control (Copilot review on #4209): the namespace check must pin
+        // the EXACT top-level `Xunit` namespace (`global::Xunit`), not
+        // merely a namespace whose LAST segment happens to be named
+        // "Xunit". `Company.Xunit.Assert.Equal` is an unrelated,
+        // non-exempted method that just happens to share the name/shape.
+        //
+        // IMPORTED (a genuinely separately-compiled, referenced assembly —
+        // not a same-compilation declaration): gsc's oblivious-PROMOTION
+        // mechanism only ever rewrites a SAME-compilation declaration's own
+        // parameter type, so a same-file "Company.Xunit.Assert.Equal" would
+        // itself get silently promoted to `object?` by usage evidence,
+        // masking the exact bug this control exists to catch. An imported
+        // method's declared (non-nullable, explicitly `#nullable enable`)
+        // parameter can never be rewritten that way, so its own contract is
+        // what decides — and a mutant that matches on the namespace's leaf
+        // name alone is caught here.
+        MetadataReference customAssertLibrary = CompileLibraryReference(@"
+#nullable enable
+namespace Company.Xunit
+{
+    public static class Assert
+    {
+        public static void Equal(object expected, object actual)
+        {
+        }
+    }
+}
+");
+
+        string rendered = Render(
+            @"
+using Company.Xunit;
+
+public static class Probe
+{
+    private static void CheckDefault(object expected, object actual)
+    {
+        Assert.Equal(expected, actual);
+    }
+
+    public static void Run()
+    {
+        CheckDefault(null, null);
+    }
+}
+",
+            additionalReferences: new[] { customAssertLibrary });
+
+        // Round-trip binding is skipped here: it would require also
+        // resolving the compiled "Company.Xunit.Assert" library on gsc's
+        // OWN (separate) ReferenceResolver, which this control's narrow
+        // purpose — proving the printed text still forces `!!` — does not
+        // warrant.
+        Assert.Contains("expected!!", rendered, StringComparison.Ordinal);
+    }
+
+    private static MetadataReference CompileLibraryReference(string source)
+    {
+        var syntaxTree = CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest));
+        var compilation = CSharpCompilation.Create(
+            "Issue4116CustomXunitLibrary",
+            new[] { syntaxTree },
+            CSharpProjectLoader.RuntimeReferences(),
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        using var stream = new MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult result = compilation.Emit(stream);
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        stream.Position = 0;
+        return MetadataReference.CreateFromStream(stream);
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);
@@ -133,10 +213,15 @@ public static class Probe
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + rendered);
     }
 
-    private static string Render(string source)
+    private static string Render(string source, MetadataReference[] additionalReferences = null)
     {
+        IReadOnlyList<MetadataReference> references = additionalReferences == null
+            ? null
+            : CSharpProjectLoader.RuntimeReferences().Concat(additionalReferences).ToList();
+
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Source.cs", source) });
+            new[] { ("Source.cs", source) },
+            references);
 
         Assert.True(
             project.BoundWithoutErrors,

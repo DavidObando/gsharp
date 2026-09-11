@@ -2383,14 +2383,28 @@ public sealed partial class CSharpToGSharpTranslator
         // per-expression annotations at all. Returns null for every other
         // position (a nested initializer, a return, a local initializer,
         // …), where the literal's own natural type is exactly what's wanted.
+        //
+        // Walks the OPERATION tree, not the syntax tree: a semantics-
+        // preserving wrap (`eqMethod.Invoke(null, (new[] { m1, n }))`) still
+        // binds to the same argument/parameter, but Roslyn's operation tree
+        // elides a ParenthesizedExpressionSyntax entirely — it produces NO
+        // IOperation node of its own, so `GetOperation` on the ArgumentSyntax
+        // (or on the ParenthesizedExpressionSyntax) returns null even though
+        // the ArrayCreationOperation's own `.Parent` already IS the
+        // IArgumentOperation directly. Starting from the array expression's
+        // own operation and walking its OPERATION-tree parent (skipping only
+        // an intervening IConversionOperation, e.g. an implicit array
+        // covariance conversion) sidesteps the syntax-level parenthesization
+        // question entirely.
         private IArrayTypeSymbol TryGetArgumentParameterArrayType(ExpressionSyntax arrayExpression)
         {
-            if (arrayExpression.Parent is not ArgumentSyntax argument)
+            IOperation operation = this.context.SemanticModel.GetOperation(arrayExpression)?.Parent;
+            while (operation is IConversionOperation)
             {
-                return null;
+                operation = operation.Parent;
             }
 
-            return (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
+            return (operation as IArgumentOperation)
                 ?.Parameter?.Type as IArrayTypeSymbol;
         }
 

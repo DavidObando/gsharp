@@ -69,6 +69,35 @@ public static class Probe
     }
 
     [Fact]
+    public void ParenthesizedImplicitArrayLiteral_PassedToBclNullableElementParameter_DoesNotAssertItsElements()
+    {
+        // Copilot review on #4209: a semantics-preserving pair of
+        // parentheses around the array literal (`eqMethod.Invoke(null,
+        // (new[] { m1, n }))`) is still a direct call argument — its
+        // IMMEDIATE syntactic parent is a ParenthesizedExpressionSyntax,
+        // not the ArgumentSyntax, so the fix must walk up through it (as
+        // every other "is this a direct argument" check in this translator
+        // already does) rather than giving up and falling back to the
+        // oblivious annotation.
+        string rendered = Render(@"
+using System;
+using System.Reflection;
+
+public static class Probe
+{
+    public static void Run(MethodInfo eqMethod, object m1, Type nullableType)
+    {
+        var n = Activator.CreateInstance(nullableType);
+        eqMethod.Invoke(null, (new[] { m1, n }));
+    }
+}
+");
+
+        Assert.DoesNotContain("n!!", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void ImplicitArrayLiteral_PassedToSourceDeclaredObliviousElementParameter_StillAssertsItsElements()
     {
         // Control: a SOURCE-DECLARED (same-compilation) sink whose array
