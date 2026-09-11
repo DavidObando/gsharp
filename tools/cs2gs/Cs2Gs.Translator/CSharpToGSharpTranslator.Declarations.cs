@@ -279,9 +279,67 @@ public sealed partial class CSharpToGSharpTranslator
             // such a function is never at risk of the forward-reference
             // problem the nullable scheme exists to solve, so it plays no
             // part in ANY partner's SCC/reachability analysis either.
-            var topLevelHoistedStatements = new HashSet<StatementSyntax>(ordered.Where(statement =>
-                statement is LocalFunctionStatementSyntax hoistCandidate
-                && this.IsTopLevelLocalFunctionCaptureFree(hoistCandidate, argsParameter, enclosingSpan)));
+            //
+            // PR #4200 review follow-up: `IsTopLevelLocalFunctionCaptureFree`
+            // only inspects a CANDIDATE's own body for a captured sibling
+            // local/`args` — it has no idea whether the candidate CALLS
+            // another top-level local function that itself stays behind as a
+            // statement-local `let` binding (because THAT one genuinely
+            // captures). Hoisting such a candidate independently leaves its
+            // emitted `func` body referencing a name with no sibling `func`
+            // declaration to find — the callee is a statement-scoped `let`/
+            // nullable-var, not a pre-declared sibling. So the initial
+            // per-function hoist set is shrunk to a FIXED POINT: repeatedly
+            // drop any still-hoisted candidate that calls a sibling top-level
+            // local function symbol not itself (currently) in the hoisted set,
+            // until a pass removes nothing. A self-call doesn't count (plain
+            // recursion inside a genuine `func` already works natively).
+            // Everything that drops out here flows into
+            // `RegisterCapturingRecursiveLocalFunctions` below exactly like a
+            // function that was never a hoist candidate in the first place —
+            // that pass (widened by #4197 to claim every `group.Count > 1`
+            // SCC) picks the pair back up.
+            List<LocalFunctionStatementSyntax> topLevelLocalFunctions =
+                ordered.OfType<LocalFunctionStatementSyntax>().ToList();
+            var topLevelLocalFunctionsBySymbol =
+                new Dictionary<IMethodSymbol, LocalFunctionStatementSyntax>(SymbolEqualityComparer.Default);
+            foreach (LocalFunctionStatementSyntax candidate in topLevelLocalFunctions)
+            {
+                if (this.context.GetDeclaredSymbol(candidate) is IMethodSymbol candidateSymbol)
+                {
+                    topLevelLocalFunctionsBySymbol[candidateSymbol] = candidate;
+                }
+            }
+
+            var topLevelHoistedStatements = new HashSet<StatementSyntax>(topLevelLocalFunctions.Where(candidate =>
+                this.IsTopLevelLocalFunctionCaptureFree(candidate, argsParameter, enclosingSpan)));
+            bool shrank = true;
+            while (shrank)
+            {
+                shrank = false;
+                foreach (LocalFunctionStatementSyntax candidate in topLevelLocalFunctions)
+                {
+                    if (!topLevelHoistedStatements.Contains(candidate))
+                    {
+                        continue;
+                    }
+
+                    bool callsNonHoistedSibling = candidate.DescendantNodes()
+                        .Select(node => this.context.GetSymbolInfo(node).Symbol)
+                        .OfType<IMethodSymbol>()
+                        .Any(dependency =>
+                            topLevelLocalFunctionsBySymbol.TryGetValue(dependency, out LocalFunctionStatementSyntax dependencyDecl)
+                            && !ReferenceEquals(dependencyDecl, candidate)
+                            && !topLevelHoistedStatements.Contains(dependencyDecl));
+
+                    if (callsNonHoistedSibling)
+                    {
+                        topLevelHoistedStatements.Remove(candidate);
+                        shrank = true;
+                    }
+                }
+            }
+
             this.RegisterCapturingRecursiveLocalFunctions(
                 ordered.Where(statement => !topLevelHoistedStatements.Contains(statement)).ToList());
             bool renamedArgs = argsParameter != null && argsParameter.Name != "args";
@@ -298,7 +356,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     if (statement is LocalFunctionStatementSyntax localFunction
                         && this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol localSymbol
-                        && this.IsTopLevelLocalFunctionCaptureFree(localFunction, argsParameter, enclosingSpan))
+                        && topLevelHoistedStatements.Contains(localFunction))
                     {
                         GMember hoisted = this.TranslateTopLevelLocalFunctionAsFunc(localFunction, localSymbol);
                         if (hoisted != null)
