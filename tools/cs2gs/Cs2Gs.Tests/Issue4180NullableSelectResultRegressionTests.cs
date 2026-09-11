@@ -52,6 +52,29 @@ namespace Cs2Gs.Tests;
 /// matching when that element is already nullable-ANNOTATED (e.g. the
 /// BCL-declared <c>IEnumerable&lt;string?&gt;</c> <c>string.Join</c> accepts).
 /// </para>
+/// <para>
+/// Issue #4115 ("selfmig: generic iterator state-machine metadata
+/// inspection throws NRE (6 parity failures)", split from #4045) is the
+/// SAME six rows as #4180 (split from #4129) — both parity measurements
+/// independently surfaced the identical
+/// <c>StateMachine_BareElement_IsGeneric_ImplementsAsyncEnumerableOfVar0</c>,
+/// <c>StateMachine_MapElement_ImplementsAsyncEnumerableOfReifiedDictionary</c>,
+/// <c>StateMachine_FunctionElement_ImplementsAsyncEnumerableOfReifiedFunc</c>,
+/// <c>StateMachineClass_MapElement_ImplementsIEnumerableOfReifiedDictionary</c>,
+/// <c>StateMachineClass_FunctionElement_ImplementsIEnumerableOfReifiedFunc</c>,
+/// and <c>StateMachineClass_TupleElement_ImplementsIEnumerableOfValueTuple</c>
+/// failures, in the same three files, with the same
+/// <c>NullReferenceException</c>-inside-<c>.Select(i =&gt; i.FullName)</c>
+/// signature. There is no defect left to fix for #4115 either — this class's
+/// two <c>!!</c>-on-<c>FullName</c> tests already pin the exact translator
+/// defect, and <c>test/Compiler.Tests</c>' 25 native tests across
+/// <c>Issue1481MapFunctionIteratorEmitTests</c>,
+/// <c>Issue1489GenericAsyncIteratorEmitTests</c>, and
+/// <c>Issue813TupleSequenceReturnEmitTests</c> were never affected (native
+/// gsc never hits this bug — it is purely a self-hosting translation-fidelity
+/// issue). This provenance note is the same shape #4199 used to record that
+/// #4195's regression test also pinned #4112's rows.
+/// </para>
 /// </summary>
 public sealed class Issue4180NullableSelectResultRegressionTests
 {
