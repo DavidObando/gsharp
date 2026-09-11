@@ -2319,7 +2319,26 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateImplicitArrayCreation(ImplicitArrayCreationExpressionSyntax creation)
         {
             GTypeReference elementType = this.GetArrayElementType(creation, null);
-            IArrayTypeSymbol arrayType = this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol;
+
+            // Issue #4116: prefer the BOUND PARAMETER's array element type,
+            // when this literal is passed directly as a call argument, over
+            // the literal's own best-common-type-inferred `Type`/
+            // `ConvertedType`. In a nullable-OBLIVIOUS file (no `#nullable
+            // enable` — exactly the migrated corpus's own state), Roslyn
+            // does not compute per-EXPRESSION nullable annotations at all:
+            // `GetTypeInfo(creation).Type` and `.ConvertedType` both report
+            // `NullableAnnotation.None` for `new[] { a, n }`, even when it
+            // flows straight into a BCL sink like
+            // `MethodInfo.Invoke(object?, object?[]?)`. The bound PARAMETER
+            // SYMBOL itself, resolved from the enclosing argument's
+            // operation, is unaffected by that — parameter annotations come
+            // from the callee's OWN (already nullable-annotated) metadata
+            // regardless of the caller's nullable context — so it is
+            // preferred here when available, falling back to the literal's
+            // natural type otherwise.
+            IArrayTypeSymbol arrayType =
+                this.TryGetArgumentParameterArrayType(creation)
+                ?? this.context.GetTypeInfo(creation).Type as IArrayTypeSymbol;
             ITypeSymbol elementTypeSymbol = arrayType?.ElementType;
             if (arrayType is { Rank: > 1 })
             {
@@ -2353,6 +2372,26 @@ public sealed partial class CSharpToGSharpTranslator
                         this.TranslateArrayInitializerElement(
                             expression, elementTypeSymbol, literalPromoted))
                     .ToList());
+        }
+
+        // Issue #4116: when `arrayExpression` is passed DIRECTLY as a call
+        // argument, resolves the array type of the BOUND PARAMETER it binds
+        // to — via the argument's own IArgumentOperation, not the
+        // expression's own GetTypeInfo — so its element's real nullable
+        // annotation (sourced from the callee's metadata) is visible even in
+        // a nullable-oblivious file, where GetTypeInfo never populates
+        // per-expression annotations at all. Returns null for every other
+        // position (a nested initializer, a return, a local initializer,
+        // …), where the literal's own natural type is exactly what's wanted.
+        private IArrayTypeSymbol TryGetArgumentParameterArrayType(ExpressionSyntax arrayExpression)
+        {
+            if (arrayExpression.Parent is not ArgumentSyntax argument)
+            {
+                return null;
+            }
+
+            return (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
+                ?.Parameter?.Type as IArrayTypeSymbol;
         }
 
         private GExpression TranslateInitializerExpression(InitializerExpressionSyntax initializer)

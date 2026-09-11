@@ -2146,9 +2146,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #4116: `Assert.Equal<T>(T, T)`/`Assert.NotEqual<T>(T, T)`
+            // carry no non-null constraint on `T` in xunit's own signature —
+            // comparing a value against a legitimately-null expected/actual
+            // result (e.g. a reflected `ParameterInfo.DefaultValue` for a
+            // nilable-defaulted parameter) is exactly what they exist to do.
+            // Before this, only `Assert.Null`/`Assert.NotNull` were exempted
+            // here, so gsc's oblivious-forwarding bridge treated `Equal`'s
+            // arguments as flowing into a non-null sink and forced a G# `!!`
+            // runtime assertion on a value that is null by design — throwing
+            // an NRE instead of comparing the legitimate `nil`.
             return this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
             {
-                Name: "Null" or "NotNull",
+                Name: "Null" or "NotNull" or "Equal" or "NotEqual",
                 ContainingType.Name: "Assert",
                 ContainingNamespace.Name: "Xunit",
             };
