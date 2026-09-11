@@ -245,4 +245,53 @@ class C { func F(flag bool, other Counters) { for v in flag ? Counters{X: 1} : o
         var structLiteral = Descendants(tree.Root).OfType<StructLiteralExpressionSyntax>().Single();
         Assert.Equal("Counters", structLiteral.TypeIdentifier.Text);
     }
+
+    [Fact]
+    public void IfLet_FirstBinding_LabelShapedStructLiteral_Followed_By_MoreBindings_Still_Parses()
+    {
+        // A label-shaped struct literal that is only the FIRST of several
+        // `if let` bindings must stay a struct literal even though the token
+        // right after its matching `}` is `,` (the binding list's own
+        // separator), not a further body brace or a binary/postfix operator —
+        // this is `,`'s discrimination witness: without it in the accept set,
+        // this falls through to IsExpressionContinuationAfterBraceAt, which
+        // does not accept `,`, and the parse would fail the same way the
+        // label repros did.
+        const string source = @"
+package p
+data struct Pt { let X int32 }
+class C { func F(flag Pt?, b string?) { if let x = Pt{X: 1}, let y = b { } else { } } }
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var ifLet = Descendants(tree.Root).OfType<IfLetStatementSyntax>().Single();
+        Assert.Equal(2, ifLet.Bindings.Count);
+        var structLiteral = Descendants(ifLet.Bindings[0]).OfType<StructLiteralExpressionSyntax>().Single();
+        Assert.Equal("Pt", structLiteral.TypeIdentifier.Text);
+    }
+
+    [Fact]
+    public void If_Condition_With_LabeledBreak_Body_And_Else_Still_Parses()
+    {
+        // Pins the shape immediately after a labeled-body `if`'s own matching
+        // close brace: `else`. ElseKeyword is not in the accept set (an
+        // `else` clause can only follow a genuine `if`-body, never a
+        // struct-literal condition in this suppressed position), so this
+        // must keep parsing as a labeled body with an else branch, not
+        // regress into an attempted (and impossible) struct-literal reading.
+        const string source = @"
+package p
+class C { func F(flag bool) { if flag { retry: break } else { } } }
+";
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+
+        var ifStatement = Descendants(tree.Root).OfType<IfStatementSyntax>().Single();
+        Assert.NotNull(ifStatement.ElseClause);
+        Assert.Empty(Descendants(ifStatement.Condition).OfType<StructLiteralExpressionSyntax>());
+
+        var labeled = Descendants(ifStatement.ThenStatement).OfType<LabeledStatementSyntax>().Single();
+        Assert.Equal("retry", labeled.LabelIdentifier.Text);
+    }
 }
