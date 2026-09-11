@@ -7,6 +7,7 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -79,7 +80,17 @@ namespace Corpus.Issue4116
         Assert.Contains("int32(il[i + 4]) << 24", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
 
-        Assert.Equal(0x04030201, EvaluateDecode(new byte[] { 0, 0x01, 0x02, 0x03, 0x04 }, 0));
+        // End-to-end proof: compile and RUN the emitted G# itself (not a
+        // parallel C# re-implementation of the same arithmetic, which would
+        // pass unconditionally regardless of what the translator emitted).
+        // Without the fix, the byte-typed slots stay uint8-shifted and every
+        // term past the first collapses to 0, so the reconstructed value
+        // would be 1 (just il[i + 1]) instead of the correct 0x04030201.
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            rendered + Environment.NewLine + "Holder().Decode([]uint8{0, 1, 2, 3, 4}, 0)");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(0x04030201, result.Value);
     }
 
     [Fact]
@@ -151,9 +162,6 @@ namespace Corpus.Issue4116
         Assert.DoesNotContain("int32(value)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
-
-    private static int EvaluateDecode(byte[] il, int i)
-        => il[i + 1] | (il[i + 2] << 8) | (il[i + 3] << 16) | (il[i + 4] << 24);
 
     private static void AssertRoundTripParses(string rendered)
     {
