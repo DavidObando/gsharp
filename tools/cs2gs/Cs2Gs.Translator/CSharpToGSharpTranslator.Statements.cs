@@ -230,6 +230,69 @@ public sealed partial class CSharpToGSharpTranslator
                     type = MakeNullable(this.typeMapper.MapEventType(
                         inferredLocal.Type, this.context, declaration.Type.GetLocation()));
                 }
+                else if (initializer != null &&
+                    declarator.Initializer.Value is BaseObjectCreationExpressionSyntax { ArgumentList.Arguments.Count: 1 } &&
+                    this.context.GetDeclaredSymbol(declarator) is ILocalSymbol delegateInferredLocal &&
+                    delegateInferredLocal.Type is INamedTypeSymbol namedDelegateLocalType &&
+                    namedDelegateLocalType.TypeKind == TypeKind.Delegate)
+                {
+                    // Issue #4127/#4129 (self-hosting regression, #3501):
+                    // decomposed into a designation (`is ILocalSymbol
+                    // delegateInferredLocal`) plus a separate, PLAIN enum
+                    // comparison (`namedDelegateLocalType.TypeKind ==
+                    // TypeKind.Delegate`) — not a nested `{ Type:
+                    // INamedTypeSymbol { TypeKind: TypeKind.Delegate } }`
+                    // property pattern — because gsc's pattern matcher does
+                    // not reliably evaluate a property pattern containing an
+                    // enum-constant sub-pattern against an
+                    // imported-interface-typed scrutinee (`ILocalSymbol.Type`
+                    // is declared `ITypeSymbol`) once this exact translator
+                    // source is itself translated to G# and compiled by gsc
+                    // — the self-hosting pipeline issue #4116 exists to fix.
+                    // See CSharpTypeMapper.MapEventType and
+                    // CSharpToGSharpTranslator.Constructors.cs's
+                    // `explicitlyNamedDelegate` for the same workaround
+                    // already applied elsewhere in this translator (issue
+                    // #4153's own repro isolates the trigger to the enum
+                    // sub-pattern alone).
+                    //
+                    // Issue #4116: a `var`-typed local initialized by a
+                    // delegate-CREATION expression (`var handler = new
+                    // Action(() => counter++);`) can lose its C# delegate
+                    // identity entirely. TranslateObjectCreation unwraps
+                    // `new SomeDelegate(lambda)` straight to the bare lambda
+                    // argument (G# has no delegate-wrapper constructor to
+                    // keep), and a `var` local — unlike an EXPLICITLY typed
+                    // one (`EventHandler handler = ...`, issue #4045, handled
+                    // by the `hasExplicitType` branch above) — has no OTHER
+                    // place in the emitted G# that still carries the C#
+                    // delegate type forward. Left un-annotated, G# infers the
+                    // arrow lambda's type from its own BODY instead: a VOID
+                    // delegate whose lambda body is a value-producing
+                    // expression (e.g. `counter++` — G# models
+                    // increment/decrement as value-producing, ADR-0115 §B /
+                    // gsc issue #1027) infers a non-void `Func&lt;T&gt;`
+                    // rather than the source's `Action`, and a
+                    // reflection-based `MethodInfo.Invoke` against the real
+                    // (`Action`-typed) parameter then rejects it outright.
+                    // This is the same nominal-identity-preservation rule
+                    // already applied to an explicit local's declared type, a
+                    // `typeof(...)` operand (issue #4113), and an explicit
+                    // generic type argument (issue #4113) — MapExplicitType,
+                    // not the general structurally-canonicalizing Map.
+                    //
+                    // Scoped to exactly this shape (an object-CREATION
+                    // initializer, the one TranslateObjectCreation unwraps):
+                    // a `var` local initialized by a BARE lambda (`var f = (x
+                    // int32 = 10) => x * 2;`, no wrapping delegate
+                    // constructor at all) loses nothing — there is no unwrap
+                    // step to discard information — and must keep the
+                    // idiomatic unannotated arrow form (issue #1901's own
+                    // coverage pins this; a broader condition here
+                    // regressed it).
+                    type = this.typeMapper.MapExplicitType(
+                        namedDelegateLocalType, this.context, declaration.Type.GetLocation());
+                }
 
                 results.Add(new LocalDeclarationStatement(
                     binding,
