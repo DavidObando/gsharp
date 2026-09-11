@@ -2365,11 +2365,17 @@ public sealed partial class CSharpToGSharpTranslator
         // ONLY from a claimed SCC also folds into that SAME group with its
         // real name (see the fold-BFS below) instead of being lifted to
         // `__local_` by `RegisterRecursiveLocalFunctionLifts` purely because
-        // it happened to be reachable. Only a cycle that itself passes through
-        // a generic or ref-returning local function stays on the `__local_`
-        // path (those members never enter the `functions`/`edges` graph below,
-        // so this pass never even sees the cycle — see the carve-out further
-        // down).
+        // it happened to be reachable. Only a cycle (or fold candidate) that
+        // itself passes through a generic, ref-returning, or default-
+        // parameter-carrying local function stays on the `__local_` path
+        // (those members never enter the `functions`/`edges` graph below, so
+        // this pass never even sees the cycle — see the carve-out further
+        // down). PR #4200's CI run found the default-parameter gap: a
+        // non-recursive callee folded into a group has every call site
+        // rewritten to `Name!!(args)`, and a delegate-typed call site cannot
+        // fall back to a default the way a real method call can, so a caller
+        // that relied on the C#-level default would end up short an argument
+        // (GS0144).
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
             // `DescendantNodes()` excludes the node itself — local functions that
@@ -2391,10 +2397,26 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    // A generic local function's type parameters cannot be expressed
-                    // on a function-typed local, and a ref-returning local is an
-                    // unsupported gap either way — both stay on the existing path.
-                    if (localFunction.TypeParameterList != null || symbol.ReturnsByRef)
+                    // A generic local function's type parameters cannot be
+                    // expressed on a function-typed local, a ref-returning
+                    // local is an unsupported gap either way, and a
+                    // DEFAULT PARAMETER VALUE has no expression on a
+                    // function-typed local either — `(Params) -> R)?` is a
+                    // structural arrow/delegate type, not a full method
+                    // declaration, so it cannot carry a default. Once a
+                    // function is rewritten to that shape, every call site
+                    // is rewritten to `Name!!(args)` too — a call site that
+                    // relied on the C#-level default (supplying fewer
+                    // arguments than the parameter list) would then be
+                    // missing a required argument (GS0144), since a
+                    // delegate-typed call site cannot fall back to a
+                    // default the way a real method call can. All three
+                    // carve-outs stay on the existing `__local_` lift path,
+                    // which lifts to a REAL method declaration that natively
+                    // supports default parameter values.
+                    if (localFunction.TypeParameterList != null
+                        || symbol.ReturnsByRef
+                        || symbol.Parameters.Any(parameter => parameter.HasExplicitDefaultValue))
                     {
                         continue;
                     }

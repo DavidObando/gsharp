@@ -238,4 +238,85 @@ namespace Demo
 
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "C().Run(2)");
     }
+
+    [Fact]
+    public void DefaultParameterNonRecursiveDependency_StaysLiftedNotFolded()
+    {
+        // Carve-out regression guard found via PR #4200's own "hot-core
+        // translation guard" CI job (a separate root cause from that PR's
+        // Copilot review comment): #4197's fold-BFS pulls a non-recursive
+        // callee reachable only from a claimed capturing SCC into the SAME
+        // forward-declared nullable-function-local group. That scheme's
+        // declaration shape — `var Name (Params -> R)? = nil` — is a
+        // structural arrow/delegate type with no way to express a default
+        // parameter value, and every call site is rewritten to
+        // `Name!!(args)` (a delegate-typed invocation), which cannot fall
+        // back to a default the way a real method call can. Real corpus
+        // shape (`src/Core/CodeAnalysis/Binding/Binder.cs`'s
+        // `FindTopLevelBaseIndex`, called with all 3 arguments from
+        // `AddNestedBaseDependencies` but only 2 from `AddBaseFirst`, relying
+        // on the third parameter's default): folding it in produced
+        // `GS0144: Function 'FindTopLevelBaseIndex!!' requires 3 arguments
+        // but was given 2` at the `AddBaseFirst`-shaped call site. A
+        // default-parameter candidate must stay on the `__local_` lift path
+        // instead, which lifts to a REAL method declaration that natively
+        // supports default parameter values — both the 3-argument and the
+        // 2-argument (default-relying) call sites keep working.
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
+namespace Demo
+{
+    public class Builder
+    {
+        public int Project(int seed)
+        {
+            int total = 0;
+
+            void Add(int depth)
+            {
+                total += CollectLabel(depth);
+                if (depth > 0)
+                {
+                    AddPatternSwitch(depth - 1);
+                }
+            }
+
+            void AddPatternSwitch(int depth)
+            {
+                if (depth > 0)
+                {
+                    Add(depth - 1);
+                }
+            }
+
+            int CollectLabel(int depth, int bonus = 10)
+            {
+                return (depth * 2) + bonus;
+            }
+
+            Add(seed);
+            System.Console.WriteLine(total);
+            return total;
+        }
+    }
+}");
+
+        // The capturing `Add`/`AddPatternSwitch` cycle is unaffected — still
+        // the real-named nullable scheme, same as `CapturingCycleNonRecursiveDependency_FoldsIntoSameGroup_NotLifted`.
+        Assert.Contains("var Add", printed, StringComparison.Ordinal);
+        Assert.Contains("var AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.Contains("Add!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("AddPatternSwitch!!(", printed, StringComparison.Ordinal);
+
+        // `CollectLabel` — the default-parameter non-recursive dependency —
+        // must NOT be folded into that group; it stays lifted to a synthetic
+        // helper (a real method, defaults and all).
+        Assert.DoesNotContain("var CollectLabel", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("CollectLabel!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Project_CollectLabel", printed, StringComparison.Ordinal);
+
+        // Add(3): total += CollectLabel(3, 10)=16 -> AddPatternSwitch(2) ->
+        // Add(1): total += CollectLabel(1, 10)=12 (total=28) ->
+        // AddPatternSwitch(0): depth not > 0, stop. Final total = 28.
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(3)", "28");
+    }
 }
