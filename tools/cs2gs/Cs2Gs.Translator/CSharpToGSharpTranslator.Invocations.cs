@@ -295,8 +295,10 @@ public sealed partial class CSharpToGSharpTranslator
             else if (invocation.Expression is GenericNameSyntax generic)
             {
                 ISymbol genericSymbol = this.context.GetSymbolInfo(invocation).Symbol;
-                if (genericSymbol is IMethodSymbol
-                    { IsStatic: true, ContainingType: { TypeKind: TypeKind.Class or TypeKind.Struct } genericOwner } genericMethod
+                if (genericSymbol is IMethodSymbol genericMethod
+                    && genericMethod.IsStatic
+                    && genericMethod.ContainingType is INamedTypeSymbol genericOwner
+                    && (genericOwner.TypeKind == TypeKind.Class || genericOwner.TypeKind == TypeKind.Struct)
                     && RequiresQualifiedImportedContextualCall(
                         genericMethod,
                         includeGenericPrefix: true))
@@ -343,8 +345,11 @@ public sealed partial class CSharpToGSharpTranslator
                 typeArguments = this.MapTypeArguments(memberBindingGeneric);
             }
             else if (invocation.Expression is IdentifierNameSyntax bareName &&
-                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true, MethodKind: not MethodKind.LocalFunction } staticMethod &&
-                staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol staticMethod &&
+                staticMethod.IsStatic &&
+                staticMethod.MethodKind != MethodKind.LocalFunction &&
+                staticMethod.ContainingType is INamedTypeSymbol owner &&
+                (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualCall(staticMethod)) &&
@@ -3932,8 +3937,8 @@ public sealed partial class CSharpToGSharpTranslator
                     && target is { IsReferenceType: true })
                 || (conversion.IsExplicit
                     && source is ITypeParameterSymbol
-                    && target is { TypeKind: TypeKind.Interface })
-                || (source is { TypeKind: TypeKind.Dynamic }
+                    && target?.TypeKind == TypeKind.Interface)
+                || (source?.TypeKind == TypeKind.Dynamic
                     && target is { IsReferenceType: true });
         }
 

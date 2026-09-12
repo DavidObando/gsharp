@@ -100,9 +100,11 @@ public sealed partial class CSharpToGSharpTranslator
             // (`Ec3Extensions.FfAc3ChannelsTab`) — the field/property analog of the
             // bare static-call rule (ADR-0115 §B.18). Without this the binder reports
             // GS0125 (the name is not in scope at top level).
-            if (this.context.GetSymbolInfo(identifier).Symbol is
-                    { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
-                staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+            if (this.context.GetSymbolInfo(identifier).Symbol is ISymbol staticMember &&
+                staticMember.IsStatic &&
+                (staticMember.Kind == SymbolKind.Field || staticMember.Kind == SymbolKind.Property) &&
+                staticMember.ContainingType is INamedTypeSymbol owner &&
+                (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualValue(

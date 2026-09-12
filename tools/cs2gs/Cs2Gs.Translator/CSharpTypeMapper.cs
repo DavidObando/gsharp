@@ -891,8 +891,9 @@ public sealed class CSharpTypeMapper
                 }
 
                 if (node is TypeDeclarationSyntax memberCensusDeclaration
-                    && semanticModel.GetDeclaredSymbol(memberCensusDeclaration) is INamedTypeSymbol
-                        { TypeKind: TypeKind.Class or TypeKind.Struct } declaredAggregate)
+                    && semanticModel.GetDeclaredSymbol(memberCensusDeclaration) is INamedTypeSymbol declaredAggregate
+                    && (declaredAggregate.TypeKind == TypeKind.Class
+                        || declaredAggregate.TypeKind == TypeKind.Struct))
                 {
                     foreach (ISymbol member in declaredAggregate.GetMembers())
                     {

@@ -260,7 +260,8 @@ public sealed partial class CSharpToGSharpTranslator
         // input here.
         private static bool MentionsMethodTypeParameter(ITypeSymbol type) => type switch
         {
-            ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } => true,
+            ITypeParameterSymbol parameter =>
+                parameter.TypeParameterKind == TypeParameterKind.Method,
             IArrayTypeSymbol array => MentionsMethodTypeParameter(array.ElementType),
             IPointerTypeSymbol pointer => MentionsMethodTypeParameter(pointer.PointedAtType),
             INamedTypeSymbol named => named.TypeArguments.Any(MentionsMethodTypeParameter),

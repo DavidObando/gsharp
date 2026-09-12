@@ -578,8 +578,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             IParameterSymbol receiver = symbol.Parameters[0];
             return receiver.RefKind == RefKind.None &&
-                receiver.Type is INamedTypeSymbol
-                    { TypeKind: TypeKind.Class or TypeKind.Struct } receiverType &&
+                receiver.Type is INamedTypeSymbol receiverType &&
+                (receiverType.TypeKind == TypeKind.Class || receiverType.TypeKind == TypeKind.Struct) &&
                 !IsGenericReceiver(receiverType) &&
                 !this.ShouldPromoteToNullableReference(receiver);
         }

@@ -604,7 +604,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private static bool IsMemberOfExtensionBearingStaticClass(ISymbol symbol)
         {
-            if (symbol.ContainingType is not { IsStatic: true, TypeKind: TypeKind.Class } container)
+            if (symbol.ContainingType is not INamedTypeSymbol container
+                || !container.IsStatic
+                || container.TypeKind != TypeKind.Class)
             {
                 return false;
             }
