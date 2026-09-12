@@ -115,19 +115,19 @@ public static class DocumentSyncHandler
             diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
         }
 
-        foreach (var d in compilation.GlobalScope.Diagnostics)
-        {
-            // Only report diagnostics that originate from this file's syntax tree.
-            if (useProject && d.Location.Text != syntaxTree.Text)
-            {
-                continue;
-            }
-
-            diagnostics.Add(BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
-        }
-
         if (!skipBinding)
         {
+            foreach (var d in compilation.GlobalScope.Diagnostics)
+            {
+                // Only report diagnostics that originate from this file's syntax tree.
+                if (useProject && d.Location.Text != syntaxTree.Text)
+                {
+                    continue;
+                }
+
+                diagnostics.Add(BuildDiagnostic("Semantic", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
+            }
+
             var program = compilation.BoundProgram;
             foreach (var d in program.Diagnostics)
             {

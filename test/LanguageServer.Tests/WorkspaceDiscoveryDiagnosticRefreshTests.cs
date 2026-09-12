@@ -17,12 +17,10 @@ namespace GSharp.LanguageServer.Tests;
 /// <summary>
 /// Background workspace discovery (kicked off in "initialized") races the editor's didOpen:
 /// on a cold start the client opens visible files before discovery has registered any project,
-/// so a pull-diagnostics client (e.g. VS Code) that pulls diagnostics during the race gets a
-/// file bound against a project-less compilation — with none of the project's references or
-/// sibling source files. Every imported symbol then reported "could not be found" (e.g. GS0198
-/// on xunit's <c>@Fact</c>, or a sibling type/function in the same project), and the squiggles
-/// persisted because nothing re-pulled the file once discovery finished — the user had to edit
-/// the file to trigger a refresh.
+/// so a pull-diagnostics client (e.g. VS Code) can pull diagnostics before the file has an owning
+/// project. Binding such a file against a project-less compilation reports every imported/BCL
+/// symbol as missing. While discovery is pending the server must therefore return syntax-only
+/// diagnostics, then refresh and perform the full project-aware bind once discovery completes.
 ///
 /// This test locks in the fix: once background discovery completes, the server replaces each
 /// open document snapshot with one attached to its now-discovered project and asks the client
@@ -57,11 +55,11 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
                 TextDocument = new TextDocumentItem { Uri = uri, Text = FooSource },
             });
 
-            // A pull that lands before background discovery registers the project binds the file
-            // project-less: the sibling symbols in Bar.gs are invisible and reported missing.
+            // A pull that lands before background discovery registers the project must not bind
+            // project-less and flash false missing-symbol diagnostics.
             var beforeDiscovery = await PullDiagnosticsAsync(server, uri);
             Assert.Null(workspace.GetProjectForFile(fooPath));
-            Assert.NotEmpty(beforeDiscovery);
+            Assert.Empty(beforeDiscovery);
 
             // Discovery runs in the background; when it completes the server asks the client to
             // refresh (re-pull) diagnostics for its open documents.

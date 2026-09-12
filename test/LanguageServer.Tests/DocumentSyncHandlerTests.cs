@@ -23,6 +23,17 @@ public class DocumentSyncHandlerTests
     }
 
     [Fact]
+    public void ComputeDiagnostics_SkipBindingReportsOnlySyntaxDiagnostics()
+    {
+        const string source = "import System\n\nfunc F(value MissingType) {\n";
+
+        var diagnostics = DocumentSyncHandler.ComputeDiagnostics(source, skipBinding: true).Diagnostics;
+
+        Assert.NotEmpty(diagnostics);
+        Assert.All(diagnostics, d => Assert.Equal("Syntax", d.Code.Value));
+    }
+
+    [Fact]
     public void ComputeDiagnostics_PassesProjectReferencesToBindProgram()
     {
         // Regression: previously DocumentSyncHandler called Binder.BindProgram(GlobalScope)
