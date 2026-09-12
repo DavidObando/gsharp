@@ -765,6 +765,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return type;
             }
+
             SyntaxNode methodSyntax = symbol.ContainingSymbol?
                 .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             if (methodSyntax == null)
