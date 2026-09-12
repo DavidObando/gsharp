@@ -67,6 +67,13 @@ public class PrinterExhaustivenessTests
     }
 
     [Fact]
+    public void ConcreteNodeClassification_UsesSealedLeafSemantics()
+    {
+        Assert.False(GNodeSamples.IsConcreteNodeType(typeof(MigratedAbstractRoot)));
+        Assert.True(GNodeSamples.IsConcreteNodeType(typeof(MigratedConcreteNode)));
+    }
+
+    [Fact]
     public void KnownRoundTripGapsOnlyListSampleTypes()
     {
         var unknown = KnownRoundTripGaps.Keys
@@ -113,4 +120,12 @@ public class PrinterExhaustivenessTests
             .GetExportedTypes()
             .Where(GNodeSamples.IsConcreteNodeType)
             .ToList();
+
+    private class MigratedAbstractRoot : GNode
+    {
+    }
+
+    private sealed class MigratedConcreteNode : MigratedAbstractRoot
+    {
+    }
 }

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -22,6 +23,21 @@ namespace Cs2Gs.Tests;
 /// <summary>Issue #3461: every emitted identifier must avoid G# reserved spellings without collisions.</summary>
 public sealed class Issue3461IdentifierSanitizationTests
 {
+    [Fact]
+    public void ImportedContextualFixtures_PreserveObliviousMethodsAndNullableMembers()
+    {
+        var context = new NullabilityInfoContext();
+        MethodInfo method = typeof(ImportedContextualStatics)
+            .GetMethods()
+            .Single(candidate => candidate.Name == "base");
+
+        Assert.Equal(NullabilityState.Unknown, context.Create(method.ReturnParameter).ReadState);
+        Assert.Equal(NullabilityState.Unknown, context.Create(method.GetParameters().Single()).ReadState);
+        Assert.Equal(
+            NullabilityState.Nullable,
+            context.Create(typeof(ImportedContextualStaticFields).GetField("base")).ReadState);
+    }
+
     [Fact]
     public void LanguageServerParamsParameter_DeclarationAndReference_Bind()
     {
@@ -1351,7 +1367,7 @@ public static class ImportedContextualStatics
     public static T @nameof<T>(T value) => value;
 }
 
-#nullable enable
+#nullable enable annotations
 
 /// <summary>Imported contextual static field fixture.</summary>
 public static class ImportedContextualStaticFields
@@ -1378,3 +1394,5 @@ public static class ImportedContextualStaticProperties
     /// <summary>Reserved invocation property.</summary>
     public static Func<int>? @nameof { get; } = () => 8;
 }
+
+#nullable restore annotations

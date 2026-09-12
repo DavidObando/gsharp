@@ -68,17 +68,41 @@ public sealed class GscInvoker
     /// Issue #2215: resolves the <c>gsgen.dll</c> to use, the same way
     /// <see cref="Resolve"/> resolves gsc — the explicit override when
     /// supplied, otherwise the first <c>out/bin/&lt;Config&gt;/Gsgen.Cli/gsgen.dll</c>
-    /// found by walking up from <paramref name="startDirectory"/>. In a dev
+    /// found by walking up from each supplied start directory in order. In a dev
     /// tree, gsc.dll and gsgen.dll do NOT live in sibling directories (unlike
     /// the packaged SDK NuGet), so cs2gs must resolve this explicitly and pass
     /// it via <c>/gsgentool:</c> for <c>/analyzer:</c> to work outside a packaged install.
     /// </summary>
     /// <param name="explicitPath">The <c>--gsgen</c> override, or <see langword="null"/>.</param>
     /// <param name="config">The build configuration to probe (e.g. <c>Release</c>).</param>
-    /// <param name="startDirectory">The directory to begin the upward walk from.</param>
+    /// <param name="startDirectories">Directories to begin upward walks from, in priority order.</param>
     /// <returns>The resolved path, or <see langword="null"/> if none was found.</returns>
-    public static string? ResolveGsgenTool(string? explicitPath, string config, string startDirectory) =>
-        ResolveSiblingTool(explicitPath, config, startDirectory, "Gsgen.Cli", "gsgen.dll");
+    public static string? ResolveGsgenTool(
+        string? explicitPath,
+        string config,
+        params string[] startDirectories)
+    {
+        foreach (string startDirectory in startDirectories.Where(directory => !string.IsNullOrWhiteSpace(directory)))
+        {
+            string? resolved = ResolveSiblingTool(
+                explicitPath,
+                config,
+                startDirectory,
+                "Gsgen.Cli",
+                "gsgen.dll");
+            if (resolved != null)
+            {
+                return resolved;
+            }
+
+            if (!string.IsNullOrEmpty(explicitPath))
+            {
+                break;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Derives a human-readable <c>gscVersion</c> from the compiler assembly:

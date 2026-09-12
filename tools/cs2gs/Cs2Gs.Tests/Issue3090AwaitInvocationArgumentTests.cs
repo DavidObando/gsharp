@@ -339,9 +339,10 @@ public sealed class Issue3090AwaitInvocationArgumentTests
             "Y: Side.Log(\"B\", 4)",
             "Z: 9");
         Assert.DoesNotContain("__spill", emitted, StringComparison.Ordinal);
-        Assert.True(
-            appResult.Succeeded,
-            PipelineFailureDetails(outputRoot, result, appResult));
+        if (!appResult.Succeeded)
+        {
+            Assert.Fail(PipelineFailureDetails(outputRoot, result, appResult));
+        }
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());
@@ -390,9 +391,10 @@ public sealed class Issue3090AwaitInvocationArgumentTests
         Assert.DoesNotContain("__spill", emitted, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(emitted, "TraceReceiver(\"static-extension\")"));
         Assert.Equal(1, CountOccurrences(emitted, "CreateReceiver(\"bare-extension\")"));
-        Assert.True(
-            appResult.Succeeded,
-            PipelineFailureDetails(outputRoot, result, appResult));
+        if (!appResult.Succeeded)
+        {
+            Assert.Fail(PipelineFailureDetails(outputRoot, result, appResult));
+        }
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());

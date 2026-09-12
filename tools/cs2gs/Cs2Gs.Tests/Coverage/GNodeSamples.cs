@@ -22,13 +22,7 @@ public static class GNodeSamples
     internal static bool IsConcreteNodeType(Type type) =>
         type.IsClass
         && typeof(GNode).IsAssignableFrom(type)
-        && type != typeof(GNode)
-        && type != typeof(GExpression)
-        && type != typeof(GStatement)
-        && type != typeof(GMember)
-        && type != typeof(GPattern)
-        && type != typeof(GTypeReference)
-        && !type.IsAbstract;
+        && type.IsSealed;
 
     /// <summary>
     /// Gets, for every concrete <see cref="GNode"/> subclass, a factory

@@ -3093,10 +3093,30 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             expression = StripParentheses(expression);
-            return symbol is ILocalSymbol or IParameterSymbol
-                && expression is IdentifierNameSyntax identifier
-                && identifier.Identifier.ValueText == symbol.Name;
+            if (symbol is not (ILocalSymbol or IParameterSymbol)
+                || expression is not IdentifierNameSyntax identifier
+                || identifier.Identifier.ValueText != symbol.Name)
+            {
+                return false;
+            }
+
+            ISymbol bound = this.context.GetSymbolInfo(identifier).Symbol;
+            if (bound != null)
+            {
+                return HasSameSourceDeclaration(bound, symbol);
+            }
+
+            ISymbol visible = this.context.SemanticModel
+                .LookupSymbols(identifier.SpanStart, name: symbol.Name)
+                .FirstOrDefault();
+            return visible == null || HasSameSourceDeclaration(visible, symbol);
         }
+
+        private static bool HasSameSourceDeclaration(ISymbol left, ISymbol right) =>
+            left.DeclaringSyntaxReferences.Any(leftDeclaration =>
+                right.DeclaringSyntaxReferences.Any(rightDeclaration =>
+                    leftDeclaration.SyntaxTree == rightDeclaration.SyntaxTree
+                    && leftDeclaration.Span == rightDeclaration.Span));
 
         // Issue #2202: true when <paramref name="use"/> reads a nullable
         // (`T?`) field/property from within the branch of an enclosing

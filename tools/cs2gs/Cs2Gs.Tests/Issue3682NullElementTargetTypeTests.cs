@@ -115,6 +115,28 @@ namespace Demo
     }
 
     [Fact]
+    public void CollectionInitializerTarget_NullLiteralDoesNotGainRuntimeAssertion()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public class C
+    {
+        public List<string> F(string value)
+        {
+            return [null, value];
+        }
+    }
+}");
+
+        Assert.Contains("nil", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RectangularArrayWithNullElement_RendersNullableElementType()
     {
         string printed = TranslateUnit(@"

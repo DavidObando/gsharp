@@ -2798,7 +2798,9 @@ public sealed partial class CSharpToGSharpTranslator
                 element,
                 translated,
                 elementType);
-            if (targetElementSymbol?.IsReferenceType == true
+            if (!IsNullOrSuppressedNull(element)
+                && !this.IsWithinExpressionTreeLambda(element)
+                && targetElementSymbol?.IsReferenceType == true
                 && targetElementSymbol.NullableAnnotation != NullableAnnotation.Annotated
                 && elementInfo.Nullability.FlowState != NullableFlowState.NotNull
                 && (elementInfo.Nullability.Annotation == NullableAnnotation.Annotated

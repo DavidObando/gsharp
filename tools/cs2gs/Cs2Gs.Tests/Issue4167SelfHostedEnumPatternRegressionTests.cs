@@ -79,7 +79,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
 
         string compact = string.Concat(analyzerGs.Where(c => !char.IsWhiteSpace(c)));
         Assert.DoesNotContain("parameter.RefKindisRefKind", compact, StringComparison.Ordinal);
-        Assert.Contains("RefKind.Out", compact, StringComparison.Ordinal);
+        Assert.Contains("parameter.RefKind==RefKind.Out&&", compact, StringComparison.Ordinal);
     }
 
     private static async Task<string> TranslateOwnFile(string projectDirName, string fileName)
