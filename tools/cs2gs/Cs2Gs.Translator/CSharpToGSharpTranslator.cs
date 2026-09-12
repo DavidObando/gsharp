@@ -743,7 +743,7 @@ public sealed partial class CSharpToGSharpTranslator
                 continue;
             }
 
-            if (receiver.TypeKind is TypeKind.Class or TypeKind.Struct &&
+            if ((receiver.TypeKind == TypeKind.Class || receiver.TypeKind == TypeKind.Struct) &&
                 method.Parameters[0].NullableAnnotation != NullableAnnotation.Annotated &&
                 method.Parameters[0].Type is INamedTypeSymbol receiverType &&
                 !IsGenericReceiver(receiverType) &&
@@ -775,7 +775,8 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
-        return receiverDefinition.TypeKind is TypeKind.Class or TypeKind.Struct &&
+        return (receiverDefinition.TypeKind == TypeKind.Class
+                || receiverDefinition.TypeKind == TypeKind.Struct) &&
             SymbolEqualityComparer.Default.Equals(
                 receiverDefinition.ContainingAssembly,
                 method.ContainingAssembly) &&

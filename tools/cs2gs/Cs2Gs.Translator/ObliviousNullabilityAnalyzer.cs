@@ -2336,8 +2336,9 @@ internal static class ObliviousNullabilityAnalyzer
             // now-`T?` deconstructed local). `ref` stays excluded too: the
             // caller's variable was initialized before the call, so its own
             // initializer/assignment edges already model its nullability.
-            if (parameter.RefKind is RefKind.Out
-                && parameter.ContainingSymbol is not IMethodSymbol { Name: "Deconstruct" })
+            if (parameter.RefKind == RefKind.Out
+                && (parameter.ContainingSymbol is not IMethodSymbol containingMethod
+                    || containingMethod.Name != "Deconstruct"))
             {
                 ISymbol receiver =
                     value is DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax designation }
@@ -2702,7 +2703,8 @@ internal static class ObliviousNullabilityAnalyzer
         if (target is not (IFieldSymbol or IPropertySymbol or ILocalSymbol or IParameterSymbol)
             || targetType is not INamedTypeSymbol receiverType
             || argument.Parameter is not IParameterSymbol parameter
-            || parameter.RefKind is RefKind.Out or RefKind.Ref
+            || parameter.RefKind == RefKind.Out
+            || parameter.RefKind == RefKind.Ref
             || !TryGetGenericReceiverTuplePath(
                 receiverType,
                 parameter,
@@ -4025,7 +4027,8 @@ internal static class ObliviousNullabilityAnalyzer
     {
         foreach (INamedTypeSymbol type in EnumerateSourceNamedTypes(compilation))
         {
-            if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct) || type.AllInterfaces.IsDefaultOrEmpty)
+            if ((type.TypeKind != TypeKind.Class && type.TypeKind != TypeKind.Struct)
+                || type.AllInterfaces.IsDefaultOrEmpty)
             {
                 continue;
             }

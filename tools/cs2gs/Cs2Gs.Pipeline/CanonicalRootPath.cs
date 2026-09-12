@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.IO;
 
@@ -52,7 +54,7 @@ public static class CanonicalRootPath
     /// </summary>
     /// <param name="path">The user-supplied root, absolute or relative.</param>
     /// <returns>The canonical absolute path, or <paramref name="path"/> unchanged when it is null or empty.</returns>
-    public static string Resolve(string path)
+    public static string? Resolve(string? path)
     {
         if (string.IsNullOrEmpty(path))
         {

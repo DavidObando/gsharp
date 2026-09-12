@@ -414,7 +414,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && !inferredGeneric.TypeArguments.IsDefaultOrEmpty
                 && inferredGeneric.TypeArguments.All(t => t.TypeKind != TypeKind.Error)
                 && inferredGeneric.TypeArguments.Any(t =>
-                    !t.DeclaringSyntaxReferences.IsDefaultOrEmpty && t.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Interface)
+                    !t.DeclaringSyntaxReferences.IsDefaultOrEmpty
+                        && (t.TypeKind == TypeKind.Class
+                            || t.TypeKind == TypeKind.Struct
+                            || t.TypeKind == TypeKind.Interface))
                 && HasErasureCollidingNonGenericSibling(inferredGeneric))
             {
                 typeArguments = inferredGeneric.TypeArguments
@@ -1001,7 +1004,8 @@ public sealed partial class CSharpToGSharpTranslator
                     mapped.IsVariadic,
                     mapped.RefKind));
                 GExpression argument = new IdentifierExpression(name);
-                if (sourceParameters[i].RefKind is RefKind.Ref or RefKind.Out)
+                if (sourceParameters[i].RefKind == RefKind.Ref
+                    || sourceParameters[i].RefKind == RefKind.Out)
                 {
                     argument = new UnaryExpression("&", argument);
                 }
@@ -1027,7 +1031,8 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol method)
         {
             IMethodSymbol original = method.ReducedFrom ?? method;
-            return original.Parameters[0].RefKind is RefKind.Ref or RefKind.Out
+            return original.Parameters[0].RefKind == RefKind.Ref
+                    || original.Parameters[0].RefKind == RefKind.Out
                 ? new UnaryExpression("&", receiver)
                 : receiver;
         }
@@ -2247,7 +2252,8 @@ public sealed partial class CSharpToGSharpTranslator
                     mapped.RefKind));
 
                 GExpression forwarded = new IdentifierExpression(name);
-                if (invokeParameter.RefKind is RefKind.Ref or RefKind.Out)
+                if (invokeParameter.RefKind == RefKind.Ref
+                    || invokeParameter.RefKind == RefKind.Out)
                 {
                     forwarded = new UnaryExpression("&", forwarded);
                 }
@@ -2279,7 +2285,8 @@ public sealed partial class CSharpToGSharpTranslator
             // method (the block statement discards the value). By-ref
             // parameters also keep the literal form.
             bool hasByRefParameter = invoke.Parameters.Any(
-                parameter => parameter.RefKind is RefKind.Ref or RefKind.Out);
+                parameter => parameter.RefKind == RefKind.Ref
+                    || parameter.RefKind == RefKind.Out);
             bool resultMatches = invoke.ReturnsVoid
                 ? method.ReturnsVoid
                 : !method.ReturnsVoid

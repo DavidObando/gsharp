@@ -257,15 +257,8 @@ internal static class Program
         // package assembly it needs. See CanonicalRootPath.
         options.SourceRoot = CanonicalRootPath.Resolve(corpus);
         corpus = options.SourceRoot;
-        if (!string.IsNullOrEmpty(options.OutputRoot))
-        {
-            options.OutputRoot = CanonicalRootPath.Resolve(options.OutputRoot);
-        }
-
-        if (!string.IsNullOrEmpty(options.ArtifactRoot))
-        {
-            options.ArtifactRoot = CanonicalRootPath.Resolve(options.ArtifactRoot);
-        }
+        options.OutputRoot = CanonicalRootPath.Resolve(options.OutputRoot);
+        options.ArtifactRoot = CanonicalRootPath.Resolve(options.ArtifactRoot);
 
         // Issue #3885: the test-parity failure allow-list, read from the source
         // repository. A malformed list stops the run here — degrading to "allow

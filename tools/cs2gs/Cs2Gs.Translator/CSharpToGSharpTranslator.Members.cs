@@ -1528,7 +1528,8 @@ public sealed partial class CSharpToGSharpTranslator
             for (int index = 0; index < parameters.Count; index++)
             {
                 GExpression argument = new IdentifierExpression(parameters[index].Name);
-                if (original.Parameters[index + 1].RefKind is RefKind.Ref or RefKind.Out)
+                if (original.Parameters[index + 1].RefKind == RefKind.Ref
+                    || original.Parameters[index + 1].RefKind == RefKind.Out)
                 {
                     argument = new UnaryExpression("&", argument);
                 }

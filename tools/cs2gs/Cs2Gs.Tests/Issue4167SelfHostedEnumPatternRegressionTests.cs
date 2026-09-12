@@ -71,6 +71,16 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         Assert.Contains("enumType.TypeKind != TypeKind.Enum", typesGs, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task TranslatedOwnSource_UsesEqualityForRefKindConstants()
+    {
+        string analyzerGs = await TranslateOwnFile(
+            "Cs2Gs.Translator", "ObliviousNullabilityAnalyzer.cs");
+
+        Assert.DoesNotContain("parameter.RefKind is RefKind", analyzerGs, StringComparison.Ordinal);
+        Assert.Contains("parameter.RefKind == RefKind.Out", analyzerGs, StringComparison.Ordinal);
+    }
+
     private static async Task<string> TranslateOwnFile(string projectDirName, string fileName)
     {
         string projectPath = TestFixtureSource.Resolve(

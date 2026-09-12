@@ -563,12 +563,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            bool originalIsIntegral = original is { SpecialType: SpecialType.System_SByte
-                or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16
-                or SpecialType.System_Int32 or SpecialType.System_UInt32 or SpecialType.System_Int64
-                or SpecialType.System_UInt64 };
-            bool convertedIsFloat = converted.SpecialType is SpecialType.System_Single
-                or SpecialType.System_Double;
+            bool originalIsIntegral = original != null
+                && (original.SpecialType == SpecialType.System_SByte
+                    || original.SpecialType == SpecialType.System_Byte
+                    || original.SpecialType == SpecialType.System_Int16
+                    || original.SpecialType == SpecialType.System_UInt16
+                    || original.SpecialType == SpecialType.System_Int32
+                    || original.SpecialType == SpecialType.System_UInt32
+                    || original.SpecialType == SpecialType.System_Int64
+                    || original.SpecialType == SpecialType.System_UInt64);
+            bool convertedIsFloat = converted.SpecialType == SpecialType.System_Single
+                || converted.SpecialType == SpecialType.System_Double;
             return originalIsIntegral && convertedIsFloat;
         }
 
