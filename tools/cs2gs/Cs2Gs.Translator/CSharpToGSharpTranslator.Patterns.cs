@@ -2796,6 +2796,13 @@ public sealed partial class CSharpToGSharpTranslator
                 element,
                 translated,
                 elementType);
+            if (targetElementSymbol?.IsReferenceType == true
+                && targetElementSymbol.NullableAnnotation != NullableAnnotation.Annotated
+                && elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                translated = EnsureNonNullAssertion(translated);
+            }
+
             if (elementSymbol != null && convertedSymbol != null &&
                 !SymbolEqualityComparer.Default.Equals(elementSymbol, convertedSymbol) &&
                 IsPrimitiveNumeric(elementSymbol) && IsPrimitiveNumeric(convertedSymbol))

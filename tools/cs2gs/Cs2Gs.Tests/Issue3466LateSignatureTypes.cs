@@ -4,6 +4,8 @@
 
 using System.Collections.Generic;
 
+#nullable enable annotations
+
 namespace Models
 {
     public sealed class TextStringBuilder
@@ -19,8 +21,7 @@ namespace Signatures
 
     public sealed class TargetTypedDefaults
     {
-        [System.Diagnostics.CodeAnalysis.MaybeNull]
-        public Models.TextStringBuilder Value { get; set; }
+        public Models.TextStringBuilder? Value { get; set; }
 
         public Models.TextStringBuilder[] Values { get; set; }
 

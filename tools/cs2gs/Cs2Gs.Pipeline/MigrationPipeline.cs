@@ -119,7 +119,7 @@ public sealed class MigrationPipeline
         string gsgenPath = GscInvoker.ResolveGsgenTool(
             this.options.GsgenPath,
             this.options.Config,
-            Directory.GetCurrentDirectory());
+            Path.GetDirectoryName(gscPath));
 
         var gsc = new GscInvoker(gscPath, gsgenPath);
         string gscVersion = gsc.GetVersion();
@@ -437,7 +437,7 @@ public sealed class MigrationPipeline
         string gsgenPath = GscInvoker.ResolveGsgenTool(
             this.options.GsgenPath,
             this.options.Config,
-            Directory.GetCurrentDirectory());
+            Path.GetDirectoryName(gscPath));
         var gsc = new GscInvoker(gscPath, gsgenPath);
         string gscVersion = gsc.GetVersion();
 
