@@ -88,6 +88,70 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
         }
     }
 
+    [Fact]
+    public async Task PullClient_DiscoveryFailure_RestoresSemanticDiagnostics()
+    {
+        var rootDir = CreateSampleWorkspace();
+        try
+        {
+            var server = new LspServer(new DocumentContentService(), new WorkspaceState());
+            var fooPath = Path.Combine(rootDir, "Demo", "Foo.gs");
+            var uri = DocumentUri.FromFileSystemPath(fooPath);
+            var refreshRequested = false;
+            server.TestBeforeWorkspaceDiscovery = () => throw new InvalidOperationException("Injected discovery failure.");
+            server.TestOnDiagnosticRefreshAfterDiscovery = () => refreshRequested = true;
+
+            await server.InitializeAsync(new InitializeParams { RootPath = rootDir, Capabilities = PullClientCapabilities() });
+            await server.DidOpenAsync(new DidOpenTextDocumentParams
+            {
+                TextDocument = new TextDocumentItem { Uri = uri, Text = FooSource },
+            });
+
+            Assert.Empty(await PullDiagnosticsAsync(server, uri));
+
+            using var doc = JsonDocument.Parse("{}");
+            server.Initialized(doc.RootElement.Clone());
+            await WaitForAsync(() => refreshRequested);
+
+            Assert.NotEmpty(await PullDiagnosticsAsync(server, uri));
+        }
+        finally
+        {
+            Directory.Delete(rootDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullClient_ShutdownBeforeDiscoveryCompletion_DoesNotRefresh()
+    {
+        var rootDir = CreateSampleWorkspace();
+        try
+        {
+            var server = new LspServer(new DocumentContentService(), new WorkspaceState());
+            var completionReached = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var refreshRequested = false;
+            server.TestBeforeWorkspaceDiscoveryCompletion = () =>
+            {
+                server.Shutdown();
+                completionReached.TrySetResult(true);
+            };
+            server.TestOnDiagnosticRefreshAfterDiscovery = () => refreshRequested = true;
+
+            await server.InitializeAsync(new InitializeParams { RootPath = rootDir, Capabilities = PullClientCapabilities() });
+            using var doc = JsonDocument.Parse("{}");
+            server.Initialized(doc.RootElement.Clone());
+
+            await completionReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.Delay(100);
+
+            Assert.False(refreshRequested);
+        }
+        finally
+        {
+            Directory.Delete(rootDir, recursive: true);
+        }
+    }
+
     private static JsonElement PullClientCapabilities()
     {
         // Advertise textDocument/diagnostic (pull) and workspace diagnostic refreshSupport so the

@@ -48,6 +48,8 @@ public sealed class LspServer
     internal Action<DocumentUri, DiagnosticComputationResult> TestOnBindResult;
     internal Action<DocumentUri, IReadOnlyList<Diagnostic>> TestOnPublish;
     internal Action TestOnDiagnosticRefreshAfterDiscovery;
+    internal Action TestBeforeWorkspaceDiscovery;
+    internal Action TestBeforeWorkspaceDiscoveryCompletion;
     internal Func<CancellationToken, Task> TestPushBindDelay;
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object refreshLock = new object();
@@ -127,58 +129,61 @@ public sealed class LspServer
         {
             try
             {
-                WorkspaceInitializer.Initialize(
-                    this.workspaceState,
-                    rootPath,
-                    cts.Token,
-                    tryGetOpenBuffer: file => this.workspaceState.TryGetOpenBuffer(file, out var text) ? text : null,
-                    withGate: mutate =>
-                    {
-                        this.gate.Wait(cts.Token);
-                        try
+                try
+                {
+                    this.TestBeforeWorkspaceDiscovery?.Invoke();
+                    WorkspaceInitializer.Initialize(
+                        this.workspaceState,
+                        rootPath,
+                        cts.Token,
+                        tryGetOpenBuffer: file => this.workspaceState.TryGetOpenBuffer(file, out var text) ? text : null,
+                        withGate: mutate =>
                         {
-                            mutate();
-                        }
-                        finally
-                        {
-                            this.gate.Release();
-                        }
-                    },
-                    waitForWarmUp: true);
+                            this.gate.Wait(cts.Token);
+                            try
+                            {
+                                mutate();
+                            }
+                            finally
+                            {
+                                this.gate.Release();
+                            }
+                        },
+                        waitForWarmUp: true);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not ObjectDisposedException)
+                {
+                    // Workspace discovery is best-effort; single-file editing still works
+                    // without it, but a failed load should be debuggable rather than silently
+                    // degraded.
+                    this.logger?.LogError($"Background workspace load failed: {ex.GetType().FullName}: {ex.Message}", ex);
+                }
 
+                // Discovery can (and on a cold start typically does) finish *after* the client
+                // has already opened files. Until this point diagnostics stay syntax-only rather
+                // than binding against a project-less compilation and reporting every BCL/imported
+                // symbol as missing. Mark discovery complete before refreshing so the re-pull/full
+                // push bind uses the now-registered projects and references.
+                this.TestBeforeWorkspaceDiscoveryCompletion?.Invoke();
+                cts.Token.ThrowIfCancellationRequested();
+                this.gate.Wait(cts.Token);
+                try
+                {
+                    this.workspaceDiscoveryPending = false;
+                    this.RefreshOpenDocumentDiagnosticsAfterDiscovery();
+                }
+                finally
+                {
+                    this.gate.Release();
+                }
             }
             catch (OperationCanceledException)
             {
                 // Shutdown raced the background load; nothing left to do.
-                return;
             }
             catch (ObjectDisposedException)
             {
                 // Shutdown disposed the CTS while the load observed its token; benign.
-                return;
-            }
-            catch (Exception ex)
-            {
-                // Workspace discovery is best-effort; single-file editing still works without
-                // it, but a failed load should be debuggable rather than silently degraded.
-                this.logger?.LogError($"Background workspace load failed: {ex.GetType().FullName}: {ex.Message}", ex);
-                return;
-            }
-
-            // Discovery can (and on a cold start typically does) finish *after* the client
-            // has already opened files. Until this point diagnostics stay syntax-only rather
-            // than binding against a project-less compilation and reporting every BCL/imported
-            // symbol as missing. Mark discovery complete before refreshing so the re-pull/full
-            // push bind uses the now-registered projects and references.
-            this.gate.Wait(cts.Token);
-            try
-            {
-                this.workspaceDiscoveryPending = false;
-                this.RefreshOpenDocumentDiagnosticsAfterDiscovery();
-            }
-            finally
-            {
-                this.gate.Release();
             }
         });
     }
