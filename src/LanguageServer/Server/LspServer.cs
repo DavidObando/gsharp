@@ -48,6 +48,8 @@ public sealed class LspServer
     internal Action<DocumentUri, DiagnosticComputationResult> TestOnBindResult;
     internal Action<DocumentUri, IReadOnlyList<Diagnostic>> TestOnPublish;
     internal Action TestOnDiagnosticRefreshAfterDiscovery;
+    internal Action TestBeforeWorkspaceDiscovery;
+    internal Action TestBeforeWorkspaceDiscoveryCompletion;
     internal Func<CancellationToken, Task> TestPushBindDelay;
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object refreshLock = new object();
@@ -60,6 +62,7 @@ public sealed class LspServer
     private LanguageServerInitializationOptions initializationOptions = new LanguageServerInitializationOptions();
     private string pendingWorkspaceRootPath;
     private CancellationTokenSource backgroundLoadCts;
+    private bool workspaceDiscoveryPending;
 
     public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState, ILogger logger = null)
     {
@@ -83,6 +86,7 @@ public sealed class LspServer
     public Task<InitializeResult> InitializeAsync(InitializeParams request)
     {
         this.pendingWorkspaceRootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
+        this.workspaceDiscoveryPending = !string.IsNullOrEmpty(this.pendingWorkspaceRootPath);
         this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
         this.initializationOptions = request?.InitializationOptions ?? new LanguageServerInitializationOptions();
 
@@ -125,38 +129,47 @@ public sealed class LspServer
         {
             try
             {
-                WorkspaceInitializer.Initialize(
-                    this.workspaceState,
-                    rootPath,
-                    cts.Token,
-                    tryGetOpenBuffer: file => this.workspaceState.TryGetOpenBuffer(file, out var text) ? text : null,
-                    withGate: mutate =>
-                    {
-                        this.gate.Wait(cts.Token);
-                        try
+                try
+                {
+                    this.TestBeforeWorkspaceDiscovery?.Invoke();
+                    WorkspaceInitializer.Initialize(
+                        this.workspaceState,
+                        rootPath,
+                        cts.Token,
+                        tryGetOpenBuffer: file => this.workspaceState.TryGetOpenBuffer(file, out var text) ? text : null,
+                        withGate: mutate =>
                         {
-                            mutate();
-                        }
-                        finally
-                        {
-                            this.gate.Release();
-                        }
-                    });
+                            this.gate.Wait(cts.Token);
+                            try
+                            {
+                                mutate();
+                            }
+                            finally
+                            {
+                                this.gate.Release();
+                            }
+                        },
+                        waitForWarmUp: true);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not ObjectDisposedException)
+                {
+                    // Workspace discovery is best-effort; single-file editing still works
+                    // without it, but a failed load should be debuggable rather than silently
+                    // degraded.
+                    this.logger?.LogError($"Background workspace load failed: {ex.GetType().FullName}: {ex.Message}", ex);
+                }
 
                 // Discovery can (and on a cold start typically does) finish *after* the client
-                // has already opened files: the editor sends didOpen the moment the window
-                // restores, racing the background load kicked off just above. Those files were
-                // bound against a project-less compilation (no project references), so every
-                // imported symbol — the project's own types and referenced-assembly types alike
-                // — was reported "could not be found" (e.g. GS0198 on xunit's @Fact). Now that
-                // projects and their references are known, refresh diagnostics for every open
-                // document so those spurious squiggles clear without the user having to edit the
-                // file to trigger a re-bind (issue: persistent import squiggles after scaffolding
-                // a multi-project workspace).
+                // has already opened files. Until this point diagnostics stay syntax-only rather
+                // than binding against a project-less compilation and reporting every BCL/imported
+                // symbol as missing. Mark discovery complete before refreshing so the re-pull/full
+                // push bind uses the now-registered projects and references.
+                this.TestBeforeWorkspaceDiscoveryCompletion?.Invoke();
                 cts.Token.ThrowIfCancellationRequested();
                 this.gate.Wait(cts.Token);
                 try
                 {
+                    this.workspaceDiscoveryPending = false;
                     this.RefreshOpenDocumentDiagnosticsAfterDiscovery();
                 }
                 finally
@@ -171,12 +184,6 @@ public sealed class LspServer
             catch (ObjectDisposedException)
             {
                 // Shutdown disposed the CTS while the load observed its token; benign.
-            }
-            catch (Exception ex)
-            {
-                // Workspace discovery is best-effort; single-file editing still works without
-                // it, but a failed load should be debuggable rather than silently degraded.
-                this.logger?.LogError($"Background workspace load failed: {ex.GetType().FullName}: {ex.Message}", ex);
             }
         });
     }
@@ -324,9 +331,11 @@ public sealed class LspServer
         SyntaxTree syntaxTree = null;
         string filePath = null;
         ProjectState project = null;
+        bool skipBinding;
         await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            skipBinding = this.workspaceDiscoveryPending;
             filePath = uri.GetFileSystemPath();
             project = !string.IsNullOrEmpty(filePath) ? this.workspaceState.GetProjectForFile(filePath) : null;
             if (this.documentContentService.TryGet(uri.ToString(), out var content))
@@ -349,7 +358,7 @@ public sealed class LspServer
         DiagnosticComputationResult result;
         try
         {
-            result = DocumentSyncHandler.ComputeDiagnosticsForSnapshot(syntaxTree, skipBinding: false, project, filePath, this.workspaceState);
+            result = DocumentSyncHandler.ComputeDiagnosticsForSnapshot(syntaxTree, skipBinding, project, filePath, this.workspaceState);
         }
         catch (OperationCanceledException)
         {
@@ -1140,7 +1149,7 @@ public sealed class LspServer
     /// </summary>
     private void SchedulePushDiagnosticsBind(DocumentUri uri, DiagnosticComputationResult parseResult)
     {
-        if (this.clientSupportsPullDiagnostics)
+        if (this.clientSupportsPullDiagnostics || this.workspaceDiscoveryPending)
         {
             return;
         }

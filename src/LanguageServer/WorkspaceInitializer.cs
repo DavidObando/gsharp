@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,12 +27,14 @@ public static class WorkspaceInitializer
     /// <param name="withGate">Runs a single file's registration under the same gate used by
     /// didOpen/didChange/didSave, so registration and buffer edits never interleave and
     /// clobber each other. Callers that run single-threaded (tests) can omit it.</param>
+    /// <param name="waitForWarmUp">Waits for project binding warm-up before returning.</param>
     public static void Initialize(
         WorkspaceState workspaceState,
         string rootPath,
         CancellationToken cancellationToken = default,
         Func<string, string?>? tryGetOpenBuffer = null,
-        Action<Action>? withGate = null)
+        Action<Action>? withGate = null,
+        bool waitForWarmUp = false)
     {
         if (string.IsNullOrEmpty(rootPath))
         {
@@ -88,12 +91,10 @@ public static class WorkspaceInitializer
         // Warm up each project's compilation on the thread pool so the first
         // user-facing request (file open → diagnostics) doesn't pay the full
         // cold-bind cost (typically ~500ms for a project with a large reference
-        // graph). Fire-and-forget is fine — every public consumer goes through
-        // ProjectState.GetCompilation which locks and lazy-initializes, so the
-        // background warm-up just races with the first real request to populate
-        // the cache. If discovery turns up an unbindable project the binder
-        // surfaces those diagnostics through the normal path; we swallow any
-        // exception here so warm-up never crashes the LSP startup path.
+        // graph). The LSP waits for these tasks before enabling semantic
+        // diagnostics so a cold pull cannot race a warm-up bind of the same
+        // compilation. Direct callers retain the existing fire-and-forget behavior.
+        var warmUps = new List<Task>();
         foreach (var disc in discovered)
         {
             if (cancellationToken.IsCancellationRequested)
@@ -104,7 +105,7 @@ public static class WorkspaceInitializer
             var project = workspaceState.GetProject(disc.ProjectFilePath);
             if (project != null)
             {
-                _ = Task.Run(() =>
+                warmUps.Add(Task.Run(() =>
                 {
                     try
                     {
@@ -124,8 +125,13 @@ public static class WorkspaceInitializer
                     catch
                     {
                     }
-                });
+                }));
             }
+        }
+
+        if (waitForWarmUp)
+        {
+            Task.WaitAll(warmUps.ToArray(), cancellationToken);
         }
     }
 }
