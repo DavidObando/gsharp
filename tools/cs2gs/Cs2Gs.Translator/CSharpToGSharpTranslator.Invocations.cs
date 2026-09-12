@@ -2167,11 +2167,12 @@ public sealed partial class CSharpToGSharpTranslator
                         SameAssembly(
                             compilation.Assembly,
                             original.ContainingAssembly));
+                bool topLevelGSharpExtension = original.ContainingType?.Name == "<Program>";
                 bool useStaticHelper = this.TryGetStaticExtensionHelper(
                     original,
                     out string helperOwner,
                     out string helperName)
-                    || !sourceDefined;
+                    || (!sourceDefined && !topLevelGSharpExtension);
                 GExpression receiver;
                 if (useStaticHelper)
                 {
