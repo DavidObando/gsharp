@@ -1351,6 +1351,8 @@ public static class ImportedContextualStatics
     public static T @nameof<T>(T value) => value;
 }
 
+#nullable enable
+
 /// <summary>Imported contextual static field fixture.</summary>
 public static class ImportedContextualStaticFields
 {
