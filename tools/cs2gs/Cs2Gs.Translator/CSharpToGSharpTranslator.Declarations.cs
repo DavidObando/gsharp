@@ -1106,7 +1106,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The member reference (or OR'd flag combination) expression, or <see langword="null"/> when no member/combination matches.</returns>
         private GExpression MapEnumConstant(ITypeSymbol enumType, object rawValue, SyntaxNode node, string constructDescription)
         {
-            if (enumType is not INamedTypeSymbol { TypeKind: TypeKind.Enum } namedEnum)
+            if (enumType is not INamedTypeSymbol namedEnum
+                || namedEnum.TypeKind != TypeKind.Enum)
             {
                 return null;
             }

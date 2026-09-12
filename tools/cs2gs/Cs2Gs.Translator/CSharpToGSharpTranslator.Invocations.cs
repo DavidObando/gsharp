@@ -2535,8 +2535,9 @@ public sealed partial class CSharpToGSharpTranslator
             // mapped delegate type directly would fail because a delegate maps to an
             // `ArrowTypeReference` (a structural function type), not a callable named
             // type, and would otherwise leak the AST node's CLR type name.
-            if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } &&
-                arguments.Count == 1)
+            if (typeSymbol is INamedTypeSymbol namedType
+                && namedType.TypeKind == TypeKind.Delegate
+                && arguments.Count == 1)
             {
                 return UnwrapNamedArgument(arguments[0]);
             }

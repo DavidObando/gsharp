@@ -2617,7 +2617,8 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
             bool isConstructibleClassTarget =
-                target is INamedTypeSymbol { TypeKind: TypeKind.Class } namedTarget &&
+                target is INamedTypeSymbol namedTarget
+                && namedTarget.TypeKind == TypeKind.Class &&
                 this.typeMapper.Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference;
             NamedTypeReference targetRef = isConstructibleClassTarget
                 ? (NamedTypeReference)this.typeMapper.Map((INamedTypeSymbol)target, this.context, collection.GetLocation())

@@ -913,9 +913,10 @@ internal static class ObliviousNullabilityAnalyzer
     {
         tupleType = null;
         tuplePath = null;
+        ITypeSymbol parameterType = parameter?.OriginalDefinition.Type;
         if (receiverType == null
-            || parameter?.OriginalDefinition.Type
-                is not ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Type } typeParameter
+            || parameterType is not ITypeParameterSymbol typeParameter
+            || typeParameter.TypeParameterKind != TypeParameterKind.Type
             || typeParameter.ContainingType is not INamedTypeSymbol declaringType)
         {
             return false;
@@ -2309,7 +2310,8 @@ internal static class ObliviousNullabilityAnalyzer
             // when the original null-producing caller lives in another project.
             foreach (ISymbol source in ResolveSources(value, model))
             {
-                if (source is IParameterSymbol { Type.TypeKind: TypeKind.Delegate }
+                if (source is IParameterSymbol sourceParameter
+                    && sourceParameter.Type.TypeKind == TypeKind.Delegate
                     && parameter.Type.TypeKind == TypeKind.Delegate)
                 {
                     edges.Add((Canonical(source), parameterSymbol));
