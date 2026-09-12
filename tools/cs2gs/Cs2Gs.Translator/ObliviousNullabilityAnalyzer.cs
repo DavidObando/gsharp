@@ -3015,7 +3015,8 @@ internal static class ObliviousNullabilityAnalyzer
             else if (IsEligibleTupleLeaf(targetType))
             {
                 var targetKey = new TupleElementKey(target, targetPath);
-                if (sourceType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated })
+                if (sourceType.IsReferenceType
+                    && sourceType.NullableAnnotation == NullableAnnotation.Annotated)
                 {
                     tupleTainted.Add(targetKey);
                 }
@@ -3404,7 +3405,8 @@ internal static class ObliviousNullabilityAnalyzer
                     current = declaration;
                     break;
 
-                case ArgumentSyntax { Parent: TupleExpressionSyntax tuple } argument:
+                case ArgumentSyntax argument
+                    when argument.Parent is TupleExpressionSyntax tuple:
                     int tupleIndex = tuple.Arguments.IndexOf(argument);
                     if (tupleIndex < 0)
                     {
@@ -3635,14 +3637,16 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     private static bool IsEligibleTupleLeaf(ITypeSymbol type) =>
-        type is { IsReferenceType: true }
+        type != null
+            && type.IsReferenceType
             && type.NullableAnnotation != NullableAnnotation.Annotated;
 
     private static bool IsEligibleScalarTarget(ISymbol symbol)
     {
         ITypeSymbol type = SymbolValueType(symbol);
 
-        return type is { IsReferenceType: true }
+        return type != null
+            && type.IsReferenceType
             && type.NullableAnnotation != NullableAnnotation.Annotated;
     }
 
@@ -5095,7 +5099,7 @@ internal static class ObliviousNullabilityAnalyzer
     }
 
     private static bool IsReferenceLike(ITypeSymbol type) =>
-        type is { IsReferenceType: true } || type is ITypeParameterSymbol;
+        (type != null && type.IsReferenceType) || type is ITypeParameterSymbol;
 
     // The declaration kinds whose emitted reference type this analysis governs.
     private static bool IsValueDeclarationSymbol(ISymbol symbol) =>
