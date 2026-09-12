@@ -2788,6 +2788,7 @@ public sealed partial class CSharpToGSharpTranslator
             TypeInfo elementInfo = this.context.GetTypeInfo(element);
             ITypeSymbol elementSymbol = elementInfo.Type;
             ITypeSymbol convertedSymbol = elementInfo.ConvertedType;
+            ITypeSymbol declaredElementType = this.GetDeclaredValueType(element);
             translated = this.ForgiveNullableReferenceValue(
                 element,
                 translated,
@@ -2800,7 +2801,8 @@ public sealed partial class CSharpToGSharpTranslator
             if (targetElementSymbol?.IsReferenceType == true
                 && targetElementSymbol.NullableAnnotation != NullableAnnotation.Annotated
                 && (elementInfo.Nullability.Annotation == NullableAnnotation.Annotated
-                    || elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated))
+                    || elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated
+                    || declaredElementType?.NullableAnnotation == NullableAnnotation.Annotated))
             {
                 translated = EnsureNonNullAssertion(translated);
             }
