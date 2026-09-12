@@ -3749,10 +3749,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (!genericMethod.IsGenericMethod
                 || parameterOrdinal < 0
                 || parameterOrdinal >= genericMethod.Parameters.Length
-                || genericMethod.Parameters[parameterOrdinal].Type
-                    is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                || delegateType.DelegateInvokeMethod?.ReturnType
-                    is not ITypeParameterSymbol resultParameter
+                || genericMethod.Parameters[parameterOrdinal].Type is not INamedTypeSymbol delegateType
+                || delegateType.TypeKind != TypeKind.Delegate
+                || delegateType.DelegateInvokeMethod?.ReturnType is not ITypeParameterSymbol resultParameter
                 || resultParameter.TypeParameterKind != TypeParameterKind.Method
                 || !SymbolEqualityComparer.Default.Equals(
                     resultParameter.ContainingSymbol,

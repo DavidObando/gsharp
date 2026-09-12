@@ -3821,7 +3821,8 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference targetType = targetSymbol != null
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
-            if (targetSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateTarget)
+            if (targetSymbol is INamedTypeSymbol delegateTarget
+                && delegateTarget.TypeKind == TypeKind.Delegate)
             {
                 targetType = this.typeMapper.MapNominalDelegate(
                     delegateTarget,

@@ -753,13 +753,18 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (!this.IsObliviousCompilation()
                 || type is not ArrowTypeReference arrow
-                || symbol.Type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                || delegateType.DelegateInvokeMethod is not { } invoke
-                || invoke.Parameters.Length != arrow.ParameterTypes.Count)
+                || symbol.Type is not INamedTypeSymbol delegateType
+                || delegateType.TypeKind != TypeKind.Delegate
+                || delegateType.DelegateInvokeMethod == null)
             {
                 return type;
             }
 
+            IMethodSymbol invoke = delegateType.DelegateInvokeMethod;
+            if (invoke.Parameters.Length != arrow.ParameterTypes.Count)
+            {
+                return type;
+            }
             SyntaxNode methodSyntax = symbol.ContainingSymbol?
                 .DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             if (methodSyntax == null)
