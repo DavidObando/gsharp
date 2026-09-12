@@ -111,6 +111,6 @@ public class PrinterExhaustivenessTests
     private static IReadOnlyList<Type> ConcreteGNodeTypes() =>
         typeof(GNode).Assembly
             .GetExportedTypes()
-            .Where(t => t.IsClass && !t.IsAbstract && typeof(GNode).IsAssignableFrom(t))
+            .Where(GNodeSamples.IsConcreteNodeType)
             .ToList();
 }

@@ -771,8 +771,7 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (InvocationExpressionSyntax invocation in methodSyntax
                 .DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (!SymbolEqualityComparer.Default.Equals(
-                        this.context.GetSymbolInfo(invocation.Expression).Symbol, symbol))
+                if (!this.BindsToGuardSymbol(invocation.Expression, symbol))
                 {
                     continue;
                 }

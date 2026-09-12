@@ -1355,24 +1355,24 @@ public static class ImportedContextualStatics
 public static class ImportedContextualStaticFields
 {
     /// <summary>Reserved index-prefix field.</summary>
-    public static readonly int[] @base = { 3 };
+    public static readonly int[]? @base = { 3 };
 
     /// <summary>Reserved index-prefix field.</summary>
-    public static readonly int[] @stackalloc = { 5 };
+    public static readonly int[]? @stackalloc = { 5 };
 
     /// <summary>Reserved invocation field.</summary>
-    public static readonly Func<int> @nameof = () => 7;
+    public static readonly Func<int>? @nameof = () => 7;
 }
 
 /// <summary>Imported contextual static property fixture.</summary>
 public static class ImportedContextualStaticProperties
 {
     /// <summary>Reserved index-prefix property.</summary>
-    public static int[] @base { get; } = new[] { 4 };
+    public static int[]? @base { get; } = new[] { 4 };
 
     /// <summary>Reserved index-prefix property.</summary>
-    public static int[] @stackalloc { get; } = new[] { 6 };
+    public static int[]? @stackalloc { get; } = new[] { 6 };
 
     /// <summary>Reserved invocation property.</summary>
-    public static Func<int> @nameof { get; } = () => 8;
+    public static Func<int>? @nameof { get; } = () => 8;
 }

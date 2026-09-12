@@ -3740,33 +3740,33 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Compilation.ClassifyConversion(resultType, sinkElementType);
             return elementConversion.IsImplicit
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
+        }
 
-            static bool ReturnsGenericSelectorResult(
-                IMethodSymbol genericMethod,
-                int parameterOrdinal)
+        private static bool ReturnsGenericSelectorResult(
+            IMethodSymbol genericMethod,
+            int parameterOrdinal)
+        {
+            if (!genericMethod.IsGenericMethod
+                || parameterOrdinal < 0
+                || parameterOrdinal >= genericMethod.Parameters.Length
+                || genericMethod.Parameters[parameterOrdinal].Type
+                    is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
+                || delegateType.DelegateInvokeMethod?.ReturnType
+                    is not ITypeParameterSymbol resultParameter
+                || resultParameter.TypeParameterKind != TypeParameterKind.Method
+                || !SymbolEqualityComparer.Default.Equals(
+                    resultParameter.ContainingSymbol,
+                    genericMethod))
             {
-                if (!genericMethod.IsGenericMethod
-                    || parameterOrdinal < 0
-                    || parameterOrdinal >= genericMethod.Parameters.Length
-                    || genericMethod.Parameters[parameterOrdinal].Type
-                        is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                    || delegateType.DelegateInvokeMethod?.ReturnType
-                        is not ITypeParameterSymbol resultParameter
-                    || resultParameter.TypeParameterKind != TypeParameterKind.Method
-                    || !SymbolEqualityComparer.Default.Equals(
-                        resultParameter.ContainingSymbol,
-                        genericMethod))
-                {
-                    return false;
-                }
-
-                return SymbolEqualityComparer.Default.Equals(
-                        genericMethod.ReturnType,
-                        resultParameter)
-                    || (genericMethod.ReturnType is INamedTypeSymbol named
-                        && named.TypeArguments.Any(argument =>
-                            SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
+                return false;
             }
+
+            return SymbolEqualityComparer.Default.Equals(
+                    genericMethod.ReturnType,
+                    resultParameter)
+                || (genericMethod.ReturnType is INamedTypeSymbol named
+                    && named.TypeArguments.Any(argument =>
+                        SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
         }
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)
