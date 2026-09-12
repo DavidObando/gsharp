@@ -77,8 +77,9 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         string analyzerGs = await TranslateOwnFile(
             "Cs2Gs.Translator", "ObliviousNullabilityAnalyzer.cs");
 
-        Assert.DoesNotContain("parameter.RefKind is RefKind", analyzerGs, StringComparison.Ordinal);
-        Assert.Contains("parameter.RefKind == RefKind.Out", analyzerGs, StringComparison.Ordinal);
+        string compact = string.Concat(analyzerGs.Where(c => !char.IsWhiteSpace(c)));
+        Assert.DoesNotContain("parameter.RefKindisRefKind", compact, StringComparison.Ordinal);
+        Assert.Contains("parameter.RefKind==RefKind.Out", compact, StringComparison.Ordinal);
     }
 
     private static async Task<string> TranslateOwnFile(string projectDirName, string fileName)
