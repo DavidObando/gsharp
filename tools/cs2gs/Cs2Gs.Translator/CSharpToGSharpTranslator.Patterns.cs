@@ -2785,8 +2785,9 @@ public sealed partial class CSharpToGSharpTranslator
             // `byte[]`) needs an explicit G# conversion, since untyped numeric
             // literals do not auto-narrow. Wrap such elements in `T(elem)`.
             GExpression translated = this.TranslateExpression(element);
-            ITypeSymbol elementSymbol = this.context.GetTypeInfo(element).Type;
-            ITypeSymbol convertedSymbol = this.context.GetTypeInfo(element).ConvertedType;
+            TypeInfo elementInfo = this.context.GetTypeInfo(element);
+            ITypeSymbol elementSymbol = elementInfo.Type;
+            ITypeSymbol convertedSymbol = elementInfo.ConvertedType;
             translated = this.ForgiveNullableReferenceValue(
                 element,
                 translated,
@@ -2798,7 +2799,8 @@ public sealed partial class CSharpToGSharpTranslator
                 elementType);
             if (targetElementSymbol?.IsReferenceType == true
                 && targetElementSymbol.NullableAnnotation != NullableAnnotation.Annotated
-                && elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated)
+                && (elementInfo.Nullability.Annotation == NullableAnnotation.Annotated
+                    || elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated))
             {
                 translated = EnsureNonNullAssertion(translated);
             }
