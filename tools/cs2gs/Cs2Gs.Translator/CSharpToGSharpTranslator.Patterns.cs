@@ -2800,6 +2800,7 @@ public sealed partial class CSharpToGSharpTranslator
                 elementType);
             if (targetElementSymbol?.IsReferenceType == true
                 && targetElementSymbol.NullableAnnotation != NullableAnnotation.Annotated
+                && elementInfo.Nullability.FlowState != NullableFlowState.NotNull
                 && (elementInfo.Nullability.Annotation == NullableAnnotation.Annotated
                     || elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated
                     || declaredElementType?.NullableAnnotation == NullableAnnotation.Annotated))
