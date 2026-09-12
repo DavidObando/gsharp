@@ -2530,8 +2530,9 @@ internal static class ObliviousNullabilityAnalyzer
         List<(TupleElementKey Target, ISymbol Source)> tupleScalarEdges)
     {
         ITypeSymbol returnType = SymbolValueType(method);
-        if (returnType is not INamedTypeSymbol { IsTupleType: true }
-            && NestedTupleSlots(returnType).Count == 0)
+        bool returnsTuple = returnType is INamedTypeSymbol namedReturn
+            && namedReturn.IsTupleType;
+        if (!returnsTuple && NestedTupleSlots(returnType).Count == 0)
         {
             return;
         }
@@ -2752,7 +2753,7 @@ internal static class ObliviousNullabilityAnalyzer
             return;
         }
 
-        if (targetType is INamedTypeSymbol { IsTupleType: true } tuple)
+        if (targetType is INamedTypeSymbol tuple && tuple.IsTupleType)
         {
             CollectTupleValueFlow(
                 target,
@@ -2890,7 +2891,8 @@ internal static class ObliviousNullabilityAnalyzer
                     ITypeSymbol targetType = targetTuple.TupleElements[i].Type;
                     ExpressionSyntax elementValue = tuple.Arguments[i].Expression;
                     string path = AppendTuplePath(prefix, i);
-                    if (targetType is INamedTypeSymbol { IsTupleType: true } nestedTarget)
+                    if (targetType is INamedTypeSymbol nestedTarget
+                        && nestedTarget.IsTupleType)
                     {
                         CollectTupleValueFlow(
                             target,
@@ -2995,8 +2997,10 @@ internal static class ObliviousNullabilityAnalyzer
             string targetPath = AppendTuplePath(targetPrefix, i);
             string sourcePath = AppendTuplePath(sourcePrefix, i);
 
-            if (targetType is INamedTypeSymbol { IsTupleType: true } nestedTarget
-                && sourceType is INamedTypeSymbol { IsTupleType: true } nestedSource)
+            if (targetType is INamedTypeSymbol nestedTarget
+                && nestedTarget.IsTupleType
+                && sourceType is INamedTypeSymbol nestedSource
+                && nestedSource.IsTupleType)
             {
                 AddTupleShapeEdges(
                     target,
@@ -3033,7 +3037,7 @@ internal static class ObliviousNullabilityAnalyzer
         {
             ITypeSymbol elementType = tupleType.TupleElements[i].Type;
             string path = AppendTuplePath(prefix, i);
-            if (elementType is INamedTypeSymbol { IsTupleType: true } nested)
+            if (elementType is INamedTypeSymbol nested && nested.IsTupleType)
             {
                 TaintAllTupleLeaves(target, nested, path, tupleTainted);
             }
@@ -3216,7 +3220,7 @@ internal static class ObliviousNullabilityAnalyzer
         {
             ITypeSymbol sourceType = sourceTuple.TupleElements[i].Type;
             string path = AppendTuplePath(prefix, i);
-            if (sourceType is INamedTypeSymbol { IsTupleType: true } nested)
+            if (sourceType is INamedTypeSymbol nested && nested.IsTupleType)
             {
                 CollectPatternFromTupleSource(targets[i], source, nested, path, model, scalarTupleEdges);
             }
@@ -3242,7 +3246,8 @@ internal static class ObliviousNullabilityAnalyzer
             ITypeSymbol sourceType = sourceTuple.TupleElements[i].Type;
             string path = AppendTuplePath(prefix, i);
             if (target is ParenthesizedVariableDesignationSyntax nestedPattern
-                && sourceType is INamedTypeSymbol { IsTupleType: true } nestedTuple)
+                && sourceType is INamedTypeSymbol nestedTuple
+                && nestedTuple.IsTupleType)
             {
                 CollectDesignationPatternFromTupleSource(
                     nestedPattern,
@@ -3331,7 +3336,8 @@ internal static class ObliviousNullabilityAnalyzer
         expression = UnwrapTupleValue(expression);
         if (expression is MemberAccessExpressionSyntax member
             && model.GetSymbolInfo(member).Symbol is IFieldSymbol field
-            && model.GetTypeInfo(member.Expression).Type is INamedTypeSymbol { IsTupleType: true } receiverTuple)
+            && model.GetTypeInfo(member.Expression).Type is INamedTypeSymbol receiverTuple
+            && receiverTuple.IsTupleType)
         {
             int index = TupleElementIndex(receiverTuple, field);
             if (index >= 0)
@@ -3423,7 +3429,8 @@ internal static class ObliviousNullabilityAnalyzer
         }
 
         if (model.GetForEachStatementInfo(forEach).ElementType
-                is not INamedTypeSymbol { IsTupleType: true } elementTuple
+                is not INamedTypeSymbol elementTuple
+            || !elementTuple.IsTupleType
             || model.GetSymbolInfo(forEach.Expression).Symbol is not { } collection
             || SymbolValueType(collection) is not { } collectionType)
         {
@@ -3504,7 +3511,7 @@ internal static class ObliviousNullabilityAnalyzer
     private static List<(string Path, INamedTypeSymbol Tuple)> NestedTupleSlots(ITypeSymbol type)
     {
         var slots = new List<(string Path, INamedTypeSymbol Tuple)>();
-        if (type is INamedTypeSymbol { IsTupleType: false })
+        if (type is INamedTypeSymbol named && !named.IsTupleType)
         {
             CollectNestedTupleSlots(type, string.Empty, slots);
         }
@@ -3546,8 +3553,8 @@ internal static class ObliviousNullabilityAnalyzer
         if (SymbolEqualityComparer.Default.Equals(receiverType.OriginalDefinition, declaringType))
         {
             if (ordinal >= receiverType.TypeArguments.Length
-                || receiverType.TypeArguments[ordinal]
-                    is not INamedTypeSymbol { IsTupleType: true } directTuple)
+                || receiverType.TypeArguments[ordinal] is not INamedTypeSymbol directTuple
+                || !directTuple.IsTupleType)
             {
                 return false;
             }

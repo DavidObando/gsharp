@@ -650,7 +650,14 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
         Assert.Contains("private open class Helper[TInner]", translated, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
-            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status))
+            + Environment.NewLine
+            + string.Join(
+                Environment.NewLine,
+                appResult.Artifacts.Select(path => File.ReadAllText(Path.Combine(
+                    outputRoot,
+                    result.RunId,
+                    path)))));
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());

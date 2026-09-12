@@ -2772,7 +2772,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GTypeReference mappedType = this.typeMapper.Map(
-                parameterType,
+                parameterType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                 this.context,
                 location);
             if (value is LiteralExpression { Kind: LiteralKind.Null }

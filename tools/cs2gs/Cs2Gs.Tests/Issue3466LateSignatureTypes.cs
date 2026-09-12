@@ -19,7 +19,9 @@ namespace Signatures
 
     public sealed class TargetTypedDefaults
     {
-        public Models.TextStringBuilder Value { get; set; }
+#nullable enable annotations
+        public Models.TextStringBuilder? Value { get; set; }
+#nullable restore
 
         public Models.TextStringBuilder[] Values { get; set; }
 

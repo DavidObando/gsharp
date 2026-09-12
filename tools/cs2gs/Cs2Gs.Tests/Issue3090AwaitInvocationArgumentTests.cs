@@ -341,7 +341,7 @@ public sealed class Issue3090AwaitInvocationArgumentTests
         Assert.DoesNotContain("__spill", emitted, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
-            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+            PipelineFailureDetails(outputRoot, result, appResult));
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());
@@ -392,7 +392,7 @@ public sealed class Issue3090AwaitInvocationArgumentTests
         Assert.Equal(1, CountOccurrences(emitted, "CreateReceiver(\"bare-extension\")"));
         Assert.True(
             appResult.Succeeded,
-            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+            PipelineFailureDetails(outputRoot, result, appResult));
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());
@@ -468,6 +468,19 @@ public sealed class Issue3090AwaitInvocationArgumentTests
         Directory.CreateDirectory(root);
         return root;
     }
+
+    private static string PipelineFailureDetails(
+        string outputRoot,
+        RunResult result,
+        AppResult app) =>
+        string.Join("; ", app.Stages.Select(stage => stage.Stage + "=" + stage.Status))
+        + Environment.NewLine
+        + string.Join(
+            Environment.NewLine,
+            app.Artifacts.Select(path => File.ReadAllText(Path.Combine(
+                outputRoot,
+                result.RunId,
+                path))));
 
     private static string FindCompiler()
     {
