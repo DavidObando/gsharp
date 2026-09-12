@@ -87,8 +87,13 @@ public sealed class GscInvoker
             return File.Exists(explicitPath) ? Path.GetFullPath(explicitPath) : null;
         }
 
-        foreach (string startDirectory in startDirectories.Where(directory => !string.IsNullOrWhiteSpace(directory)))
+        foreach (string startDirectory in startDirectories)
         {
+            if (string.IsNullOrWhiteSpace(startDirectory))
+            {
+                continue;
+            }
+
             string? resolved = ResolveSiblingTool(
                 null,
                 config,
