@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -17,6 +18,23 @@ namespace Cs2Gs.Tests;
 
 public sealed class Issue3466NestedHomonymAliasTests
 {
+    [Fact]
+    public void LateSignatureFixture_PreservesNullableValueAndObliviousPeers()
+    {
+        var context = new NullabilityInfoContext();
+        Type fixture = typeof(Signatures.TargetTypedDefaults);
+
+        Assert.Equal(
+            NullabilityState.Nullable,
+            context.Create(fixture.GetProperty(nameof(Signatures.TargetTypedDefaults.Value))).ReadState);
+        Assert.Equal(
+            NullabilityState.Unknown,
+            context.Create(fixture.GetProperty(nameof(Signatures.TargetTypedDefaults.Values))).ReadState);
+        Assert.Equal(
+            NullabilityState.Unknown,
+            context.Create(fixture.GetProperty("Item")).ReadState);
+    }
+
     [Fact]
     public void NestedDocInlineList_DoesNotAliasImportedGenericList()
     {

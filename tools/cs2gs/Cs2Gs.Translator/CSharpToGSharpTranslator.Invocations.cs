@@ -295,8 +295,10 @@ public sealed partial class CSharpToGSharpTranslator
             else if (invocation.Expression is GenericNameSyntax generic)
             {
                 ISymbol genericSymbol = this.context.GetSymbolInfo(invocation).Symbol;
-                if (genericSymbol is IMethodSymbol
-                    { IsStatic: true, ContainingType: { TypeKind: TypeKind.Class or TypeKind.Struct } genericOwner } genericMethod
+                if (genericSymbol is IMethodSymbol genericMethod
+                    && genericMethod.IsStatic
+                    && genericMethod.ContainingType is INamedTypeSymbol genericOwner
+                    && (genericOwner.TypeKind == TypeKind.Class || genericOwner.TypeKind == TypeKind.Struct)
                     && RequiresQualifiedImportedContextualCall(
                         genericMethod,
                         includeGenericPrefix: true))
@@ -343,8 +345,11 @@ public sealed partial class CSharpToGSharpTranslator
                 typeArguments = this.MapTypeArguments(memberBindingGeneric);
             }
             else if (invocation.Expression is IdentifierNameSyntax bareName &&
-                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol { IsStatic: true, MethodKind: not MethodKind.LocalFunction } staticMethod &&
-                staticMethod.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+                this.context.GetSymbolInfo(bareName).Symbol is IMethodSymbol staticMethod &&
+                staticMethod.IsStatic &&
+                staticMethod.MethodKind != MethodKind.LocalFunction &&
+                staticMethod.ContainingType is INamedTypeSymbol owner &&
+                (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualCall(staticMethod)) &&
@@ -409,7 +414,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && !inferredGeneric.TypeArguments.IsDefaultOrEmpty
                 && inferredGeneric.TypeArguments.All(t => t.TypeKind != TypeKind.Error)
                 && inferredGeneric.TypeArguments.Any(t =>
-                    !t.DeclaringSyntaxReferences.IsDefaultOrEmpty && t.TypeKind is TypeKind.Class or TypeKind.Struct or TypeKind.Interface)
+                    !t.DeclaringSyntaxReferences.IsDefaultOrEmpty
+                        && (t.TypeKind == TypeKind.Class
+                            || t.TypeKind == TypeKind.Struct
+                            || t.TypeKind == TypeKind.Interface))
                 && HasErasureCollidingNonGenericSibling(inferredGeneric))
             {
                 typeArguments = inferredGeneric.TypeArguments
@@ -996,7 +1004,8 @@ public sealed partial class CSharpToGSharpTranslator
                     mapped.IsVariadic,
                     mapped.RefKind));
                 GExpression argument = new IdentifierExpression(name);
-                if (sourceParameters[i].RefKind is RefKind.Ref or RefKind.Out)
+                if (sourceParameters[i].RefKind == RefKind.Ref
+                    || sourceParameters[i].RefKind == RefKind.Out)
                 {
                     argument = new UnaryExpression("&", argument);
                 }
@@ -1022,7 +1031,8 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol method)
         {
             IMethodSymbol original = method.ReducedFrom ?? method;
-            return original.Parameters[0].RefKind is RefKind.Ref or RefKind.Out
+            return original.Parameters[0].RefKind == RefKind.Ref
+                    || original.Parameters[0].RefKind == RefKind.Out
                 ? new UnaryExpression("&", receiver)
                 : receiver;
         }
@@ -2167,11 +2177,12 @@ public sealed partial class CSharpToGSharpTranslator
                         SameAssembly(
                             compilation.Assembly,
                             original.ContainingAssembly));
+                bool topLevelGSharpExtension = original.ContainingType?.Name == "<Program>";
                 bool useStaticHelper = this.TryGetStaticExtensionHelper(
                     original,
                     out string helperOwner,
                     out string helperName)
-                    || !sourceDefined;
+                    || (!sourceDefined && !topLevelGSharpExtension);
                 GExpression receiver;
                 if (useStaticHelper)
                 {
@@ -2241,7 +2252,8 @@ public sealed partial class CSharpToGSharpTranslator
                     mapped.RefKind));
 
                 GExpression forwarded = new IdentifierExpression(name);
-                if (invokeParameter.RefKind is RefKind.Ref or RefKind.Out)
+                if (invokeParameter.RefKind == RefKind.Ref
+                    || invokeParameter.RefKind == RefKind.Out)
                 {
                     forwarded = new UnaryExpression("&", forwarded);
                 }
@@ -2273,7 +2285,8 @@ public sealed partial class CSharpToGSharpTranslator
             // method (the block statement discards the value). By-ref
             // parameters also keep the literal form.
             bool hasByRefParameter = invoke.Parameters.Any(
-                parameter => parameter.RefKind is RefKind.Ref or RefKind.Out);
+                parameter => parameter.RefKind == RefKind.Ref
+                    || parameter.RefKind == RefKind.Out);
             bool resultMatches = invoke.ReturnsVoid
                 ? method.ReturnsVoid
                 : !method.ReturnsVoid
@@ -2534,8 +2547,9 @@ public sealed partial class CSharpToGSharpTranslator
             // mapped delegate type directly would fail because a delegate maps to an
             // `ArrowTypeReference` (a structural function type), not a callable named
             // type, and would otherwise leak the AST node's CLR type name.
-            if (typeSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } &&
-                arguments.Count == 1)
+            if (typeSymbol is INamedTypeSymbol namedType
+                && namedType.TypeKind == TypeKind.Delegate
+                && arguments.Count == 1)
             {
                 return UnwrapNamedArgument(arguments[0]);
             }
@@ -2765,7 +2779,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GTypeReference mappedType = this.typeMapper.Map(
-                parameterType,
+                parameterType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                 this.context,
                 location);
             if (value is LiteralExpression { Kind: LiteralKind.Null }
@@ -3820,7 +3834,8 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference targetType = targetSymbol != null
                 ? this.typeMapper.Map(targetSymbol, this.context, cast.Type.GetLocation())
                 : new NamedTypeReference(cast.Type.ToString());
-            if (targetSymbol is INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateTarget)
+            if (targetSymbol is INamedTypeSymbol delegateTarget
+                && delegateTarget.TypeKind == TypeKind.Delegate)
             {
                 targetType = this.typeMapper.MapNominalDelegate(
                     delegateTarget,
@@ -3929,8 +3944,8 @@ public sealed partial class CSharpToGSharpTranslator
                     && target is { IsReferenceType: true })
                 || (conversion.IsExplicit
                     && source is ITypeParameterSymbol
-                    && target is { TypeKind: TypeKind.Interface })
-                || (source is { TypeKind: TypeKind.Dynamic }
+                    && target?.TypeKind == TypeKind.Interface)
+                || (source?.TypeKind == TypeKind.Dynamic
                     && target is { IsReferenceType: true });
         }
 

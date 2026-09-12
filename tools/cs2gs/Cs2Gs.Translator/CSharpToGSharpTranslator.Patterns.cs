@@ -2617,7 +2617,8 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
             bool isConstructibleClassTarget =
-                target is INamedTypeSymbol { TypeKind: TypeKind.Class } namedTarget &&
+                target is INamedTypeSymbol namedTarget
+                && namedTarget.TypeKind == TypeKind.Class &&
                 this.typeMapper.Map(namedTarget, this.context, collection.GetLocation()) is NamedTypeReference;
             NamedTypeReference targetRef = isConstructibleClassTarget
                 ? (NamedTypeReference)this.typeMapper.Map((INamedTypeSymbol)target, this.context, collection.GetLocation())
@@ -2784,8 +2785,10 @@ public sealed partial class CSharpToGSharpTranslator
             // `byte[]`) needs an explicit G# conversion, since untyped numeric
             // literals do not auto-narrow. Wrap such elements in `T(elem)`.
             GExpression translated = this.TranslateExpression(element);
-            ITypeSymbol elementSymbol = this.context.GetTypeInfo(element).Type;
-            ITypeSymbol convertedSymbol = this.context.GetTypeInfo(element).ConvertedType;
+            TypeInfo elementInfo = this.context.GetTypeInfo(element);
+            ITypeSymbol elementSymbol = elementInfo.Type;
+            ITypeSymbol convertedSymbol = elementInfo.ConvertedType;
+            ITypeSymbol declaredElementType = this.GetDeclaredValueType(element);
             translated = this.ForgiveNullableReferenceValue(
                 element,
                 translated,
@@ -2795,6 +2798,18 @@ public sealed partial class CSharpToGSharpTranslator
                 element,
                 translated,
                 elementType);
+            if (!IsNullOrSuppressedNull(element)
+                && !this.IsWithinExpressionTreeLambda(element)
+                && targetElementSymbol?.IsReferenceType == true
+                && targetElementSymbol.NullableAnnotation != NullableAnnotation.Annotated
+                && elementInfo.Nullability.FlowState != NullableFlowState.NotNull
+                && (elementInfo.Nullability.Annotation == NullableAnnotation.Annotated
+                    || elementSymbol?.NullableAnnotation == NullableAnnotation.Annotated
+                    || declaredElementType?.NullableAnnotation == NullableAnnotation.Annotated))
+            {
+                translated = EnsureNonNullAssertion(translated);
+            }
+
             if (elementSymbol != null && convertedSymbol != null &&
                 !SymbolEqualityComparer.Default.Equals(elementSymbol, convertedSymbol) &&
                 IsPrimitiveNumeric(elementSymbol) && IsPrimitiveNumeric(convertedSymbol))

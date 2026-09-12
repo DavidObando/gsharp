@@ -39,6 +39,7 @@
          ReferenceOutputAssembly=false: only needed for build ordering, this
          project never calls into Compiler's API directly. -->
     <ProjectReference Include="..\..\..\src\Compiler\Compiler.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\gsgen\Gsgen.Cli\Gsgen.Cli.csproj" ReferenceOutputAssembly="false" />
 
     <!-- ADR-0174: the suspend-func translation tests compile C# against the
          real channel runtime (Chan<T>, [Suspending]) and bind the translated

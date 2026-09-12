@@ -260,7 +260,8 @@ public sealed partial class CSharpToGSharpTranslator
         // input here.
         private static bool MentionsMethodTypeParameter(ITypeSymbol type) => type switch
         {
-            ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } => true,
+            ITypeParameterSymbol parameter =>
+                parameter.TypeParameterKind == TypeParameterKind.Method,
             IArrayTypeSymbol array => MentionsMethodTypeParameter(array.ElementType),
             IPointerTypeSymbol pointer => MentionsMethodTypeParameter(pointer.PointedAtType),
             INamedTypeSymbol named => named.TypeArguments.Any(MentionsMethodTypeParameter),
@@ -753,9 +754,15 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (!this.IsObliviousCompilation()
                 || type is not ArrowTypeReference arrow
-                || symbol.Type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                || delegateType.DelegateInvokeMethod is not { } invoke
-                || invoke.Parameters.Length != arrow.ParameterTypes.Count)
+                || symbol.Type is not INamedTypeSymbol delegateType
+                || delegateType.TypeKind != TypeKind.Delegate
+                || delegateType.DelegateInvokeMethod == null)
+            {
+                return type;
+            }
+
+            IMethodSymbol invoke = delegateType.DelegateInvokeMethod;
+            if (invoke.Parameters.Length != arrow.ParameterTypes.Count)
             {
                 return type;
             }
@@ -771,8 +778,7 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (InvocationExpressionSyntax invocation in methodSyntax
                 .DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (!SymbolEqualityComparer.Default.Equals(
-                        this.context.GetSymbolInfo(invocation.Expression).Symbol, symbol))
+                if (!this.BindsToGuardSymbol(invocation.Expression, symbol))
                 {
                     continue;
                 }

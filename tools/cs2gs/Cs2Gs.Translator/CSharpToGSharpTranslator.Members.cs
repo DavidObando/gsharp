@@ -578,8 +578,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             IParameterSymbol receiver = symbol.Parameters[0];
             return receiver.RefKind == RefKind.None &&
-                receiver.Type is INamedTypeSymbol
-                    { TypeKind: TypeKind.Class or TypeKind.Struct } receiverType &&
+                receiver.Type is INamedTypeSymbol receiverType &&
+                (receiverType.TypeKind == TypeKind.Class || receiverType.TypeKind == TypeKind.Struct) &&
                 !IsGenericReceiver(receiverType) &&
                 !this.ShouldPromoteToNullableReference(receiver);
         }
@@ -1528,7 +1528,8 @@ public sealed partial class CSharpToGSharpTranslator
             for (int index = 0; index < parameters.Count; index++)
             {
                 GExpression argument = new IdentifierExpression(parameters[index].Name);
-                if (original.Parameters[index + 1].RefKind is RefKind.Ref or RefKind.Out)
+                if (original.Parameters[index + 1].RefKind == RefKind.Ref
+                    || original.Parameters[index + 1].RefKind == RefKind.Out)
                 {
                     argument = new UnaryExpression("&", argument);
                 }

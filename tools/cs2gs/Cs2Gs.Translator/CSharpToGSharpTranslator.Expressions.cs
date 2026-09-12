@@ -100,9 +100,11 @@ public sealed partial class CSharpToGSharpTranslator
             // (`Ec3Extensions.FfAc3ChannelsTab`) — the field/property analog of the
             // bare static-call rule (ADR-0115 §B.18). Without this the binder reports
             // GS0125 (the name is not in scope at top level).
-            if (this.context.GetSymbolInfo(identifier).Symbol is
-                    { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
-                staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+            if (this.context.GetSymbolInfo(identifier).Symbol is ISymbol staticMember &&
+                staticMember.IsStatic &&
+                (staticMember.Kind == SymbolKind.Field || staticMember.Kind == SymbolKind.Property) &&
+                staticMember.ContainingType is INamedTypeSymbol owner &&
+                (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualValue(
@@ -561,12 +563,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            bool originalIsIntegral = original is { SpecialType: SpecialType.System_SByte
-                or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16
-                or SpecialType.System_Int32 or SpecialType.System_UInt32 or SpecialType.System_Int64
-                or SpecialType.System_UInt64 };
-            bool convertedIsFloat = converted.SpecialType is SpecialType.System_Single
-                or SpecialType.System_Double;
+            bool originalIsIntegral = original != null
+                && (original.SpecialType == SpecialType.System_SByte
+                    || original.SpecialType == SpecialType.System_Byte
+                    || original.SpecialType == SpecialType.System_Int16
+                    || original.SpecialType == SpecialType.System_UInt16
+                    || original.SpecialType == SpecialType.System_Int32
+                    || original.SpecialType == SpecialType.System_UInt32
+                    || original.SpecialType == SpecialType.System_Int64
+                    || original.SpecialType == SpecialType.System_UInt64);
+            bool convertedIsFloat = converted.SpecialType == SpecialType.System_Single
+                || converted.SpecialType == SpecialType.System_Double;
             return originalIsIntegral && convertedIsFloat;
         }
 
@@ -3086,10 +3093,30 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             expression = StripParentheses(expression);
-            return symbol is ILocalSymbol or IParameterSymbol
-                && expression is IdentifierNameSyntax identifier
-                && identifier.Identifier.ValueText == symbol.Name;
+            if (symbol is not (ILocalSymbol or IParameterSymbol)
+                || expression is not IdentifierNameSyntax identifier
+                || identifier.Identifier.ValueText != symbol.Name)
+            {
+                return false;
+            }
+
+            ISymbol bound = this.context.GetSymbolInfo(identifier).Symbol;
+            if (bound != null)
+            {
+                return HasSameSourceDeclaration(bound, symbol);
+            }
+
+            ISymbol visible = this.context.SemanticModel
+                .LookupSymbols(identifier.SpanStart, name: symbol.Name)
+                .FirstOrDefault();
+            return visible == null || HasSameSourceDeclaration(visible, symbol);
         }
+
+        private static bool HasSameSourceDeclaration(ISymbol left, ISymbol right) =>
+            left.DeclaringSyntaxReferences.Any(leftDeclaration =>
+                right.DeclaringSyntaxReferences.Any(rightDeclaration =>
+                    leftDeclaration.SyntaxTree == rightDeclaration.SyntaxTree
+                    && leftDeclaration.Span == rightDeclaration.Span));
 
         // Issue #2202: true when <paramref name="use"/> reads a nullable
         // (`T?`) field/property from within the branch of an enclosing
@@ -3740,33 +3767,32 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Compilation.ClassifyConversion(resultType, sinkElementType);
             return elementConversion.IsImplicit
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
+        }
 
-            static bool ReturnsGenericSelectorResult(
-                IMethodSymbol genericMethod,
-                int parameterOrdinal)
+        private static bool ReturnsGenericSelectorResult(
+            IMethodSymbol genericMethod,
+            int parameterOrdinal)
+        {
+            if (!genericMethod.IsGenericMethod
+                || parameterOrdinal < 0
+                || parameterOrdinal >= genericMethod.Parameters.Length
+                || genericMethod.Parameters[parameterOrdinal].Type is not INamedTypeSymbol delegateType
+                || delegateType.TypeKind != TypeKind.Delegate
+                || delegateType.DelegateInvokeMethod?.ReturnType is not ITypeParameterSymbol resultParameter
+                || resultParameter.TypeParameterKind != TypeParameterKind.Method
+                || !SymbolEqualityComparer.Default.Equals(
+                    resultParameter.ContainingSymbol,
+                    genericMethod))
             {
-                if (!genericMethod.IsGenericMethod
-                    || parameterOrdinal < 0
-                    || parameterOrdinal >= genericMethod.Parameters.Length
-                    || genericMethod.Parameters[parameterOrdinal].Type
-                        is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                    || delegateType.DelegateInvokeMethod?.ReturnType
-                        is not ITypeParameterSymbol resultParameter
-                    || resultParameter.TypeParameterKind != TypeParameterKind.Method
-                    || !SymbolEqualityComparer.Default.Equals(
-                        resultParameter.ContainingSymbol,
-                        genericMethod))
-                {
-                    return false;
-                }
-
-                return SymbolEqualityComparer.Default.Equals(
-                        genericMethod.ReturnType,
-                        resultParameter)
-                    || (genericMethod.ReturnType is INamedTypeSymbol named
-                        && named.TypeArguments.Any(argument =>
-                            SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
+                return false;
             }
+
+            return SymbolEqualityComparer.Default.Equals(
+                    genericMethod.ReturnType,
+                    resultParameter)
+                || (genericMethod.ReturnType is INamedTypeSymbol named
+                    && named.TypeArguments.Any(argument =>
+                        SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
         }
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)

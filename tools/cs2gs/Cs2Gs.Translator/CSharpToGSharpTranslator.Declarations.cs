@@ -604,7 +604,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private static bool IsMemberOfExtensionBearingStaticClass(ISymbol symbol)
         {
-            if (symbol.ContainingType is not { IsStatic: true, TypeKind: TypeKind.Class } container)
+            if (symbol.ContainingType is not INamedTypeSymbol container
+                || !container.IsStatic
+                || container.TypeKind != TypeKind.Class)
             {
                 return false;
             }
@@ -1106,7 +1108,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The member reference (or OR'd flag combination) expression, or <see langword="null"/> when no member/combination matches.</returns>
         private GExpression MapEnumConstant(ITypeSymbol enumType, object rawValue, SyntaxNode node, string constructDescription)
         {
-            if (enumType is not INamedTypeSymbol { TypeKind: TypeKind.Enum } namedEnum)
+            if (enumType is not INamedTypeSymbol namedEnum
+                || namedEnum.TypeKind != TypeKind.Enum)
             {
                 return null;
             }
@@ -2211,8 +2214,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
                 if (symbol is { IsStatic: false } &&
-                    symbol.Kind is SymbolKind.Field or SymbolKind.Property
-                        or SymbolKind.Method or SymbolKind.Event &&
+                    (symbol.Kind == SymbolKind.Field ||
+                        symbol.Kind == SymbolKind.Property ||
+                        symbol.Kind == SymbolKind.Method ||
+                        symbol.Kind == SymbolKind.Event) &&
                     symbol.ContainingType != null &&
                     InheritsFromOrEquals(containingType, symbol.ContainingType))
                 {
@@ -2281,8 +2286,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
                 if (symbol is { IsStatic: true } &&
-                    symbol.Kind is SymbolKind.Field or SymbolKind.Property
-                        or SymbolKind.Method or SymbolKind.Event &&
+                    (symbol.Kind == SymbolKind.Field ||
+                        symbol.Kind == SymbolKind.Property ||
+                        symbol.Kind == SymbolKind.Method ||
+                        symbol.Kind == SymbolKind.Event) &&
                     symbol.ContainingType != null &&
                     InheritsFromOrEquals(containingType, symbol.ContainingType))
                 {

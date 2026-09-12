@@ -747,7 +747,8 @@ public sealed class CSharpTypeMapper
         void AddMappedTypeNamespaces(ITypeSymbol type)
         {
             if (type == null
-                || type.TypeKind is TypeKind.Dynamic or TypeKind.Error
+                || type.TypeKind == TypeKind.Dynamic
+                || type.TypeKind == TypeKind.Error
                 || !mappedTypes.Add(type))
             {
                 return;
@@ -891,8 +892,9 @@ public sealed class CSharpTypeMapper
                 }
 
                 if (node is TypeDeclarationSyntax memberCensusDeclaration
-                    && semanticModel.GetDeclaredSymbol(memberCensusDeclaration) is INamedTypeSymbol
-                        { TypeKind: TypeKind.Class or TypeKind.Struct } declaredAggregate)
+                    && semanticModel.GetDeclaredSymbol(memberCensusDeclaration) is INamedTypeSymbol declaredAggregate
+                    && (declaredAggregate.TypeKind == TypeKind.Class
+                        || declaredAggregate.TypeKind == TypeKind.Struct))
                 {
                     foreach (ISymbol member in declaredAggregate.GetMembers())
                     {
@@ -1115,7 +1117,8 @@ public sealed class CSharpTypeMapper
             return semanticModel.LookupSymbols(position)
                 .OfType<IMethodSymbol>()
                 .Any(method =>
-                    method.MethodKind is MethodKind.Ordinary or MethodKind.ReducedExtension
+                    (method.MethodKind == MethodKind.Ordinary
+                        || method.MethodKind == MethodKind.ReducedExtension)
                     && names.GetName(method) == name);
         }
 

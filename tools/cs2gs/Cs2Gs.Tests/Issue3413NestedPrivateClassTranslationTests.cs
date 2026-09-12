@@ -648,9 +648,18 @@ public sealed class Issue3413NestedPrivateClassTranslationTests
             StringComparison.Ordinal);
         Assert.Contains("class GenericOwner[TOuter]", translated, StringComparison.Ordinal);
         Assert.Contains("private open class Helper[TInner]", translated, StringComparison.Ordinal);
-        Assert.True(
-            appResult.Succeeded,
-            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+        if (!appResult.Succeeded)
+        {
+            Assert.Fail(
+                string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status))
+                + Environment.NewLine
+                + string.Join(
+                    Environment.NewLine,
+                    appResult.Artifacts.Select(path => File.ReadAllText(Path.Combine(
+                        outputRoot,
+                        result.RunId,
+                        path)))));
+        }
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());
