@@ -1394,5 +1394,3 @@ public static class ImportedContextualStaticProperties
     /// <summary>Reserved invocation property.</summary>
     public static Func<int>? @nameof { get; } = () => 8;
 }
-
-#nullable restore annotations

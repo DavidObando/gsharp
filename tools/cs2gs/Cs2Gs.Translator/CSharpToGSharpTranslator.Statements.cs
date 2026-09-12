@@ -2206,7 +2206,8 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (member.Expression is IdentifierNameSyntax receiverId &&
                     this.context.GetSymbolInfo(receiverId).Symbol is { IsStatic: false } receiverSymbol &&
-                    receiverSymbol.Kind is SymbolKind.Property or SymbolKind.Field)
+                    (receiverSymbol.Kind == SymbolKind.Property ||
+                        receiverSymbol.Kind == SymbolKind.Field))
                 {
                     GExpression qualifiedReceiver = new MemberAccessExpression(
                         new ThisExpression(),

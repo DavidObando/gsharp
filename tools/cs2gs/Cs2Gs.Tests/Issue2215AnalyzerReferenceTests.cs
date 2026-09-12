@@ -45,6 +45,9 @@ public class Issue2215AnalyzerReferenceTests
 
         Assert.Equal(
             cwdGsgen,
+            GscInvoker.ResolveGsgenTool(cwdGsgen, "Release"));
+        Assert.Equal(
+            cwdGsgen,
             GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
 
         string gscRelativeGsgen = Path.Combine(

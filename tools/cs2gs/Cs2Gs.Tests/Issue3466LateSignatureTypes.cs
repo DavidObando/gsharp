@@ -17,21 +17,6 @@ namespace Signatures
 
     public delegate void ActionHandler(Models.TextStringBuilder value);
 
-    public sealed class TargetTypedDefaults
-    {
-#nullable enable annotations
-        public Models.TextStringBuilder? Value { get; set; }
-#nullable restore annotations
-
-        public Models.TextStringBuilder[] Values { get; set; }
-
-        public Models.TextStringBuilder this[int index]
-        {
-            get => this.Value;
-            set => this.Value = value;
-        }
-    }
-
     public static class OptionalSignatureMethod
     {
         public static int Read(
@@ -53,5 +38,19 @@ namespace Signatures
         public int Value { get; }
 
         public int Marker { get; set; }
+    }
+
+    public sealed class TargetTypedDefaults
+    {
+        public Models.TextStringBuilder[] Values { get; set; }
+
+        public Models.TextStringBuilder this[int index]
+        {
+            get => this.Value;
+            set => this.Value = value;
+        }
+
+#nullable enable annotations
+        public Models.TextStringBuilder? Value { get; set; }
     }
 }

@@ -2214,8 +2214,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
                 if (symbol is { IsStatic: false } &&
-                    symbol.Kind is SymbolKind.Field or SymbolKind.Property
-                        or SymbolKind.Method or SymbolKind.Event &&
+                    (symbol.Kind == SymbolKind.Field ||
+                        symbol.Kind == SymbolKind.Property ||
+                        symbol.Kind == SymbolKind.Method ||
+                        symbol.Kind == SymbolKind.Event) &&
                     symbol.ContainingType != null &&
                     InheritsFromOrEquals(containingType, symbol.ContainingType))
                 {
@@ -2284,8 +2286,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
                 if (symbol is { IsStatic: true } &&
-                    symbol.Kind is SymbolKind.Field or SymbolKind.Property
-                        or SymbolKind.Method or SymbolKind.Event &&
+                    (symbol.Kind == SymbolKind.Field ||
+                        symbol.Kind == SymbolKind.Property ||
+                        symbol.Kind == SymbolKind.Method ||
+                        symbol.Kind == SymbolKind.Event) &&
                     symbol.ContainingType != null &&
                     InheritsFromOrEquals(containingType, symbol.ContainingType))
                 {

@@ -82,10 +82,15 @@ public sealed class GscInvoker
         string config,
         params string[] startDirectories)
     {
+        if (!string.IsNullOrEmpty(explicitPath))
+        {
+            return File.Exists(explicitPath) ? Path.GetFullPath(explicitPath) : null;
+        }
+
         foreach (string startDirectory in startDirectories.Where(directory => !string.IsNullOrWhiteSpace(directory)))
         {
             string? resolved = ResolveSiblingTool(
-                explicitPath,
+                null,
                 config,
                 startDirectory,
                 "Gsgen.Cli",
@@ -93,11 +98,6 @@ public sealed class GscInvoker
             if (resolved != null)
             {
                 return resolved;
-            }
-
-            if (!string.IsNullOrEmpty(explicitPath))
-            {
-                break;
             }
         }
 
