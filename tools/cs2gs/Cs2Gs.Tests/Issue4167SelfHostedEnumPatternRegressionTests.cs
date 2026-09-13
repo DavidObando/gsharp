@@ -19,7 +19,7 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #4167 (tracked by #4153, umbrella #3501): one of #4153's own
+/// Issue #4167 (historical root #4153, umbrella #3501): one of #4153's own
 /// candidate call sites, confirmed live by gate run 34370082359 --
 /// <c>CSharpToGSharpTranslator.Types.cs</c>'s
 /// <c>RequiresEnumStatementFallback</c> used a property pattern combining an
@@ -34,13 +34,23 @@ namespace Cs2Gs.Tests;
 /// The fix mirrors #4155 exactly: decompose the nested pattern into a plain
 /// designated <c>is</c> narrowing followed by a <c>!=</c> comparison --
 /// semantically identical C#, proven below to survive translation + gsc
-/// compilation. Like #4155, this is a workaround for cs2gs's own source, not
-/// a fix for #4153 itself (which remains open and still tracks the ~8
-/// remaining candidate call sites in this project using the same shape).
+/// compilation. Like #4155, this is a source-level workaround for historical
+/// gsc issue #4153; #4167 guards cs2gs's remaining self-migration surface.
 /// </para>
 /// </summary>
 public sealed class Issue4167SelfHostedEnumPatternRegressionTests
 {
+    private const string RoslynEnumTypePattern =
+        @"(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind|SyntaxKind|DiagnosticSeverity)";
+
+    private static readonly Regex RoslynEnumPropertyPattern = new(
+        @":\s*(?:not\s+)?(?:[A-Za-z_]\w*\.)*(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind)\.\w+",
+        RegexOptions.CultureInvariant);
+
+    private static readonly Regex RoslynEnumDirectPattern = new(
+        $@"\bis\s+(?:not\s+)?(?:[A-Za-z_]\w*\.)*{RoslynEnumTypePattern}\.\w+",
+        RegexOptions.CultureInvariant);
+
     /// <summary>
     /// Translates cs2gs's own <c>CSharpToGSharpTranslator.Types.cs</c> with
     /// the production translator (exactly what self-migration does) and
@@ -87,16 +97,28 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
 
         foreach (string source in translated.Values)
         {
-            string code = Regex.Replace(
-                source,
-                @"/\*.*?\*/|//[^\r\n]*|#[^\r\n]*",
-                string.Empty,
-                RegexOptions.CultureInvariant | RegexOptions.Singleline);
-            Assert.DoesNotMatch(
-                new Regex(
-                    @":\s*(?:not\s+)?(?:[A-Za-z_]\w*\.)*(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind)\.\w+",
-                    RegexOptions.CultureInvariant),
-                code);
+            string code = StripComments(source);
+            Assert.DoesNotMatch(RoslynEnumPropertyPattern, code);
+            Assert.DoesNotMatch(RoslynEnumDirectPattern, code);
+        }
+
+        string cs2gsRoot = TestFixtureSource.Resolve("tools", "cs2gs");
+        foreach (string projectDirectory in Directory.EnumerateDirectories(cs2gsRoot, "Cs2Gs.*"))
+        {
+            if (projectDirectory.EndsWith(".Tests", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (string sourcePath in Directory.EnumerateFiles(
+                         projectDirectory,
+                         "*.cs",
+                         SearchOption.AllDirectories))
+            {
+                Assert.DoesNotMatch(
+                    RoslynEnumDirectPattern,
+                    StripComments(File.ReadAllText(sourcePath)));
+            }
         }
 
         string invocationsGs = translated["CSharpToGSharpTranslator.Invocations.cs"];
@@ -125,6 +147,13 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
             fileName);
         return translated[fileName];
     }
+
+    private static string StripComments(string source) =>
+        Regex.Replace(
+            source,
+            @"/\*.*?\*/|//[^\r\n]*|#[^\r\n]*",
+            string.Empty,
+            RegexOptions.CultureInvariant | RegexOptions.Singleline);
 
     private static async Task<IReadOnlyDictionary<string, string>> TranslateOwnFiles(
         string projectDirName,

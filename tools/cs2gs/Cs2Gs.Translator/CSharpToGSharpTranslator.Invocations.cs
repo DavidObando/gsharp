@@ -1188,12 +1188,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            return named.OriginalDefinition.SpecialType is
-                SpecialType.System_Collections_Generic_IEnumerable_T or
-                SpecialType.System_Collections_Generic_ICollection_T or
-                SpecialType.System_Collections_Generic_IList_T or
-                SpecialType.System_Collections_Generic_IReadOnlyList_T or
-                SpecialType.System_Collections_Generic_IReadOnlyCollection_T;
+            SpecialType specialType = named.OriginalDefinition.SpecialType;
+            return specialType == SpecialType.System_Collections_Generic_IEnumerable_T
+                || specialType == SpecialType.System_Collections_Generic_ICollection_T
+                || specialType == SpecialType.System_Collections_Generic_IList_T
+                || specialType == SpecialType.System_Collections_Generic_IReadOnlyList_T
+                || specialType == SpecialType.System_Collections_Generic_IReadOnlyCollection_T;
         }
 
         private static bool IsSpanParamsCollectionType(ITypeSymbol type) =>

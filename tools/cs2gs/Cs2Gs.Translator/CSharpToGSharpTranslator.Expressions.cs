@@ -185,13 +185,16 @@ public sealed partial class CSharpToGSharpTranslator
                 AssignmentExpressionSyntax assignment when assignment.Left == identifier => true,
                 PrefixUnaryExpressionSyntax prefix
                     when prefix.Operand == identifier &&
-                         prefix.Kind() is SyntaxKind.PreIncrementExpression or SyntaxKind.PreDecrementExpression => true,
+                         (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                          || prefix.IsKind(SyntaxKind.PreDecrementExpression)) => true,
                 PostfixUnaryExpressionSyntax postfix
                     when postfix.Operand == identifier &&
-                         postfix.Kind() is SyntaxKind.PostIncrementExpression or SyntaxKind.PostDecrementExpression => true,
+                         (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                          || postfix.IsKind(SyntaxKind.PostDecrementExpression)) => true,
                 ArgumentSyntax argument
                     when argument.Expression == identifier &&
-                         argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword => true,
+                         (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)
+                          || argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)) => true,
                 _ => false,
             };
 
@@ -1494,9 +1497,79 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (this.LambdaResultFeedsNullFilteringInvocation(invocation))
+            {
+                return true;
+            }
+
             return this.ResolveValueSink(invocation) is ILocalSymbol result
                 && (this.IsUsedAsNullable(result, this.GetNullabilityScope(result))
                     || this.IsPassedToNullableParameter(result));
+        }
+
+        private bool LambdaResultFeedsNullFilteringInvocation(
+            InvocationExpressionSyntax selectorInvocation)
+        {
+            SyntaxNode node = selectorInvocation;
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            if (node.Parent is not MemberAccessExpressionSyntax { Expression: var receiver } member
+                || receiver != node
+                || member.Parent is not InvocationExpressionSyntax filteringInvocation
+                || this.context.GetSymbolInfo(filteringInvocation).Symbol is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            if (method.Name == "OfType")
+            {
+                return true;
+            }
+
+            if (method.Name is not ("Where" or "FirstOrDefault")
+                || filteringInvocation.ArgumentList.Arguments.FirstOrDefault()?.Expression
+                    is not AnonymousFunctionExpressionSyntax predicate)
+            {
+                return false;
+            }
+
+            ParameterSyntax parameter = predicate switch
+            {
+                SimpleLambdaExpressionSyntax simple => simple.Parameter,
+                ParenthesizedLambdaExpressionSyntax { ParameterList.Parameters.Count: 1 } parenthesized =>
+                    parenthesized.ParameterList.Parameters[0],
+                _ => null,
+            };
+            ISymbol parameterSymbol = parameter == null
+                ? null
+                : this.context.SemanticModel.GetDeclaredSymbol(parameter);
+            if (parameterSymbol == null)
+            {
+                return false;
+            }
+
+            return predicate.Body.DescendantNodesAndSelf()
+                .OfType<ConditionalAccessExpressionSyntax>()
+                .Any(access =>
+                    this.BindsTo(access.Expression, parameterSymbol)
+                    && (access.Parent is IsPatternExpressionSyntax
+                        { Pattern: RecursivePatternSyntax }
+                        || (access.Parent is BinaryExpressionSyntax comparison
+                            && (comparison.IsKind(SyntaxKind.GreaterThanExpression)
+                                || comparison.IsKind(SyntaxKind.GreaterThanOrEqualExpression)
+                                || comparison.IsKind(SyntaxKind.LessThanExpression)
+                                || comparison.IsKind(SyntaxKind.LessThanOrEqualExpression)))))
+                || predicate.Body.DescendantNodesAndSelf()
+                    .OfType<BinaryExpressionSyntax>()
+                    .Any(binary =>
+                        binary.IsKind(SyntaxKind.NotEqualsExpression)
+                        && ((binary.Left.IsKind(SyntaxKind.NullLiteralExpression)
+                             && this.BindsTo(binary.Right, parameterSymbol))
+                            || (binary.Right.IsKind(SyntaxKind.NullLiteralExpression)
+                                && this.BindsTo(binary.Left, parameterSymbol))));
         }
 
         private bool IsPassedToNullableParameter(ILocalSymbol local)

@@ -543,8 +543,8 @@ public sealed partial class CSharpToGSharpTranslator
                 continue;
             }
 
-            if (member.DeclaredAccessibility is not Accessibility.Private
-                and not Accessibility.NotApplicable)
+            if (member.DeclaredAccessibility != Accessibility.Private
+                && member.DeclaredAccessibility != Accessibility.NotApplicable)
             {
                 return true;
             }

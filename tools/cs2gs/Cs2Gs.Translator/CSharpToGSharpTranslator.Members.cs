@@ -1046,12 +1046,16 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private static bool IsSignedIntegerSpecialType(SpecialType type) =>
-            type is SpecialType.System_SByte or SpecialType.System_Int16
-                or SpecialType.System_Int32 or SpecialType.System_Int64;
+            type == SpecialType.System_SByte
+                || type == SpecialType.System_Int16
+                || type == SpecialType.System_Int32
+                || type == SpecialType.System_Int64;
 
         private static bool IsUnsignedIntegerSpecialType(SpecialType type) =>
-            type is SpecialType.System_Byte or SpecialType.System_UInt16
-                or SpecialType.System_UInt32 or SpecialType.System_UInt64;
+            type == SpecialType.System_Byte
+                || type == SpecialType.System_UInt16
+                || type == SpecialType.System_UInt32
+                || type == SpecialType.System_UInt64;
 
         private IEnumerable<(GMember Member, bool IsStatic)> TranslateField(
             FieldDeclarationSyntax field,
@@ -2227,18 +2231,18 @@ public sealed partial class CSharpToGSharpTranslator
         /// Whether <paramref name="kind"/> is a C# 14 instance compound-assignment
         /// operator token (<c>op_AdditionAssignment</c> and siblings).
         /// </summary>
-        private static bool IsCompoundAssignmentOperatorToken(SyntaxKind kind) => kind is
-            SyntaxKind.PlusEqualsToken or
-            SyntaxKind.MinusEqualsToken or
-            SyntaxKind.AsteriskEqualsToken or
-            SyntaxKind.SlashEqualsToken or
-            SyntaxKind.PercentEqualsToken or
-            SyntaxKind.AmpersandEqualsToken or
-            SyntaxKind.BarEqualsToken or
-            SyntaxKind.CaretEqualsToken or
-            SyntaxKind.LessThanLessThanEqualsToken or
-            SyntaxKind.GreaterThanGreaterThanEqualsToken or
-            SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken;
+        private static bool IsCompoundAssignmentOperatorToken(SyntaxKind kind) =>
+            kind == SyntaxKind.PlusEqualsToken
+                || kind == SyntaxKind.MinusEqualsToken
+                || kind == SyntaxKind.AsteriskEqualsToken
+                || kind == SyntaxKind.SlashEqualsToken
+                || kind == SyntaxKind.PercentEqualsToken
+                || kind == SyntaxKind.AmpersandEqualsToken
+                || kind == SyntaxKind.BarEqualsToken
+                || kind == SyntaxKind.CaretEqualsToken
+                || kind == SyntaxKind.LessThanLessThanEqualsToken
+                || kind == SyntaxKind.GreaterThanGreaterThanEqualsToken
+                || kind == SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken;
 
         /// <summary>
         /// Translates a C# operator overload (<c>public static X operator +(X a, X b)</c>)

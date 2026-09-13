@@ -77,9 +77,9 @@ public static class UnsupportedByDesign
 
             bool isDocStructure = name.StartsWith("Xml", StringComparison.Ordinal)
                 || name.Contains("Cref", StringComparison.Ordinal)
-                || kind is SyntaxKind.SingleLineDocumentationCommentTrivia
-                    or SyntaxKind.MultiLineDocumentationCommentTrivia
-                    or SyntaxKind.SkippedTokensTrivia;
+                || kind == SyntaxKind.SingleLineDocumentationCommentTrivia
+                || kind == SyntaxKind.MultiLineDocumentationCommentTrivia
+                || kind == SyntaxKind.SkippedTokensTrivia;
             if (isDocStructure)
             {
                 registry[kind] = UnsupportedRationale.ToolingScope;

@@ -46,10 +46,8 @@ namespace Cs2Gs.Tests;
 /// DECOMPOSED equivalent (a designated <c>is</c> narrowing followed by plain
 /// <c>==</c>/<c>!=</c> comparisons) — semantically identical C#, proven by
 /// the self-hosted regression test below to survive translation + gsc
-/// compilation. It is a workaround for cs2gs's own source, not a fix for
-/// #4153 itself (which needs a gsc-level fix and remains open, tracking the
-/// ~9 other call sites in this project using the same shape that have not
-/// individually been verified).
+/// compilation. It is a source-level workaround for historical gsc issue
+/// #4153; follow-up #4167 guards cs2gs's remaining self-migration surface.
 /// </para>
 /// </summary>
 public sealed class Issue4045SelfHostedPatternMatchRegressionTests

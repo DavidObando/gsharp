@@ -672,7 +672,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             ITypeSymbol operandType = this.context.GetTypeInfo(operandSyntax).Type;
             SpecialType specialType = operandType?.SpecialType ?? SpecialType.None;
-            if (specialType is SpecialType.System_String or SpecialType.System_Char)
+            if (specialType == SpecialType.System_String
+                || specialType == SpecialType.System_Char)
             {
                 return translated;
             }

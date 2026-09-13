@@ -308,6 +308,35 @@ namespace Demo
     }
 
     [Fact]
+    public void ConstructorInitializer_NullableOptionalAndParamsContracts_ArePreserved()
+    {
+        string printed = TranslateUnit("""
+            #nullable enable
+
+            namespace Demo
+            {
+                public class Base
+                {
+                    public Base(int value, string? label = null, params string?[] tags) { }
+                }
+
+                public class Derived : Base
+                {
+                    public Derived()
+                        : base(value: 1, tags: new string?[] { null, "tag" })
+                    {
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains(
+            "base(1, nil, []string?{nil, \"tag\"})",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ConstructorInitializerNames_ReorderedTrivialValues_LowerPositionally()
     {
         string printed = TranslateUnit(@"

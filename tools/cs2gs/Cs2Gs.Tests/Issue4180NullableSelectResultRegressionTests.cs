@@ -290,6 +290,65 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         }
     }
 
+    private const string NullFilteringSource = """
+        using System;
+        using System.Collections.Generic;
+        using System.Linq;
+
+        public static class Probe
+        {
+            public static void Main()
+            {
+                Type[] types = typeof(List<>).GetGenericArguments();
+                int ofTypeCount = types.Select(t => t.FullName).OfType<string>().Count();
+                string cast = types.Select(t => t.FullName as string)
+                    .FirstOrDefault(name => name != null && name.Length > 0);
+                int guardedCount = types.Select(t => t.FullName)
+                    .Where(name => name?.Length > 0)
+                    .Select(name => name.Length)
+                    .Count();
+                Console.WriteLine($"OK:{ofTypeCount}:{(cast == null ? 0 : 1)}:{guardedCount}");
+            }
+        }
+        """;
+
+    [Fact]
+    public void SelfHostedNullableSelectResult_RemainsNullableForNullFilteringOperators()
+    {
+        string printed = Translate(NullFilteringSource);
+        Assert.DoesNotContain("t.FullName!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("t.FullName as string!!", printed, StringComparison.Ordinal);
+
+        string compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue4180NullableSelectResultRegressionTests),
+            Guid.NewGuid().ToString("N") + "-filters");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Probe.gs");
+            string dllPath = Path.Combine(workDir, "Probe.dll");
+            File.WriteAllText(gsPath, printed);
+
+            (int compileExit, string compileOutput) = RunDotnet(
+                $"\"{compiler}\" /target:exe /targetframework:net10.0 /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0,
+                "gsc must compile the translated probe. Output:\n" + compileOutput
+                    + "\n\nTranslated G#:\n" + printed);
+
+            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "the compiled probe must run. Output:\n" + output);
+            Assert.Equal("OK:0:0:0", output.Trim());
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
