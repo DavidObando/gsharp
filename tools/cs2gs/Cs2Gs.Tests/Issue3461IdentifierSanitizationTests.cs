@@ -5,8 +5,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -24,18 +24,29 @@ namespace Cs2Gs.Tests;
 public sealed class Issue3461IdentifierSanitizationTests
 {
     [Fact]
-    public void ImportedContextualFixtures_PreserveObliviousMethodsAndNullableMembers()
+    public async Task ImportedContextualFixtures_PreserveObliviousMethodsAndNullableMembers()
     {
-        var context = new NullabilityInfoContext();
-        MethodInfo method = typeof(ImportedContextualStatics)
-            .GetMethods()
-            .Single(candidate => candidate.Name == "base");
+        string projectPath = TestFixtureSource.Resolve(
+            "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj");
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
-        Assert.Equal(NullabilityState.Unknown, context.Create(method.ReturnParameter).ReadState);
-        Assert.Equal(NullabilityState.Unknown, context.Create(method.GetParameters().Single()).ReadState);
+        INamedTypeSymbol methods = project.Compilation.GetTypeByMetadataName(
+            "Cs2Gs.Tests.ImportedContextualStatics");
+        IMethodSymbol method = methods.GetMembers("base")
+            .OfType<IMethodSymbol>()
+            .Single(candidate => candidate.Arity == 1);
+        INamedTypeSymbol fields = project.Compilation.GetTypeByMetadataName(
+            "Cs2Gs.Tests.ImportedContextualStaticFields");
+        IFieldSymbol field = fields.GetMembers("base").OfType<IFieldSymbol>().Single();
+
+        Assert.Equal(NullableAnnotation.None, method.ReturnType.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.None, method.Parameters.Single().Type.NullableAnnotation);
         Assert.Equal(
-            NullabilityState.Nullable,
-            context.Create(typeof(ImportedContextualStaticFields).GetField("base")).ReadState);
+            NullableAnnotation.Annotated,
+            field.Type.NullableAnnotation);
     }
 
     [Fact]

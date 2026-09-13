@@ -5,7 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -19,20 +19,26 @@ namespace Cs2Gs.Tests;
 public sealed class Issue3466NestedHomonymAliasTests
 {
     [Fact]
-    public void LateSignatureFixture_PreservesNullableValueAndObliviousPeers()
+    public async Task LateSignatureFixture_PreservesNullableValueAndObliviousPeers()
     {
-        var context = new NullabilityInfoContext();
-        Type fixture = typeof(Signatures.TargetTypedDefaults);
+        string projectPath = TestFixtureSource.Resolve(
+            "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj");
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
+        INamedTypeSymbol fixture = project.Compilation.GetTypeByMetadataName(
+            "Signatures.TargetTypedDefaults");
+        IPropertySymbol value = fixture.GetMembers("Value").OfType<IPropertySymbol>().Single();
+        IPropertySymbol values = fixture.GetMembers("Values").OfType<IPropertySymbol>().Single();
+        IPropertySymbol indexer = fixture.GetMembers().OfType<IPropertySymbol>().Single(p => p.IsIndexer);
+
+        Assert.Equal(NullableAnnotation.Annotated, value.Type.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.None, values.Type.NullableAnnotation);
         Assert.Equal(
-            NullabilityState.Nullable,
-            context.Create(fixture.GetProperty(nameof(Signatures.TargetTypedDefaults.Value))).ReadState);
-        Assert.Equal(
-            NullabilityState.Unknown,
-            context.Create(fixture.GetProperty(nameof(Signatures.TargetTypedDefaults.Values))).ReadState);
-        Assert.Equal(
-            NullabilityState.Unknown,
-            context.Create(fixture.GetProperty("Item")).ReadState);
+            NullableAnnotation.None,
+            indexer.Type.NullableAnnotation);
     }
 
     [Fact]
