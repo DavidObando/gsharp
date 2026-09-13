@@ -827,7 +827,22 @@ internal sealed partial class StatementBinder
     }
 
     private static (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ClassifyImportedBoolCallNarrowing(BoundImportedCallExpression call, bool negate)
-        => ClassifyImportedMethodBoolCallNarrowing(call.Function.Method.GetParameters(), call.Arguments, negate);
+    {
+        var parameters = call.Function.Method.GetParameters();
+        var result = ClassifyImportedMethodBoolCallNarrowing(parameters, call.Arguments, negate);
+
+        // Issue #4216: preserve established unannotated IsNullOrEmpty
+        // extensions while preferring explicit CLR nullability contracts.
+        if (MemberLookup.HasExtensionAttribute(call.Function.Method)
+            && !HasClrNullabilityContract(parameters.FirstOrDefault())
+            && IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments))
+        {
+            result = MergeNotNullWhenFalseReceiver(result, call.Arguments[0], negate);
+        }
+
+        return result;
+    }
+
     private static (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) ClassifyImportedMethodBoolCallNarrowing(
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments,
@@ -863,15 +878,14 @@ internal sealed partial class StatementBinder
             }
 
             if (!ClrNullability.TryGetNotNullWhen(parameter, out var returnValue)
-                || arguments[i] is not BoundVariableExpression variableExpression
-                || variableExpression.Variable.Type is not NullableTypeSymbol nullable)
+                || !TryGetNullableNarrowingTarget(arguments[i], out var target, out var underlying))
             {
                 continue;
             }
 
             var narrowThen = returnValue != negate;
             var frame = narrowThen ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>()) : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
-            frame[variableExpression.Variable] = nullable.UnderlyingType;
+            frame[target] = underlying;
         }
 
         return (thenFrame, elseFrame);
@@ -914,17 +928,14 @@ internal sealed partial class StatementBinder
 
             // [NotNullWhen(rv)]: narrow a nullable argument to its underlying
             // non-nullable type on the arm where the call returns rv.
-            var narrowVarExpr = argExpr as BoundVariableExpression;
-            var nullable = narrowVarExpr?.Variable.Type as NullableTypeSymbol;
             if (notNullWhenReturnValue.HasValue
-                && narrowVarExpr != null
-                && nullable != null)
+                && TryGetNullableNarrowingTarget(argExpr, out var target, out var underlying))
             {
                 var narrowThen = notNullWhenReturnValue.Value != negate;
                 var frame = narrowThen
                     ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
                     : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
-                frame[narrowVarExpr.Variable] = nullable.UnderlyingType;
+                frame[target] = underlying;
             }
 
             // [MaybeNullWhen(rv)]: widen a non-nullable argument to its nullable
@@ -943,7 +954,145 @@ internal sealed partial class StatementBinder
             }
         }
 
+        var result = (Then: thenFrame, Else: elseFrame);
+
+        // Issue #4216: user extensions use the same compatibility rule as
+        // imported extensions; an explicit receiver contract wins.
+        if (call.Function.IsExtension
+            && !HasUserNullabilityContract(parameters.FirstOrDefault())
+            && IsNullOrEmptyCompatibilityCandidate(call.Function.Name, parameters, call.Arguments))
+        {
+            result = MergeNotNullWhenFalseReceiver(result, call.Arguments[0], negate);
+        }
+
+        return result;
+    }
+
+    private static bool IsNullOrEmptyCompatibilityCandidate(
+        string name,
+        ImmutableArray<ParameterSymbol> parameters,
+        ImmutableArray<BoundExpression> arguments)
+        => IsNullOrEmptyCompatibilityShape(name, parameters.Length, arguments.Length)
+            && parameters[0].Type is NullableTypeSymbol nullable
+            && IsNullOrEmptyReceiverType(nullable.UnderlyingType);
+
+    private static bool IsNullOrEmptyCompatibilityCandidate(
+        string name,
+        ParameterInfo[] parameters,
+        ImmutableArray<BoundExpression> arguments)
+        => IsNullOrEmptyCompatibilityShape(name, parameters.Length, arguments.Length)
+            && IsNullOrEmptyReceiverType(parameters[0].ParameterType);
+
+    private static bool IsNullOrEmptyCompatibilityShape(string name, int parameterCount, int argumentCount)
+        => string.Equals(name, "IsNullOrEmpty", StringComparison.Ordinal)
+            && parameterCount == 1
+            && argumentCount == 1;
+
+    // The DECLARED receiver type must itself be a string or sequence. Judging
+    // eligibility from the call-site argument would let an unconstrained
+    // generic receiver (`func (value T?) IsNullOrEmpty[T]() bool`) inherit the
+    // contract at any sequence-typed call site.
+    private static bool IsNullOrEmptyReceiverType(TypeSymbol receiverType)
+        => receiverType == TypeSymbol.String
+            || receiverType is SequenceTypeSymbol
+            || (receiverType.ClrType != null && IsNullOrEmptyReceiverType(receiverType.ClrType));
+
+    private static bool IsNullOrEmptyReceiverType(Type receiverType)
+        => !receiverType.IsGenericParameter
+            && (ClrTypeUtilities.AreSame(receiverType, typeof(string))
+                || ClrLoadContext.Satisfies(receiverType, typeof(System.Collections.IEnumerable)));
+
+    private static bool HasClrNullabilityContract(ParameterInfo? parameter)
+        => parameter != null
+            && (ClrNullability.TryGetNotNullWhen(parameter, out _)
+                || ClrNullability.TryGetMaybeNullWhen(parameter, out _));
+
+    private static bool HasUserNullabilityContract(ParameterSymbol? parameter)
+    {
+        if (parameter == null || parameter.Attributes.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var attribute in parameter.Attributes)
+        {
+            if (KnownAttributes.TryGetNotNullWhenReturnValue(attribute, out _)
+                || KnownAttributes.TryGetMaybeNullWhenReturnValue(attribute, out _))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) MergeNotNullWhenFalseReceiver(
+        (Dictionary<AccessPath, TypeSymbol>? Then, Dictionary<AccessPath, TypeSymbol>? Else) frames,
+        BoundExpression receiver,
+        bool negate)
+    {
+        if (!TryGetNullableNarrowingTarget(receiver, out var target, out var underlying))
+        {
+            return frames;
+        }
+
+        var thenFrame = frames.Then;
+        var elseFrame = frames.Else;
+        var narrowThen = negate;
+        var frame = narrowThen
+            ? (thenFrame ??= new Dictionary<AccessPath, TypeSymbol>())
+            : (elseFrame ??= new Dictionary<AccessPath, TypeSymbol>());
+        frame[target] = underlying;
         return (thenFrame, elseFrame);
+    }
+
+    private static bool TryGetNullableNarrowingTarget(
+        BoundExpression expression,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out AccessPath? target,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out TypeSymbol? underlying)
+    {
+        while (expression is BoundConversionExpression conversion
+            && IsFlowTransparentConversion(conversion))
+        {
+            expression = conversion.Expression;
+        }
+
+        if (expression.Type is not NullableTypeSymbol nullable)
+        {
+            target = null;
+            underlying = null;
+            return false;
+        }
+
+        target = expression is BoundVariableExpression bve
+            ? AccessPath.ForVariable(bve.Variable)
+            : SmartCastStability.TryGetStablePath(expression);
+        if (target == null)
+        {
+            underlying = null;
+            return false;
+        }
+
+        underlying = nullable.UnderlyingType;
+        return true;
+    }
+
+    private static bool IsFlowTransparentConversion(BoundConversionExpression conversion)
+    {
+        if (ReferenceEquals(conversion.Type, conversion.Expression.Type))
+        {
+            return true;
+        }
+
+        if (conversion.Type is NullableTypeSymbol widened
+            && widened.UnderlyingType == conversion.Expression.Type)
+        {
+            return true;
+        }
+
+        return conversion.Type?.ClrType != null
+            && conversion.Expression.Type?.ClrType != null
+            && ClrTypeUtilities.AreSame(conversion.Type.ClrType, conversion.Expression.Type.ClrType);
     }
 
     internal static bool IsNilLiteral(BoundExpression expr)

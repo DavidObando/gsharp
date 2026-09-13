@@ -2028,13 +2028,19 @@ public partial class Parser
 
     private bool LooksLikeExplicitExtensionReceiverClause()
     {
-        if (Peek(1).Kind != SyntaxKind.OpenParenthesisToken ||
-            Peek(2).Kind != SyntaxKind.IdentifierToken)
+        if (Peek(1).Kind != SyntaxKind.OpenParenthesisToken)
         {
             return false;
         }
 
-        var ahead = 3;
+        var ahead = 2;
+        if (!TryScanParameterAnnotations(ref ahead)
+            || Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+        {
+            return false;
+        }
+
+        ahead++;
         if (!TryScanTypeClause(ref ahead) ||
             Peek(ahead).Kind != SyntaxKind.CloseParenthesisToken ||
             Peek(ahead + 1).Kind != SyntaxKind.IdentifierToken)
@@ -2049,7 +2055,7 @@ public partial class Parser
     private bool LooksLikeReceiverClause()
     {
         // Issue #751 (ADR-0084 L2): a receiver clause has the shape
-        //   '(' ident <type-clause> ')' (ident | operator) ( '(' | '[' )
+        //   '(' annotation* ident <type-clause> ')' (ident | operator) ( '(' | '[' )
         // The original implementation hard-coded a tiny subset of type-clause
         // spellings (bare identifier, `[N]T` / `[]T`). That excluded common
         // shapes like `T?`, `sequence[T]`, `map[K,V]`, `(int, T)`, and
@@ -2069,14 +2075,16 @@ public partial class Parser
             return false;
         }
 
-        if (Peek(1).Kind != SyntaxKind.IdentifierToken)
+        var ahead = 1;
+        if (!TryScanParameterAnnotations(ref ahead)
+            || Peek(ahead).Kind != SyntaxKind.IdentifierToken)
         {
             return false;
         }
 
+        ahead++;
         var parenDepth = 1;
         var bracketDepth = 0;
-        var ahead = 2;
         var closeParenAhead = -1;
         while (true)
         {
@@ -2152,6 +2160,91 @@ public partial class Parser
         var afterNameKind = Peek(ahead + 1).Kind;
         return afterNameKind == SyntaxKind.OpenParenthesisToken
             || afterNameKind == SyntaxKind.OpenSquareBracketToken;
+    }
+
+    private bool TryScanParameterAnnotations(ref int ahead)
+    {
+        while (Peek(ahead).Kind == SyntaxKind.AtToken)
+        {
+            ahead++;
+            if (Peek(ahead + 1).Kind == SyntaxKind.ColonToken
+                && (Peek(ahead).Kind == SyntaxKind.IdentifierToken
+                    || IsValidAnnotationTargetKind(Peek(ahead).Text)))
+            {
+                ahead += 2;
+            }
+
+            if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+            {
+                return false;
+            }
+
+            ahead++;
+            while (Peek(ahead).Kind == SyntaxKind.DotToken)
+            {
+                ahead++;
+                if (Peek(ahead).Kind != SyntaxKind.IdentifierToken)
+                {
+                    return false;
+                }
+
+                ahead++;
+            }
+
+            if (Peek(ahead).Kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                var bracketDepth = 0;
+                do
+                {
+                    var kind = Peek(ahead).Kind;
+                    if (kind == SyntaxKind.EndOfFileToken)
+                    {
+                        return false;
+                    }
+
+                    if (kind == SyntaxKind.OpenSquareBracketToken)
+                    {
+                        bracketDepth++;
+                    }
+                    else if (kind == SyntaxKind.CloseSquareBracketToken)
+                    {
+                        bracketDepth--;
+                    }
+
+                    ahead++;
+                }
+                while (bracketDepth > 0);
+            }
+
+            if (Peek(ahead).Kind != SyntaxKind.OpenParenthesisToken)
+            {
+                continue;
+            }
+
+            var depth = 0;
+            do
+            {
+                var kind = Peek(ahead).Kind;
+                if (kind == SyntaxKind.EndOfFileToken)
+                {
+                    return false;
+                }
+
+                if (kind == SyntaxKind.OpenParenthesisToken)
+                {
+                    depth++;
+                }
+                else if (kind == SyntaxKind.CloseParenthesisToken)
+                {
+                    depth--;
+                }
+
+                ahead++;
+            }
+            while (depth > 0);
+        }
+
+        return true;
     }
 
     private SeparatedSyntaxList<ParameterSyntax> ParseParameterList()

@@ -184,7 +184,7 @@ internal sealed partial class DeclarationBinder
         var isAsyncVoid = returnBinding.IsAsyncVoid;
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
         var functionAttributes = BindFunctionAttributes(syntax, type);
-        BindFunctionParameterAttributes(syntax, parameterSymbolBySyntax, type);
+        BindFunctionParameterAttributes(syntax, explicitReceiverParameter, parameterSymbolBySyntax, type);
 
         // G# follows C#: user-defined operators cannot be method-generic.
         // Generic containing types remain supported: their open owner
@@ -895,9 +895,15 @@ internal sealed partial class DeclarationBinder
 
     private void BindFunctionParameterAttributes(
         FunctionDeclarationSyntax syntax,
+        ParameterSymbol? receiverParameter,
         ParameterSymbol[] parameterSymbolBySyntax,
         TypeSymbol type)
     {
+        if (syntax.Receiver != null && receiverParameter != null)
+        {
+            BindFunctionParameterAttributes(syntax.Receiver, receiverParameter, type);
+        }
+
         // Per-parameter annotations: each ParameterSyntax owns its own
         // annotation list; the default target is `param`. Issue #170 /
         // ADR-0047 §3: the bound list is stored on the ParameterSymbol so
@@ -906,45 +912,59 @@ internal sealed partial class DeclarationBinder
         for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
         {
             var parameterSyntax = syntax.Parameters[pIndex];
-            var paramAttrs = BindAttributes(
-                parameterSyntax.Annotations,
-                AttributeTargetKind.Param,
-                Binder.ParameterAllowedTargets,
-                "a parameter declaration",
-                System.AttributeTargets.Parameter);
-
             var parameterSymbol = parameterSymbolBySyntax[pIndex];
-            if (parameterSymbol != null && !paramAttrs.IsDefaultOrEmpty)
+            if (parameterSymbol != null)
             {
-                parameterSymbol.SetAttributes(paramAttrs);
-
-                // Issue #180 / ADR-0040: validate @EnumeratorCancellation.
-                // The attribute marks the cancellation-token parameter that
-                // the async-sequence rewriter threads through, so it is
-                // only meaningful when (a) the parameter's type is
-                // System.Threading.CancellationToken and (b) the enclosing
-                // function returns IAsyncEnumerable[T] (an `async sequence`).
-                // Diagnostics are reported per offending attribute; the
-                // attribute is still attached so downstream tooling can
-                // observe the user's intent.
-                var ecAttr = KnownAttributes.FindEnumeratorCancellation(paramAttrs);
-                if (ecAttr != null)
-                {
-                    if (parameterSymbol.Type?.ClrType.IsSameAs(typeof(System.Threading.CancellationToken)) != true)
-                    {
-                        Diagnostics.ReportEnumeratorCancellationWrongType(
-                            parameterSyntax.Location,
-                            parameterSymbol.Name,
-                            parameterSymbol.Type?.Name ?? "?");
-                    }
-                    else if (!isAsyncSequenceReturnType(type))
-                    {
-                        Diagnostics.ReportEnumeratorCancellationNotAsyncSequence(
-                            parameterSyntax.Location,
-                            parameterSymbol.Name);
-                    }
-                }
+                BindFunctionParameterAttributes(parameterSyntax, parameterSymbol, type);
             }
+        }
+    }
+
+    private void BindFunctionParameterAttributes(
+        ParameterSyntax parameterSyntax,
+        ParameterSymbol parameterSymbol,
+        TypeSymbol functionReturnType)
+    {
+        var paramAttrs = BindAttributes(
+            parameterSyntax.Annotations,
+            AttributeTargetKind.Param,
+            Binder.ParameterAllowedTargets,
+            "a parameter declaration",
+            System.AttributeTargets.Parameter);
+        if (paramAttrs.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        parameterSymbol.SetAttributes(paramAttrs);
+
+        // Issue #180 / ADR-0040: validate @EnumeratorCancellation.
+        // The attribute marks the cancellation-token parameter that
+        // the async-sequence rewriter threads through, so it is only
+        // meaningful when (a) the parameter's type is
+        // System.Threading.CancellationToken and (b) the enclosing
+        // function returns IAsyncEnumerable[T] (an `async sequence`).
+        // Diagnostics are reported per offending attribute; the
+        // attribute is still attached so downstream tooling can
+        // observe the user's intent.
+        var ecAttr = KnownAttributes.FindEnumeratorCancellation(paramAttrs);
+        if (ecAttr == null)
+        {
+            return;
+        }
+
+        if (parameterSymbol.Type?.ClrType.IsSameAs(typeof(System.Threading.CancellationToken)) != true)
+        {
+            Diagnostics.ReportEnumeratorCancellationWrongType(
+                parameterSyntax.Location,
+                parameterSymbol.Name,
+                parameterSymbol.Type?.Name ?? "?");
+        }
+        else if (!isAsyncSequenceReturnType(functionReturnType))
+        {
+            Diagnostics.ReportEnumeratorCancellationNotAsyncSequence(
+                parameterSyntax.Location,
+                parameterSymbol.Name);
         }
     }
 

@@ -176,6 +176,57 @@ func Sum(boxed object) int32 {
 - **Negative-position narrowing inside `&&` short-circuit on `!is`**. Currently `!is` inside a `&&` chain narrows the *else* branch only; we could also propagate the else-narrowing to the rest of the right operand. The Kotlin specification does not include this, so we follow Kotlin.
 - **Narrow on instance-property reads that the binder can prove are idempotent** (e.g., a getter on a sealed class that just returns a constant). Out of scope.
 
+## Addendum — issue #4216 (receiver predicate contracts)
+
+Boolean postcondition narrowing applies to extension receivers because an
+extension receiver is parameter zero of the lowered static method. A
+user-declared receiver may carry the same contract as an ordinary parameter:
+
+```gs
+import System.Diagnostics.CodeAnalysis
+
+func (@NotNullWhen(false) value string?) IsMissing() bool {
+    return value == nil
+}
+
+if !text.IsMissing() {
+    Console.WriteLine(text.Length)
+}
+```
+
+The receiver must resolve to a stable smart-cast access path. Locals,
+parameters, and the immutable member paths already admitted by
+`SmartCastStability` may narrow; mutable members, indexers, method results, and
+other repeatable-but-not-stable expressions do not.
+
+For source compatibility with established G# libraries, an unannotated
+extension named exactly `IsNullOrEmpty` is treated as
+`[NotNullWhen(false)]` on receiver parameter zero only when it:
+
+- returns `bool`;
+- has no arguments beyond its receiver;
+- receives a nullable `string`, sequence, or CLR `IEnumerable`.
+
+Eligibility is decided by the *declared* receiver parameter type, not by the
+call-site argument. An unconstrained generic receiver
+(`func (value T?) IsNullOrEmpty[T]() bool`) therefore never inherits the
+contract, even when a particular call site passes a sequence.
+
+Explicit `[NotNullWhen]` or `[MaybeNullWhen]` metadata is authoritative and
+disables this compatibility inference. No other predicate name is inferred.
+
+Existing .NET support remains metadata-driven:
+
+- `String.IsNullOrEmpty(value)` and `String.IsNullOrWhiteSpace(value)` already
+  narrow through their BCL `[NotNullWhen(false)]` annotations.
+- `TryGetValue`-style APIs already apply `[NotNullWhen]`/`[MaybeNullWhen]` to
+  their out parameters.
+- `[MemberNotNullWhen]` continues to narrow fields on the receiver object.
+
+`Nullable<T>.HasValue` is not folded into this rule. It is a property rather
+than a parameter postcondition, and narrowing `T?` to `T` requires the
+value-type storage and emit rules to be designed independently.
+
 ## Status
 
 Accepted; implemented in the same PR as this ADR.
