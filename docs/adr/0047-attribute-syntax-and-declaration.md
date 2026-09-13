@@ -150,6 +150,13 @@ Extension functions (ADR-0019) lower to a static method on `<Extensions>` with t
 * `@param:Foo` on the receiver parameter is valid and targets the first parameter (the receiver) — exactly as if the user had written `func M(self receiverType, …)` and annotated `self`.
 * `@type:Foo` is invalid on an extension function — extensions do not have a user-controlled enclosing type; the `<Extensions>` static class is a compiler artifact. The diagnostic is `ERR_AttributeTargetInvalid`.
 
+Issue #4216 completed the receiver side of this contract: receiver-clause
+lookahead accepts annotated parameters, the declaration binder attaches those
+annotations to parameter zero, and the emitter writes them on the lowered
+static extension method. Nullability postconditions such as
+`@NotNullWhen(false)` therefore drive the same caller flow analysis on an
+extension receiver as they do on an ordinary parameter.
+
 ### 8. Interaction with `data struct` synthesised members
 
 `data struct` (ADR-0029, ADR-0032) synthesises `==`, `!=`, `GetHashCode`, `ToString`, etc. Attribute syntax composes as follows:
