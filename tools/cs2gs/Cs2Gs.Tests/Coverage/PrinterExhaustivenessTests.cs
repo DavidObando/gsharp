@@ -74,6 +74,26 @@ public class PrinterExhaustivenessTests
     }
 
     [Fact]
+    public void EveryExportedConcreteGNodeTypeIsSealed()
+    {
+        var unsealed = typeof(GNode).Assembly
+            .GetExportedTypes()
+            .Where(type =>
+                type.IsClass
+                && typeof(GNode).IsAssignableFrom(type)
+                && !type.IsAbstract
+                && !type.IsSealed)
+            .Select(type => type.FullName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            unsealed.Count == 0,
+            "Concrete GNode subclasses must be sealed so migrated reflection can distinguish them from abstract roots:\n"
+            + string.Join("\n", unsealed));
+    }
+
+    [Fact]
     public void KnownRoundTripGapsOnlyListSampleTypes()
     {
         var unknown = KnownRoundTripGaps.Keys

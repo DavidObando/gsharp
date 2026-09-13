@@ -20,6 +20,22 @@ namespace Cs2Gs.Tests;
 public sealed class Issue3090AwaitInvocationArgumentTests
 {
     [Fact]
+    public void PipelineFailureDetails_MissingArtifactPreservesOriginalFailure()
+    {
+        var result = new RunResult { RunId = "missing-run" };
+        var app = new AppResult
+        {
+            Stages = { new StageResult { Stage = "compile", Status = "failed" } },
+            Artifacts = { "missing.json" },
+        };
+
+        string details = PipelineFailureDetails(AppContext.BaseDirectory, result, app);
+
+        Assert.Contains("compile=failed", details, StringComparison.Ordinal);
+        Assert.Contains("Artifact unavailable:", details, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NestedAwaitNamedArguments_PreserveNamesWithoutTranslatorSpills()
     {
         string printed = Translate("""
@@ -479,10 +495,26 @@ public sealed class Issue3090AwaitInvocationArgumentTests
         + Environment.NewLine
         + string.Join(
             Environment.NewLine,
-            app.Artifacts.Select(path => File.ReadAllText(Path.Combine(
+            app.Artifacts.Select(path => ReadArtifact(Path.Combine(
                 outputRoot,
                 result.RunId,
                 path))));
+
+    private static string ReadArtifact(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (IOException error)
+        {
+            return $"Artifact unavailable: '{path}' ({error.Message})";
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            return $"Artifact unavailable: '{path}' ({error.Message})";
+        }
+    }
 
     private static string FindCompiler()
     {
