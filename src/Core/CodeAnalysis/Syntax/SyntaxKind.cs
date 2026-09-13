@@ -249,6 +249,11 @@ public enum SyntaxKind
     StructLiteralExpression,
     FieldInitializer,
 
+    // ADR-0180: a bare content element or `...source` content spread inside a
+    // struct/class composite literal, interleaved with FieldInitializer
+    // members. Lowers to Add(...) on the constructed receiver.
+    StructLiteralContentElement,
+
     // Issue #2224: anonymous-class literal expression `object { let Name string = "Foo" }`.
     AnonymousClassExpression,
     AnonymousClassMemberInitializer,

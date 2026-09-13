@@ -1433,7 +1433,7 @@ public partial class Parser
             }
 
             var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-            var (spreadToken, spreadExpression, spreadSeparator, initializers) = ParseStructLiteralInitializers();
+            var (spreadToken, spreadExpression, spreadSeparator, elements) = ParseStructLiteralInitializers();
             var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
             var literal = new StructLiteralExpressionSyntax(
                 syntaxTree,
@@ -1442,7 +1442,7 @@ public partial class Parser
                 spreadToken,
                 spreadExpression,
                 spreadSeparator,
-                initializers,
+                elements,
                 closeBrace);
             literal.TypeArgumentList = typeArguments;
             return literal;

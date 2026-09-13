@@ -1927,6 +1927,57 @@ internal sealed partial class ExpressionBinder
         return new BoundErrorExpression(syntax);
     }
 
+    /// <summary>
+    /// ADR-0180: one ordered step of a mixed composite literal's lexical
+    /// lowering — either a member (<c>Field: value</c>, mirroring the
+    /// pre-ADR-0180 ordered-initializer tuple) or a content element/spread
+    /// (<c>Text("x")</c> / <c>...rows</c>, lowered to <c>Add(...)</c> on the
+    /// constructed receiver). Kept as one discriminated list, rather than
+    /// separate member/content lists, so the binder can walk
+    /// <see cref="StructLiteralExpressionSyntax.Elements"/> once, in the
+    /// exact source order the ADR requires.
+    /// </summary>
+    private sealed class StructLiteralOrderedStep
+    {
+        private StructLiteralOrderedStep()
+        {
+        }
+
+        public FieldInitializerSyntax? MemberSyntax { get; private init; }
+
+        public TypeSymbol? MemberType { get; private init; }
+
+        public CollectionInitializerExpressionSyntax? Braced { get; private init; }
+
+        public FieldSymbol? Field { get; private init; }
+
+        public StructSymbol? FieldDeclaringType { get; private init; }
+
+        public PropertySymbol? Property { get; private init; }
+
+        public StructLiteralContentElementSyntax? Content { get; private init; }
+
+        public static StructLiteralOrderedStep ForMember(
+            FieldInitializerSyntax syntax,
+            TypeSymbol memberType,
+            CollectionInitializerExpressionSyntax? braced,
+            FieldSymbol? field,
+            StructSymbol? fieldDeclaringType,
+            PropertySymbol? property)
+            => new()
+            {
+                MemberSyntax = syntax,
+                MemberType = memberType,
+                Braced = braced,
+                Field = field,
+                FieldDeclaringType = fieldDeclaringType,
+                Property = property,
+            };
+
+        public static StructLiteralOrderedStep ForContent(StructLiteralContentElementSyntax content)
+            => new() { Content = content };
+    }
+
     private BoundExpression BindStructLiteralExpression(StructLiteralExpressionSyntax syntax)
         => BindStructLiteralExpression(syntax, resolvedDefinition: null);
 
@@ -2306,21 +2357,71 @@ internal sealed partial class ExpressionBinder
             structSymbol = StructSymbol.ConstructNested(structSymbol, enclosingTypeArguments, scope.References.MapClrTypeToReferences);
         }
 
+        // ADR-0180: a bare content element or `...source` content spread
+        // lowers to Add(...)/Add(item) on the constructed receiver, exactly
+        // like ADR-0117's collection-initializer elements — so the same
+        // "does the target expose an accessible Add" gate applies here,
+        // reusing ADR-0117's own GS0369 diagnostic rather than a new one.
+        var hasBareContentElement = false;
+        var hasSpreadContentElement = false;
+        foreach (var scanElement in syntax.Elements)
+        {
+            if (scanElement is not StructLiteralContentElementSyntax scanContent)
+            {
+                continue;
+            }
+
+            if (scanContent.Expression is SpreadElementExpressionSyntax)
+            {
+                hasSpreadContentElement = true;
+            }
+            else
+            {
+                hasBareContentElement = true;
+            }
+        }
+
+        var hasContentElement = hasBareContentElement || hasSpreadContentElement;
+        if ((hasBareContentElement && !HasCollectionAdd(structSymbol)) ||
+            (hasSpreadContentElement && !HasUnaryCollectionAdd(structSymbol)))
+        {
+            Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, structSymbol);
+            foreach (var badElement in syntax.Elements)
+            {
+                switch (badElement)
+                {
+                    case StructLiteralContentElementSyntax { Expression: SpreadElementExpressionSyntax badSpread }:
+                        _ = BindExpression(badSpread.Expression);
+                        break;
+                    case StructLiteralContentElementSyntax badContent:
+                        _ = BindExpression(badContent.Expression);
+                        break;
+                    case FieldInitializerSyntax badField:
+                        _ = BindExpression(badField.Value);
+                        break;
+                }
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
         var seenFieldNames = new HashSet<string>();
         var inits = ImmutableArray.CreateBuilder<BoundFieldInitializer>();
-        List<(
-            FieldInitializerSyntax Syntax,
-            TypeSymbol MemberType,
-            CollectionInitializerExpressionSyntax? Braced,
-            FieldSymbol? Field,
-            StructSymbol? FieldDeclaringType,
-            PropertySymbol? Property)>? orderedInitializers =
+        List<StructLiteralOrderedStep>? orderedInitializers =
+            hasContentElement ||
             syntax.Initializers.Any(initializer =>
                 initializer.Value is CollectionInitializerExpressionSyntax { Target: null })
                 ? new()
                 : null;
-        foreach (var initSyntax in syntax.Initializers)
+        foreach (var element in syntax.Elements)
         {
+            if (element is StructLiteralContentElementSyntax contentElement)
+            {
+                orderedInitializers!.Add(StructLiteralOrderedStep.ForContent(contentElement));
+                continue;
+            }
+
+            var initSyntax = (FieldInitializerSyntax)element;
             var fieldName = initSyntax.FieldIdentifier.ValueText;
 
             // Issue #1211: a composite literal targets `var` fields AND settable
@@ -2383,7 +2484,7 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                orderedInitializers!.Add((
+                orderedInitializers!.Add(StructLiteralOrderedStep.ForMember(
                     initSyntax,
                     memberType,
                     bracedMemberInit,
@@ -2409,10 +2510,10 @@ internal sealed partial class ExpressionBinder
 
             if (orderedInitializers != null)
             {
-                orderedInitializers.Add((
+                orderedInitializers.Add(StructLiteralOrderedStep.ForMember(
                     initSyntax,
                     memberType,
-                    Braced: null,
+                    braced: null,
                     field,
                     fieldDeclaringType,
                     property));
@@ -2460,30 +2561,56 @@ internal sealed partial class ExpressionBinder
             return structLiteral;
         }
 
-        // A braced member forces statement lowering for every explicit
-        // initializer so scalar assignments stay interleaved with nested
-        // object/collection population in C# textual evaluation order.
+        // A braced member, or an ADR-0180 content element/spread, forces
+        // statement lowering for every explicit initializer so scalar
+        // assignments and Add(...) calls stay interleaved in lexical
+        // (source) order.
         var litTempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var litTemp = new LocalVariableSymbol(litTempName, isReadOnly: true, structSymbol);
+
+        // ADR-0180: a content spread lowers through BindCollectionSpreadStatements,
+        // which reassigns the receiver local (its Add may return an updated
+        // value, e.g. for a value-type collection) — so the local can no
+        // longer be readonly once any content element/spread is present.
+        // Plain member-only literals (the pre-ADR-0180 shape) keep the
+        // original readonly local unchanged.
+        var litTemp = new LocalVariableSymbol(litTempName, isReadOnly: !hasContentElement, structSymbol);
         scope.TryDeclareVariable(litTemp);
 
         var bracedStatements = ImmutableArray.CreateBuilder<BoundStatement>();
         bracedStatements.Add(new BoundVariableDeclaration(syntax, litTemp, structLiteral));
         foreach (var initializer in orderedInitializers)
         {
+            if (initializer.Content != null)
+            {
+                var content = initializer.Content;
+                if (content.Expression is SpreadElementExpressionSyntax spread)
+                {
+                    bracedStatements.AddRange(BindCollectionSpreadStatements(litTemp, spread));
+                }
+                else
+                {
+                    var addCall = BindCollectionAddCall(litTemp, content, ImmutableArray.Create(content.Expression));
+                    bracedStatements.Add(new BoundExpressionStatement(content, addCall));
+                }
+
+                continue;
+            }
+
+            var memberSyntax = Invariant.Required(initializer.MemberSyntax, "a member step has member syntax");
+            var memberType = Invariant.Required(initializer.MemberType, "a member step has a member type");
             if (initializer.Braced != null)
             {
-                var litReceiver = new BoundVariableExpression(initializer.Syntax, litTemp);
+                var litReceiver = new BoundVariableExpression(memberSyntax, litTemp);
                 if (!TryEmitMemberCollectionInitializer(
                     litReceiver,
-                    initializer.Syntax.FieldIdentifier.ValueText,
-                    initializer.Syntax.FieldIdentifier,
+                    memberSyntax.FieldIdentifier.ValueText,
+                    memberSyntax.FieldIdentifier,
                     initializer.Braced,
                     bracedStatements))
                 {
                     Diagnostics.ReportTypeNotCollectionInitializable(
-                        initializer.Syntax.FieldIdentifier.Location,
-                        initializer.MemberType);
+                        memberSyntax.FieldIdentifier.Location,
+                        memberType);
                     BindCollectionElementsForDiagnostics(initializer.Braced);
                 }
 
@@ -2491,11 +2618,11 @@ internal sealed partial class ExpressionBinder
             }
 
             var converted = BindExpression(
-                initializer.Syntax.Value,
-                initializer.MemberType);
+                memberSyntax.Value,
+                memberType);
             BoundExpression assignment = initializer.Field != null
                 ? new BoundFieldAssignmentExpression(
-                    initializer.Syntax,
+                    memberSyntax,
                     litTemp,
                     Invariant.Required(
                         initializer.FieldDeclaringType,
@@ -2503,15 +2630,15 @@ internal sealed partial class ExpressionBinder
                     initializer.Field,
                     converted)
                 : new BoundPropertyAssignmentExpression(
-                    initializer.Syntax,
-                    new BoundVariableExpression(initializer.Syntax, litTemp),
+                    memberSyntax,
+                    new BoundVariableExpression(memberSyntax, litTemp),
                     structSymbol,
                     Invariant.Required(
                         initializer.Property,
                         "a resolved property initializer has a property"),
                     converted);
             bracedStatements.Add(new BoundExpressionStatement(
-                initializer.Syntax,
+                memberSyntax,
                 assignment));
         }
 
@@ -2531,7 +2658,7 @@ internal sealed partial class ExpressionBinder
             spreadToken: null,
             spreadExpression: null,
             spreadSeparatorToken: null,
-            new SeparatedSyntaxList<FieldInitializerSyntax>(ImmutableArray<SyntaxNode>.Empty),
+            new SeparatedSyntaxList<StructLiteralElementSyntax>(ImmutableArray<SyntaxNode>.Empty),
             syntax.CloseBraceToken)
         {
             TypeArgumentList = syntax.TypeArgumentList,
@@ -2648,9 +2775,57 @@ internal sealed partial class ExpressionBinder
         StructLiteralExpressionSyntax syntax,
         Type clrType,
         TypeSymbol? resultTypeOverride = null)
-        => clrType.IsValueType
+    {
+        // ADR-0180: bare content elements and content spreads only lower
+        // through the primary user-declared-type struct-literal path above.
+        // The imported-CLR-type literal path is a separate lowering
+        // (construct via the public parameterless constructor, then assign
+        // named members) that never learned to emit Add(...) calls, so a
+        // content element reaching here must be diagnosed — syntax.Initializers'
+        // member-only filter would otherwise silently drop it.
+        if (ReportUnsupportedStructLiteralContentElements(syntax, resultTypeOverride ?? TypeSymbol.FromClrType(clrType)))
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        return clrType.IsValueType
             ? BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
             : BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride);
+    }
+
+    /// <summary>
+    /// ADR-0180: binds (for diagnostic continuity) and reports GS0369 for
+    /// every content element/spread found directly on <paramref name="syntax"/>,
+    /// for the struct-literal binder paths that do not (yet) support them —
+    /// imported-CLR-type construction and type-parameter construction. Both
+    /// paths only ever read <see cref="StructLiteralExpressionSyntax.Initializers"/>
+    /// (members), so without this guard a content element would be silently
+    /// skipped rather than diagnosed.
+    /// </summary>
+    private bool ReportUnsupportedStructLiteralContentElements(StructLiteralExpressionSyntax syntax, TypeSymbol resultType)
+    {
+        var hasContentElement = false;
+        foreach (var element in syntax.Elements)
+        {
+            if (element is not StructLiteralContentElementSyntax contentElement)
+            {
+                continue;
+            }
+
+            hasContentElement = true;
+            _ = BindExpression(
+                contentElement.Expression is SpreadElementExpressionSyntax spread
+                    ? spread.Expression
+                    : contentElement.Expression);
+        }
+
+        if (hasContentElement)
+        {
+            Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, resultType);
+        }
+
+        return hasContentElement;
+    }
 
     /// <summary>
     /// Issue #4024 (review finding 4): returns <see langword="true"/> when every
@@ -2920,6 +3095,14 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindTypeParameterObjectInitializer(StructLiteralExpressionSyntax syntax, TypeParameterSymbol tp)
     {
+        // ADR-0180: see ReportUnsupportedStructLiteralContentElements — a
+        // type-parameter construction (`T{Field: value}` under a `new()`
+        // constraint) never learned Add(...) lowering either.
+        if (ReportUnsupportedStructLiteralContentElements(syntax, tp))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         var tempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, tp);
         scope.TryDeclareVariable(tempVar);

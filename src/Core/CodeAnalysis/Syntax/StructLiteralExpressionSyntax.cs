@@ -8,12 +8,23 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// Represents a struct composite literal: <c>Point{X: 1, Y: 2}</c> (Phase 3.B.1).
+/// ADR-0180: <see cref="Elements"/> may also interleave bare content elements
+/// and non-leading <c>...source</c> content spreads with the
+/// <c>Field: value</c> members, e.g.
+/// <c>Container{ Width: 320.0, Text("Account"), ...rows }</c>.
 /// </summary>
 public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 {
     // Backing field for the property the parser assigns after construction. Its setter
     // invalidates the node's cached span (issue #1675).
     private TypeArgumentListSyntax? typeArgumentList;
+
+    // ADR-0180: lazily computed, filtered view of Elements exposing only the
+    // FieldInitializerSyntax members, for the many pre-existing binder paths
+    // (ADR-0148 structural projection, imported-CLR-type/type-parameter
+    // construction, generic type-argument inference) that only ever cared
+    // about members and never need to see a content element or spread.
+    private SeparatedSyntaxList<FieldInitializerSyntax>? cachedInitializers;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructLiteralExpressionSyntax"/> class.
@@ -24,7 +35,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     /// <param name="spreadToken">The optional leading ellipsis.</param>
     /// <param name="spreadExpression">The optional spread source.</param>
     /// <param name="spreadSeparatorToken">The optional separator after the spread source.</param>
-    /// <param name="initializers">The field initializers.</param>
+    /// <param name="elements">The ordered field-initializer / content-element / content-spread elements (ADR-0180).</param>
     /// <param name="closeBraceToken">The closing brace.</param>
     public StructLiteralExpressionSyntax(
         SyntaxTree syntaxTree,
@@ -33,7 +44,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
         SyntaxToken? spreadToken,
         ExpressionSyntax? spreadExpression,
         SyntaxToken? spreadSeparatorToken,
-        SeparatedSyntaxList<FieldInitializerSyntax> initializers,
+        SeparatedSyntaxList<StructLiteralElementSyntax> elements,
         SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
@@ -42,7 +53,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
         SpreadToken = spreadToken;
         SpreadExpression = spreadExpression;
         SpreadSeparatorToken = spreadSeparatorToken;
-        Initializers = initializers;
+        Elements = elements;
         CloseBraceToken = closeBraceToken;
     }
 
@@ -64,8 +75,48 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     /// <summary>Gets the comma separating the spread from explicit overrides, when present.</summary>
     public SyntaxToken? SpreadSeparatorToken { get; }
 
-    /// <summary>Gets the field initializers.</summary>
-    public SeparatedSyntaxList<FieldInitializerSyntax> Initializers { get; }
+    /// <summary>Gets the ordered field-initializer / content-element / content-spread elements (ADR-0180).</summary>
+    public SeparatedSyntaxList<StructLiteralElementSyntax> Elements { get; }
+
+    /// <summary>
+    /// Gets the field initializers only, in source order, filtered out of
+    /// <see cref="Elements"/> (ADR-0180). Ignored by <see cref="SyntaxNode.GetChildren"/>
+    /// — <see cref="Elements"/> is the authoritative child list — so consumers that
+    /// only care about members (ADR-0148 structural projection, imported-CLR-type
+    /// and type-parameter construction, generic type-argument inference) can keep
+    /// reading this exactly as before.
+    /// </summary>
+    [SyntaxChildIgnore]
+    public SeparatedSyntaxList<FieldInitializerSyntax> Initializers
+    {
+        get
+        {
+            if (cachedInitializers != null)
+            {
+                return cachedInitializers;
+            }
+
+            var builder = ImmutableArray.CreateBuilder<SyntaxNode>();
+            foreach (var element in Elements)
+            {
+                if (element is not FieldInitializerSyntax memberInitializer)
+                {
+                    continue;
+                }
+
+                if (builder.Count > 0)
+                {
+                    builder.Add(new SyntaxToken(SyntaxTree, SyntaxKind.CommaToken, builder[^1].Span.End, ",", null));
+                }
+
+                builder.Add(memberInitializer);
+            }
+
+            var result = new SeparatedSyntaxList<FieldInitializerSyntax>(builder.ToImmutable());
+            cachedInitializers = result;
+            return result;
+        }
+    }
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }

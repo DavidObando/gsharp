@@ -7,8 +7,11 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// <summary>
 /// Represents a single <c>FieldName: value</c> element inside a struct composite
 /// literal (Phase 3.B.1), or <c>FieldName = value</c> in data-struct copy sugar.
+/// ADR-0180: also one ordered element of a <see cref="StructLiteralExpressionSyntax"/>'s
+/// <see cref="StructLiteralExpressionSyntax.Elements"/> list, alongside
+/// <see cref="StructLiteralContentElementSyntax"/>.
 /// </summary>
-public sealed class FieldInitializerSyntax : SyntaxNode
+public sealed class FieldInitializerSyntax : StructLiteralElementSyntax
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="FieldInitializerSyntax"/> class.

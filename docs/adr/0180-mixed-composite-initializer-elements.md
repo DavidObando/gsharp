@@ -1,6 +1,6 @@
 # ADR-0180: Mixed composite initializers — members, elements, and content spread in one ordered sequence
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-13
 - **Phase**: v0.2 — language surface (ADR-0117 follow-on)
 - **Related**: ADR-0117 (collection initializers — method-directed `Add` lowering, deferred user-defined `Add` targets), ADR-0148 (safe structural projections and object-spread mapping — leading `...source` structural spread), ADR-0079 (receiver-clause methods restricted to non-owned types — `Add` on owned G# types stays in the type body), ADR-3160/#3160 (native collection spread, lexical order, exactly-once evaluation), issue #962 and ADR-0117 (method-directed collection initializers), issue #1588 (`Member: { elements }` lowering through the member collection's `Add`), issue #547 (object initializer parsing and lowering). **Issue**: [#3785](https://github.com/DavidObando/gsharp/issues/3785)
