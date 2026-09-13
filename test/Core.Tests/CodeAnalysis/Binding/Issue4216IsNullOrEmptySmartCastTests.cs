@@ -278,6 +278,37 @@ public class Issue4216IsNullOrEmptySmartCastTests
             diagnostic => diagnostic.Message.Contains("IEnumerable[int32]?", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void MemberPathNarrowing_IsNotLiftedPastAnEarlyReturn()
+    {
+        // ADR-0069: the issue #2159 join pass lifts plain variables only, so a
+        // member path narrowed by an early-exit guard is NOT non-null at the
+        // join. Failing to narrow is sound; this pins the boundary so a future
+        // change to the join pass is a deliberate decision, not a surprise.
+        var result = Evaluate(SequenceExtension + """
+
+            class Box { let Values IEnumerable[int32]? }
+
+            func Count(box Box) int32 {
+                if box.Values.IsNullOrEmpty() {
+                    return 0
+                }
+
+                var count = 0
+                for value in box.Values {
+                    count++
+                }
+                return count
+            }
+
+            Count(Box{Values: []int32{1, 2}})
+            """);
+
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("IEnumerable[int32]?", StringComparison.Ordinal));
+    }
+
     private static EmittedOracleResult Evaluate(string source)
         => EmittedOracle.Evaluate(source);
 }

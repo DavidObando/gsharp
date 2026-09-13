@@ -56,11 +56,12 @@ public class Issue4216ReceiverAnnotationParserTests
     }
 
     [Fact]
-    public void ReceiverClauseLookaheadSurvivesInvalidKeywordTarget()
+    public void ReceiverClauseLookaheadAcceptsReservedKeywordTarget()
     {
-        // A reserved-keyword target still parses AS a receiver clause; the
-        // invalid-target diagnostic must come from ParseAnnotation, not from
-        // the lookahead misreading the clause as a parameter list.
+        // `return` is a valid annotation target kind, but the lexer never
+        // demotes it to an identifier. The lookahead must accept it so the
+        // clause is still read as a receiver; whether the target is legal in
+        // this position is a later, separate concern.
         var tree = SyntaxTree.Parse("""
             package P
 

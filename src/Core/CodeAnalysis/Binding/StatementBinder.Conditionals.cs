@@ -981,6 +981,7 @@ internal sealed partial class StatementBinder
         ParameterInfo[] parameters,
         ImmutableArray<BoundExpression> arguments)
         => IsNullOrEmptyCompatibilityShape(name, parameters.Length, arguments.Length)
+            && ClrNullability.GetParameterTypeSymbol(parameters[0]) is NullableTypeSymbol
             && IsNullOrEmptyReceiverType(parameters[0].ParameterType);
 
     private static bool IsNullOrEmptyCompatibilityShape(string name, int parameterCount, int argumentCount)
@@ -988,7 +989,7 @@ internal sealed partial class StatementBinder
             && parameterCount == 1
             && argumentCount == 1;
 
-    // The DECLARED receiver type must itself be a string or sequence. Judging
+    // The DECLARED receiver must be a NULLABLE string or sequence. Judging
     // eligibility from the call-site argument would let an unconstrained
     // generic receiver (`func (value T?) IsNullOrEmpty[T]() bool`) inherit the
     // contract at any sequence-typed call site.

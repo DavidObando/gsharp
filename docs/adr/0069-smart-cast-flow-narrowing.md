@@ -199,6 +199,23 @@ parameters, and the immutable member paths already admitted by
 `SmartCastStability` may narrow; mutable members, indexers, method results, and
 other repeatable-but-not-stable expressions do not.
 
+Two scope boundaries follow from reusing the existing machinery, and both fail
+safe (they decline to narrow rather than narrowing unsoundly):
+
+- A *bare variable* receiver is accepted even when its root is a mutable
+  global, which `SmartCastStability.IsStableRoot` would reject. This matches
+  the long-standing behaviour of every if-condition narrowing classifier: the
+  if-statement path has flow-based mutation invalidation, so a later assignment
+  clears the fact. The stricter `IsStableRoot` test applies to *member paths*,
+  whose links have no such per-assignment tracking, and to the `&&`/`||`
+  short-circuit classifier, which has no invalidation pass at all.
+- Member-path narrowing is confined to the guarded branch. The issue #2159
+  early-exit/join pass deliberately lifts only plain variables past an early
+  `return`, so after `if x.Values.IsNullOrEmpty() { return }` the member path
+  is *not* narrowed at the join. Lifting member paths would require the join
+  pass to model member invalidation across the merge; until then the
+  conservative result stands.
+
 For source compatibility with established G# libraries, an unannotated
 extension named exactly `IsNullOrEmpty` is treated as
 `[NotNullWhen(false)]` on receiver parameter zero only when it:
