@@ -34,35 +34,42 @@ public class Issue2215AnalyzerReferenceTests
             Guid.NewGuid().ToString("N"));
         string gscRoot = Path.Combine(testRoot, "gsc-root");
         string gscDirectory = Path.Combine(gscRoot, "out", "bin", "Release", "Compiler");
-        Directory.CreateDirectory(gscDirectory);
+        try
+        {
+            Directory.CreateDirectory(gscDirectory);
 
-        string cwdRoot = Path.Combine(testRoot, "cwd-root");
-        string cwdStart = Path.Combine(cwdRoot, "work");
-        Directory.CreateDirectory(cwdStart);
-        string cwdGsgen = Path.Combine(cwdRoot, "out", "bin", "Release", "Gsgen.Cli", "gsgen.dll");
-        Directory.CreateDirectory(Path.GetDirectoryName(cwdGsgen));
-        File.WriteAllText(cwdGsgen, string.Empty);
+            string cwdRoot = Path.Combine(testRoot, "cwd-root");
+            string cwdStart = Path.Combine(cwdRoot, "work");
+            Directory.CreateDirectory(cwdStart);
+            string cwdGsgen = Path.Combine(cwdRoot, "out", "bin", "Release", "Gsgen.Cli", "gsgen.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(cwdGsgen));
+            File.WriteAllText(cwdGsgen, string.Empty);
 
-        Assert.Equal(
-            cwdGsgen,
-            GscInvoker.ResolveGsgenTool(cwdGsgen, "Release"));
-        Assert.Equal(
-            cwdGsgen,
-            GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
+            Assert.Equal(
+                cwdGsgen,
+                GscInvoker.ResolveGsgenTool(cwdGsgen, "Release"));
+            Assert.Equal(
+                cwdGsgen,
+                GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
 
-        string gscRelativeGsgen = Path.Combine(
-            gscRoot,
-            "out",
-            "bin",
-            "Release",
-            "Gsgen.Cli",
-            "gsgen.dll");
-        Directory.CreateDirectory(Path.GetDirectoryName(gscRelativeGsgen));
-        File.WriteAllText(gscRelativeGsgen, string.Empty);
+            string gscRelativeGsgen = Path.Combine(
+                gscRoot,
+                "out",
+                "bin",
+                "Release",
+                "Gsgen.Cli",
+                "gsgen.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(gscRelativeGsgen));
+            File.WriteAllText(gscRelativeGsgen, string.Empty);
 
-        Assert.Equal(
-            gscRelativeGsgen,
-            GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
+            Assert.Equal(
+                gscRelativeGsgen,
+                GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
+        }
+        finally
+        {
+            Directory.Delete(testRoot, recursive: true);
+        }
     }
 
     [Fact]

@@ -223,7 +223,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // still gapped: its DECLARATION does not translate (there is
                     // no read-only by-ref return in G#), so an element access
                     // through one would name a member that was never emitted.
-                    if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol { RefKind: RefKind.RefReadOnly } refIndexer &&
+                    if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol refIndexer &&
+                        refIndexer.RefKind == RefKind.RefReadOnly &&
                         refIndexer.Locations.Any(l => l.IsInSource))
                     {
                         this.context.ReportUnsupported(
@@ -748,8 +749,8 @@ public sealed partial class CSharpToGSharpTranslator
             TypeInfo resultTypeInfo = this.context.GetTypeInfo(result);
             ITypeSymbol resultType = resultTypeInfo.Type ?? resultTypeInfo.ConvertedType;
             return FindLeadingElementBinding(receiver) != null
-                || resultType is INamedTypeSymbol
-                    { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T }
+                || (resultType is INamedTypeSymbol namedResultType
+                    && namedResultType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
                 || this.NullableReferenceValueMayBeNull(result)
                 || this.ReceiverValueIsPromotedNullable(result)
                 || this.ReceiverIsNullableReferenceFieldOrProperty(result);
@@ -1543,8 +1544,9 @@ public sealed partial class CSharpToGSharpTranslator
             // <see cref="TranslateMemberAccess"/>'s `Value`/`HasValue` rewrite)
             // and relies on the same Kotlin-style smart-cast a reference-type
             // receiver does, so the guard is the same `!= nil` test.
-            bool receiverIsNullableValueType = recursive.Type == null &&
-                patternOperation is IPatternOperation { InputType.OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
+            bool receiverIsNullableValueType = recursive.Type == null
+                && patternOperation is IPatternOperation recursiveOperation
+                && recursiveOperation.InputType?.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T;
 
             // Issue #1923: a NESTED bare recursive pattern (`{ Address: { City:
             // "Lima" } }`) recurses into this method with `receiver` bound to the

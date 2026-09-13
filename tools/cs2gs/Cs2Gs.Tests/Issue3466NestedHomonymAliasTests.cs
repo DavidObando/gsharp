@@ -30,6 +30,7 @@ public sealed class Issue3466NestedHomonymAliasTests
 
         INamedTypeSymbol fixture = project.Compilation.GetTypeByMetadataName(
             "Signatures.TargetTypedDefaults");
+        Assert.NotNull(fixture);
         IPropertySymbol value = fixture.GetMembers("Value").OfType<IPropertySymbol>().Single();
         IPropertySymbol values = fixture.GetMembers("Values").OfType<IPropertySymbol>().Single();
         IPropertySymbol indexer = fixture.GetMembers().OfType<IPropertySymbol>().Single(p => p.IsIndexer);

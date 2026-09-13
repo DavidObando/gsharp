@@ -596,8 +596,9 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol receiverType,
             ISymbol extensionOwner)
         {
-            if (receiverType is INamedTypeSymbol
-                { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T, TypeArguments: { Length: 1 } } nullable)
+            if (receiverType is INamedTypeSymbol nullable
+                && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                && nullable.TypeArguments.Length == 1)
             {
                 receiverType = nullable.TypeArguments[0];
             }
@@ -1082,8 +1083,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // context (Avalonia x:Name fields are the common case) retain
                 // C#'s ability to hold/test null when translated as a standalone
                 // generated partial part.
-                if (this.widenObliviousReferenceFields &&
-                    symbol?.Type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.None })
+                if (this.widenObliviousReferenceFields
+                    && symbol?.Type?.IsReferenceType == true
+                    && symbol.Type.NullableAnnotation == NullableAnnotation.None)
                 {
                     type = MakeNullable(type);
                 }

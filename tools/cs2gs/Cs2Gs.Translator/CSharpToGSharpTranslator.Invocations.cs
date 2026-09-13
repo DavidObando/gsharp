@@ -62,8 +62,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return analyzerSwitchWalk;
             }
 
-            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.LocalFunction } recursiveLocal
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol recursiveLocal
+                && recursiveLocal.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
                     recursiveLocal,
                     out LiftedRecursiveLocalFunction recursiveLift))
@@ -142,8 +142,8 @@ public sealed partial class CSharpToGSharpTranslator
             // function-typed value (delegate field or event) directly and has no
             // `.Invoke` member (`.Invoke` would be GS0159). Detected via the
             // delegate's synthesized `Invoke` method (MethodKind.DelegateInvoke).
-            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.DelegateInvoke }
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol delegateInvoke
+                && delegateInvoke.MethodKind == MethodKind.DelegateInvoke
                 && TryGetDelegateInvokeReceiver(invocation.Expression, out GExpression invokeTarget))
             {
                 var invokeArguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
@@ -188,8 +188,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (invocation.Expression is MemberAccessExpressionSyntax staticExtMember
                 && staticExtMember.Expression is TypeSyntax or IdentifierNameSyntax or MemberAccessExpressionSyntax
                 && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation staticExtOperation
-                && staticExtOperation.TargetMethod is IMethodSymbol
-                    { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } staticExt
+                && staticExtOperation.TargetMethod is IMethodSymbol staticExt
+                && staticExt.IsExtensionMethod
+                && staticExt.MethodKind != MethodKind.ReducedExtension
                 && staticExt.Parameters.Length >= 1
                 && !(staticExt.ReducedFrom ?? staticExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && !this.IsStaticExtensionHelper(staticExt)
@@ -232,8 +233,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (invocation.Expression is SimpleNameSyntax bareExtName
                 && bareExtName is IdentifierNameSyntax or GenericNameSyntax
                 && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation bareExtOperation
-                && bareExtOperation.TargetMethod is IMethodSymbol
-                    { IsExtensionMethod: true, MethodKind: not MethodKind.ReducedExtension } bareExt
+                && bareExtOperation.TargetMethod is IMethodSymbol bareExt
+                && bareExt.IsExtensionMethod
+                && bareExt.MethodKind != MethodKind.ReducedExtension
                 && bareExt.Parameters.Length >= 1
                 && !(bareExt.ReducedFrom ?? bareExt).DeclaringSyntaxReferences.IsDefaultOrEmpty
                 && !this.IsStaticExtensionHelper(bareExt)
@@ -262,8 +264,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             // A generic call `Foo<T>(...)` carries its type arguments on the name;
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
-            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.LocalFunction } localFunction
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol localFunction
+                && localFunction.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
@@ -279,8 +281,8 @@ public sealed partial class CSharpToGSharpTranslator
                     typeArguments = this.MapTypeArguments(liftedGeneric);
                 }
             }
-            else if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.LocalFunction } groupMember
+            else if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol groupMember
+                && groupMember.MethodKind == MethodKind.LocalFunction
                 && this.state.RecursiveLocalFunctionGroups.TryGetValue(
                     groupMember, out RecursiveLocalFunctionGroup recursiveGroup)
                 && recursiveGroup.Members.Contains(groupMember, SymbolEqualityComparer.Default))
@@ -390,8 +392,8 @@ public sealed partial class CSharpToGSharpTranslator
             // results such as `FindFactory()()`. Keep the decision receiver-only
             // so callable-return taint is asserted on the produced delegate value,
             // never on a method group.
-            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.DelegateInvoke }
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol invokedMethod
+                && invokedMethod.MethodKind == MethodKind.DelegateInvoke
                 && (this.ReceiverNeedsNullForgiveness(
                         invocation.Expression,
                         isDereferenceReceiver: true)
@@ -410,7 +412,10 @@ public sealed partial class CSharpToGSharpTranslator
             // and fail conversion — spell the type arguments explicitly so the
             // C#-chosen overload binds.
             if ((typeArguments == null || typeArguments.Count == 0)
-                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol { IsGenericMethod: true, MethodKind: MethodKind.Ordinary or MethodKind.ReducedExtension } inferredGeneric
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol inferredGeneric
+                && inferredGeneric.IsGenericMethod
+                && (inferredGeneric.MethodKind == MethodKind.Ordinary
+                    || inferredGeneric.MethodKind == MethodKind.ReducedExtension)
                 && !inferredGeneric.TypeArguments.IsDefaultOrEmpty
                 && inferredGeneric.TypeArguments.All(t => t.TypeKind != TypeKind.Error)
                 && inferredGeneric.TypeArguments.Any(t =>
@@ -1098,8 +1103,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (symbol is ILocalSymbol { RefKind: not RefKind.None }
-                or IParameterSymbol { RefKind: not RefKind.None })
+            if ((symbol is ILocalSymbol local && local.RefKind != RefKind.None)
+                || (symbol is IParameterSymbol parameter && parameter.RefKind != RefKind.None))
             {
                 return false;
             }
@@ -1235,7 +1240,7 @@ public sealed partial class CSharpToGSharpTranslator
             // binds to, because the reassembly addresses slots by
             // `Parameter.Ordinal` — `IInvocationOperation.Arguments` is in
             // EVALUATION order, not parameter order (PR #4211 review).
-            if (targetMethod is { MethodKind: MethodKind.LocalFunction }
+            if (targetMethod?.MethodKind == MethodKind.LocalFunction
                 && this.state.RecursiveLocalFunctionGroups.TryGetValue(
                     targetMethod, out RecursiveLocalFunctionGroup claimedGroup)
                 && claimedGroup.Members.Contains(targetMethod, SymbolEqualityComparer.Default)
@@ -1869,7 +1874,8 @@ public sealed partial class CSharpToGSharpTranslator
         // Metadata-imported targets are excluded: the imported-call path
         // accepts a plain value and spills it to a temp itself.
         private bool TargetsSourceDeclaredInParameter(ArgumentSyntax argument) =>
-            this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { RefKind: RefKind.In } parameter }
+            this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter }
+            && parameter.RefKind == RefKind.In
             && !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty;
 
         // Issue #3414: Roslyn has already fixed the converted delegate signature
@@ -2583,7 +2589,8 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyList<GExpression> arguments,
             InitializerExpressionSyntax initializer)
         {
-            if (typeSymbol is INamedTypeSymbol { SpecialType: SpecialType.System_Object } systemObject)
+            if (typeSymbol is INamedTypeSymbol systemObject
+                && systemObject.SpecialType == SpecialType.System_Object)
             {
                 type = new NamedTypeReference(
                     this.typeMapper.GetOrCreateImportedTypeAlias(
@@ -2609,7 +2616,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             var valueType = typeSymbol as INamedTypeSymbol;
             bool isSourceValueStruct =
-                valueType is { TypeKind: TypeKind.Struct, SpecialType: SpecialType.None } &&
+                valueType != null &&
+                valueType.TypeKind == TypeKind.Struct &&
+                valueType.SpecialType == SpecialType.None &&
                 !valueType.IsTupleType &&
                 !valueType.DeclaringSyntaxReferences.IsEmpty;
 
@@ -3874,7 +3883,7 @@ public sealed partial class CSharpToGSharpTranslator
                         ? MakeNullable(targetType)
                         : targetType;
                 bool useUnambiguousCast =
-                    targetSymbol is not { SpecialType: SpecialType.System_Object };
+                    targetSymbol?.SpecialType != SpecialType.System_Object;
                 return new ConversionExpression(
                     boxingTargetType,
                     operand,
@@ -3887,7 +3896,7 @@ public sealed partial class CSharpToGSharpTranslator
             // incompatible operands in G# even though the C# expression is
             // object-typed. G# accepts the canonical `object(expr)` /
             // `object?(expr)` conversion form for these upcasts.
-            if (targetSymbol is { SpecialType: SpecialType.System_Object }
+            if (targetSymbol?.SpecialType == SpecialType.System_Object
                 && sourceSymbol is { IsReferenceType: true })
             {
                 GTypeReference objectTargetType = cast.Type is NullableTypeSyntax

@@ -536,10 +536,9 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (member.IsImplicitlyDeclared
                 || SymbolEqualityComparer.Default.Equals(member, entryPoint)
-                || member is IMethodSymbol
-                {
-                    MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor,
-                })
+                || (member is IMethodSymbol method
+                    && (method.MethodKind == MethodKind.Constructor
+                        || method.MethodKind == MethodKind.StaticConstructor)))
             {
                 continue;
             }
@@ -1019,8 +1018,8 @@ public sealed partial class CSharpToGSharpTranslator
     private static string SignatureType(ITypeSymbol type) =>
         string.Concat(
             type.ToDisplayParts(SymbolDisplayFormat.FullyQualifiedFormat)
-                .Select(part => part.Symbol is ITypeParameterSymbol
-                    { TypeParameterKind: TypeParameterKind.Method } parameter
+                .Select(part => part.Symbol is ITypeParameterSymbol parameter
+                    && parameter.TypeParameterKind == TypeParameterKind.Method
                         ? "!" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
                         : part.ToString()));
 

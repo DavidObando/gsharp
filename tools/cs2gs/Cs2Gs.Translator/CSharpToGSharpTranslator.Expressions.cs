@@ -45,8 +45,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
         {
-            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.LocalFunction } localFunction
+            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol localFunction
+                && localFunction.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
@@ -67,8 +67,8 @@ public sealed partial class CSharpToGSharpTranslator
             // `nil` default. The postfix null assertion unwraps the nullable
             // (ADR-0069), mirroring gsc's own lowering (its `var` decl also
             // emits as `(p) → R? = nil`).
-            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.LocalFunction } recursiveLocal
+            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol recursiveLocal
+                && recursiveLocal.MethodKind == MethodKind.LocalFunction
                 && this.state.RecursiveLocalFunctionGroups.TryGetValue(
                     recursiveLocal, out RecursiveLocalFunctionGroup recursiveGroup)
                 && recursiveGroup.Members.Contains(recursiveLocal))
@@ -1061,7 +1061,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (unwrapped is not IdentifierNameSyntax
                 || this.context.GetSymbolInfo(unwrapped).Symbol is not
                     (ILocalSymbol or IParameterSymbol)
-                || this.GetDeclaredValueType(unwrapped) is not { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
+                || this.GetDeclaredValueType(unwrapped) is not { } declaredType
+                || !declaredType.IsReferenceType
+                || declaredType.NullableAnnotation != NullableAnnotation.Annotated
                 || !this.IsGSharpFlowNarrowedLocal(unwrapped))
             {
                 return false;
@@ -1522,7 +1524,8 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol declaredValueType = this.GetDeclaredValueType(value);
             if (!this.GSharpExpressionIsStaticallyNonNull(value, translated)
                 && targetType is { IsNullable: false }
-                && declaredValueType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
+                && declaredValueType?.IsReferenceType == true
+                && declaredValueType.NullableAnnotation == NullableAnnotation.Annotated
                 && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull)
             {
                 return EnsureNonNullAssertion(translated);
@@ -1701,7 +1704,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ILocalSymbol local => local.Type,
                 IParameterSymbol parameter => parameter.Type,
                 IPropertySymbol property => property.Type,
-                IMethodSymbol { MethodKind: not MethodKind.Constructor } method => method.ReturnType,
+                IMethodSymbol method when method.MethodKind != MethodKind.Constructor => method.ReturnType,
                 _ => this.context.GetTypeInfo(expression).Type,
             };
 
@@ -1710,7 +1713,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T;
             }
 
-            return type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.NotAnnotated }
+            return type?.IsReferenceType == true
+                && type.NullableAnnotation == NullableAnnotation.NotAnnotated
                 && !this.IsImportedObliviousNullableMember(symbol)
                 && !this.LocalInitializedFromImportedObliviousNullable(symbol)
                 && (symbol == null || !this.ShouldPromoteToNullableReference(symbol));
@@ -1783,7 +1787,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return elementType is { IsValueType: true }
                     ? elementType.OriginalDefinition?.SpecialType
                         != SpecialType.System_Nullable_T
-                    : elementType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.NotAnnotated };
+                    : elementType?.IsReferenceType == true
+                        && elementType.NullableAnnotation == NullableAnnotation.NotAnnotated;
             }
 
             return false;
@@ -2183,9 +2188,9 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ILocalSymbol local when ExplicitLocalTypeIsNullable(local) =>
                     (local.Type, local),
-                IFieldSymbol { Type.NullableAnnotation: NullableAnnotation.Annotated } field =>
+                IFieldSymbol field when field.Type.NullableAnnotation == NullableAnnotation.Annotated =>
                     (field.Type, field),
-                IPropertySymbol { Type.NullableAnnotation: NullableAnnotation.Annotated } property =>
+                IPropertySymbol property when property.Type.NullableAnnotation == NullableAnnotation.Annotated =>
                     (property.Type, property),
                 _ => this.FindContextualValueTarget(value),
             };
@@ -3748,7 +3753,8 @@ public sealed partial class CSharpToGSharpTranslator
             // though the ORIGINAL C# `string.Join`/`.Select` pipeline tolerates
             // null elements silently.
             if (sinkType is not INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } sinkCollection
-                || sinkCollection.TypeArguments[0] is not { NullableAnnotation: NullableAnnotation.Annotated } sinkElement
+                || sinkCollection.TypeArguments[0] is not { } sinkElement
+                || sinkElement.NullableAnnotation != NullableAnnotation.Annotated
                 || resultType == null)
             {
                 return false;

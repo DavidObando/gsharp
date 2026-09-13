@@ -1651,10 +1651,17 @@ internal static class ObliviousNullabilityAnalyzer
 
     // The declaration a `return`/arrow body belongs to: the method itself, or
     // the property behind a getter rather than the synthesized accessor.
-    private static ISymbol OwningMember(ISymbol symbol) =>
-        symbol is IMethodSymbol { MethodKind: MethodKind.PropertyGet, AssociatedSymbol: { } property }
-            ? property
-            : symbol;
+    private static ISymbol OwningMember(ISymbol symbol)
+    {
+        if (symbol is IMethodSymbol method
+            && method.MethodKind == MethodKind.PropertyGet
+            && method.AssociatedSymbol is { } property)
+        {
+            return property;
+        }
+
+        return symbol;
+    }
 
     // Every declaration whose `[AllowNull]` binds `symbol`'s write contract:
     // the symbol itself, a property setter's `value` parameter, and the base or

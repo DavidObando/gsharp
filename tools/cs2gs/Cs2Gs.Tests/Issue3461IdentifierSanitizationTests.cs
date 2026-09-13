@@ -35,11 +35,13 @@ public sealed class Issue3461IdentifierSanitizationTests
 
         INamedTypeSymbol methods = project.Compilation.GetTypeByMetadataName(
             "Cs2Gs.Tests.ImportedContextualStatics");
+        Assert.NotNull(methods);
         IMethodSymbol method = methods.GetMembers("base")
             .OfType<IMethodSymbol>()
             .Single(candidate => candidate.Arity == 1);
         INamedTypeSymbol fields = project.Compilation.GetTypeByMetadataName(
             "Cs2Gs.Tests.ImportedContextualStaticFields");
+        Assert.NotNull(fields);
         IFieldSymbol field = fields.GetMembers("base").OfType<IFieldSymbol>().Single();
 
         Assert.Equal(NullableAnnotation.None, method.ReturnType.NullableAnnotation);

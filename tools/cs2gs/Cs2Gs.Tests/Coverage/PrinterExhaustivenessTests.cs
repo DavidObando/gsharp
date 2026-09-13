@@ -90,7 +90,7 @@ public class PrinterExhaustivenessTests
             "Cs2Gs.CodeModel.Ast.GNode");
         Assert.NotNull(root);
 
-        var unsealed = GetTypes(project.Compilation.GlobalNamespace)
+        var unsealed = GetTypes(project.Compilation.Assembly.GlobalNamespace)
             .Where(type =>
                 IsExported(type)
                 && InheritsFrom(type, root)

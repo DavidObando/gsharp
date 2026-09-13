@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -72,31 +73,91 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
     }
 
     [Fact]
-    public async Task TranslatedOwnSource_UsesEqualityForRefKindConstants()
+    public async Task TranslatedOwnSource_UsesEqualityForRoslynEnumConstants()
     {
-        string analyzerGs = await TranslateOwnFile(
-            "Cs2Gs.Translator", "ObliviousNullabilityAnalyzer.cs");
+        IReadOnlyDictionary<string, string> translated = await TranslateOwnFiles(
+            "Cs2Gs.Translator",
+            "CSharpToGSharpTranslator.Analyzers.cs",
+            "CSharpToGSharpTranslator.cs",
+            "CSharpToGSharpTranslator.Declarations.cs",
+            "CSharpToGSharpTranslator.Expressions.cs",
+            "CSharpToGSharpTranslator.Invocations.cs",
+            "CSharpToGSharpTranslator.Members.cs",
+            "CSharpToGSharpTranslator.Nullability.cs",
+            "CSharpToGSharpTranslator.Patterns.cs",
+            "CSharpToGSharpTranslator.Statements.cs",
+            "CSharpTypeMapper.cs",
+            "ObliviousNullabilityAnalyzer.cs");
 
+        string analyzerGs = translated["ObliviousNullabilityAnalyzer.cs"];
         string compact = string.Concat(analyzerGs.Where(c => !char.IsWhiteSpace(c)));
         Assert.DoesNotContain("parameter.RefKindisRefKind", compact, StringComparison.Ordinal);
         Assert.Matches(
             @"parameter\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.Out",
             compact);
+
+        foreach (string source in translated.Values)
+        {
+            string code = Regex.Replace(
+                source,
+                @"/\*.*?\*/|//[^\r\n]*|#[^\r\n]*",
+                string.Empty,
+                RegexOptions.CultureInvariant | RegexOptions.Singleline);
+            Assert.DoesNotMatch(
+                new Regex(
+                    @"\b(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind)\s*:",
+                    RegexOptions.CultureInvariant),
+                code);
+        }
+
+        string invocationsGs = translated["CSharpToGSharpTranslator.Invocations.cs"];
+        string compactInvocations = string.Concat(invocationsGs.Where(c => !char.IsWhiteSpace(c)));
+        Assert.Matches(
+            @"local\.RefKind!=(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.None",
+            compactInvocations);
+        Assert.Matches(
+            @"parameter\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.In",
+            compactInvocations);
+        Assert.Matches(
+            @"valueType(?:!!)?\.TypeKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*TypeKind\.Struct",
+            compactInvocations);
+
+        string patternsGs = translated["CSharpToGSharpTranslator.Patterns.cs"];
+        string compactPatterns = string.Concat(patternsGs.Where(c => !char.IsWhiteSpace(c)));
+        Assert.Matches(
+            @"refIndexer\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.RefReadOnly",
+            compactPatterns);
     }
 
     private static async Task<string> TranslateOwnFile(string projectDirName, string fileName)
+    {
+        IReadOnlyDictionary<string, string> translated = await TranslateOwnFiles(
+            projectDirName,
+            fileName);
+        return translated[fileName];
+    }
+
+    private static async Task<IReadOnlyDictionary<string, string>> TranslateOwnFiles(
+        string projectDirName,
+        params string[] fileNames)
     {
         string projectPath = TestFixtureSource.Resolve(
             "tools", "cs2gs", projectDirName, projectDirName + ".csproj");
         LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
 
-        LoadedDocument document = Assert.Single(
-            project.Documents,
-            d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal));
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        return GSharpPrinter.Print(unit);
+        var translated = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string fileName in fileNames)
+        {
+            LoadedDocument document = Assert.Single(
+                project.Documents,
+                d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal));
+            var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+            translated.Add(fileName, GSharpPrinter.Print(unit));
+        }
+
+        return translated;
     }
 
     /// <summary>

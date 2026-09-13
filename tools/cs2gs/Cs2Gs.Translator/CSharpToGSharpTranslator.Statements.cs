@@ -1320,9 +1320,11 @@ public sealed partial class CSharpToGSharpTranslator
             // more than a nullable annotation, spell the upcast (`arm as T`).
             // Mirrors CoerceSwitchArmNumericValue's reference rule for switch
             // arms; each arm is coerced independently.
-            if (resultType is { IsReferenceType: true, TypeKind: not TypeKind.Error })
+            if (resultType?.IsReferenceType == true
+                && resultType.TypeKind != TypeKind.Error)
             {
-                if (trueType is { IsReferenceType: true, TypeKind: not TypeKind.Error }
+                if (trueType?.IsReferenceType == true
+                    && trueType.TypeKind != TypeKind.Error
                     && !SymbolEqualityComparer.Default.Equals(trueType, resultType))
                 {
                     whenTrue = this.CoerceReferenceValueTo(
@@ -1331,7 +1333,8 @@ public sealed partial class CSharpToGSharpTranslator
                         resultType);
                 }
 
-                if (falseType is { IsReferenceType: true, TypeKind: not TypeKind.Error }
+                if (falseType?.IsReferenceType == true
+                    && falseType.TypeKind != TypeKind.Error
                     && !SymbolEqualityComparer.Default.Equals(falseType, resultType))
                 {
                     whenFalse = this.CoerceReferenceValueTo(
@@ -2006,8 +2009,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (expression is ConditionalAccessExpressionSyntax voidConditionalAccess
-                && this.context.GetTypeInfo(voidConditionalAccess).Type
-                    is { SpecialType: SpecialType.System_Void }
+                && this.context.GetTypeInfo(voidConditionalAccess).Type?.SpecialType
+                    == SpecialType.System_Void
                 && this.RequiresLocalAssignmentSeam(
                     voidConditionalAccess.WhenNotNull))
             {
@@ -2269,10 +2272,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
 
                 case IdentifierNameSyntax identifier:
-                    return this.context.GetSymbolInfo(identifier).Symbol
-                        is ILocalSymbol { RefKind: RefKind.None }
-                        or IParameterSymbol { RefKind: RefKind.None }
-                        or IRangeVariableSymbol;
+                    ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                    return symbol is IRangeVariableSymbol
+                        || (symbol is ILocalSymbol local && local.RefKind == RefKind.None)
+                        || (symbol is IParameterSymbol parameter && parameter.RefKind == RefKind.None);
 
                 case PostfixUnaryExpressionSyntax suppressed
                     when suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression):

@@ -899,8 +899,9 @@ public sealed class CSharpTypeMapper
                     foreach (ISymbol member in declaredAggregate.GetMembers())
                     {
                         if (member.IsStatic
-                            && member is IFieldSymbol or IPropertySymbol
-                                or IMethodSymbol { MethodKind: MethodKind.Ordinary })
+                            && (member is IFieldSymbol or IPropertySymbol
+                                || (member is IMethodSymbol method
+                                    && method.MethodKind == MethodKind.Ordinary)))
                         {
                             this.reservedSiblingStaticMemberNames.Add(names.GetName(member));
                         }
@@ -911,7 +912,8 @@ public sealed class CSharpTypeMapper
                 {
                     ISymbol invokedSymbol = semanticModel.GetSymbolInfo(invokedName).Symbol;
                     if (invokedSymbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
-                        || invokedSymbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction })
+                        || (invokedSymbol is IMethodSymbol method
+                            && method.MethodKind == MethodKind.LocalFunction))
                     {
                         this.reservedInvokedLocalNames.Add(names.GetName(invokedSymbol));
                     }
