@@ -68,7 +68,7 @@ public class Issue2215AnalyzerReferenceTests
         }
         finally
         {
-            Directory.Delete(testRoot, recursive: true);
+            TryDelete(testRoot);
         }
     }
 
@@ -148,6 +148,20 @@ public class Issue2215AnalyzerReferenceTests
         string root = Path.Combine(AppContext.BaseDirectory, "pipeline-tests", label, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static void TryDelete(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string NewScratchDir(string label)

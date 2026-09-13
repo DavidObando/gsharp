@@ -143,7 +143,8 @@ internal sealed class EmittedNameAllocator
         {
             INamespaceSymbol => true,
             INamedTypeSymbol { IsAnonymousType: false } => true,
-            IMethodSymbol { MethodKind: MethodKind.LocalFunction or MethodKind.AnonymousFunction } => false,
+            IMethodSymbol method when method.MethodKind == MethodKind.LocalFunction
+                || method.MethodKind == MethodKind.AnonymousFunction => false,
             IMethodSymbol method => method.ContainingType?.IsAnonymousType == false,
             IPropertySymbol property => property.ContainingType?.IsAnonymousType == false,
             IFieldSymbol field => field.ContainingType?.IsAnonymousType == false,
@@ -187,7 +188,8 @@ internal sealed class EmittedNameAllocator
             IMethodSymbol method when method.Name == "init"
                 && !method.DeclaringSyntaxReferences.IsDefaultOrEmpty =>
                 GSharpIdentifierNameContext.Invocation,
-            IMethodSymbol { MethodKind: MethodKind.LocalFunction } => GSharpIdentifierNameContext.Local,
+            IMethodSymbol method when method.MethodKind == MethodKind.LocalFunction =>
+                GSharpIdentifierNameContext.Local,
             ILocalSymbol local when local.DeclaringSyntaxReferences
                 .Any(reference => reference.GetSyntax() is SingleVariableDesignationSyntax) =>
                 GSharpIdentifierNameContext.Pattern,
@@ -237,7 +239,7 @@ internal sealed class EmittedNameAllocator
             case ILocalSymbol:
             case IRangeVariableSymbol:
             case ILabelSymbol:
-            case IMethodSymbol { MethodKind: MethodKind.LocalFunction }:
+            case IMethodSymbol method when method.MethodKind == MethodKind.LocalFunction:
                 return this.GetMethodScopeNames(symbol.ContainingSymbol);
 
             case IAliasSymbol alias:
@@ -426,7 +428,8 @@ internal sealed class EmittedNameAllocator
             {
                 ISymbol declared = model.GetDeclaredSymbol(node);
                 if (declared is ILocalSymbol or IRangeVariableSymbol or ILabelSymbol
-                    || declared is IMethodSymbol { MethodKind: MethodKind.LocalFunction })
+                    || (declared is IMethodSymbol declaredMethod
+                        && declaredMethod.MethodKind == MethodKind.LocalFunction))
                 {
                     if (SymbolEqualityComparer.Default.Equals(
                         Canonical(declared.ContainingSymbol),

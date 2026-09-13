@@ -928,7 +928,8 @@ public sealed partial class CSharpToGSharpTranslator
         private bool IsNullableIfLetReceiver(ExpressionSyntax receiver)
         {
             ITypeSymbol type = this.context.GetTypeInfo(receiver).Type;
-            if (type is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T })
+            if (type is INamedTypeSymbol namedType
+                && namedType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
             {
                 return true;
             }

@@ -76,18 +76,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
     public async Task TranslatedOwnSource_UsesEqualityForRoslynEnumConstants()
     {
         IReadOnlyDictionary<string, string> translated = await TranslateOwnFiles(
-            "Cs2Gs.Translator",
-            "CSharpToGSharpTranslator.Analyzers.cs",
-            "CSharpToGSharpTranslator.cs",
-            "CSharpToGSharpTranslator.Declarations.cs",
-            "CSharpToGSharpTranslator.Expressions.cs",
-            "CSharpToGSharpTranslator.Invocations.cs",
-            "CSharpToGSharpTranslator.Members.cs",
-            "CSharpToGSharpTranslator.Nullability.cs",
-            "CSharpToGSharpTranslator.Patterns.cs",
-            "CSharpToGSharpTranslator.Statements.cs",
-            "CSharpTypeMapper.cs",
-            "ObliviousNullabilityAnalyzer.cs");
+            "Cs2Gs.Translator");
 
         string analyzerGs = translated["ObliviousNullabilityAnalyzer.cs"];
         string compact = string.Concat(analyzerGs.Where(c => !char.IsWhiteSpace(c)));
@@ -105,7 +94,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
                 RegexOptions.CultureInvariant | RegexOptions.Singleline);
             Assert.DoesNotMatch(
                 new Regex(
-                    @"\b(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind)\s*:",
+                    @":\s*(?:not\s+)?(?:[A-Za-z_]\w*\.)*(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind)\.\w+",
                     RegexOptions.CultureInvariant),
                 code);
         }
@@ -146,12 +135,15 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
 
-        var translated = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (string fileName in fileNames)
-        {
-            LoadedDocument document = Assert.Single(
+        IEnumerable<LoadedDocument> documents = fileNames.Length == 0
+            ? project.Documents
+            : fileNames.Select(fileName => Assert.Single(
                 project.Documents,
-                d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal));
+                d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal)));
+        var translated = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (LoadedDocument document in documents)
+        {
+            string fileName = Path.GetFileName(document.FilePath);
             var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
             CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
             translated.Add(fileName, GSharpPrinter.Print(unit));

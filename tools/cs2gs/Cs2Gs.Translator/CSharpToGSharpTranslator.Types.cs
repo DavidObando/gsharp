@@ -1340,8 +1340,11 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression value = this.TranslateValueWithNullForgiveness(node.Expression);
             TypeInfo typeInfo = this.context.GetTypeInfo(node.Expression);
             ITypeSymbol declaredType = this.GetDeclaredValueType(node.Expression);
-            if (declaredType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
-                && typeInfo.ConvertedType is { IsReferenceType: true, NullableAnnotation: not NullableAnnotation.Annotated }
+            if (declaredType?.IsReferenceType == true
+                && declaredType.NullableAnnotation == NullableAnnotation.Annotated
+                && typeInfo.ConvertedType is { } convertedType
+                && convertedType.IsReferenceType
+                && convertedType.NullableAnnotation != NullableAnnotation.Annotated
                 && this.context.GetSymbolInfo(node.Expression).Symbol is ILocalSymbol yieldedLocal
                 && yieldedLocal.DeclaringSyntaxReferences.Any(reference =>
                     reference.GetSyntax() is ForEachStatementSyntax)
