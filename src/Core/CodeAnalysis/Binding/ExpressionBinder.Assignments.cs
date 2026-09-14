@@ -522,6 +522,54 @@ internal sealed partial class ExpressionBinder
     {
         var propertyName = memberIdentifier.ValueText;
 
+        if (receiverType is InterfaceSymbol interfaceSymbol)
+        {
+            if (!TypeMemberModel.TryGetPropertyWithOwner(
+                interfaceSymbol,
+                propertyName,
+                out var property,
+                out var propertyOwner))
+            {
+                Diagnostics.ReportUnableToFindMember(memberIdentifier.Location, propertyName);
+                _ = BindExpression(valueSyntax);
+                return null;
+            }
+
+            if (!property.HasSetter)
+            {
+                Diagnostics.ReportCannotAssign(separator.Location, propertyName);
+                _ = BindExpression(valueSyntax);
+                return null;
+            }
+
+            var effectiveInterface = Invariant.Required(
+                propertyOwner as InterfaceSymbol,
+                "an interface property has an effective interface owner");
+            if (!AccessibilityChecker.IsAccessible(
+                property.SetterAccessibility,
+                effectiveInterface,
+                this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(
+                    memberIdentifier.Location,
+                    property.Name,
+                    effectiveInterface.Name,
+                    property.SetterAccessibility);
+            }
+
+            var propertyType = effectiveInterface.SubstituteMemberType(property.Type);
+            var converted = BindExpression(valueSyntax, propertyType);
+            var receiverExpr = new BoundVariableExpression(anchor, receiverLocal);
+            return new BoundPropertyAssignmentExpression(
+                anchor,
+                receiverExpr,
+                null,
+                property,
+                converted,
+                ReferenceEquals(propertyType, property.Type) ? null : propertyType,
+                effectiveInterface);
+        }
+
         // Receiver-side type discriminator mirrors the receiver dispatch in
         // BindFieldAssignmentExpression: pure CLR types go through reflection;
         // user-defined StructSymbols use the symbol tables; both can fall

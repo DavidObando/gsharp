@@ -322,8 +322,20 @@ internal sealed partial class ExpressionBinder
         if ((hasNonIndexedElement && !HasCollectionAdd(resultType)) ||
             (hasSpreadElement && !HasUnaryCollectionAdd(resultType)))
         {
+            var diagnosticLocal = new LocalVariableSymbol("$collinitdiagnostic", isReadOnly: false, resultType);
+            foreach (var member in syntax.Elements.OfType<MemberCollectionElementSyntax>())
+            {
+                _ = BindInitializerMemberAssignment(
+                    diagnosticLocal,
+                    resultType,
+                    member.Initializer.FieldIdentifier,
+                    member.Initializer.ColonToken,
+                    member.Initializer.Value,
+                    member);
+            }
+
             Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, resultType);
-            BindCollectionElementsForDiagnostics(syntax);
+            BindCollectionElementsForDiagnostics(syntax, skipMemberElements: true);
             return new BoundErrorExpression(null);
         }
 
@@ -1136,14 +1148,20 @@ internal sealed partial class ExpressionBinder
     internal static bool IsSynthesizedCollectionAddCall(CallExpressionSyntax? call)
         => call != null && SynthesizedCollectionAddCalls.TryGetValue(call, out _);
 
-    private void BindCollectionElementsForDiagnostics(CollectionInitializerExpressionSyntax syntax)
+    private void BindCollectionElementsForDiagnostics(
+        CollectionInitializerExpressionSyntax syntax,
+        bool skipMemberElements = false)
     {
         foreach (var element in syntax.Elements)
         {
             switch (element)
             {
                 case MemberCollectionElementSyntax member:
-                    _ = BindExpression(member.Initializer.Value);
+                    if (!skipMemberElements)
+                    {
+                        _ = BindExpression(member.Initializer.Value);
+                    }
+
                     break;
                 case ExpressionCollectionElementSyntax { Expression: SpreadElementExpressionSyntax spread }:
                     _ = BindExpression(spread.Expression);

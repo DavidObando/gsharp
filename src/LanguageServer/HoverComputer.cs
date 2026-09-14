@@ -388,16 +388,25 @@ public static class HoverComputer
         // is the constructed G# struct/class type.
         foreach (var context in FindAccessorMemberContexts(tree, token).Concat(FindObjectInitializerMemberContexts(tree, token)))
         {
-            var structSymbol = token.Parent?.Parent is MemberCollectionElementSyntax
-                ? InferInitializerReceiverType(tree, compilation, context.ReceiverExpression) as StructSymbol
+            var receiverType = token.Parent?.Parent is MemberCollectionElementSyntax
+                ? InferInitializerReceiverType(tree, compilation, context.ReceiverExpression)
                 : ResolveReceiverStructSymbol(tree, compilation, context.ReceiverExpression);
-            if (structSymbol != null)
+            if (receiverType is StructSymbol structSymbol)
             {
                 var member = LookupMemberOnStruct(structSymbol, context.MemberName);
                 if (member != null)
                 {
                     return member;
                 }
+            }
+            else if (receiverType is InterfaceSymbol interfaceSymbol
+                && TypeMemberModel.TryGetPropertyWithOwner(
+                    interfaceSymbol,
+                    context.MemberName,
+                    out var property,
+                    out _))
+            {
+                return property;
             }
         }
 
@@ -1985,6 +1994,12 @@ public static class CompletionComputer
             // chain, preserves the historic enumeration (fields then properties per
             // level) and the same writable-member set object initializers accept.
             AddStructMembersFromModel(items, seen, structSymbol, MemberQuery.Instance(MemberKinds.Field | MemberKinds.Property));
+            return;
+        }
+
+        if (receiverType is InterfaceSymbol interfaceSymbol)
+        {
+            AddInterfaceInstanceMembers(items, seen, interfaceSymbol);
             return;
         }
 
