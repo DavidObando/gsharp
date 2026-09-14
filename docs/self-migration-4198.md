@@ -251,10 +251,11 @@ and is not a generic mutual-recursion group.
 
 ## Local commands
 
-Commands run from the dedicated implementation worktree. The evidence directory
-is its sibling, not a descendant: the migration correctly rejects overlapping
-source/destination trees. All output and scratch paths remain inside the parent
-project directory.
+For reproduction, use a fresh, clean worktree checked out at the measured
+`b9cd4a4fe17889b4768ee39b6893335b83ea5971`, not the later documentation branch.
+The evidence directory is its sibling, not a descendant: the migration correctly
+rejects overlapping source/destination trees. All output and scratch paths remain
+inside the parent project directory.
 
 ```bash
 mkdir -p ../issue-4198-evidence/runtime artifacts/issue-4198
@@ -264,12 +265,27 @@ printf '<Project />\n' > "$evidence/runtime/Directory.Build.props"
 printf '<Project />\n' > "$evidence/runtime/Directory.Build.targets"
 export TMPDIR="$evidence/runtime"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
-export SELFMIG_GATE_ROOT="$evidence/selfmig-final"
+export SELFMIG_GATE_ROOT="$evidence/selfmig"
 
 dotnet restore GSharp.sln --locked-mode -v:minimal
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj \
   -c Release --no-restore -graph -v:minimal
-bash build/run-cs2gs-selfmig-migrate.sh
+bash build/run-cs2gs-selfmig-migrate.sh || exit 1
+
+repo_root=$PWD
+source build/selfmig-common.sh
+selfmig_hash_tree "$SELFMIG_GATE_ROOT/migrated" \
+  > artifacts/issue-4198/first-pre-validation.sha256 || exit 1
+
+export SELFMIG_GATE_ROOT="$evidence/selfmig-final"
+bash build/run-cs2gs-selfmig-migrate.sh || exit 1
+selfmig_hash_tree "$SELFMIG_GATE_ROOT/migrated" \
+  > artifacts/issue-4198/final-pre-validation.sha256 || exit 1
+cmp -s artifacts/issue-4198/first-pre-validation.sha256 \
+  artifacts/issue-4198/final-pre-validation.sha256 || {
+  echo "Pre-validation trees differ." >&2
+  exit 1
+}
 
 dotnet build tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj \
   -c Release --no-restore -graph -v:minimal
