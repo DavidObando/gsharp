@@ -77,6 +77,24 @@ public class Issue3580OrphanMirrorRobustnessTests : IDisposable
     }
 
     [Fact]
+    public void UnsupportedFixtureData_IsCopiedWithoutHidingUnsupportedSource()
+    {
+        const string source = "class C { void M() { var args = __arglist; } }";
+        this.WriteSource("src/Fixture.cs.txt", source);
+        this.WriteSource("src/Production.cs", source);
+        string sourceRoot = Path.Combine(this.root, "src");
+        string destinationRoot = Path.Combine(this.root, "out");
+        var files = RepositoryMirror.Prepare(sourceRoot, destinationRoot);
+
+        var failures = RepositoryOrphanSourceTranslator.TranslateMissing(
+            sourceRoot, destinationRoot, files);
+
+        Assert.Contains("Production.cs", Assert.Single(failures));
+        Assert.Equal(source, File.ReadAllText(Path.Combine(destinationRoot, "Fixture.cs.txt")));
+        Assert.False(File.Exists(Path.Combine(destinationRoot, "Production.gs")));
+    }
+
+    [Fact]
     public void FileUnderExcludedProjectDirectory_IsSkipped()
     {
         // The file is untranslatable standalone — but its project was

@@ -248,9 +248,9 @@ internal static class DeclaredProjectItems
     }
 
     internal static IReadOnlyList<DeclaredProjectItem> RewriteProjectReferences(
-        IReadOnlyList<DeclaredProjectItem> items,
+        IReadOnlyList<DeclaredProjectItem>? items,
         string generatedProjectDirectory,
-        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        IReadOnlyDictionary<string, string>? generatedProjectPaths)
     {
         var rewritten = new List<DeclaredProjectItem>();
         foreach (DeclaredProjectItem item in items ?? Array.Empty<DeclaredProjectItem>())

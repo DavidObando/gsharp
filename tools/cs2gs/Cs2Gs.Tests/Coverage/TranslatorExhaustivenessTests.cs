@@ -22,6 +22,8 @@ namespace Cs2Gs.Tests.Coverage;
 /// unhandled construct that is NOT registered is classified as a gap
 /// (<c>CS2GS-GAP</c>) — an accidental fallthrough can never masquerade as a
 /// design decision.
+/// Unsupported examples use <c>.cs.txt</c> so repository migration preserves
+/// their input bytes as fixture data rather than translating them as source.
 /// </summary>
 public class TranslatorExhaustivenessTests
 {
@@ -60,7 +62,7 @@ public class TranslatorExhaustivenessTests
     public void UnsupportedFixture_ProducesByDesignDiagnostic(string kind)
     {
         string fixturePath = Path.Combine(
-            RepoRoot(), "tools", "cs2gs", "Cs2Gs.Tests", "Fixtures", "Grid", "Unsupported", kind + ".cs");
+            RepoRoot(), "tools", "cs2gs", "Cs2Gs.Tests", "Fixtures", "Grid", "Unsupported", kind + ".cs.txt");
         Assert.True(File.Exists(fixturePath), $"missing fixture {fixturePath}");
 
         TranslationContext context = Translate(File.ReadAllText(fixturePath));
