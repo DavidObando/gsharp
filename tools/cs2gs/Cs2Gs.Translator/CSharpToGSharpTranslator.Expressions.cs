@@ -1480,7 +1480,15 @@ public sealed partial class CSharpToGSharpTranslator
                 node = node.Parent;
             }
 
-            if (node.Parent is not ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation })
+            // Issue #4074: observing the invocation's result says nothing about
+            // an unrelated callback's fixed return contract (e.g. Func<string>).
+            if (node.Parent is not ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation } argument
+                || this.context.SemanticModel.GetOperation(argument)
+                    is not IArgumentOperation { Parameter: { } selectorParameter }
+                || selectorParameter.ContainingSymbol is not IMethodSymbol containingMethod
+                || !ReturnsGenericSelectorResult(
+                    containingMethod.OriginalDefinition,
+                    selectorParameter.Ordinal))
             {
                 return false;
             }

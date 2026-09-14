@@ -353,6 +353,66 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         }
     }
 
+    [Theory]
+    [InlineData("Build(() => type.FullName).OfType<int>().Count()")]
+    [InlineData("Build(() => { return type.FullName; }).OfType<int>().Count()")]
+    [InlineData("Build(((Func<string>)(() => type.FullName))).OfType<int>().Count()")]
+    [InlineData("BuildGeneric(() => type.FullName, () => 42).OfType<int>().Count()")]
+    [InlineData("BuildGeneric(selector: () => 42, get: () => type.FullName).OfType<int>().Count()")]
+    public void UnrelatedCallbackResult_BeforeOfType_PreservesBridgeAndRuns(string invocation)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class Probe
+            {
+                static IEnumerable<int> Build(Func<string> get) => new[] { get().Length };
+
+                static IEnumerable<T> BuildGeneric<T>(Func<string> get, Func<T> selector)
+                {
+                    _ = get().Length;
+                    return new[] { selector() };
+                }
+
+                static int Run(Type type) => INVOCATION;
+
+                public static void Main() => Console.WriteLine(Run(typeof(string)));
+            }
+            """.Replace("INVOCATION", invocation, StringComparison.Ordinal));
+
+        string compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue4180NullableSelectResultRegressionTests),
+            Guid.NewGuid().ToString("N") + "-unrelated-callback");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Probe.gs");
+            string dllPath = Path.Combine(workDir, "Probe.dll");
+            File.WriteAllText(gsPath, printed);
+
+            (int compileExit, string compileOutput) = RunDotnet(
+                $"\"{compiler}\" /target:exe /targetframework:net10.0 /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0,
+                "gsc must compile the translated probe. Output:\n" + compileOutput
+                    + "\n\nTranslated G#:\n" + printed);
+            Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+
+            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "the compiled probe must run. Output:\n" + output);
+            Assert.Equal("1", output.Trim());
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
     [Fact]
     public void UserDefinedNullFilteringNames_DoNotSuppressRequiredAssertion()
     {
