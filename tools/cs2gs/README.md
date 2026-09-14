@@ -31,6 +31,13 @@ Why Roslyn here does not contradict ADR-0027 (no Roslyn *in the compiler*):
 `cs2gs` uses Roslyn as an **external, offline C# reader** in a separate process;
 `gsc` gains no Roslyn dependency. See ADR-0115 §A.
 
+Named arguments on delegate invocations and claimed recursive local functions
+are normalized to parameter slots, with omitted defaults supplied explicitly.
+When that reorders operands, call-local spills preserve receiver evaluation,
+argument reads, implicit conversions, and `ref`/`out`/`in` aliases in C# source
+order. Spills stay inside conditional calls and repeated loop conditions.
+Ordinary method calls retain their native G# named arguments.
+
 ## Build
 
 ```sh

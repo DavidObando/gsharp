@@ -2440,7 +2440,7 @@ public sealed partial class CSharpToGSharpTranslator
         // path also preserves the `name:` wrappers (a real method HAS parameter
         // names), so the call site binds correctly. This also makes a
         // ref-kind argument unreachable in
-        // <see cref="TranslateClaimedLocalFunctionArgumentsWithDefaults"/>,
+        // <see cref="TranslateFunctionTypeArguments"/>,
         // which is why that method's evaluation-order spill only ever has
         // by-value operands to consider.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
