@@ -140,6 +140,9 @@ behavior changes.
 
 All four canonical validation shards completed. Their manifests were checked
 against the complete translation manifest: **56 apps, each exactly once**.
+For this evidenced run, all 12 shard artifacts were required and each copied
+file's SHA-256 was compared with its source. This provenance check does not
+change the canonical gate's policy for other runs.
 The existing merge/gate script replayed every shard's polish delta and produced
 `run.merged.json` for `2026-09-14T20-37-39Z_f92f65`.
 
@@ -296,15 +299,28 @@ for shard in 1 2 3 4; do
     bash build/run-cs2gs-selfmig-validate.sh "$shard" "${apps[@]}"
 done
 
-for shard in 1 2 3 4; do
-  mkdir -p "$evidence/final-shards/$shard"
-  for artifact in shard-run.json shard-costs.json polished.tar.gz; do
-    if test -f "$evidence/validation-$shard/shard-$shard/$artifact"; then
-      cp "$evidence/validation-$shard/shard-$shard/$artifact" \
-        "$evidence/final-shards/$shard/$artifact"
-    fi
-  done
-done
+python3 - "$evidence" <<'PY'
+import hashlib
+import shutil
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+for shard in ("1", "2", "3", "4"):
+    source = root / f"validation-{shard}" / f"shard-{shard}"
+    target = root / "final-shards" / shard
+    target.mkdir(parents=True, exist_ok=True)
+    for artifact in ("shard-run.json", "shard-costs.json", "polished.tar.gz"):
+        src, dst = source / artifact, target / artifact
+        if not src.is_file():
+            raise SystemExit(f"Missing required artifact: {src}")
+        shutil.copy2(src, dst)
+        expected = hashlib.sha256(src.read_bytes()).hexdigest()
+        actual = hashlib.sha256(dst.read_bytes()).hexdigest()
+        if actual != expected:
+            raise SystemExit(f"SHA-256 mismatch: {src} -> {dst}")
+        print(f"{shard}/{artifact}: {actual}")
+PY
 bash build/run-cs2gs-selfmig-gate.sh \
   "$SELFMIG_GATE_ROOT" "$evidence/final-shards"
 
