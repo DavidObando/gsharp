@@ -459,7 +459,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (snapshotDelegateTarget
-                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol { MethodKind: MethodKind.DelegateInvoke })
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol snapshotMethod
+                && snapshotMethod.MethodKind == MethodKind.DelegateInvoke)
             {
                 target = this.SnapshotReorderedDelegateTarget(target, invocation);
             }
