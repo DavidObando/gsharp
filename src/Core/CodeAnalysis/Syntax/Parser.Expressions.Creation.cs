@@ -1438,6 +1438,8 @@ public partial class Parser
             var literal = new StructLiteralExpressionSyntax(
                 syntaxTree,
                 identifier,
+                openParenToken: null,
+                closeParenToken: null,
                 openBrace,
                 spreadToken,
                 spreadExpression,

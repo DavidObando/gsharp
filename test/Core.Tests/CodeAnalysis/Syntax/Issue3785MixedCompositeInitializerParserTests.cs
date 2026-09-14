@@ -107,4 +107,62 @@ let c = Container(){ Text(""Account""), ...rows }
             .Single();
         Assert.IsType<CollectionInitializerExpressionSyntax>(varDecl.Initializer);
     }
+
+    [Fact]
+    public void ExplicitEmptyParens_LeadingSpreadThenMember_IsACompositeLiteral()
+    {
+        // ADR-0180 §B's explicit-parens marker: a leading `...source` under
+        // explicit empty call parens, followed by a real member, promotes the
+        // literal from an ADR-0117 collection initializer to a composite
+        // literal whose first Elements entry is a content spread.
+        var literal = ParseLiteral(@"
+let c = Container(){ ...rows, Width: 320.0, Text(""Account"") }
+");
+        Assert.NotNull(literal.OpenParenToken);
+        Assert.NotNull(literal.CloseParenToken);
+        Assert.Null(literal.SpreadExpression);
+        Assert.Equal(3, literal.Elements.Count);
+
+        var spread = Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[0]);
+        Assert.IsType<SpreadElementExpressionSyntax>(spread.Expression);
+
+        var width = Assert.IsType<FieldInitializerSyntax>(literal.Elements[1]);
+        Assert.Equal("Width", width.FieldIdentifier.Text);
+
+        var bare = Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[2]);
+        Assert.IsType<CallExpressionSyntax>(bare.Expression);
+    }
+
+    [Fact]
+    public void ExplicitEmptyParens_LeadingSpreadOnly_NoMember_StaysAdr0117CollectionInitializer()
+    {
+        // Regression: with no later member, `Type(){ ...source }` keeps its
+        // pre-ADR-0180 ADR-0117 collection-initializer meaning, unchanged.
+        var tree = SyntaxTree.Parse(@"
+let c = Container(){ ...rows }
+");
+        Assert.Empty(tree.Diagnostics);
+        var varDecl = tree.Root.Members
+            .OfType<GlobalStatementSyntax>()
+            .Select(g => g.Statement)
+            .OfType<VariableDeclarationSyntax>()
+            .Single();
+        Assert.IsType<CollectionInitializerExpressionSyntax>(varDecl.Initializer);
+    }
+
+    [Fact]
+    public void ExplicitEmptyParens_LeadingSpreadThenMember_GenericTarget_IsACompositeLiteral()
+    {
+        // The same marker applies to a generic construction target
+        // (`Type[T](){ ...source, Member: value }`), reached through the same
+        // MaybeWrapWithObjectInitializer dispatch as the non-generic form.
+        var literal = ParseLiteral(@"
+let c = Container[int32](){ ...rows, Width: 320.0 }
+");
+        Assert.NotNull(literal.OpenParenToken);
+        Assert.Equal(2, literal.Elements.Count);
+        Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[0]);
+        var width = Assert.IsType<FieldInitializerSyntax>(literal.Elements[1]);
+        Assert.Equal("Width", width.FieldIdentifier.Text);
+    }
 }

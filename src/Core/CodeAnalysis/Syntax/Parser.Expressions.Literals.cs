@@ -116,6 +116,24 @@ public partial class Parser
 
         if (!LooksLikeObjectInitializerBrace())
         {
+            // ADR-0180 §B: `Type(){ ...source, Member: value }` is the
+            // explicit-parens marker for a composite literal whose first
+            // content element is a spread — checked before the ADR-0117
+            // collection-initializer brace below so a later member entry
+            // routes into the struct-literal element grammar (a proper
+            // FieldInitializerSyntax) rather than being misread as a keyed
+            // dictionary entry. `target`'s empty argument list is exactly the
+            // same explicit-construction marker ADR-0117 §1 already
+            // established for a leading collection-initializer spread
+            // (`List[T](){ ...source }`); this only reroutes when a later
+            // member additionally promotes the literal to the composite form.
+            if (Peek(1).Kind == SyntaxKind.EllipsisToken
+                && target is CallExpressionSyntax { Arguments.Count: 0 } callTarget
+                && LooksLikeCompositeWithLeadingSpreadBrace())
+            {
+                return ParseCompositeLiteralWithLeadingSpread(callTarget);
+            }
+
             // Issue #479 / ADR-0117: a collection initializer applied to a
             // constructor call (`List[int32](){…}`, `Dictionary[K, V](cmp){…}`).
             if (LooksLikeCollectionInitializerBrace(target))
@@ -130,6 +148,116 @@ public partial class Parser
         var initializers = ParseObjectInitializerList();
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
         return new ObjectCreationExpressionSyntax(syntaxTree, target, openBrace, initializers, closeBrace);
+    }
+
+    // ADR-0180 §B: recognises `(){ ...source` where a later top-level entry is
+    // an `Identifier ':'` member — the only shape that distinguishes this
+    // composite-with-leading-spread form from ADR-0117's plain
+    // `List[T](){ ...source }` collection-initializer spread. Scanning only
+    // right after a depth-0 comma (rather than anywhere in the brace) avoids
+    // misreading an incidental `Identifier ':'` inside the spread source
+    // expression itself (e.g. a bare-identifier ternary branch).
+    private bool LooksLikeCompositeWithLeadingSpreadBrace()
+    {
+        var depth = 0;
+        for (var i = 1; i <= LookaheadMaxScan; i++)
+        {
+            var kind = Peek(i).Kind;
+            if (kind == SyntaxKind.EndOfFileToken)
+            {
+                return false;
+            }
+
+            if (kind == SyntaxKind.OpenBraceToken
+                || kind == SyntaxKind.OpenParenthesisToken
+                || kind == SyntaxKind.OpenSquareBracketToken)
+            {
+                depth++;
+                continue;
+            }
+
+            if (kind == SyntaxKind.CloseParenthesisToken
+                || kind == SyntaxKind.CloseSquareBracketToken)
+            {
+                depth--;
+                continue;
+            }
+
+            if (kind == SyntaxKind.CloseBraceToken)
+            {
+                if (depth == 0)
+                {
+                    return false;
+                }
+
+                depth--;
+                continue;
+            }
+
+            if (depth == 0
+                && kind == SyntaxKind.CommaToken
+                && Peek(i + 1).Kind == SyntaxKind.IdentifierToken
+                && Peek(i + 2).Kind == SyntaxKind.ColonToken)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // ADR-0180 §B: parses `Type(){ ...source, Member: value, ... }` /
+    // `Type[args](){ ...source, ... }` into a StructLiteralExpressionSyntax
+    // whose Elements' first entry is a content spread — never the ADR-0148
+    // SpreadExpression field, which is reserved for the no-parens leading
+    // spread. callTarget's own '(' / ')' become the literal's OpenParenToken
+    // / CloseParenToken, so the marker's tokens stay part of the tree rather
+    // than being discarded.
+    private ExpressionSyntax ParseCompositeLiteralWithLeadingSpread(CallExpressionSyntax callTarget)
+    {
+        var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+        var ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+        var spread = new SpreadElementExpressionSyntax(syntaxTree, ellipsis, ParseExpression());
+
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+        nodesAndSeparators.Add(new StructLiteralContentElementSyntax(syntaxTree, spread));
+
+        var parseNext = Current.Kind == SyntaxKind.CommaToken;
+        if (parseNext)
+        {
+            nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+        }
+
+        while (parseNext &&
+               Current.Kind != SyntaxKind.CloseBraceToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            nodesAndSeparators.Add(ParseStructLiteralElement(allowContentElements: true));
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
+            }
+            else
+            {
+                parseNext = false;
+            }
+        }
+
+        var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+        var elements = new SeparatedSyntaxList<StructLiteralElementSyntax>(nodesAndSeparators.ToImmutable());
+        var literal = new StructLiteralExpressionSyntax(
+            syntaxTree,
+            callTarget.Identifier,
+            callTarget.OpenParenthesisToken,
+            callTarget.CloseParenthesisToken,
+            openBrace,
+            spreadToken: null,
+            spreadExpression: null,
+            spreadSeparatorToken: null,
+            elements,
+            closeBrace);
+        literal.TypeArgumentList = callTarget.TypeArgumentList;
+        return literal;
     }
 
     // Recognises an object-initializer `{` after a constructor call. To avoid
@@ -1516,6 +1644,8 @@ public partial class Parser
         return new StructLiteralExpressionSyntax(
             syntaxTree,
             typeIdentifier,
+            openParenToken: null,
+            closeParenToken: null,
             openBrace,
             spreadToken,
             spreadExpression,

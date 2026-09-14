@@ -163,6 +163,75 @@ public class Issue3785MixedCompositeInitializerEmitTests
     }
 
     [Fact]
+    public void ExplicitEmptyParens_LeadingSpreadThenMember_LowersMemberAndAddInOrder()
+    {
+        // ADR-0180 §B's explicit-parens marker: Type(){ ...source, Member: v }
+        // promotes the literal from an ADR-0117 collection initializer to a
+        // composite literal, lowering the spread's Add(...) calls before the
+        // member assignment that follows it lexically.
+        var source = """
+            package App
+            import System
+            import System.Collections.Generic
+
+            var trace = List[string]()
+
+            class Node {
+                var Name string = ""
+                var Tag int32 = 0
+                var Children List[Node] = List[Node]()
+                func Add(child Node) {
+                    trace.Add("add:" + child.Name)
+                    Children.Add(child)
+                }
+            }
+
+            var rows = List[Node]{ Node{ Name: "a" }, Node{ Name: "b" } }
+            var root = Node(){ ...rows, Tag: 7 }
+            Console.WriteLine(root.Tag)
+            Console.WriteLine(root.Children.Count)
+            Console.WriteLine(root.Children[0].Name)
+            Console.WriteLine(root.Children[1].Name)
+            for t in trace {
+                Console.WriteLine(t)
+            }
+            """;
+
+        var expected = string.Join(Environment.NewLine, new[]
+        {
+            "7",
+            "2",
+            "a",
+            "b",
+            "add:a",
+            "add:b",
+        }) + Environment.NewLine;
+
+        Assert.Equal(expected, CompileAndRun(source));
+    }
+
+    [Fact]
+    public void ImportedClrType_MixedMemberAndElement_AppliesMemberAssignmentAndAddInOrder()
+    {
+        // Reviewer finding: an imported CLR collection with a writable member
+        // AND a compatible Add (List[T].Capacity plus List[T].Add) must apply
+        // member assignment and Add in lexical order, not report GS0369.
+        var source = """
+            package App
+            import System
+            import System.Collections.Generic
+
+            let xs = List[int32]{ Capacity: 10, 1, 2 }
+            Console.WriteLine(xs.Capacity >= 10)
+            Console.WriteLine(xs.Count)
+            Console.WriteLine(xs[0])
+            Console.WriteLine(xs[1])
+            """;
+
+        Assert.Equal($"True{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
     public void LeadingSpread_NoParens_StillLowersAsAdr0148StructuralProjection()
     {
         // Regression: Type{ ...source } (no explicit call parens) is

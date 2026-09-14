@@ -2417,6 +2417,10 @@ internal sealed partial class ExpressionBinder
         {
             if (element is StructLiteralContentElementSyntax contentElement)
             {
+                // orderedInitializers is non-null here: hasContentElement (computed
+                // above from this same syntax.Elements) is one of the two conditions
+                // that allocates it just above, and this branch only runs when a
+                // StructLiteralContentElementSyntax is actually present.
                 orderedInitializers!.Add(StructLiteralOrderedStep.ForContent(contentElement));
                 continue;
             }
@@ -2654,6 +2658,8 @@ internal sealed partial class ExpressionBinder
         var emptyTargetSyntax = new StructLiteralExpressionSyntax(
             syntax.SyntaxTree,
             syntax.TypeIdentifier,
+            openParenToken: null,
+            closeParenToken: null,
             syntax.OpenBraceToken,
             spreadToken: null,
             spreadExpression: null,
@@ -2771,36 +2777,28 @@ internal sealed partial class ExpressionBinder
     /// value-type binder, mirroring the C# object-initializer contract for
     /// either kind.
     /// </summary>
+    // ADR-0180: bare content elements and content spreads lower through
+    // BindImportedTypeObjectInitializer below, shared by both the
+    // reference-type and value-type imported literal binders — see that
+    // function for the Add(...) lowering and the GS0369 gate.
     private BoundExpression BindImportedTypeLiteralExpression(
         StructLiteralExpressionSyntax syntax,
         Type clrType,
         TypeSymbol? resultTypeOverride = null)
-    {
-        // ADR-0180: bare content elements and content spreads only lower
-        // through the primary user-declared-type struct-literal path above.
-        // The imported-CLR-type literal path is a separate lowering
-        // (construct via the public parameterless constructor, then assign
-        // named members) that never learned to emit Add(...) calls, so a
-        // content element reaching here must be diagnosed — syntax.Initializers'
-        // member-only filter would otherwise silently drop it.
-        if (ReportUnsupportedStructLiteralContentElements(syntax, resultTypeOverride ?? TypeSymbol.FromClrType(clrType)))
-        {
-            return new BoundErrorExpression(null);
-        }
-
-        return clrType.IsValueType
+        => clrType.IsValueType
             ? BindImportedValueTypeLiteralExpression(syntax, clrType, resultTypeOverride)
             : BindImportedClassLiteralExpression(syntax, clrType, resultTypeOverride);
-    }
 
     /// <summary>
     /// ADR-0180: binds (for diagnostic continuity) and reports GS0369 for
     /// every content element/spread found directly on <paramref name="syntax"/>,
     /// for the struct-literal binder paths that do not (yet) support them —
-    /// imported-CLR-type construction and type-parameter construction. Both
-    /// paths only ever read <see cref="StructLiteralExpressionSyntax.Initializers"/>
+    /// type-parameter construction (<see cref="BindTypeParameterObjectInitializer"/>).
+    /// That path only ever reads <see cref="StructLiteralExpressionSyntax.Initializers"/>
     /// (members), so without this guard a content element would be silently
-    /// skipped rather than diagnosed.
+    /// skipped rather than diagnosed. Imported-CLR-type construction does not
+    /// use this guard — <see cref="BindImportedTypeObjectInitializer"/> lowers
+    /// content elements directly.
     /// </summary>
     private bool ReportUnsupportedStructLiteralContentElements(StructLiteralExpressionSyntax syntax, TypeSymbol resultType)
     {
@@ -2887,9 +2885,16 @@ internal sealed partial class ExpressionBinder
         if (parameterlessCtor == null)
         {
             Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, syntax.TypeIdentifier.ValueText);
-            foreach (var initSyntax in syntax.Initializers)
+            foreach (var badElement in syntax.Elements)
             {
-                _ = BindExpression(initSyntax.Value);
+                if (badElement is StructLiteralContentElementSyntax badContent)
+                {
+                    _ = BindExpression(badContent.Expression is SpreadElementExpressionSyntax badSpread ? badSpread.Expression : badContent.Expression);
+                }
+                else if (badElement is FieldInitializerSyntax badField)
+                {
+                    _ = BindExpression(badField.Value);
+                }
             }
 
             return new BoundErrorExpression(null);
@@ -2963,16 +2968,82 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindImportedTypeObjectInitializer(StructLiteralExpressionSyntax syntax, Type clrType, TypeSymbol resultType, BoundExpression construction)
     {
+        // ADR-0180: a bare content element or `...source` content spread on an
+        // imported CLR type (e.g. `List[int32]{ Capacity: 1, 2 }`) lowers to
+        // Add(...) through the same accessor-call binder as the primary
+        // struct-literal path — reusing HasCollectionAdd/HasUnaryCollectionAdd
+        // and reporting the same GS0369 on failure. Imported targets are not
+        // excluded from ADR-0180's scope.
+        var hasBareContentElement = false;
+        var hasSpreadContentElement = false;
+        foreach (var scanElement in syntax.Elements)
+        {
+            if (scanElement is not StructLiteralContentElementSyntax scanContent)
+            {
+                continue;
+            }
+
+            if (scanContent.Expression is SpreadElementExpressionSyntax)
+            {
+                hasSpreadContentElement = true;
+            }
+            else
+            {
+                hasBareContentElement = true;
+            }
+        }
+
+        var hasContentElement = hasBareContentElement || hasSpreadContentElement;
+        if ((hasBareContentElement && !HasCollectionAdd(resultType)) ||
+            (hasSpreadContentElement && !HasUnaryCollectionAdd(resultType)))
+        {
+            Diagnostics.ReportTypeNotCollectionInitializable(syntax.OpenBraceToken.Location, resultType);
+            foreach (var badElement in syntax.Elements)
+            {
+                if (badElement is StructLiteralContentElementSyntax badContent)
+                {
+                    _ = BindExpression(badContent.Expression is SpreadElementExpressionSyntax badSpread ? badSpread.Expression : badContent.Expression);
+                }
+                else if (badElement is FieldInitializerSyntax badField)
+                {
+                    _ = BindExpression(badField.Value);
+                }
+            }
+
+            return new BoundErrorExpression(null);
+        }
+
         var tempName = "$implit" + System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, resultType);
+
+        // ADR-0180: a content spread's lowering reassigns the receiver local
+        // (BindCollectionSpreadStatements), so it can no longer be readonly
+        // once any content element/spread is present — mirroring the primary
+        // struct-literal path.
+        var tempVar = new LocalVariableSymbol(tempName, isReadOnly: !hasContentElement, resultType);
         scope.TryDeclareVariable(tempVar);
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(syntax, tempVar, construction));
 
         var seen = new HashSet<string>();
-        foreach (var initSyntax in syntax.Initializers)
+        foreach (var element in syntax.Elements)
         {
+            if (element is StructLiteralContentElementSyntax contentElement)
+            {
+                if (contentElement.Expression is SpreadElementExpressionSyntax spread)
+                {
+                    statements.AddRange(BindCollectionSpreadStatements(tempVar, spread));
+                }
+                else
+                {
+                    var addCall = BindCollectionAddCall(tempVar, contentElement, ImmutableArray.Create(contentElement.Expression));
+                    statements.Add(new BoundExpressionStatement(contentElement, addCall));
+                }
+
+                continue;
+            }
+
+            var initSyntax = (FieldInitializerSyntax)element;
             var memberName = initSyntax.FieldIdentifier.ValueText;
             if (!seen.Add(memberName))
             {

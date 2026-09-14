@@ -3,7 +3,7 @@
 - **Status**: Accepted
 - **Date**: 2026-09-13
 - **Phase**: v0.2 — language surface (ADR-0117 follow-on)
-- **Related**: ADR-0117 (collection initializers — method-directed `Add` lowering, deferred user-defined `Add` targets), ADR-0148 (safe structural projections and object-spread mapping — leading `...source` structural spread), ADR-0079 (receiver-clause methods restricted to non-owned types — `Add` on owned G# types stays in the type body), ADR-3160/#3160 (native collection spread, lexical order, exactly-once evaluation), issue #962 and ADR-0117 (method-directed collection initializers), issue #1588 (`Member: { elements }` lowering through the member collection's `Add`), issue #547 (object initializer parsing and lowering). **Issue**: [#3785](https://github.com/DavidObando/gsharp/issues/3785)
+- **Related**: ADR-0117 (collection initializers — method-directed `Add` lowering, deferred user-defined `Add` targets), ADR-0148 (safe structural projections and object-spread mapping — leading `...source` structural spread), ADR-0079 (receiver-clause methods restricted to non-owned types — `Add` on owned G# types stays in the type body), issue #3160 (native collection spread, lexical order, exactly-once evaluation), issue #962 and ADR-0117 (method-directed collection initializers), issue #1588 (`Member: { elements }` lowering through the member collection's `Add`), issue #547 (object initializer parsing and lowering). **Issue**: [#3785](https://github.com/DavidObando/gsharp/issues/3785)
 
 ## Context
 
@@ -110,15 +110,26 @@ CompositeElement      ::= Identifier ':' Expression      (* member:  Width: 320.
                         | Expression ':' Expression         (* keyed (ADR-0117, unchanged)   *)
 ```
 
-The parser and bound tree represent this as a single node
-(`CompositeInitializerExpressionSyntax`, replacing the spike's parallel
-lists) holding one `SeparatedSyntaxList<InitializerElementSyntax>`, so
-parents, separators, spans, and traversal order are all defined by one list
-rather than reconstructed from two. `MemberInitializerElementSyntax`,
-`ContentElementSyntax`, and `ContentSpreadElementSyntax` are the three
-element node kinds; `IndexedElementSyntax` and `KeyedElementSyntax` from
-ADR-0117 are unchanged and continue to apply only inside the collection-
-initializer classification in §C below.
+The parser and bound tree represent the member family as a single node,
+`StructLiteralExpressionSyntax`, holding one ordered
+`SeparatedSyntaxList<StructLiteralElementSyntax>` — its `Elements` property,
+replacing the spike's parallel lists — so parents, separators, spans, and
+traversal order are all defined by one list rather than reconstructed from
+two. `StructLiteralElementSyntax` is the common element base;
+`FieldInitializerSyntax` (the pre-existing `Identifier ':' Expression` node)
+and the new `StructLiteralContentElementSyntax` are its two concrete shapes,
+the latter covering both a bare content element and a content spread (a
+content spread is a `StructLiteralContentElementSyntax` whose `Expression` is
+a `SpreadElementExpressionSyntax` — the same wrapping ADR-0117's
+`ExpressionCollectionElementSyntax` already uses for a collection-initializer
+spread). `StructLiteralExpressionSyntax` also exposes a lazily computed,
+member-only `Initializers` view over `Elements`, kept for the pre-existing
+binder paths that only ever read members (ADR-0148 structural projection,
+imported-CLR-type and type-parameter construction, generic type-argument
+inference). `IndexedCollectionElementSyntax` and `KeyedCollectionElementSyntax`
+from ADR-0117 are unchanged and continue to apply only inside the collection-
+initializer classification in §B below; they are not part of
+`StructLiteralElementSyntax`.
 
 ### B. Classification stays first-element-driven; only the member family gains new element kinds
 
@@ -267,11 +278,10 @@ Positive:
   based initializers; ADR-0117's deferred CLR-only restriction is lifted
   through the same binder path that already handles CLR receivers, so no new
   resolution machinery is introduced.
-- One ordered `CompositeInitializerExpressionSyntax` element list replaces
-  two independently-shaped literal grammars in the parser and bound tree,
-  which is a simplification for every consumer that walks these nodes
-  (binder, emitter, interpreter, `gsfmt`, completion, hover), not just a
-  convenience for this feature.
+- One ordered `StructLiteralExpressionSyntax.Elements` list replaces the
+  member-only list plus separate ADR-0148 spread fields for this literal
+  family, which is a simplification for every consumer that walks these
+  nodes, not just a convenience for this feature.
 
 Negative:
 
@@ -280,11 +290,15 @@ Negative:
   this is a wider blast radius than a typical grammar addition because it
   touches the representation of every existing struct/object literal, not
   only the new mixed form.
-- `StructLiteralExpressionSyntax` and its consumers (including cs2gs, if it
-  ever emits G# struct literals) must move from whatever parallel-list shape
-  they hold today to the single ordered list; this is a mechanical but
-  non-trivial migration, and the prototype spike explicitly did not attempt
-  it.
+- `StructLiteralExpressionSyntax`'s pre-existing `Initializers` shape (a
+  members-only `SeparatedSyntaxList<FieldInitializerSyntax>`) is now a
+  lazily computed, filtered view over `Elements`, not the node's own stored
+  field; a consumer that reconstructs a `StructLiteralExpressionSyntax`
+  directly (rather than through the parser) must supply `Elements`, not
+  `Initializers`. `gsfmt`, completion, and hover consume nodes only through
+  `GetChildren()`/generic tree traversal and needed no changes; a future
+  consumer that pattern-matches on `StructLiteralExpressionSyntax.Initializers`
+  as a stored constructor input would need to move to `Elements`.
 - Lexical-order interleaving of member assignment and `Add` calls is a new,
   user-observable execution-order contract for the member-initializer family
   specifically because of this ADR; a member initializer with no content
@@ -312,6 +326,13 @@ Follow-up work:
   list, and the corresponding `gsfmt`/completion/hover updates, are
   implementation work tracked against this ADR's definition of done, not
   design decisions; they do not require ADR-level sign-off individually.
+- A content element/spread on a type-parameter construction (`T{Field: value,
+  ...}` under a `new()` constraint, `BindTypeParameterObjectInitializer`) is
+  diagnosed with GS0369 rather than lowered — unlike the imported-CLR-type and
+  user-declared-type paths, which fully support content elements/spreads.
+  Type-parameter construction is a narrower, less common surface than the
+  other two, and closing this gap is tracked as follow-up work rather than
+  blocking this ADR.
 
 ## Alternatives considered
 

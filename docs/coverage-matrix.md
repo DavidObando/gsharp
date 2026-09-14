@@ -242,6 +242,7 @@ StaticInitializerBlock
 StringToken
 StructDeclaration
 StructKeyword
+StructLiteralContentElement
 StructLiteralExpression
 SuspendKeyword
 SwitchCase

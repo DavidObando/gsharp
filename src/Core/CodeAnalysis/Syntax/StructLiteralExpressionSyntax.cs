@@ -31,8 +31,14 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="typeIdentifier">The struct type identifier.</param>
+    /// <param name="openParenToken">
+    /// The optional explicit empty-parens marker's <c>(</c> (ADR-0180 §B): present only for the
+    /// <c>Type(){ ...source, Member: value }</c> composite-with-leading-spread spelling, which
+    /// disambiguates a leading content spread from ADR-0148's no-parens structural-projection spread.
+    /// </param>
+    /// <param name="closeParenToken">The matching <c>)</c>, present exactly when <paramref name="openParenToken"/> is.</param>
     /// <param name="openBraceToken">The opening brace.</param>
-    /// <param name="spreadToken">The optional leading ellipsis.</param>
+    /// <param name="spreadToken">The optional leading ellipsis (ADR-0148 structural spread; never set together with <paramref name="openParenToken"/>).</param>
     /// <param name="spreadExpression">The optional spread source.</param>
     /// <param name="spreadSeparatorToken">The optional separator after the spread source.</param>
     /// <param name="elements">The ordered field-initializer / content-element / content-spread elements (ADR-0180).</param>
@@ -40,6 +46,8 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     public StructLiteralExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken typeIdentifier,
+        SyntaxToken? openParenToken,
+        SyntaxToken? closeParenToken,
         SyntaxToken openBraceToken,
         SyntaxToken? spreadToken,
         ExpressionSyntax? spreadExpression,
@@ -49,6 +57,8 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
         : base(syntaxTree)
     {
         TypeIdentifier = typeIdentifier;
+        OpenParenToken = openParenToken;
+        CloseParenToken = closeParenToken;
         OpenBraceToken = openBraceToken;
         SpreadToken = spreadToken;
         SpreadExpression = spreadExpression;
@@ -62,6 +72,12 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the struct type identifier.</summary>
     public SyntaxToken TypeIdentifier { get; }
+
+    /// <summary>Gets the optional explicit empty-parens marker's <c>(</c> (ADR-0180 §B). See the constructor's remarks.</summary>
+    public SyntaxToken? OpenParenToken { get; }
+
+    /// <summary>Gets the optional explicit empty-parens marker's <c>)</c> (ADR-0180 §B).</summary>
+    public SyntaxToken? CloseParenToken { get; }
 
     /// <summary>Gets the opening brace.</summary>
     public SyntaxToken OpenBraceToken { get; }
@@ -96,17 +112,24 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
                 return cachedInitializers;
             }
 
+            // Reuse the REAL separator token that preceded each kept member in
+            // Elements' own nodes-and-separators array, rather than
+            // synthesizing a fresh comma — this keeps every token in the
+            // filtered view an authentic token from the source (correct span
+            // and text), even though the view is necessarily lossy about
+            // which content elements sat between two kept members.
+            var raw = Elements.GetWithSeparators();
             var builder = ImmutableArray.CreateBuilder<SyntaxNode>();
-            foreach (var element in Elements)
+            for (var i = 0; i < raw.Length; i += 2)
             {
-                if (element is not FieldInitializerSyntax memberInitializer)
+                if (raw[i] is not FieldInitializerSyntax memberInitializer)
                 {
                     continue;
                 }
 
                 if (builder.Count > 0)
                 {
-                    builder.Add(new SyntaxToken(SyntaxTree, SyntaxKind.CommaToken, builder[^1].Span.End, ",", null));
+                    builder.Add(raw[i - 1]);
                 }
 
                 builder.Add(memberInitializer);
