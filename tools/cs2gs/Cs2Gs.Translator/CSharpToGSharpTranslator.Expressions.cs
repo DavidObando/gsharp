@@ -1499,12 +1499,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Issue #4074: filtering the invocation's result says nothing about
             // an unrelated callback's fixed return contract (e.g. Func<string>).
-            if (this.context.SemanticModel.GetOperation(argument)
-                    is IArgumentOperation { Parameter: { } selectorParameter }
-                && selectorParameter.ContainingSymbol is IMethodSymbol containingMethod
-                && ReturnsGenericSelectorResult(
-                    containingMethod.OriginalDefinition,
-                    selectorParameter.Ordinal)
+            if (this.IsGenericSelectorResultArgument(argument)
                 && this.LambdaResultFeedsNullFilteringInvocation(invocation))
             {
                 return true;
@@ -3778,12 +3773,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (current.Parent is not ArgumentSyntax argument
                 || argument.Expression != current
                 || argument.Parent?.Parent is not InvocationExpressionSyntax invocation
-                || this.context.SemanticModel.GetOperation(argument)
-                    is not IArgumentOperation { Parameter: { } selectorParameter }
-                || selectorParameter.ContainingSymbol is not IMethodSymbol containingMethod
-                || !ReturnsGenericSelectorResult(
-                    containingMethod.OriginalDefinition,
-                    selectorParameter.Ordinal))
+                || !this.IsGenericSelectorResultArgument(argument))
             {
                 return false;
             }
@@ -3875,14 +3865,40 @@ public sealed partial class CSharpToGSharpTranslator
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
         }
 
+        private bool IsGenericSelectorResultArgument(ArgumentSyntax argument)
+        {
+            IParameterSymbol parameter =
+                (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)?.Parameter;
+            if (parameter == null
+                && !this.TryGetExpandedParamsElementTarget(argument, out _, out parameter))
+            {
+                return false;
+            }
+
+            return parameter?.ContainingSymbol is IMethodSymbol method
+                && ReturnsGenericSelectorResult(method.OriginalDefinition, parameter.Ordinal);
+        }
+
         private static bool ReturnsGenericSelectorResult(
             IMethodSymbol genericMethod,
             int parameterOrdinal)
         {
             if (!genericMethod.IsGenericMethod
                 || parameterOrdinal < 0
-                || parameterOrdinal >= genericMethod.Parameters.Length
-                || genericMethod.Parameters[parameterOrdinal].Type is not INamedTypeSymbol delegateType
+                || parameterOrdinal >= genericMethod.Parameters.Length)
+            {
+                return false;
+            }
+
+            IParameterSymbol parameter = genericMethod.Parameters[parameterOrdinal];
+            ITypeSymbol selectorType = parameter.Type switch
+            {
+                IArrayTypeSymbol array when parameter.IsParams => array.ElementType,
+                INamedTypeSymbol named when parameter.IsParams && IsSupportedParamsCollectionType(named) =>
+                    named.TypeArguments[0],
+                _ => parameter.Type,
+            };
+            if (selectorType is not INamedTypeSymbol delegateType
                 || delegateType.TypeKind != TypeKind.Delegate
                 || delegateType.DelegateInvokeMethod?.ReturnType is not ITypeParameterSymbol resultParameter
                 || resultParameter.TypeParameterKind != TypeParameterKind.Method

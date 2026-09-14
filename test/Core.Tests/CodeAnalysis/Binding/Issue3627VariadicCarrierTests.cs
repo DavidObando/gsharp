@@ -101,6 +101,42 @@ total(existing)
         Assert.Equal(2, result.Value);
     }
 
+    [Theory]
+    [InlineData("List")]
+    [InlineData("Span")]
+    [InlineData("ReadOnlySpan")]
+    public void ReferenceNullableElementCarrier_PacksWithoutLosingNullability(string carrier)
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+            import System.Collections.Generic
+
+            func countNulls(values ...CARRIER[string?]) int32 {
+                var count = 0
+                for value in values {
+                    if value == nil { count++ }
+                }
+                return count
+            }
+            countNulls(nil, "present")
+            """.Replace("CARRIER", carrier));
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void SameCompilationElementCarrier_RemainsUnsupported()
+    {
+        var diagnostics = Errors("""
+            import System.Collections.Generic
+
+            class Entry {}
+            func count(values ...List[Entry]) int32 -> values.Count
+            count(Entry())
+            """);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0544");
+    }
+
     [Fact]
     public void ReadOnlySpanCarrier_PacksExpandedCall()
     {

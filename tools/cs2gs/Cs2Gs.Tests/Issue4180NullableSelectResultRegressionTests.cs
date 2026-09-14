@@ -364,6 +364,7 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     [InlineData("BuildNestedList(() => type.FullName).OfType<List<string>>().Count()", false, "1")]
     [InlineData("BuildNestedValues(() => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildUnrelatedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildUnrelatedParams(42, () => type.FullName).OfType<int>().Count()", true, "1")]
     public void CallbackResult_BeforeOfType_PreservesRequiredBridgesAndRuns(
         string invocation,
         bool requiresBridge,
@@ -401,6 +402,12 @@ public sealed class Issue4180NullableSelectResultRegressionTests
                     return new Dictionary<int, int> { { 0, 42 } }.Values;
                 }
 
+                static IEnumerable<T> BuildUnrelatedParams<T>(T value, params Func<string>[] selectors)
+                {
+                    _ = selectors[0]().Length;
+                    return new[] { value };
+                }
+
                 static int Run(Type type) => INVOCATION;
 
                 public static void Main() => Console.WriteLine(Run(TYPE));
@@ -411,12 +418,17 @@ public sealed class Issue4180NullableSelectResultRegressionTests
                     requiresBridge ? "typeof(string)" : "typeof(List<>).GetGenericArguments()[0]",
                     StringComparison.Ordinal));
 
+        AssertCompilesAndRuns(printed, expectedOutput, requiresBridge);
+    }
+
+    private static void AssertCompilesAndRuns(string printed, string expectedOutput, bool requiresBridge)
+    {
         string compiler = FindCompiler();
         Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
         string workDir = Path.Combine(
             AppContext.BaseDirectory,
             nameof(Issue4180NullableSelectResultRegressionTests),
-            Guid.NewGuid().ToString("N") + "-unrelated-callback");
+            Guid.NewGuid().ToString("N") + "-selector-result");
         Directory.CreateDirectory(workDir);
         try
         {
@@ -448,6 +460,47 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         {
             TryDelete(workDir);
         }
+    }
+
+    [Theory]
+    [InlineData("Func<T>[]")]
+    [InlineData("List<Func<T>>")]
+    [InlineData("IEnumerable<Func<T>>")]
+    [InlineData("ICollection<Func<T>>")]
+    [InlineData("IList<Func<T>>")]
+    [InlineData("IReadOnlyList<Func<T>>")]
+    [InlineData("IReadOnlyCollection<Func<T>>")]
+    [InlineData("Span<Func<T>>")]
+    [InlineData("ReadOnlySpan<Func<T>>")]
+    public void ExpandedParamsSelectorResult_RemainsNullableAndRuns(string carrier)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class Probe
+            {
+                static IEnumerable<T> Build<T>(params CARRIER selectors)
+                {
+                    var results = new List<T>();
+                    foreach (var selector in selectors)
+                    {
+                        results.Add(selector());
+                    }
+
+                    return results;
+                }
+
+                static int Run(Type type) =>
+                    Build(() => type.FullName, () => type.FullName).OfType<string>().Count();
+
+                public static void Main() =>
+                    Console.WriteLine(Run(typeof(List<>).GetGenericArguments()[0]));
+            }
+            """.Replace("CARRIER", carrier, StringComparison.Ordinal));
+
+        AssertCompilesAndRuns(printed, "0", requiresBridge: false);
     }
 
     [Theory]

@@ -223,7 +223,8 @@ internal static class VariadicCarriers
             : ResolveElementInCarrierContext(carrierClr, NullableTypeSymbol.GetEffectiveClrType(elementType));
         if (carrierClr == null
             || elementClr == null
-            || TypeSymbol.RequiresSymbolicProjection(elementType))
+            || TypeSymbol.ContainsTypeParameter(elementType)
+            || TypeSymbol.ContainsSameCompilationUserType(elementType))
         {
             // A collection carrier over a same-compilation (erased) element
             // has no closed CLR construction shape yet; the array family
@@ -254,6 +255,8 @@ internal static class VariadicCarriers
             return packedArray;
         }
 
+        // Reference-nullability annotations do not change the CLR constructor;
+        // keep them on the symbolic carrier result rather than rejecting it.
         return new BoundClrConstructorCallExpression(
             callSyntax,
             carrierClr,
