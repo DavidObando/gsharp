@@ -255,8 +255,8 @@ internal static class VariadicCarriers
             return packedArray;
         }
 
-        // Reference-nullability annotations do not change the CLR constructor;
-        // keep them on the symbolic carrier result rather than rejecting it.
+        // Keep the symbolic carrier so emission can reify its constructor's
+        // declaring type consistently with the packed element array.
         return new BoundClrConstructorCallExpression(
             callSyntax,
             carrierClr,

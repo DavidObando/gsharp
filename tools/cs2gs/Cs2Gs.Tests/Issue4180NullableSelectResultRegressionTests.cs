@@ -561,6 +561,42 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         AssertCompilesAndRuns(printed, "0", requiresBridge: false);
     }
 
+    [Theory]
+    [InlineData("List", "Task", "")]
+    [InlineData("Span", "Task", "")]
+    [InlineData("ReadOnlySpan", "Task", "")]
+    [InlineData("List", "ValueTask", ".AsTask()")]
+    [InlineData("Span", "ValueTask", ".AsTask()")]
+    [InlineData("ReadOnlySpan", "ValueTask", ".AsTask()")]
+    public void AsyncExpandedParamsSelectorResult_RemainsNullableAndRuns(
+        string carrier,
+        string envelope,
+        string taskConversion)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            public static class Probe
+            {
+                static IEnumerable<T> Build<T>(params CARRIER<Func<ENVELOPE<T>>> selectors) =>
+                    new[] { selectors[0]()CONVERSION.GetAwaiter().GetResult() };
+
+                static int Run(Type type) =>
+                    Build(async () => type.FullName).OfType<string>().Count();
+
+                public static void Main() =>
+                    Console.WriteLine(Run(typeof(List<>).GetGenericArguments()[0]));
+            }
+            """.Replace("CARRIER", carrier, StringComparison.Ordinal)
+                .Replace("ENVELOPE", envelope, StringComparison.Ordinal)
+                .Replace("CONVERSION", taskConversion, StringComparison.Ordinal));
+
+        AssertCompilesAndRuns(printed, "0", requiresBridge: false);
+    }
+
     [Fact]
     public void SynchronousTaskSelector_KeepsTaskObjectBridge()
     {
