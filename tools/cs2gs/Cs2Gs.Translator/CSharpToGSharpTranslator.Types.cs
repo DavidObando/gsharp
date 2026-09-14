@@ -87,6 +87,23 @@ public sealed partial class CSharpToGSharpTranslator
                     isAsync,
                     lambda.GetLocation())
                 : null;
+
+            // Explicit ValueTask envelopes must preserve the nullable result
+            // already accepted by the generic selector flow proof.
+            if (isAsync
+                && exactTargetInvoke?.ReturnType is INamedTypeSymbol taskLike
+                && IsTaskLikeEnvelope(taskLike)
+                && lambda.Body.DescendantNodesAndSelf(static node =>
+                        node is not AnonymousFunctionExpressionSyntax and not LocalFunctionStatementSyntax)
+                    .OfType<ExpressionSyntax>()
+                    .Any(this.LambdaResultFeedsNullableObservedInvocation))
+            {
+                exactReturnType = this.PromoteTaskEnvelopeReturnIfTainted(
+                    exactReturnType,
+                    taskLike.TypeArguments[0],
+                    lambdaSymbol);
+            }
+
             bool hasUnderscoreParameter = (lambda is SimpleLambdaExpressionSyntax simpleLambda
                 && simpleLambda.Parameter.Identifier.ValueText == "_")
                 || parameterList?.Parameters.Any(parameter => parameter.Identifier.ValueText == "_") == true;

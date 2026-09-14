@@ -83,6 +83,28 @@ public class Issue818VariadicAnonymousFunctionTypeEmitTests
         Assert.Equal($"5{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
+    [Theory]
+    [InlineData("nil", "0")]
+    [InlineData("\"present\"", "1")]
+    public void AsyncVariadicSelector_NullableResult_PreservesDelegateArrayType(string value, string expected)
+    {
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+            import System.Linq
+            import System.Threading.Tasks
+
+            func Build[T](selectors ...async () -> T) IEnumerable[T] ->
+                []T{selectors[0]().GetAwaiter().GetResult()}
+
+            let text string? = VALUE
+            Console.WriteLine(Build(async () -> text).OfType[string]().Count())
+            """.Replace("VALUE", value, StringComparison.Ordinal);
+
+        Assert.Equal(expected + Environment.NewLine, CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue818_emit_").FullName;

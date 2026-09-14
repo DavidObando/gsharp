@@ -1499,7 +1499,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Issue #4074: filtering the invocation's result says nothing about
             // an unrelated callback's fixed return contract (e.g. Func<string>).
-            if (this.IsGenericSelectorResultArgument(argument)
+            if (this.IsGenericSelectorResultArgument(argument, lambda)
                 && this.LambdaResultFeedsNullFilteringInvocation(invocation))
             {
                 return true;
@@ -2253,27 +2253,17 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol targetType = target switch
             {
-                IMethodSymbol method => GetEffectiveReturnType(method),
+                IMethodSymbol method => GetEffectiveReturnType(method.ReturnType, method.IsAsync),
                 IPropertySymbol property => property.Type,
                 _ => this.context.GetTypeInfo(value).ConvertedType,
             };
             return (targetType, target);
-
-            static ITypeSymbol GetEffectiveReturnType(IMethodSymbol method)
-            {
-                if (method.IsAsync
-                    && method.ReturnType is INamedTypeSymbol taskLike
-                    && taskLike.IsGenericType
-                    && taskLike.TypeArguments.Length == 1
-                    && taskLike.Name is "Task" or "ValueTask"
-                    && taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
-                {
-                    return taskLike.TypeArguments[0];
-                }
-
-                return method.ReturnType;
-            }
         }
+
+        private static ITypeSymbol GetEffectiveReturnType(ITypeSymbol returnType, bool isAsync) =>
+            isAsync && returnType is INamedTypeSymbol taskLike && IsTaskLikeEnvelope(taskLike)
+                ? taskLike.TypeArguments[0]
+                : returnType;
 
         private (ITypeSymbol Type, ISymbol Symbol) FindNullForgivingTarget(
             PostfixUnaryExpressionSyntax value)
@@ -3653,8 +3643,10 @@ public sealed partial class CSharpToGSharpTranslator
                 || this.LambdaResultFlowsToNullableSink(lambda)
                 || this.LambdaResultFeedsUnobservedTaskRun(use)
                 || this.GetLambdaTargetDelegateType(lambda) is not { DelegateInvokeMethod: { } invoke }
-                || invoke.ReturnType is not { IsReferenceType: true }
-                || invoke.ReturnType.NullableAnnotation == NullableAnnotation.Annotated)
+                || GetEffectiveReturnType(
+                    invoke.ReturnType,
+                    lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)) is not { IsReferenceType: true } returnType
+                || returnType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return false;
             }
@@ -3773,7 +3765,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (current.Parent is not ArgumentSyntax argument
                 || argument.Expression != current
                 || argument.Parent?.Parent is not InvocationExpressionSyntax invocation
-                || !this.IsGenericSelectorResultArgument(argument))
+                || !this.IsGenericSelectorResultArgument(argument, lambda))
             {
                 return false;
             }
@@ -3865,7 +3857,9 @@ public sealed partial class CSharpToGSharpTranslator
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
         }
 
-        private bool IsGenericSelectorResultArgument(ArgumentSyntax argument)
+        private bool IsGenericSelectorResultArgument(
+            ArgumentSyntax argument,
+            AnonymousFunctionExpressionSyntax lambda)
         {
             IParameterSymbol parameter =
                 (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)?.Parameter;
@@ -3876,12 +3870,16 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return parameter?.ContainingSymbol is IMethodSymbol method
-                && ReturnsGenericSelectorResult(method.OriginalDefinition, parameter.Ordinal);
+                && ReturnsGenericSelectorResult(
+                    method.OriginalDefinition,
+                    parameter.Ordinal,
+                    lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword));
         }
 
         private static bool ReturnsGenericSelectorResult(
             IMethodSymbol genericMethod,
-            int parameterOrdinal)
+            int parameterOrdinal,
+            bool isAsync)
         {
             if (!genericMethod.IsGenericMethod
                 || parameterOrdinal < 0
@@ -3900,7 +3898,8 @@ public sealed partial class CSharpToGSharpTranslator
             };
             if (selectorType is not INamedTypeSymbol delegateType
                 || delegateType.TypeKind != TypeKind.Delegate
-                || delegateType.DelegateInvokeMethod?.ReturnType is not ITypeParameterSymbol resultParameter
+                || GetEffectiveReturnType(delegateType.DelegateInvokeMethod?.ReturnType, isAsync)
+                    is not ITypeParameterSymbol resultParameter
                 || resultParameter.TypeParameterKind != TypeParameterKind.Method
                 || !SymbolEqualityComparer.Default.Equals(
                     resultParameter.ContainingSymbol,

@@ -365,6 +365,14 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     [InlineData("BuildNestedValues(() => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildUnrelatedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
     [InlineData("BuildUnrelatedParams(42, () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildTask(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildTask(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTask(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTask(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildFixedTask(42, async () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildFixedValueTask(42, async () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildTaskParams(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTaskParams(async () => type.FullName).OfType<string>().Count()", false, "0")]
     public void CallbackResult_BeforeOfType_PreservesRequiredBridgesAndRuns(
         string invocation,
         bool requiresBridge,
@@ -374,6 +382,7 @@ public sealed class Issue4180NullableSelectResultRegressionTests
             using System;
             using System.Collections.Generic;
             using System.Linq;
+            using System.Threading.Tasks;
 
             public static class Probe
             {
@@ -407,6 +416,30 @@ public sealed class Issue4180NullableSelectResultRegressionTests
                     _ = selectors[0]().Length;
                     return new[] { value };
                 }
+
+                static IEnumerable<T> BuildTask<T>(Func<Task<T>> selector) =>
+                    new[] { selector().GetAwaiter().GetResult() };
+
+                static IEnumerable<T> BuildValueTask<T>(Func<ValueTask<T>> selector) =>
+                    new[] { selector().AsTask().GetAwaiter().GetResult() };
+
+                static IEnumerable<T> BuildFixedTask<T>(T value, Func<Task<string>> selector)
+                {
+                    _ = selector().GetAwaiter().GetResult().Length;
+                    return new[] { value };
+                }
+
+                static IEnumerable<T> BuildFixedValueTask<T>(T value, Func<ValueTask<string>> selector)
+                {
+                    _ = selector().AsTask().GetAwaiter().GetResult().Length;
+                    return new[] { value };
+                }
+
+                static IEnumerable<T> BuildTaskParams<T>(params Func<Task<T>>[] selectors) =>
+                    new[] { selectors[0]().GetAwaiter().GetResult() };
+
+                static IEnumerable<T> BuildValueTaskParams<T>(params Func<ValueTask<T>>[] selectors) =>
+                    new[] { selectors[0]().AsTask().GetAwaiter().GetResult() };
 
                 static int Run(Type type) => INVOCATION;
 
@@ -501,6 +534,28 @@ public sealed class Issue4180NullableSelectResultRegressionTests
             """.Replace("CARRIER", carrier, StringComparison.Ordinal));
 
         AssertCompilesAndRuns(printed, "0", requiresBridge: false);
+    }
+
+    [Fact]
+    public void SynchronousTaskSelector_KeepsTaskObjectBridge()
+    {
+        string printed = Translate("""
+            #nullable enable annotations
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            public static class Probe
+            {
+                static Task<string>? pending;
+                static IEnumerable<T> Build<T>(Func<Task<T>> selector) =>
+                    new[] { selector().GetAwaiter().GetResult() };
+                public static int Run() => Build(() => pending).OfType<string>().Count();
+            }
+            """);
+
+        Assert.Contains("pending!!", printed, StringComparison.Ordinal);
     }
 
     [Theory]

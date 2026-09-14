@@ -250,13 +250,15 @@ internal sealed class ImportedMemberRefFactory
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
-        if (element is FunctionTypeSymbol fnElement && fnElement.ClrType == null)
+        if (element is FunctionTypeSymbol fnElement
+            && (fnElement.ClrType == null || TypeSymbol.RequiresSymbolicProjection(fnElement)))
         {
             // ADR-0087 §3 R6: an open-bearing function type
             // (e.g. `(T) -> U`) tokenises as a TypeSpec for the
             // reified `Func<...>` / `Action<...>` shape, with VAR/MVAR
             // slots that the runtime substitutes against the
-            // surrounding generic instantiation.
+            // surrounding generic instantiation. Nullable slots inside a
+            // constructed return type must also avoid its erased CLR backing.
             return this.GetFunctionDelegateTypeSpec(fnElement);
         }
 
