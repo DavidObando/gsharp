@@ -8,6 +8,7 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -33,6 +34,31 @@ namespace Cs2Gs.Tests;
 /// </summary>
 public class Issue4113NominalDelegateIdentityInExpressionsTranslationTests
 {
+    [Fact]
+    public void TypeOfSourceEventHandlerPlaceholder_PreservesNominalRuntimeIdentity()
+    {
+        // #4116's Issue1473FunctionTypeEventEmitTests uses a source-defined
+        // EventArgs subclass. CanonicalizeWellKnownEventHandler has no CLR type
+        // for it yet, so it uses this closed placeholder with EventHandler<>'s
+        // generic definition. #4205 must preserve their matching identities.
+        string printed = TranslateUnit(@"
+using System;
+
+public class Probe
+{
+    public Type Placeholder() => typeof(EventHandler<EventArgs>);
+    public Type Definition() => typeof(EventHandler<>);
+}");
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine
+                + "Probe().Placeholder().GetGenericTypeDefinition() == Probe().Definition()");
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(true, result.Value);
+        Assert.Contains("typeof(EventHandler[EventArgs])", printed);
+    }
+
     [Fact]
     public void TypeOfNominalEventHandler_PreservesNominalIdentity()
     {
