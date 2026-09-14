@@ -263,4 +263,31 @@ grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 0 |' <<< "$report"
 grep -Fq '| lines >300 chars (total) | n/a | 1 |' <<< "$report"
 grep -Fq '| synthetic `__` identifiers | 3 | 3 |' <<< "$report"
 
+# Issue #4198: one retained helper means three CODE occurrences, not one
+# identifier or four raw occurrences (the lift comment is not code).
+lift_tree="$scratch/lift-tree"
+mkdir -p "$lift_tree"
+cat > "$lift_tree/Retained.gs" <<'GS'
+// lifted recursive local function __local_Owner_Helper
+func __local_Owner_Helper() {}
+__local_Owner_Helper()
+__local_Owner_Helper()
+GS
+jq '.liftedLocalCeiling = 3' "$scratch/baseline.json" > "$scratch/lift-baseline.json"
+selfmig_measure "$lift_tree"
+assert_eq "$lifts" "3" "retained helper occurrence count"
+if ! output=$(TMPDIR="$scratch" selfmig_apply_baseline "$scratch/lift-baseline.json" 0 0 2>&1); then
+  echo "expected three lifted-helper occurrences to pass ceiling 3: $output" >&2
+  exit 1
+fi
+
+echo '__local_Owner_Helper()' >> "$lift_tree/Retained.gs"
+selfmig_measure "$lift_tree"
+assert_eq "$lifts" "4" "additional lifted-helper occurrence count"
+if output=$(TMPDIR="$scratch" selfmig_apply_baseline "$scratch/lift-baseline.json" 0 0 2>&1); then
+  echo "expected a fourth lifted-helper occurrence to fail ceiling 3" >&2
+  exit 1
+fi
+grep -Fq 'GATE: __local_ count 4 exceeded ceiling 3.' <<< "$output"
+
 echo "cs2gs counter contract tests passed"
