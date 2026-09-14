@@ -627,15 +627,15 @@ internal sealed partial class StatementBinder
         //   }
         scope = new BoundScope(scope);
 
-        var condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
         var body = BindConditionedLoopBody(
-            condition,
+            conditionSyntax,
             bodySyntax,
             labelName,
             out var breakLabel,
             out var continueLabel,
-            backEdgeTail: null,
-            backEdgeCondition: condition);
+            out var condition,
+            out _,
+            postSyntax: null);
 
         scope = scope.Pop();
 
@@ -648,7 +648,11 @@ internal sealed partial class StatementBinder
         statements.Add(body);
         statements.Add(new BoundLabelStatement(originatingSyntax, continueLabel));
         statements.Add(new BoundLabelStatement(originatingSyntax, checkLabel));
-        statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundConditionalGotoStatement(
+            originatingSyntax,
+            bodyLabel,
+            Invariant.Required(condition, "a conditional loop has a bound condition"),
+            jumpIfTrue: true));
         statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
 
         return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
@@ -697,16 +701,15 @@ internal sealed partial class StatementBinder
             }
         }
 
-        var condition = syntax.Condition == null ? null : bindExpressionWithTargetType(syntax.Condition, TypeSymbol.Bool);
-        var post = syntax.Post == null ? null : BindStatement(syntax.Post);
         var body = BindConditionedLoopBody(
-            condition,
+            syntax.Condition,
             syntax.Body,
             labelName,
             out var breakLabel,
             out var continueLabel,
-            post,
-            condition);
+            out var condition,
+            out var post,
+            syntax.Post);
 
         scope = scope.Pop();
 
@@ -744,74 +747,68 @@ internal sealed partial class StatementBinder
     }
 
     private BoundStatement BindConditionedLoopBody(
-        BoundExpression? condition,
+        ExpressionSyntax? conditionSyntax,
         StatementSyntax bodySyntax,
         string? labelName,
         out BoundLabel breakLabel,
         out BoundLabel continueLabel,
-        BoundStatement? backEdgeTail,
-        BoundExpression? backEdgeCondition)
+        out BoundExpression? condition,
+        out BoundStatement? post,
+        StatementSyntax? postSyntax)
     {
-        // ADR-0166: the loop body runs only when the condition was true, so
-        // the condition's when-true pattern variables are in scope there
-        // (`for queue.Peek() is Node node { ... }`).
-        var (patternWhenTrue, _) = PatternVariables.Classify(condition);
-        var (body, loopBreak, loopContinue) = PatternVariables.BindInScope(
-            binderCtx,
-            patternWhenTrue,
-            () =>
+        BoundExpression? boundCondition = null;
+        BoundStatement? boundPost = null;
+        var headerParentScope = scope;
+        var body = BindLoopBody(
+            bodySyntax,
+            labelName,
+            out breakLabel,
+            out continueLabel,
+            bindIteration: () =>
             {
-                var bound = BindConditionedLoopBodyCore(
-                    condition,
-                    bodySyntax,
-                    labelName,
-                    out var breakTarget,
-                    out var continueTarget,
-                    backEdgeTail,
-                    backEdgeCondition);
-                return (bound, breakTarget, continueTarget);
+                // #4129: the header executes again too. Keeping its first binding
+                // retained stale casts and pattern-variable identities after #2943
+                // rebound only the body.
+                scope = new BoundScope(headerParentScope);
+                try
+                {
+                    boundCondition = conditionSyntax == null
+                        ? null
+                        : bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
+                    boundPost = postSyntax == null ? null : BindStatement(postSyntax);
+                    var (patternWhenTrue, _) = PatternVariables.Classify(boundCondition);
+                    var boundBody = PatternVariables.BindInScope(
+                        binderCtx,
+                        patternWhenTrue,
+                        () => BindConditionedLoopBodyCore(boundCondition, bodySyntax));
+                    return (boundBody, boundPost, boundCondition);
+                }
+                finally
+                {
+                    scope = headerParentScope;
+                }
             });
-        breakLabel = loopBreak;
-        continueLabel = loopContinue;
+        condition = boundCondition;
+        post = boundPost;
         return body;
     }
 
     private BoundStatement BindConditionedLoopBodyCore(
         BoundExpression? condition,
-        StatementSyntax bodySyntax,
-        string? labelName,
-        out BoundLabel breakLabel,
-        out BoundLabel continueLabel,
-        BoundStatement? backEdgeTail,
-        BoundExpression? backEdgeCondition)
+        StatementSyntax bodySyntax)
     {
-        var inheritedNarrowingFrameCount = binderCtx.NarrowedVariables.Count;
         var loopNarrow = condition == null
             ? null
             : ComputeConditionNarrowing(condition).Then;
         if (loopNarrow == null)
         {
-            return BindLoopBody(
-                bodySyntax,
-                labelName,
-                out breakLabel,
-                out continueLabel,
-                inheritedNarrowingFrameCount,
-                backEdgeTail,
-                backEdgeCondition);
+            return Invariant.Required(BindStatement(bodySyntax), "a loop body has a bound statement");
         }
 
         binderCtx.NarrowedVariables.Add(loopNarrow);
         try
         {
-            return BindLoopBody(
-                bodySyntax,
-                labelName,
-                out breakLabel,
-                out continueLabel,
-                inheritedNarrowingFrameCount,
-                backEdgeTail,
-                backEdgeCondition);
+            return Invariant.Required(BindStatement(bodySyntax), "a loop body has a bound statement");
         }
         finally
         {
@@ -855,54 +852,58 @@ internal sealed partial class StatementBinder
         //     breakLabel:
         //   }
         var enclosingScope = scope;
-        scope = new BoundScope(enclosingScope);
-        var loopScope = scope;
-
-        // ADR-0174 D3: a `let v = <-ch` clause is a channel clause. Its
-        // declarations run at the check label like any other clause, but its
-        // gate (`ok`) is tested right after them — `if !ok goto break` — so the
-        // clauses short-circuit in source order, and it never joins the
-        // nil-check chain (the element keeps its own nullability).
-        var localsForFrame = new List<(VariableSymbol Variable, TypeSymbol Underlying)>();
         var clauses = new List<WhileLetChannelClause>();
-        var declarations = ImmutableArray.CreateBuilder<BoundStatement>();
-        var hasChannelGate = false;
-        foreach (var binding in bindingSyntaxes)
-        {
-            if (IsChannelReceiveSyntax(binding.Initializer, out var receive))
-            {
-                var channelClause = BindWhileLetChannelClause(binding, receive, enclosingScope, loopScope);
-                clauses.Add(channelClause);
-                declarations.AddRange(channelClause.Declarations);
-                hasChannelGate |= channelClause.Gate != null;
-                continue;
-            }
-
-            var (variable, underlying, declaration) = BindWhileLetBindingClause(
-                binding,
-                enclosingScope,
-                loopScope);
-            clauses.Add(new WhileLetChannelClause(ImmutableArray.Create(declaration), Gate: null));
-            declarations.Add(declaration);
-            if (variable != null && underlying != null)
-            {
-                localsForFrame.Add((variable, underlying));
-            }
-        }
-
-        var condition = BuildNilCheckChain(originatingSyntax, localsForFrame)
-            ?? new BoundLiteralExpression(originatingSyntax, hasChannelGate, TypeSymbol.Bool);
-        var declarationBlock = new BoundBlockStatement(originatingSyntax, declarations.ToImmutable());
-        var body = BindConditionedLoopBody(
-            condition,
+        BoundExpression? condition = null;
+        var body = BindLoopBody(
             bodySyntax,
             labelName,
             out var breakLabel,
             out var continueLabel,
-            backEdgeTail: declarationBlock,
-            backEdgeCondition: condition);
+            bindIteration: () =>
+            {
+                scope = new BoundScope(enclosingScope);
+                var loopScope = scope;
+                try
+                {
+                    clauses.Clear();
+                    var localsForFrame = new List<(VariableSymbol Variable, TypeSymbol Underlying)>();
+                    var declarations = ImmutableArray.CreateBuilder<BoundStatement>();
+                    var hasChannelGate = false;
+                    foreach (var binding in bindingSyntaxes)
+                    {
+                        // ADR-0174 D3: channel gates short-circuit in source order
+                        // and do not join the nullable-value check chain.
+                        if (IsChannelReceiveSyntax(binding.Initializer, out var receive))
+                        {
+                            var channelClause = BindWhileLetChannelClause(binding, receive, enclosingScope, loopScope);
+                            clauses.Add(channelClause);
+                            declarations.AddRange(channelClause.Declarations);
+                            hasChannelGate |= channelClause.Gate != null;
+                            continue;
+                        }
 
-        scope = scope.Pop();
+                        var (variable, underlying, declaration) = BindWhileLetBindingClause(
+                            binding,
+                            enclosingScope,
+                            loopScope);
+                        clauses.Add(new WhileLetChannelClause(ImmutableArray.Create(declaration), Gate: null));
+                        declarations.Add(declaration);
+                        if (variable != null && underlying != null)
+                        {
+                            localsForFrame.Add((variable, underlying));
+                        }
+                    }
+
+                    condition = BuildNilCheckChain(originatingSyntax, localsForFrame)
+                        ?? new BoundLiteralExpression(originatingSyntax, hasChannelGate, TypeSymbol.Bool);
+                    var declarationBlock = new BoundBlockStatement(originatingSyntax, declarations.ToImmutable());
+                    return (BindConditionedLoopBodyCore(condition, bodySyntax), declarationBlock, condition);
+                }
+                finally
+                {
+                    scope = enclosingScope;
+                }
+            });
 
         var bodyLabel = new BoundLabel($"body{binderCtx.LabelCounter}");
         var checkLabel = new BoundLabel($"check{binderCtx.LabelCounter}");
@@ -921,7 +922,11 @@ internal sealed partial class StatementBinder
             }
         }
 
-        statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundConditionalGotoStatement(
+            originatingSyntax,
+            bodyLabel,
+            Invariant.Required(condition, "a while-let loop has a bound condition"),
+            jumpIfTrue: true));
         statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
         return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
     }
@@ -1113,14 +1118,27 @@ internal sealed partial class StatementBinder
         //   }
         scope = new BoundScope(scope);
 
-        var condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
+        BoundExpression? condition = null;
+        var headerParentScope = scope;
         var body = BindLoopBody(
             bodySyntax,
             labelName,
             out var breakLabel,
             out var continueLabel,
-            backEdgeTail: null,
-            backEdgeCondition: condition);
+            bindIteration: () =>
+            {
+                scope = new BoundScope(headerParentScope);
+                try
+                {
+                    condition = bindExpressionWithTargetType(conditionSyntax, TypeSymbol.Bool);
+                    var boundBody = Invariant.Required(BindStatement(bodySyntax), "a loop body has a bound statement");
+                    return (boundBody, null, condition);
+                }
+                finally
+                {
+                    scope = headerParentScope;
+                }
+            });
 
         scope = scope.Pop();
 
@@ -1130,7 +1148,11 @@ internal sealed partial class StatementBinder
         statements.Add(new BoundLabelStatement(originatingSyntax, bodyLabel));
         statements.Add(body);
         statements.Add(new BoundLabelStatement(originatingSyntax, continueLabel));
-        statements.Add(new BoundConditionalGotoStatement(originatingSyntax, bodyLabel, condition, jumpIfTrue: true));
+        statements.Add(new BoundConditionalGotoStatement(
+            originatingSyntax,
+            bodyLabel,
+            Invariant.Required(condition, "a do-while loop has a bound condition"),
+            jumpIfTrue: true));
         statements.Add(new BoundLabelStatement(originatingSyntax, breakLabel));
 
         return new BoundBlockStatement(originatingSyntax, statements.ToImmutable());
