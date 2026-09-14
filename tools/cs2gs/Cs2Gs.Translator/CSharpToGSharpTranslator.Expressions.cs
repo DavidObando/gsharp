@@ -1524,6 +1524,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            IMethodSymbol originalMethod = method.ReducedFrom ?? method;
+            INamedTypeSymbol containingType = originalMethod.ContainingType?.OriginalDefinition;
+            if (!SymbolEqualityComparer.Default.Equals(
+                    containingType,
+                    this.context.Compilation.GetTypeByMetadataName("System.Linq.Enumerable"))
+                && !SymbolEqualityComparer.Default.Equals(
+                    containingType,
+                    this.context.Compilation.GetTypeByMetadataName("System.Linq.Queryable")))
+            {
+                return false;
+            }
+
             if (method.Name == "OfType")
             {
                 return true;
@@ -1562,6 +1574,13 @@ public sealed partial class CSharpToGSharpTranslator
                                 || comparison.IsKind(SyntaxKind.GreaterThanOrEqualExpression)
                                 || comparison.IsKind(SyntaxKind.LessThanExpression)
                                 || comparison.IsKind(SyntaxKind.LessThanOrEqualExpression)))))
+                || predicate.Body.DescendantNodesAndSelf()
+                    .OfType<IsPatternExpressionSyntax>()
+                    .Any(isPattern =>
+                        this.BindsTo(isPattern.Expression, parameterSymbol)
+                        && IsNullConstantPattern(isPattern.Pattern)
+                        && isPattern.Pattern is UnaryPatternSyntax unary
+                        && unary.IsKind(SyntaxKind.NotPattern))
                 || predicate.Body.DescendantNodesAndSelf()
                     .OfType<BinaryExpressionSyntax>()
                     .Any(binary =>

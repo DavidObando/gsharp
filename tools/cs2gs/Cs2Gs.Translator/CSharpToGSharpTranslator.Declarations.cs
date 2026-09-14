@@ -324,20 +324,15 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    bool callsNonHoistedSibling = false;
-                    foreach (SyntaxNode node in candidate.DescendantNodes())
-                    {
-                        if (this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency
-                            && topLevelLocalFunctionsBySymbol.TryGetValue(
+                    bool callsNonHoistedSibling = candidate.DescendantNodes()
+                        .Select(node => this.context.GetSymbolInfo(node).Symbol)
+                        .OfType<IMethodSymbol>()
+                        .Any(dependency =>
+                            topLevelLocalFunctionsBySymbol.TryGetValue(
                                 dependency,
                                 out LocalFunctionStatementSyntax dependencyDecl)
                             && !ReferenceEquals(dependencyDecl, candidate)
-                            && !topLevelHoistedStatements.Contains(dependencyDecl))
-                        {
-                            callsNonHoistedSibling = true;
-                            break;
-                        }
-                    }
+                            && !topLevelHoistedStatements.Contains(dependencyDecl));
 
                     if (callsNonHoistedSibling)
                     {

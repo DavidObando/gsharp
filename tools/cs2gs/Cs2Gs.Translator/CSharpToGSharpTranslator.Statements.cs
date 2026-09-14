@@ -1851,7 +1851,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private bool IsAdjacentFallthroughGoto(GotoStatementSyntax gotoStatement)
         {
-            if (gotoStatement.Kind() is not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement))
+            if (!gotoStatement.IsKind(SyntaxKind.GotoCaseStatement)
+                && !gotoStatement.IsKind(SyntaxKind.GotoDefaultStatement))
             {
                 return false;
             }

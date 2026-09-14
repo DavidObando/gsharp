@@ -48,8 +48,14 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         RegexOptions.CultureInvariant);
 
     private static readonly Regex RoslynEnumDirectPattern = new(
-        $@"\bis\s+(?:not\s+)?(?:[A-Za-z_]\w*\.)*{RoslynEnumTypePattern}\.\w+",
+        $@"\bis\s+(?:(?:not)\s+|\(\s*)*(?:[A-Za-z_]\w*\.)*{RoslynEnumTypePattern}\.\w+",
         RegexOptions.CultureInvariant);
+
+    [Theory]
+    [InlineData("kind is not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement)")]
+    [InlineData("kind is (not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement))")]
+    public void DirectPatternGuard_CatchesParenthesizedAndNestedNot(string source) =>
+        Assert.Matches(RoslynEnumDirectPattern, source);
 
     /// <summary>
     /// Translates cs2gs's own <c>CSharpToGSharpTranslator.Types.cs</c> with
