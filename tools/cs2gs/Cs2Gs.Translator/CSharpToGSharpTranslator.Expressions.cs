@@ -1480,15 +1480,7 @@ public sealed partial class CSharpToGSharpTranslator
                 node = node.Parent;
             }
 
-            // Issue #4074: observing the invocation's result says nothing about
-            // an unrelated callback's fixed return contract (e.g. Func<string>).
-            if (node.Parent is not ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation } argument
-                || this.context.SemanticModel.GetOperation(argument)
-                    is not IArgumentOperation { Parameter: { } selectorParameter }
-                || selectorParameter.ContainingSymbol is not IMethodSymbol containingMethod
-                || !ReturnsGenericSelectorResult(
-                    containingMethod.OriginalDefinition,
-                    selectorParameter.Ordinal))
+            if (node.Parent is not ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation } argument)
             {
                 return false;
             }
@@ -1505,7 +1497,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            if (this.LambdaResultFeedsNullFilteringInvocation(invocation))
+            // Issue #4074: filtering the invocation's result says nothing about
+            // an unrelated callback's fixed return contract (e.g. Func<string>).
+            if (this.context.SemanticModel.GetOperation(argument)
+                    is IArgumentOperation { Parameter: { } selectorParameter }
+                && selectorParameter.ContainingSymbol is IMethodSymbol containingMethod
+                && ReturnsGenericSelectorResult(
+                    containingMethod.OriginalDefinition,
+                    selectorParameter.Ordinal)
+                && this.LambdaResultFeedsNullFilteringInvocation(invocation))
             {
                 return true;
             }
@@ -3893,13 +3893,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            return SymbolEqualityComparer.Default.Equals(
-                    genericMethod.ReturnType,
-                    resultParameter)
-                || (genericMethod.ReturnType is INamedTypeSymbol named
-                    && named.TypeArguments.Any(argument =>
-                        SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
+            return ContainsSelectorResult(genericMethod.ReturnType, resultParameter);
         }
+
+        private static bool ContainsSelectorResult(ITypeSymbol type, ITypeParameterSymbol resultParameter) =>
+            SymbolEqualityComparer.Default.Equals(type, resultParameter)
+            || (type is IArrayTypeSymbol array
+                && ContainsSelectorResult(array.ElementType, resultParameter))
+            || (type is INamedTypeSymbol named
+                && named.TypeArguments.Any(argument =>
+                    ContainsSelectorResult(argument, resultParameter)));
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)
         {

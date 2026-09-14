@@ -354,12 +354,18 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     }
 
     [Theory]
-    [InlineData("Build(() => type.FullName).OfType<int>().Count()")]
-    [InlineData("Build(() => { return type.FullName; }).OfType<int>().Count()")]
-    [InlineData("Build(((Func<string>)(() => type.FullName))).OfType<int>().Count()")]
-    [InlineData("BuildGeneric(() => type.FullName, () => 42).OfType<int>().Count()")]
-    [InlineData("BuildGeneric(selector: () => 42, get: () => type.FullName).OfType<int>().Count()")]
-    public void UnrelatedCallbackResult_BeforeOfType_PreservesBridgeAndRuns(string invocation)
+    [InlineData("Build(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("Build(() => { return type.FullName; }).OfType<int>().Count()", true, "1")]
+    [InlineData("Build(((Func<string>)(() => type.FullName))).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildGeneric(() => type.FullName, () => 42).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildGeneric(selector: () => 42, get: () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildArray(() => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildNestedArray(() => type.FullName).OfType<string[]>().Count()", false, "1")]
+    [InlineData("BuildNestedList(() => type.FullName).OfType<List<string>>().Count()", false, "1")]
+    public void CallbackResult_BeforeOfType_PreservesRequiredBridgesAndRuns(
+        string invocation,
+        bool requiresBridge,
+        string expectedOutput)
     {
         string printed = Translate("""
             using System;
@@ -376,11 +382,23 @@ public sealed class Issue4180NullableSelectResultRegressionTests
                     return new[] { selector() };
                 }
 
+                static T[] BuildArray<T>(Func<T> selector) => new[] { selector() };
+
+                static IEnumerable<T[]> BuildNestedArray<T>(Func<T> selector) =>
+                    new[] { new[] { selector() } };
+
+                static IEnumerable<List<T>> BuildNestedList<T>(Func<T> selector) =>
+                    new[] { new List<T> { selector() } };
+
                 static int Run(Type type) => INVOCATION;
 
-                public static void Main() => Console.WriteLine(Run(typeof(string)));
+                public static void Main() => Console.WriteLine(Run(TYPE));
             }
-            """.Replace("INVOCATION", invocation, StringComparison.Ordinal));
+            """.Replace("INVOCATION", invocation, StringComparison.Ordinal)
+                .Replace(
+                    "TYPE",
+                    requiresBridge ? "typeof(string)" : "typeof(List<>).GetGenericArguments()[0]",
+                    StringComparison.Ordinal));
 
         string compiler = FindCompiler();
         Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
@@ -401,11 +419,18 @@ public sealed class Issue4180NullableSelectResultRegressionTests
                 compileExit == 0,
                 "gsc must compile the translated probe. Output:\n" + compileOutput
                     + "\n\nTranslated G#:\n" + printed);
-            Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+            if (requiresBridge)
+            {
+                Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.DoesNotContain("type.FullName!!", printed, StringComparison.Ordinal);
+            }
 
             (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
             Assert.True(runExit == 0, "the compiled probe must run. Output:\n" + output);
-            Assert.Equal("1", output.Trim());
+            Assert.Equal(expectedOutput, output.Trim());
         }
         finally
         {
