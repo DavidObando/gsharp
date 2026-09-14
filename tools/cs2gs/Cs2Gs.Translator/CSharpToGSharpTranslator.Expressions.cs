@@ -3914,8 +3914,22 @@ public sealed partial class CSharpToGSharpTranslator
                 INamedTypeSymbol enumerable =
                     namedResult.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T
                         ? namedResult
-                        : namedResult.AllInterfaces.FirstOrDefault(iface =>
-                            iface.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T);
+                        : null;
+                foreach (INamedTypeSymbol iface in namedResult.AllInterfaces)
+                {
+                    if (iface.OriginalDefinition.SpecialType != SpecialType.System_Collections_Generic_IEnumerable_T)
+                    {
+                        continue;
+                    }
+
+                    if (enumerable != null && !SymbolEqualityComparer.Default.Equals(enumerable, iface))
+                    {
+                        return false;
+                    }
+
+                    enumerable = iface;
+                }
+
                 if (enumerable != null)
                 {
                     resultType = GetEnumerableElementType(enumerable);

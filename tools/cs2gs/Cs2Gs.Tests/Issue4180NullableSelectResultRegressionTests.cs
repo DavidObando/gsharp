@@ -623,6 +623,34 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         }
     }
 
+    [Theory]
+    [InlineData("IEnumerable<T[]>, IEnumerable<int>")]
+    [InlineData("IEnumerable<int>, IEnumerable<T[]>")]
+    public void AmbiguousEnumerableSelectorResult_KeepsBridgeRegardlessOfInterfaceOrder(string interfaces)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public class Rows<T> : INTERFACES
+            {
+                IEnumerator<T[]> IEnumerable<T[]>.GetEnumerator() => throw new NotImplementedException();
+                IEnumerator<int> IEnumerable<int>.GetEnumerator() => throw new NotImplementedException();
+                IEnumerator IEnumerable.GetEnumerator() => throw new NotImplementedException();
+            }
+
+            public static class Probe
+            {
+                static Rows<T> Build<T>(Func<T> selector) => throw new NotImplementedException();
+                public static int Run(Type type) => Build(() => type.FullName).OfType<int>().Count();
+            }
+            """.Replace("INTERFACES", interfaces, StringComparison.Ordinal));
+
+        Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void UserDefinedNullFilteringNames_DoNotSuppressRequiredAssertion()
     {
