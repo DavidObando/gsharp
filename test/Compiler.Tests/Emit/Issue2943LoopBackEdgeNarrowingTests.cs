@@ -24,6 +24,85 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue2943LoopBackEdgeNarrowingTests
 {
     [Theory]
+    [InlineData("while value is string text", "text")]
+    [InlineData("for value is string text", "text")]
+    [InlineData("for ; value is string text; count++", "text")]
+    [InlineData("while value is string", "value.Length")]
+    [InlineData("while !(value is not string text)", "text")]
+    [InlineData("again: while value is string text", "text")]
+    [InlineData("while let text = value as string", "text")]
+    [InlineData("do", "value")]
+    public void RepeatedCondition_RebindsInheritedTypeNarrowing(string header, string observed)
+    {
+        // #4129: SatisfiesClassConstraint's repeated type test must inspect the
+        // current storage, not cast it using the preceding if's stale narrowing.
+        var source = $$"""
+            import System
+
+            func Main() {
+                var value object = "first"
+                var count = 0
+                if value is string {
+                    {{header}} {
+                        Console.WriteLine({{observed}})
+                        if count == 0 {
+                            value = "second"
+                        } else {
+                            value = 42
+                        }
+                        {{(header.StartsWith("for ;", StringComparison.Ordinal) ? "" : "count++")}}
+                    }{{(header == "do" ? " while value is string" : "")}}
+                }
+                Console.WriteLine(count)
+            }
+            """;
+
+        var expected = observed == "value.Length" ? "5\n6\n2\n" : "first\nsecond\n2\n";
+        Assert.Equal(expected, CompileAndRun(source, "issue4129-condition"));
+    }
+
+    [Fact]
+    public void RepeatedCondition_OutVariableIsDeclaredInTheReboundHeader()
+    {
+        const string source = """
+            import System
+
+            func Main() {
+                var value object = "42"
+                if value is string {
+                    while value is string text && int32.TryParse(text, out var number) {
+                        Console.WriteLine(number)
+                        value = 0
+                    }
+                }
+            }
+            """;
+        Assert.Equal("42\n", CompileAndRun(source, "issue4129-out-variable"));
+    }
+
+    [Theory]
+    [InlineData("while value.Length > 0", "")]
+    [InlineData("for ; value.Length > 0;", "")]
+    [InlineData("do", " while value.Length > 0")]
+    public void RepeatedCondition_CannotDereferenceAnInvalidatedTypeNarrowing(string header, string suffix)
+    {
+        var source = $$"""
+            func Main() {
+                var value object = "first"
+                if value is string {
+                    {{header}} {
+                        value = 42
+                    }{{suffix}}
+                }
+            }
+            """;
+        var (exitCode, diagnostics) = CompileWithDriver(source, "issue4129-unsafe-condition");
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("Length", diagnostics, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("initializer", "GS0159")]
     [InlineData("for-clause", "GS0159")]
     [InlineData("while", "GS0503")]

@@ -383,13 +383,20 @@ This is intentionally stricter than Kotlin (which keeps `val`-member casts acros
 
 ### Loop back-edges (issue #2943)
 
-A narrowing inherited from outside a loop is invalidated before the body when
-an assignment or member-path mutation can reach that loop's back-edge. This
+A narrowing inherited from outside a loop is invalidated before the body and
+repeated header when an assignment or member-path mutation can reach that loop's back-edge. This
 applies to condition, C-style, infinite, ellipsis, range, async-range, and
 `do…while` loops, including writes inside nested control flow and paths ending
 in `continue`. A write on a path that exits the loop with `break`, `return`,
 `throw`, or `goto` does not invalidate the body because that path cannot begin
 another iteration.
+
+The repeated condition, C-style post statement, and `while let` initializers
+are rebound together with the body (#4129). Otherwise `if x is T` followed by
+`while x is T value` can retain a stale cast before the second type test.
+Pattern bindings and header `out var` declarations belong to the same fresh
+binding pass as the body that consumes them; a C-style initializer still runs
+only once and is not part of this rebinding.
 
 Narrowing proved anew for each iteration remains valid. In particular,
 `while x != nil`, `while x is T`, and equivalent C-style loop conditions keep

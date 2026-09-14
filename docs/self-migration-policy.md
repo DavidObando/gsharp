@@ -76,6 +76,18 @@ it silently. "Unrelated" is a claim that needs the same standard of proof as
 any other — infrastructure flakes and real regressions look identical from the
 summary line.
 
+## Preserve compiler-test fixture provenance
+
+An imported C# contract must remain C# even when its test harness migrates.
+Compile that contract from source data with Roslyn and pass the resulting
+assembly explicitly to the compiler under test, as
+`ConstantNarrowingCoverageTests` does (#4129/#4206). Using the ambient test
+assembly instead can change the input: cs2gs deliberately seals a class with
+no visible inheritance intent. Assert the relevant metadata and the precise
+negative diagnostic; a missing base type must not masquerade as rejection of
+an out-of-range constructor argument. This preserves the fixture, not an
+exclusion of production source or a relaxation of the parity oracle.
+
 ## Related
 
 - `build/run-cs2gs-selfmig-pr-guard.sh` — what the guard covers, and
