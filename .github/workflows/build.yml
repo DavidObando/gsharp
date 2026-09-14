@@ -539,6 +539,99 @@ jobs:
           name: visual-studio-gsharp-vsix
           path: src/vs-gsharp/src/VsGsharp/bin/Release/net472/GSharp.VisualStudio.vsix
 
+  # The hot-core translation guard ensures that changes to core projects
+  # (src/Core, src/Analyzers, src/Formatting, src/Sdk/Gsharp.Runtime.Channels,
+  # tools/cs2gs) that would break the self-migration pipeline are caught early.
+  # By making it depend on the fast test suite (build, tests, test-partition, etc.),
+  # we avoid wasting ~45 min of compute on a diff that fails unit tests.
+  #
+  # This is the new authoritative PR-time gate (replaces standalone cs2gs-pr-guard.yml
+  # for required checks). It only runs on PRs, not on main or tags.
+  hot-core-translation-guard:
+    name: hot-core translation guard
+    runs-on: ubuntu-latest
+    needs: [build, tests, test-partition, e2e, ilverify, nullable-hygiene, cs2gs-corpus]
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Test PR guard control and failure propagation
+        run: ./build/test-cs2gs-selfmig-pr-guard.sh
+
+      - name: Detect changes that can affect the guard
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run_guard=true
+          changed_paths="$RUNNER_TEMP/cs2gs-pr-guard-paths"
+          if git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"; then
+            if ./build/cs2gs-pr-guard-control.sh relevant-paths < "$changed_paths"; then
+              :
+            else
+              helper_status=$?
+              if (( helper_status == 1 )); then
+                run_guard=false
+              else
+                echo "::warning title=Path classification failed::Classifier exited $helper_status; running guard."
+              fi
+            fi
+          else
+            diff_status=$?
+            echo "::warning title=PR diff failed::git diff exited $diff_status; running guard."
+          fi
+          echo "run=$run_guard" >> "$GITHUB_OUTPUT"
+
+      - name: Report unaffected change
+        if: steps.scope.outputs.run != 'true'
+        run: |
+          {
+            echo "### cs2gs PR translation guard"
+            echo
+            echo "Skipped: this PR changes no input that can affect the hot-core translation guard."
+            echo
+            echo "The required check still reports; no translation, compile, ILVerify, or parity gate was needed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup .NET SDK
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        if: steps.scope.outputs.run == 'true'
+        run: dotnet restore GSharp.sln --locked-mode
+
+      - name: Restore .NET local tools
+        if: steps.scope.outputs.run == 'true'
+        run: dotnet tool restore
+
+      - name: Migrate and compile the hot core
+        if: steps.scope.outputs.run == 'true'
+        env:
+          SELFMIG_PR_GUARD_ROOT: /tmp/gsharp-cs2gs-pr-guard
+        run: ./build/run-cs2gs-selfmig-pr-guard.sh
+
+      - name: Upload guard artifacts
+        if: always() && steps.scope.outputs.run == 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: hot-core-guard-artifacts
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            /tmp/gsharp-cs2gs-pr-guard/guard.log
+            /tmp/gsharp-cs2gs-pr-guard/runs/**/*.json
+            /tmp/gsharp-cs2gs-pr-guard/runs/**/report.html
+            /tmp/gsharp-cs2gs-pr-guard/runs/**/sdk.build.log
+            /tmp/gsharp-cs2gs-pr-guard/migrated/**/*.gs
+
   publish:
     runs-on: ubuntu-latest
     needs: [build, tests, test-partition, e2e, ilverify, cs2gs-corpus, cs2gs-oahu, cs2gs-code-exploder, vsix, visual-studio-extension]

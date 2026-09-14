@@ -1,5 +1,13 @@
 name: cs2gs-pr-guard
 
+# DEPRECATED: As of September 2026, the authoritative PR-time hot-core translation
+# guard has moved to build.yml (hot-core-translation-guard job). This workflow is now
+# advisory/legacy and runs only on manual dispatch or for backwards compatibility.
+#
+# See build.yml for the required check that runs after the fast test suite passes.
+# This achieves the original goal (catch migration defects on PR) while avoiding
+# wasted compute on diffs that fail unit tests.
+
 # Issue #3836: the PR-time translation guard for the self-migration effort
 # (#3501).
 #
@@ -82,10 +90,18 @@ name: cs2gs-pr-guard
 # covers an on-demand run.
 
 on:
+  # As of Sept 2026, the authoritative PR-time hot-core translation guard has moved
+  # to build.yml (hot-core-translation-guard job). That job runs after the fast test
+  # suite (~20 min) passes, avoiding wasted compute on PRs with failing unit tests.
+  #
+  # This workflow is now advisory/manual only. It can be triggered on-demand via
+  # workflow_dispatch for explicit validation. See build.yml for the required check.
+  workflow_dispatch:
+  # Kept for backwards compatibility with external tooling that may reference this.
+  # New PRs will be gated by build.yml instead.
   pull_request:
     branches:
       - main
-  workflow_dispatch:
 
 env:
   # See build.yml: parallel MSBuild nodes corrupt $GITHUB_ENV via
