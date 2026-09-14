@@ -362,6 +362,8 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     [InlineData("BuildArray(() => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildNestedArray(() => type.FullName).OfType<string[]>().Count()", false, "1")]
     [InlineData("BuildNestedList(() => type.FullName).OfType<List<string>>().Count()", false, "1")]
+    [InlineData("BuildNestedValues(() => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildUnrelatedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
     public void CallbackResult_BeforeOfType_PreservesRequiredBridgesAndRuns(
         string invocation,
         bool requiresBridge,
@@ -389,6 +391,15 @@ public sealed class Issue4180NullableSelectResultRegressionTests
 
                 static IEnumerable<List<T>> BuildNestedList<T>(Func<T> selector) =>
                     new[] { new List<T> { selector() } };
+
+                static Dictionary<int, T>.ValueCollection BuildNestedValues<T>(Func<T> selector) =>
+                    new Dictionary<int, T> { { 0, selector() } }.Values;
+
+                static Dictionary<int, int>.ValueCollection BuildUnrelatedValues<T>(Func<T> selector)
+                {
+                    selector();
+                    return new Dictionary<int, int> { { 0, 42 } }.Values;
+                }
 
                 static int Run(Type type) => INVOCATION;
 
@@ -419,6 +430,11 @@ public sealed class Issue4180NullableSelectResultRegressionTests
                 compileExit == 0,
                 "gsc must compile the translated probe. Output:\n" + compileOutput
                     + "\n\nTranslated G#:\n" + printed);
+
+            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "the compiled probe must run. Output:\n" + output);
+            Assert.Equal(expectedOutput, output.Trim());
+
             if (requiresBridge)
             {
                 Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
@@ -427,14 +443,50 @@ public sealed class Issue4180NullableSelectResultRegressionTests
             {
                 Assert.DoesNotContain("type.FullName!!", printed, StringComparison.Ordinal);
             }
-
-            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
-            Assert.True(runExit == 0, "the compiled probe must run. Output:\n" + output);
-            Assert.Equal(expectedOutput, output.Trim());
         }
         finally
         {
             TryDelete(workDir);
+        }
+    }
+
+    [Theory]
+    [InlineData("Outer<T>.Rows", false)]
+    [InlineData("Outer<T>.Middle.Rows", false)]
+    [InlineData("Outer<int>.Rows", true)]
+    public void NestedContainingTypeSelectorResult_PreservesRequiredBridge(
+        string returnType,
+        bool requiresBridge)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public class Outer<T>
+            {
+                public class Rows : List<T> { }
+
+                public class Middle
+                {
+                    public class Rows : List<T> { }
+                }
+            }
+
+            public static class Probe
+            {
+                static RETURN_TYPE Build<T>(Func<T> selector) => throw new NotImplementedException();
+                public static int Run(Type type) => Build(() => type.FullName).OfType<string>().Count();
+            }
+            """.Replace("RETURN_TYPE", returnType, StringComparison.Ordinal));
+
+        if (requiresBridge)
+        {
+            Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("type.FullName!!", printed, StringComparison.Ordinal);
         }
     }
 

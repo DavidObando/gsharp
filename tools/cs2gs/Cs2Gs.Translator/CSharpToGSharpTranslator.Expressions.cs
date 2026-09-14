@@ -3901,8 +3901,10 @@ public sealed partial class CSharpToGSharpTranslator
             || (type is IArrayTypeSymbol array
                 && ContainsSelectorResult(array.ElementType, resultParameter))
             || (type is INamedTypeSymbol named
-                && named.TypeArguments.Any(argument =>
-                    ContainsSelectorResult(argument, resultParameter)));
+                && (named.TypeArguments.Any(argument =>
+                        ContainsSelectorResult(argument, resultParameter))
+                    || (named.ContainingType is { } containingType
+                        && ContainsSelectorResult(containingType, resultParameter))));
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)
         {
