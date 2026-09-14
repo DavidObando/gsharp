@@ -3,6 +3,10 @@
 // </copyright>
 
 using System;
+using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.Translator;
+using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -505,6 +509,41 @@ public class Issue4212NamedFunctionInvocationTests
                 }
             }
             """, "32:23");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Delegate_EntryPointRefSpillsStayStackLocal(bool topLevel, bool returnsValue)
+    {
+        string returnType = returnsValue ? "int" : "void";
+        string declaration = $"public delegate {returnType} D(int a, ref int cell, int bonus = 100);";
+        string body = $$"""
+            int[] order = new int[1];
+            int[] cells = new int[1];
+            D d = (int a, ref int cell, int bonus) =>
+            {
+                cell = a + bonus;
+                {{(returnsValue ? "return cell;" : string.Empty)}}
+            };
+            {{(returnsValue ? "int result = " : string.Empty)}}d(
+                cell: ref cells[(order[0] = 1) - 1], a: (order[0] = order[0] * 10 + 2) - 7);
+            System.Console.WriteLine({{(returnsValue ? "result" : "cells[0]")}} + ":" + order[0]);
+            """;
+        string source = topLevel
+            ? body + "\n" + declaration
+            : declaration + "\npublic static class Program { public static void Main() { " + body + " } }";
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Program.cs", source) },
+            outputKind: OutputKind.ConsoleApplication);
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        TranslationTestValidation.AssertBinds(printed);
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, string.Empty, "105:12");
     }
 
     private static string Verify(string source, string expected)

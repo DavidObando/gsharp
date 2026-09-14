@@ -40,9 +40,32 @@ public sealed partial class CSharpToGSharpTranslator
 
                 // Keep reordered operands at the call's evaluation point, not
                 // ahead of a sibling expression, loop condition or null guard.
-                return this.TranslateWithLocalAssignmentSeam(
+                GExpression translated = this.TranslateWithLocalAssignmentSeam(
                     invocation,
                     () => this.TranslateInvocationCore(invocation, snapshotDelegateTarget: true));
+                if (translated is BlockExpression block
+                    && this.entryType != null
+                    && SymbolEqualityComparer.Default.Equals(
+                        this.context.SemanticModel.GetEnclosingSymbol(invocation.SpanStart),
+                        this.context.Compilation.GetEntryPoint(default))
+                    && block.Statements.OfType<LocalDeclarationStatement>().Any(s => s.IsRefAlias))
+                {
+                    // G# top-level locals are static fields, even in a block
+                    // expression. A managed reference needs a stack frame.
+                    var statements = block.Statements.ToList();
+                    bool returnsVoid = this.context.GetTypeInfo(invocation).Type?.SpecialType
+                        == SpecialType.System_Void;
+                    statements.Add(returnsVoid
+                        ? new ExpressionStatement(block.Value)
+                        : new ReturnStatement(block.Value));
+                    return new InvocationExpression(
+                        new ParenthesizedExpression(new LambdaExpression(
+                            Array.Empty<Parameter>(),
+                            blockBody: new BlockStatement(statements))),
+                        Array.Empty<GExpression>());
+                }
+
+                return translated;
             }
 
             return this.TranslateInvocationCore(invocation);
