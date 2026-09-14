@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Xml.Linq;
 using Cs2Gs.Pipeline;
 using Xunit;
 
@@ -79,6 +81,25 @@ public class Issue2317ProjectReferenceTests
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
 
         Assert.Empty(rewritten);
+    }
+
+    [Fact]
+    public void RewriteProjectReferences_NullInputsKeepTheirDeclaredContract()
+    {
+        MethodInfo method = typeof(DeclaredProjectItems).GetMethod(
+            nameof(DeclaredProjectItems.RewriteProjectReferences),
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        var nullability = new NullabilityInfoContext();
+        Assert.Equal(NullabilityState.Nullable, nullability.Create(method.GetParameters()[0]).ReadState);
+        Assert.Equal(NullabilityState.Nullable, nullability.Create(method.GetParameters()[2]).ReadState);
+        Assert.Empty(DeclaredProjectItems.RewriteProjectReferences(null, AppContext.BaseDirectory, null));
+
+        var item = new DeclaredProjectItem(null, new XElement("ProjectReference", new XAttribute("Include", "Lib.csproj")));
+        DeclaredProjectItem rewritten = Assert.Single(DeclaredProjectItems.RewriteProjectReferences(
+            new[] { item }, AppContext.BaseDirectory, null));
+        Assert.Equal("Lib.csproj", rewritten.Element.Attribute("Include")?.Value);
+        Assert.NotSame(item.Element, rewritten.Element);
     }
 
     [Fact]

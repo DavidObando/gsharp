@@ -49,7 +49,7 @@ public class ConstructInventoryGoldenTests
     public void Inventory_IsValid_AndCoversTheSurface()
     {
         ConstructInventory inventory = LoadInventory();
-        IReadOnlyList<string> errors = inventory.Validate(RepoRoot());
+        IReadOnlyList<string> errors = inventory.Validate(TestFixtureSource.Root);
         Assert.True(errors.Count == 0, "construct inventory violations:\n" + string.Join("\n", errors));
     }
 

@@ -28,7 +28,7 @@ public class Issue4072Stage4FixtureContractTests
             "tools", "cs2gs", "corpus", "L4-Console", "L4-Console.csproj")));
 
         string unsupported = TestFixtureSource.Resolve(
-            "tools", "cs2gs", "Cs2Gs.Tests", "Fixtures", "Grid", "Unsupported", "MakeRefExpression.cs");
+            "tools", "cs2gs", "Cs2Gs.Tests", "Fixtures", "Grid", "Unsupported", "MakeRefExpression.cs.txt");
         Assert.Contains("__makeref", File.ReadAllText(unsupported), StringComparison.Ordinal);
 
         string coreProjectPath = TestFixtureSource.Resolve("src", "Core", "Core.csproj");
