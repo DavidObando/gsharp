@@ -365,6 +365,8 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     [InlineData("BuildNestedValues(() => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildUnrelatedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
     [InlineData("BuildKeyedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildIntRows(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildObjectRows(() => type.FullName).OfType<int>().Count()", true, "1")]
     [InlineData("BuildUnrelatedParams(42, () => type.FullName).OfType<int>().Count()", true, "1")]
     [InlineData("BuildTask(async () => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildTask(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", false, "0")]
@@ -384,6 +386,9 @@ public sealed class Issue4180NullableSelectResultRegressionTests
             using System.Collections.Generic;
             using System.Linq;
             using System.Threading.Tasks;
+
+            public class IntRows<T> : List<int> { }
+            public class ObjectRows<T> : System.Collections.ArrayList { }
 
             public static class Probe
             {
@@ -408,6 +413,22 @@ public sealed class Issue4180NullableSelectResultRegressionTests
 
                 static Dictionary<T, int>.ValueCollection BuildKeyedValues<T>(Func<T> selector) =>
                     new Dictionary<T, int> { { selector(), 42 } }.Values;
+
+                static IntRows<T> BuildIntRows<T>(Func<T> selector)
+                {
+                    selector();
+                    var rows = new IntRows<T>();
+                    rows.Add(42);
+                    return rows;
+                }
+
+                static ObjectRows<T> BuildObjectRows<T>(Func<T> selector)
+                {
+                    selector();
+                    var rows = new ObjectRows<T>();
+                    rows.Add(42);
+                    return rows;
+                }
 
                 static Dictionary<int, int>.ValueCollection BuildUnrelatedValues<T>(Func<T> selector)
                 {

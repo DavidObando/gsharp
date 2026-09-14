@@ -3909,12 +3909,23 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ITypeSymbol resultType = genericMethod.ReturnType;
-            if (resultType is INamedTypeSymbol { ContainingType: not null } nested
-                && nested.AllInterfaces.FirstOrDefault(iface =>
-                    iface.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
-                    is { } enumerable)
+            if (resultType is INamedTypeSymbol namedResult)
             {
-                resultType = GetEnumerableElementType(enumerable);
+                INamedTypeSymbol enumerable =
+                    namedResult.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T
+                        ? namedResult
+                        : namedResult.AllInterfaces.FirstOrDefault(iface =>
+                            iface.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T);
+                if (enumerable != null)
+                {
+                    resultType = GetEnumerableElementType(enumerable);
+                }
+                else if (namedResult.SpecialType == SpecialType.System_Collections_IEnumerable
+                    || namedResult.AllInterfaces.Any(iface =>
+                        iface.SpecialType == SpecialType.System_Collections_IEnumerable))
+                {
+                    return false;
+                }
             }
 
             return ContainsSelectorResult(resultType, resultParameter);
