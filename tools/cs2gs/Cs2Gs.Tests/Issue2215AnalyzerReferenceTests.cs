@@ -29,7 +29,7 @@ public class Issue2215AnalyzerReferenceTests
     public void ResolveGsgenTool_TriesGscLocationBeforeWorkingDirectoryFallback()
     {
         string testRoot = Path.Combine(
-            Path.GetTempPath(),
+            AppContext.BaseDirectory,
             nameof(ResolveGsgenTool_TriesGscLocationBeforeWorkingDirectoryFallback),
             Guid.NewGuid().ToString("N"));
         string gscRoot = Path.Combine(testRoot, "gsc-root");
@@ -50,7 +50,7 @@ public class Issue2215AnalyzerReferenceTests
                 GscInvoker.ResolveGsgenTool(cwdGsgen, "Release"));
             Assert.Equal(
                 cwdGsgen,
-                GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
+                GscInvoker.ResolveGsgenTool(null, "Release", " ", cwdStart));
 
             string gscRelativeGsgen = Path.Combine(
                 gscRoot,
@@ -65,11 +65,16 @@ public class Issue2215AnalyzerReferenceTests
             Assert.Equal(
                 gscRelativeGsgen,
                 GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
+            Assert.Equal(
+                cwdGsgen,
+                GscInvoker.ResolveGsgenTool(cwdGsgen, "Release", gscDirectory, cwdStart));
         }
         finally
         {
             TryDelete(testRoot);
         }
+
+        Assert.False(Directory.Exists(testRoot));
     }
 
     [Fact]

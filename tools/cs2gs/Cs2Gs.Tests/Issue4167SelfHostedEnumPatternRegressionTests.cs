@@ -44,7 +44,7 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         @"(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind|SyntaxKind|DiagnosticSeverity)";
 
     private static readonly Regex RoslynEnumPropertyPattern = new(
-        @":\s*(?:not\s+)?(?:[A-Za-z_]\w*\.)*(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind)\.\w+",
+        @":\s*(?:not\s+|\(\s*)*(?:[A-Za-z_]\w*\.)*(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind)\.\w+",
         RegexOptions.CultureInvariant);
 
     private static readonly Regex RoslynEnumDirectPattern = new(
@@ -56,6 +56,14 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
     [InlineData("kind is (not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement))")]
     public void DirectPatternGuard_CatchesParenthesizedAndNestedNot(string source) =>
         Assert.Matches(RoslynEnumDirectPattern, source);
+
+    [Theory]
+    [InlineData("symbol is IParameterSymbol { RefKind: (RefKind.Out or RefKind.Ref) }")]
+    [InlineData("symbol is ITypeSymbol { TypeKind: not (TypeKind.Enum or TypeKind.Delegate) }")]
+    [InlineData("symbol is IMethodSymbol { MethodKind: (not (MethodKind.LocalFunction)) }")]
+    [InlineData("symbol is ITypeSymbol { SpecialType: (Microsoft.CodeAnalysis.SpecialType.System_Object) }")]
+    public void PropertyPatternGuard_CatchesParenthesizedAndNestedNot(string source) =>
+        Assert.Matches(RoslynEnumPropertyPattern, source);
 
     /// <summary>
     /// Translates cs2gs's own <c>CSharpToGSharpTranslator.Types.cs</c> with
@@ -121,9 +129,9 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
                          "*.cs",
                          SearchOption.AllDirectories))
             {
-                Assert.DoesNotMatch(
-                    RoslynEnumDirectPattern,
-                    StripComments(File.ReadAllText(sourcePath)));
+                string code = StripComments(File.ReadAllText(sourcePath));
+                Assert.DoesNotMatch(RoslynEnumPropertyPattern, code);
+                Assert.DoesNotMatch(RoslynEnumDirectPattern, code);
             }
         }
 
