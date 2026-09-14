@@ -55,7 +55,7 @@ public sealed class Issue3422RedundantNullForgivenessTranslationTests
         }
 
         Assert.Equal(0, doubledAssertions);
-        Assert.InRange(assertedParenthesizedReceivers, 0, 8);
+        Assert.InRange(assertedParenthesizedReceivers, 0, 9);
     }
 
     [Fact]

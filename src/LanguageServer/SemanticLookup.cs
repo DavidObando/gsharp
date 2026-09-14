@@ -488,6 +488,41 @@ public static class SemanticLookup
         System.Threading.Interlocked.Exchange(ref functionLocalsCacheMisses, 0);
     }
 
+    internal static ExpressionSyntax? GetInitializerTarget(CollectionInitializerExpressionSyntax initializer)
+    {
+        var target = initializer.Target;
+        if (target == null)
+        {
+            if (initializer.Parent is FieldInitializerSyntax member
+                && member.Parent is MemberCollectionElementSyntax { Parent: CollectionInitializerExpressionSyntax owner } designator
+                && GetInitializerTarget(owner) is { } ownerTarget)
+            {
+                return new AccessorExpressionSyntax(
+                    initializer.SyntaxTree,
+                    ownerTarget,
+                    designator.DotToken,
+                    new NameExpressionSyntax(initializer.SyntaxTree, member.FieldIdentifier));
+            }
+
+            return null;
+        }
+
+        // Qualification lives outside the initializer in right-nested access
+        // syntax. Keep that prefix, but not accesses on the initialized result.
+        SyntaxNode current = initializer;
+        while (current.Parent is AccessorExpressionSyntax accessor)
+        {
+            if (ReferenceEquals(accessor.RightPart, current))
+            {
+                target = new AccessorExpressionSyntax(initializer.SyntaxTree, accessor.LeftPart, accessor.DotToken, target);
+            }
+
+            current = accessor;
+        }
+
+        return target;
+    }
+
     private static FunctionSymbol? FindFunctionSymbol(Compilation compilation, FunctionDeclarationSyntax declaration)
     {
         foreach (var function in compilation.GlobalScope.Functions)

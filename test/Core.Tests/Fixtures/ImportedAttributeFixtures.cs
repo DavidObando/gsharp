@@ -137,3 +137,54 @@ public sealed class ImportedGreeter
     /// <returns>A greeting string.</returns>
     public string Greet(string name) => $"Hello, {name}!";
 }
+
+/// <summary>
+/// ADR-0180 / issue #3785 regression fixture: an imported (plain, non-record)
+/// CLR reference type whose only <c>Add</c> overload declares a TRAILING
+/// <c>params</c> array after one fixed parameter. Not a semantic-aggregate
+/// candidate (no <c>GSharp.TypeSemantics</c> marker, not a C# record shape),
+/// so a composite literal targeting it always routes through the plain
+/// imported-type literal binder rather than the semantic-aggregate path —
+/// exercising the raw-reflection <c>ParameterInfo[]</c> capability probe
+/// directly. <c>Add("x")</c> is callable with a single argument via normal
+/// C#-style params expansion, so the probe must recognize it and let overload
+/// resolution do the rest, rather than reject it up front.
+/// </summary>
+public sealed class ImportedParamsAddCollection
+{
+    private readonly System.Collections.Generic.List<string> items = new();
+
+    /// <summary>Gets or sets the explicit initializer member.</summary>
+    public int Tag { get; set; }
+
+    /// <summary>Gets the items added so far, in order.</summary>
+    public System.Collections.Generic.IReadOnlyList<string> Items => items;
+
+    /// <summary>Adds <paramref name="item"/>, then each of <paramref name="rest"/> in order.</summary>
+    /// <param name="item">The fixed leading item.</param>
+    /// <param name="rest">Trailing variadic items.</param>
+    public void Add(string item, params string[] rest)
+    {
+        items.Add(item);
+        items.AddRange(rest);
+    }
+}
+
+/// <summary>A collection whose Add combines a trailing optional and params argument.</summary>
+public sealed class ImportedOptionalParamsAddCollection
+{
+    /// <summary>Gets or sets the explicit initializer member.</summary>
+    public int Tag { get; set; }
+
+    /// <summary>Gets the number of inserted items.</summary>
+    public int Count { get; private set; }
+
+    /// <summary>Adds the supplied items.</summary>
+    /// <param name="item">The first item.</param>
+    /// <param name="trace">An optional fixed argument.</param>
+    /// <param name="rest">The trailing items.</param>
+    public void Add(string item, bool trace = false, params string[] rest)
+    {
+        Count += 1 + rest.Length;
+    }
+}

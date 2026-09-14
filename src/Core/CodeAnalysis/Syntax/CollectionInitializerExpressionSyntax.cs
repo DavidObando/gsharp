@@ -10,19 +10,20 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// <c>List[int32]{1, 2, 3}</c>, <c>HashSet[int32](){1, 2}</c>,
 /// <c>Dictionary[string, int32]{"a": 1}</c>, and
 /// <c>Dictionary[K, V](comparer){ ["k"] = v }</c>, and
-/// <c>List[T](){ ...items }</c>.
+/// <c>List[T](){ ...items }</c>. ADR-0180 also admits explicit receiver
+/// members in lexical order, e.g. <c>List[int32](4){ .Capacity: 8, 1, ...items }</c>.
 /// <para>
 /// The <see cref="Target"/> is the constructor call expression (a
 /// <see cref="CallExpressionSyntax"/> carrying the type-argument list and any
 /// explicit constructor arguments). For the no-parentheses spelling
 /// (<c>List[int32]{…}</c>) the parser synthesizes an empty-argument
 /// constructor call as the target. Each element in <see cref="Elements"/> is
-/// one of the three <see cref="CollectionElementSyntax"/> shapes; a spread is
+/// one of the <see cref="CollectionElementSyntax"/> shapes; a spread is
 /// an <see cref="ExpressionCollectionElementSyntax"/> containing a
 /// <see cref="SpreadElementExpressionSyntax"/>. The binder
 /// lowers this to a <see cref="GSharp.Core.CodeAnalysis.Binding.BoundBlockExpression"/>
 /// that constructs into a synthetic local, calls <c>Add(...)</c> / sets the
-/// indexer for each element, and yields the local.
+/// indexer or an explicitly designated member for each element, and yields the local.
 /// </para>
 /// <para>
 /// Issue #1567: <see cref="Target"/> is <see langword="null"/> for the

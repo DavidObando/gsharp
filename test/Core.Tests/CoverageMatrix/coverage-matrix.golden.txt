@@ -158,6 +158,7 @@ MakeChannelExpression
 MapCreationExpression
 MapEntry
 MapKeyword
+MemberCollectionElement
 MemberFieldAssignmentExpression
 MemberIndexAssignmentExpression
 MinusEqualsToken
@@ -242,6 +243,7 @@ StaticInitializerBlock
 StringToken
 StructDeclaration
 StructKeyword
+StructLiteralContentElement
 StructLiteralExpression
 SuspendKeyword
 SwitchCase

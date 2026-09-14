@@ -204,6 +204,7 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax current = syntax;
         CallExpressionSyntax? terminalCall = null;
         ObjectCreationExpressionSyntax? terminalObjectCreation = null;
+        CollectionInitializerExpressionSyntax? terminalCollectionInitializer = null;
         ExpressionSyntax? trailingAccess = null;
         while (true)
         {
@@ -239,6 +240,14 @@ internal sealed partial class ExpressionBinder
                     break;
                 }
 
+                if (accessor.LeftPart is CollectionInitializerExpressionSyntax { Target: CallExpressionSyntax nestedCollectionCall } nestedCollection)
+                {
+                    terminalCall = nestedCollectionCall;
+                    terminalCollectionInitializer = nestedCollection;
+                    trailingAccess = accessor.RightPart;
+                    break;
+                }
+
                 return false;
             }
 
@@ -252,6 +261,13 @@ internal sealed partial class ExpressionBinder
             {
                 terminalCall = objectCall;
                 terminalObjectCreation = objectCreation;
+                break;
+            }
+
+            if (current is CollectionInitializerExpressionSyntax { Target: CallExpressionSyntax collectionCall } collectionInitializer)
+            {
+                terminalCall = collectionCall;
+                terminalCollectionInitializer = collectionInitializer;
                 break;
             }
 
@@ -342,6 +358,13 @@ internal sealed partial class ExpressionBinder
                 Invariant.Required(
                     result,
                     "a successful qualified constructor binding produces a bound target"));
+        }
+
+        if (handled && terminalCollectionInitializer != null)
+        {
+            result = BindCollectionInitializerSuffix(
+                terminalCollectionInitializer,
+                Invariant.Required(result, "a qualified constructor produces an initializer receiver"));
         }
 
         if (handled && trailingAccess != null && result is not BoundErrorExpression)
@@ -546,6 +569,10 @@ internal sealed partial class ExpressionBinder
         int arity;
         switch (remainder)
         {
+            case CollectionInitializerExpressionSyntax { Target: { } target }:
+                return RemainderHeadIsSourceType(target);
+            case AccessorExpressionSyntax { LeftPart: CollectionInitializerExpressionSyntax collection }:
+                return RemainderHeadIsSourceType(collection);
             case CallExpressionSyntax call when !call.Identifier.IsMissing:
                 simpleName = call.Identifier.ValueText;
                 arity = call.TypeArgumentList?.Arguments.Count ?? 0;

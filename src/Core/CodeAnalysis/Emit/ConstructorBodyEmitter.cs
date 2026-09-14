@@ -425,33 +425,7 @@ internal sealed class ConstructorBodyEmitter
     /// <param name="structSym">The struct definition to probe.</param>
     /// <returns><see langword="true"/> when the synthesized parameterless ctor is required.</returns>
     internal static bool NeedsSynthesizedValueStructDefaultCtor(StructSymbol structSym)
-    {
-        if (structSym.IsClass || structSym.IsInline || structSym.InstanceFieldInitializers.IsEmpty)
-        {
-            return false;
-        }
-
-        if (!structSym.ExplicitConstructors.IsDefaultOrEmpty)
-        {
-            foreach (var ctor in structSym.ExplicitConstructors)
-            {
-                if (ctor.Parameters.Length == 0)
-                {
-                    return false;
-                }
-            }
-        }
-
-        foreach (var initializer in structSym.InstanceFieldInitializers)
-        {
-            if (initializer.Key.Accessibility != Accessibility.Public)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+        => structSym.NeedsSynthesizedValueStructDefaultCtor;
 
     /// <summary>
     /// Issue #3219: builds the IL body for the synthesized parameterless

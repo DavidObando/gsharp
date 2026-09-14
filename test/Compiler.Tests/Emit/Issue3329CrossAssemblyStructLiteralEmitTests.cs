@@ -310,6 +310,72 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
         Assert.Equal($"0{Environment.NewLine}", CompileAndRun(source));
     }
 
+    [Fact]
+    public void PlainStruct_MixedCompositeInitializerAddTouchesOmittedField_ZeroInitBeforeOrderedAdd()
+    {
+        // ADR-0180 reviewer finding: the ordered content-element/spread Add(...)
+        // calls a mixed composite initializer lowers to (Basket{ Touches: 0, 1, 2,
+        // ...extra }) must not run before this struct's own #3329/ADR-0159
+        // magic-collection zero-value reconstruction — otherwise Add's own body,
+        // which reads the omitted `Items` slice field, observes the raw (unsound)
+        // CLR null instead of a zero-initialized empty slice and NREs on the very
+        // first Add.
+        const string library = """
+            package i3785lib1
+
+            struct Basket {
+                public var Items []int32
+                public var Touches int32
+                func Add(item int32) {
+                    Touches = Touches + Items.Length + item
+                }
+            }
+            """;
+
+        const string source = """
+            package i3785a
+            import System.Collections.Generic
+            import i3785lib1
+
+            func Main() {
+                let extra = List[int32]{ 3, 4 }
+                let b = Basket{ Touches: 0, 1, 2, ...extra }
+                System.Console.WriteLine(b.Touches)
+                System.Console.WriteLine(b.Items.Length)
+            }
+            """;
+
+        Assert.Equal($"10{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source, library, "i3785lib1"));
+    }
+
+    [Theory]
+    [InlineData("", "Basket{ Touches: 0, 1, Items: []int32{ 2 }, Counts: map[string, int32]{ \"last\": 3 } }")]
+    [InlineData("data ", "Basket{ Touches: 0, 1, Items: []int32{ 2 }, Counts: map[string, int32]{ \"last\": 3 } }")]
+    [InlineData("", "Basket(){ .Touches: 0, 1, .Items: []int32{ 2 }, .Counts: map[string, int32]{ \"last\": 3 } }")]
+    [InlineData("data ", "Basket(){ .Touches: 0, 1, .Items: []int32{ 2 }, .Counts: map[string, int32]{ \"last\": 3 } }")]
+    public void MixedInitializer_LaterExplicitMagicFieldsAreSoundBeforeAdd(string modifier, string initializer)
+    {
+        var library = $$"""
+            package i3785later
+            {{modifier}}struct Basket {
+                public var Items []int32
+                public var Counts map[string, int32]
+                public var Touches int32
+                func Add(item int32) {
+                    Touches = Touches + Items.Length + Counts.Count + item
+                }
+            }
+            """;
+        var source = $$"""
+            import i3785later
+            let value = {{initializer}}
+            System.Console.WriteLine(value.Touches)
+            System.Console.WriteLine(value.Items.Length)
+            System.Console.WriteLine(value.Counts.Count)
+            """;
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source, library, "i3785later"));
+    }
+
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3329_").FullName;
