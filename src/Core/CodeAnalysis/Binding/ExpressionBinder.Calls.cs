@@ -967,15 +967,28 @@ internal sealed partial class ExpressionBinder
         return requiredParamCount <= 1;
     }
 
+    // Reviewer finding: mirrors the FunctionSymbol overload above — a
+    // TRAILING `params` array (e.g. an imported `Add(T item, params U[]
+    // rest)`) is callable with a single non-params argument, so it must not
+    // count toward the required parameter count. Only a params array in the
+    // LAST declared position qualifies; C# forbids it anywhere else.
     private static bool IsCallableWithSingleArgument(ParameterInfo[] parameters)
     {
-        if (parameters.Length == 0)
+        var paramLen = parameters.Length;
+        if (paramLen == 0)
         {
             return false;
         }
 
-        var requiredParamCount = parameters.Length;
-        for (var i = parameters.Length - 1; i >= 0; i--)
+        var isVariadic = HasParamArrayAttribute(parameters[paramLen - 1]);
+        var fixedParamCount = isVariadic ? paramLen - 1 : paramLen;
+        if (isVariadic)
+        {
+            return fixedParamCount <= 1;
+        }
+
+        var requiredParamCount = fixedParamCount;
+        for (var i = fixedParamCount - 1; i >= 0; i--)
         {
             if (!parameters[i].IsOptional)
             {
@@ -986,6 +999,22 @@ internal sealed partial class ExpressionBinder
         }
 
         return requiredParamCount <= 1;
+    }
+
+    private static bool HasParamArrayAttribute(ParameterInfo parameter)
+    {
+        foreach (var attribute in parameter.GetCustomAttributesData())
+        {
+            if (string.Equals(
+                attribute.AttributeType.FullName,
+                "System.ParamArrayAttribute",
+                StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

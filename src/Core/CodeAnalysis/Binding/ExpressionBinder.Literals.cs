@@ -1984,14 +1984,17 @@ internal sealed partial class ExpressionBinder
     /// <summary>
     /// ADR-0180 §B: rebinds a literal the parser tentatively read as
     /// `Type(){ ...source, Member: value }` as ADR-0117's
-    /// `funcCall(){ ...source, key: value }` collection initializer once the
-    /// binder has established <see cref="StructLiteralExpressionSyntax.TypeIdentifier"/>
-    /// does not name a type — reusing <see cref="StructLiteralExpressionSyntax.SourceCallTarget"/>
-    /// as the collection-initializer's construction target and converting
-    /// each element back into its ADR-0117 <see cref="CollectionElementSyntax"/>
+    /// `funcCall(){ ...source, key: value }` collection initializer, reusing
+    /// <see cref="StructLiteralExpressionSyntax.SourceCallTarget"/> as the
+    /// collection-initializer's construction target and converting each
+    /// element back into its ADR-0117 <see cref="CollectionElementSyntax"/>
     /// shape (a member `Identifier: value` becomes a keyed entry whose key is
     /// that identifier evaluated as an expression, exactly as the parser's
-    /// own collection-element grammar would have parsed it directly).
+    /// own collection-element grammar would have parsed it directly). Reached
+    /// either because <see cref="StructLiteralExpressionSyntax.TypeIdentifier"/>
+    /// does not name a type at all, or because it names a real type but at
+    /// least one `Identifier:` entry is not a member of it (see
+    /// <see cref="AllKeyedEntriesAreMembers"/>).
     /// </summary>
     private BoundExpression BindStructLiteralAsCollectionInitializerFallback(StructLiteralExpressionSyntax syntax)
     {
@@ -2019,6 +2022,78 @@ internal sealed partial class ExpressionBinder
             new SeparatedSyntaxList<CollectionElementSyntax>(elementsBuilder.ToImmutable()),
             syntax.CloseBraceToken);
         return BindCollectionInitializerExpression(collectionInitializer);
+    }
+
+    /// <summary>
+    /// ADR-0180 §B follow-up: true when every `Identifier:` (member) entry in
+    /// the literal names an actual field/property of <paramref
+    /// name="structSymbol"/>. Used only to disambiguate a retained
+    /// <see cref="StructLiteralExpressionSyntax.SourceCallTarget"/> whose head
+    /// happens to resolve to a real type — it does not report diagnostics, so
+    /// a `false` result can be redirected wholesale to the ADR-0117
+    /// collection-initializer fallback instead of surfacing a bogus
+    /// "unknown member" error. Content elements (bare/spread) are ignored: a
+    /// mismatch there does not exist since they carry no identifier to
+    /// resolve as a member.
+    /// </summary>
+    private static bool AllKeyedEntriesAreMembers(StructLiteralExpressionSyntax syntax, StructSymbol structSymbol)
+    {
+        foreach (var element in syntax.Elements)
+        {
+            if (element is not FieldInitializerSyntax fieldInit)
+            {
+                continue;
+            }
+
+            var name = fieldInit.FieldIdentifier.ValueText;
+            if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, name, MemberQuery.Instance(MemberKinds.Field), out _, out _))
+            {
+                continue;
+            }
+
+            if (TypeMemberModel.TryGetProperty(structSymbol, name, out _, out _))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0180 §B follow-up: the <see cref="Type"/>-based sibling of <see
+    /// cref="AllKeyedEntriesAreMembers"/> for a NON-aggregate imported CLR
+    /// type (<see cref="BindImportedTypeObjectInitializer"/>'s own member
+    /// resolution has no <see cref="StructSymbol"/> to query). Mirrors that
+    /// function's property-then-field lookup, including the indexer
+    /// exclusion, without reporting diagnostics.
+    /// </summary>
+    private static bool AllKeyedEntriesAreClrMembers(StructLiteralExpressionSyntax syntax, Type clrType)
+    {
+        foreach (var element in syntax.Elements)
+        {
+            if (element is not FieldInitializerSyntax fieldInit)
+            {
+                continue;
+            }
+
+            var name = fieldInit.FieldIdentifier.ValueText;
+            MemberInfo? member = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrType, name, BindingFlags.Public | BindingFlags.Instance);
+            if (member is PropertyInfo indexerProperty && indexerProperty.GetIndexParameters().Length != 0)
+            {
+                member = null;
+            }
+
+            member ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrType, name, BindingFlags.Public | BindingFlags.Instance);
+            if (member == null)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -2288,6 +2363,22 @@ internal sealed partial class ExpressionBinder
         }
 
         structSymbol = Invariant.Required(structSymbol, "a valid struct literal resolves to a struct symbol");
+
+        // ADR-0180 §B follow-up: the explicit-parens lookahead that retains
+        // SourceCallTarget also matches a valid ADR-0117 typed collection
+        // initializer whose head names a real type
+        // (`Dictionary[string, int32](){ ...pairs, key: 2 }`) — that call
+        // resolves to `structSymbol` here, so the `structSymbol == null`
+        // fallback above never fires and `key` would otherwise be reported as
+        // a missing member. Disambiguate non-breakingly: this is a genuine
+        // mixed composite only if EVERY `Identifier:` entry actually names a
+        // member of the resolved type; if ANY does not, the whole literal is
+        // re-read as ADR-0117's collection initializer over the retained call
+        // target (each `Identifier: value` becomes a keyed `Add` entry).
+        if (syntax.SourceCallTarget != null && !AllKeyedEntriesAreMembers(syntax, structSymbol))
+        {
+            return BindStructLiteralAsCollectionInitializerFallback(syntax);
+        }
 
         // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a
         // use of the named type.
@@ -3020,6 +3111,21 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindImportedTypeObjectInitializer(StructLiteralExpressionSyntax syntax, Type clrType, TypeSymbol resultType, BoundExpression construction)
     {
+        // ADR-0180 §B follow-up: the explicit-parens lookahead that retains
+        // SourceCallTarget also matches a valid ADR-0117 typed collection
+        // initializer over a NON-aggregate imported CLR type (e.g.
+        // `Dictionary[string, int32](){ ...pairs, key: 2 }` — `Dictionary` is
+        // not a semantic aggregate, so it lowers through THIS function
+        // instead of the primary struct-literal path, which has the sibling
+        // check right after it resolves `structSymbol`). Same disambiguation:
+        // stay a mixed composite only if EVERY `Identifier:` entry names a
+        // real member of `clrType`; otherwise re-read the whole literal as
+        // ADR-0117's collection initializer over the retained call target.
+        if (syntax.SourceCallTarget != null && !AllKeyedEntriesAreClrMembers(syntax, clrType))
+        {
+            return BindStructLiteralAsCollectionInitializerFallback(syntax);
+        }
+
         // ADR-0180: a bare content element or `...source` content spread on an
         // imported CLR type (e.g. `List[int32]{ Capacity: 1, 2 }`) lowers to
         // Add(...) through the same accessor-call binder as the primary

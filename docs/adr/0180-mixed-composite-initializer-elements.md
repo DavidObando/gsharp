@@ -172,6 +172,23 @@ new element kinds that can now legally follow a member:
   actually present in source, not an inferred one**, so classification stays
   purely syntactic and never depends on whether `Type` happens to also be
   structurally projectable from `source`.
+- **The explicit-parens marker also matches a valid ADR-0117 typed collection
+  initializer whose head happens to name a real type** — e.g.
+  `Dictionary[string, int32](){ ...pairs, key: 2 }` has the exact same
+  "comma, then `Identifier ':'`" token shape as the composite marker above,
+  and unlike the `makeMap(){ ...pairs, key: value }` case (where `makeMap` is
+  a function, so the parser's tentative read is undone once the binder finds
+  no such type), `Dictionary[string, int32]` *does* resolve to a type, so the
+  binder cannot rule out the composite reading on resolution failure alone.
+  This is resolved in the **binder**, not the parser, and non-breakingly:
+  once the head resolves to a type, the literal stays a composite (member
+  family) only if **every** `Identifier: value` entry actually names a member
+  (field or settable property) of the resolved type; if **any** entry is not
+  a member, the whole literal is re-read as ADR-0117's collection initializer
+  over the same retained call target instead (each `Identifier: value`
+  becomes a keyed `Add(key, value)` entry, exactly as `makeMap(){...}` above).
+  A literal with no keyed entries (only content elements/spreads) is
+  unaffected — the check is vacuously satisfied and stays a composite.
 
 This means a caller who wants a member initializer to *start* with children
 writes the explicit-parentheses form:

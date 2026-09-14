@@ -318,6 +318,60 @@ public class Issue3785MixedCompositeInitializerEmitTests
         Assert.Equal($"2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
+    [Fact]
+    public void TypedHead_LeadingSpreadThenNonMemberKeyedEntry_StaysAdr0117CollectionInitializer()
+    {
+        // Reviewer finding: `Dictionary[string, int32](){ ...pairs, key: 2 }`
+        // shares the exact "comma, Identifier ':'" token shape ADR-0180 §B
+        // reserves for a mixed composite, and — unlike the sibling
+        // `makeMap(){...}` case above — `Dictionary[string, int32]` DOES
+        // resolve to a real type, so the binder cannot rule out the composite
+        // reading merely because the head is a non-type. Disambiguate on the
+        // keyed entries themselves: `key` is not a member of `Dictionary`, so
+        // the whole literal must still be re-read as ADR-0117's collection
+        // initializer (a keyed `Add(key, value)` entry) rather than reporting
+        // `key` as an unknown member.
+        var source = """
+            package App
+            import System
+            import System.Collections.Generic
+
+            var pairs = Dictionary[string, int32]{ "a": 1 }
+            var key = "b"
+            var m = Dictionary[string, int32](){ ...pairs, key: 2 }
+            Console.WriteLine(m.Count)
+            Console.WriteLine(m["a"])
+            Console.WriteLine(m["b"])
+            """;
+
+        Assert.Equal($"2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void TypedHead_LeadingSpreadThenAllMemberKeyedEntries_StaysMixedComposite()
+    {
+        // Anti-vacuity partner to the test above: when the head resolves to a
+        // real type AND every `Identifier:` entry genuinely names a member of
+        // it (`Capacity` on the imported `List[int32]`), the literal must stay
+        // a mixed composite — member assignment plus ordered `Add` calls —
+        // not be misdiagnosed or wrongly redirected to ADR-0117 collection
+        // lowering.
+        var source = """
+            package App
+            import System
+            import System.Collections.Generic
+
+            var source = List[int32]{ 1, 2 }
+            var xs = List[int32](){ ...source, Capacity: 10 }
+            Console.WriteLine(xs.Capacity >= 10)
+            Console.WriteLine(xs.Count)
+            Console.WriteLine(xs[0])
+            Console.WriteLine(xs[1])
+            """;
+
+        Assert.Equal($"True{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var (exit, output, diagnostics) = Compile(source, run: true);
