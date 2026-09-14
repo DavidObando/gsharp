@@ -376,6 +376,9 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     [InlineData("BuildFixedValueTask(42, async () => type.FullName).OfType<int>().Count()", true, "1")]
     [InlineData("BuildTaskParams(async () => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildValueTaskParams(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildDirect(async () => type.FullName).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildDirect(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildDirectParams(async () => type.FullName).OfType<string>().Count()", true, "0")]
     public void CallbackResult_BeforeOfType_PreservesRequiredBridgesAndRuns(
         string invocation,
         bool requiresBridge,
@@ -401,6 +404,11 @@ public sealed class Issue4180NullableSelectResultRegressionTests
                 }
 
                 static T[] BuildArray<T>(Func<T> selector) => new[] { selector() };
+
+                static IEnumerable<T> BuildDirect<T>(Func<T> selector) => new[] { selector() };
+
+                static IEnumerable<T> BuildDirectParams<T>(params Func<T>[] selectors) =>
+                    new[] { selectors[0]() };
 
                 static IEnumerable<T[]> BuildNestedArray<T>(Func<T> selector) =>
                     new[] { new[] { selector() } };

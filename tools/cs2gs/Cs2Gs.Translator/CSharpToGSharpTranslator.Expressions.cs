@@ -3898,6 +3898,7 @@ public sealed partial class CSharpToGSharpTranslator
             };
             if (selectorType is not INamedTypeSymbol delegateType
                 || delegateType.TypeKind != TypeKind.Delegate
+                || (isAsync && !IsTaskLikeEnvelope(delegateType.DelegateInvokeMethod?.ReturnType))
                 || GetEffectiveReturnType(delegateType.DelegateInvokeMethod?.ReturnType, isAsync)
                     is not ITypeParameterSymbol resultParameter
                 || resultParameter.TypeParameterKind != TypeParameterKind.Method
