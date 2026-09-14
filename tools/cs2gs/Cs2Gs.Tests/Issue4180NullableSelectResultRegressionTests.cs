@@ -379,6 +379,15 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     [InlineData("BuildDirect(async () => type.FullName).OfType<string>().Count()", true, "0")]
     [InlineData("BuildDirect(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", true, "0")]
     [InlineData("BuildDirectParams(async () => type.FullName).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildDirect((() => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildDirect((((() => type.FullName)))).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildTask((async () => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTask((async () => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildGeneric(selector: (() => type.FullName), get: (() => \"fixed\")).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildGeneric(selector: (() => 42), get: (() => type.FullName)).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildDirect((async () => type.FullName)).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildTaskParams((async () => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildDirectParams((() => type.FullName)).OfType<string>().Count()", false, "0")]
     public void CallbackResult_BeforeOfType_PreservesRequiredBridgesAndRuns(
         string invocation,
         bool requiresBridge,
@@ -601,6 +610,27 @@ public sealed class Issue4180NullableSelectResultRegressionTests
             """.Replace("CARRIER", carrier, StringComparison.Ordinal)
                 .Replace("ENVELOPE", envelope, StringComparison.Ordinal)
                 .Replace("CONVERSION", taskConversion, StringComparison.Ordinal));
+
+        AssertCompilesAndRuns(printed, "0", requiresBridge: false);
+    }
+
+    [Fact]
+    public void ParenthesizedSelectorResult_RemainsNullableAtScalarSinkAndRuns()
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class Probe
+            {
+                static IEnumerable<T> Build<T>(Func<T> selector) => new[] { selector() };
+                static string? Find(Type type) => Build((() => type.FullName)).FirstOrDefault();
+
+                public static void Main() =>
+                    Console.WriteLine(Find(typeof(List<>).GetGenericArguments()[0]) == null ? 0 : 1);
+            }
+            """);
 
         AssertCompilesAndRuns(printed, "0", requiresBridge: false);
     }

@@ -3762,6 +3762,11 @@ public sealed partial class CSharpToGSharpTranslator
             // for operators such as FirstOrDefault to inspect instead of
             // throwing at the selector boundary.
             SyntaxNode current = lambda;
+            while (current.Parent is ParenthesizedExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
             if (current.Parent is not ArgumentSyntax argument
                 || argument.Expression != current
                 || argument.Parent?.Parent is not InvocationExpressionSyntax invocation
@@ -3863,6 +3868,15 @@ public sealed partial class CSharpToGSharpTranslator
         {
             IParameterSymbol parameter =
                 (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)?.Parameter;
+            if (parameter == null
+                && argument.Parent?.Parent is InvocationExpressionSyntax invocation
+                && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation)
+            {
+                // Roslyn may attach the operation to the operand inside parentheses.
+                parameter = operation.Arguments.FirstOrDefault(candidate =>
+                    argument.Span.Contains(candidate.Syntax.Span))?.Parameter;
+            }
+
             if (parameter == null
                 && !this.TryGetExpandedParamsElementTarget(argument, out _, out parameter))
             {
