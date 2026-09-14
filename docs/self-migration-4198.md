@@ -251,13 +251,32 @@ and is not a generic mutual-recursion group.
 
 ## Local commands
 
-For reproduction, use a fresh, clean worktree checked out at the measured
-`b9cd4a4fe17889b4768ee39b6893335b83ea5971`, not the later documentation branch.
-The evidence directory is its sibling, not a descendant: the migration correctly
-rejects overlapping source/destination trees. All output and scratch paths remain
-inside the parent project directory.
+For reproduction, use a fresh, clean worktree at the #4232 implementation commit,
+`f19f3d2bd83a5213b3e68c5ff8f4260e737383c5`. Its compiler, translator, and project
+sources are identical to its parent, the measured `b9cd4a4fe1`, but it also
+contains the ceiling-3 baseline and boundary regression. A fresh build can carry
+a different Git-derived version stamp from the recorded `0.4.686` binaries.
+Do not use the later documentation branch containing ADR-0180.
+
+Run this as a Bash script. Unexpected command failures stop it immediately. The
+recorded gate exit 1 is checked explicitly so the remaining controls can run;
+even if those controls pass, the script finishes with that red gate status.
+Use a fresh evidence directory to avoid stale inputs or overwriting retained
+results. The evidence directory is a sibling of the worktree, not its descendant;
+all output and scratch paths stay inside the parent project directory.
 
 ```bash
+set -euo pipefail
+if [[ "$(git rev-parse HEAD)" != f19f3d2bd83a5213b3e68c5ff8f4260e737383c5 ]]; then
+  echo "Use a clean worktree at the #4232 implementation commit." >&2
+  exit 1
+fi
+git diff --quiet
+git diff --cached --quiet
+if [[ -e ../issue-4198-evidence ]]; then
+  echo "Choose a fresh evidence directory; refusing to reuse existing results." >&2
+  exit 1
+fi
 mkdir -p ../issue-4198-evidence/runtime artifacts/issue-4198
 evidence="$(cd ../issue-4198-evidence && pwd)"
 git init --quiet "$evidence/runtime"
@@ -337,8 +356,17 @@ for shard in ("1", "2", "3", "4"):
             raise SystemExit(f"SHA-256 mismatch: {src} -> {dst}")
         print(f"{shard}/{artifact}: {actual}")
 PY
+gate_exit=0
 bash build/run-cs2gs-selfmig-gate.sh \
-  "$SELFMIG_GATE_ROOT" "$evidence/final-shards"
+  "$SELFMIG_GATE_ROOT" "$evidence/final-shards" \
+  > artifacts/issue-4198/reproduced-gate.log 2>&1 || gate_exit=$?
+cat artifacts/issue-4198/reproduced-gate.log
+if (( gate_exit != 1 )); then
+  echo "Expected recorded gate exit 1, got $gate_exit." >&2
+  exit 1
+fi
+grep -Fq 'self-migration: 52/56 green (floor 54);' \
+  artifacts/issue-4198/reproduced-gate.log
 
 bash build/test-cs2gs-counters.sh
 python3 build/test-check-selfmig-stage-floor.py
@@ -359,6 +387,8 @@ dotnet build test/Compiler.Tests/Compiler.Tests.csproj \
 dotnet test test/Compiler.Tests/Compiler.Tests.csproj -c Debug --no-build --no-restore \
   --filter FullyQualifiedName~Issue2965ChannelElementSlotTests.ChannelElementMatrix_LoadsVerifiesAndRuns
 git diff --check
+printf 'Controls passed; the full gate remains red (exit %s).\n' "$gate_exit"
+exit "$gate_exit"
 ```
 
 The project-local runtime scratch directory is initialized as an empty Git
