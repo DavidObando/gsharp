@@ -123,7 +123,9 @@ public sealed partial class CSharpToGSharpTranslator
             // <see cref="WithSpillSeam"/> (rather than being suspended outright),
             // since they have no per-statement seam of their own to fall back on.
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            List<GStatement> outerOutDeclarations = this.state.FunctionArgumentOutDeclarations;
             this.state.PendingSpillPrologue = null;
+            this.state.FunctionArgumentOutDeclarations = null;
 
             // Issue #1736: a lambda is its own mutability/reference-scan scope,
             // regardless of WHERE the lambda appears. `currentBodyScope` drives
@@ -242,7 +244,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // explicit `return`.
                 var spillPrologue = new List<GStatement>();
                 List<GStatement> savedSeam = this.state.PendingSpillPrologue;
+                List<GStatement> savedOutDeclarations = this.state.FunctionArgumentOutDeclarations;
                 this.state.PendingSpillPrologue = spillPrologue;
+                this.state.FunctionArgumentOutDeclarations = spillPrologue;
                 GExpression expressionBody;
                 try
                 {
@@ -261,6 +265,7 @@ public sealed partial class CSharpToGSharpTranslator
                 finally
                 {
                     this.state.PendingSpillPrologue = savedSeam;
+                    this.state.FunctionArgumentOutDeclarations = savedOutDeclarations;
                 }
 
                 if (spillPrologue.Count == 0)
@@ -290,6 +295,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
                 this.state.CurrentBodyScope = previousBodyScope;
             }
         }

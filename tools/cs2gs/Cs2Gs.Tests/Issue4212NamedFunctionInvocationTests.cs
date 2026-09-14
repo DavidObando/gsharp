@@ -546,6 +546,123 @@ public class Issue4212NamedFunctionInvocationTests
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, string.Empty, "105:12");
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ConditionalDelegate_OutDeclarationUsesEnclosingScope(bool returnsValue, bool present)
+    {
+        Verify($$"""
+            #nullable enable
+            namespace Demo
+            {
+                public delegate {{(returnsValue ? "int" : "void")}} D(int a, out int cell);
+                public class C
+                {
+                    public void Run()
+                    {
+                        int calls = 0;
+                        int observed = 0;
+                        int Next() { calls++; return 42; }
+                        D? d = null;
+                        if ({{(present ? "true" : "false")}})
+                        {
+                            d = (int a, out int cell) =>
+                            {
+                                cell = a;
+                                observed = cell;
+                                {{(returnsValue ? "return cell;" : string.Empty)}}
+                            };
+                        }
+                        {{(returnsValue ? "int? returned = " : string.Empty)}}d?.Invoke(cell: out int value, a: Next());
+                        value = 7;
+                        System.Console.WriteLine(value + ":" + observed + ":" + calls{{(returnsValue ? " + \":\" + (returned ?? -1)" : string.Empty)}});
+                    }
+                }
+            }
+            """, (present ? "7:42:1" : "7:0:0") + (returnsValue ? (present ? ":42" : ":-1") : string.Empty));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Delegate_TernaryOutDeclarationUsesEnclosingScope(bool enabled)
+    {
+        Verify($$"""
+            namespace Demo
+            {
+                public delegate int D(int a, out int cell);
+                public class C
+                {
+                    public void Run()
+                    {
+                        int calls = 0;
+                        int Next() { calls++; return calls; }
+                        D d = (int a, out int cell) => { cell = a; return a; };
+                        bool enabled = {{(enabled ? "true" : "false")}};
+                        int answer = enabled ? d(cell: out int value, a: Next()) : 0;
+                        value = 7;
+                        System.Console.WriteLine(value + ":" + answer + ":" + calls);
+                    }
+                }
+            }
+            """, enabled ? "7:1:1" : "7:0:0");
+    }
+
+    [Fact]
+    public void Delegate_NestedArgumentOutDeclarationUsesEnclosingScope()
+    {
+        Verify("""
+            namespace Demo
+            {
+                public delegate int D(int a, out int cell);
+                public class C
+                {
+                    public void Run()
+                    {
+                        int calls = 0;
+                        int Next() { calls++; return calls; }
+                        D d = (int a, out int cell) => { cell = a; return a; };
+                        System.Func<int, int, int> sum = (a, b) => a + b;
+                        int answer = sum(arg2: d(cell: out int value, a: Next()), arg1: Next());
+                        value = 7;
+                        System.Console.WriteLine(value + ":" + answer + ":" + calls);
+                    }
+                }
+            }
+            """, "7:3:2");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConditionalDelegate_OutDeclarationStaysInsideExpressionBody(bool localFunction)
+    {
+        string declaration = localFunction ? "int Read() =>" : "System.Func<int> Read = () =>";
+        Verify($$"""
+            #nullable enable
+            namespace Demo
+            {
+                public delegate int D(int a, out int cell);
+                public class C
+                {
+                    public void Run()
+                    {
+                        int calls = 0;
+                        int Next() { calls++; return calls; }
+                        D? d = null;
+                        {{declaration}} (d?.Invoke(cell: out int value, a: Next()) ?? 0) + (value = 7);
+                        int answer = Read();
+                        d = (int a, out int cell) => { cell = a; return a; };
+                        answer += Read();
+                        System.Console.WriteLine(answer + ":" + calls);
+                    }
+                }
+            }
+            """, "15:1");
+    }
+
     private static string Verify(string source, string expected)
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit(source);

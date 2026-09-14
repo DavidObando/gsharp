@@ -36,6 +36,8 @@ are normalized to parameter slots, with omitted defaults supplied explicitly.
 When that reorders operands, call-local spills preserve receiver evaluation,
 argument reads, implicit conversions, and `ref`/`out`/`in` aliases in C# source
 order. Spills stay inside conditional calls and repeated loop conditions.
+Storage for reordered `out` declarations stays in its enclosing statement or
+function body, independently of the guarded argument evaluation.
 Top-level reference spills use an immediately invoked function so managed
 references stay on the stack rather than becoming static fields.
 Ordinary method calls retain their native G# named arguments.

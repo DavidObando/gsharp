@@ -31,7 +31,7 @@ public sealed partial class CSharpToGSharpTranslator
                     if (argument.Expression is DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax designation }
                         && this.context.GetDeclaredSymbol(designation) is ILocalSymbol local)
                     {
-                        this.state.PendingSpillPrologue?.Add(new LocalDeclarationStatement(
+                        (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(new LocalDeclarationStatement(
                             BindingKind.Var,
                             this.EmittedName(local, local.Name),
                             this.typeMapper.Map(local.Type, this.context, argument.GetLocation())));

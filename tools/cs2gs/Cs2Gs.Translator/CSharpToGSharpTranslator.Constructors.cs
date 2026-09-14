@@ -2438,11 +2438,9 @@ public sealed partial class CSharpToGSharpTranslator
         // Such a member keeps its whole cycle on the `__local_` lift path,
         // whose real method declaration carries the ref-kind natively. That
         // path also preserves the `name:` wrappers (a real method HAS parameter
-        // names), so the call site binds correctly. This also makes a
-        // ref-kind argument unreachable in
-        // <see cref="TranslateFunctionTypeArguments"/>,
-        // which is why that method's evaluation-order spill only ever has
-        // by-value operands to consider.
+        // names), so the call site binds correctly. Claimed-local callers of
+        // <see cref="TranslateFunctionTypeArguments"/> therefore only need
+        // by-value spills; delegate callers also use its ref/out/in handling.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
             // `DescendantNodes()` excludes the node itself — local functions that
@@ -3106,8 +3104,10 @@ public sealed partial class CSharpToGSharpTranslator
         private IEnumerable<GStatement> TranslateStatement(StatementSyntax statement)
         {
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            List<GStatement> outerOutDeclarations = this.state.FunctionArgumentOutDeclarations;
             var spillPrologue = new List<GStatement>();
             this.state.PendingSpillPrologue = spillPrologue;
+            this.state.FunctionArgumentOutDeclarations = spillPrologue;
             try
             {
                 List<GStatement> core = this.TranslateStatementCore(statement).ToList();
@@ -3129,6 +3129,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
             }
         }
 

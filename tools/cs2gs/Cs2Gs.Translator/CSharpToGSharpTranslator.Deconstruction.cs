@@ -1441,8 +1441,10 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            List<GStatement> outerOutDeclarations = this.state.FunctionArgumentOutDeclarations;
             var spillPrologue = new List<GStatement>();
             this.state.PendingSpillPrologue = spillPrologue;
+            this.state.FunctionArgumentOutDeclarations = spillPrologue;
             try
             {
                 GExpression value = translate();
@@ -1453,6 +1455,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
             }
         }
 
@@ -1535,8 +1538,10 @@ public sealed partial class CSharpToGSharpTranslator
         private IReadOnlyList<GStatement> WithSpillSeam(Func<IReadOnlyList<GStatement>> translate)
         {
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            List<GStatement> outerOutDeclarations = this.state.FunctionArgumentOutDeclarations;
             var spillPrologue = new List<GStatement>();
             this.state.PendingSpillPrologue = spillPrologue;
+            this.state.FunctionArgumentOutDeclarations = spillPrologue;
             try
             {
                 IReadOnlyList<GStatement> core = translate();
@@ -1552,6 +1557,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
             }
         }
 
@@ -1718,8 +1724,10 @@ public sealed partial class CSharpToGSharpTranslator
             // inside a block body still opens its own fresh seam via
             // <see cref="TranslateStatement"/>.
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
+            List<GStatement> outerOutDeclarations = this.state.FunctionArgumentOutDeclarations;
             SyntaxNode previousBodyScope = this.state.CurrentBodyScope;
             this.state.PendingSpillPrologue = null;
+            this.state.FunctionArgumentOutDeclarations = null;
             this.state.CurrentBodyScope = localFunction;
             LambdaExpression lambda;
             try
@@ -1756,6 +1764,7 @@ public sealed partial class CSharpToGSharpTranslator
             finally
             {
                 this.state.PendingSpillPrologue = outerSpillPrologue;
+                this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
                 this.state.CurrentBodyScope = previousBodyScope;
             }
 
