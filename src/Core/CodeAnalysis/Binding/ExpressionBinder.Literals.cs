@@ -1982,121 +1982,6 @@ internal sealed partial class ExpressionBinder
         => BindStructLiteralExpression(syntax, resolvedDefinition: null);
 
     /// <summary>
-    /// ADR-0180 §B: rebinds a literal the parser tentatively read as
-    /// `Type(){ ...source, Member: value }` as ADR-0117's
-    /// `funcCall(){ ...source, key: value }` collection initializer, reusing
-    /// <see cref="StructLiteralExpressionSyntax.SourceCallTarget"/> as the
-    /// collection-initializer's construction target and converting each
-    /// element back into its ADR-0117 <see cref="CollectionElementSyntax"/>
-    /// shape (a member `Identifier: value` becomes a keyed entry whose key is
-    /// that identifier evaluated as an expression, exactly as the parser's
-    /// own collection-element grammar would have parsed it directly). Reached
-    /// either because <see cref="StructLiteralExpressionSyntax.TypeIdentifier"/>
-    /// does not name a type at all, or because it names a real type but at
-    /// least one `Identifier:` entry is not a member of it (see
-    /// <see cref="AllKeyedEntriesAreMembers"/>).
-    /// </summary>
-    private BoundExpression BindStructLiteralAsCollectionInitializerFallback(StructLiteralExpressionSyntax syntax)
-    {
-        var callTarget = Invariant.Required(syntax.SourceCallTarget, "fallback requires a retained call target");
-        var elementsBuilder = ImmutableArray.CreateBuilder<SyntaxNode>();
-        var raw = syntax.Elements.GetWithSeparators();
-        foreach (var node in raw)
-        {
-            elementsBuilder.Add(node switch
-            {
-                FieldInitializerSyntax field => new KeyedCollectionElementSyntax(
-                    field.SyntaxTree,
-                    new NameExpressionSyntax(field.SyntaxTree, field.FieldIdentifier),
-                    field.ColonToken,
-                    field.Value),
-                StructLiteralContentElementSyntax content => new ExpressionCollectionElementSyntax(content.SyntaxTree, content.Expression),
-                _ => node,
-            });
-        }
-
-        var collectionInitializer = new CollectionInitializerExpressionSyntax(
-            syntax.SyntaxTree,
-            callTarget,
-            syntax.OpenBraceToken,
-            new SeparatedSyntaxList<CollectionElementSyntax>(elementsBuilder.ToImmutable()),
-            syntax.CloseBraceToken);
-        return BindCollectionInitializerExpression(collectionInitializer);
-    }
-
-    /// <summary>
-    /// ADR-0180 §B follow-up: true when every `Identifier:` (member) entry in
-    /// the literal names an actual field/property of <paramref
-    /// name="structSymbol"/>. Used only to disambiguate a retained
-    /// <see cref="StructLiteralExpressionSyntax.SourceCallTarget"/> whose head
-    /// happens to resolve to a real type — it does not report diagnostics, so
-    /// a `false` result can be redirected wholesale to the ADR-0117
-    /// collection-initializer fallback instead of surfacing a bogus
-    /// "unknown member" error. Content elements (bare/spread) are ignored: a
-    /// mismatch there does not exist since they carry no identifier to
-    /// resolve as a member.
-    /// </summary>
-    private static bool AllKeyedEntriesAreMembers(StructLiteralExpressionSyntax syntax, StructSymbol structSymbol)
-    {
-        foreach (var element in syntax.Elements)
-        {
-            if (element is not FieldInitializerSyntax fieldInit)
-            {
-                continue;
-            }
-
-            var name = fieldInit.FieldIdentifier.ValueText;
-            if (TypeMemberModel.TryGetFieldIncludingInherited(structSymbol, name, MemberQuery.Instance(MemberKinds.Field), out _, out _))
-            {
-                continue;
-            }
-
-            if (TypeMemberModel.TryGetProperty(structSymbol, name, out _, out _))
-            {
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// ADR-0180 §B follow-up: the <see cref="Type"/>-based sibling of <see
-    /// cref="AllKeyedEntriesAreMembers"/> for a NON-aggregate imported CLR
-    /// type (<see cref="BindImportedTypeObjectInitializer"/>'s own member
-    /// resolution has no <see cref="StructSymbol"/> to query). Mirrors that
-    /// function's property-then-field lookup, including the indexer
-    /// exclusion, without reporting diagnostics.
-    /// </summary>
-    private static bool AllKeyedEntriesAreClrMembers(StructLiteralExpressionSyntax syntax, Type clrType)
-    {
-        foreach (var element in syntax.Elements)
-        {
-            if (element is not FieldInitializerSyntax fieldInit)
-            {
-                continue;
-            }
-
-            var name = fieldInit.FieldIdentifier.ValueText;
-            MemberInfo? member = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrType, name, BindingFlags.Public | BindingFlags.Instance);
-            if (member is PropertyInfo indexerProperty && indexerProperty.GetIndexParameters().Length != 0)
-            {
-                member = null;
-            }
-
-            member ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrType, name, BindingFlags.Public | BindingFlags.Instance);
-            if (member == null)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
     /// Binds a struct/class literal <c>Foo{ ... }</c>. When
     /// <paramref name="resolvedDefinition"/> is supplied (issue #1174: a
     /// qualified nested type <c>Container.Nested{ ... }</c> whose simple name
@@ -2338,18 +2223,6 @@ internal sealed partial class ExpressionBinder
                     Diagnostics.ReportAmbiguousSourceType(syntax.TypeIdentifier.Location, typeName);
                     return new BoundErrorExpression(null);
                 }
-                else if (structSymbol == null && syntax.SourceCallTarget != null)
-                {
-                    // ADR-0180 §B: `typeName` doesn't name a type after all, so this
-                    // was never `Type(){ ...source, Member: value }` — it is
-                    // ADR-0117's pre-existing `funcCall(){ ...source, key: value }`
-                    // collection initializer, whose call-suffix brace shares the
-                    // exact same "comma, then Identifier ':'" token pattern
-                    // (SourceCallTarget's remarks). Rebind the retained call target
-                    // and elements as a collection initializer instead of reporting
-                    // a bogus "type not found" for `makeMap`.
-                    return BindStructLiteralAsCollectionInitializerFallback(syntax);
-                }
                 else if (structSymbol == null)
                 {
                     Diagnostics.ReportUnableToFindType(syntax.TypeIdentifier.Location, typeName);
@@ -2363,22 +2236,6 @@ internal sealed partial class ExpressionBinder
         }
 
         structSymbol = Invariant.Required(structSymbol, "a valid struct literal resolves to a struct symbol");
-
-        // ADR-0180 §B follow-up: the explicit-parens lookahead that retains
-        // SourceCallTarget also matches a valid ADR-0117 typed collection
-        // initializer whose head names a real type
-        // (`Dictionary[string, int32](){ ...pairs, key: 2 }`) — that call
-        // resolves to `structSymbol` here, so the `structSymbol == null`
-        // fallback above never fires and `key` would otherwise be reported as
-        // a missing member. Disambiguate non-breakingly: this is a genuine
-        // mixed composite only if EVERY `Identifier:` entry actually names a
-        // member of the resolved type; if ANY does not, the whole literal is
-        // re-read as ADR-0117's collection initializer over the retained call
-        // target (each `Identifier: value` becomes a keyed `Add` entry).
-        if (syntax.SourceCallTarget != null && !AllKeyedEntriesAreMembers(syntax, structSymbol))
-        {
-            return BindStructLiteralAsCollectionInitializerFallback(syntax);
-        }
 
         // ADR-0047 §6 / #175: struct/class literal `Foo{ ... }` is a
         // use of the named type.
@@ -2691,6 +2548,19 @@ internal sealed partial class ExpressionBinder
             {
                 if (seenFieldNames.Contains(field.Name))
                 {
+                    // A later explicit write must not leave an earlier Add
+                    // observing a raw null. Seed only mandatory zero values,
+                    // not a skipped, possibly effectful field initializer.
+                    if (hasContentElement
+                        && !(structSymbol.Definition ?? structSymbol).NeedsSynthesizedValueStructDefaultCtor)
+                    {
+                        var zeroValue = GetStructFieldZeroValue(syntax, structSymbol, field);
+                        if (zeroValue != null)
+                        {
+                            inits.Add(new BoundFieldInitializer(field, zeroValue));
+                        }
+                    }
+
                     continue;
                 }
 
@@ -2801,8 +2671,6 @@ internal sealed partial class ExpressionBinder
         var emptyTargetSyntax = new StructLiteralExpressionSyntax(
             syntax.SyntaxTree,
             syntax.TypeIdentifier,
-            openParenToken: null,
-            closeParenToken: null,
             syntax.OpenBraceToken,
             spreadToken: null,
             spreadExpression: null,
@@ -3111,21 +2979,6 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindImportedTypeObjectInitializer(StructLiteralExpressionSyntax syntax, Type clrType, TypeSymbol resultType, BoundExpression construction)
     {
-        // ADR-0180 §B follow-up: the explicit-parens lookahead that retains
-        // SourceCallTarget also matches a valid ADR-0117 typed collection
-        // initializer over a NON-aggregate imported CLR type (e.g.
-        // `Dictionary[string, int32](){ ...pairs, key: 2 }` — `Dictionary` is
-        // not a semantic aggregate, so it lowers through THIS function
-        // instead of the primary struct-literal path, which has the sibling
-        // check right after it resolves `structSymbol`). Same disambiguation:
-        // stay a mixed composite only if EVERY `Identifier:` entry names a
-        // real member of `clrType`; otherwise re-read the whole literal as
-        // ADR-0117's collection initializer over the retained call target.
-        if (syntax.SourceCallTarget != null && !AllKeyedEntriesAreClrMembers(syntax, clrType))
-        {
-            return BindStructLiteralAsCollectionInitializerFallback(syntax);
-        }
-
         // ADR-0180: a bare content element or `...source` content spread on an
         // imported CLR type (e.g. `List[int32]{ Capacity: 1, 2 }`) lowers to
         // Add(...) through the same accessor-call binder as the primary
@@ -3183,68 +3036,20 @@ internal sealed partial class ExpressionBinder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(syntax, tempVar, construction));
 
-        // Issue #3329 / ADR-0159: a value-type struct's magic-collection
-        // field loses its "sound zero value" instance-field initializer when
-        // the struct doesn't carry the GSharp.TypeSemantics marker (a PLAIN
-        // struct — see EmitGSharpTypeSemantics's data/primary-ctor gate) and
-        // is therefore constructed through this generic imported-CLR-type
-        // literal lowering instead of the StructSymbol aggregate path. The
-        // GSharp.MagicCollectionFields marker is written independently of
-        // that gate (every gsc-compiled value-type struct with a magic-
-        // collection field carries it), so this only ever fires for a
-        // gsc-compiled type — a genuine external (non-gsc) struct literal
-        // (e.g. a BCL type like `JsonWriterOptions`) is completely unaffected.
-        //
-        // Reviewer finding: this must run BEFORE the ordered element loop
-        // below, not after — an ADR-0180 Add(...) call for a content
-        // element/spread that lexically precedes a member's own omission
-        // would otherwise observe the field's raw (unsound) CLR default,
-        // e.g. a null-backed slice/map, and can throw. So this precomputes
-        // which magic fields are omitted from a source-only scan of the
-        // FieldInitializerSyntax member names (cheap, no binding) and
-        // zero-initializes them up front; explicit member assignments in the
-        // ordered loop below still run afterward, in lexical order, and
-        // simply overwrite whichever zero value was seeded here.
-        if (clrType.IsValueType
-            && ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds))
+        // Only raw default construction needs reconstruction. A real
+        // constructor has already established its own field values.
+        var zeroValueStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (construction is BoundDefaultExpression && clrType.IsValueType)
         {
-            var declaredMemberNames = new HashSet<string>();
-            foreach (var scanElement in syntax.Elements)
-            {
-                if (scanElement is FieldInitializerSyntax scanField)
-                {
-                    declaredMemberNames.Add(scanField.FieldIdentifier.ValueText);
-                }
-            }
+            var excludedMembers = hasContentElement
+                ? null
+                : syntax.Initializers.Select(member => member.FieldIdentifier.ValueText).ToHashSet(StringComparer.Ordinal);
+            AppendImportedStructZeroInitializers(syntax, clrType, tempVar, excludedMembers, zeroValueStatements);
+        }
 
-            foreach (var (fieldName, kind) in magicFieldKinds)
-            {
-                if (declaredMemberNames.Contains(fieldName))
-                {
-                    continue;
-                }
-
-                var fieldInfo = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
-                var zeroValue = fieldInfo != null
-                    ? MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(fieldInfo, kind)
-                    : null;
-                if (zeroValue == null
-                    || !TryGetWritableClrMember(
-                        Invariant.Required(fieldInfo, "a magic collection marker has a backing field"),
-                        out _,
-                        out var fieldTargetSymbol,
-                        out var fieldWritable)
-                    || !fieldWritable)
-                {
-                    continue;
-                }
-
-                var convertedZero = conversions.BindConversion(syntax.Location, zeroValue, fieldTargetSymbol);
-                var zeroReceiverExpr = new BoundVariableExpression(syntax, tempVar);
-                statements.Add(new BoundExpressionStatement(
-                    syntax,
-                    new BoundClrPropertyAssignmentExpression(syntax, zeroReceiverExpr, Invariant.Required(fieldInfo, "a magic collection field has metadata"), convertedZero, fieldTargetSymbol, staticContainerType: null)));
-            }
+        if (hasContentElement)
+        {
+            statements.AddRange(zeroValueStatements);
         }
 
         var seen = new HashSet<string>();
@@ -3323,8 +3128,60 @@ internal sealed partial class ExpressionBinder
                 new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, member, converted, targetSymbol, staticContainerType: null)));
         }
 
+        // Keep the historical omitted-field ordering for members-only literals.
+        if (!hasContentElement)
+        {
+            statements.AddRange(zeroValueStatements);
+        }
+
         var resultExpr = new BoundVariableExpression(syntax, tempVar);
         return new BoundBlockExpression(syntax, statements.ToImmutable(), resultExpr);
+    }
+
+    private static BoundExpression? GetStructFieldZeroValue(SyntaxNode syntax, StructSymbol type, FieldSymbol field)
+        => type.ClrType == null
+            ? MagicCollectionZeroValue.TrySynthesizeEmptyInstance(syntax, field.Type)
+            : type.InstanceFieldInitializers.TryGetValue(field, out var zeroValue) ? zeroValue : null;
+
+    private void AppendImportedStructZeroInitializers(
+        SyntaxNode syntax,
+        Type clrType,
+        LocalVariableSymbol receiver,
+        HashSet<string>? excludedMembers,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        if (!ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds))
+        {
+            return;
+        }
+
+        foreach (var (fieldName, kind) in magicFieldKinds)
+        {
+            if (excludedMembers?.Contains(fieldName) == true)
+            {
+                continue;
+            }
+
+            var field = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
+            var zeroValue = MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(field, kind);
+            if (field == null || zeroValue == null
+                || !TryGetWritableClrMember(field, receiver.Type, out _, out var fieldType, out var writable)
+                || !writable)
+            {
+                continue;
+            }
+
+            var converted = conversions.BindConversion(syntax.Location, zeroValue, fieldType);
+            statements.Add(new BoundExpressionStatement(
+                syntax,
+                new BoundClrPropertyAssignmentExpression(
+                    syntax,
+                    new BoundVariableExpression(syntax, receiver),
+                    field,
+                    converted,
+                    fieldType,
+                    staticContainerType: null)));
+        }
     }
 
     /// <summary>

@@ -135,6 +135,7 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // ADR-0180: mixed composite initializer — a bare content element and
         // a non-leading content spread interleaved with members.
         "package p\nfunc F(rows []int32) {\n  var c = Container{ Width: 1, 2, ...rows }\n}\n",
+        "package p\nfunc F(rows []int32) {\n  var c = Container[int32](7){ ...rows, .Width: 1, key: 2, [key] = 3, }\n}\n",
     };
 
     /// <summary>

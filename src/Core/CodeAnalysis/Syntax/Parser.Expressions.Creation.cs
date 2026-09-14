@@ -1438,8 +1438,6 @@ public partial class Parser
             var literal = new StructLiteralExpressionSyntax(
                 syntaxTree,
                 identifier,
-                openParenToken: null,
-                closeParenToken: null,
                 openBrace,
                 spreadToken,
                 spreadExpression,
@@ -1535,6 +1533,13 @@ public partial class Parser
         if (k1 == SyntaxKind.CloseBraceToken)
         {
             return false;
+        }
+
+        // A leading dot cannot begin a statement body; admit incomplete
+        // member designators too so completion can recover `.Partial`.
+        if (k1 == SyntaxKind.DotToken)
+        {
+            return true;
         }
 
         if (k1 == SyntaxKind.OpenSquareBracketToken)
@@ -1639,6 +1644,12 @@ public partial class Parser
         suppressStructLiteral = 0;
         try
         {
+            if (Current.Kind == SyntaxKind.DotToken)
+            {
+                var dot = MatchToken(SyntaxKind.DotToken);
+                return new MemberCollectionElementSyntax(syntaxTree, dot, ParseFieldInitializer());
+            }
+
             // Native spread element `...source`.
             if (Current.Kind == SyntaxKind.EllipsisToken)
             {

@@ -8,40 +8,15 @@ using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 
-/// <summary>
-/// Issue #3785: parser regression coverage for mixed composite initializers
-/// (ADR-0180). A struct/class composite literal's <see cref="StructLiteralExpressionSyntax.Elements"/>
-/// is one ordered list mixing <see cref="FieldInitializerSyntax"/> members
-/// with <see cref="StructLiteralContentElementSyntax"/> bare/spread content
-/// elements, replacing the pre-ADR-0180 members-only list for this shape.
-/// </summary>
+/// <summary>ADR-0180: operation selection is syntactic, with one ordered element list.</summary>
 public class Issue3785MixedCompositeInitializerParserTests
 {
-    private static StructLiteralExpressionSyntax ParseLiteral(string source)
-    {
-        var tree = SyntaxTree.Parse(source);
-        Assert.Empty(tree.Diagnostics);
-
-        var varDecl = tree.Root.Members
-            .OfType<GlobalStatementSyntax>()
-            .Select(g => g.Statement)
-            .OfType<VariableDeclarationSyntax>()
-            .Last();
-
-        return Assert.IsType<StructLiteralExpressionSyntax>(varDecl.Initializer);
-    }
-
     [Fact]
     public void MembersOnly_StillParsesEntirelyAsFieldInitializers()
     {
-        // Regression: a plain literal with no content elements keeps
-        // Elements entirely FieldInitializerSyntax, and Initializers mirrors
-        // it exactly (ADR-0180 must not disturb the pre-existing shape).
-        var literal = ParseLiteral(@"
-let p = Point{ X: 1, Y: 2 }
-");
+        var literal = Parse<StructLiteralExpressionSyntax>("let p = Point{ X: 1, Y: 2 }");
         Assert.Equal(2, literal.Elements.Count);
-        Assert.All(literal.Elements, e => Assert.IsType<FieldInitializerSyntax>(e));
+        Assert.All(literal.Elements, element => Assert.IsType<FieldInitializerSyntax>(element));
         Assert.Equal(2, literal.Initializers.Count);
         Assert.Equal("X", literal.Initializers[0].FieldIdentifier.Text);
         Assert.Equal("Y", literal.Initializers[1].FieldIdentifier.Text);
@@ -50,154 +25,116 @@ let p = Point{ X: 1, Y: 2 }
     [Fact]
     public void MixedMembersElementsAndSpread_ParseInLexicalOrder()
     {
-        var literal = ParseLiteral(@"
-let c = Container{ Width: 320.0, Text(""Account""), ...rows, Height: 10.0 }
-");
+        var literal = Parse<StructLiteralExpressionSyntax>("""
+            let c = Container{ Width: 320.0, Text("Account"), ...rows, Height: 10.0 }
+            """);
         Assert.Equal(4, literal.Elements.Count);
-
-        var width = Assert.IsType<FieldInitializerSyntax>(literal.Elements[0]);
-        Assert.Equal("Width", width.FieldIdentifier.Text);
-
-        var bare = Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[1]);
-        Assert.IsType<CallExpressionSyntax>(bare.Expression);
-
-        var spread = Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[2]);
-        Assert.IsType<SpreadElementExpressionSyntax>(spread.Expression);
-
-        var height = Assert.IsType<FieldInitializerSyntax>(literal.Elements[3]);
-        Assert.Equal("Height", height.FieldIdentifier.Text);
-
-        // The member-only filtered view keeps just Width/Height, in order.
-        Assert.Equal(2, literal.Initializers.Count);
-        Assert.Equal("Width", literal.Initializers[0].FieldIdentifier.Text);
-        Assert.Equal("Height", literal.Initializers[1].FieldIdentifier.Text);
+        Assert.Equal("Width", Assert.IsType<FieldInitializerSyntax>(literal.Elements[0]).FieldIdentifier.Text);
+        Assert.IsType<CallExpressionSyntax>(Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[1]).Expression);
+        Assert.IsType<SpreadElementExpressionSyntax>(Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[2]).Expression);
+        Assert.Equal("Height", Assert.IsType<FieldInitializerSyntax>(literal.Elements[3]).FieldIdentifier.Text);
+        Assert.Equal(new[] { "Width", "Height" }, literal.Initializers.Select(member => member.FieldIdentifier.Text));
     }
 
     [Fact]
     public void LeadingStructuralSpread_NoParens_StaysAdr0148_NoContentElements()
     {
-        // A leading `...source` with no explicit call parens remains
-        // ADR-0148 structural projection: SpreadExpression is set, and
-        // Elements holds only the (member-only) explicit overrides — never a
-        // StructLiteralContentElementSyntax.
-        var literal = ParseLiteral(@"
-let p = Target{ ...source, Name: ""z"" }
-");
+        var literal = Parse<StructLiteralExpressionSyntax>("""let p = Target{ ...source, Name: "z" }""");
         Assert.NotNull(literal.SpreadExpression);
-        Assert.Single(literal.Elements);
-        var member = Assert.IsType<FieldInitializerSyntax>(literal.Elements[0]);
-        Assert.Equal("Name", member.FieldIdentifier.Text);
+        Assert.Equal("Name", Assert.IsType<FieldInitializerSyntax>(Assert.Single(literal.Elements)).FieldIdentifier.Text);
     }
 
-    [Fact]
-    public void BareContentElement_First_IsNotAStructLiteral()
+    [Theory]
+    [InlineData("""Container(){ Text("Account"), ...rows }""")]
+    [InlineData("Container(){ ...rows }")]
+    public void BareOrSpreadFirst_StaysACollectionInitializer(string expression)
     {
-        // Unchanged ADR-0117 disambiguation: a bare-element-first brace after
-        // explicit empty parens is a CollectionInitializerExpressionSyntax,
-        // not a StructLiteralExpressionSyntax — ADR-0180 does not touch this
-        // classification rule.
-        var tree = SyntaxTree.Parse(@"
-let c = Container(){ Text(""Account""), ...rows }
-");
-        Assert.Empty(tree.Diagnostics);
-        var varDecl = tree.Root.Members
-            .OfType<GlobalStatementSyntax>()
-            .Select(g => g.Statement)
-            .OfType<VariableDeclarationSyntax>()
-            .Single();
-        Assert.IsType<CollectionInitializerExpressionSyntax>(varDecl.Initializer);
+        Parse<CollectionInitializerExpressionSyntax>("let c = " + expression);
     }
 
-    [Fact]
-    public void ExplicitEmptyParens_LeadingSpreadThenMember_IsACompositeLiteral()
+    [Theory]
+    [InlineData("Container()", 0, 0)]
+    [InlineData("Container(7)", 1, 0)]
+    [InlineData("Container[int32](7)", 1, 1)]
+    [InlineData("makeContainer()", 0, 0)]
+    public void ExplicitMember_RetainsCallArgumentsAndLexicalOrder(string target, int argumentCount, int typeArgumentCount)
     {
-        // ADR-0180 §B's explicit-parens marker: a leading `...source` under
-        // explicit empty call parens, followed by a real member, promotes the
-        // literal from an ADR-0117 collection initializer to a composite
-        // literal whose first Elements entry is a content spread.
-        var literal = ParseLiteral(@"
-let c = Container(){ ...rows, Width: 320.0, Text(""Account"") }
-");
-        Assert.NotNull(literal.OpenParenToken);
-        Assert.NotNull(literal.CloseParenToken);
-        Assert.Null(literal.SpreadExpression);
+        var literal = Parse<CollectionInitializerExpressionSyntax>(
+            "let c = " + target + """{ ...rows, .Width: 320.0, Text("Account") }""");
+        var call = Assert.IsType<CallExpressionSyntax>(literal.Target);
+        Assert.Equal(argumentCount, call.Arguments.Count);
+        Assert.Equal(typeArgumentCount, call.TypeArgumentList?.Arguments.Count ?? 0);
         Assert.Equal(3, literal.Elements.Count);
-
-        var spread = Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[0]);
-        Assert.IsType<SpreadElementExpressionSyntax>(spread.Expression);
-
-        var width = Assert.IsType<FieldInitializerSyntax>(literal.Elements[1]);
-        Assert.Equal("Width", width.FieldIdentifier.Text);
-
-        var bare = Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[2]);
-        Assert.IsType<CallExpressionSyntax>(bare.Expression);
+        Assert.IsType<SpreadElementExpressionSyntax>(Assert.IsType<ExpressionCollectionElementSyntax>(literal.Elements[0]).Expression);
+        var width = Assert.IsType<MemberCollectionElementSyntax>(literal.Elements[1]);
+        Assert.Equal("Width", width.Initializer.FieldIdentifier.Text);
+        Assert.Equal(SyntaxKind.DotToken, width.DotToken.Kind);
+        Assert.IsType<CallExpressionSyntax>(Assert.IsType<ExpressionCollectionElementSyntax>(literal.Elements[2]).Expression);
     }
 
     [Fact]
-    public void ExplicitEmptyParens_LeadingSpreadOnly_NoMember_StaysAdr0117CollectionInitializer()
+    public void ExplicitMember_First_DoesNotReclassifyKeyedOrIndexedEntries()
     {
-        // Regression: with no later member, `Type(){ ...source }` keeps its
-        // pre-ADR-0180 ADR-0117 collection-initializer meaning, unchanged.
-        var tree = SyntaxTree.Parse(@"
-let c = Container(){ ...rows }
-");
-        Assert.Empty(tree.Diagnostics);
-        var varDecl = tree.Root.Members
-            .OfType<GlobalStatementSyntax>()
-            .Select(g => g.Statement)
-            .OfType<VariableDeclarationSyntax>()
-            .Single();
-        Assert.IsType<CollectionInitializerExpressionSyntax>(varDecl.Initializer);
+        var literal = Parse<CollectionInitializerExpressionSyntax>("""
+            let c = Bag(){ .Capacity: 10, ...rows, Capacity: 2, "c": 3, [key] = 4, item, }
+            """);
+        Assert.Collection(
+            literal.Elements,
+            element => Assert.IsType<MemberCollectionElementSyntax>(element),
+            element => Assert.IsType<ExpressionCollectionElementSyntax>(element),
+            element => Assert.IsType<KeyedCollectionElementSyntax>(element),
+            element => Assert.IsType<KeyedCollectionElementSyntax>(element),
+            element => Assert.IsType<IndexedCollectionElementSyntax>(element),
+            element => Assert.IsType<ExpressionCollectionElementSyntax>(element));
+        Assert.Equal(12, literal.Elements.GetWithSeparators().Length);
     }
 
-    [Fact]
-    public void ExplicitEmptyParens_LeadingSpreadThenMember_GenericTarget_IsACompositeLiteral()
+    [Theory]
+    [InlineData("makeMap()")]
+    [InlineData("Dictionary[string, int32]()")]
+    public void LeadingSpreadThenUnmarkedKeys_RemainsACollectionInitializer(string target)
     {
-        // The same marker applies to a generic construction target
-        // (`Type[T](){ ...source, Member: value }`), reached through the same
-        // MaybeWrapWithObjectInitializer dispatch as the non-generic form.
-        var literal = ParseLiteral(@"
-let c = Container[int32](){ ...rows, Width: 320.0 }
-");
-        Assert.NotNull(literal.OpenParenToken);
-        Assert.Equal(2, literal.Elements.Count);
-        Assert.IsType<StructLiteralContentElementSyntax>(literal.Elements[0]);
-        var width = Assert.IsType<FieldInitializerSyntax>(literal.Elements[1]);
-        Assert.Equal("Width", width.FieldIdentifier.Text);
+        var literal = Parse<CollectionInitializerExpressionSyntax>(
+            "let m = " + target + """{ ...pairs, key: 2, "c": 3, [key] = 4 }""");
+        Assert.IsType<KeyedCollectionElementSyntax>(literal.Elements[1]);
+        Assert.IsType<KeyedCollectionElementSyntax>(literal.Elements[2]);
+        Assert.IsType<IndexedCollectionElementSyntax>(literal.Elements[3]);
     }
 
     [Fact]
     public void MembersOnly_TrailingComma_InitializersKeepsFinalSeparator()
     {
-        // Reviewer finding: the filtered Initializers view dropped the final
-        // separator for a members-only literal with a trailing comma, even
-        // though every source element is a kept FieldInitializerSyntax and
-        // GetWithSeparators() should mirror Elements exactly in that case.
-        var literal = ParseLiteral(@"
-let p = Point{ X: 1, Y: 2, }
-");
-        var elementsRaw = literal.Elements.GetWithSeparators();
-        var initializersRaw = literal.Initializers.GetWithSeparators();
-        Assert.Equal(elementsRaw.Length, initializersRaw.Length);
-        Assert.Equal(4, initializersRaw.Length);
-        Assert.IsType<SyntaxToken>(initializersRaw[3]);
-        Assert.Equal(SyntaxKind.CommaToken, ((SyntaxToken)initializersRaw[3]).Kind);
+        var literal = Parse<StructLiteralExpressionSyntax>("let p = Point{ X: 1, Y: 2, }");
+        var raw = literal.Initializers.GetWithSeparators();
+        Assert.Equal(literal.Elements.GetWithSeparators().ToArray(), raw.ToArray());
+        Assert.Equal(4, raw.Length);
+        Assert.Equal(SyntaxKind.CommaToken, Assert.IsType<SyntaxToken>(raw[3]).Kind);
     }
 
-    [Fact]
-    public void ExplicitEmptyParens_LeadingSpreadThenIdentifierColon_RetainsSourceCallTarget()
+    [Theory]
+    [InlineData(".")]
+    [InlineData(".Cap")]
+    [InlineData(".Capacity:")]
+    public void IncompleteExplicitMember_RetainsInitializerContext(string entry)
     {
-        // Reviewer finding: `makeMap(){ ...pairs, key: value }` parses through
-        // the exact same "comma, Identifier ':'" shape as
-        // `Type(){ ...source, Member: value }` — the parser cannot tell a type
-        // name from a function name here, so it must retain the original call
-        // target so the binder can fall back to ADR-0117's collection
-        // initializer when `makeMap` turns out not to name a type.
-        var literal = ParseLiteral(@"
-let m = makeMap(){ ...pairs, key: 2 }
-");
-        Assert.NotNull(literal.SourceCallTarget);
-        Assert.Equal("makeMap", literal.SourceCallTarget!.Identifier.Text);
-        Assert.Equal(0, literal.SourceCallTarget.Arguments.Count);
+        var tree = SyntaxTree.Parse("let c = Bag(){ " + entry + " }");
+        Assert.NotEmpty(tree.Diagnostics);
+        var declaration = Assert.IsType<VariableDeclarationSyntax>(
+            Assert.IsType<GlobalStatementSyntax>(tree.Root.Members.Single()).Statement);
+        var initializer = Assert.IsType<CollectionInitializerExpressionSyntax>(declaration.Initializer);
+        Assert.IsType<MemberCollectionElementSyntax>(Assert.Single(initializer.Elements));
+    }
+
+    private static T Parse<T>(string source)
+        where T : ExpressionSyntax
+    {
+        var tree = SyntaxTree.Parse(source);
+        Assert.Empty(tree.Diagnostics);
+        var declaration = tree.Root.Members
+            .OfType<GlobalStatementSyntax>()
+            .Select(member => member.Statement)
+            .OfType<VariableDeclarationSyntax>()
+            .Last();
+        return Assert.IsType<T>(declaration.Initializer);
     }
 }

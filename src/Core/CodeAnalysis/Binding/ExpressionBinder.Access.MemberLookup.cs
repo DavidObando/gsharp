@@ -294,6 +294,10 @@ internal sealed partial class ExpressionBinder
 
                 return BindObjectInitializerSuffix(objCreate, ctorResult);
 
+            case CollectionInitializerExpressionSyntax { Target: { } collectionTarget } collection:
+                var collectionReceiver = BindAccessorStep(receiver, classSymbol, collectionTarget, receiverSyntax, receiverStart);
+                return BindCollectionInitializerSuffix(collection, collectionReceiver);
+
             // Issue #507 follow-up: support indexer reads through a member chain
             // (`obj.Member[k]`, `obj.A.B[k]`, `obj?.Member[k]`). ParsePostfixChain
             // folds a trailing `[...]` into the right-hand side of the most

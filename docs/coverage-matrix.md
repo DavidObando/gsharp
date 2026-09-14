@@ -158,6 +158,7 @@ MakeChannelExpression
 MapCreationExpression
 MapEntry
 MapKeyword
+MemberCollectionElement
 MemberFieldAssignmentExpression
 MemberIndexAssignmentExpression
 MinusEqualsToken

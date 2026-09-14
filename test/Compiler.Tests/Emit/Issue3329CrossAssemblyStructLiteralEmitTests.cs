@@ -348,6 +348,34 @@ public class Issue3329CrossAssemblyStructLiteralEmitTests
         Assert.Equal($"10{Environment.NewLine}0{Environment.NewLine}", CompileAndRun(source, library, "i3785lib1"));
     }
 
+    [Theory]
+    [InlineData("", "Basket{ Touches: 0, 1, Items: []int32{ 2 }, Counts: map[string, int32]{ \"last\": 3 } }")]
+    [InlineData("data ", "Basket{ Touches: 0, 1, Items: []int32{ 2 }, Counts: map[string, int32]{ \"last\": 3 } }")]
+    [InlineData("", "Basket(){ .Touches: 0, 1, .Items: []int32{ 2 }, .Counts: map[string, int32]{ \"last\": 3 } }")]
+    [InlineData("data ", "Basket(){ .Touches: 0, 1, .Items: []int32{ 2 }, .Counts: map[string, int32]{ \"last\": 3 } }")]
+    public void MixedInitializer_LaterExplicitMagicFieldsAreSoundBeforeAdd(string modifier, string initializer)
+    {
+        var library = $$"""
+            package i3785later
+            {{modifier}}struct Basket {
+                public var Items []int32
+                public var Counts map[string, int32]
+                public var Touches int32
+                func Add(item int32) {
+                    Touches = Touches + Items.Length + Counts.Count + item
+                }
+            }
+            """;
+        var source = $$"""
+            import i3785later
+            let value = {{initializer}}
+            System.Console.WriteLine(value.Touches)
+            System.Console.WriteLine(value.Items.Length)
+            System.Console.WriteLine(value.Counts.Count)
+            """;
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source, library, "i3785later"));
+    }
+
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_3329_").FullName;

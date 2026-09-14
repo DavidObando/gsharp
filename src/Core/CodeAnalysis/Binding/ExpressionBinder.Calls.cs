@@ -278,11 +278,32 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var target = BindExpression(syntax.Target);
+        return BindCollectionInitializerSuffix(syntax, BindExpression(syntax.Target));
+    }
+
+    private BoundExpression BindCollectionInitializerSuffix(CollectionInitializerExpressionSyntax syntax, BoundExpression target)
+    {
         if (target.Type == TypeSymbol.Error || target.Type == null)
         {
             BindCollectionElementsForDiagnostics(syntax);
             return new BoundErrorExpression(null);
+        }
+
+        if (target is BoundStructLiteralExpression { StructType.IsClass: false } literal
+            && !(literal.StructType.Definition ?? literal.StructType).NeedsSynthesizedValueStructDefaultCtor)
+        {
+            var initializers = literal.Initializers.ToBuilder();
+            var initializedMembers = literal.Initializers.Select(initializer => initializer.MemberName).ToHashSet(StringComparer.Ordinal);
+            foreach (var field in literal.StructType.Fields)
+            {
+                if (!initializedMembers.Contains(field.Name)
+                    && GetStructFieldZeroValue(syntax, literal.StructType, field) is { } zeroValue)
+                {
+                    initializers.Add(new BoundFieldInitializer(field, zeroValue));
+                }
+            }
+
+            target = new BoundStructLiteralExpression(literal.Syntax, literal.StructType, initializers.ToImmutable());
         }
 
         var resultType = target.Type;
@@ -290,7 +311,7 @@ internal sealed partial class ExpressionBinder
         var hasSpreadElement = false;
         foreach (var element in syntax.Elements)
         {
-            hasNonIndexedElement |= element is not IndexedCollectionElementSyntax;
+            hasNonIndexedElement |= element is not IndexedCollectionElementSyntax and not MemberCollectionElementSyntax;
             var expressionElement = element as ExpressionCollectionElementSyntax;
             hasSpreadElement |= expressionElement?.Expression is SpreadElementExpressionSyntax;
         }
@@ -312,6 +333,11 @@ internal sealed partial class ExpressionBinder
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(syntax, tempVar, target));
+        if (target is BoundDefaultExpression && resultType.ClrType is { IsValueType: true } clrType)
+        {
+            AppendImportedStructZeroInitializers(syntax, clrType, tempVar, excludedMembers: null, statements);
+        }
+
         EmitCollectionElementAddStatements(tempVar, syntax.Elements, statements);
 
         var resultExpr = new BoundVariableExpression(syntax, tempVar);
@@ -332,11 +358,45 @@ internal sealed partial class ExpressionBinder
         SeparatedSyntaxList<CollectionElementSyntax> elements,
         ImmutableArray<BoundStatement>.Builder statements)
     {
+        var seenMembers = new HashSet<string>(StringComparer.Ordinal);
         foreach (var element in elements)
         {
             BoundExpression bound;
             switch (element)
             {
+                case MemberCollectionElementSyntax member:
+                    var initializer = member.Initializer;
+                    var memberName = initializer.FieldIdentifier.ValueText;
+                    if (!seenMembers.Add(memberName))
+                    {
+                        Diagnostics.ReportSymbolAlreadyDeclared(initializer.FieldIdentifier.Location, memberName);
+                        continue;
+                    }
+
+                    if (initializer.Value is CollectionInitializerExpressionSyntax { Target: null } braced
+                        && TryEmitMemberCollectionInitializer(
+                            new BoundVariableExpression(member, collectionLocal),
+                            memberName,
+                            initializer.FieldIdentifier,
+                            braced,
+                            statements))
+                    {
+                        continue;
+                    }
+
+                    var assignment = BindInitializerMemberAssignment(
+                        collectionLocal,
+                        collectionLocal.Type,
+                        initializer.FieldIdentifier,
+                        initializer.ColonToken,
+                        initializer.Value,
+                        initializer);
+                    if (assignment != null)
+                    {
+                        statements.Add(new BoundExpressionStatement(member, assignment));
+                    }
+
+                    continue;
                 case ExpressionCollectionElementSyntax { Expression: SpreadElementExpressionSyntax spread }:
                     statements.AddRange(BindCollectionSpreadStatements(collectionLocal, spread));
                     continue;
@@ -834,7 +894,7 @@ internal sealed partial class ExpressionBinder
             var assignment = expressionElement?.Expression as AssignmentExpressionSyntax;
             nestedObjectAssignments.Add(assignment);
             allElementsAreAssignments &= assignment is not null;
-            hasNonIndexedElement |= element is not IndexedCollectionElementSyntax;
+            hasNonIndexedElement |= element is not IndexedCollectionElementSyntax and not MemberCollectionElementSyntax;
             hasSpreadElement |= expressionElement?.Expression is SpreadElementExpressionSyntax;
         }
 
@@ -948,11 +1008,6 @@ internal sealed partial class ExpressionBinder
 
         var isVariadic = method.Parameters[paramLen - 1].IsVariadic;
         var fixedParamCount = isVariadic ? paramLen - 1 : paramLen;
-        if (isVariadic)
-        {
-            return fixedParamCount <= 1;
-        }
-
         var requiredParamCount = fixedParamCount;
         for (var i = fixedParamCount - 1; i >= 0; i--)
         {
@@ -982,11 +1037,6 @@ internal sealed partial class ExpressionBinder
 
         var isVariadic = HasParamArrayAttribute(parameters[paramLen - 1]);
         var fixedParamCount = isVariadic ? paramLen - 1 : paramLen;
-        if (isVariadic)
-        {
-            return fixedParamCount <= 1;
-        }
-
         var requiredParamCount = fixedParamCount;
         for (var i = fixedParamCount - 1; i >= 0; i--)
         {
@@ -1092,6 +1142,9 @@ internal sealed partial class ExpressionBinder
         {
             switch (element)
             {
+                case MemberCollectionElementSyntax member:
+                    _ = BindExpression(member.Initializer.Value);
+                    break;
                 case ExpressionCollectionElementSyntax { Expression: SpreadElementExpressionSyntax spread }:
                     _ = BindExpression(spread.Expression);
                     break;

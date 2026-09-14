@@ -32,15 +32,23 @@ public sealed class Issue3785ImportedParamsAddBindingTests
     private static ReferenceResolver FixtureResolver()
         => ReferenceResolver.WithReferences(new[] { typeof(ImportedParamsAddCollection).Assembly.Location });
 
-    [Fact]
-    public void ContentSpread_ImportedTypeWithTrailingParamsAdd_BindsWithoutGs0369()
+    [Theory]
+    [InlineData("ImportedParamsAddCollection")]
+    [InlineData("ImportedOptionalParamsAddCollection")]
+    public void ContentSpread_ImportedTypeWithTrailingParamsAdd_BindsLikeOrdinaryCall(string target)
     {
-        var diagnostics = Bind("""
+        Assert.Empty(Bind($$"""
+            import GSharp.Core.Tests.Fixtures
+            let bag = {{target}}()
+            bag.Add("a")
+            """));
+
+        var diagnostics = Bind($$"""
             import System.Collections.Generic
             import GSharp.Core.Tests.Fixtures
 
             let rows = List[string]{ "a", "b" }
-            let bag = ImportedParamsAddCollection(){ ...rows }
+            let bag = {{target}}(){ .Tag: 7, ...rows }
             """);
 
         Assert.Empty(diagnostics);

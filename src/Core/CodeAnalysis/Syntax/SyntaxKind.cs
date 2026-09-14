@@ -441,6 +441,9 @@ public enum SyntaxKind
 
     // An indexed element of a dictionary collection initializer (`[key] = value`).
     IndexedCollectionElement,
+
+    // ADR-0180: `.Member: value` explicitly assigns the initializer receiver.
+    MemberCollectionElement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

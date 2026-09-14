@@ -31,52 +31,30 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     /// </summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
     /// <param name="typeIdentifier">The struct type identifier.</param>
-    /// <param name="openParenToken">
-    /// The optional explicit empty-parens marker's <c>(</c> (ADR-0180 §B): present only for the
-    /// <c>Type(){ ...source, Member: value }</c> composite-with-leading-spread spelling, which
-    /// disambiguates a leading content spread from ADR-0148's no-parens structural-projection spread.
-    /// </param>
-    /// <param name="closeParenToken">The matching <c>)</c>, present exactly when <paramref name="openParenToken"/> is.</param>
     /// <param name="openBraceToken">The opening brace.</param>
-    /// <param name="spreadToken">The optional leading ellipsis (ADR-0148 structural spread; never set together with <paramref name="openParenToken"/>).</param>
+    /// <param name="spreadToken">The optional leading ellipsis (ADR-0148 structural spread).</param>
     /// <param name="spreadExpression">The optional spread source.</param>
     /// <param name="spreadSeparatorToken">The optional separator after the spread source.</param>
     /// <param name="elements">The ordered field-initializer / content-element / content-spread elements (ADR-0180).</param>
     /// <param name="closeBraceToken">The closing brace.</param>
-    /// <param name="sourceCallTarget">
-    /// The original call expression this literal was reclassified from (ADR-0180 §B
-    /// call-suffix disambiguation, e.g. <c>Type(){ ...source, Member: value }</c>),
-    /// or <c>null</c> for every other struct-literal spelling. The parser cannot tell
-    /// a type name apart from a function name at this position, so it keeps this
-    /// around purely as a fallback: if <see cref="TypeIdentifier"/> turns out not to
-    /// name a type, the binder rebinds as an ADR-0117 collection initializer against
-    /// this call instead of reporting a bogus "type not found" for a valid
-    /// function-call-headed collection initializer (e.g. <c>makeMap(){ ...pairs, key: value }</c>).
-    /// </param>
     public StructLiteralExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken typeIdentifier,
-        SyntaxToken? openParenToken,
-        SyntaxToken? closeParenToken,
         SyntaxToken openBraceToken,
         SyntaxToken? spreadToken,
         ExpressionSyntax? spreadExpression,
         SyntaxToken? spreadSeparatorToken,
         SeparatedSyntaxList<StructLiteralElementSyntax> elements,
-        SyntaxToken closeBraceToken,
-        CallExpressionSyntax? sourceCallTarget = null)
+        SyntaxToken closeBraceToken)
         : base(syntaxTree)
     {
         TypeIdentifier = typeIdentifier;
-        OpenParenToken = openParenToken;
-        CloseParenToken = closeParenToken;
         OpenBraceToken = openBraceToken;
         SpreadToken = spreadToken;
         SpreadExpression = spreadExpression;
         SpreadSeparatorToken = spreadSeparatorToken;
         Elements = elements;
         CloseBraceToken = closeBraceToken;
-        SourceCallTarget = sourceCallTarget;
     }
 
     /// <inheritdoc/>
@@ -84,12 +62,6 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the struct type identifier.</summary>
     public SyntaxToken TypeIdentifier { get; }
-
-    /// <summary>Gets the optional explicit empty-parens marker's <c>(</c> (ADR-0180 §B). See the constructor's remarks.</summary>
-    public SyntaxToken? OpenParenToken { get; }
-
-    /// <summary>Gets the optional explicit empty-parens marker's <c>)</c> (ADR-0180 §B).</summary>
-    public SyntaxToken? CloseParenToken { get; }
 
     /// <summary>Gets the opening brace.</summary>
     public SyntaxToken OpenBraceToken { get; }
@@ -166,14 +138,6 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }
-
-    /// <summary>
-    /// Gets the original call expression this literal was reclassified from
-    /// (ADR-0180 §B call-suffix disambiguation), or <c>null</c> for every
-    /// other struct-literal spelling. See the constructor's remarks.
-    /// </summary>
-    [SyntaxChildIgnore]
-    public CallExpressionSyntax? SourceCallTarget { get; }
 
     /// <summary>Gets or sets the optional type-argument list (Phase 4.3 / ADR-0020), e.g. <c>Result[int, string]{...}</c>. <c>null</c> for non-generic literals or for literals whose type arguments are to be inferred.</summary>
     public TypeArgumentListSyntax? TypeArgumentList

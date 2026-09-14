@@ -663,6 +663,17 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public DeinitSymbol? Deinitializer { get; private set; }
 
+    /// <summary>
+    /// Gets a value indicating whether non-public value-struct field initializers require an
+    /// in-type default constructor rather than call-site field stores.
+    /// </summary>
+    internal bool NeedsSynthesizedValueStructDefaultCtor =>
+        !IsClass
+        && !IsInline
+        && !InstanceFieldInitializers.IsEmpty
+        && (ExplicitConstructors.IsDefaultOrEmpty || !ExplicitConstructors.Any(ctor => ctor.Parameters.Length == 0))
+        && InstanceFieldInitializers.Keys.Any(member => member.Accessibility != Accessibility.Public);
+
     /// <summary>Sets <see cref="Symbol.ContainingType"/> (ADR-0110 / issue #910). Intended to be called exactly once by the binder for a nested type declaration.</summary>
     /// <param name="containingType">The enclosing user-defined type.</param>
     public void SetContainingType(TypeSymbol containingType)

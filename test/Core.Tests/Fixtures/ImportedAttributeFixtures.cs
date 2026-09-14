@@ -154,6 +154,9 @@ public sealed class ImportedParamsAddCollection
 {
     private readonly System.Collections.Generic.List<string> items = new();
 
+    /// <summary>Gets or sets the explicit initializer member.</summary>
+    public int Tag { get; set; }
+
     /// <summary>Gets the items added so far, in order.</summary>
     public System.Collections.Generic.IReadOnlyList<string> Items => items;
 
@@ -164,5 +167,24 @@ public sealed class ImportedParamsAddCollection
     {
         items.Add(item);
         items.AddRange(rest);
+    }
+}
+
+/// <summary>A collection whose Add combines a trailing optional and params argument.</summary>
+public sealed class ImportedOptionalParamsAddCollection
+{
+    /// <summary>Gets or sets the explicit initializer member.</summary>
+    public int Tag { get; set; }
+
+    /// <summary>Gets the number of inserted items.</summary>
+    public int Count { get; private set; }
+
+    /// <summary>Adds the supplied items.</summary>
+    /// <param name="item">The first item.</param>
+    /// <param name="trace">An optional fixed argument.</param>
+    /// <param name="rest">The trailing items.</param>
+    public void Add(string item, bool trace = false, params string[] rest)
+    {
+        Count += 1 + rest.Length;
     }
 }

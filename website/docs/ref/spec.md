@@ -912,7 +912,7 @@ let d2 = Dictionary[string, int32]{ ["a"] = 1, ["b"] = 2 }   // [key] = value en
 let ci = Dictionary[string, int32](StringComparer.OrdinalIgnoreCase){ "Key": 5 }  // ctor args
 ```
 
-Each element lowers against a fresh local seeded by the constructor call: a **bare** element `e` becomes `add.Add(e)`, a **keyed** pair `k: v` becomes `add.Add(k, v)`, and an **indexed** entry `[k] = v` becomes the indexer set `add[k] = v` (overwrite semantics; later duplicate keys win). Element, key, and value expressions are converted through ordinary overload resolution. Identifier-keyed `{ x: y }` entries are reserved for struct-literal field initialization, so an identifier/expression dictionary key must use the `["x"] = y` form. A target type with no accessible `Add` (and no settable indexer for the keyed/bare forms) reports `GS0369` rather than failing internally.
+Each element lowers against a fresh local seeded by the constructor call: a **bare** element `e` becomes `add.Add(e)`, a **keyed** pair `k: v` becomes `add.Add(k, v)`, and an **indexed** entry `[k] = v` becomes the indexer set `add[k] = v` (overwrite semantics; later duplicate keys win). Element, key, and value expressions are converted through ordinary overload resolution. A leading identifier-keyed entry in the no-parentheses form selects a struct/member literal; a call-headed collection initializer such as `Dictionary[K, V](){ key: value }` treats the key as an expression. A target type without the required `Add` capability reports `GS0369` rather than failing internally; indexed entries use ordinary indexer diagnostics.
 
 A **spread element** is written `...source` and is accepted by array, slice,
 and CLR collection initializers:
@@ -929,6 +929,41 @@ empty sources, generic sources, spans, LINQ results, and user-defined element
 conversions are supported. Dictionary-style collection targets may spread an
 enumerable of key/value pairs. A source that is not enumerable, an inaccessible
 enumerator, or an incompatible element type is diagnosed at the spread.
+
+### Mixed member and content initializers
+
+Call-headed initializers accept explicit receiver members, `.Member: value`,
+interleaved with content, spreads, keyed entries, and indexed writes:
+
+```gsharp
+let root = Container(layout){
+    .Width: 320.0,
+    Text("Account"),
+    ...rows,
+    .Height: 100.0,
+}
+```
+
+`.Member:` always initializes a member; unmarked `key: value` always calls
+`Add(key, value)` in this family. A key named `Capacity` does not become a
+property assignment when its target exposes a `Capacity` property. A
+misspelled dotted member is an error, not a collection fallback. Duplicate
+member designators are rejected. Member-only initializers do not require
+`Add`; `.Children: { ... }` populates an existing readable collection member.
+
+The original call is evaluated once, including constructor arguments and
+factory side effects. User elements execute in lexical order against its
+result; an `Add` observes preceding member writes, not later ones. A fresh
+value type's mandatory non-null collection zero values are available before
+the first element, even if a field is assigned later. This repair does not
+evaluate later values early or reset actual constructor/factory results.
+
+The concise member-first form `Container{ Width: 320.0, child, ...rows }`
+is also supported. Existing `Type(args){ Member = value }` object initializers
+are unchanged. A leading `Type{ ...source }` without parentheses remains
+structural projection; `Type(){ ...source }` enumerates content. Normal
+constructor and generic constraints still apply. See ADR-0180 for the
+normative classification and acceptance criteria.
 
 ### Structural projections and object spread
 

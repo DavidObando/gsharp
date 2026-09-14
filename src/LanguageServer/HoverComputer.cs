@@ -305,7 +305,13 @@ public static class HoverComputer
 
         foreach (var context in FindAccessorMemberContexts(tree, token).Concat(FindObjectInitializerMemberContexts(tree, token)))
         {
-            if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out var receiver)
+            ClrReceiver? receiver;
+            if (token.Parent?.Parent is MemberCollectionElementSyntax
+                && InferInitializerReceiverType(tree, compilation, context.ReceiverExpression)?.ClrType is { } clrType)
+            {
+                receiver = new ClrReceiver(clrType, StaticMembers: false);
+            }
+            else if (!TryResolveClrReceiver(tree, compilation, context.ReceiverExpression, out receiver)
                 || receiver is null)
             {
                 continue;
@@ -352,6 +358,17 @@ public static class HoverComputer
         return false;
     }
 
+    private static TypeSymbol? InferInitializerReceiverType(SyntaxTree tree, Compilation compilation, ExpressionSyntax target)
+    {
+        var (function, locals) = SemanticLookup.GetExpressionBindingContext(compilation, tree, target.Span.Start);
+        return GSharp.Core.CodeAnalysis.Binding.Binder.TryInferExpressionType(
+            compilation.GlobalScope,
+            compilation.References ?? ReferenceResolver.Default(),
+            function,
+            locals,
+            target);
+    }
+
     /// <summary>
     /// Resolves a member access on a user-defined G# type (struct/class).
     /// For example, hovering over <c>Name</c> in <c>person.Name</c> where
@@ -371,7 +388,9 @@ public static class HoverComputer
         // is the constructed G# struct/class type.
         foreach (var context in FindAccessorMemberContexts(tree, token).Concat(FindObjectInitializerMemberContexts(tree, token)))
         {
-            var structSymbol = ResolveReceiverStructSymbol(tree, compilation, context.ReceiverExpression);
+            var structSymbol = token.Parent?.Parent is MemberCollectionElementSyntax
+                ? InferInitializerReceiverType(tree, compilation, context.ReceiverExpression) as StructSymbol
+                : ResolveReceiverStructSymbol(tree, compilation, context.ReceiverExpression);
             if (structSymbol != null)
             {
                 var member = LookupMemberOnStruct(structSymbol, context.MemberName);
@@ -565,6 +584,18 @@ public static class HoverComputer
                     {
                         yield return (creation.Target, initializer.PropertyIdentifier.Text);
                     }
+                }
+            }
+        }
+
+        foreach (var collection in FindNodes<CollectionInitializerExpressionSyntax>(tree.Root))
+        {
+            foreach (var member in collection.Elements.OfType<MemberCollectionElementSyntax>())
+            {
+                if (MatchesToken(member.Initializer.FieldIdentifier, token)
+                    && SemanticLookup.GetInitializerTarget(collection) is { } target)
+                {
+                    yield return (target, member.Initializer.FieldIdentifier.ValueText);
                 }
             }
         }
@@ -1598,18 +1629,12 @@ public static class CompletionComputer
         // is invoked implicitly mid-identifier rather than only after a trigger char.
         var replacementRange = ComputeReplacementRange(content, offset);
 
-        // Member-access context (`receiver.<caret>`): offer the receiver's members
-        // instead of the global keyword/symbol list. Returns null only when the
-        // caret is not positioned after a member-access dot.
         var memberItems = TryComputeMemberCompletions(content, compilation, offset);
         if (memberItems != null)
         {
             return ApplyReplacementRange(memberItems, replacementRange);
         }
 
-        // Issue #522 / #897: inside a C#-style object-initializer block
-        // (`T(args) { <caret> }`), offer the writable instance members of the
-        // constructed type instead of the global keyword/symbol list.
         var initializerItems = TryComputeObjectInitializerCompletions(content, compilation, offset);
         if (initializerItems != null)
         {
@@ -1801,12 +1826,17 @@ public static class CompletionComputer
     {
         var root = content.SyntaxTree.Root;
 
-        // Well-formed initializer: the brace block parses as an ObjectCreationExpression.
+        var collection = EnumerateNodes(root).OfType<CollectionInitializerExpressionSyntax>()
+            .Where(candidate => candidate.Elements.OfType<MemberCollectionElementSyntax>().Any(member =>
+                IsInInitializerNamePosition(member, offset)))
+            .OrderBy(candidate => candidate.Span.Length)
+            .FirstOrDefault();
+
         var creation = EnumerateNodes(root).OfType<ObjectCreationExpressionSyntax>()
             .Where(c => IsInInitializerNamePosition(c, offset))
             .OrderBy(c => c.Span.Length)
             .FirstOrDefault();
-        var receiver = creation?.Target;
+        var receiver = collection != null ? SemanticLookup.GetInitializerTarget(collection) : creation?.Target;
 
         // Mid-typing recovery: `T(args) { Partial }` with no `=` parses the brace
         // block as a standalone BlockStatement abutting the constructor call. Recover
@@ -1836,6 +1866,9 @@ public static class CompletionComputer
         AddObjectInitializerMembers(receiverType, items, seen);
         return items;
     }
+
+    private static bool IsInInitializerNamePosition(MemberCollectionElementSyntax member, int offset)
+        => offset >= member.DotToken.Span.End && offset <= member.Initializer.ColonToken.Span.Start;
 
     /// <summary>
     /// Determines whether <paramref name="offset"/> sits inside the braces of
@@ -1999,9 +2032,12 @@ public static class CompletionComputer
     private static IReadOnlyList<CompletionItem>? TryComputeMemberCompletions(DocumentContent content, Compilation compilation, int offset)
     {
         var accessor = FindReceiverAccessor(content.SyntaxTree.Root, offset);
-        if (accessor == null)
+        if (accessor == null
+            || EnumerateNodes(content.SyntaxTree.Root).OfType<MemberCollectionElementSyntax>()
+                .Any(member => IsInInitializerNamePosition(member, offset)))
         {
-            // Not a member-access context — caller falls back to the global list.
+            // A qualified construction's outer accessor must not steal an
+            // explicit initializer designator from member-name completion.
             return null;
         }
 

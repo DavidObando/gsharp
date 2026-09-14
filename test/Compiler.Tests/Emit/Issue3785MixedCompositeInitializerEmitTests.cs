@@ -5,6 +5,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -18,6 +19,14 @@ namespace GSharp.Compiler.Tests.Emit;
 /// </summary>
 public class Issue3785MixedCompositeInitializerEmitTests
 {
+    [Fact]
+    public void MembersAndMultipleSpreads_ObserveLexicalStateAndEnumerateExactlyOnce()
+        => Assert.Equal(Issue3785MixedInitializerCases.LexicalOrderOutput, CompileAndRun(Issue3785MixedInitializerCases.LexicalOrder));
+
+    [Fact]
+    public void ExplicitMemberAndSameNamedKey_RemainIndependent()
+        => Assert.Equal(Issue3785MixedInitializerCases.DistinctMemberAndKeyOutput, CompileAndRun(Issue3785MixedInitializerCases.DistinctMemberAndKey));
+
     [Fact]
     public void MembersOnly_NoContentElements_EmitsExactlyAsPlainStructLiteral()
     {
@@ -193,12 +202,8 @@ public class Issue3785MixedCompositeInitializerEmitTests
     }
 
     [Fact]
-    public void ExplicitEmptyParens_LeadingSpreadThenMember_LowersMemberAndAddInOrder()
+    public void ExplicitMember_AfterLeadingSpread_LowersMemberAndAddInOrder()
     {
-        // ADR-0180 §B's explicit-parens marker: Type(){ ...source, Member: v }
-        // promotes the literal from an ADR-0117 collection initializer to a
-        // composite literal, lowering the spread's Add(...) calls before the
-        // member assignment that follows it lexically.
         var source = """
             package App
             import System
@@ -217,7 +222,7 @@ public class Issue3785MixedCompositeInitializerEmitTests
             }
 
             var rows = List[Node]{ Node{ Name: "a" }, Node{ Name: "b" } }
-            var root = Node(){ ...rows, Tag: 7 }
+            var root = Node(){ ...rows, .Tag: 7 }
             Console.WriteLine(root.Tag)
             Console.WriteLine(root.Children.Count)
             Console.WriteLine(root.Children[0].Name)
@@ -291,13 +296,6 @@ public class Issue3785MixedCompositeInitializerEmitTests
     [Fact]
     public void FunctionCallHead_LeadingSpreadThenKeyedEntry_StaysAdr0117CollectionInitializer()
     {
-        // Reviewer finding: `makeMap(){ ...pairs, key: value }` shares the
-        // exact "comma, Identifier ':'" token shape ADR-0180 §B reserves for
-        // `Type(){ ...source, Member: value }`, but `makeMap` is a function,
-        // not a type — the parser cannot tell the two apart, so the binder
-        // must fall back to ADR-0117's collection initializer (a keyed
-        // `Add(key, value)` entry) instead of inventing a nonexistent
-        // `makeMap` struct type.
         var source = """
             package App
             import System
@@ -321,16 +319,6 @@ public class Issue3785MixedCompositeInitializerEmitTests
     [Fact]
     public void TypedHead_LeadingSpreadThenNonMemberKeyedEntry_StaysAdr0117CollectionInitializer()
     {
-        // Reviewer finding: `Dictionary[string, int32](){ ...pairs, key: 2 }`
-        // shares the exact "comma, Identifier ':'" token shape ADR-0180 §B
-        // reserves for a mixed composite, and — unlike the sibling
-        // `makeMap(){...}` case above — `Dictionary[string, int32]` DOES
-        // resolve to a real type, so the binder cannot rule out the composite
-        // reading merely because the head is a non-type. Disambiguate on the
-        // keyed entries themselves: `key` is not a member of `Dictionary`, so
-        // the whole literal must still be re-read as ADR-0117's collection
-        // initializer (a keyed `Add(key, value)` entry) rather than reporting
-        // `key` as an unknown member.
         var source = """
             package App
             import System
@@ -348,21 +336,15 @@ public class Issue3785MixedCompositeInitializerEmitTests
     }
 
     [Fact]
-    public void TypedHead_LeadingSpreadThenAllMemberKeyedEntries_StaysMixedComposite()
+    public void ExplicitMember_OnImportedCollection_AssignsPropertyWithoutAddingAKey()
     {
-        // Anti-vacuity partner to the test above: when the head resolves to a
-        // real type AND every `Identifier:` entry genuinely names a member of
-        // it (`Capacity` on the imported `List[int32]`), the literal must stay
-        // a mixed composite — member assignment plus ordered `Add` calls —
-        // not be misdiagnosed or wrongly redirected to ADR-0117 collection
-        // lowering.
         var source = """
             package App
             import System
             import System.Collections.Generic
 
             var source = List[int32]{ 1, 2 }
-            var xs = List[int32](){ ...source, Capacity: 10 }
+            var xs = List[int32](){ ...source, .Capacity: 10 }
             Console.WriteLine(xs.Capacity >= 10)
             Console.WriteLine(xs.Count)
             Console.WriteLine(xs[0])
@@ -370,6 +352,301 @@ public class Issue3785MixedCompositeInitializerEmitTests
             """;
 
         Assert.Equal($"True{Environment.NewLine}2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Theory]
+    [InlineData("List[int32]()")]
+    [InlineData("List[int32](4)")]
+    [InlineData("List[int32](capacity: 4)")]
+    [InlineData("System.Collections.Generic.List[int32](4)")]
+    public void ExplicitMemberFirst_PreservesConstructorArgumentsAndQualification(string target)
+    {
+        var source = $$"""
+            import System.Collections.Generic
+
+            let values = {{target}}{ .Capacity: 10, 1, 2 }
+            System.Console.WriteLine(values.Capacity)
+            System.Console.WriteLine(values.Count)
+            """;
+        Assert.Equal($"10{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Theory]
+    [InlineData("key")]
+    [InlineData("Capacity")]
+    public void UnmarkedKey_MemberNameCollisionDoesNotChangeInsertion(string keyName)
+    {
+        var source = $$"""
+            import System.Collections.Generic
+
+            let pairs = Dictionary[string, int32]{ "a": 1 }
+            let {{keyName}} = "b"
+            let values = SortedList[string, int32](){ ...pairs, {{keyName}}: 2 }
+            System.Console.WriteLine(values.Count)
+            System.Console.WriteLine(values["b"])
+            """;
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Theory]
+    [InlineData("key")]
+    [InlineData("Count")]
+    public void UnmarkedKey_ReadOnlyMemberNameDoesNotBecomeAssignment(string keyName)
+    {
+        var source = $$"""
+            import System.Collections.Generic
+
+            let pairs = Dictionary[string, int32]{ "a": 1 }
+            let {{keyName}} = "b"
+            let values = Dictionary[string, int32](){ ...pairs, {{keyName}}: 2 }
+            System.Console.WriteLine(values.Count)
+            System.Console.WriteLine(values["b"])
+            """;
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(".Capacity: 10,")]
+    public void HeterogeneousKeyedIndexedAndSpreadEntries_KeepTheirOperations(string member)
+    {
+        var source = $$"""
+            import System.Collections.Generic
+
+            let pairs = Dictionary[string, int32]{ "a": 1 }
+            let key = "b"
+            let values = SortedList[string, int32](){
+                ...pairs, {{member}} key: 2, "c": 3, [key] = 4,
+            }
+            System.Console.WriteLine(values.Count)
+            System.Console.WriteLine(values["a"])
+            System.Console.WriteLine(values["b"])
+            System.Console.WriteLine(values["c"])
+            """;
+        Assert.Equal($"3{Environment.NewLine}1{Environment.NewLine}4{Environment.NewLine}3{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Theory]
+    [InlineData("struct Basket", "Basket{ Touches: 0, 1 }", 0)]
+    [InlineData("struct Basket", "Basket{ Touches: 0, 1, Items: []int32{ 2 }, Counts: map[string, int32]{ \"final\": 3 } }", 1)]
+    [InlineData("data struct Basket(seed int32)", "Basket(0){ .Touches: 0, 1 }", 0)]
+    [InlineData("data struct Basket(seed int32)", "Basket(0){ .Touches: 0, 1, .Items: []int32{ 2 }, .Counts: map[string, int32]{ \"final\": 3 } }", 1)]
+    public void StructContent_SeesSoundSliceAndMapZerosBeforeLaterAssignments(string declaration, string initializer, int finalLength)
+    {
+        var source = $$"""
+            {{declaration}} {
+                public var Items []int32
+                public var Counts map[string, int32]
+                public var Touches int32
+                func Add(item int32) {
+                    Touches = Touches + Items.Length + Counts.Count + item
+                    Counts["seen"] = item
+                }
+            }
+
+            let value = {{initializer}}
+            System.Console.WriteLine(value.Touches)
+            System.Console.WriteLine(value.Items.Length)
+            System.Console.WriteLine(value.Counts.Count)
+            """;
+        Assert.Equal($"1{Environment.NewLine}{finalLength}{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void MandatoryZeroSeeding_DoesNotRunSkippedFieldInitializerOrHoistExplicitValue()
+    {
+        const string source = """
+            var defaults = 0
+            func DefaultItems() []int32 {
+                defaults++
+                return []int32{ 9 }
+            }
+            func ExplicitItems() []int32 {
+                System.Console.WriteLine("rhs")
+                return []int32{ 2 }
+            }
+            struct Basket {
+                public var Items []int32 = DefaultItems()
+                public var Tag int32
+                func Add(item int32) {
+                    System.Console.WriteLine(Items.Length)
+                }
+            }
+            let value = Basket{ Tag: 0, 1, Items: ExplicitItems() }
+            System.Console.WriteLine(defaults)
+            System.Console.WriteLine(value.Items.Length)
+            """;
+        Assert.Equal($"0{Environment.NewLine}rhs{Environment.NewLine}0{Environment.NewLine}1{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void FactoryReceiver_IsEvaluatedOnceAndPreservesExistingContents()
+    {
+        const string source = """
+            import System.Collections.Generic
+            var calls = 0
+            func Make() List[int32] {
+                calls++
+                return List[int32]{ 42 }
+            }
+            let values = Make(){ .Capacity: 10, 7, ...[]int32{ 8 } }
+            System.Console.WriteLine(calls)
+            System.Console.WriteLine(values.Count)
+            System.Console.WriteLine(values[0])
+            """;
+        Assert.Equal($"1{Environment.NewLine}3{Environment.NewLine}42{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void StructConstructor_InitializesReceiverBeforeOrderedElements()
+    {
+        const string source = """
+            struct Basket {
+                public var Items []int32
+                public var Touches int32
+                init() {
+                    Items = []int32{ 9 }
+                }
+                func Add(item int32) {
+                    Touches = Touches + Items.Length + item
+                }
+            }
+            let value = Basket(){ .Touches: 0, 1, .Items: []int32{ 2, 3 } }
+            System.Console.WriteLine(value.Touches)
+            System.Console.WriteLine(value.Items.Length)
+            """;
+        Assert.Equal($"2{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void SynthesizedStructConstructor_IsNotOverwrittenByZeroSeeding()
+    {
+        const string source = """
+            var calls = 0
+            func Items() []int32 {
+                calls++
+                return []int32{ 9 }
+            }
+            struct Basket {
+                private var hidden int32 = 1
+                public var Values []int32 = Items()
+                public var Tag int32
+                func Add(item int32) {
+                    System.Console.WriteLine(Values.Length + hidden)
+                }
+            }
+            let value = Basket{ Tag: 0, 1, Values: []int32{ 2, 3 } }
+            System.Console.WriteLine(calls)
+            System.Console.WriteLine(value.Values.Length)
+            """;
+        Assert.Equal($"2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void GenericAndNestedMixedNodes_PreserveTargetTyping()
+    {
+        const string source = """
+            import System.Collections.Generic
+            class Node[T any] {
+                public var Value T
+                public var Children List[Node[T]] = List[Node[T]]()
+                public var Transform (T) -> T
+                init(value T) {
+                    Value = value
+                    Transform = (x T) -> x
+                }
+                func Add(child Node[T]) {
+                    Children.Add(child)
+                }
+            }
+            let root = Node[int32](1){
+                .Transform: x -> x + 1,
+                Node[int32](2){ .Value: 3, Node[int32](4){ .Value: 5 } },
+            }
+            System.Console.WriteLine(root.Transform(root.Value))
+            System.Console.WriteLine(root.Children[0].Value)
+            System.Console.WriteLine(root.Children[0].Children[0].Value)
+            """;
+        Assert.Equal($"2{Environment.NewLine}3{Environment.NewLine}5{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void NestedMemberCollection_PopulatesExistingReadOnlyField()
+    {
+        const string source = """
+            import System.Collections.Generic
+            class Owner {
+                public let Children List[int32] = List[int32]{ 42 }
+            }
+            let owner = Owner(){ .Children: { 1, ...[]int32{ 2 } } }
+            System.Console.WriteLine(owner.Children.Count)
+            System.Console.WriteLine(owner.Children[0])
+            System.Console.WriteLine(owner.Children[2])
+            """;
+        Assert.Equal($"3{Environment.NewLine}42{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Theory]
+    [InlineData("Factory.Make(1)")]
+    [InlineData("Factory().Create(1)")]
+    public void QualifiedFactory_PreservesCallAndReceiver(string target)
+    {
+        var source = $$"""
+            import System.Collections.Generic
+            class Factory {
+                shared {
+                    var Calls int32
+                    func Make(seed int32) List[int32] {
+                        Calls++
+                        return List[int32]{ seed }
+                    }
+                }
+                func Create(seed int32) List[int32] {
+                    return Factory.Make(seed)
+                }
+            }
+            let values = {{target}}{ .Capacity: 10, 2 }
+            System.Console.WriteLine(Factory.Calls)
+            System.Console.WriteLine(values[0])
+            System.Console.WriteLine(values.Count)
+            """;
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void QualifiedSourceConstructorAndTrailingAccess_PreserveReceiver()
+    {
+        const string source = """
+            package MixedSource
+            class Bag {
+                var Total int32
+                init(seed int32) { Total = seed }
+                func Add(value int32) { Total = Total + value }
+            }
+            let value = MixedSource.Bag(1){ .Total: 10, 2 }.Total
+            System.Console.WriteLine(value)
+            let count = System.Collections.Generic.List[int32](4){ .Capacity: 10, 1, 2 }.Count
+            System.Console.WriteLine(count)
+            """;
+        Assert.Equal($"12{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void ExplicitMembersAndSpreads_UseOrdinaryUserDefinedConversions()
+    {
+        const string source = """
+            import System.Collections.Generic
+            struct Celsius { var Degrees float64 }
+            func operator implicit(value Celsius) float64 { return value.Degrees }
+            let values = List[float64](){
+                .Capacity: 4,
+                Celsius{ Degrees: 1.5 },
+                ...[]Celsius{ Celsius{ Degrees: 2.5 } },
+            }
+            System.Console.WriteLine(values[0])
+            System.Console.WriteLine(values[1])
+            """;
+        Assert.Equal($"1.5{Environment.NewLine}2.5{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -454,13 +731,7 @@ public class Issue3785MixedCompositeInitializerEmitTests
         }
         finally
         {
-            try
-            {
-                Directory.Delete(tempDir, recursive: true);
-            }
-            catch
-            {
-            }
+            Directory.Delete(tempDir, recursive: true);
         }
     }
 }
