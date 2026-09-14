@@ -43,6 +43,16 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
     /// <param name="spreadSeparatorToken">The optional separator after the spread source.</param>
     /// <param name="elements">The ordered field-initializer / content-element / content-spread elements (ADR-0180).</param>
     /// <param name="closeBraceToken">The closing brace.</param>
+    /// <param name="sourceCallTarget">
+    /// The original call expression this literal was reclassified from (ADR-0180 §B
+    /// call-suffix disambiguation, e.g. <c>Type(){ ...source, Member: value }</c>),
+    /// or <c>null</c> for every other struct-literal spelling. The parser cannot tell
+    /// a type name apart from a function name at this position, so it keeps this
+    /// around purely as a fallback: if <see cref="TypeIdentifier"/> turns out not to
+    /// name a type, the binder rebinds as an ADR-0117 collection initializer against
+    /// this call instead of reporting a bogus "type not found" for a valid
+    /// function-call-headed collection initializer (e.g. <c>makeMap(){ ...pairs, key: value }</c>).
+    /// </param>
     public StructLiteralExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken typeIdentifier,
@@ -53,7 +63,8 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
         ExpressionSyntax? spreadExpression,
         SyntaxToken? spreadSeparatorToken,
         SeparatedSyntaxList<StructLiteralElementSyntax> elements,
-        SyntaxToken closeBraceToken)
+        SyntaxToken closeBraceToken,
+        CallExpressionSyntax? sourceCallTarget = null)
         : base(syntaxTree)
     {
         TypeIdentifier = typeIdentifier;
@@ -65,6 +76,7 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
         SpreadSeparatorToken = spreadSeparatorToken;
         Elements = elements;
         CloseBraceToken = closeBraceToken;
+        SourceCallTarget = sourceCallTarget;
     }
 
     /// <inheritdoc/>
@@ -135,6 +147,17 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
                 builder.Add(memberInitializer);
             }
 
+            // A trailing separator (raw ends in node, separator) is only
+            // authentic to the filtered view when the true final source
+            // element is itself a kept member — otherwise the separator
+            // followed a content element/spread that this view drops, and
+            // fabricating a trailing comma after the last kept member would
+            // misrepresent the source.
+            if (raw.Length > 0 && raw.Length % 2 == 0 && raw[^2] is FieldInitializerSyntax)
+            {
+                builder.Add(raw[^1]);
+            }
+
             var result = new SeparatedSyntaxList<FieldInitializerSyntax>(builder.ToImmutable());
             cachedInitializers = result;
             return result;
@@ -143,6 +166,14 @@ public sealed class StructLiteralExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }
+
+    /// <summary>
+    /// Gets the original call expression this literal was reclassified from
+    /// (ADR-0180 §B call-suffix disambiguation), or <c>null</c> for every
+    /// other struct-literal spelling. See the constructor's remarks.
+    /// </summary>
+    [SyntaxChildIgnore]
+    public CallExpressionSyntax? SourceCallTarget { get; }
 
     /// <summary>Gets or sets the optional type-argument list (Phase 4.3 / ADR-0020), e.g. <c>Result[int, string]{...}</c>. <c>null</c> for non-generic literals or for literals whose type arguments are to be inferred.</summary>
     public TypeArgumentListSyntax? TypeArgumentList

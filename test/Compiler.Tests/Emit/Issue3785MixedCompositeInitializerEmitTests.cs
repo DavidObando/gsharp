@@ -113,6 +113,36 @@ public class Issue3785MixedCompositeInitializerEmitTests
     }
 
     [Fact]
+    public void SpreadContentElement_AddWithTrailingOptionalParameter_IsAccepted()
+    {
+        // Reviewer finding: HasUnaryCollectionAdd required exactly one
+        // DECLARED parameter, so an Add overload with a trailing optional
+        // parameter (callable with just one argument) was wrongly rejected
+        // with GS0369 before overload resolution ever ran.
+        var source = """
+            package App
+            import System
+            import System.Collections.Generic
+
+            class Node {
+                var Name string = ""
+                var Children List[Node] = List[Node]()
+                func Add(child Node, trace bool = false) {
+                    Children.Add(child)
+                }
+            }
+
+            var rows = List[Node]{ Node{ Name: "a" }, Node{ Name: "b" } }
+            var root = Node{ Name: "root", ...rows }
+            Console.WriteLine(root.Children.Count)
+            Console.WriteLine(root.Children[0].Name)
+            Console.WriteLine(root.Children[1].Name)
+            """;
+
+        Assert.Equal($"2{Environment.NewLine}a{Environment.NewLine}b{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
     public void BareContentElement_NoAddMethod_ReportsGs0369()
     {
         // A bare content element on a type with no accessible Add reuses
@@ -256,6 +286,36 @@ public class Issue3785MixedCompositeInitializerEmitTests
             """;
 
         Assert.Equal($"z{Environment.NewLine}", CompileAndRun(source));
+    }
+
+    [Fact]
+    public void FunctionCallHead_LeadingSpreadThenKeyedEntry_StaysAdr0117CollectionInitializer()
+    {
+        // Reviewer finding: `makeMap(){ ...pairs, key: value }` shares the
+        // exact "comma, Identifier ':'" token shape ADR-0180 §B reserves for
+        // `Type(){ ...source, Member: value }`, but `makeMap` is a function,
+        // not a type — the parser cannot tell the two apart, so the binder
+        // must fall back to ADR-0117's collection initializer (a keyed
+        // `Add(key, value)` entry) instead of inventing a nonexistent
+        // `makeMap` struct type.
+        var source = """
+            package App
+            import System
+            import System.Collections.Generic
+
+            func makeMap() Dictionary[string, int32] {
+                return Dictionary[string, int32]()
+            }
+
+            var pairs = Dictionary[string, int32]{ "a": 1 }
+            var key = "b"
+            var m = makeMap(){ ...pairs, key: 2 }
+            Console.WriteLine(m.Count)
+            Console.WriteLine(m["a"])
+            Console.WriteLine(m["b"])
+            """;
+
+        Assert.Equal($"2{Environment.NewLine}1{Environment.NewLine}2{Environment.NewLine}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)

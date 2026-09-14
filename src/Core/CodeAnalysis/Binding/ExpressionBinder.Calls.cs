@@ -902,7 +902,7 @@ internal sealed partial class ExpressionBinder
     private static bool HasUnaryCollectionAdd(TypeSymbol type)
     {
         if (TypeMemberModel.GetMethods(type, "Add", MemberQuery.Instance(MemberKinds.Method))
-            .Any(method => method.Parameters.Length == 1))
+            .Any(IsCallableWithSingleArgument))
         {
             return true;
         }
@@ -921,13 +921,71 @@ internal sealed partial class ExpressionBinder
             includeInternal: false,
             includeExplicitInterfaceMembers: true))
         {
-            if (method.GetParameters().Length == 1)
+            if (IsCallableWithSingleArgument(method.GetParameters()))
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    // Reviewer finding: this is a capability PROBE for "is there an Add
+    // overload reachable with exactly one argument", not the overload
+    // resolution itself — BindCollectionAddCall does the real resolution
+    // (§D). Requiring exactly one DECLARED parameter wrongly rejected
+    // `Add(child Node, trace bool = false)`, which is callable with one
+    // argument via its trailing optional parameter. Mirrors the
+    // required-parameter-count scan OverloadResolver.Candidates.cs'
+    // IsApplicableUserCallable already uses.
+    private static bool IsCallableWithSingleArgument(FunctionSymbol method)
+    {
+        var paramLen = method.Parameters.Length;
+        if (paramLen == 0)
+        {
+            return false;
+        }
+
+        var isVariadic = method.Parameters[paramLen - 1].IsVariadic;
+        var fixedParamCount = isVariadic ? paramLen - 1 : paramLen;
+        if (isVariadic)
+        {
+            return fixedParamCount <= 1;
+        }
+
+        var requiredParamCount = fixedParamCount;
+        for (var i = fixedParamCount - 1; i >= 0; i--)
+        {
+            if (!method.Parameters[i].HasExplicitDefaultValue)
+            {
+                break;
+            }
+
+            requiredParamCount = i;
+        }
+
+        return requiredParamCount <= 1;
+    }
+
+    private static bool IsCallableWithSingleArgument(ParameterInfo[] parameters)
+    {
+        if (parameters.Length == 0)
+        {
+            return false;
+        }
+
+        var requiredParamCount = parameters.Length;
+        for (var i = parameters.Length - 1; i >= 0; i--)
+        {
+            if (!parameters[i].IsOptional)
+            {
+                break;
+            }
+
+            requiredParamCount = i;
+        }
+
+        return requiredParamCount <= 1;
     }
 
     /// <summary>

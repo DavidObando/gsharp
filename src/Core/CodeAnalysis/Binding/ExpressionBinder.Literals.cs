@@ -1982,6 +1982,46 @@ internal sealed partial class ExpressionBinder
         => BindStructLiteralExpression(syntax, resolvedDefinition: null);
 
     /// <summary>
+    /// ADR-0180 §B: rebinds a literal the parser tentatively read as
+    /// `Type(){ ...source, Member: value }` as ADR-0117's
+    /// `funcCall(){ ...source, key: value }` collection initializer once the
+    /// binder has established <see cref="StructLiteralExpressionSyntax.TypeIdentifier"/>
+    /// does not name a type — reusing <see cref="StructLiteralExpressionSyntax.SourceCallTarget"/>
+    /// as the collection-initializer's construction target and converting
+    /// each element back into its ADR-0117 <see cref="CollectionElementSyntax"/>
+    /// shape (a member `Identifier: value` becomes a keyed entry whose key is
+    /// that identifier evaluated as an expression, exactly as the parser's
+    /// own collection-element grammar would have parsed it directly).
+    /// </summary>
+    private BoundExpression BindStructLiteralAsCollectionInitializerFallback(StructLiteralExpressionSyntax syntax)
+    {
+        var callTarget = Invariant.Required(syntax.SourceCallTarget, "fallback requires a retained call target");
+        var elementsBuilder = ImmutableArray.CreateBuilder<SyntaxNode>();
+        var raw = syntax.Elements.GetWithSeparators();
+        foreach (var node in raw)
+        {
+            elementsBuilder.Add(node switch
+            {
+                FieldInitializerSyntax field => new KeyedCollectionElementSyntax(
+                    field.SyntaxTree,
+                    new NameExpressionSyntax(field.SyntaxTree, field.FieldIdentifier),
+                    field.ColonToken,
+                    field.Value),
+                StructLiteralContentElementSyntax content => new ExpressionCollectionElementSyntax(content.SyntaxTree, content.Expression),
+                _ => node,
+            });
+        }
+
+        var collectionInitializer = new CollectionInitializerExpressionSyntax(
+            syntax.SyntaxTree,
+            callTarget,
+            syntax.OpenBraceToken,
+            new SeparatedSyntaxList<CollectionElementSyntax>(elementsBuilder.ToImmutable()),
+            syntax.CloseBraceToken);
+        return BindCollectionInitializerExpression(collectionInitializer);
+    }
+
+    /// <summary>
     /// Binds a struct/class literal <c>Foo{ ... }</c>. When
     /// <paramref name="resolvedDefinition"/> is supplied (issue #1174: a
     /// qualified nested type <c>Container.Nested{ ... }</c> whose simple name
@@ -2222,6 +2262,18 @@ internal sealed partial class ExpressionBinder
                 {
                     Diagnostics.ReportAmbiguousSourceType(syntax.TypeIdentifier.Location, typeName);
                     return new BoundErrorExpression(null);
+                }
+                else if (structSymbol == null && syntax.SourceCallTarget != null)
+                {
+                    // ADR-0180 §B: `typeName` doesn't name a type after all, so this
+                    // was never `Type(){ ...source, Member: value }` — it is
+                    // ADR-0117's pre-existing `funcCall(){ ...source, key: value }`
+                    // collection initializer, whose call-suffix brace shares the
+                    // exact same "comma, then Identifier ':'" token pattern
+                    // (SourceCallTarget's remarks). Rebind the retained call target
+                    // and elements as a collection initializer instead of reporting
+                    // a bogus "type not found" for `makeMap`.
+                    return BindStructLiteralAsCollectionInitializerFallback(syntax);
                 }
                 else if (structSymbol == null)
                 {
@@ -3025,6 +3077,70 @@ internal sealed partial class ExpressionBinder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         statements.Add(new BoundVariableDeclaration(syntax, tempVar, construction));
 
+        // Issue #3329 / ADR-0159: a value-type struct's magic-collection
+        // field loses its "sound zero value" instance-field initializer when
+        // the struct doesn't carry the GSharp.TypeSemantics marker (a PLAIN
+        // struct — see EmitGSharpTypeSemantics's data/primary-ctor gate) and
+        // is therefore constructed through this generic imported-CLR-type
+        // literal lowering instead of the StructSymbol aggregate path. The
+        // GSharp.MagicCollectionFields marker is written independently of
+        // that gate (every gsc-compiled value-type struct with a magic-
+        // collection field carries it), so this only ever fires for a
+        // gsc-compiled type — a genuine external (non-gsc) struct literal
+        // (e.g. a BCL type like `JsonWriterOptions`) is completely unaffected.
+        //
+        // Reviewer finding: this must run BEFORE the ordered element loop
+        // below, not after — an ADR-0180 Add(...) call for a content
+        // element/spread that lexically precedes a member's own omission
+        // would otherwise observe the field's raw (unsound) CLR default,
+        // e.g. a null-backed slice/map, and can throw. So this precomputes
+        // which magic fields are omitted from a source-only scan of the
+        // FieldInitializerSyntax member names (cheap, no binding) and
+        // zero-initializes them up front; explicit member assignments in the
+        // ordered loop below still run afterward, in lexical order, and
+        // simply overwrite whichever zero value was seeded here.
+        if (clrType.IsValueType
+            && ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds))
+        {
+            var declaredMemberNames = new HashSet<string>();
+            foreach (var scanElement in syntax.Elements)
+            {
+                if (scanElement is FieldInitializerSyntax scanField)
+                {
+                    declaredMemberNames.Add(scanField.FieldIdentifier.ValueText);
+                }
+            }
+
+            foreach (var (fieldName, kind) in magicFieldKinds)
+            {
+                if (declaredMemberNames.Contains(fieldName))
+                {
+                    continue;
+                }
+
+                var fieldInfo = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
+                var zeroValue = fieldInfo != null
+                    ? MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(fieldInfo, kind)
+                    : null;
+                if (zeroValue == null
+                    || !TryGetWritableClrMember(
+                        Invariant.Required(fieldInfo, "a magic collection marker has a backing field"),
+                        out _,
+                        out var fieldTargetSymbol,
+                        out var fieldWritable)
+                    || !fieldWritable)
+                {
+                    continue;
+                }
+
+                var convertedZero = conversions.BindConversion(syntax.Location, zeroValue, fieldTargetSymbol);
+                var zeroReceiverExpr = new BoundVariableExpression(syntax, tempVar);
+                statements.Add(new BoundExpressionStatement(
+                    syntax,
+                    new BoundClrPropertyAssignmentExpression(syntax, zeroReceiverExpr, Invariant.Required(fieldInfo, "a magic collection field has metadata"), convertedZero, fieldTargetSymbol, staticContainerType: null)));
+            }
+        }
+
         var seen = new HashSet<string>();
         foreach (var element in syntax.Elements)
         {
@@ -3099,50 +3215,6 @@ internal sealed partial class ExpressionBinder
             statements.Add(new BoundExpressionStatement(
                 initSyntax,
                 new BoundClrPropertyAssignmentExpression(initSyntax, receiverExpr, member, converted, targetSymbol, staticContainerType: null)));
-        }
-
-        // Issue #3329 / ADR-0159: a value-type struct's magic-collection
-        // field loses its "sound zero value" instance-field initializer when
-        // the struct doesn't carry the GSharp.TypeSemantics marker (a PLAIN
-        // struct — see EmitGSharpTypeSemantics's data/primary-ctor gate) and
-        // is therefore constructed through this generic imported-CLR-type
-        // literal lowering instead of the StructSymbol aggregate path. The
-        // GSharp.MagicCollectionFields marker is written independently of
-        // that gate (every gsc-compiled value-type struct with a magic-
-        // collection field carries it), so this only ever fires for a
-        // gsc-compiled type — a genuine external (non-gsc) struct literal
-        // (e.g. a BCL type like `JsonWriterOptions`) is completely unaffected.
-        if (clrType.IsValueType
-            && ImportedAssemblySemantics.TryGetMagicCollectionFields(clrType, out var magicFieldKinds))
-        {
-            foreach (var (fieldName, kind) in magicFieldKinds)
-            {
-                if (seen.Contains(fieldName))
-                {
-                    continue;
-                }
-
-                var fieldInfo = clrType.GetField(fieldName, BindingFlags.Public | BindingFlags.Instance);
-                var zeroValue = fieldInfo != null
-                    ? MagicCollectionZeroValue.TrySynthesizeEmptyInstanceFromMarker(fieldInfo, kind)
-                    : null;
-                if (zeroValue == null
-                    || !TryGetWritableClrMember(
-                        Invariant.Required(fieldInfo, "a magic collection marker has a backing field"),
-                        out _,
-                        out var fieldTargetSymbol,
-                        out var fieldWritable)
-                    || !fieldWritable)
-                {
-                    continue;
-                }
-
-                var convertedZero = conversions.BindConversion(syntax.Location, zeroValue, fieldTargetSymbol);
-                var zeroReceiverExpr = new BoundVariableExpression(syntax, tempVar);
-                statements.Add(new BoundExpressionStatement(
-                    syntax,
-                    new BoundClrPropertyAssignmentExpression(syntax, zeroReceiverExpr, Invariant.Required(fieldInfo, "a magic collection field has metadata"), convertedZero, fieldTargetSymbol, staticContainerType: null)));
-            }
         }
 
         var resultExpr = new BoundVariableExpression(syntax, tempVar);

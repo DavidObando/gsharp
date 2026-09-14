@@ -165,4 +165,39 @@ let c = Container[int32](){ ...rows, Width: 320.0 }
         var width = Assert.IsType<FieldInitializerSyntax>(literal.Elements[1]);
         Assert.Equal("Width", width.FieldIdentifier.Text);
     }
+
+    [Fact]
+    public void MembersOnly_TrailingComma_InitializersKeepsFinalSeparator()
+    {
+        // Reviewer finding: the filtered Initializers view dropped the final
+        // separator for a members-only literal with a trailing comma, even
+        // though every source element is a kept FieldInitializerSyntax and
+        // GetWithSeparators() should mirror Elements exactly in that case.
+        var literal = ParseLiteral(@"
+let p = Point{ X: 1, Y: 2, }
+");
+        var elementsRaw = literal.Elements.GetWithSeparators();
+        var initializersRaw = literal.Initializers.GetWithSeparators();
+        Assert.Equal(elementsRaw.Length, initializersRaw.Length);
+        Assert.Equal(4, initializersRaw.Length);
+        Assert.IsType<SyntaxToken>(initializersRaw[3]);
+        Assert.Equal(SyntaxKind.CommaToken, ((SyntaxToken)initializersRaw[3]).Kind);
+    }
+
+    [Fact]
+    public void ExplicitEmptyParens_LeadingSpreadThenIdentifierColon_RetainsSourceCallTarget()
+    {
+        // Reviewer finding: `makeMap(){ ...pairs, key: value }` parses through
+        // the exact same "comma, Identifier ':'" shape as
+        // `Type(){ ...source, Member: value }` — the parser cannot tell a type
+        // name from a function name here, so it must retain the original call
+        // target so the binder can fall back to ADR-0117's collection
+        // initializer when `makeMap` turns out not to name a type.
+        var literal = ParseLiteral(@"
+let m = makeMap(){ ...pairs, key: 2 }
+");
+        Assert.NotNull(literal.SourceCallTarget);
+        Assert.Equal("makeMap", literal.SourceCallTarget!.Identifier.Text);
+        Assert.Equal(0, literal.SourceCallTarget.Arguments.Count);
+    }
 }

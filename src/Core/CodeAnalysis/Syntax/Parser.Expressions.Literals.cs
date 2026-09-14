@@ -255,7 +255,8 @@ public partial class Parser
             spreadExpression: null,
             spreadSeparatorToken: null,
             elements,
-            closeBrace);
+            closeBrace,
+            sourceCallTarget: callTarget);
         literal.TypeArgumentList = callTarget.TypeArgumentList;
         return literal;
     }

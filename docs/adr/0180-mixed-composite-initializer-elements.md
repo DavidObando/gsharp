@@ -8,7 +8,7 @@
 ## Context
 
 G# already has two separate initializer grammars sharing the same
-`Type{ ... }` / `Type(args){ ... }` brace position, disambiguated by the
+`Type{ ... }` / `Type(){ ... }` brace position, disambiguated by the
 shape of the **first** element (ADR-0117 §2):
 
 - A leading `Identifier ':' Expression` (or an empty `{}`) is a **named/struct
@@ -96,9 +96,11 @@ declared in the type body per ADR-0079 — is exactly that case.
 
 ### A. One ordered element sequence, not two initializer families plus a first-element sniff
 
-A named-target literal (`Type{ ... }` / `Type(args){ ... }` /
-`Type[args]{ ... }` / `Type[args](args){ ... }`) is parsed as **one ordered
-sequence** of initializer elements:
+A named-target literal (`Type{ ... }` / `Type(){ ... }` /
+`Type[args]{ ... }` / `Type[args](){ ... }`) is parsed as **one ordered
+sequence** of initializer elements. The constructor-argument spellings
+(`Type(args){ ... }` / `Type[args](args){ ... }`, non-empty parens) are **not**
+implemented by this ADR — see §B and Follow-up work below.
 
 ```text
 CompositeInitializer  ::= ConstructionTarget '{' CompositeElementList? '}'
@@ -185,6 +187,15 @@ Container(){
 while `Container{ ...headerRows, Width: 320.0 }` (no parens) keeps meaning
 "structurally project `headerRows`'s matching members into `Container`, then
 override `Width`" — ADR-0148, unaffected.
+
+**Scope note**: only the no-parens (`Type{ ... }`) and explicit-empty-parens
+(`Type(){ ... }`) spellings above are implemented by this ADR. The
+constructor-argument spelling — `Type(args){ ...source, Member: value }`,
+non-empty parens — is **not** implemented; it is deferred as follow-up work
+(see Consequences). Writing it today parses as an
+`ObjectCreationExpressionSyntax` (the pre-existing `Type(args){ Field = value
+}` object-initializer grammar) and does not gain this ADR's content
+elements/spreads.
 
 ### C. Lexical-order execution against one synthesized receiver
 
@@ -314,6 +325,11 @@ Negative:
 
 Follow-up work:
 
+- The constructor-argument spelling — `Type(args){ ...source, Member: value }`
+  / `Type[args](args){ ...source, ... }`, non-empty parens — is not
+  implemented by this ADR (see §B's scope note). Extending the explicit-parens
+  marker to also accept constructor arguments is future work, tracked
+  separately from the no-parens/empty-parens forms this ADR ships.
 - Statement-style control-flow elements (`if`/`for` producing zero or more
   children) are an explicit non-goal here and are left to a separate
   control-flow-lowering proposal, per the issue's stated non-goals.
