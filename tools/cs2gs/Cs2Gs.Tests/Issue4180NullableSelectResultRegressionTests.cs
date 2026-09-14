@@ -353,6 +353,378 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         }
     }
 
+    [Theory]
+    [InlineData("Build(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("Build(() => { return type.FullName; }).OfType<int>().Count()", true, "1")]
+    [InlineData("Build(((Func<string>)(() => type.FullName))).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildGeneric(() => type.FullName, () => 42).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildGeneric(selector: () => 42, get: () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildArray(() => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildNestedArray(() => type.FullName).OfType<string[]>().Count()", false, "1")]
+    [InlineData("BuildNestedList(() => type.FullName).OfType<List<string>>().Count()", false, "1")]
+    [InlineData("BuildNestedValues(() => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildUnrelatedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildKeyedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildIntRows(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildObjectRows(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildUnrelatedParams(42, () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildTask(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildTask(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTask(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTask(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildFixedTask(42, async () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildFixedValueTask(42, async () => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildTaskParams(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTaskParams(async () => type.FullName).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildDirect(async () => type.FullName).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildDirect(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildDirectParams(async () => type.FullName).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildDirect((() => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildDirect((((() => type.FullName)))).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildTask((async () => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildValueTask((async () => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildGeneric(selector: (() => type.FullName), get: (() => \"fixed\")).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildGeneric(selector: (() => 42), get: (() => type.FullName)).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildDirect((async () => type.FullName)).OfType<string>().Count()", true, "0")]
+    [InlineData("BuildTaskParams((async () => type.FullName)).OfType<string>().Count()", false, "0")]
+    [InlineData("BuildDirectParams((() => type.FullName)).OfType<string>().Count()", false, "0")]
+    public void CallbackResult_BeforeOfType_PreservesRequiredBridgesAndRuns(
+        string invocation,
+        bool requiresBridge,
+        string expectedOutput)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            public class IntRows<T> : List<int> { }
+            public class ObjectRows<T> : System.Collections.ArrayList { }
+
+            public static class Probe
+            {
+                static IEnumerable<int> Build(Func<string> get) => new[] { get().Length };
+
+                static IEnumerable<T> BuildGeneric<T>(Func<string> get, Func<T> selector)
+                {
+                    _ = get().Length;
+                    return new[] { selector() };
+                }
+
+                static T[] BuildArray<T>(Func<T> selector) => new[] { selector() };
+
+                static IEnumerable<T> BuildDirect<T>(Func<T> selector) => new[] { selector() };
+
+                static IEnumerable<T> BuildDirectParams<T>(params Func<T>[] selectors) =>
+                    new[] { selectors[0]() };
+
+                static IEnumerable<T[]> BuildNestedArray<T>(Func<T> selector) =>
+                    new[] { new[] { selector() } };
+
+                static IEnumerable<List<T>> BuildNestedList<T>(Func<T> selector) =>
+                    new[] { new List<T> { selector() } };
+
+                static Dictionary<int, T>.ValueCollection BuildNestedValues<T>(Func<T> selector) =>
+                    new Dictionary<int, T> { { 0, selector() } }.Values;
+
+                static Dictionary<T, int>.ValueCollection BuildKeyedValues<T>(Func<T> selector) =>
+                    new Dictionary<T, int> { { selector(), 42 } }.Values;
+
+                static IntRows<T> BuildIntRows<T>(Func<T> selector)
+                {
+                    selector();
+                    var rows = new IntRows<T>();
+                    rows.Add(42);
+                    return rows;
+                }
+
+                static ObjectRows<T> BuildObjectRows<T>(Func<T> selector)
+                {
+                    selector();
+                    var rows = new ObjectRows<T>();
+                    rows.Add(42);
+                    return rows;
+                }
+
+                static Dictionary<int, int>.ValueCollection BuildUnrelatedValues<T>(Func<T> selector)
+                {
+                    selector();
+                    return new Dictionary<int, int> { { 0, 42 } }.Values;
+                }
+
+                static IEnumerable<T> BuildUnrelatedParams<T>(T value, params Func<string>[] selectors)
+                {
+                    _ = selectors[0]().Length;
+                    return new[] { value };
+                }
+
+                static IEnumerable<T> BuildTask<T>(Func<Task<T>> selector) =>
+                    new[] { selector().GetAwaiter().GetResult() };
+
+                static IEnumerable<T> BuildValueTask<T>(Func<ValueTask<T>> selector) =>
+                    new[] { selector().AsTask().GetAwaiter().GetResult() };
+
+                static IEnumerable<T> BuildFixedTask<T>(T value, Func<Task<string>> selector)
+                {
+                    _ = selector().GetAwaiter().GetResult().Length;
+                    return new[] { value };
+                }
+
+                static IEnumerable<T> BuildFixedValueTask<T>(T value, Func<ValueTask<string>> selector)
+                {
+                    _ = selector().AsTask().GetAwaiter().GetResult().Length;
+                    return new[] { value };
+                }
+
+                static IEnumerable<T> BuildTaskParams<T>(params Func<Task<T>>[] selectors) =>
+                    new[] { selectors[0]().GetAwaiter().GetResult() };
+
+                static IEnumerable<T> BuildValueTaskParams<T>(params Func<ValueTask<T>>[] selectors) =>
+                    new[] { selectors[0]().AsTask().GetAwaiter().GetResult() };
+
+                static int Run(Type type) => INVOCATION;
+
+                public static void Main() => Console.WriteLine(Run(TYPE));
+            }
+            """.Replace("INVOCATION", invocation, StringComparison.Ordinal)
+                .Replace(
+                    "TYPE",
+                    requiresBridge ? "typeof(string)" : "typeof(List<>).GetGenericArguments()[0]",
+                    StringComparison.Ordinal));
+
+        AssertCompilesAndRuns(printed, expectedOutput, requiresBridge);
+    }
+
+    private static void AssertCompilesAndRuns(string printed, string expectedOutput, bool requiresBridge)
+    {
+        string compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue4180NullableSelectResultRegressionTests),
+            Guid.NewGuid().ToString("N") + "-selector-result");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Probe.gs");
+            string dllPath = Path.Combine(workDir, "Probe.dll");
+            File.WriteAllText(gsPath, printed);
+
+            (int compileExit, string compileOutput) = RunDotnet(
+                $"\"{compiler}\" /target:exe /targetframework:net10.0 /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0,
+                "gsc must compile the translated probe. Output:\n" + compileOutput
+                    + "\n\nTranslated G#:\n" + printed);
+
+            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "the compiled probe must run. Output:\n" + output);
+            Assert.Equal(expectedOutput, output.Trim());
+
+            if (requiresBridge)
+            {
+                Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.DoesNotContain("type.FullName!!", printed, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    [Theory]
+    [InlineData("Func<T>[]")]
+    [InlineData("List<Func<T>>")]
+    [InlineData("IEnumerable<Func<T>>")]
+    [InlineData("ICollection<Func<T>>")]
+    [InlineData("IList<Func<T>>")]
+    [InlineData("IReadOnlyList<Func<T>>")]
+    [InlineData("IReadOnlyCollection<Func<T>>")]
+    [InlineData("Span<Func<T>>")]
+    [InlineData("ReadOnlySpan<Func<T>>")]
+    public void ExpandedParamsSelectorResult_RemainsNullableAndRuns(string carrier)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class Probe
+            {
+                static IEnumerable<T> Build<T>(params CARRIER selectors)
+                {
+                    var results = new List<T>();
+                    foreach (var selector in selectors)
+                    {
+                        results.Add(selector());
+                    }
+
+                    return results;
+                }
+
+                static int Run(Type type) =>
+                    Build(() => type.FullName, () => type.FullName).OfType<string>().Count();
+
+                public static void Main() =>
+                    Console.WriteLine(Run(typeof(List<>).GetGenericArguments()[0]));
+            }
+            """.Replace("CARRIER", carrier, StringComparison.Ordinal));
+
+        AssertCompilesAndRuns(printed, "0", requiresBridge: false);
+    }
+
+    [Theory]
+    [InlineData("List", "Task", "")]
+    [InlineData("Span", "Task", "")]
+    [InlineData("ReadOnlySpan", "Task", "")]
+    [InlineData("List", "ValueTask", ".AsTask()")]
+    [InlineData("Span", "ValueTask", ".AsTask()")]
+    [InlineData("ReadOnlySpan", "ValueTask", ".AsTask()")]
+    public void AsyncExpandedParamsSelectorResult_RemainsNullableAndRuns(
+        string carrier,
+        string envelope,
+        string taskConversion)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            public static class Probe
+            {
+                static IEnumerable<T> Build<T>(params CARRIER<Func<ENVELOPE<T>>> selectors) =>
+                    new[] { selectors[0]()CONVERSION.GetAwaiter().GetResult() };
+
+                static int Run(Type type) =>
+                    Build(async () => type.FullName).OfType<string>().Count();
+
+                public static void Main() =>
+                    Console.WriteLine(Run(typeof(List<>).GetGenericArguments()[0]));
+            }
+            """.Replace("CARRIER", carrier, StringComparison.Ordinal)
+                .Replace("ENVELOPE", envelope, StringComparison.Ordinal)
+                .Replace("CONVERSION", taskConversion, StringComparison.Ordinal));
+
+        AssertCompilesAndRuns(printed, "0", requiresBridge: false);
+    }
+
+    [Fact]
+    public void ParenthesizedSelectorResult_RemainsNullableAtScalarSinkAndRuns()
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class Probe
+            {
+                static IEnumerable<T> Build<T>(Func<T> selector) => new[] { selector() };
+                static string? Find(Type type) => Build((() => type.FullName)).FirstOrDefault();
+
+                public static void Main() =>
+                    Console.WriteLine(Find(typeof(List<>).GetGenericArguments()[0]) == null ? 0 : 1);
+            }
+            """);
+
+        AssertCompilesAndRuns(printed, "0", requiresBridge: false);
+    }
+
+    [Fact]
+    public void SynchronousTaskSelector_KeepsTaskObjectBridge()
+    {
+        string printed = Translate("""
+            #nullable enable annotations
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+            using System.Threading.Tasks;
+
+            public static class Probe
+            {
+                static Task<string>? pending;
+                static IEnumerable<T> Build<T>(Func<Task<T>> selector) =>
+                    new[] { selector().GetAwaiter().GetResult() };
+                public static int Run() => Build(() => pending).OfType<string>().Count();
+            }
+            """);
+
+        Assert.Contains("pending!!", printed, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Outer<T>.Rows", false)]
+    [InlineData("Outer<T>.Middle.Rows", false)]
+    [InlineData("Outer<int>.Rows", true)]
+    public void NestedContainingTypeSelectorResult_PreservesRequiredBridge(
+        string returnType,
+        bool requiresBridge)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public class Outer<T>
+            {
+                public class Rows : List<T> { }
+
+                public class Middle
+                {
+                    public class Rows : List<T> { }
+                }
+            }
+
+            public static class Probe
+            {
+                static RETURN_TYPE Build<T>(Func<T> selector) => throw new NotImplementedException();
+                public static int Run(Type type) => Build(() => type.FullName).OfType<string>().Count();
+            }
+            """.Replace("RETURN_TYPE", returnType, StringComparison.Ordinal));
+
+        if (requiresBridge)
+        {
+            Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("type.FullName!!", printed, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("IEnumerable<T[]>, IEnumerable<int>")]
+    [InlineData("IEnumerable<int>, IEnumerable<T[]>")]
+    public void AmbiguousEnumerableSelectorResult_KeepsBridgeRegardlessOfInterfaceOrder(string interfaces)
+    {
+        string printed = Translate("""
+            using System;
+            using System.Collections;
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public class Rows<T> : INTERFACES
+            {
+                IEnumerator<T[]> IEnumerable<T[]>.GetEnumerator() => throw new NotImplementedException();
+                IEnumerator<int> IEnumerable<int>.GetEnumerator() => throw new NotImplementedException();
+                IEnumerator IEnumerable.GetEnumerator() => throw new NotImplementedException();
+            }
+
+            public static class Probe
+            {
+                static Rows<T> Build<T>(Func<T> selector) => throw new NotImplementedException();
+                public static int Run(Type type) => Build(() => type.FullName).OfType<int>().Count();
+            }
+            """.Replace("INTERFACES", interfaces, StringComparison.Ordinal));
+
+        Assert.Contains("type.FullName!!", printed, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void UserDefinedNullFilteringNames_DoNotSuppressRequiredAssertion()
     {

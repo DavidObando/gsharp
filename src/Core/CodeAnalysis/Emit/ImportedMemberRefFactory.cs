@@ -250,13 +250,15 @@ internal sealed class ImportedMemberRefFactory
             return this.emitCtx.Metadata.AddTypeSpecification(this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         }
 
-        if (element is FunctionTypeSymbol fnElement && fnElement.ClrType == null)
+        if (element is FunctionTypeSymbol fnElement
+            && (fnElement.ClrType == null || TypeSymbol.RequiresSymbolicProjection(fnElement)))
         {
             // ADR-0087 §3 R6: an open-bearing function type
             // (e.g. `(T) -> U`) tokenises as a TypeSpec for the
             // reified `Func<...>` / `Action<...>` shape, with VAR/MVAR
             // slots that the runtime substitutes against the
-            // surrounding generic instantiation.
+            // surrounding generic instantiation. Nullable slots inside a
+            // constructed return type must also avoid its erased CLR backing.
             return this.GetFunctionDelegateTypeSpec(fnElement);
         }
 
@@ -1573,7 +1575,7 @@ internal sealed class ImportedMemberRefFactory
     /// possibly type-erased generic declaring type. When
     /// <paramref name="containingTypeSymbol"/> is an
     /// <see cref="ImportedTypeSymbol"/> whose <see cref="ImportedTypeSymbol.TypeArguments"/>
-    /// contain one or more G# user-defined types (issue #671), the parent
+    /// require symbolic projection (including nullable delegate shapes), the parent
     /// TypeSpec is encoded against those symbolic arguments (resolving to the
     /// real user-defined TypeDef tokens) instead of the type-erased
     /// <c>Open&lt;object,…&gt;</c> shape carried by <paramref name="ctor"/>.
@@ -1637,14 +1639,14 @@ internal sealed class ImportedMemberRefFactory
 
     /// <summary>
     /// Issue #671: builds a constructor MemberRef whose parent TypeSpec is
-    /// encoded from the original symbolic type arguments (resolving to G#
-    /// user-defined TypeDef tokens) rather than the type-erased
+    /// encoded from the original symbolic type arguments, including reified
+    /// nullable delegates, rather than the type-erased
     /// <c>Open&lt;object,…&gt;</c> shape baked into the constructor's
     /// <see cref="MemberInfo.DeclaringType"/>. Mirrors the method
     /// counterpart in <see cref="TryCreateMemberReferenceForConstructedSymbolicContainer"/>.
     /// </summary>
     /// <param name="ctor">The (type-erased) constructor.</param>
-    /// <param name="containingTypeSymbol">The bound type of the call's result; expected to be an <see cref="ImportedTypeSymbol"/> carrying user-defined type args.</param>
+    /// <param name="containingTypeSymbol">The bound type of the call's result; expected to be an <see cref="ImportedTypeSymbol"/> carrying arguments requiring symbolic projection.</param>
     /// <param name="handle">On success, the new MemberRef handle.</param>
     /// <returns>Whether a symbolic-container MemberRef was produced.</returns>
     private bool TryCreateCtorMemberReferenceForConstructedSymbolicContainer(
@@ -1657,7 +1659,7 @@ internal sealed class ImportedMemberRefFactory
             || containingTypeSymbol is not ImportedTypeSymbol imported
             || imported.OpenDefinition == null
             || imported.TypeArguments.IsDefaultOrEmpty
-            || !(imported.HasTypeParameterArgument || imported.TypeArguments.Any(ReflectionMetadataEmitter.ArgIsSymbolicUserDefined)))
+            || !imported.TypeArguments.Any(TypeSymbol.RequiresSymbolicProjection))
         {
             return false;
         }

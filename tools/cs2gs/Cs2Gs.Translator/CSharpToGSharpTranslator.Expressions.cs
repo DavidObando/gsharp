@@ -1480,7 +1480,7 @@ public sealed partial class CSharpToGSharpTranslator
                 node = node.Parent;
             }
 
-            if (node.Parent is not ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation })
+            if (node.Parent is not ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation } argument)
             {
                 return false;
             }
@@ -1497,7 +1497,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            if (this.LambdaResultFeedsNullFilteringInvocation(invocation))
+            // Issue #4074: filtering the invocation's result says nothing about
+            // an unrelated callback's fixed return contract (e.g. Func<string>).
+            if (this.IsGenericSelectorResultArgument(argument, lambda)
+                && this.LambdaResultFeedsNullFilteringInvocation(invocation))
             {
                 return true;
             }
@@ -2250,27 +2253,17 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol targetType = target switch
             {
-                IMethodSymbol method => GetEffectiveReturnType(method),
+                IMethodSymbol method => GetEffectiveReturnType(method.ReturnType, method.IsAsync),
                 IPropertySymbol property => property.Type,
                 _ => this.context.GetTypeInfo(value).ConvertedType,
             };
             return (targetType, target);
-
-            static ITypeSymbol GetEffectiveReturnType(IMethodSymbol method)
-            {
-                if (method.IsAsync
-                    && method.ReturnType is INamedTypeSymbol taskLike
-                    && taskLike.IsGenericType
-                    && taskLike.TypeArguments.Length == 1
-                    && taskLike.Name is "Task" or "ValueTask"
-                    && taskLike.ContainingNamespace?.ToDisplayString() == "System.Threading.Tasks")
-                {
-                    return taskLike.TypeArguments[0];
-                }
-
-                return method.ReturnType;
-            }
         }
+
+        private static ITypeSymbol GetEffectiveReturnType(ITypeSymbol returnType, bool isAsync) =>
+            isAsync && returnType is INamedTypeSymbol taskLike && IsTaskLikeEnvelope(taskLike)
+                ? taskLike.TypeArguments[0]
+                : returnType;
 
         private (ITypeSymbol Type, ISymbol Symbol) FindNullForgivingTarget(
             PostfixUnaryExpressionSyntax value)
@@ -3650,8 +3643,10 @@ public sealed partial class CSharpToGSharpTranslator
                 || this.LambdaResultFlowsToNullableSink(lambda)
                 || this.LambdaResultFeedsUnobservedTaskRun(use)
                 || this.GetLambdaTargetDelegateType(lambda) is not { DelegateInvokeMethod: { } invoke }
-                || invoke.ReturnType is not { IsReferenceType: true }
-                || invoke.ReturnType.NullableAnnotation == NullableAnnotation.Annotated)
+                || GetEffectiveReturnType(
+                    invoke.ReturnType,
+                    lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)) is not { IsReferenceType: true } returnType
+                || returnType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return false;
             }
@@ -3767,15 +3762,15 @@ public sealed partial class CSharpToGSharpTranslator
             // for operators such as FirstOrDefault to inspect instead of
             // throwing at the selector boundary.
             SyntaxNode current = lambda;
+            while (current.Parent is ParenthesizedExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
             if (current.Parent is not ArgumentSyntax argument
                 || argument.Expression != current
                 || argument.Parent?.Parent is not InvocationExpressionSyntax invocation
-                || this.context.SemanticModel.GetOperation(argument)
-                    is not IArgumentOperation { Parameter: { } selectorParameter }
-                || selectorParameter.ContainingSymbol is not IMethodSymbol containingMethod
-                || !ReturnsGenericSelectorResult(
-                    containingMethod.OriginalDefinition,
-                    selectorParameter.Ordinal))
+                || !this.IsGenericSelectorResultArgument(argument, lambda))
             {
                 return false;
             }
@@ -3867,16 +3862,59 @@ public sealed partial class CSharpToGSharpTranslator
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
         }
 
+        private bool IsGenericSelectorResultArgument(
+            ArgumentSyntax argument,
+            AnonymousFunctionExpressionSyntax lambda)
+        {
+            IParameterSymbol parameter =
+                (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)?.Parameter;
+            if (parameter == null
+                && argument.Parent?.Parent is InvocationExpressionSyntax invocation
+                && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation)
+            {
+                // Roslyn may attach the operation to the operand inside parentheses.
+                parameter = operation.Arguments.FirstOrDefault(candidate =>
+                    argument.Span.Contains(candidate.Syntax.Span))?.Parameter;
+            }
+
+            if (parameter == null
+                && !this.TryGetExpandedParamsElementTarget(argument, out _, out parameter))
+            {
+                return false;
+            }
+
+            return parameter?.ContainingSymbol is IMethodSymbol method
+                && ReturnsGenericSelectorResult(
+                    method.OriginalDefinition,
+                    parameter.Ordinal,
+                    lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword));
+        }
+
         private static bool ReturnsGenericSelectorResult(
             IMethodSymbol genericMethod,
-            int parameterOrdinal)
+            int parameterOrdinal,
+            bool isAsync)
         {
             if (!genericMethod.IsGenericMethod
                 || parameterOrdinal < 0
-                || parameterOrdinal >= genericMethod.Parameters.Length
-                || genericMethod.Parameters[parameterOrdinal].Type is not INamedTypeSymbol delegateType
+                || parameterOrdinal >= genericMethod.Parameters.Length)
+            {
+                return false;
+            }
+
+            IParameterSymbol parameter = genericMethod.Parameters[parameterOrdinal];
+            ITypeSymbol selectorType = parameter.Type switch
+            {
+                IArrayTypeSymbol array when parameter.IsParams => array.ElementType,
+                INamedTypeSymbol named when parameter.IsParams && IsSupportedParamsCollectionType(named) =>
+                    named.TypeArguments[0],
+                _ => parameter.Type,
+            };
+            if (selectorType is not INamedTypeSymbol delegateType
                 || delegateType.TypeKind != TypeKind.Delegate
-                || delegateType.DelegateInvokeMethod?.ReturnType is not ITypeParameterSymbol resultParameter
+                || (isAsync && !IsTaskLikeEnvelope(delegateType.DelegateInvokeMethod?.ReturnType))
+                || GetEffectiveReturnType(delegateType.DelegateInvokeMethod?.ReturnType, isAsync)
+                    is not ITypeParameterSymbol resultParameter
                 || resultParameter.TypeParameterKind != TypeParameterKind.Method
                 || !SymbolEqualityComparer.Default.Equals(
                     resultParameter.ContainingSymbol,
@@ -3885,13 +3923,52 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            return SymbolEqualityComparer.Default.Equals(
-                    genericMethod.ReturnType,
-                    resultParameter)
-                || (genericMethod.ReturnType is INamedTypeSymbol named
-                    && named.TypeArguments.Any(argument =>
-                        SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
+            ITypeSymbol resultType = genericMethod.ReturnType;
+            if (resultType is INamedTypeSymbol namedResult)
+            {
+                INamedTypeSymbol enumerable =
+                    namedResult.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T
+                        ? namedResult
+                        : null;
+                foreach (INamedTypeSymbol iface in namedResult.AllInterfaces)
+                {
+                    if (iface.OriginalDefinition.SpecialType != SpecialType.System_Collections_Generic_IEnumerable_T)
+                    {
+                        continue;
+                    }
+
+                    if (enumerable != null && !SymbolEqualityComparer.Default.Equals(enumerable, iface))
+                    {
+                        return false;
+                    }
+
+                    enumerable = iface;
+                }
+
+                if (enumerable != null)
+                {
+                    resultType = GetEnumerableElementType(enumerable);
+                }
+                else if (namedResult.SpecialType == SpecialType.System_Collections_IEnumerable
+                    || namedResult.AllInterfaces.Any(iface =>
+                        iface.SpecialType == SpecialType.System_Collections_IEnumerable))
+                {
+                    return false;
+                }
+            }
+
+            return ContainsSelectorResult(resultType, resultParameter);
         }
+
+        private static bool ContainsSelectorResult(ITypeSymbol type, ITypeParameterSymbol resultParameter) =>
+            SymbolEqualityComparer.Default.Equals(type, resultParameter)
+            || (type is IArrayTypeSymbol array
+                && ContainsSelectorResult(array.ElementType, resultParameter))
+            || (type is INamedTypeSymbol named
+                && (named.TypeArguments.Any(argument =>
+                        ContainsSelectorResult(argument, resultParameter))
+                    || (named.ContainingType is { } containingType
+                        && ContainsSelectorResult(containingType, resultParameter))));
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)
         {

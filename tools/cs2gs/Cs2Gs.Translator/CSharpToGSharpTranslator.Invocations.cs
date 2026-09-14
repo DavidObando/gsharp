@@ -1883,7 +1883,7 @@ public sealed partial class CSharpToGSharpTranslator
         // differs, instead of leaving gsc to materialize the wrong delegate ABI.
         private GExpression TranslateExactCallableArgument(ArgumentSyntax argument)
         {
-            ExpressionSyntax expression = argument.Expression;
+            ExpressionSyntax expression = StripParentheses(argument.Expression);
             if (expression is AnonymousFunctionExpressionSyntax lambda
                 && this.TryGetConvertedDelegateInvoke(lambda, out IMethodSymbol lambdaInvoke))
             {

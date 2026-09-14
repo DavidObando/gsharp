@@ -83,6 +83,40 @@ public class Issue818VariadicAnonymousFunctionTypeEmitTests
         Assert.Equal($"5{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
+    [Theory]
+    [InlineData("async () -> T", "", "nil", "0")]
+    [InlineData("async () -> T", "", "\"present\"", "1")]
+    [InlineData("List[async () -> T]", "[string?]", "nil", "0")]
+    [InlineData("List[async () -> T]", "[string?]", "\"present\"", "1")]
+    [InlineData("Span[async () -> T]", "[string?]", "nil", "0")]
+    [InlineData("Span[async () -> T]", "[string?]", "\"present\"", "1")]
+    [InlineData("ReadOnlySpan[async () -> T]", "[string?]", "nil", "0")]
+    [InlineData("ReadOnlySpan[async () -> T]", "[string?]", "\"present\"", "1")]
+    public void AsyncVariadicSelector_NullableResult_PreservesDelegateCarrierType(
+        string carrier,
+        string typeArguments,
+        string value,
+        string expected)
+    {
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+            import System.Linq
+            import System.Threading.Tasks
+
+            func Build[T](selectors ...CARRIER) IEnumerable[T] ->
+                []T{selectors[0]().GetAwaiter().GetResult()}
+
+            let text string? = VALUE
+            Console.WriteLine(BuildTYPEARGS(async () -> text).OfType[string]().Count())
+            """.Replace("VALUE", value, StringComparison.Ordinal)
+                .Replace("TYPEARGS", typeArguments, StringComparison.Ordinal)
+                .Replace("CARRIER", carrier, StringComparison.Ordinal);
+
+        Assert.Equal(expected + Environment.NewLine, CompileAndRun(source));
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_issue818_emit_").FullName;
