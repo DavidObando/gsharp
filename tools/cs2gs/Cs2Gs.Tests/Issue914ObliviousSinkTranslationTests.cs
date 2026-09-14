@@ -171,6 +171,26 @@ namespace Demo
     }
 
     [Fact]
+    public void Oblivious_ShadowedNestedDelegateParameter_DoesNotPromoteOuterParameter()
+    {
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class C
+    {
+        public void Run(System.Action<object> callback)
+        {
+            System.Action<System.Action<object>> invoke =
+                callback => callback(null);
+        }
+    }
+}");
+
+        Assert.Contains("Run(callback (object) -> void)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Run(callback (object?) -> void)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Oblivious_SourceNamedDelegatePromotion_IsConsistentAcrossForwardingParameters()
     {
         string printed = TranslateOblivious(@"

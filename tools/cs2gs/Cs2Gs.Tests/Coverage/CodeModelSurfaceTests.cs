@@ -46,7 +46,7 @@ public class CodeModelSurfaceTests
     {
         var assembly = typeof(GNode).Assembly;
         var concrete = assembly.GetExportedTypes()
-            .Where(t => t.IsClass && !t.IsAbstract && typeof(GNode).IsAssignableFrom(t))
+            .Where(GNodeSamples.IsConcreteNodeType)
             .ToList();
 
         var groups = new (string Header, Func<Type, bool> Match)[]

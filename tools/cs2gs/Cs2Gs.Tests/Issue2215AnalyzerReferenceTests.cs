@@ -26,6 +26,58 @@ namespace Cs2Gs.Tests;
 public class Issue2215AnalyzerReferenceTests
 {
     [Fact]
+    public void ResolveGsgenTool_TriesGscLocationBeforeWorkingDirectoryFallback()
+    {
+        string testRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(ResolveGsgenTool_TriesGscLocationBeforeWorkingDirectoryFallback),
+            Guid.NewGuid().ToString("N"));
+        string gscRoot = Path.Combine(testRoot, "gsc-root");
+        string gscDirectory = Path.Combine(gscRoot, "out", "bin", "Release", "Compiler");
+        try
+        {
+            Directory.CreateDirectory(gscDirectory);
+
+            string cwdRoot = Path.Combine(testRoot, "cwd-root");
+            string cwdStart = Path.Combine(cwdRoot, "work");
+            Directory.CreateDirectory(cwdStart);
+            string cwdGsgen = Path.Combine(cwdRoot, "out", "bin", "Release", "Gsgen.Cli", "gsgen.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(cwdGsgen));
+            File.WriteAllText(cwdGsgen, string.Empty);
+
+            Assert.Equal(
+                cwdGsgen,
+                GscInvoker.ResolveGsgenTool(cwdGsgen, "Release"));
+            Assert.Equal(
+                cwdGsgen,
+                GscInvoker.ResolveGsgenTool(null, "Release", " ", cwdStart));
+
+            string gscRelativeGsgen = Path.Combine(
+                gscRoot,
+                "out",
+                "bin",
+                "Release",
+                "Gsgen.Cli",
+                "gsgen.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(gscRelativeGsgen));
+            File.WriteAllText(gscRelativeGsgen, string.Empty);
+
+            Assert.Equal(
+                gscRelativeGsgen,
+                GscInvoker.ResolveGsgenTool(null, "Release", gscDirectory, cwdStart));
+            Assert.Equal(
+                cwdGsgen,
+                GscInvoker.ResolveGsgenTool(cwdGsgen, "Release", gscDirectory, cwdStart));
+        }
+        finally
+        {
+            TryDelete(testRoot);
+        }
+
+        Assert.False(Directory.Exists(testRoot));
+    }
+
+    [Fact]
     public async Task Pipeline_ForwardsAnalyzerReference_GeneratorMemberReachesCompiledAssembly()
     {
         string compiler = FindSiblingTool("Compiler", "gsc.dll");
@@ -101,6 +153,20 @@ public class Issue2215AnalyzerReferenceTests
         string root = Path.Combine(AppContext.BaseDirectory, "pipeline-tests", label, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static void TryDelete(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string NewScratchDir(string label)

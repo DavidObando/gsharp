@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
@@ -18,7 +19,7 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #4167 (tracked by #4153, umbrella #3501): one of #4153's own
+/// Issue #4167 (historical root #4153, umbrella #3501): one of #4153's own
 /// candidate call sites, confirmed live by gate run 34370082359 --
 /// <c>CSharpToGSharpTranslator.Types.cs</c>'s
 /// <c>RequiresEnumStatementFallback</c> used a property pattern combining an
@@ -33,13 +34,37 @@ namespace Cs2Gs.Tests;
 /// The fix mirrors #4155 exactly: decompose the nested pattern into a plain
 /// designated <c>is</c> narrowing followed by a <c>!=</c> comparison --
 /// semantically identical C#, proven below to survive translation + gsc
-/// compilation. Like #4155, this is a workaround for cs2gs's own source, not
-/// a fix for #4153 itself (which remains open and still tracks the ~8
-/// remaining candidate call sites in this project using the same shape).
+/// compilation. Like #4155, this is a source-level workaround for historical
+/// gsc issue #4153; #4167 guards cs2gs's remaining self-migration surface.
 /// </para>
 /// </summary>
 public sealed class Issue4167SelfHostedEnumPatternRegressionTests
 {
+    private const string RoslynEnumTypePattern =
+        @"(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind|SyntaxKind|DiagnosticSeverity)";
+
+    private static readonly Regex RoslynEnumPropertyPattern = new(
+        @":\s*(?:not\s+|\(\s*)*(?:[A-Za-z_]\w*\.)*(?:RefKind|TypeKind|SymbolKind|SpecialType|MethodKind|NullableAnnotation|TypeParameterKind|Accessibility|NullableFlowState|VarianceKind)\.\w+",
+        RegexOptions.CultureInvariant);
+
+    private static readonly Regex RoslynEnumDirectPattern = new(
+        $@"\bis\s+(?:(?:not)\s+|\(\s*)*(?:[A-Za-z_]\w*\.)*{RoslynEnumTypePattern}\.\w+",
+        RegexOptions.CultureInvariant);
+
+    [Theory]
+    [InlineData("kind is not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement)")]
+    [InlineData("kind is (not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement))")]
+    public void DirectPatternGuard_CatchesParenthesizedAndNestedNot(string source) =>
+        Assert.Matches(RoslynEnumDirectPattern, source);
+
+    [Theory]
+    [InlineData("symbol is IParameterSymbol { RefKind: (RefKind.Out or RefKind.Ref) }")]
+    [InlineData("symbol is ITypeSymbol { TypeKind: not (TypeKind.Enum or TypeKind.Delegate) }")]
+    [InlineData("symbol is IMethodSymbol { MethodKind: (not (MethodKind.LocalFunction)) }")]
+    [InlineData("symbol is ITypeSymbol { SpecialType: (Microsoft.CodeAnalysis.SpecialType.System_Object) }")]
+    public void PropertyPatternGuard_CatchesParenthesizedAndNestedNot(string source) =>
+        Assert.Matches(RoslynEnumPropertyPattern, source);
+
     /// <summary>
     /// Translates cs2gs's own <c>CSharpToGSharpTranslator.Types.cs</c> with
     /// the production translator (exactly what self-migration does) and
@@ -71,19 +96,103 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
         Assert.Contains("enumType.TypeKind != TypeKind.Enum", typesGs, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task TranslatedOwnSource_UsesEqualityForRoslynEnumConstants()
+    {
+        IReadOnlyDictionary<string, string> translated = await TranslateOwnFiles(
+            "Cs2Gs.Translator");
+
+        string analyzerGs = translated["ObliviousNullabilityAnalyzer.cs"];
+        string compact = string.Concat(analyzerGs.Where(c => !char.IsWhiteSpace(c)));
+        Assert.DoesNotContain("parameter.RefKindisRefKind", compact, StringComparison.Ordinal);
+        Assert.Matches(
+            @"parameter\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.Out",
+            compact);
+
+        foreach (string source in translated.Values)
+        {
+            string code = StripComments(source);
+            Assert.DoesNotMatch(RoslynEnumPropertyPattern, code);
+            Assert.DoesNotMatch(RoslynEnumDirectPattern, code);
+        }
+
+        string cs2gsRoot = TestFixtureSource.Resolve("tools", "cs2gs");
+        foreach (string projectDirectory in Directory.EnumerateDirectories(cs2gsRoot, "Cs2Gs.*"))
+        {
+            if (projectDirectory.EndsWith(".Tests", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (string sourcePath in Directory.EnumerateFiles(
+                         projectDirectory,
+                         "*.cs",
+                         SearchOption.AllDirectories))
+            {
+                string code = StripComments(File.ReadAllText(sourcePath));
+                Assert.DoesNotMatch(RoslynEnumPropertyPattern, code);
+                Assert.DoesNotMatch(RoslynEnumDirectPattern, code);
+            }
+        }
+
+        string invocationsGs = translated["CSharpToGSharpTranslator.Invocations.cs"];
+        string compactInvocations = string.Concat(invocationsGs.Where(c => !char.IsWhiteSpace(c)));
+        Assert.Matches(
+            @"local\.RefKind!=(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.None",
+            compactInvocations);
+        Assert.Matches(
+            @"parameter\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.In",
+            compactInvocations);
+        Assert.Matches(
+            @"valueType(?:!!)?\.TypeKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*TypeKind\.Struct",
+            compactInvocations);
+
+        string patternsGs = translated["CSharpToGSharpTranslator.Patterns.cs"];
+        string compactPatterns = string.Concat(patternsGs.Where(c => !char.IsWhiteSpace(c)));
+        Assert.Matches(
+            @"refIndexer\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.RefReadOnly",
+            compactPatterns);
+    }
+
     private static async Task<string> TranslateOwnFile(string projectDirName, string fileName)
+    {
+        IReadOnlyDictionary<string, string> translated = await TranslateOwnFiles(
+            projectDirName,
+            fileName);
+        return translated[fileName];
+    }
+
+    private static string StripComments(string source) =>
+        Regex.Replace(
+            source,
+            @"/\*.*?\*/|//[^\r\n]*|#[^\r\n]*",
+            string.Empty,
+            RegexOptions.CultureInvariant | RegexOptions.Singleline);
+
+    private static async Task<IReadOnlyDictionary<string, string>> TranslateOwnFiles(
+        string projectDirName,
+        params string[] fileNames)
     {
         string projectPath = TestFixtureSource.Resolve(
             "tools", "cs2gs", projectDirName, projectDirName + ".csproj");
         LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
 
-        LoadedDocument document = Assert.Single(
-            project.Documents,
-            d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal));
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        return GSharpPrinter.Print(unit);
+        IEnumerable<LoadedDocument> documents = fileNames.Length == 0
+            ? project.Documents
+            : fileNames.Select(fileName => Assert.Single(
+                project.Documents,
+                d => d.FilePath.EndsWith(fileName, StringComparison.Ordinal)));
+        var translated = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (LoadedDocument document in documents)
+        {
+            string fileName = Path.GetFileName(document.FilePath);
+            var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+            CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+            translated.Add(fileName, GSharpPrinter.Print(unit));
+        }
+
+        return translated;
     }
 
     /// <summary>

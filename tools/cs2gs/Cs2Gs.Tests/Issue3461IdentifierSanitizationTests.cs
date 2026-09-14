@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -22,6 +23,34 @@ namespace Cs2Gs.Tests;
 /// <summary>Issue #3461: every emitted identifier must avoid G# reserved spellings without collisions.</summary>
 public sealed class Issue3461IdentifierSanitizationTests
 {
+    [Fact]
+    public async Task ImportedContextualFixtures_PreserveObliviousMethodsAndNullableMembers()
+    {
+        string projectPath = TestFixtureSource.Resolve(
+            "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj");
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        INamedTypeSymbol methods = project.Compilation.GetTypeByMetadataName(
+            "Cs2Gs.Tests.ImportedContextualStatics");
+        Assert.NotNull(methods);
+        IMethodSymbol method = methods.GetMembers("base")
+            .OfType<IMethodSymbol>()
+            .Single(candidate => candidate.Arity == 1);
+        INamedTypeSymbol fields = project.Compilation.GetTypeByMetadataName(
+            "Cs2Gs.Tests.ImportedContextualStaticFields");
+        Assert.NotNull(fields);
+        IFieldSymbol field = fields.GetMembers("base").OfType<IFieldSymbol>().Single();
+
+        Assert.Equal(NullableAnnotation.None, method.ReturnType.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.None, method.Parameters.Single().Type.NullableAnnotation);
+        Assert.Equal(
+            NullableAnnotation.Annotated,
+            field.Type.NullableAnnotation);
+    }
+
     [Fact]
     public void LanguageServerParamsParameter_DeclarationAndReference_Bind()
     {
@@ -1351,28 +1380,30 @@ public static class ImportedContextualStatics
     public static T @nameof<T>(T value) => value;
 }
 
+#nullable enable annotations
+
 /// <summary>Imported contextual static field fixture.</summary>
 public static class ImportedContextualStaticFields
 {
     /// <summary>Reserved index-prefix field.</summary>
-    public static readonly int[] @base = { 3 };
+    public static readonly int[]? @base = { 3 };
 
     /// <summary>Reserved index-prefix field.</summary>
-    public static readonly int[] @stackalloc = { 5 };
+    public static readonly int[]? @stackalloc = { 5 };
 
     /// <summary>Reserved invocation field.</summary>
-    public static readonly Func<int> @nameof = () => 7;
+    public static readonly Func<int>? @nameof = () => 7;
 }
 
 /// <summary>Imported contextual static property fixture.</summary>
 public static class ImportedContextualStaticProperties
 {
     /// <summary>Reserved index-prefix property.</summary>
-    public static int[] @base { get; } = new[] { 4 };
+    public static int[]? @base { get; } = new[] { 4 };
 
     /// <summary>Reserved index-prefix property.</summary>
-    public static int[] @stackalloc { get; } = new[] { 6 };
+    public static int[]? @stackalloc { get; } = new[] { 6 };
 
     /// <summary>Reserved invocation property.</summary>
-    public static Func<int> @nameof { get; } = () => 8;
+    public static Func<int>? @nameof { get; } = () => 8;
 }

@@ -130,7 +130,7 @@ public sealed partial class CSharpToGSharpTranslator
         // unconstrained) type parameter — the forms whose `?` the G# type mapper
         // preserves and which inference over a non-null initializer would drop.
         private static bool IsAnnotatedNullableReference(ITypeSymbol type) =>
-            type is { NullableAnnotation: NullableAnnotation.Annotated }
+            type?.NullableAnnotation == NullableAnnotation.Annotated
                 && (type.IsReferenceType || type is ITypeParameterSymbol);
 
         // Issue #3855: true when <paramref name="parameter"/> is a lambda
@@ -260,7 +260,8 @@ public sealed partial class CSharpToGSharpTranslator
         // input here.
         private static bool MentionsMethodTypeParameter(ITypeSymbol type) => type switch
         {
-            ITypeParameterSymbol { TypeParameterKind: TypeParameterKind.Method } => true,
+            ITypeParameterSymbol parameter =>
+                parameter.TypeParameterKind == TypeParameterKind.Method,
             IArrayTypeSymbol array => MentionsMethodTypeParameter(array.ElementType),
             IPointerTypeSymbol pointer => MentionsMethodTypeParameter(pointer.PointedAtType),
             INamedTypeSymbol named => named.TypeArguments.Any(MentionsMethodTypeParameter),
@@ -753,9 +754,15 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (!this.IsObliviousCompilation()
                 || type is not ArrowTypeReference arrow
-                || symbol.Type is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                || delegateType.DelegateInvokeMethod is not { } invoke
-                || invoke.Parameters.Length != arrow.ParameterTypes.Count)
+                || symbol.Type is not INamedTypeSymbol delegateType
+                || delegateType.TypeKind != TypeKind.Delegate
+                || delegateType.DelegateInvokeMethod == null)
+            {
+                return type;
+            }
+
+            IMethodSymbol invoke = delegateType.DelegateInvokeMethod;
+            if (invoke.Parameters.Length != arrow.ParameterTypes.Count)
             {
                 return type;
             }
@@ -771,8 +778,7 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (InvocationExpressionSyntax invocation in methodSyntax
                 .DescendantNodes().OfType<InvocationExpressionSyntax>())
             {
-                if (!SymbolEqualityComparer.Default.Equals(
-                        this.context.GetSymbolInfo(invocation.Expression).Symbol, symbol))
+                if (!this.BindsToGuardSymbol(invocation.Expression, symbol))
                 {
                     continue;
                 }
@@ -1413,16 +1419,18 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        private static bool IsStoredMemberNullabilitySymbol(ISymbol symbol) =>
-            symbol is IFieldSymbol or IPropertySymbol
-            || symbol is IParameterSymbol
+        private static bool IsStoredMemberNullabilitySymbol(ISymbol symbol)
+        {
+            if (symbol is IFieldSymbol or IPropertySymbol)
             {
-                ContainingSymbol: IMethodSymbol
-                {
-                    MethodKind: MethodKind.Constructor,
-                    ContainingType.IsRecord: true,
-                },
-            };
+                return true;
+            }
+
+            return symbol is IParameterSymbol parameter
+                && parameter.ContainingSymbol is IMethodSymbol method
+                && method.MethodKind == MethodKind.Constructor
+                && method.ContainingType.IsRecord;
+        }
 
         // Issue #2521: sink lowering must use the target contract that G# will
         // actually bind, not consumer-side taint recorded for an imported

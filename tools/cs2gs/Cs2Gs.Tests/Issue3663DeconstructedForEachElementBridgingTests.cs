@@ -93,10 +93,12 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("List[(Owner Registry?, Name string)]", printed);
+        Assert.True(
+            printed.Contains("List[(Owner Registry?, Name string)]", StringComparison.Ordinal),
+            printed);
         Assert.Contains("Describe(o!!)", printed);
         Assert.Contains("o!!.Rank", printed);
-        Assert.Contains("n.Length", printed);
+        Assert.True(printed.Contains("n.Length", StringComparison.Ordinal), printed);
     }
 
     /// <summary>
@@ -155,7 +157,7 @@ namespace Demo
 }");
 
         Assert.Contains("o!!.Rank", printed);
-        Assert.Contains("n.Length", printed);
+        Assert.True(printed.Contains("n.Length", StringComparison.Ordinal), printed);
     }
 
     /// <summary>

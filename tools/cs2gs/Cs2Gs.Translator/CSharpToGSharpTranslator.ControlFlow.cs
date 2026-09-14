@@ -1161,7 +1161,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             if (this.IsNativelyExpressiblePattern(positivePattern, topLevel: true)
-                && binder.Type is { TypeKind: not TypeKind.Error, IsRefLikeType: false }
+                && binder.Type.TypeKind != TypeKind.Error
+                && !binder.Type.IsRefLikeType
                 && !CSharpTypeMapper.IsSystemIndexOrRange(binder.Type))
             {
                 string mutableName = this.EmittedName(designation, designation.Identifier);

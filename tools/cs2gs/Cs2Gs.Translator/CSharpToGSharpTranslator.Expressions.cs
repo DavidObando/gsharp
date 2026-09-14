@@ -45,8 +45,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateIdentifierName(IdentifierNameSyntax identifier)
         {
-            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.LocalFunction } localFunction
+            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol localFunction
+                && localFunction.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
@@ -67,8 +67,8 @@ public sealed partial class CSharpToGSharpTranslator
             // `nil` default. The postfix null assertion unwraps the nullable
             // (ADR-0069), mirroring gsc's own lowering (its `var` decl also
             // emits as `(p) → R? = nil`).
-            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol
-                    { MethodKind: MethodKind.LocalFunction } recursiveLocal
+            if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol recursiveLocal
+                && recursiveLocal.MethodKind == MethodKind.LocalFunction
                 && this.state.RecursiveLocalFunctionGroups.TryGetValue(
                     recursiveLocal, out RecursiveLocalFunctionGroup recursiveGroup)
                 && recursiveGroup.Members.Contains(recursiveLocal))
@@ -100,9 +100,11 @@ public sealed partial class CSharpToGSharpTranslator
             // (`Ec3Extensions.FfAc3ChannelsTab`) — the field/property analog of the
             // bare static-call rule (ADR-0115 §B.18). Without this the binder reports
             // GS0125 (the name is not in scope at top level).
-            if (this.context.GetSymbolInfo(identifier).Symbol is
-                    { IsStatic: true, Kind: SymbolKind.Field or SymbolKind.Property } staticMember &&
-                staticMember.ContainingType is { TypeKind: TypeKind.Class or TypeKind.Struct } owner &&
+            if (this.context.GetSymbolInfo(identifier).Symbol is ISymbol staticMember &&
+                staticMember.IsStatic &&
+                (staticMember.Kind == SymbolKind.Field || staticMember.Kind == SymbolKind.Property) &&
+                staticMember.ContainingType is INamedTypeSymbol owner &&
+                (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualValue(
@@ -183,13 +185,16 @@ public sealed partial class CSharpToGSharpTranslator
                 AssignmentExpressionSyntax assignment when assignment.Left == identifier => true,
                 PrefixUnaryExpressionSyntax prefix
                     when prefix.Operand == identifier &&
-                         prefix.Kind() is SyntaxKind.PreIncrementExpression or SyntaxKind.PreDecrementExpression => true,
+                         (prefix.IsKind(SyntaxKind.PreIncrementExpression)
+                          || prefix.IsKind(SyntaxKind.PreDecrementExpression)) => true,
                 PostfixUnaryExpressionSyntax postfix
                     when postfix.Operand == identifier &&
-                         postfix.Kind() is SyntaxKind.PostIncrementExpression or SyntaxKind.PostDecrementExpression => true,
+                         (postfix.IsKind(SyntaxKind.PostIncrementExpression)
+                          || postfix.IsKind(SyntaxKind.PostDecrementExpression)) => true,
                 ArgumentSyntax argument
                     when argument.Expression == identifier &&
-                         argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword => true,
+                         (argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)
+                          || argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)) => true,
                 _ => false,
             };
 
@@ -561,12 +566,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            bool originalIsIntegral = original is { SpecialType: SpecialType.System_SByte
-                or SpecialType.System_Byte or SpecialType.System_Int16 or SpecialType.System_UInt16
-                or SpecialType.System_Int32 or SpecialType.System_UInt32 or SpecialType.System_Int64
-                or SpecialType.System_UInt64 };
-            bool convertedIsFloat = converted.SpecialType is SpecialType.System_Single
-                or SpecialType.System_Double;
+            bool originalIsIntegral = original != null
+                && (original.SpecialType == SpecialType.System_SByte
+                    || original.SpecialType == SpecialType.System_Byte
+                    || original.SpecialType == SpecialType.System_Int16
+                    || original.SpecialType == SpecialType.System_UInt16
+                    || original.SpecialType == SpecialType.System_Int32
+                    || original.SpecialType == SpecialType.System_UInt32
+                    || original.SpecialType == SpecialType.System_Int64
+                    || original.SpecialType == SpecialType.System_UInt64);
+            bool convertedIsFloat = converted.SpecialType == SpecialType.System_Single
+                || converted.SpecialType == SpecialType.System_Double;
             return originalIsIntegral && convertedIsFloat;
         }
 
@@ -1054,7 +1064,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (unwrapped is not IdentifierNameSyntax
                 || this.context.GetSymbolInfo(unwrapped).Symbol is not
                     (ILocalSymbol or IParameterSymbol)
-                || this.GetDeclaredValueType(unwrapped) is not { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
+                || this.GetDeclaredValueType(unwrapped) is not { } declaredType
+                || !declaredType.IsReferenceType
+                || declaredType.NullableAnnotation != NullableAnnotation.Annotated
                 || !this.IsGSharpFlowNarrowedLocal(unwrapped))
             {
                 return false;
@@ -1485,9 +1497,98 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (this.LambdaResultFeedsNullFilteringInvocation(invocation))
+            {
+                return true;
+            }
+
             return this.ResolveValueSink(invocation) is ILocalSymbol result
                 && (this.IsUsedAsNullable(result, this.GetNullabilityScope(result))
                     || this.IsPassedToNullableParameter(result));
+        }
+
+        private bool LambdaResultFeedsNullFilteringInvocation(
+            InvocationExpressionSyntax selectorInvocation)
+        {
+            SyntaxNode node = selectorInvocation;
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            if (node.Parent is not MemberAccessExpressionSyntax { Expression: var receiver } member
+                || receiver != node
+                || member.Parent is not InvocationExpressionSyntax filteringInvocation
+                || this.context.GetSymbolInfo(filteringInvocation).Symbol is not IMethodSymbol method)
+            {
+                return false;
+            }
+
+            IMethodSymbol originalMethod = method.ReducedFrom ?? method;
+            INamedTypeSymbol containingType = originalMethod.ContainingType?.OriginalDefinition;
+            if (!SymbolEqualityComparer.Default.Equals(
+                    containingType,
+                    this.context.Compilation.GetTypeByMetadataName("System.Linq.Enumerable"))
+                && !SymbolEqualityComparer.Default.Equals(
+                    containingType,
+                    this.context.Compilation.GetTypeByMetadataName("System.Linq.Queryable")))
+            {
+                return false;
+            }
+
+            if (method.Name == "OfType")
+            {
+                return true;
+            }
+
+            if (method.Name is not ("Where" or "FirstOrDefault")
+                || filteringInvocation.ArgumentList.Arguments.FirstOrDefault()?.Expression
+                    is not AnonymousFunctionExpressionSyntax predicate)
+            {
+                return false;
+            }
+
+            ParameterSyntax parameter = predicate switch
+            {
+                SimpleLambdaExpressionSyntax simple => simple.Parameter,
+                ParenthesizedLambdaExpressionSyntax { ParameterList.Parameters.Count: 1 } parenthesized =>
+                    parenthesized.ParameterList.Parameters[0],
+                _ => null,
+            };
+            ISymbol parameterSymbol = parameter == null
+                ? null
+                : this.context.SemanticModel.GetDeclaredSymbol(parameter);
+            if (parameterSymbol == null)
+            {
+                return false;
+            }
+
+            return predicate.Body.DescendantNodesAndSelf()
+                .OfType<ConditionalAccessExpressionSyntax>()
+                .Any(access =>
+                    this.BindsTo(access.Expression, parameterSymbol)
+                    && (access.Parent is IsPatternExpressionSyntax
+                        { Pattern: RecursivePatternSyntax }
+                        || (access.Parent is BinaryExpressionSyntax comparison
+                            && (comparison.IsKind(SyntaxKind.GreaterThanExpression)
+                                || comparison.IsKind(SyntaxKind.GreaterThanOrEqualExpression)
+                                || comparison.IsKind(SyntaxKind.LessThanExpression)
+                                || comparison.IsKind(SyntaxKind.LessThanOrEqualExpression)))))
+                || predicate.Body.DescendantNodesAndSelf()
+                    .OfType<IsPatternExpressionSyntax>()
+                    .Any(isPattern =>
+                        this.BindsTo(isPattern.Expression, parameterSymbol)
+                        && IsNullConstantPattern(isPattern.Pattern)
+                        && isPattern.Pattern is UnaryPatternSyntax unary
+                        && unary.IsKind(SyntaxKind.NotPattern))
+                || predicate.Body.DescendantNodesAndSelf()
+                    .OfType<BinaryExpressionSyntax>()
+                    .Any(binary =>
+                        binary.IsKind(SyntaxKind.NotEqualsExpression)
+                        && ((binary.Left.IsKind(SyntaxKind.NullLiteralExpression)
+                             && this.BindsTo(binary.Right, parameterSymbol))
+                            || (binary.Right.IsKind(SyntaxKind.NullLiteralExpression)
+                                && this.BindsTo(binary.Left, parameterSymbol))));
         }
 
         private bool IsPassedToNullableParameter(ILocalSymbol local)
@@ -1515,7 +1616,8 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol declaredValueType = this.GetDeclaredValueType(value);
             if (!this.GSharpExpressionIsStaticallyNonNull(value, translated)
                 && targetType is { IsNullable: false }
-                && declaredValueType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated }
+                && declaredValueType?.IsReferenceType == true
+                && declaredValueType.NullableAnnotation == NullableAnnotation.Annotated
                 && this.context.GetTypeInfo(value).Nullability.FlowState == NullableFlowState.NotNull)
             {
                 return EnsureNonNullAssertion(translated);
@@ -1694,7 +1796,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ILocalSymbol local => local.Type,
                 IParameterSymbol parameter => parameter.Type,
                 IPropertySymbol property => property.Type,
-                IMethodSymbol { MethodKind: not MethodKind.Constructor } method => method.ReturnType,
+                IMethodSymbol method when method.MethodKind != MethodKind.Constructor => method.ReturnType,
                 _ => this.context.GetTypeInfo(expression).Type,
             };
 
@@ -1703,7 +1805,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T;
             }
 
-            return type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.NotAnnotated }
+            return type?.IsReferenceType == true
+                && type.NullableAnnotation == NullableAnnotation.NotAnnotated
                 && !this.IsImportedObliviousNullableMember(symbol)
                 && !this.LocalInitializedFromImportedObliviousNullable(symbol)
                 && (symbol == null || !this.ShouldPromoteToNullableReference(symbol));
@@ -1776,7 +1879,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return elementType is { IsValueType: true }
                     ? elementType.OriginalDefinition?.SpecialType
                         != SpecialType.System_Nullable_T
-                    : elementType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.NotAnnotated };
+                    : elementType?.IsReferenceType == true
+                        && elementType.NullableAnnotation == NullableAnnotation.NotAnnotated;
             }
 
             return false;
@@ -2176,9 +2280,9 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ILocalSymbol local when ExplicitLocalTypeIsNullable(local) =>
                     (local.Type, local),
-                IFieldSymbol { Type.NullableAnnotation: NullableAnnotation.Annotated } field =>
+                IFieldSymbol field when field.Type.NullableAnnotation == NullableAnnotation.Annotated =>
                     (field.Type, field),
-                IPropertySymbol { Type.NullableAnnotation: NullableAnnotation.Annotated } property =>
+                IPropertySymbol property when property.Type.NullableAnnotation == NullableAnnotation.Annotated =>
                     (property.Type, property),
                 _ => this.FindContextualValueTarget(value),
             };
@@ -3086,10 +3190,30 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             expression = StripParentheses(expression);
-            return symbol is ILocalSymbol or IParameterSymbol
-                && expression is IdentifierNameSyntax identifier
-                && identifier.Identifier.ValueText == symbol.Name;
+            if (symbol is not (ILocalSymbol or IParameterSymbol)
+                || expression is not IdentifierNameSyntax identifier
+                || identifier.Identifier.ValueText != symbol.Name)
+            {
+                return false;
+            }
+
+            ISymbol bound = this.context.GetSymbolInfo(identifier).Symbol;
+            if (bound != null)
+            {
+                return HasSameSourceDeclaration(bound, symbol);
+            }
+
+            ISymbol visible = this.context.SemanticModel
+                .LookupSymbols(identifier.SpanStart, name: symbol.Name)
+                .FirstOrDefault();
+            return visible == null || HasSameSourceDeclaration(visible, symbol);
         }
+
+        private static bool HasSameSourceDeclaration(ISymbol left, ISymbol right) =>
+            left.DeclaringSyntaxReferences.Any(leftDeclaration =>
+                right.DeclaringSyntaxReferences.Any(rightDeclaration =>
+                    leftDeclaration.SyntaxTree == rightDeclaration.SyntaxTree
+                    && leftDeclaration.Span == rightDeclaration.Span));
 
         // Issue #2202: true when <paramref name="use"/> reads a nullable
         // (`T?`) field/property from within the branch of an enclosing
@@ -3721,7 +3845,8 @@ public sealed partial class CSharpToGSharpTranslator
             // though the ORIGINAL C# `string.Join`/`.Select` pipeline tolerates
             // null elements silently.
             if (sinkType is not INamedTypeSymbol { IsGenericType: true, TypeArguments.Length: 1 } sinkCollection
-                || sinkCollection.TypeArguments[0] is not { NullableAnnotation: NullableAnnotation.Annotated } sinkElement
+                || sinkCollection.TypeArguments[0] is not { } sinkElement
+                || sinkElement.NullableAnnotation != NullableAnnotation.Annotated
                 || resultType == null)
             {
                 return false;
@@ -3740,33 +3865,32 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Compilation.ClassifyConversion(resultType, sinkElementType);
             return elementConversion.IsImplicit
                 && (elementConversion.IsReference || elementConversion.IsIdentity);
+        }
 
-            static bool ReturnsGenericSelectorResult(
-                IMethodSymbol genericMethod,
-                int parameterOrdinal)
+        private static bool ReturnsGenericSelectorResult(
+            IMethodSymbol genericMethod,
+            int parameterOrdinal)
+        {
+            if (!genericMethod.IsGenericMethod
+                || parameterOrdinal < 0
+                || parameterOrdinal >= genericMethod.Parameters.Length
+                || genericMethod.Parameters[parameterOrdinal].Type is not INamedTypeSymbol delegateType
+                || delegateType.TypeKind != TypeKind.Delegate
+                || delegateType.DelegateInvokeMethod?.ReturnType is not ITypeParameterSymbol resultParameter
+                || resultParameter.TypeParameterKind != TypeParameterKind.Method
+                || !SymbolEqualityComparer.Default.Equals(
+                    resultParameter.ContainingSymbol,
+                    genericMethod))
             {
-                if (!genericMethod.IsGenericMethod
-                    || parameterOrdinal < 0
-                    || parameterOrdinal >= genericMethod.Parameters.Length
-                    || genericMethod.Parameters[parameterOrdinal].Type
-                        is not INamedTypeSymbol { TypeKind: TypeKind.Delegate } delegateType
-                    || delegateType.DelegateInvokeMethod?.ReturnType
-                        is not ITypeParameterSymbol resultParameter
-                    || resultParameter.TypeParameterKind != TypeParameterKind.Method
-                    || !SymbolEqualityComparer.Default.Equals(
-                        resultParameter.ContainingSymbol,
-                        genericMethod))
-                {
-                    return false;
-                }
-
-                return SymbolEqualityComparer.Default.Equals(
-                        genericMethod.ReturnType,
-                        resultParameter)
-                    || (genericMethod.ReturnType is INamedTypeSymbol named
-                        && named.TypeArguments.Any(argument =>
-                            SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
+                return false;
             }
+
+            return SymbolEqualityComparer.Default.Equals(
+                    genericMethod.ReturnType,
+                    resultParameter)
+                || (genericMethod.ReturnType is INamedTypeSymbol named
+                    && named.TypeArguments.Any(argument =>
+                        SymbolEqualityComparer.Default.Equals(argument, resultParameter)));
         }
 
         private AnonymousFunctionExpressionSyntax FindResultLambda(ExpressionSyntax use)

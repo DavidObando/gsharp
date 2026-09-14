@@ -53,7 +53,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return memberName;
             }
 
-            if (symbol is IFieldSymbol { ContainingType.TypeKind: TypeKind.Enum }
+            if (symbol is IFieldSymbol field
+                && field.ContainingType.TypeKind == TypeKind.Enum
                 && RoslynAnalyzerApiMap.TryMapEnumMember(containingName, memberName, out RoslynAnalyzerApiMap.Entry enumEntry))
             {
                 this.ReportAnalyzerShapeIfAdapted(member, containingName, memberName, enumEntry);

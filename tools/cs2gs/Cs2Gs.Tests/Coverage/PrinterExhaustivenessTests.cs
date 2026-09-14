@@ -5,9 +5,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests.Coverage;
@@ -67,6 +70,43 @@ public class PrinterExhaustivenessTests
     }
 
     [Fact]
+    public void ConcreteNodeClassification_UsesSealedLeafSemantics()
+    {
+        Assert.False(GNodeSamples.IsConcreteNodeType(typeof(MigratedAbstractRoot)));
+        Assert.True(GNodeSamples.IsConcreteNodeType(typeof(MigratedConcreteNode)));
+    }
+
+    [Fact]
+    public async Task EverySourceConcreteGNodeTypeIsSealed()
+    {
+        string projectPath = TestFixtureSource.Resolve(
+            "tools", "cs2gs", "Cs2Gs.CodeModel", "Cs2Gs.CodeModel.csproj");
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        INamedTypeSymbol root = project.Compilation.GetTypeByMetadataName(
+            "Cs2Gs.CodeModel.Ast.GNode");
+        Assert.NotNull(root);
+
+        var unsealed = GetTypes(project.Compilation.Assembly.GlobalNamespace)
+            .Where(type =>
+                IsExported(type)
+                && InheritsFrom(type, root)
+                && !type.IsAbstract
+                && !type.IsSealed)
+            .Select(type => type.ToDisplayString())
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            unsealed.Count == 0,
+            "Source concrete GNode subclasses must be sealed so migrated reflection can distinguish them from abstract roots:\n"
+            + string.Join("\n", unsealed));
+    }
+
+    [Fact]
     public void KnownRoundTripGapsOnlyListSampleTypes()
     {
         var unknown = KnownRoundTripGaps.Keys
@@ -111,6 +151,38 @@ public class PrinterExhaustivenessTests
     private static IReadOnlyList<Type> ConcreteGNodeTypes() =>
         typeof(GNode).Assembly
             .GetExportedTypes()
-            .Where(t => t.IsClass && !t.IsAbstract && typeof(GNode).IsAssignableFrom(t))
+            .Where(GNodeSamples.IsConcreteNodeType)
             .ToList();
+
+    private static IEnumerable<INamedTypeSymbol> GetTypes(INamespaceSymbol scope) =>
+        scope.GetTypeMembers().SelectMany(GetTypes).Concat(
+            scope.GetNamespaceMembers().SelectMany(GetTypes));
+
+    private static IEnumerable<INamedTypeSymbol> GetTypes(INamedTypeSymbol type) =>
+        new[] { type }.Concat(type.GetTypeMembers().SelectMany(GetTypes));
+
+    private static bool IsExported(INamedTypeSymbol type) =>
+        type.DeclaredAccessibility == Accessibility.Public
+        && (type.ContainingType == null || IsExported(type.ContainingType));
+
+    private static bool InheritsFrom(INamedTypeSymbol type, INamedTypeSymbol root)
+    {
+        for (INamedTypeSymbol current = type; current != null; current = current.BaseType)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, root))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private class MigratedAbstractRoot : GNode
+    {
+    }
+
+    private sealed class MigratedConcreteNode : MigratedAbstractRoot
+    {
+    }
 }

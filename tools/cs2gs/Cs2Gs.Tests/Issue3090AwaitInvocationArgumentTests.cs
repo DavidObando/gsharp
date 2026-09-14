@@ -20,6 +20,22 @@ namespace Cs2Gs.Tests;
 public sealed class Issue3090AwaitInvocationArgumentTests
 {
     [Fact]
+    public void PipelineFailureDetails_MissingArtifactPreservesOriginalFailure()
+    {
+        var result = new RunResult { RunId = "missing-run" };
+        var app = new AppResult
+        {
+            Stages = { new StageResult { Stage = "compile", Status = "failed" } },
+            Artifacts = { "missing.json" },
+        };
+
+        string details = PipelineFailureDetails(AppContext.BaseDirectory, result, app);
+
+        Assert.Contains("compile=failed", details, StringComparison.Ordinal);
+        Assert.Contains("Artifact unavailable:", details, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NestedAwaitNamedArguments_PreserveNamesWithoutTranslatorSpills()
     {
         string printed = Translate("""
@@ -339,9 +355,10 @@ public sealed class Issue3090AwaitInvocationArgumentTests
             "Y: Side.Log(\"B\", 4)",
             "Z: 9");
         Assert.DoesNotContain("__spill", emitted, StringComparison.Ordinal);
-        Assert.True(
-            appResult.Succeeded,
-            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+        if (!appResult.Succeeded)
+        {
+            Assert.Fail(PipelineFailureDetails(outputRoot, result, appResult));
+        }
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());
@@ -390,9 +407,10 @@ public sealed class Issue3090AwaitInvocationArgumentTests
         Assert.DoesNotContain("__spill", emitted, StringComparison.Ordinal);
         Assert.Equal(1, CountOccurrences(emitted, "TraceReceiver(\"static-extension\")"));
         Assert.Equal(1, CountOccurrences(emitted, "CreateReceiver(\"bare-extension\")"));
-        Assert.True(
-            appResult.Succeeded,
-            string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
+        if (!appResult.Succeeded)
+        {
+            Assert.Fail(PipelineFailureDetails(outputRoot, result, appResult));
+        }
         Assert.Equal(
             new[] { "passed", "passed", "passed", "passed" },
             appResult.Stages.Select(stage => stage.Status).ToArray());
@@ -467,6 +485,35 @@ public sealed class Issue3090AwaitInvocationArgumentTests
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static string PipelineFailureDetails(
+        string outputRoot,
+        RunResult result,
+        AppResult app) =>
+        string.Join("; ", app.Stages.Select(stage => stage.Stage + "=" + stage.Status))
+        + Environment.NewLine
+        + string.Join(
+            Environment.NewLine,
+            app.Artifacts.Select(path => ReadArtifact(Path.Combine(
+                outputRoot,
+                result.RunId,
+                path))));
+
+    private static string ReadArtifact(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (IOException error)
+        {
+            return $"Artifact unavailable: '{path}' ({error.Message})";
+        }
+        catch (UnauthorizedAccessException error)
+        {
+            return $"Artifact unavailable: '{path}' ({error.Message})";
+        }
     }
 
     private static string FindCompiler()

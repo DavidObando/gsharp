@@ -747,7 +747,8 @@ public sealed class CSharpTypeMapper
         void AddMappedTypeNamespaces(ITypeSymbol type)
         {
             if (type == null
-                || type.TypeKind is TypeKind.Dynamic or TypeKind.Error
+                || type.TypeKind == TypeKind.Dynamic
+                || type.TypeKind == TypeKind.Error
                 || !mappedTypes.Add(type))
             {
                 return;
@@ -891,14 +892,16 @@ public sealed class CSharpTypeMapper
                 }
 
                 if (node is TypeDeclarationSyntax memberCensusDeclaration
-                    && semanticModel.GetDeclaredSymbol(memberCensusDeclaration) is INamedTypeSymbol
-                        { TypeKind: TypeKind.Class or TypeKind.Struct } declaredAggregate)
+                    && semanticModel.GetDeclaredSymbol(memberCensusDeclaration) is INamedTypeSymbol declaredAggregate
+                    && (declaredAggregate.TypeKind == TypeKind.Class
+                        || declaredAggregate.TypeKind == TypeKind.Struct))
                 {
                     foreach (ISymbol member in declaredAggregate.GetMembers())
                     {
                         if (member.IsStatic
-                            && member is IFieldSymbol or IPropertySymbol
-                                or IMethodSymbol { MethodKind: MethodKind.Ordinary })
+                            && (member is IFieldSymbol or IPropertySymbol
+                                || (member is IMethodSymbol method
+                                    && method.MethodKind == MethodKind.Ordinary)))
                         {
                             this.reservedSiblingStaticMemberNames.Add(names.GetName(member));
                         }
@@ -909,7 +912,8 @@ public sealed class CSharpTypeMapper
                 {
                     ISymbol invokedSymbol = semanticModel.GetSymbolInfo(invokedName).Symbol;
                     if (invokedSymbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol
-                        || invokedSymbol is IMethodSymbol { MethodKind: MethodKind.LocalFunction })
+                        || (invokedSymbol is IMethodSymbol method
+                            && method.MethodKind == MethodKind.LocalFunction))
                     {
                         this.reservedInvokedLocalNames.Add(names.GetName(invokedSymbol));
                     }
@@ -1115,7 +1119,8 @@ public sealed class CSharpTypeMapper
             return semanticModel.LookupSymbols(position)
                 .OfType<IMethodSymbol>()
                 .Any(method =>
-                    method.MethodKind is MethodKind.Ordinary or MethodKind.ReducedExtension
+                    (method.MethodKind == MethodKind.Ordinary
+                        || method.MethodKind == MethodKind.ReducedExtension)
                     && names.GetName(method) == name);
         }
 

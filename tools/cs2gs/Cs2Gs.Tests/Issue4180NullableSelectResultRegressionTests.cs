@@ -290,6 +290,97 @@ public sealed class Issue4180NullableSelectResultRegressionTests
         }
     }
 
+    private const string NullFilteringSource = """
+        using System;
+        using System.Collections.Generic;
+        using System.Linq;
+
+        public static class Probe
+        {
+            public static void Main()
+            {
+                Type[] types = typeof(List<>).GetGenericArguments();
+                int ofTypeCount = types.Select(t => t.FullName).OfType<string>().Count();
+                string cast = types.Select(t => t.FullName as string)
+                    .FirstOrDefault(name => name != null && name.Length > 0);
+                int guardedCount = types.Select(t => t.FullName)
+                    .Where(name => name?.Length > 0)
+                    .Select(name => name.Length)
+                    .Count();
+                int patternCount = types.Select(t => t.FullName)
+                    .Where(name => name is not null)
+                    .Count();
+                Console.WriteLine(
+                    $"OK:{ofTypeCount}:{(cast == null ? 0 : 1)}:{guardedCount}:{patternCount}");
+            }
+        }
+        """;
+
+    [Fact]
+    public void SelfHostedNullableSelectResult_RemainsNullableForNullFilteringOperators()
+    {
+        string printed = Translate(NullFilteringSource);
+        Assert.DoesNotContain("t.FullName!!", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("t.FullName as string!!", printed, StringComparison.Ordinal);
+
+        string compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(Issue4180NullableSelectResultRegressionTests),
+            Guid.NewGuid().ToString("N") + "-filters");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Probe.gs");
+            string dllPath = Path.Combine(workDir, "Probe.dll");
+            File.WriteAllText(gsPath, printed);
+
+            (int compileExit, string compileOutput) = RunDotnet(
+                $"\"{compiler}\" /target:exe /targetframework:net10.0 /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0,
+                "gsc must compile the translated probe. Output:\n" + compileOutput
+                    + "\n\nTranslated G#:\n" + printed);
+
+            (int runExit, string output) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "the compiled probe must run. Output:\n" + output);
+            Assert.Equal("OK:0:0:0:0", output.Trim());
+        }
+        finally
+        {
+            TryDelete(workDir);
+        }
+    }
+
+    [Fact]
+    public void UserDefinedNullFilteringNames_DoNotSuppressRequiredAssertion()
+    {
+        string printed = Translate("""
+            using System;
+
+            public sealed class Flow<T>
+            {
+                public Flow<TResult> Select<TResult>(Func<T, TResult> selector) => null;
+                public Flow<TResult> OfType<TResult>() => null;
+                public Flow<T> Where(Func<T, bool> predicate) => null;
+            }
+
+            public static class Probe
+            {
+                public static Flow<string> RunOfType(Flow<Type> types) =>
+                    types.Select(t => t.FullName).OfType<string>();
+
+                public static Flow<string> RunWhere(Flow<Type> types) =>
+                    types.Select(t => t.AssemblyQualifiedName)
+                        .Where(name => name is not null);
+            }
+            """);
+
+        Assert.Contains("t.FullName!!", printed, StringComparison.Ordinal);
+        Assert.Contains("t.AssemblyQualifiedName!!", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

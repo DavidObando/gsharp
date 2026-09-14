@@ -1406,7 +1406,8 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateNullSeamArgument(ArgumentSyntax argument, bool preserveName)
         {
             GExpression value;
-            if (argument.RefKindKeyword.Kind() is SyntaxKind.RefKeyword or SyntaxKind.OutKeyword
+            if ((argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword)
+                 || argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword))
                 && argument.Expression is not DeclarationExpressionSyntax
                 && argument.Expression is not IdentifierNameSyntax { Identifier.ValueText: "_" })
             {

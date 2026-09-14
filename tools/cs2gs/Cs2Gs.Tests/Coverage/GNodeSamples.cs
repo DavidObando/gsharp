@@ -19,6 +19,11 @@ namespace Cs2Gs.Tests.Coverage;
 /// </summary>
 public static class GNodeSamples
 {
+    internal static bool IsConcreteNodeType(Type type) =>
+        type.IsClass
+        && typeof(GNode).IsAssignableFrom(type)
+        && type.IsSealed;
+
     /// <summary>
     /// Gets, for every concrete <see cref="GNode"/> subclass, a factory
     /// building a minimal compilation unit exercising that node type.

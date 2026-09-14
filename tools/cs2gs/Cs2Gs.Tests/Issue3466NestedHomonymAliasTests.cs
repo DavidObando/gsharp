@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -17,6 +18,30 @@ namespace Cs2Gs.Tests;
 
 public sealed class Issue3466NestedHomonymAliasTests
 {
+    [Fact]
+    public async Task LateSignatureFixture_PreservesNullableValueAndObliviousPeers()
+    {
+        string projectPath = TestFixtureSource.Resolve(
+            "tools", "cs2gs", "Cs2Gs.Tests", "Cs2Gs.Tests.csproj");
+        LoadedCSharpProject project = await CSharpProjectLoader.LoadProjectAsync(projectPath);
+        Assert.True(
+            project.BoundWithoutErrors,
+            string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        INamedTypeSymbol fixture = project.Compilation.GetTypeByMetadataName(
+            "Signatures.TargetTypedDefaults");
+        Assert.NotNull(fixture);
+        IPropertySymbol value = fixture.GetMembers("Value").OfType<IPropertySymbol>().Single();
+        IPropertySymbol values = fixture.GetMembers("Values").OfType<IPropertySymbol>().Single();
+        IPropertySymbol indexer = fixture.GetMembers().OfType<IPropertySymbol>().Single(p => p.IsIndexer);
+
+        Assert.Equal(NullableAnnotation.Annotated, value.Type.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.None, values.Type.NullableAnnotation);
+        Assert.Equal(
+            NullableAnnotation.None,
+            indexer.Type.NullableAnnotation);
+    }
+
     [Fact]
     public void NestedDocInlineList_DoesNotAliasImportedGenericList()
     {

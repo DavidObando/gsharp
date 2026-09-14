@@ -578,8 +578,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             IParameterSymbol receiver = symbol.Parameters[0];
             return receiver.RefKind == RefKind.None &&
-                receiver.Type is INamedTypeSymbol
-                    { TypeKind: TypeKind.Class or TypeKind.Struct } receiverType &&
+                receiver.Type is INamedTypeSymbol receiverType &&
+                (receiverType.TypeKind == TypeKind.Class || receiverType.TypeKind == TypeKind.Struct) &&
                 !IsGenericReceiver(receiverType) &&
                 !this.ShouldPromoteToNullableReference(receiver);
         }
@@ -596,8 +596,9 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol receiverType,
             ISymbol extensionOwner)
         {
-            if (receiverType is INamedTypeSymbol
-                { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T, TypeArguments: { Length: 1 } } nullable)
+            if (receiverType is INamedTypeSymbol nullable
+                && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                && nullable.TypeArguments.Length == 1)
             {
                 receiverType = nullable.TypeArguments[0];
             }
@@ -1045,12 +1046,16 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private static bool IsSignedIntegerSpecialType(SpecialType type) =>
-            type is SpecialType.System_SByte or SpecialType.System_Int16
-                or SpecialType.System_Int32 or SpecialType.System_Int64;
+            type == SpecialType.System_SByte
+                || type == SpecialType.System_Int16
+                || type == SpecialType.System_Int32
+                || type == SpecialType.System_Int64;
 
         private static bool IsUnsignedIntegerSpecialType(SpecialType type) =>
-            type is SpecialType.System_Byte or SpecialType.System_UInt16
-                or SpecialType.System_UInt32 or SpecialType.System_UInt64;
+            type == SpecialType.System_Byte
+                || type == SpecialType.System_UInt16
+                || type == SpecialType.System_UInt32
+                || type == SpecialType.System_UInt64;
 
         private IEnumerable<(GMember Member, bool IsStatic)> TranslateField(
             FieldDeclarationSyntax field,
@@ -1082,8 +1087,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // context (Avalonia x:Name fields are the common case) retain
                 // C#'s ability to hold/test null when translated as a standalone
                 // generated partial part.
-                if (this.widenObliviousReferenceFields &&
-                    symbol?.Type is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.None })
+                if (this.widenObliviousReferenceFields
+                    && symbol?.Type?.IsReferenceType == true
+                    && symbol.Type.NullableAnnotation == NullableAnnotation.None)
                 {
                     type = MakeNullable(type);
                 }
@@ -1528,7 +1534,8 @@ public sealed partial class CSharpToGSharpTranslator
             for (int index = 0; index < parameters.Count; index++)
             {
                 GExpression argument = new IdentifierExpression(parameters[index].Name);
-                if (original.Parameters[index + 1].RefKind is RefKind.Ref or RefKind.Out)
+                if (original.Parameters[index + 1].RefKind == RefKind.Ref
+                    || original.Parameters[index + 1].RefKind == RefKind.Out)
                 {
                     argument = new UnaryExpression("&", argument);
                 }
@@ -2224,18 +2231,18 @@ public sealed partial class CSharpToGSharpTranslator
         /// Whether <paramref name="kind"/> is a C# 14 instance compound-assignment
         /// operator token (<c>op_AdditionAssignment</c> and siblings).
         /// </summary>
-        private static bool IsCompoundAssignmentOperatorToken(SyntaxKind kind) => kind is
-            SyntaxKind.PlusEqualsToken or
-            SyntaxKind.MinusEqualsToken or
-            SyntaxKind.AsteriskEqualsToken or
-            SyntaxKind.SlashEqualsToken or
-            SyntaxKind.PercentEqualsToken or
-            SyntaxKind.AmpersandEqualsToken or
-            SyntaxKind.BarEqualsToken or
-            SyntaxKind.CaretEqualsToken or
-            SyntaxKind.LessThanLessThanEqualsToken or
-            SyntaxKind.GreaterThanGreaterThanEqualsToken or
-            SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken;
+        private static bool IsCompoundAssignmentOperatorToken(SyntaxKind kind) =>
+            kind == SyntaxKind.PlusEqualsToken
+                || kind == SyntaxKind.MinusEqualsToken
+                || kind == SyntaxKind.AsteriskEqualsToken
+                || kind == SyntaxKind.SlashEqualsToken
+                || kind == SyntaxKind.PercentEqualsToken
+                || kind == SyntaxKind.AmpersandEqualsToken
+                || kind == SyntaxKind.BarEqualsToken
+                || kind == SyntaxKind.CaretEqualsToken
+                || kind == SyntaxKind.LessThanLessThanEqualsToken
+                || kind == SyntaxKind.GreaterThanGreaterThanEqualsToken
+                || kind == SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken;
 
         /// <summary>
         /// Translates a C# operator overload (<c>public static X operator +(X a, X b)</c>)

@@ -672,7 +672,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             ITypeSymbol operandType = this.context.GetTypeInfo(operandSyntax).Type;
             SpecialType specialType = operandType?.SpecialType ?? SpecialType.None;
-            if (specialType is SpecialType.System_String or SpecialType.System_Char)
+            if (specialType == SpecialType.System_String
+                || specialType == SpecialType.System_Char)
             {
                 return translated;
             }
@@ -1320,9 +1321,11 @@ public sealed partial class CSharpToGSharpTranslator
             // more than a nullable annotation, spell the upcast (`arm as T`).
             // Mirrors CoerceSwitchArmNumericValue's reference rule for switch
             // arms; each arm is coerced independently.
-            if (resultType is { IsReferenceType: true, TypeKind: not TypeKind.Error })
+            if (resultType?.IsReferenceType == true
+                && resultType.TypeKind != TypeKind.Error)
             {
-                if (trueType is { IsReferenceType: true, TypeKind: not TypeKind.Error }
+                if (trueType?.IsReferenceType == true
+                    && trueType.TypeKind != TypeKind.Error
                     && !SymbolEqualityComparer.Default.Equals(trueType, resultType))
                 {
                     whenTrue = this.CoerceReferenceValueTo(
@@ -1331,7 +1334,8 @@ public sealed partial class CSharpToGSharpTranslator
                         resultType);
                 }
 
-                if (falseType is { IsReferenceType: true, TypeKind: not TypeKind.Error }
+                if (falseType?.IsReferenceType == true
+                    && falseType.TypeKind != TypeKind.Error
                     && !SymbolEqualityComparer.Default.Equals(falseType, resultType))
                 {
                     whenFalse = this.CoerceReferenceValueTo(
@@ -1847,7 +1851,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private bool IsAdjacentFallthroughGoto(GotoStatementSyntax gotoStatement)
         {
-            if (gotoStatement.Kind() is not (SyntaxKind.GotoCaseStatement or SyntaxKind.GotoDefaultStatement))
+            if (!gotoStatement.IsKind(SyntaxKind.GotoCaseStatement)
+                && !gotoStatement.IsKind(SyntaxKind.GotoDefaultStatement))
             {
                 return false;
             }
@@ -2006,8 +2011,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (expression is ConditionalAccessExpressionSyntax voidConditionalAccess
-                && this.context.GetTypeInfo(voidConditionalAccess).Type
-                    is { SpecialType: SpecialType.System_Void }
+                && this.context.GetTypeInfo(voidConditionalAccess).Type?.SpecialType
+                    == SpecialType.System_Void
                 && this.RequiresLocalAssignmentSeam(
                     voidConditionalAccess.WhenNotNull))
             {
@@ -2206,7 +2211,8 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (member.Expression is IdentifierNameSyntax receiverId &&
                     this.context.GetSymbolInfo(receiverId).Symbol is { IsStatic: false } receiverSymbol &&
-                    receiverSymbol.Kind is SymbolKind.Property or SymbolKind.Field)
+                    (receiverSymbol.Kind == SymbolKind.Property ||
+                        receiverSymbol.Kind == SymbolKind.Field))
                 {
                     GExpression qualifiedReceiver = new MemberAccessExpression(
                         new ThisExpression(),
@@ -2268,10 +2274,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
 
                 case IdentifierNameSyntax identifier:
-                    return this.context.GetSymbolInfo(identifier).Symbol
-                        is ILocalSymbol { RefKind: RefKind.None }
-                        or IParameterSymbol { RefKind: RefKind.None }
-                        or IRangeVariableSymbol;
+                    ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                    return symbol is IRangeVariableSymbol
+                        || (symbol is ILocalSymbol local && local.RefKind == RefKind.None)
+                        || (symbol is IParameterSymbol parameter && parameter.RefKind == RefKind.None);
 
                 case PostfixUnaryExpressionSyntax suppressed
                     when suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression):

@@ -536,16 +536,15 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (member.IsImplicitlyDeclared
                 || SymbolEqualityComparer.Default.Equals(member, entryPoint)
-                || member is IMethodSymbol
-                {
-                    MethodKind: MethodKind.Constructor or MethodKind.StaticConstructor,
-                })
+                || (member is IMethodSymbol method
+                    && (method.MethodKind == MethodKind.Constructor
+                        || method.MethodKind == MethodKind.StaticConstructor)))
             {
                 continue;
             }
 
-            if (member.DeclaredAccessibility is not Accessibility.Private
-                and not Accessibility.NotApplicable)
+            if (member.DeclaredAccessibility != Accessibility.Private
+                && member.DeclaredAccessibility != Accessibility.NotApplicable)
             {
                 return true;
             }
@@ -743,7 +742,7 @@ public sealed partial class CSharpToGSharpTranslator
                 continue;
             }
 
-            if (receiver.TypeKind is TypeKind.Class or TypeKind.Struct &&
+            if ((receiver.TypeKind == TypeKind.Class || receiver.TypeKind == TypeKind.Struct) &&
                 method.Parameters[0].NullableAnnotation != NullableAnnotation.Annotated &&
                 method.Parameters[0].Type is INamedTypeSymbol receiverType &&
                 !IsGenericReceiver(receiverType) &&
@@ -775,7 +774,8 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
-        return receiverDefinition.TypeKind is TypeKind.Class or TypeKind.Struct &&
+        return (receiverDefinition.TypeKind == TypeKind.Class
+                || receiverDefinition.TypeKind == TypeKind.Struct) &&
             SymbolEqualityComparer.Default.Equals(
                 receiverDefinition.ContainingAssembly,
                 method.ContainingAssembly) &&
@@ -1018,8 +1018,8 @@ public sealed partial class CSharpToGSharpTranslator
     private static string SignatureType(ITypeSymbol type) =>
         string.Concat(
             type.ToDisplayParts(SymbolDisplayFormat.FullyQualifiedFormat)
-                .Select(part => part.Symbol is ITypeParameterSymbol
-                    { TypeParameterKind: TypeParameterKind.Method } parameter
+                .Select(part => part.Symbol is ITypeParameterSymbol parameter
+                    && parameter.TypeParameterKind == TypeParameterKind.Method
                         ? "!" + parameter.Ordinal.ToString(CultureInfo.InvariantCulture)
                         : part.ToString()));
 

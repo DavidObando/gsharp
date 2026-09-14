@@ -691,7 +691,8 @@ public static class CSharpProjectLoader
 
     private static IReadOnlyList<Diagnostic> SignificantDiagnostics(CSharpCompilation compilation) =>
         compilation.GetDiagnostics()
-            .Where(d => d.Severity is DiagnosticSeverity.Warning or DiagnosticSeverity.Error)
+            .Where(d => d.Severity == DiagnosticSeverity.Warning
+                || d.Severity == DiagnosticSeverity.Error)
             .ToImmutableArray();
 
     private static void EnsureMSBuildRegistered()

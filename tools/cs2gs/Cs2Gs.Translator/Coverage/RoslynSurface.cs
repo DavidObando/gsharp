@@ -104,7 +104,7 @@ public static class RoslynSurface
     /// <returns><see langword="true"/> when the kind identifies a syntax node.</returns>
     private static bool IsNodeKind(SyntaxKind kind)
     {
-        if (kind is SyntaxKind.None or SyntaxKind.List)
+        if (kind == SyntaxKind.None || kind == SyntaxKind.List)
         {
             return false;
         }
@@ -138,8 +138,8 @@ public static class RoslynSurface
     private static bool IsStructuredTriviaNodeKind(SyntaxKind kind)
     {
         return SyntaxFacts.IsPreprocessorDirective(kind)
-            || kind is SyntaxKind.SkippedTokensTrivia
-                or SyntaxKind.SingleLineDocumentationCommentTrivia
-                or SyntaxKind.MultiLineDocumentationCommentTrivia;
+            || kind == SyntaxKind.SkippedTokensTrivia
+            || kind == SyntaxKind.SingleLineDocumentationCommentTrivia
+            || kind == SyntaxKind.MultiLineDocumentationCommentTrivia;
     }
 }
