@@ -3908,7 +3908,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            return ContainsSelectorResult(genericMethod.ReturnType, resultParameter);
+            ITypeSymbol resultType = genericMethod.ReturnType;
+            if (resultType is INamedTypeSymbol { ContainingType: not null } nested
+                && nested.AllInterfaces.FirstOrDefault(iface =>
+                    iface.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T)
+                    is { } enumerable)
+            {
+                resultType = GetEnumerableElementType(enumerable);
+            }
+
+            return ContainsSelectorResult(resultType, resultParameter);
         }
 
         private static bool ContainsSelectorResult(ITypeSymbol type, ITypeParameterSymbol resultParameter) =>

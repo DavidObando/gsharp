@@ -364,6 +364,7 @@ public sealed class Issue4180NullableSelectResultRegressionTests
     [InlineData("BuildNestedList(() => type.FullName).OfType<List<string>>().Count()", false, "1")]
     [InlineData("BuildNestedValues(() => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildUnrelatedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
+    [InlineData("BuildKeyedValues(() => type.FullName).OfType<int>().Count()", true, "1")]
     [InlineData("BuildUnrelatedParams(42, () => type.FullName).OfType<int>().Count()", true, "1")]
     [InlineData("BuildTask(async () => type.FullName).OfType<string>().Count()", false, "0")]
     [InlineData("BuildTask(async () => { await Task.Yield(); return type.FullName; }).OfType<string>().Count()", false, "0")]
@@ -404,6 +405,9 @@ public sealed class Issue4180NullableSelectResultRegressionTests
 
                 static Dictionary<int, T>.ValueCollection BuildNestedValues<T>(Func<T> selector) =>
                     new Dictionary<int, T> { { 0, selector() } }.Values;
+
+                static Dictionary<T, int>.ValueCollection BuildKeyedValues<T>(Func<T> selector) =>
+                    new Dictionary<T, int> { { selector(), 42 } }.Values;
 
                 static Dictionary<int, int>.ValueCollection BuildUnrelatedValues<T>(Func<T> selector)
                 {
