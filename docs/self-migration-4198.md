@@ -299,7 +299,7 @@ for shard in 1 2 3 4; do
     bash build/run-cs2gs-selfmig-validate.sh "$shard" "${apps[@]}"
 done
 
-python3 - "$evidence" <<'PY'
+python3 - "$evidence" <<'PY' || exit 1
 import hashlib
 import shutil
 import sys
