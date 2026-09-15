@@ -155,16 +155,9 @@ namespace Demo
         // NEGATIVE property #4197 could have broken — the widened gate does
         // not swallow a generic cycle into `var`/`!!` output.
         //
-        // NOTE: this does NOT assert the pair ends up cleanly lifted to
-        // `__local_` either. A generic local function's recursive call site
-        // resolves (via Roslyn) to a CONSTRUCTED method symbol, which never
-        // equals the UNCONSTRUCTED declaration `GetDeclaredSymbol` returns —
-        // so BOTH `RegisterCapturingRecursiveLocalFunctions` and
-        // `RegisterRecursiveLocalFunctionLifts` fail to see the recursive
-        // edge at all, and this shape falls through to a plain `let` binding
-        // that does not bind in gsc (GS0130). That gap is pre-existing,
-        // independent of #4197 (verified unchanged with and without this
-        // issue's fix), and out of this issue's scope — see #4198.
+        // #4219: graph edges use declaration identity even for constructed
+        // generic calls. Keep the qualified lift fallback and execute it;
+        // merely missing a cycle must never masquerade as native support.
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit(
             @"
 namespace Demo
@@ -179,13 +172,15 @@ namespace Demo
             static string Other<T>(T x, int n) => Helper(x, n - 1);
         }
     }
-}",
-            roundTripOnlyReason: "pre-existing gap (generic recursive local function symbol identity, #4198) — not fixed by #4197");
+}");
 
         Assert.DoesNotContain("var Helper", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("var Other", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Helper!!(", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Other!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Run_Helper", printed, StringComparison.Ordinal);
+        Assert.Contains("__local_Run_Other", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run(42))", "42");
     }
 
     [Fact]

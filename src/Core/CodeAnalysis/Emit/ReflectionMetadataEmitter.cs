@@ -1533,8 +1533,8 @@ internal sealed class ReflectionMetadataEmitter
         // enclosing TypeDef row always precedes its nested rows, satisfying
         // ECMA-335 §II.22.32 for every combination (including nested interfaces
         // and class-in-struct, which no fixed kind partition can order).
-        // Closure/state-machine types never set ContainingType, so they stay in
-        // the top-level partitions and their nesting is handled separately.
+        // Lexically hosted closures also participate in this order; other
+        // closure/state-machine types have their nesting handled separately.
         static bool IsUserNested(TypeSymbol t) => t switch
         {
             StructSymbol ss => ss.ContainingType != null,
@@ -3094,7 +3094,8 @@ internal sealed class ReflectionMetadataEmitter
                 // and its body is already registered against the synthesized
                 // Invoke method, so it must NOT also be hosted as a top-level
                 // <Program> static method.
-                if (this.closures.ClosureInfos.ContainsKey(literal))
+                if (this.closures.ClosureInfos.ContainsKey(literal)
+                    || literal.Function is { LocalDeclaration: not null, StaticOwnerType: not null })
                 {
                     continue;
                 }
@@ -4026,7 +4027,7 @@ internal sealed class ReflectionMetadataEmitter
         // body). The enclosing TypeDef row was emitted before the nested row
         // (ECMA-335 §II.22.32) because of the kind-partitioned emission order;
         // see BindNestedTypeDeclarations and the emission-order notes above.
-        // The enclosing handle is always a StructSymbol (class or struct).
+        // Direct generic-local hosts can also be nested in an interface.
         void AddUserNestedTypeRow(TypeSymbol nested, TypeDefinitionHandle nestedHandle)
         {
             TypeSymbol? containing = nested switch
@@ -4041,6 +4042,11 @@ internal sealed class ReflectionMetadataEmitter
                 && this.cache.StructTypeDefs.TryGetValue(enclosingStruct, out var enclosingHandle))
             {
                 this.emitCtx.Metadata.AddNestedType(nestedHandle, enclosingHandle);
+            }
+            else if (containing is InterfaceSymbol enclosingInterface
+                && this.cache.InterfaceTypeDefs.TryGetValue(enclosingInterface, out var interfaceHandle))
+            {
+                this.emitCtx.Metadata.AddNestedType(nestedHandle, interfaceHandle);
             }
         }
 

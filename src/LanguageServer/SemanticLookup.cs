@@ -47,6 +47,7 @@ public static class SemanticLookup
     // old trees/bodies become unreachable after the edit.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SyntaxTree, NodeBuckets> NodeBucketCache = new();
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BoundBlockStatement, IReadOnlyList<(SyntaxToken Identifier, Symbol Variable)>> FunctionLocalsCache = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<BoundNode, IReadOnlyList<(SyntaxToken Identifier, Symbol Function)>> LocalFunctionReferencesCache = new();
 
     // Diagnostics counters (used by tests to assert the incremental path reuses
     // unchanged files rather than re-walking them).
@@ -945,6 +946,17 @@ public static class SemanticLookup
             return;
         }
 
+        foreach (var root in EnumerateBoundRoots(program))
+        {
+            var references = useIncrementalCaches
+                ? LocalFunctionReferencesCache.GetValue(root, MatchBoundLocalFunctions)
+                : MatchBoundLocalFunctions(root);
+            foreach (var (identifier, function) in references)
+            {
+                declarations[identifier] = function;
+            }
+        }
+
         // Issue #894: constructor (`init`) bodies are keyed in
         // BoundProgram.Functions by a synthesized instance-method-shaped
         // FunctionSymbol whose Declaration is null (the declaring syntax is a
@@ -1014,6 +1026,29 @@ public static class SemanticLookup
         }
     }
 
+    private static IReadOnlyList<(SyntaxToken Identifier, Symbol Function)> MatchBoundLocalFunctions(BoundNode root)
+    {
+        var result = new List<(SyntaxToken Identifier, Symbol Function)>();
+
+        // Use the binder's selected symbol, not a by-name approximation:
+        // nested regions, overloads and calls before a region must agree.
+        foreach (var node in FindBoundNodes<BoundNode>(root))
+        {
+            if (node is BoundLocalFunctionDeclaration local
+                && local.Literal.Function.LocalDeclaration is { } declaration)
+            {
+                result.Add((declaration.Identifier, local.Literal.Function));
+            }
+            else if (node is BoundCallExpression call
+                && call.Function.LocalDeclaration != null && call.Syntax is CallExpressionSyntax syntax)
+            {
+                result.Add((syntax.Identifier, call.Function));
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>
     /// ADR-0106: returns the (syntax identifier → local variable symbol) pairs
     /// for a single member body, memoized by the lowered-body instance when
@@ -1046,6 +1081,7 @@ public static class SemanticLookup
         BoundBlockStatement body)
     {
         var syntaxLocalIdentifiers = FindNodes<VariableDeclarationSyntax>(new[] { bodySyntax })
+            .Where(v => v.TypeParameterList == null)
             .Select(v => v.Identifier)
             .Concat(FindNodes<ForRangeStatementSyntax>(new[] { bodySyntax }).SelectMany(f => EnumerateForRangeIdentifiers(f)))
             .Concat(FindNodes<AwaitForRangeStatementSyntax>(new[] { bodySyntax }).Select(f => f.Identifier))

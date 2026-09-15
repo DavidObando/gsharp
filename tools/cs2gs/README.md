@@ -42,6 +42,14 @@ Top-level reference spills use an immediately invoked function so managed
 references stay on the stack rather than becoming static fields.
 Ordinary method calls retain their native G# named arguments.
 
+Generic local recursion graphs use original declaration identity; constructed
+type arguments remain on calls. Generic/ref/variadic/ref-kind exclusions keep
+their entire cycles on the existing lift fallback. G# now supports consecutive
+non-capturing generic declaration regions, but this milestone does not retire
+those translator fallbacks or enable ref-returning literals. See
+[`generic-local-recursion.md`](../../docs/generic-local-recursion.md) for exact
+visibility, overload rules and exclusions.
+
 ## Build
 
 ```sh

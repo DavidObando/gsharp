@@ -116,7 +116,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol recursiveLocal
                 && recursiveLocal.MethodKind == MethodKind.LocalFunction
                 && this.state.LiftedRecursiveLocalFunctions.TryGetValue(
-                    recursiveLocal,
+                    recursiveLocal.OriginalDefinition,
                     out LiftedRecursiveLocalFunction recursiveLift))
             {
                 var recursiveArguments = this.TranslateCallArguments(
@@ -322,7 +322,7 @@ public sealed partial class CSharpToGSharpTranslator
             // lift them onto the G# bracket-type-argument form `Foo[T](...)`.
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol localFunction
                 && localFunction.MethodKind == MethodKind.LocalFunction
-                && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
+                && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
                 // Issue #3471: same-type call sites name the lifted `shared`

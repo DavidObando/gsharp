@@ -507,6 +507,8 @@ internal static class DiagnosticDescriptors
     // types (DeclarationBinder.IsValidAttributeParameterType).
     internal static readonly DiagnosticDescriptor AttributeConstructorParameterInvalidType = new("GS0585", DiagnosticSeverity.Error, "Attribute constructor parameter '{0}' has type '{1}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4143; C# spells the same rule CS0181).");
 
+    internal static readonly DiagnosticDescriptor GenericLocalFunctionUnsupportedOwner = new("GS0586", DiagnosticSeverity.Error, "Generic local function '{0}' requires lexical owner '{1}', whose direct generic-local hosting is not supported. Use a named member or move the helper to a supported non-generic class/struct/interface or top-level context.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

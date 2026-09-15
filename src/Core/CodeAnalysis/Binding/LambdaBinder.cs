@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#pragma warning disable SA1202 // Keep function-literal signature and body binding together.
+
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -141,7 +143,7 @@ internal sealed class LambdaBinder
     /// binds a <c>[T, U, ...]</c> type-parameter list to
     /// <see cref="TypeParameterSymbol"/>s, reusing
     /// <see cref="DeclarationBinder.BindTypeParameterList(TypeParameterListSyntax)"/>.
-    /// Required only when <see cref="BindGenericLocalFunctionDeclaration"/>
+    /// Required only when <see cref="PrepareGenericLocalFunctionDeclaration"/>
     /// is invoked.</param>
     public LambdaBinder(
         BinderContext binderCtx,
@@ -247,12 +249,23 @@ internal sealed class LambdaBinder
         string? explicitName = null,
         Action<FunctionSymbol, FunctionTypeSymbol>? onSignatureBound = null)
     {
-        // Phase 4.7: function literal `[async] func(p1 T1, p2 T2) R { body }`.
-        // Bind parameters, push a new scope chained to the current scope so
-        // outer locals are visible by lexical lookup (closure capture), bind
-        // the body against a synthetic FunctionSymbol whose return type is
-        // the declared return clause (or void), then collect the captured
-        // outer variables by inspecting the bound body.
+        var signature = PrepareFunctionLiteralSignature(syntax, explicitName);
+        if (signature == null)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        var (synthetic, fnType) = signature.Value;
+        onSignatureBound?.Invoke(synthetic, fnType);
+        return BindFunctionLiteralBody(syntax, synthetic, fnType);
+    }
+
+    private (FunctionSymbol Function, FunctionTypeSymbol Type)? PrepareFunctionLiteralSignature(
+        FunctionLiteralExpressionSyntax syntax,
+        string? explicitName)
+    {
+        // The signature is independent of the body, so generic siblings can
+        // register their callable symbols before any recursive call binds.
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(syntax.Parameters.Count);
         var parameterSymbols = ImmutableArray.CreateBuilder<ParameterSymbol>(syntax.Parameters.Count);
         var seen = new HashSet<string>();
@@ -341,7 +354,7 @@ internal sealed class LambdaBinder
         if (isAsync && isAsyncIteratorReturnType(returnType))
         {
             Diagnostics.ReportAsyncIteratorFunctionLiteralNotSupported(syntax.Location, returnType);
-            return new BoundErrorExpression(syntax);
+            return null;
         }
 
         // ADR-0058: a managed-pointer (*T) cannot be used as a lambda return type
@@ -373,11 +386,14 @@ internal sealed class LambdaBinder
         synthetic.IsAsyncVoid = isAsyncVoid;
         synthetic.AsyncReturnsValueTask = asyncReturnsValueTask;
 
-        // Issue #3501 A2: give a named-binding caller the chance to declare
-        // the literal's own name into the (still-current) enclosing scope
-        // before the body binds, so `let f = func ...` bodies can call `f`.
-        onSignatureBound?.Invoke(synthetic, fnType);
+        return (synthetic, fnType);
+    }
 
+    private BoundFunctionLiteralExpression BindFunctionLiteralBody(
+        FunctionLiteralExpressionSyntax syntax,
+        FunctionSymbol synthetic,
+        FunctionTypeSymbol fnType)
+    {
         // Snapshot current binder state, then push a child scope and bind
         // the body as if we were inside this synthetic function.
         var outerScope = Scope;
@@ -444,8 +460,8 @@ internal sealed class LambdaBinder
         // `return` so the literal actually returns its value. Void literals keep the
         // existing statement-body handling (no implicit return) so the #889
         // Action-style void-delegate path is preserved.
-        body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, returnType);
-        CheckAllPathsReturn((BoundBlockStatement)body, returnType, syntax.Body.Location);
+        body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, synthetic.Type);
+        CheckAllPathsReturn((BoundBlockStatement)body, synthetic.Type, syntax.Body.Location);
 
         var captured = CollectCapturedVariables(body, synthetic.Parameters);
 
@@ -530,7 +546,7 @@ internal sealed class LambdaBinder
             return;
         }
 
-        var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParametersInScope.Values.ToImmutableArray());
+        var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParametersInScope.Values.ToImmutableArray(), out _);
         if (offender != null)
         {
             Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(location, name, offender.Name);
@@ -538,28 +554,22 @@ internal sealed class LambdaBinder
     }
 
     /// <summary>
-    /// Issue #1886: binds a generic local-function declaration
+    /// Prepares a generic local-function declaration
     /// <c>let Name[T, U, ...] = func (a T, b U) ... { ... }</c>. A CLR
-    /// delegate cannot close over an unbound generic method, so this does
-    /// NOT produce a runtime variable/closure value — it binds the
-    /// <c>[T, U, ...]</c> list, binds the function literal against those
-    /// type parameters (so <c>T</c>/<c>U</c> resolve in the parameter,
-    /// return-type, and body clauses), marks the resulting
-    /// <see cref="FunctionSymbol"/> as generic, and declares it directly
-    /// into the enclosing scope so calls resolve through the ordinary
-    /// generic overload-resolution / type-inference call path — the exact
-    /// mechanism already used for top-level generic functions — instead of
-    /// through an indirect delegate call.
+    /// delegate cannot close over an unbound generic method, so this registers
+    /// a directly callable signature, not a delegate variable. The returned
+    /// continuation binds the body using the same symbol and its own type
+    /// parameters after sibling signatures have been registered (#4219).
     /// </summary>
     /// <param name="syntax">The <c>let Name[T, ...] = ...</c> variable declaration syntax.</param>
-    /// <returns>The bound statement (a no-op declaration; the underlying method is emitted independently).</returns>
-    public BoundStatement BindGenericLocalFunctionDeclaration(VariableDeclarationSyntax syntax)
+    /// <returns>The body-binding continuation; preparation never binds a body.</returns>
+    public Func<BoundStatement> PrepareGenericLocalFunctionDeclaration(VariableDeclarationSyntax syntax)
     {
         var name = syntax.Identifier.ValueText;
         if (syntax.Keyword?.Kind != SyntaxKind.LetKeyword || syntax.Initializer is not FunctionLiteralExpressionSyntax literalSyntax)
         {
             Diagnostics.ReportGenericLocalFunctionMustBeLetBoundLiteral(syntax.Identifier.Location, name);
-            return new BoundBlockStatement(syntax, ImmutableArray<BoundStatement>.Empty);
+            return () => new BoundBlockStatement(syntax, ImmutableArray<BoundStatement>.Empty);
         }
 
         var previousTypeParameters = binderCtx.CurrentTypeParameters;
@@ -585,54 +595,55 @@ internal sealed class LambdaBinder
                 binderCtx.CurrentTypeParameters[tp.Name] = tp;
             }
 
-            // Issue #3501 A2: declare the function (with its type parameters
-            // already attached, so generic call resolution sees them) into the
-            // enclosing scope BEFORE the body binds — a generic local function
-            // can then call itself (`fact[T](n - 1)`), matching C# local
-            // functions.
-            var declaredEarly = false;
-            var literal = (BoundFunctionLiteralExpression)BindFunctionLiteralExpression(
-                literalSyntax,
-                explicitName: name,
-                onSignatureBound: (fn, _) =>
-                {
-                    fn.TypeParameters = typeParameters;
-                    declaredEarly = Scope.TryDeclareFunction(fn);
-                });
-
-            if (literal.CapturedVariables.Length > 0)
+            var signature = PrepareFunctionLiteralSignature(literalSyntax, name);
+            if (signature == null)
             {
-                Diagnostics.ReportGenericLocalFunctionCannotCapture(syntax.Identifier.Location, name);
+                return () => new BoundBlockStatement(syntax, ImmutableArray<BoundStatement>.Empty);
             }
 
-            // Issue #1940: a generic local function is hoisted to its own
-            // top-level static method carrying only ITS OWN type parameters
-            // as CLR MVAR slots. Referencing a type parameter owned by an
-            // enclosing generic method or class (available here only because
-            // BindFunctionLiteralExpression's body bind saw the merged
-            // enclosing + own CurrentTypeParameters dictionary above) has no
-            // corresponding slot on that hoisted method and would silently
-            // emit invalid IL. Detect any such reference — in a parameter
-            // type, the return type, or anywhere in the body — and report a
-            // diagnostic instead of letting it reach the emitter.
-            var enclosingTypeParameters = previousTypeParameters == null
-                ? ImmutableArray<TypeParameterSymbol>.Empty
-                : previousTypeParameters.Values.ToImmutableArray();
-            if (enclosingTypeParameters.Length > 0)
-            {
-                var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParameters);
-                if (offender != null)
-                {
-                    Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
-                }
-            }
-
-            if (!declaredEarly)
+            var (function, functionType) = signature.Value;
+            function.TypeParameters = typeParameters;
+            function.LocalDeclaration = syntax;
+            if (!Scope.TryDeclareFunction(function))
             {
                 Diagnostics.ReportSymbolAlreadyDeclared(syntax.Identifier.Location, name);
             }
 
-            return new BoundLocalFunctionDeclaration(syntax, literal);
+            var bodyTypeParameters = binderCtx.CurrentTypeParameters;
+            var enclosingTypeParameters = previousTypeParameters == null
+                ? ImmutableArray<TypeParameterSymbol>.Empty
+                : previousTypeParameters.Values.ToImmutableArray();
+            return () =>
+            {
+                var savedTypeParameters = binderCtx.CurrentTypeParameters;
+                binderCtx.CurrentTypeParameters = bodyTypeParameters;
+                try
+                {
+                    var literal = BindFunctionLiteralBody(literalSyntax, function, functionType);
+                    if (literal.CapturedVariables.Length > 0)
+                    {
+                        Diagnostics.ReportGenericLocalFunctionCannotCapture(syntax.Identifier.Location, name);
+                    }
+
+                    // The emitted method owns only its own generic slots (#1940).
+                    var offender = FindEnclosingTypeParameterReference(function, literal.Body, enclosingTypeParameters, out var requiresLexicalOwner);
+                    if (offender != null)
+                    {
+                        Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
+                    }
+                    else if (function.LexicalEnclosingType is { } owner
+                        && requiresLexicalOwner && !function.HasNonGenericLexicalOwner)
+                    {
+                        Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(syntax.Identifier.Location, name, owner);
+                    }
+
+                    return new BoundLocalFunctionDeclaration(syntax, literal);
+                }
+                finally
+                {
+                    binderCtx.CurrentTypeParameters = savedTypeParameters;
+                }
+            };
         }
         finally
         {
@@ -2301,20 +2312,28 @@ internal sealed class LambdaBinder
     /// <param name="function">The generic local function's symbol (already carrying its own type parameters).</param>
     /// <param name="body">The bound body to scan.</param>
     /// <param name="enclosingTypeParameters">The in-scope type parameters owned by an enclosing method or class.</param>
+    /// <param name="requiresLexicalOwner">Whether a direct generic local needs its lexical access domain.</param>
     /// <returns>The first offending enclosing type parameter found, or <see langword="null"/> if none.</returns>
     private static TypeParameterSymbol? FindEnclosingTypeParameterReference(
         FunctionSymbol function,
         BoundStatement body,
-        ImmutableArray<TypeParameterSymbol> enclosingTypeParameters)
+        ImmutableArray<TypeParameterSymbol> enclosingTypeParameters,
+        out bool requiresLexicalOwner)
     {
-        var walker = new EnclosingTypeParameterReferenceWalker(enclosingTypeParameters);
+        var walker = new EnclosingTypeParameterReferenceWalker(enclosingTypeParameters, function.IsGeneric);
         foreach (var parameter in function.Parameters)
         {
             walker.CheckType(parameter.Type);
         }
 
         walker.CheckType(function.Type);
+        foreach (var typeParameter in function.TypeParameters)
+        {
+            walker.CheckType(typeParameter.ConstraintReferenceType);
+        }
+
         walker.Visit(body);
+        requiresLexicalOwner = walker.RequiresLexicalOwner;
         return walker.Found;
     }
 
@@ -3054,18 +3073,45 @@ internal sealed class LambdaBinder
     private sealed class EnclosingTypeParameterReferenceWalker : BoundTreeWalker
     {
         private readonly ImmutableArray<TypeParameterSymbol> enclosingTypeParameters;
+        private readonly bool checkOwners;
 
-        public EnclosingTypeParameterReferenceWalker(ImmutableArray<TypeParameterSymbol> enclosingTypeParameters)
+        public EnclosingTypeParameterReferenceWalker(ImmutableArray<TypeParameterSymbol> enclosingTypeParameters, bool checkOwners)
         {
             this.enclosingTypeParameters = enclosingTypeParameters;
+            this.checkOwners = checkOwners;
         }
 
         public TypeParameterSymbol? Found { get; private set; }
+
+        public bool RequiresLexicalOwner { get; private set; }
 
         public void CheckType(TypeSymbol? type)
         {
             if (Found != null || type == null)
             {
+                return;
+            }
+
+            if (checkOwners)
+            {
+                var referenced = new List<TypeParameterSymbol>();
+                TypeSymbol.CollectReferencedTypeParameters(type, referenced);
+                foreach (var parameter in enclosingTypeParameters)
+                {
+                    if (referenced.Contains(parameter))
+                    {
+                        Found = parameter;
+                        break;
+                    }
+                }
+
+                RequiresLexicalOwner |= type switch
+                {
+                    StructSymbol owner => NeedsAccessDomain(owner.Accessibility),
+                    InterfaceSymbol owner => NeedsAccessDomain(owner.Accessibility),
+                    EnumSymbol owner => NeedsAccessDomain(owner.Accessibility),
+                    _ => false,
+                };
                 return;
             }
 
@@ -3088,6 +3134,51 @@ internal sealed class LambdaBinder
             }
 
             CheckType(node.Type);
+            if (checkOwners)
+            {
+                switch (node)
+                {
+                    case BoundCallExpression call when !call.IsConditionalElided:
+                        CheckType((TypeSymbol?)call.StaticGenericOwnerType ?? call.StaticGenericInterfaceOwnerType ?? call.Function.StaticOwnerType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(call.Function.Accessibility);
+                        break;
+                    case BoundUserInstanceCallExpression call:
+                        RequiresLexicalOwner |= NeedsAccessDomain(call.Method.Accessibility);
+                        break;
+                    case BoundConstructorCallExpression { SelectedConstructor: { } constructor }:
+                        RequiresLexicalOwner |= NeedsAccessDomain(constructor.Function.Accessibility);
+                        break;
+                    case BoundMethodGroupExpression { Function: { } method } group:
+                        CheckType(group.StaticOwnerType ?? method.StaticOwnerType);
+                        CheckTypeArguments(group.MethodTypeArguments);
+                        RequiresLexicalOwner |= NeedsAccessDomain(method.Accessibility);
+                        break;
+                    case BoundFunctionPointerFromMethodExpression pointer:
+                        CheckType(pointer.Method.StaticOwnerType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(pointer.Method.Accessibility);
+                        break;
+                    case BoundFieldAccessExpression field:
+                        CheckType((TypeSymbol?)field.StructType ?? field.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(field.Field.Accessibility);
+                        break;
+                    case BoundFieldAssignmentExpression field:
+                        CheckType((TypeSymbol?)field.StructType ?? field.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(field.Field.Accessibility);
+                        break;
+                    case BoundPropertyAccessExpression property:
+                        CheckType((TypeSymbol?)property.StructType ?? property.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(property.Property.GetterAccessibility);
+                        break;
+                    case BoundPropertyAssignmentExpression property:
+                        CheckType((TypeSymbol?)property.StructType ?? property.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(property.Property.SetterAccessibility);
+                        break;
+                    case BoundFunctionLiteralExpression literal when !literal.Function.IsGeneric:
+                        RequiresLexicalOwner |= literal.Function.LexicalEnclosingType != null;
+                        break;
+                }
+            }
+
             switch (node)
             {
                 case BoundCallExpression call:
@@ -3157,6 +3248,9 @@ internal sealed class LambdaBinder
             CheckType(node.Variable.Type);
             base.VisitVariableDeclaration(node);
         }
+
+        private static bool NeedsAccessDomain(Accessibility accessibility)
+            => accessibility is Accessibility.Private or Accessibility.Protected;
 
         private void CheckTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
         {

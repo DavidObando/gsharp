@@ -47,7 +47,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (this.context.GetSymbolInfo(identifier).Symbol is IMethodSymbol localFunction
                 && localFunction.MethodKind == MethodKind.LocalFunction
-                && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction, out string liftedName)
+                && this.state.LiftedStaticLocalFunctions.TryGetValue(localFunction.OriginalDefinition, out string liftedName)
                 && localFunction.ContainingType is { } containingType)
             {
                 // Issue #3471: the lifted helper lands in the containing

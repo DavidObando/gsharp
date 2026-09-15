@@ -208,9 +208,14 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public FunctionDeclarationSyntax? Declaration { get; private set; }
 
+    /// <summary>Gets the source declaration of a directly callable generic local function.</summary>
+    public VariableDeclarationSyntax? LocalDeclaration { get; internal set; }
+
     /// <inheritdoc/>
     public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
-        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+        ((SyntaxNode?)Declaration ?? LocalDeclaration) is { } declaration
+            ? ImmutableArray.Create(declaration)
+            : ImmutableArray<SyntaxNode>.Empty;
 
     /// <summary>
     /// Gets the package this function belongs to. <c>null</c> for built-in
@@ -515,6 +520,12 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;
+
+    /// <summary>Gets a value indicating whether a fieldless direct-call host needs no enclosing generic slots.</summary>
+    internal bool HasNonGenericLexicalOwner =>
+        LexicalEnclosingType is { } owner
+        && owner is StructSymbol { TypeParameters.IsEmpty: true } or InterfaceSymbol { TypeParameters.IsEmpty: true }
+        && StructSymbol.CollectEnclosingTypeParameters(owner).IsEmpty;
 
     /// <summary>Gets or sets a value indicating whether this synthetic function represents a type's static-constructor context.</summary>
     internal bool IsStaticInitializer { get; set; }

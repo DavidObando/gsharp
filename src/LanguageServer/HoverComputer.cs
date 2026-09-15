@@ -1351,6 +1351,7 @@ public static class DefinitionComputer
         return symbol switch
         {
             FunctionSymbol f when f.Declaration != null => f.Declaration.Identifier,
+            FunctionSymbol f when f.LocalDeclaration != null => f.LocalDeclaration.Identifier,
             StructSymbol s when s.Declaration != null => s.Declaration.Identifier,
             EnumSymbol e when e.Declaration != null => e.Declaration.Identifier,
             EnumMemberSymbol m => FindEnumMemberToken(m),
@@ -1591,6 +1592,11 @@ public static class SignatureHelpComputer
 
         // Find the identifier token just before the paren
         var funcToken = SemanticLookup.FindTokenAt(content.SyntaxTree, funcNameEnd.Value - 1);
+        if (funcToken?.Kind == SyntaxKind.CloseSquareBracketToken)
+        {
+            funcToken = funcToken.FirstAncestorOrSelf<CallExpressionSyntax>()?.Identifier;
+        }
+
         var symbol = SemanticLookup.ResolveSymbol(compilation, funcToken, ct);
         if (symbol is not FunctionSymbol function)
         {

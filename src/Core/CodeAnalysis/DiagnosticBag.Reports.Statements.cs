@@ -237,6 +237,13 @@ public sealed partial class DiagnosticBag
     public void ReportGenericLocalFunctionCannotCapture(TextLocation location, string name)
     => Report(location, DiagnosticDescriptors.GenericLocalFunctionCannotCapture, name);
 
+    /// <summary>Reports a direct generic local whose required lexical host cannot be emitted.</summary>
+    /// <param name="location">The declaration identifier's location.</param>
+    /// <param name="name">The generic local's name.</param>
+    /// <param name="owner">The unsupported lexical owner.</param>
+    public void ReportGenericLocalFunctionUnsupportedOwner(TextLocation location, string name, TypeSymbol owner)
+    => Report(location, DiagnosticDescriptors.GenericLocalFunctionUnsupportedOwner, name, owner);
+
     /// <summary>
     /// Reports that a local function references a type parameter owned by an enclosing generic
     /// method or class, directly in its own parameter type, return type, or body — the sibling
