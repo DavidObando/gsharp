@@ -861,11 +861,26 @@ public sealed class ReferenceResolver : IDisposable
             // when NO accessible duplicate exists: infrastructure still
             // resolves genuinely internal well-known types (e.g.
             // IsReadOnlyAttribute) by exact name; user-written names fail.
+            //
+            // Scan with `resolved.FullName` — the type's raw CLR metadata
+            // name — rather than the caller-supplied `fullName`. `fullName`
+            // may be a G#-canonical spelling (reserved segments gain `_`,
+            // nested types may use `.` instead of `+`) that `TryResolveTypeRaw`
+            // mapped through `emittedTypeNameIndex` to reach `resolved`;
+            // `Assembly.GetType(fullName)` on that canonical spelling finds no
+            // duplicate at all, silently skipping this whole preference.
+            string scanName = resolved.FullName ?? fullName;
             foreach (Assembly assembly in this.assemblies)
             {
-                Type? candidate = SafeGetType(assembly, fullName);
+                Type? candidate = SafeGetType(assembly, scanName);
                 if (candidate != null && IsExternallyResolvable(candidate))
                 {
+                    // The raw first-writer-wins result is already cached under
+                    // `fullName` (by TryResolveTypeRaw, above) — overwrite it
+                    // with the preferred accessible candidate so repeated
+                    // lookups hit the O(1) cache instead of re-scanning the
+                    // whole reference closure every time.
+                    resolveCache[fullName] = candidate;
                     type = candidate;
                     return true;
                 }
