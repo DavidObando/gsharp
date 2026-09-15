@@ -4,9 +4,11 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using GSharp.Compiler;
 using Xunit;
@@ -69,6 +71,60 @@ public class Issue4247ZeroLengthAttributeArrayTests
             var (argumentType, values) = ReadArrayArgument(appPath, "Target");
             Assert.Equal(imported ? "System.DayOfWeek[]" : "P.Kind[]", argumentType);
             Assert.Empty(values);
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"the emitted program must run to completion. Exit {exit}:\n{output}");
+            Assert.Equal("ok", output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Issue #4247 follow-up (Copilot review): the fix's scope is the
+    /// attribute-constant binder, but the SAME no-initializer zero-length
+    /// syntax is ordinary, non-attribute array-creation syntax too. Boxing
+    /// it to <c>object</c> and running the program exercises the actual
+    /// runtime value (not just metadata read back through
+    /// <see cref="MetadataLoadContext"/>) — including that it keeps its
+    /// real enum-array identity through the box/reverse-cast round trip
+    /// (the reverse cast itself is #4246's separate concern; this only
+    /// pins that a zero-length array survives it like any other).
+    /// </summary>
+    [Fact]
+    public void NoInitializerZeroLengthArray_BoxedToObject_ExecutesWithCorrectRuntimeIdentity()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4247_boxed_object_").FullName;
+        try
+        {
+            const string Source = """
+                import System
+                enum Kind { First = 7 }
+                var values = [0]Kind
+                var boxed object = values
+                Console.WriteLine(boxed.GetType().Name)
+                let back = (boxed as []Kind)!!
+                Console.WriteLine(back.Length)
+                """;
+            var appPath = Path.Combine(tempDir, "Program.dll");
+            var log = Compile(tempDir, "Program.gs", Source, appPath, "/target:exe");
+
+            Assert.True(ErrorIds(log).Length == 0, log);
+            Assert.True(File.Exists(appPath), log);
+
+            IlVerifier.Verify(appPath);
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"the emitted program must run to completion. Exit {exit}:\n{output}");
+
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "Kind[]", "0" }, lines);
         }
         finally
         {
@@ -107,6 +163,10 @@ public class Issue4247ZeroLengthAttributeArrayTests
             var (argumentType, values) = ReadArrayArgument(appPath, "Target");
             Assert.Equal("P.Kind[]", argumentType);
             Assert.Empty(values);
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"the emitted program must run to completion. Exit {exit}:\n{output}");
+            Assert.Equal("ok", output.Trim());
         }
         finally
         {
@@ -232,5 +292,46 @@ public class Issue4247ZeroLengthAttributeArrayTests
     {
         var tpa = (string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!;
         return tpa.Split(Path.PathSeparator);
+    }
+
+    private const int RunTimeoutMilliseconds = 60_000;
+
+    private static (int Exit, string Output) RunDotnet(string assemblyPath)
+    {
+        var psi = new ProcessStartInfo("dotnet", $"\"{assemblyPath}\"")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(assemblyPath) ?? ".",
+        };
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException("could not start dotnet");
+
+        // Draining stdout to EOF before touching stderr deadlocks if the child
+        // fills the stderr pipe first — read both concurrently and bound the
+        // wait, or a hanging/misbehaving program takes the whole test run
+        // down with it (mirrors Issue3958NullableDirectionalChannelTests).
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(RunTimeoutMilliseconds))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between the timeout and the kill.
+            }
+
+            return (-1, $"timed out after {RunTimeoutMilliseconds / 1000}s (deadlock).");
+        }
+
+        var output = new StringBuilder();
+        output.Append(stdout.GetAwaiter().GetResult());
+        output.Append(stderr.GetAwaiter().GetResult());
+        return (process.ExitCode, output.ToString());
     }
 }
