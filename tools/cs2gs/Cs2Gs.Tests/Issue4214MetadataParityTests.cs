@@ -93,6 +93,37 @@ public class Issue4214MetadataParityTests
             """, "Byte:2\nInt64:1\nKind:First");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AttributeObjectArgument_PreservesSymbolicEnumArrayType(bool empty)
+    {
+        var argument = empty ? "new Kind[] { }" : "new Kind[] { Kind.First }";
+        Verify($$"""
+            using System;
+            namespace Demo
+            {
+                public enum Kind : byte { First = 7 }
+                public sealed class ValueAttribute : Attribute
+                {
+                    public ValueAttribute(object value) { Value = value; }
+                    public object Value { get; }
+                }
+                [Value({{argument}})]
+                public class C
+                {
+                    public void Run()
+                    {
+                        var attribute = (ValueAttribute)Attribute.GetCustomAttribute(typeof(C), typeof(ValueAttribute));
+                        var values = (Array)attribute.Value;
+                        Console.WriteLine(values.GetType().Name + ":" + values.Length);
+                        if (values.Length > 0) Console.WriteLine(values.GetValue(0));
+                    }
+                }
+            }
+            """, empty ? "Kind[]:0" : "Kind[]:1\nFirst");
+    }
+
     [Fact]
     public void CallerArgumentExpression_UsesRoslynCallSiteValue()
     {

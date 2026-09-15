@@ -1588,6 +1588,25 @@ internal sealed class CustomAttributeEncoder
                 return;
             }
 
+            var arrayElement = argument.Type switch
+            {
+                SliceTypeSymbol slice => slice.ElementType,
+                ArrayTypeSymbol array => array.ElementType,
+                _ => null,
+            };
+            if (paramType.IsSameAs(typeof(object))
+                && (arrayElement is EnumSymbol || arrayElement?.ClrType?.IsEnum == true)
+                && TryGetAttributeParameterWriteType(arrayElement, out var elementWriteType))
+            {
+                // The array's runtime container stores integers, but its boxed
+                // metadata tag must retain the source enum element identity.
+                bb.WriteByte(0x1D);
+                bb.WriteByte(0x55);
+                bb.WriteSerializedString(this.GetSerializedTypeName(arrayElement));
+                this.WriteCustomAttributeArrayArg(bb, elementWriteType, argument.Value);
+                return;
+            }
+
             value = argument.Value;
         }
 
