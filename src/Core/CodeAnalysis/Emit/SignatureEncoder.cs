@@ -931,6 +931,8 @@ internal sealed class SignatureEncoder
         }
 
         var type = parameter.ParameterType;
+
+        // IsByRef guarantees reflection supplies the parameter's element type.
         this.EncodeClrType(encoder.Type(isByRef: type.IsByRef), type.IsByRef ? type.GetElementType()! : type);
     }
 

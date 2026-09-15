@@ -184,7 +184,6 @@ public sealed class EmittedOracleResult
 
         return globals;
     }
-#nullable restore annotations
 
     private IEnumerable<FieldInfo> EnumerateGlobalFields()
     {
@@ -193,7 +192,7 @@ public sealed class EmittedOracleResult
             yield break;
         }
 
-        Type[] types;
+        Type?[] types;
         try
         {
             types = Assembly.GetTypes();

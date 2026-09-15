@@ -350,6 +350,7 @@ public class ClrNullabilityTests
                 public static ValueContainer<T> MakeStructValue<T>() where T : struct => default;
             }
             """);
+        // throwOnError guarantees the fixture type is returned or the lookup throws.
         var sample = fixture.Load().GetType("Sample", throwOnError: true)!;
         var pairMethod = sample.GetMethod(nameof(Sample.MakeStructPair));
         Assert.NotNull(pairMethod);

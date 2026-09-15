@@ -117,6 +117,31 @@ public class Issue4214MetadataParityTests
     }
 
     [Theory]
+    [InlineData("List<int>", "Count")]
+    [InlineData("ReadOnlySpan<int>", "Length")]
+    public void CallerInformation_WithParamsCollection_PreservesDefaultAndExplicitValues(string carrier, string size)
+    {
+        Verify($$"""
+            using System;
+            using System.Collections.Generic;
+            using System.Runtime.CompilerServices;
+            namespace Demo
+            {
+                public class C
+                {
+                    static string Capture([CallerMemberName] string caller = "", params {{carrier}} values)
+                        => caller + ":" + values.{{size}};
+                    public void Run()
+                    {
+                        Console.WriteLine(Capture());
+                        Console.WriteLine(Capture("explicit", 1, 2));
+                    }
+                }
+            }
+            """, "Run:0\nexplicit:2");
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void NullableAnnotations_PreserveNullCollectionValuesAndSelectors(bool warningsEnabled)
