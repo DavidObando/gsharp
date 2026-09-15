@@ -550,6 +550,9 @@ jobs:
   hot-core-translation-guard:
     name: hot-core translation guard
     runs-on: ubuntu-latest
+    concurrency:
+      group: cs2gs-pr-guard-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
     needs: [build, tests, test-partition, e2e, ilverify, nullable-hygiene, cs2gs-corpus]
     if: github.event_name == 'pull_request'
     timeout-minutes: 90
@@ -631,6 +634,72 @@ jobs:
             /tmp/gsharp-cs2gs-pr-guard/runs/**/report.html
             /tmp/gsharp-cs2gs-pr-guard/runs/**/sdk.build.log
             /tmp/gsharp-cs2gs-pr-guard/migrated/**/*.gs
+
+  classify-hot-core-cancellation:
+    name: hot-core cancellation cause
+    needs: hot-core-translation-guard
+    if: always() && needs.hot-core-translation-guard.result == 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report cancellation cause
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          job_id=$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name == "hot-core translation guard") | .id' |
+              head -1
+          )
+          if [[ -z "$job_id" ]]; then
+            echo "::error title=Hot-core cancellation unknown::Could not find the cancelled guard job."
+            exit 1
+          fi
+
+          cause=unknown
+          for attempt in {1..5}; do
+            annotations=$(gh api \
+              "repos/$GITHUB_REPOSITORY/check-runs/$job_id/annotations?per_page=100")
+            cause=$(./build/cs2gs-pr-guard-control.sh cancellation <<< "$annotations")
+            [[ "$cause" != unknown ]] && break
+            sleep 2
+          done
+          messages=$(jq -r '.[].message // empty' <<< "$annotations")
+
+          case "$cause" in
+            superseded)
+              summary="**Superseded by a newer push.** This was not a timeout."
+              echo "::notice title=Hot-core guard superseded::Cancelled because a newer push replaced this run; this was not a timeout."
+              ;;
+            timeout)
+              summary="**Timed out.** GitHub stopped the guard after its 90-minute job limit."
+              echo "::error title=Hot-core guard timed out::GitHub stopped the guard after its 90-minute job limit."
+              ;;
+            *)
+              summary="**Unknown cancellation.** GitHub did not return a recognized timeout or concurrency annotation."
+              echo "::error title=Hot-core cancellation unknown::GitHub did not return a recognized timeout or concurrency annotation."
+              ;;
+          esac
+
+          {
+            echo "### Hot-core guard cancellation"
+            echo
+            echo "$summary"
+            echo
+            echo '```text'
+            printf '%s\n' "$messages"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [[ "$cause" == superseded ]]
 
   publish:
     runs-on: ubuntu-latest
