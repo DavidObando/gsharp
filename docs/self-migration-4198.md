@@ -264,6 +264,8 @@ even if those controls pass, the script finishes with that red gate status.
 Use a fresh evidence directory to avoid stale inputs or overwriting retained
 results. The evidence directory is a sibling of the worktree, not its descendant;
 all output and scratch paths stay inside the parent project directory.
+The exact historical shard-cost input is embedded below so reproducing the
+partition does not depend on an expiring Actions artifact.
 
 ```bash
 set -euo pipefail
@@ -341,11 +343,74 @@ dotnet test tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj \
   --results-directory artifacts/issue-4198/test-results
 
 run_dir=$(cat "$SELFMIG_GATE_ROOT/migrate-run-dir.txt")
-gh run download 34759865620 --repo DavidObando/gsharp \
-  --name cs2gs-selfmig-run --dir artifacts/issue-4198/nightly-34759865620
+cat > artifacts/issue-4198/shard-costs.json <<'JSON'
+{
+  "schema": 1,
+  "runId": "2026-09-13T13-31-09Z_88fc8c",
+  "note": "Per-app validation wall time in seconds (issue #3721). Copy over build/selfmig-shard-costs.json to reseed the shard planner.",
+  "apps": {
+    "test/Compiler.Tests/Compiler.Tests.csproj": 4222.0,
+    "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj": 2940.6,
+    "src/Formatting/GSharp.Formatting/GSharp.Formatting.csproj": 751.8,
+    "src/Sdk/Gsharp.Templates/Gsharp.Templates.csproj": 4.3,
+    "test-assets/Issue3119.CrossConstants/Issue3119.CrossConstants.csproj": 3.7,
+    "test/Core.Tests/Core.Tests.csproj": 2358.9,
+    "test/Formatting.Tests/Formatting.Tests.csproj": 709.3,
+    "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.csproj": 11.3,
+    "test/Runtime.Channels.Tests/Runtime.Channels.Tests.csproj": 16.0,
+    "tools/cs2gs/Cs2Gs.Tests/Fixtures/Issue3086GeneratedRegex/Issue3086GeneratedRegex.csproj": 3.7,
+    "tools/cs2gs/corpus/L1-Console/L1-Console.csproj": 3.2,
+    "tools/cs2gs/corpus/L2-Library.Tests/L2-Library.Tests.csproj": 5.8,
+    "tools/cs2gs/corpus/L3-Library.Tests/L3-Library.Tests.csproj": 7.1,
+    "tools/cs2gs/corpus/grid/G05-Collections-Console/G05-Collections-Console.csproj": 3.2,
+    "tools/cs2gs/corpus/grid/G06-Types-Console/G06-Types-Console.csproj": 3.3,
+    "tools/cs2gs/corpus/grid/G13-Extensions-Console/G13-Extensions-Console.csproj": 3.2,
+    "tools/cs2gs/corpus/grid/G14-Strings-Console/G14-Strings-Console.csproj": 2.9,
+    "tools/gsgen/GSharp.GeneratorHost/GSharp.GeneratorHost.csproj": 929.8,
+    "src/Compiler/Compiler.csproj": 643.8,
+    "src/Core/Core.csproj": 133.1,
+    "src/LanguageServer/LanguageServer.csproj": 293.3,
+    "test/LanguageServer.Tests/LanguageServer.Tests.csproj": 341.5,
+    "test/Sdk.Tests/Sdk.Tests.csproj": 724.0,
+    "tools/cs2gs/Cs2Gs.Pipeline/Cs2Gs.Pipeline.csproj": 806.9,
+    "tools/cs2gs/corpus/L3-Library/L3-Library.csproj": 4.6,
+    "tools/cs2gs/corpus/grid/G02-Operators-Console/G02-Operators-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/G03-ControlFlow-Console.csproj": 4.7,
+    "tools/gsgen/GSharp.GeneratorHost.Tests/GSharp.GeneratorHost.Tests.csproj": 819.4,
+    "src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj": 627.1,
+    "src/Analyzers/InternalAnalyzers/InternalAnalyzers.csproj": 6.8,
+    "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.csproj": 272.6,
+    "src/Repl/Repl.csproj": 595.1,
+    "src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.csproj": 12.3,
+    "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj": 20.7,
+    "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.csproj": 8.0,
+    "test/Extensions.Tests/Extensions.Tests.csproj": 569.4,
+    "tools/cs2gs/Cs2Gs.Report/Cs2Gs.Report.csproj": 808.3,
+    "tools/cs2gs/Cs2Gs.Tests/Fixtures/Issue2546ImplicitUsings/Issue2546ImplicitUsings.csproj": 4.9,
+    "tools/cs2gs/corpus/L4-Console/L4-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/L5-Console/L5-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/grid/G04-Patterns-Console/G04-Patterns-Console.csproj": 7.8,
+    "tools/cs2gs/corpus/grid/G08-Generics-Console/G08-Generics-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/grid/G09-Functions-Console/G09-Functions-Console.csproj": 8.0,
+    "tools/cs2gs/corpus/grid/G10-Async-Console/G10-Async-Console.csproj": 4.7,
+    "tools/cs2gs/corpus/grid/G11-Linq-Console/G11-Linq-Console.csproj": 4.9,
+    "tools/cs2gs/corpus/grid/G12-Unsafe-Console/G12-Unsafe-Console.csproj": 4.3,
+    "out/scratch/ildump/ildump.csproj": 75.3,
+    "test/Interpreter.Tests/Interpreter.Tests.csproj": 1076.7,
+    "tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj": 991.7,
+    "tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.csproj": 174.3,
+    "tools/cs2gs/Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.csproj": 192.1,
+    "tools/cs2gs/Cs2Gs.Translator/Cs2Gs.Translator.csproj": 187.8,
+    "tools/cs2gs/corpus/L2-Library/L2-Library.csproj": 2.7,
+    "tools/cs2gs/corpus/grid/G01-Literals-Console/G01-Literals-Console.csproj": 2.9,
+    "tools/cs2gs/corpus/grid/G07-Members-Console/G07-Members-Console.csproj": 3.2,
+    "tools/gsgen/Gsgen.Cli/Gsgen.Cli.csproj": 763.9
+  }
+}
+JSON
 python3 build/generate-selfmig-shard-matrix.py \
   --run-dir "$run_dir" \
-  --costs artifacts/issue-4198/nightly-34759865620/selfmig-shard-costs.json \
+  --costs artifacts/issue-4198/shard-costs.json \
   --shards 4 > artifacts/issue-4198/validation-matrix.json
 jq -e --slurpfile run "$run_dir/run.json" '
   . as $matrix
