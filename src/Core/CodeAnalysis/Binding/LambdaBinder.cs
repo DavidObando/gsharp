@@ -3096,7 +3096,15 @@ internal sealed class LambdaBinder
             {
                 var referenced = new List<TypeParameterSymbol>();
                 TypeSymbol.CollectReferencedTypeParameters(type, referenced);
-                Found = enclosingTypeParameters.FirstOrDefault(referenced.Contains);
+                foreach (var parameter in enclosingTypeParameters)
+                {
+                    if (referenced.Contains(parameter))
+                    {
+                        Found = parameter;
+                        break;
+                    }
+                }
+
                 RequiresLexicalOwner |= type switch
                 {
                     StructSymbol owner => NeedsAccessDomain(owner.Accessibility),

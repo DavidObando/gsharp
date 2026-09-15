@@ -34,7 +34,7 @@ Console.WriteLine(first(42, 3))
   GS0102. Regions in nested blocks use those blocks' lexical scopes; a region
   itself does not introduce another scope.
 - Direct calls use generic methods and MethodSpec instantiations, not
-  unbound-generic delegates. Non-generic class/struct lexical hosts retain
+  unbound-generic delegates. Non-generic class/struct/interface lexical hosts retain
   private/protected accessibility via nested static method hosts; no host
   object is allocated by these calls.
 
