@@ -1007,6 +1007,13 @@ public sealed class Conversion
             return Conversion.Implicit;
         }
 
+        // A symbolic element does not change the array's reference representation.
+        if (from is SliceTypeSymbol or ArrayTypeSymbol
+            && to?.ClrType.IsSameAs(typeof(object)) == true)
+        {
+            return Conversion.Implicit;
+        }
+
         // Issue #3303: a `map[K, V]` is unconditionally a CLR reference type
         // (`System.Collections.Generic.Dictionary<K, V>`), but its `ClrType`
         // is null when the key or value structurally references an in-scope

@@ -96,6 +96,11 @@ root must fail, not fall back to another checkout or let an empty `*.cs` scan
 pass. This selects source data, **not** a native replacement for the compiler
 under test.
 
+Attribute constant containers are implementation details, not metadata type
+identities. Preserve symbolic enum-array types through nested boxed arrays, and
+assert both the reflected array type and its values, including empty arrays.
+Matching underlying integer payloads alone does not establish parity.
+
 Keep nullable harness contracts honest as well. Reflection globals and symbol
 lookups can legitimately return null; their helper signatures, collection
 element types, and forwarding helpers must say so. Adding runtime `!!`

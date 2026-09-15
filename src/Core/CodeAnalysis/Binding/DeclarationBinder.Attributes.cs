@@ -1377,7 +1377,10 @@ internal sealed partial class DeclarationBinder
                 return false;
             }
 
-            elementValues[i] = containerElementType.IsSameAs(typeof(object)) && IsEnumLikeType(valueType)
+            elementValues[i] = containerElementType.IsSameAs(typeof(object))
+                && (IsEnumLikeType(valueType)
+                    || (GetOneDimensionalArrayElementType(valueType) is { } nestedElementType
+                        && IsEnumLikeType(nestedElementType)))
                 ? new BoundAttributeArgument(null, elementValue, valueType)
                 : elementValue;
             if (elementValue is TypeSymbol)

@@ -124,6 +124,72 @@ public class Issue4214MetadataParityTests
             """, empty ? "Kind[]:0" : "Kind[]:1\nFirst");
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void AttributeObjectArray_PreservesNestedEnumArrayType(bool empty, bool additionalObjectArray)
+    {
+        var argument = empty ? "new Kind[] { }" : "new Kind[] { Kind.First }";
+        argument = "new object[] { " + argument + " }";
+        if (additionalObjectArray)
+        {
+            argument = "new object[] { " + argument + " }";
+        }
+
+        Verify($$"""
+            using System;
+            namespace Demo
+            {
+                public enum Kind { First = 7 }
+                public sealed class ValueAttribute : Attribute
+                {
+                    public ValueAttribute(object value) { Value = value; }
+                    public object Value { get; }
+                }
+                [Value({{argument}})]
+                public class C
+                {
+                    public void Run()
+                    {
+                        var attribute = (ValueAttribute)Attribute.GetCustomAttribute(typeof(C), typeof(ValueAttribute));
+                        var values = (Array)attribute.Value;
+                        while (values is object[] objects) values = (Array)objects[0];
+                        Console.WriteLine(values.GetType().Name + ":" + values.Length);
+                        if (values.Length > 0) Console.WriteLine(values.GetValue(0));
+                    }
+                }
+            }
+            """, empty ? "Kind[]:0" : "Kind[]:1\nFirst");
+    }
+
+    [Fact]
+    public void AttributeObjectArray_PreservesImportedEnumAndPrimitiveArrayTypes()
+    {
+        Verify("""
+            using System;
+            namespace Demo
+            {
+                public sealed class ValueAttribute : Attribute
+                {
+                    public ValueAttribute(object value) { Value = value; }
+                    public object Value { get; }
+                }
+                [Value(new object[] { new DayOfWeek[] { DayOfWeek.Monday }, new int[] { 7 } })]
+                public class C
+                {
+                    public void Run()
+                    {
+                        var attribute = (ValueAttribute)Attribute.GetCustomAttribute(typeof(C), typeof(ValueAttribute));
+                        foreach (Array values in (object[])attribute.Value)
+                            Console.WriteLine(values.GetType().Name + ":" + values.GetValue(0));
+                    }
+                }
+            }
+            """, "DayOfWeek[]:Monday\nInt32[]:7");
+    }
+
     [Fact]
     public void CallerArgumentExpression_UsesRoslynCallSiteValue()
     {
