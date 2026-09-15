@@ -17,9 +17,10 @@ namespace GSharp.Compiler.Tests.Emit;
 public class Issue4219GenericLocalRecursionTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void GenericRegions_EmitStaticMethodDefsAndConstructedCalls(bool interfaceOwner)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void GenericRegions_EmitStaticMethodDefsAndConstructedCalls(bool interfaceOwner, bool capture)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root != null && !File.Exists(Path.Combine(root.FullName, "samples", "GenericLocalRecursion.gs")))
@@ -38,6 +39,11 @@ public class Issue4219GenericLocalRecursionTests
             if (interfaceOwner)
             {
                 text = text.Replace("class Example", "interface Example", StringComparison.Ordinal);
+                var nestedReturn = capture ? "return Value() + \"${x}\".Length - 7" : "return Value()";
+                text = text.Replace(
+                    "return Value()",
+                    "let nested = func() int32 { " + nestedReturn + " }\nreturn nested()",
+                    StringComparison.Ordinal);
             }
 
             File.WriteAllText(source, text);

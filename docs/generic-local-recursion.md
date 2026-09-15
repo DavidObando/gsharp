@@ -60,7 +60,9 @@ diagnostics. Late-resolved method groups and nested literals needing an
 unsupported generic lexical host receive GS0586 instead of producing
 inaccessible or malformed IL. Non-generic interface owners use the same nested
 static hosts as non-generic classes/structs, preserving private access and
-interface-accessor compatibility. Non-generic nested
+interface-accessor compatibility. Ordinary nested literals also keep that
+non-generic interface access domain, including captures of the group's own
+parameters through the existing closure reifier. Non-generic nested
 classes within generic enclosing types do not bypass these enclosing-generic-
 context restrictions.
 

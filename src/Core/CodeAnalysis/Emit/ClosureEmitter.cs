@@ -288,11 +288,15 @@ internal sealed class ClosureEmitter
                 // host above rather than an instance Invoke method. Enclosing
                 // type-parameter reification remains outside this milestone.
                 if (literal.Function.IsGeneric
-                    || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing)
+                    || literal.Function.LexicalEnclosingType is not { } zeroCaptureEnclosing
+                    || zeroCaptureEnclosing is not (StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }))
                 {
                     continue;
                 }
 
+                var requiredTypeParameters = zeroCaptureEnclosing is StructSymbol enclosingStruct
+                    ? enclosingStruct.TypeParameters
+                    : ImmutableArray<TypeParameterSymbol>.Empty;
                 var hostName = "<lambda_host_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
                 var hostInfo = this.SynthesizeDisplayClass(
                     hostName,
@@ -302,7 +306,7 @@ internal sealed class ClosureEmitter
                     literal.Body,
                     hostPackage,
                     invokeName: "Invoke",
-                    requiredTypeParameters: zeroCaptureEnclosing.TypeParameters);
+                    requiredTypeParameters: requiredTypeParameters);
 
                 this.ClosureInfos[literal] = hostInfo;
 
@@ -344,7 +348,8 @@ internal sealed class ClosureEmitter
             // single `T`). Without nesting, the reified closure was emitted as a
             // top-level type and its Invoke could not read the generic encloser's
             // private captured field ("Field is not visible").
-            if (literal.Function.LexicalEnclosingType is StructSymbol enclosing
+            if (literal.Function.LexicalEnclosingType is { } enclosing
+                && enclosing is StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }
                 && info.ClassSym.ContainingType == null)
             {
                 info.ClassSym.SetContainingType(enclosing);

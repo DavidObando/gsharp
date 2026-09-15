@@ -314,6 +314,8 @@ public class Issue4219GenericLocalRecursionTests
     [Theory]
     [InlineData("return Secret()")]
     [InlineData("return 42")]
+    [InlineData("let nested = func() int32 { return Secret() }\nreturn nested()")]
+    [InlineData("let nested = func() int32 { return Secret() + \"${x}\".Length - 1 }\nreturn nested()")]
     public void NonGenericInterfaceOwner_PreservesPrivateAccessAndMethodPlanning(string body)
     {
         var result = EmittedOracle.Evaluate($$"""
