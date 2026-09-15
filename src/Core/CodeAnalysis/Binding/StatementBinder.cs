@@ -378,7 +378,8 @@ internal sealed partial class StatementBinder
                     for (var member = 0; member < bodies.Count; member++)
                     {
                         beforeBind?.Invoke(statementSyntaxes[i + member]);
-                        statements.Add(bodies[member]());
+                        var bindBody = bodies[member];
+                        statements.Add(bindBody());
                     }
 
                     i = end - 1;

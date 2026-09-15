@@ -74,4 +74,28 @@ public class Issue4219GenericLocalRecursionTests
             """);
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "2719");
     }
+
+    [Fact]
+    public void SignaturePreparationContinuations_RoundTripThroughNativeCallableValues()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class Body { public int Value => 42; }
+                public class C {
+                    public int Run() {
+                        System.Func<System.Func<Body>> prepare = () => () => new Body();
+                        var bodies = new System.Collections.Generic.List<System.Func<Body>>();
+                        bodies.Add(prepare());
+                        var result = 0;
+                        for (var member = 0; member < bodies.Count; member++) {
+                            var bindBody = bodies[member];
+                            result += bindBody().Value;
+                        }
+                        return result;
+                    }
+                }
+            }
+            """);
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run())", "42");
+    }
 }
