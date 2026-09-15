@@ -73,7 +73,10 @@ public class GenericMethodUserTypeArgUnderReferencesTests
     private static ImmutableArray<Diagnostic> BindLive(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
-        using var resolver = ReferenceResolver.Default();
+        using var fixture = new CSharpFixture(ContractsSource);
+        using var resolver = fixture.RuntimeReferences();
+        Assert.True(resolver.TryResolveType("GSharp.Core.Tests.CodeAnalysis.Binding.LiveConstraintBase", out var baseType));
+        Assert.False(baseType.IsSealed);
         var globalScope = Binder.BindGlobalScope(
             previous: null,
             ImmutableArray.Create(tree),
@@ -85,7 +88,8 @@ public class GenericMethodUserTypeArgUnderReferencesTests
     private static void EmitAndInvokeLive(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
-        using var resolver = ReferenceResolver.Default();
+        using var fixture = new CSharpFixture(ContractsSource);
+        using var resolver = fixture.RuntimeReferences();
         var compilation = new Compilation(resolver, tree)
         {
             AssemblyName = "GenericParamsRegression" + Guid.NewGuid().ToString("N"),
@@ -94,7 +98,7 @@ public class GenericMethodUserTypeArgUnderReferencesTests
         var result = compilation.Emit(stream);
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
 
-        var assembly = EmittedFixture.Load(stream.ToArray());
+        var assembly = EmittedFixture.Load(stream.ToArray(), fixture.DirectoryPath);
         var main = assembly.GetTypes()
             .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
             .SingleOrDefault(method => method.Name == "main" && method.GetParameters().Length == 0);
@@ -419,43 +423,21 @@ public class GenericMethodUserTypeArgUnderReferencesTests
 
         Assert.Contains(Bind(source), diagnostic => diagnostic.Id == "GS0159");
     }
-}
+    private const string ContractsSource = """
+        namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
-public class LiveConstraintBase
-{
-}
-
-public static class LiveConstraintHost
-{
-    public static void Accept<T>()
-        where T : LiveConstraintBase, new()
-    {
-    }
-
-    public static void AcceptPair<T, U>(params U[] values)
-        where T : LiveConstraintBase, new()
-    {
-    }
-
-    public static void AcceptInferred<T>(params T[] values)
-        where T : LiveConstraintBase, new()
-    {
-    }
-
-    public static void AcceptAny<T>(params T[] values)
-    {
-    }
-
-    public static void AcceptStruct<T>(params T[] values)
-        where T : struct
-    {
-    }
-}
-
-public sealed class LiveConstraintReceiver
-{
-    public void Accept<T>()
-        where T : LiveConstraintBase, new()
-    {
-    }
+        public class LiveConstraintBase {}
+        public static class LiveConstraintHost
+        {
+            public static void Accept<T>() where T : LiveConstraintBase, new() {}
+            public static void AcceptPair<T, U>(params U[] values) where T : LiveConstraintBase, new() {}
+            public static void AcceptInferred<T>(params T[] values) where T : LiveConstraintBase, new() {}
+            public static void AcceptAny<T>(params T[] values) {}
+            public static void AcceptStruct<T>(params T[] values) where T : struct {}
+        }
+        public sealed class LiveConstraintReceiver
+        {
+            public void Accept<T>() where T : LiveConstraintBase, new() {}
+        }
+        """;
 }

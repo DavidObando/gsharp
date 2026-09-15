@@ -713,7 +713,7 @@ internal sealed class CustomAttributeEncoder
         for (int i = 0; i < paramTypes.Length; i++)
         {
             var writeType = NormalizeWellKnownType(paramTypes[i]);
-            WriteCustomAttributeFixedArg(valueBlob, writeType, attr.PositionalArguments[i].Value);
+            WriteCustomAttributeFixedArg(valueBlob, writeType, attr.PositionalArguments[i]);
         }
 
         valueBlob.WriteUInt16(0); // NumNamed — see remarks above.
@@ -1409,7 +1409,7 @@ internal sealed class CustomAttributeEncoder
             {
                 if (i < positional.Length)
                 {
-                    values[i] = positional[i].Value;
+                    values[i] = positional[i];
                 }
                 else if (TryGetOptionalDefault(ctorParams[i], out var fallback))
                 {
@@ -1423,14 +1423,14 @@ internal sealed class CustomAttributeEncoder
         var result = new object?[ctorParams.Length];
         for (int i = 0; i < ctorParams.Length - 1; i++)
         {
-            result[i] = positional[i].Value;
+            result[i] = positional[i];
         }
 
         var tail = positional.Length - (ctorParams.Length - 1);
         var array = new object?[tail];
         for (int i = 0; i < tail; i++)
         {
-            array[i] = positional[ctorParams.Length - 1 + i].Value;
+            array[i] = positional[ctorParams.Length - 1 + i];
         }
 
         result[ctorParams.Length - 1] = array;
@@ -1575,6 +1575,22 @@ internal sealed class CustomAttributeEncoder
 
     private void WriteCustomAttributeFixedArg(BlobBuilder bb, Type paramType, object? value)
     {
+        if (value is BoundAttributeArgument argument)
+        {
+            if (paramType.IsSameAs(typeof(object))
+                && (argument.Type is EnumSymbol || argument.Type.ClrType?.IsEnum == true)
+                && TryGetAttributeParameterWriteType(argument.Type, out var enumType))
+            {
+                // A boxed enum's tag names the enum, not its integer payload.
+                bb.WriteByte(0x55);
+                bb.WriteSerializedString(this.GetSerializedTypeName(argument.Type));
+                this.WriteCustomAttributeFixedArg(bb, enumType, argument.Value);
+                return;
+            }
+
+            value = argument.Value;
+        }
+
         if (paramType.IsEnum)
         {
             WriteCustomAttributeFixedArg(bb, GetEnumUnderlyingTypeSafe(paramType), value);
@@ -2249,7 +2265,7 @@ internal sealed class CustomAttributeEncoder
         bb.WriteByte(kindTag);
         WriteCustomAttributeFieldOrPropertyType(bb, memberType);
         bb.WriteSerializedString(name);
-        WriteCustomAttributeFixedArg(bb, memberType, arg.Value);
+        WriteCustomAttributeFixedArg(bb, memberType, arg);
     }
 
     private static void WriteCustomAttributeFieldOrPropertyType(BlobBuilder bb, Type t)

@@ -99,24 +99,10 @@ Console.WriteLine(p.X + p.Y + z.X + z.Y + v + miss)
 
     private static string[] LocateEmitterSources()
     {
-        // Tests run with CWD = <bin>/<tfm>/. Walk up to repo root and
-        // glob the entire Emit directory so that the Binder/Emitter
-        // decomposition can split ReflectionMetadataEmitter.cs without
-        // tripping this test on the first move.
-        var dir = AppContext.BaseDirectory;
-        for (int i = 0; i < 10 && dir is not null; i++)
-        {
-            var candidateDir = Path.Combine(dir, "src", "Core", "CodeAnalysis", "Emit");
-            if (Directory.Exists(candidateDir))
-            {
-                return Directory.GetFiles(candidateDir, "*.cs", SearchOption.TopDirectoryOnly);
-            }
-
-            dir = Path.GetDirectoryName(dir);
-        }
-
-        throw new DirectoryNotFoundException(
-            "Could not locate src/Core/CodeAnalysis/Emit by walking up from " + AppContext.BaseDirectory);
+        return Directory.GetFiles(
+            Path.Combine(TestSource.Root, "src", "Core", "CodeAnalysis", "Emit"),
+            "*.cs",
+            SearchOption.TopDirectoryOnly);
     }
 
     private static EmitResult Compile(string source, Stream peStream)

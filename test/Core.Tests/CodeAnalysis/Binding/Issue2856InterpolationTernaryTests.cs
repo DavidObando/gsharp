@@ -191,7 +191,8 @@ public class Issue2856InterpolationTernaryTests
         Assert.Equal("[     3]", Value(result, "text"));
     }
 
-    private static (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object> Variables) Evaluate(string source)
+#nullable enable annotations
+    private static (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object?> Variables) Evaluate(string source)
     {
         // Post-run globals read back through the oracle (issue #3176 Phase
         // 3b.2): the emitted equivalent of the evaluator's variables
@@ -201,7 +202,7 @@ public class Issue2856InterpolationTernaryTests
     }
 
     private static object Value(
-        (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object> Variables) result,
+        (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object?> Variables) result,
         string name) =>
         result.Variables[name];
 }

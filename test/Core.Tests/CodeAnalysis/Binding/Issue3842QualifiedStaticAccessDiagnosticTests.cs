@@ -282,7 +282,10 @@ public sealed class Issue3842QualifiedStaticAccessDiagnosticTests
     [Fact]
     public void ImplicitDefaultPackage_IsNotQualifiedByItsSynthesizedName()
     {
+        using var references = ReferenceResolver.WithReferences(new[] { typeof(object).Assembly.Location });
+        Assert.Equal(typeof(object).Assembly.GetName().Name, Assert.Single(references.Assemblies).GetName().Name);
         var diagnostic = SingleError(
+            references,
             """
             class Present {}
 

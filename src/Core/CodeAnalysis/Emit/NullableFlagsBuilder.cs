@@ -453,6 +453,21 @@ internal static class NullableFlagsBuilder
             return;
         }
 
+        if (type is FunctionTypeSymbol function)
+        {
+            var start = builder.Count;
+            builder.Add(NotAnnotated);
+            AppendGenericArguments(function, builder);
+            if (isRoot && function.ClrType == null && builder.Skip(start).All(flag => flag == NotAnnotated))
+            {
+                // A scalar applies to the entire root type, preserving the
+                // existing symbolic-delegate context-selection encoding.
+                builder.Count = start + 1;
+            }
+
+            return;
+        }
+
         if (type is ImportedTypeSymbol imported)
         {
             var clr = imported.ClrType;
@@ -544,6 +559,21 @@ internal static class NullableFlagsBuilder
 
     private static void AppendGenericArguments(TypeSymbol type, ImmutableArray<byte>.Builder builder)
     {
+        if (type is FunctionTypeSymbol function)
+        {
+            foreach (var parameter in function.ParameterTypes)
+            {
+                Append(parameter, builder);
+            }
+
+            if (function.ReturnType != TypeSymbol.Void)
+            {
+                Append(function.ReturnType, builder);
+            }
+
+            return;
+        }
+
         if (type == null)
         {
             return;

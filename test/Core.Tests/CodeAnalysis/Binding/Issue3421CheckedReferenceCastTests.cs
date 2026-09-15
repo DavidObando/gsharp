@@ -21,6 +21,15 @@ public sealed class Issue3421CheckedReferenceCastTests
     [Fact]
     public void BinderClassifiesReferenceDowncastsAsExplicit()
     {
+        using var fixture = new CSharpFixture("""
+            public class OpenReference3421 {}
+            public sealed class SealedReference3421 {}
+            """);
+        var contracts = fixture.Load();
+        var openReference = contracts.GetType("OpenReference3421", throwOnError: true);
+        var sealedReference = contracts.GetType("SealedReference3421", throwOnError: true);
+        Assert.False(openReference.IsSealed);
+        Assert.True(sealedReference.IsSealed);
         var baseType = GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(Exception));
         var derivedType = GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(ArgumentException));
         var interfaceType = GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(ICloneable));
@@ -35,10 +44,10 @@ public sealed class Issue3421CheckedReferenceCastTests
             GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(string[]))).IsExplicit);
         Assert.True(Conversion.Classify(
             GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(IUnrelated3421)),
-            GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(OpenReference3421))).IsExplicit);
+            GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(openReference)).IsExplicit);
         Assert.False(Conversion.Classify(
             GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(IUnrelated3421)),
-            GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(SealedReference3421))).Exists);
+            GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(sealedReference)).Exists);
         Assert.False(Conversion.Classify(
             GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.String,
             GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.FromClrType(typeof(Uri))).Exists);
@@ -342,14 +351,6 @@ public sealed class Issue3421CheckedReferenceCastTests
     }
 
     private interface IUnrelated3421
-    {
-    }
-
-    private class OpenReference3421
-    {
-    }
-
-    private sealed class SealedReference3421
     {
     }
 

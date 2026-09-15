@@ -799,7 +799,8 @@ public class InterpolatedStringTests
             (Span: actualSpan, Text: actualText));
     }
 
-    private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.IReadOnlyDictionary<string, object> Variables) Evaluate(string source)
+#nullable enable annotations
+    private static (ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Diagnostics, System.Collections.Generic.IReadOnlyDictionary<string, object?> Variables) Evaluate(string source)
     {
         // Post-run globals read back through the oracle (issue #3176 Phase
         // 3b.2): the emitted equivalent of the evaluator's variables

@@ -1080,6 +1080,13 @@ internal sealed partial class MethodBodyEmitter
     // field; emit the field load instead of a local/parameter load.
     private void EmitCapturedVariableLoad(VariableSymbol captured)
     {
+        // An enclosing capture lives in the display class, not in an
+        // uninitialized local slot inferred by the nested async capture walk.
+        if (this.TryLoadFromEnclosingClosure(captured))
+        {
+            return;
+        }
+
         FieldSymbol? hoistedField = null;
         if ((this.asyncFieldMap != null && this.asyncFieldMap.TryGetHoistedField(captured, out hoistedField))
             || (this.iteratorEmitCtx != null && this.iteratorEmitCtx.FieldMap.TryGetValue(captured, out hoistedField)))

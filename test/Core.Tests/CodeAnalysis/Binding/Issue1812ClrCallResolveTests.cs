@@ -8,6 +8,7 @@ using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -85,9 +86,14 @@ Console.WriteLine(t.Rendered)
 
     private static string CompileAndRun(string source, string contextName)
     {
+        using var fixture = new CSharpFixture(File.ReadAllText(
+            Path.Combine(TestSource.Root, "test", "Core.Tests", "Fixtures", "InterpolatedStringHandlerFixtures.cs")));
+        using var references = ReferenceResolver.WithReferences(new[] { fixture.AssemblyPath });
+        Assert.True(references.TryResolveType("GSharp.Core.Tests.Fixtures.Issue1812BaseCtorFormattableFixture", out var baseType));
+        Assert.False(baseType.IsSealed);
         using var peStream = new MemoryStream();
         var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
+        var compilation = new Compilation(references, tree);
         var result = compilation.Emit(peStream);
 
         Assert.True(
@@ -98,6 +104,7 @@ Console.WriteLine(t.Rendered)
         var loadContext = new AssemblyLoadContext(contextName, isCollectible: true);
         try
         {
+            loadContext.LoadFromAssemblyPath(fixture.AssemblyPath);
             var asm = loadContext.LoadFromStream(peStream);
             var programType = asm.GetTypes().FirstOrDefault(t => t.Name == "<Program>");
             Assert.NotNull(programType);

@@ -166,9 +166,10 @@ public sealed class EmittedOracleResult
     /// values of submission-declared types.
     /// </summary>
     /// <returns>A name-to-value map of the top-level globals.</returns>
-    public IReadOnlyDictionary<string, object> ReadGlobals()
+#nullable enable annotations
+    public IReadOnlyDictionary<string, object?> ReadGlobals()
     {
-        var globals = new Dictionary<string, object>(StringComparer.Ordinal);
+        var globals = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var field in EnumerateGlobalFields())
         {
             if (field.Name.IndexOf('<') >= 0)
@@ -183,6 +184,7 @@ public sealed class EmittedOracleResult
 
         return globals;
     }
+#nullable restore annotations
 
     private IEnumerable<FieldInfo> EnumerateGlobalFields()
     {

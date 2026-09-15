@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -181,7 +183,7 @@ public class DocumentationIssue393Tests
         Assert.Equal(0, mismatches);
     }
 
-    private static DocumentationComment ResolveAny(MemberInfo member)
+    private static DocumentationComment? ResolveAny(MemberInfo member)
     {
         return member switch
         {

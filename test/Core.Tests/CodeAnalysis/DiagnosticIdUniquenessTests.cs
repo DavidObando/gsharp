@@ -412,19 +412,5 @@ public class DiagnosticIdUniquenessTests
         return "<top-level>";
     }
 
-    private static string FindRepoRoot()
-    {
-        var directory = Path.GetDirectoryName(typeof(DiagnosticIdUniquenessTests).Assembly.Location);
-        while (!string.IsNullOrEmpty(directory))
-        {
-            if (File.Exists(Path.Combine(directory, ".config", "dotnet-tools.json")))
-            {
-                return directory;
-            }
-
-            directory = Path.GetDirectoryName(directory);
-        }
-
-        return Environment.CurrentDirectory;
-    }
+    private static string FindRepoRoot() => TestSource.Root;
 }

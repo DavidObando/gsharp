@@ -88,6 +88,19 @@ negative diagnostic; a missing base type must not masquerade as rejection of
 an out-of-range constructor argument. This preserves the fixture, not an
 exclusion of production source or a relaxation of the parity oracle.
 
+Source-inspection guards have the same provenance requirement. A guard that
+parses C# or inventories literal C# signatures must use the original tree
+selected by `CS2GS_TEST_SOURCE_ROOT` (`Core.Tests.TestSource` or the corresponding
+cs2gs fixture-source helper). An explicitly configured missing or migrated-only
+root must fail, not fall back to another checkout or let an empty `*.cs` scan
+pass. This selects source data, **not** a native replacement for the compiler
+under test.
+
+Keep nullable harness contracts honest as well. Reflection globals and symbol
+lookups can legitimately return null; their helper signatures, collection
+element types, and forwarding helpers must say so. Adding runtime `!!`
+assertions to satisfy an incorrectly non-null contract changes the oracle.
+
 ## Related
 
 - `build/run-cs2gs-selfmig-pr-guard.sh` — what the guard covers, and

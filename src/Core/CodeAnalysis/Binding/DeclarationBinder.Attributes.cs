@@ -1215,7 +1215,21 @@ internal sealed partial class DeclarationBinder
         // the underlying primitive per ECMA-335 II.23.3. Other expressions
         // that incidentally fold to a constant (e.g. `nameof(...)`) remain
         // out of scope here; they go through GS0202.
-        if (bindExpression(syntax) is BoundLiteralExpression lit
+        var bound = bindExpression(syntax);
+        if (bound is { Type: { } constantType }
+            && (bound is BoundConversionExpression
+                || (syntax is CallExpressionSyntax or AccessorExpressionSyntax
+                    && constantType.ClrType?.IsPrimitive == true))
+            && IsSerialisableAttributeConstant(constantType)
+            && ConstantExpressionEvaluator.TryEvaluate(bound, out var convertedValue)
+            && convertedValue is not null)
+        {
+            value = convertedValue;
+            type = constantType;
+            return true;
+        }
+
+        if (bound is BoundLiteralExpression lit
             && lit.Value != null
             && IsEnumLikeType(lit.Type))
         {
@@ -1358,12 +1372,14 @@ internal sealed partial class DeclarationBinder
         var elementValues = new object?[elements.Count];
         for (int i = 0; i < elements.Count; i++)
         {
-            if (!TryBindAttributeArgument(elements[i], out var elementValue, out _))
+            if (!TryBindAttributeArgument(elements[i], out var elementValue, out var valueType))
             {
                 return false;
             }
 
-            elementValues[i] = elementValue;
+            elementValues[i] = containerElementType.IsSameAs(typeof(object)) && IsEnumLikeType(valueType)
+                ? new BoundAttributeArgument(null, elementValue, valueType)
+                : elementValue;
             if (elementValue is TypeSymbol)
             {
                 containerElementType = typeof(object);

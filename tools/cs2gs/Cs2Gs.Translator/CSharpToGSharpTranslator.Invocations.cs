@@ -1295,7 +1295,23 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (paramsCollectionArg == null)
             {
-                return this.TranslateArguments(arguments);
+                var translated = this.TranslateArguments(arguments);
+                foreach (var argument in operationArguments)
+                {
+                    if (argument.ArgumentKind == ArgumentKind.DefaultValue
+                        && argument.Parameter.GetAttributes().Any(attribute =>
+                            attribute.AttributeClass?.ContainingNamespace?.ToDisplayString() == "System.Runtime.CompilerServices"
+                            && attribute.AttributeClass.Name is "CallerArgumentExpressionAttribute"
+                                or "CallerMemberNameAttribute" or "CallerFilePathAttribute" or "CallerLineNumberAttribute"))
+                    {
+                        translated.Add(new NamedArgumentExpression(
+                            this.EmittedName(argument.Parameter, argument.Parameter.Name),
+                            this.TranslateOperationDefaultArgument(
+                                callSyntax, argument, "caller information", coerceToParameterType: false)));
+                    }
+                }
+
+                return translated;
             }
 
             if (arguments.Any(a => a.NameColon != null))

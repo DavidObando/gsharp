@@ -113,20 +113,27 @@ internal sealed class AssemblyAttributeEmitter
     }
 
     /// <summary>
-    /// Parses <see cref="EmitContext.AssemblyVersionOverride"/> into a <see cref="Version"/> suitable
-    /// for the assembly row. Falls back to <c>1.0.0.0</c> when the string is absent or
+    /// Parses the declared AssemblyVersion, or <see cref="EmitContext.AssemblyVersionOverride"/>
+    /// when none is declared, into the assembly identity. Falls back to <c>1.0.0.0</c> when absent or
     /// does not parse as a version.
     /// </summary>
     public Version ParseAssemblyVersion()
     {
-        if (string.IsNullOrEmpty(this.emitCtx.AssemblyVersionOverride))
+        // Assembly identity and informational/product version are distinct.
+        // The SDK supplies the former through its generated AssemblyInfo.
+        var declaredVersion = this.emitCtx.Program.AssemblyAttributes
+            .FirstOrDefault(attribute =>
+                attribute.AttributeType.ClrType?.FullName == "System.Reflection.AssemblyVersionAttribute"
+                && attribute.PositionalArguments.Length == 1)
+            ?.PositionalArguments[0].Value as string;
+        var versionStr = declaredVersion ?? this.emitCtx.AssemblyVersionOverride;
+        if (string.IsNullOrEmpty(versionStr))
         {
             return new Version(1, 0, 0, 0);
         }
 
         // NuGet versions can contain pre-release suffixes (e.g. "1.2.3-beta.1").
         // Extract just the numeric prefix for System.Version.
-        var versionStr = this.emitCtx.AssemblyVersionOverride;
         var dashIdx = versionStr.IndexOf('-');
         if (dashIdx >= 0)
         {

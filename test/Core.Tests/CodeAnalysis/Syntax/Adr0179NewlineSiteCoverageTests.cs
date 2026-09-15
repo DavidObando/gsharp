@@ -49,19 +49,5 @@ public sealed class Adr0179NewlineSiteCoverageTests
         Assert.Equal(expected.OrderBy(site => site, StringComparer.Ordinal), actual);
     }
 
-    private static string FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "GSharp.sln")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate GSharp.sln.");
-    }
+    private static string FindRepositoryRoot() => TestSource.Root;
 }
