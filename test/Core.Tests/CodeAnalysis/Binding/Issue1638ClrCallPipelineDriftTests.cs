@@ -94,7 +94,8 @@ Console.WriteLine(s)
         var loadContext = new AssemblyLoadContext(contextName, isCollectible: true);
         try
         {
-            loadContext.LoadFromAssemblyPath(fixture.AssemblyPath);
+            using var dependency = File.OpenRead(fixture.AssemblyPath);
+            loadContext.LoadFromStream(dependency);
             var asm = loadContext.LoadFromStream(peStream);
             var programType = asm.GetTypes().FirstOrDefault(t => t.Name == "<Program>");
             Assert.NotNull(programType);
