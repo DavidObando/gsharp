@@ -271,8 +271,12 @@ if [[ "$(git rev-parse HEAD)" != f19f3d2bd83a5213b3e68c5ff8f4260e737383c5 ]]; th
   echo "Use a clean worktree at the #4232 implementation commit." >&2
   exit 1
 fi
-git diff --quiet
-git diff --cached --quiet
+worktree_status=$(git status --porcelain=v1 --untracked-files=all)
+if [[ -n "$worktree_status" ]]; then
+  printf 'Tracked, staged, or untracked inputs would change the corpus:\n%s\n' \
+    "$worktree_status" >&2
+  exit 1
+fi
 if [[ -e ../issue-4198-evidence ]]; then
   echo "Choose a fresh evidence directory; refusing to reuse existing results." >&2
   exit 1
@@ -292,7 +296,8 @@ require_full_translation() {
   if ! jq -e --slurpfile baseline tools/cs2gs/selfmig-baseline.json '
     .apps as $apps
     | (($baseline[0].greenApps + ($baseline[0].stageFloor | keys)) | unique) as $expected
-    | ($apps | type) == "array"
+    | .succeeded == true
+      and ($apps | type) == "array"
       and ($apps | length) == 56
       and ($expected | length) == 56
       and ([$apps[].appId] | sort) == $expected
@@ -301,7 +306,7 @@ require_full_translation() {
         and (.stages | map(select(.stage == "translate"))
           | length == 1 and .[0].status == "passed"))
   ' "$manifest_run/run.json" > /dev/null; then
-    echo "Expected all 56 baseline apps to pass translation: $manifest_run/run.json" >&2
+    echo "Expected a successful repository run with all 56 apps translated: $manifest_run/run.json" >&2
     return 1
   fi
 }
