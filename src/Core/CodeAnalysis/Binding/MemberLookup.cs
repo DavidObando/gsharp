@@ -3669,6 +3669,11 @@ internal sealed class MemberLookup
             : invoke.ReturnType.ContainsGenericParameters
                 ? TypeSymbol.Object
                 : ClrNullability.GetReturnTypeSymbol(invoke);
+        if (returnType is ByRefTypeSymbol byRefReturn)
+        {
+            returnType = byRefReturn.PointeeType;
+        }
+
         var variadicFlags = anyVariadic ? variadicBuilder.ToImmutable() : default;
         functionType = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), variadicFlags, returnType);
         return true;
@@ -3784,6 +3789,12 @@ internal sealed class MemberLookup
     /// <returns><see langword="true"/> when the signatures match.</returns>
     public static bool MethodMatchesClrSignature(FunctionSymbol candidate, MethodInfo clrMethod)
     {
+        if (candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(clrMethod))
+        {
+            return false;
+        }
+
+        var clrReturnType = clrMethod.ReturnType.IsByRef ? clrMethod.ReturnType.GetElementType()! : clrMethod.ReturnType;
         var clrParams = clrMethod.GetParameters();
 
         // Issue #2230: an imported (metadata) interface method may itself be
@@ -3820,7 +3831,7 @@ internal sealed class MemberLookup
                 return false;
             }
         }
-        else if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, clrMethod.ReturnType, methodGenericParams, candidateTypeParams))
+        else if (!ClrParamTypeMatchesGenericMethodParam(candidate.Type, clrReturnType, methodGenericParams, candidateTypeParams))
         {
             return false;
         }
@@ -3950,7 +3961,8 @@ internal sealed class MemberLookup
             return false;
         }
 
-        if (!ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType, symbolicArgs))
+        if (candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(openMethod)
+            || !ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType.IsByRef ? openMethod.ReturnType.GetElementType()! : openMethod.ReturnType, symbolicArgs))
         {
             return false;
         }
@@ -4058,7 +4070,8 @@ internal sealed class MemberLookup
             return false;
         }
 
-        if (!ReturnTypeMatchesSubstituted(method.Type, slot.Method.ReturnType, slot.SymbolicArgs))
+        if (method.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot.Method)
+            || !ReturnTypeMatchesSubstituted(method.Type, slot.Method.ReturnType.IsByRef ? slot.Method.ReturnType.GetElementType()! : slot.Method.ReturnType, slot.SymbolicArgs))
         {
             return false;
         }
@@ -4233,7 +4246,8 @@ internal sealed class MemberLookup
         foreach (var implProp in structSymbol.Properties)
         {
             if (implProp.Name == openProp.Name
-                && ParameterTypeMatchesSubstituted(implProp.Type, openProp.PropertyType, symbolicArgs))
+                && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(openProp)
+                && ParameterTypeMatchesSubstituted(implProp.Type, openProp.PropertyType.IsByRef ? openProp.PropertyType.GetElementType()! : openProp.PropertyType, symbolicArgs))
             {
                 return implProp;
             }
@@ -4305,7 +4319,8 @@ internal sealed class MemberLookup
         foreach (var implProp in structSymbol.Properties)
         {
             if (implProp.Name == clrProp.Name
-                && ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(implProp.Type), clrProp.PropertyType))
+                && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(clrProp)
+                && ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(implProp.Type), clrProp.PropertyType.IsByRef ? clrProp.PropertyType.GetElementType()! : clrProp.PropertyType))
             {
                 return implProp;
             }

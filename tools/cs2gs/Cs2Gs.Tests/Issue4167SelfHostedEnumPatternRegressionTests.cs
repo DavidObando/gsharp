@@ -147,11 +147,11 @@ public sealed class Issue4167SelfHostedEnumPatternRegressionTests
             @"valueType(?:!!)?\.TypeKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*TypeKind\.Struct",
             compactInvocations);
 
-        string patternsGs = translated["CSharpToGSharpTranslator.Patterns.cs"];
-        string compactPatterns = string.Concat(patternsGs.Where(c => !char.IsWhiteSpace(c)));
+        string statementsGs = translated["CSharpToGSharpTranslator.Statements.cs"];
+        string compactStatements = string.Concat(statementsGs.Where(c => !char.IsWhiteSpace(c)));
         Assert.Matches(
-            @"refIndexer\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.RefReadOnly",
-            compactPatterns);
+            @"localSymbol\.RefKind==(?:[A-Za-z_][A-Za-z0-9_]*\.)*RefKind\.RefReadOnly",
+            compactStatements);
     }
 
     private static async Task<string> TranslateOwnFile(string projectDirName, string fileName)

@@ -1514,7 +1514,8 @@ public sealed partial class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceType,
-                isRefReturn: symbol != null && symbol.ReturnsByRef,
+                isRefReturn: symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly),
+                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
                 isSuspend: isEmittedSuspend);
 
             return (method, isStatic);
@@ -2541,12 +2542,8 @@ public sealed partial class CSharpToGSharpTranslator
             // was the right interim answer: the alternative was emitting an
             // ordinary `prop P T` that silently returns a COPY (issue #3839).
             //
-            // `ref readonly` still gaps. G# has no read-only by-ref return, and
-            // translating one as a plain `ref` would hand the caller a WRITABLE
-            // alias to storage the C# author declared read-only — a silent
-            // widening, which is the same class of quiet behaviour change the
-            // copy-returning form was.
-            bool isRefReturnProperty = symbol != null && symbol.ReturnsByRef;
+            // Issue #4220 preserves readonly capability separately from byref shape.
+            bool isRefReturnProperty = symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly);
 
             // Issue #3879: gsc restricts the by-ref property to the CONCRETE,
             // computed shapes — an abstract slot and an interface member (bodied
@@ -2559,8 +2556,7 @@ public sealed partial class CSharpToGSharpTranslator
             // failure several steps downstream — the opposite of the loud,
             // local answer #3839/#3878 established.
             if (symbol != null
-                && symbol.ReturnsByRef
-                && !symbol.ReturnsByRefReadonly
+                && isRefReturnProperty
                 && (symbol.IsAbstract || symbol.ContainingType?.TypeKind == TypeKind.Interface))
             {
                 string abstractRefPropertyMessage =
@@ -2570,16 +2566,6 @@ public sealed partial class CSharpToGSharpTranslator
                     "requirement with a copy-returning property unchecked. A concrete `ref` property translates.";
                 this.context.ReportUnsupported(node, abstractRefPropertyMessage);
                 isRefReturnProperty = false;
-            }
-
-            if (symbol != null && symbol.ReturnsByRefReadonly)
-            {
-                string refReadonlyPropertyMessage =
-                    $"ref-returning property '{node.Identifier.Text}' is `ref readonly`, which has no G# form: G#'s " +
-                    "by-ref return (issue #490 / ADR-0060, extended to `prop` by issue #3879) has no read-only " +
-                    "variant, so emitting it would hand the caller a writable alias to read-only storage. A plain " +
-                    "`ref` property translates (issue #3839).";
-                this.context.ReportUnsupported(node, refReadonlyPropertyMessage);
             }
 
             // Issue #2362, ADR-0149: explicit interface PROPERTY implementations
@@ -2778,7 +2764,8 @@ public sealed partial class CSharpToGSharpTranslator
                 attributes: this.MapAttributes(node.AttributeLists),
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfacePropertyType,
-                isRefReturn: isRefReturnProperty);
+                isRefReturn: isRefReturnProperty,
+                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true);
 
             return (property, isStatic, backingField);
         }

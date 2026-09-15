@@ -65,6 +65,9 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// </summary>
     public TypeSymbol Type { get; }
 
+    /// <summary>Gets the imported return's managed-reference capability.</summary>
+    public Binding.RefKind ReturnRefKind => Binding.RefCapabilities.GetReturnRefKind(Method);
+
     /// <summary>
     /// Gets a value indicating whether the method carries
     /// <c>[Gsharp.Concurrency.Suspending]</c> (ADR-0174 D4): it was emitted by

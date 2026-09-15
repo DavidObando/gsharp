@@ -285,7 +285,7 @@ public static class BaseCallForwarderRewriter
                 receiverType: this.classDef,
                 explicitReceiverParameter: null)
             {
-                ReturnRefKind = node.Method.ReturnType.IsByRef ? RefKind.Ref : RefKind.None,
+                ReturnRefKind = RefCapabilities.GetReturnRefKind(node.Method),
             };
 
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>(parameterArray.Length);

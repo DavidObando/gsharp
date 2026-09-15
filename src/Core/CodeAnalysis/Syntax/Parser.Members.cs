@@ -436,6 +436,8 @@ public partial class Parser
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParenthesisToken = MatchToken(SyntaxKind.CloseParenthesisToken);
+        var returnRefModifier = ParseOptionalPropertyReturnRefModifier();
+        var returnReadOnlyModifier = ParseOptionalReadOnlyRefModifier(returnRefModifier);
         var type = ParseOptionalTypeClause();
 
         // ADR-0085 (issue #881 revision): interface methods MAY carry a body
@@ -478,6 +480,8 @@ public partial class Parser
             type,
             body);
         decl.StaticModifier = staticModifier;
+        decl.ReturnRefModifier = returnRefModifier;
+        decl.ReturnReadOnlyModifier = returnReadOnlyModifier;
         decl.SemicolonBodyToken = semicolonBody;
         return decl;
     }
@@ -622,6 +626,7 @@ public partial class Parser
 
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var returnRefModifier = ParseOptionalPropertyReturnRefModifier();
+        var returnReadOnlyModifier = ParseOptionalReadOnlyRefModifier(returnRefModifier);
         var type = ParseDeclarationTypeClauseBeforeArrowBody(isProperty: true);
 
         if (Current.Kind == SyntaxKind.OpenBraceToken)
@@ -640,7 +645,7 @@ public partial class Parser
                 openBrace,
                 accessors,
                 closeBrace)
-                .WithReturnRefModifier(returnRefModifier)
+                .WithReturnRefModifier(returnRefModifier, returnReadOnlyModifier)
                 .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
@@ -666,7 +671,7 @@ public partial class Parser
                 synthOpenBrace,
                 ImmutableArray.Create(getAccessor),
                 synthCloseBrace)
-                .WithReturnRefModifier(returnRefModifier)
+                .WithReturnRefModifier(returnRefModifier, returnReadOnlyModifier)
                 .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
         }
 
@@ -682,7 +687,7 @@ public partial class Parser
             openBraceToken: null,
             accessors: ImmutableArray<PropertyAccessorSyntax>.Empty,
             closeBraceToken: null)
-            .WithReturnRefModifier(returnRefModifier)
+            .WithReturnRefModifier(returnRefModifier, returnReadOnlyModifier)
             .WithExplicitInterfaceClause(explicitIfaceOpenParen, explicitIfaceType, explicitIfaceCloseParen);
     }
 
@@ -704,6 +709,13 @@ public partial class Parser
         return null;
     }
 
+    private SyntaxToken? ParseOptionalReadOnlyRefModifier(SyntaxToken? refModifier)
+        => refModifier != null
+            && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "readonly"
+            && CanStartTypeClause(Peek(1))
+                ? NextToken()
+                : null;
+
     // ADR-0118: parse the indexer member form `prop this[<params>] T { get; set }`.
     // The leading `prop` keyword has already been consumed. The `this` token is
     // current. The resulting PropertyDeclarationSyntax carries IsIndexer = true.
@@ -718,6 +730,7 @@ public partial class Parser
         var parameters = ParseIndexerParameterList();
         var closeBracket = MatchToken(SyntaxKind.CloseSquareBracketToken);
         var returnRefModifier = ParseOptionalPropertyReturnRefModifier();
+        var returnReadOnlyModifier = ParseOptionalReadOnlyRefModifier(returnRefModifier);
         var type = ParseDeclarationTypeClauseBeforeArrowBody(isProperty: true);
 
         SyntaxToken? openBrace = null;
@@ -751,7 +764,7 @@ public partial class Parser
             openBrace,
             accessors,
             closeBrace)
-            .WithReturnRefModifier(returnRefModifier)
+            .WithReturnRefModifier(returnRefModifier, returnReadOnlyModifier)
             .WithIndexer(thisKeyword, openBracket, parameters, closeBracket);
     }
 
@@ -1265,6 +1278,7 @@ public partial class Parser
             returnRefModifier = NextToken();
         }
 
+        var returnReadOnlyModifier = ParseOptionalReadOnlyRefModifier(returnRefModifier);
         var type = ParseOptionalFunctionReturnTypeClause();
 
         // ADR-0086 / issue #727: a `;` in place of a `{ ... }` body marks the
@@ -1322,6 +1336,7 @@ public partial class Parser
         var decl = new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
         decl.ExplicitExtensionModifier = explicitExtensionModifier;
         decl.ReturnRefModifier = returnRefModifier;
+        decl.ReturnReadOnlyModifier = returnReadOnlyModifier;
         decl.SemicolonBodyToken = semicolonBody;
         decl.IsConversionOperator = isConversionOperator;
         decl.ConversionIsExplicit = conversionIsExplicit;

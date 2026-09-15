@@ -16,6 +16,7 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
     private SyntaxToken? asyncModifier;
     private SyntaxToken? scopedModifier;
     private SyntaxToken? refKindModifier;
+    private SyntaxToken? readOnlyRefModifier;
     private TypeParameterListSyntax? typeParameterList;
 
     /// <summary>
@@ -144,6 +145,17 @@ public sealed class VariableDeclarationSyntax : StatementSyntax
 
     /// <summary>Gets a value indicating whether this declaration carries the <c>ref</c> aliasing modifier (issue #491).</summary>
     public bool HasRefKindModifier => RefKindModifier != null;
+
+    /// <summary>Gets or sets the contextual <c>readonly</c> token following a local alias's <c>ref</c>.</summary>
+    public SyntaxToken? ReadOnlyRefModifier
+    {
+        get => readOnlyRefModifier;
+        set
+        {
+            readOnlyRefModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>
     /// Gets the variable identifier.

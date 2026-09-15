@@ -3095,7 +3095,7 @@ internal sealed partial class DeclarationBinder
             return RefKind.None;
         }
 
-        return RefKind.Ref;
+        return syntax.ReturnReadOnlyModifier != null ? RefKind.RefReadOnly : RefKind.Ref;
     }
 
     /// <summary>
@@ -3176,7 +3176,7 @@ internal sealed partial class DeclarationBinder
             return RefKind.None;
         }
 
-        return RefKind.Ref;
+        return syntax.ReturnReadOnlyModifier != null ? RefKind.RefReadOnly : RefKind.Ref;
     }
 
     internal VariableSymbol BindVariableDeclaration(SyntaxToken identifier, bool isReadOnly, TypeSymbol type)

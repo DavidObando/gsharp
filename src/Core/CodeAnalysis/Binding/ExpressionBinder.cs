@@ -1529,11 +1529,19 @@ internal sealed partial class ExpressionBinder
                 && conditional.WhenTrue.Type == conditional.WhenFalse.Type;
         }
 
-        return expression is BoundVariableExpression
-            or BoundFieldAccessExpression
-            or BoundIndexExpression
-            or BoundDereferenceExpression;
+        return expression switch
+        {
+            BoundFieldAccessExpression field => IsAddressableFieldReceiver(field.Receiver),
+            BoundClrPropertyAccessExpression { Member: FieldInfo field } access =>
+                !field.IsLiteral && IsAddressableFieldReceiver(access.Receiver),
+            BoundIndexExpression index => index.IsArrayBackedElementAccess,
+            BoundVariableExpression or BoundDereferenceExpression => true,
+            _ => false,
+        };
     }
+
+    private static bool IsAddressableFieldReceiver(BoundExpression? receiver)
+        => receiver == null || Binder.IsReferenceTypeForConstraint(receiver.Type) || IsLvalue(receiver);
 
     internal static bool TryGetReadOnlyAddressTarget(
         BoundExpression expression,

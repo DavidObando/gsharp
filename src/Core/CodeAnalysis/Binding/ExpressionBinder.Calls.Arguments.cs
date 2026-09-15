@@ -696,6 +696,14 @@ internal sealed partial class ExpressionBinder
             callableType = indexedType;
         }
 
+        if (callableType is not FunctionTypeSymbol
+            && callableType.ClrType is { } importedDelegateClr
+            && ClrTypeUtilities.IsDelegateType(importedDelegateClr))
+        {
+            result = BuildDelegateMemberInvocation(ce, memberLoad, callableType, functionType, arguments);
+            return true;
+        }
+
         if (callableType is DelegateTypeSymbol namedDelegate)
         {
             if (!overloads.TryBindNamedDelegateArguments(
@@ -938,20 +946,38 @@ internal sealed partial class ExpressionBinder
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<RefKind> argumentRefKinds = default)
     {
+        BoundExpression BindInvocation(BoundExpression receiver)
+        {
+            if (delegateType is not FunctionTypeSymbol
+                && delegateType.ClrType is { } delegateClr
+                && ClrTypeUtilities.IsDelegateType(delegateClr))
+            {
+                if (!overloads.TryAnalyzeCallArgumentLayout(syntax.Arguments, out _, out var argumentNames))
+                {
+                    return new BoundErrorExpression(syntax);
+                }
+
+                if (TryBindInheritedClrInstanceCall(receiver, delegateClr, "Invoke", arguments, syntax, out var importedCall, argumentNames: argumentNames))
+                {
+                    return importedCall;
+                }
+
+                Diagnostics.ReportNotAFunction(syntax.Location, delegateType.Name);
+                return new BoundErrorExpression(syntax);
+            }
+
+            return new BoundIndirectCallExpression(null, receiver, functionType, arguments, argumentRefKinds);
+        }
+
         if (syntax.NullableQuestionToken == null)
         {
-            return new BoundIndirectCallExpression(null, delegateLoad, functionType, arguments, argumentRefKinds);
+            return BindInvocation(delegateLoad);
         }
 
         var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
             .ToString(System.Globalization.CultureInfo.InvariantCulture);
         var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: delegateType);
-        var invoke = new BoundIndirectCallExpression(
-            null,
-            new BoundVariableExpression(null, capture),
-            functionType,
-            arguments,
-            argumentRefKinds);
+        var invoke = BindInvocation(new BoundVariableExpression(null, capture));
         return BuildNullConditionalDelegateInvocation(syntax, delegateLoad, capture, invoke);
     }
 
@@ -1634,7 +1660,7 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
 
-                BoundExpression inheritedCall = new BoundImportedInstanceCallExpression(null, inheritedCallReceiver, best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall);
+                BoundExpression inheritedCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, inheritedCallReceiver, best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall));
                 result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
             case ClrOverloadResolution.ResolutionOutcome.Ambiguous:

@@ -294,6 +294,12 @@ internal sealed partial class ExpressionBinder
         }
 
         // Lvalue check.
+        if (RefCapabilities.IsReadOnlyStorage(operand))
+        {
+            Diagnostics.ReportCannotTakeAddressOfConstant(syntax.OperatorToken.Location, syntax.Operand.ToString());
+            return new BoundErrorExpression(null);
+        }
+
         if (!IsLvalue(operand))
         {
             var exprText = syntax.Operand.ToString();

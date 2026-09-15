@@ -227,13 +227,8 @@ namespace Corpus.Issue1987
     }
 
     [Fact]
-    public void ElementAccess_OnRefReadonlyReturningIndexer_StaysLoudGap()
+    public void ElementAccess_OnRefReadonlyReturningIndexer_Translates()
     {
-        // The half of #1987 that #3879 did NOT close, and the reason the test
-        // above is not simply a deletion. G# has no read-only by-ref return, so
-        // a `ref readonly` indexer's DECLARATION still gaps — which means an
-        // element access through one would name a member that was never
-        // emitted, and the read has to gap with it.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 namespace Corpus.Issue1987
@@ -258,10 +253,11 @@ namespace Corpus.Issue1987
         Assert.True(project.BoundWithoutErrors);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
+        var unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Message.Contains("ref readonly", StringComparison.Ordinal));
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("ref readonly int32", GSharpPrinter.Print(unit), StringComparison.Ordinal);
     }
 
     [Fact]

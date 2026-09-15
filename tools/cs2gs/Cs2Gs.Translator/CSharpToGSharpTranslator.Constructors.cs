@@ -192,16 +192,15 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #3879 (ADR-0060 amendment): a C# `ref` INDEXER now has a
             // canonical G# form — `prop this[i int32] ref T { get { return ref
             // lvalue } }` and its arrow sugar. See the twin comment in
-            // TranslateProperty for why `ref readonly` still gaps.
-            bool isRefReturnIndexer = symbol != null && symbol.ReturnsByRef;
+            // TranslateProperty for the matching readonly capability.
+            bool isRefReturnIndexer = symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly);
 
             // Issue #3879: the twin of the abstract/interface gap in
             // TranslateProperty — gsc's by-ref form is concrete-only, so an
             // abstract or interface-declared `ref` indexer must gap HERE rather
             // than be emitted and refused later by gsc's GS0578.
             if (symbol != null
-                && symbol.ReturnsByRef
-                && !symbol.ReturnsByRefReadonly
+                && isRefReturnIndexer
                 && (symbol.IsAbstract || symbol.ContainingType?.TypeKind == TypeKind.Interface))
             {
                 string abstractRefIndexerMessage =
@@ -211,15 +210,6 @@ public sealed partial class CSharpToGSharpTranslator
                     "indexer unchecked. A concrete `ref` indexer translates.";
                 this.context.ReportUnsupported(node, abstractRefIndexerMessage);
                 isRefReturnIndexer = false;
-            }
-
-            if (symbol != null && symbol.ReturnsByRefReadonly)
-            {
-                string refReadonlyIndexerMessage =
-                    "ref-returning indexer is `ref readonly`, which has no G# form: G#'s by-ref return (issue #490 / " +
-                    "ADR-0060, extended to `prop` by issue #3879) has no read-only variant, so emitting it would hand " +
-                    "the caller a writable alias to read-only storage. A plain `ref` indexer translates (issue #3839).";
-                this.context.ReportUnsupported(node, refReadonlyIndexerMessage);
             }
 
             // ADR-0149 (issue #944 follow-up): G# interfaces can now declare an
@@ -335,7 +325,8 @@ public sealed partial class CSharpToGSharpTranslator
                 indexerParameters: indexParameters,
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceIndexerType,
-                isRefReturn: isRefReturnIndexer);
+                isRefReturn: isRefReturnIndexer,
+                isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true);
 
             return (property, isStatic);
         }

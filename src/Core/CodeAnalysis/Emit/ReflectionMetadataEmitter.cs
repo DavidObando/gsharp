@@ -4822,6 +4822,11 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
+        if (RefCapabilities.IsReadOnlyReference(receiver))
+        {
+            return true;
+        }
+
         if (receiver is BoundDereferenceExpression)
         {
             return false;

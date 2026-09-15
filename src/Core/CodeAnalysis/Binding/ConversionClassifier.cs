@@ -504,6 +504,8 @@ internal sealed class ConversionClassifier
         // conversion the emitter cannot express.
         if (expression is BoundMethodGroupExpression userMethodGroup
             && (userMethodGroup.FunctionType == null
+                || userMethodGroup.Function?.ReturnRefKind != RefKind.None
+                || HasByRefDelegateReturn(type)
                 || (type is FunctionTypeSymbol targetFn
                     && HasReferenceVariantSlotMismatch(userMethodGroup.FunctionType, targetFn))))
         {
@@ -537,6 +539,16 @@ internal sealed class ConversionClassifier
 
             ExpressionTreeRestrictionValidator.Validate(expressionTreeLiteral, type, Diagnostics);
             return new BoundConversionExpression(null, type, expressionTreeLiteral);
+        }
+
+        if (expression is BoundFunctionLiteralExpression refContractLiteral)
+        {
+            GetMethodGroupTargetRefKinds(type, refContractLiteral.Function.Parameters.Length, out var targetReturnKind);
+            if (refContractLiteral.Function.ReturnRefKind != targetReturnKind)
+            {
+                Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+                return new BoundErrorExpression(expression.Syntax);
+            }
         }
 
         if (HasDelegateParameterRefKindMismatch(type, expression))
@@ -2314,7 +2326,9 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
-            if (!IsMethodGroupReturnCompatible(candidate.ReturnType, invokeReturnType))
+            DelegateRefKindUtilities.GetDelegateParameterRefKinds(delegateClr, invokeParameterTypes.Length, out var targetReturnRefKind);
+            if (RefCapabilities.GetReturnRefKind(candidate) != targetReturnRefKind
+                || !IsMethodGroupReturnCompatible(candidate.ReturnType, invokeReturnType))
             {
                 continue;
             }
@@ -2413,6 +2427,13 @@ internal sealed class ConversionClassifier
             targetType,
             targetParameterTypes.Length,
             out var targetReturnRefKind);
+        targetParameterTypes = targetParameterTypes.Select((type, index) =>
+            targetParameterRefKinds[index] != RefKind.None && type is ByRefTypeSymbol byRef
+                ? byRef.PointeeType : type).ToImmutableArray();
+        if (targetReturnRefKind != RefKind.None && targetReturnType is ByRefTypeSymbol byRefReturn)
+        {
+            targetReturnType = byRefReturn.PointeeType;
+        }
 
         FunctionSymbol? pick = null;
         StructSymbol? pickOwner = null;
@@ -2463,7 +2484,7 @@ internal sealed class ConversionClassifier
                         targetParameterTypes[i],
                         out candidateParameterTypes[i],
                         parameterPosition: true,
-                        allowVariance: allowVariance))
+                        allowVariance: allowVariance && targetParameterRefKinds[i] == RefKind.None))
                 {
                     paramsMatch = false;
                     break;
@@ -2480,7 +2501,7 @@ internal sealed class ConversionClassifier
                 targetReturnType,
                 out canonicalCandidateReturn,
                 parameterPosition: false,
-                allowVariance: allowVariance))
+                allowVariance: allowVariance && targetReturnRefKind == RefKind.None))
             {
                 continue;
             }
@@ -2549,6 +2570,11 @@ internal sealed class ConversionClassifier
         if (ReferenceEquals(targetType, pickFnType))
         {
             return resolvedValue;
+        }
+
+        if (targetReturnRefKind != RefKind.None || targetParameterRefKinds.Any(kind => kind != RefKind.None))
+        {
+            return new BoundConversionExpression(null, targetType, resolvedValue);
         }
 
         var conversion = Conversion.Classify(pickFnType, targetType);
@@ -2668,15 +2694,15 @@ internal sealed class ConversionClassifier
         bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
         if (requiresWritable)
         {
-            if (whenTrue is BoundVariableExpression wtVar && wtVar.Variable.IsReadOnly)
+            if (RefCapabilities.IsReadOnlyStorage(whenTrue))
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, wtVar.Variable.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, syntax.WhenTrue.ToString());
                 return new BoundErrorExpression(null);
             }
 
-            if (whenFalse is BoundVariableExpression wfVar && wfVar.Variable.IsReadOnly)
+            if (RefCapabilities.IsReadOnlyStorage(whenFalse))
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, wfVar.Variable.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, syntax.WhenFalse.ToString());
                 return new BoundErrorExpression(null);
             }
         }
@@ -3605,6 +3631,12 @@ internal sealed class ConversionClassifier
 
         canonical = actual;
         return false;
+    }
+
+    private static bool HasByRefDelegateReturn(TypeSymbol targetType)
+    {
+        GetMethodGroupTargetRefKinds(targetType, 0, out var returnRefKind);
+        return returnRefKind != RefKind.None;
     }
 
     private static ImmutableArray<RefKind> GetMethodGroupTargetRefKinds(

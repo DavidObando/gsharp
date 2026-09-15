@@ -15,6 +15,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     private SyntaxToken? staticModifier;
     private SyntaxToken? returnRefModifier;
     private SyntaxToken? unsafeModifier;
+    private SyntaxToken? returnReadOnlyModifier;
     private SyntaxToken? explicitInterfaceOpenParenToken;
     private TypeClauseSyntax? explicitInterfaceType;
     private SyntaxToken? explicitInterfaceCloseParenToken;
@@ -367,6 +368,17 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets a value indicating whether this function declares a <c>ref</c> return (issue #490).</summary>
     public bool IsRefReturn => ReturnRefModifier != null;
+
+    /// <summary>Gets or sets the contextual <c>readonly</c> token following a return's <c>ref</c>.</summary>
+    public SyntaxToken? ReturnReadOnlyModifier
+    {
+        get => returnReadOnlyModifier;
+        set
+        {
+            returnReadOnlyModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>
     /// Gets or sets the optional <c>unsafe</c> contextual modifier (ADR-0122 / issue #1014)

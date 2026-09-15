@@ -2302,7 +2302,8 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            inferTypeArguments(candidate.Parameters[i + parameterOffset].Type, argType, substitution);
+            var parameter = candidate.Parameters[i + parameterOffset];
+            inferTypeArguments(parameter.Type, RefCapabilities.GetInferenceType(parameter, argType), substitution);
         }
 
         if (isVariadic

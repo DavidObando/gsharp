@@ -775,6 +775,7 @@ public partial class Parser
             refKindModifier = NextToken();
         }
 
+        var readOnlyRefModifier = ParseOptionalReadOnlyRefModifier(refKindModifier);
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
 
         // Issue #1886: `let Name[T] = func (...) ... { ... }` attaches a generic
@@ -814,6 +815,7 @@ public partial class Parser
         var result = new VariableDeclarationSyntax(syntaxTree, accessibilityModifier, keyword, identifier, typeClause, equals, initializer);
         result.ScopedModifier = scopedModifier;
         result.RefKindModifier = refKindModifier;
+        result.ReadOnlyRefModifier = readOnlyRefModifier;
         result.TypeParameterList = typeParameterList;
         return result;
     }

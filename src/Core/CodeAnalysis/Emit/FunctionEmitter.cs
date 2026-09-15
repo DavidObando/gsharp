@@ -713,12 +713,17 @@ internal sealed class FunctionEmitter
         var returnTupleNames = TupleElementNamesBuilder.Build(function.Type);
 
         ParameterHandle? returnParamHandle = null;
-        if (hasReturnAttributes || returnNeedsNullableAttribute || !returnTupleNames.IsDefaultOrEmpty)
+        if (hasReturnAttributes || returnNeedsNullableAttribute || !returnTupleNames.IsDefaultOrEmpty
+            || function.ReturnRefKind == RefKind.RefReadOnly)
         {
             returnParamHandle = this.emitCtx.Metadata.AddParameter(
                 attributes: ParameterAttributes.None,
                 name: default(StringHandle),
                 sequenceNumber: 0);
+            if (function.ReturnRefKind == RefKind.RefReadOnly)
+            {
+                this.outer.customAttrEncoder.EmitIsReadOnlyAttributeOnParameter(returnParamHandle.Value);
+            }
         }
 
         var paramHandles = new List<(ParameterSymbol Symbol, ParameterHandle Handle, ImmutableArray<byte> NullableFlags)>();

@@ -18,6 +18,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     private TypeClauseSyntax? explicitInterfaceType;
     private SyntaxToken? explicitInterfaceCloseParenToken;
     private SyntaxToken? returnRefModifier;
+    private SyntaxToken? returnReadOnlyModifier;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PropertyDeclarationSyntax"/> class.
@@ -188,6 +189,17 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// <summary>Gets a value indicating whether this property/indexer declares a <c>ref</c> return (issue #3879).</summary>
     public bool IsRefReturn => ReturnRefModifier != null;
 
+    /// <summary>Gets or sets the contextual <c>readonly</c> token following a return's <c>ref</c>.</summary>
+    public SyntaxToken? ReturnReadOnlyModifier
+    {
+        get => returnReadOnlyModifier;
+        set
+        {
+            returnReadOnlyModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
     /// <summary>Gets the property type.</summary>
     public TypeClauseSyntax? Type { get; }
 
@@ -216,8 +228,9 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
     /// instance for fluent parser use.
     /// </summary>
     /// <param name="modifier">The <c>ref</c> token, or <see langword="null"/> when the property returns by value.</param>
+    /// <param name="readOnlyModifier">The optional <c>readonly</c> token.</param>
     /// <returns>This same <see cref="PropertyDeclarationSyntax"/>.</returns>
-    internal PropertyDeclarationSyntax WithReturnRefModifier(SyntaxToken? modifier)
+    internal PropertyDeclarationSyntax WithReturnRefModifier(SyntaxToken? modifier, SyntaxToken? readOnlyModifier = null)
     {
         if (modifier == null)
         {
@@ -225,6 +238,7 @@ public sealed class PropertyDeclarationSyntax : SyntaxNode
         }
 
         ReturnRefModifier = modifier;
+        ReturnReadOnlyModifier = readOnlyModifier;
         return this;
     }
 

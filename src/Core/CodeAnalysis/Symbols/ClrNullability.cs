@@ -51,6 +51,11 @@ public static class ClrNullability
     /// <returns>The mapped type symbol.</returns>
     public static TypeSymbol GetPropertyTypeSymbol(PropertyInfo property)
     {
+        if (property.PropertyType.IsByRef)
+        {
+            return ByRefTypeSymbol.Get(GetPropertyElementTypeSymbol(property, property.PropertyType.GetElementType()!));
+        }
+
         var baseSymbol = TypeSymbol.FromClrType(property.PropertyType);
 
         // Properties have no dedicated `ReturnParameter` to attach
@@ -114,18 +119,25 @@ public static class ClrNullability
     /// <returns>The mapped type symbol.</returns>
     public static TypeSymbol GetReturnTypeSymbol(MethodInfo method)
     {
-        var baseSymbol = TypeSymbol.FromClrType(method.ReturnType);
+        var returnType = method.ReturnType.IsByRef ? method.ReturnType.GetElementType()! : method.ReturnType;
+        var baseSymbol = TypeSymbol.FromClrType(returnType);
         var definition = GetMetadataDefinition(method) as MethodInfo;
+        var layoutType = definition?.ReturnType;
+        if (layoutType?.IsByRef == true)
+        {
+            layoutType = layoutType.GetElementType();
+        }
 
         // ADR-0172 Phase B: surface imported tuple element names.
-        return TupleElementNamesReader.ApplyNames(
+        var result = TupleElementNamesReader.ApplyNames(
             ApplyReferenceNullabilityFull(
                 baseSymbol,
-                method.ReturnType,
+                returnType,
                 method.ReturnParameter,
                 method,
-                definition?.ReturnType),
+                layoutType),
             method.ReturnParameter);
+        return method.ReturnType.IsByRef ? ByRefTypeSymbol.Get(result) : result;
     }
 
     /// <summary>

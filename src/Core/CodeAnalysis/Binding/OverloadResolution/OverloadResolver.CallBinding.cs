@@ -1999,7 +1999,7 @@ internal sealed partial class OverloadResolver
                         break;
                     }
 
-                    inferTypeArguments(paramType, boundArguments[i].Type, substitution);
+                    inferTypeArguments(paramType, RefCapabilities.GetInferenceType(function.Parameters[i], boundArguments[i].Type), substitution);
                 }
 
                 // Issue #3760: a method group has no type of its own, so the

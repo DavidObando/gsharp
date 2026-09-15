@@ -517,7 +517,8 @@ public sealed partial class CSharpToGSharpTranslator
                 body,
                 typeParameters,
                 isAsync: isAsync,
-                isRefReturn: symbol.ReturnsByRef);
+                isRefReturn: symbol.ReturnsByRef || symbol.ReturnsByRefReadonly,
+                isReadOnlyRefReturn: symbol.ReturnsByRefReadonly);
         }
 
         /// <summary>

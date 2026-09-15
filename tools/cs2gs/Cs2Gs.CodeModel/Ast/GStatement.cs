@@ -81,6 +81,7 @@ public sealed class LocalDeclarationStatement : GStatement
     /// <c>var ref name [T] = lvalue</c>, issue #491/ADR-0060) — G#'s native
     /// managed by-ref local, mapped from a C# ref local (issue #1900).
     /// </param>
+    /// <param name="isReadOnlyRefAlias">Whether the alias prohibits writes.</param>
     public LocalDeclarationStatement(
         BindingKind binding,
         string name,
@@ -88,7 +89,8 @@ public sealed class LocalDeclarationStatement : GStatement
         GExpression initializer = null,
         bool isUsing = false,
         bool isAwait = false,
-        bool isRefAlias = false)
+        bool isRefAlias = false,
+        bool isReadOnlyRefAlias = false)
     {
         Binding = binding;
         Name = name;
@@ -97,6 +99,7 @@ public sealed class LocalDeclarationStatement : GStatement
         IsUsing = isUsing;
         IsAwait = isAwait;
         IsRefAlias = isRefAlias;
+        IsReadOnlyRefAlias = isReadOnlyRefAlias;
     }
 
     /// <summary>Gets the binding keyword.</summary>
@@ -129,6 +132,9 @@ public sealed class LocalDeclarationStatement : GStatement
     /// (issue #1900).
     /// </summary>
     public bool IsRefAlias { get; }
+
+    /// <summary>Gets a value indicating whether the alias prohibits writes.</summary>
+    public bool IsReadOnlyRefAlias { get; }
 }
 
 /// <summary>

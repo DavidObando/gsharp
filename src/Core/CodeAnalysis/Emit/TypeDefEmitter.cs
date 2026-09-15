@@ -1212,7 +1212,9 @@ internal sealed class TypeDefEmitter
         // ParameterAttributes.In/Out and the IsReadOnlyAttribute for `in`),
         // mirroring EmitFunction, so interface parameters keep their names in
         // metadata (named arguments / IDE signature help from consumers).
+        var returnHandle = this.AddReadOnlyReturnRow(method);
         var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles);
+        firstParamHandle = returnHandle ?? firstParamHandle;
 
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Virtual | MethodAttributes.Abstract
@@ -1239,6 +1241,18 @@ internal sealed class TypeDefEmitter
         // method signature emit as CustomAttribute rows on the MethodDef,
         // mirroring the bodied (EmitFunction) path.
         this.emitUserAttributes(handle, method, AttributeTargetKind.Method);
+    }
+
+    private ParameterHandle? AddReadOnlyReturnRow(FunctionSymbol method)
+    {
+        if (method.ReturnRefKind != RefKind.RefReadOnly)
+        {
+            return null;
+        }
+
+        var handle = this.emitCtx.Metadata.AddParameter(ParameterAttributes.None, default, sequenceNumber: 0);
+        this.emitIsReadOnlyAttributeOnParameter(handle);
+        return handle;
     }
 
     /// <summary>
@@ -1273,7 +1287,9 @@ internal sealed class TypeDefEmitter
 
         // Issue #1610: Parameter rows with names and In/Out flags, mirroring
         // EmitFunction.
+        var returnHandle = this.AddReadOnlyReturnRow(method);
         var firstParamHandle = this.AddRefKindAwareParameterRows(method.Parameters, out var paramHandles);
+        firstParamHandle = returnHandle ?? firstParamHandle;
 
         var attrs = MethodAttributes.Public | MethodAttributes.HideBySig
             | MethodAttributes.Static | MethodAttributes.Virtual

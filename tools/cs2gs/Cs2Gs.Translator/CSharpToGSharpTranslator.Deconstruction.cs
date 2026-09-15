@@ -1618,7 +1618,8 @@ public sealed partial class CSharpToGSharpTranslator
                     liftedTypeParameters,
                     visibility: Visibility.Private,
                     isAsync: liftedIsAsync,
-                    isRefReturn: recursiveLocal.ReturnsByRef);
+                    isRefReturn: recursiveLocal.ReturnsByRef || recursiveLocal.ReturnsByRefReadonly,
+                    isReadOnlyRefReturn: recursiveLocal.ReturnsByRefReadonly);
                 if (recursiveLift.IsStatic)
                 {
                     (this.state.PendingStaticSynthHelpers
@@ -1666,7 +1667,8 @@ public sealed partial class CSharpToGSharpTranslator
                     liftedTypeParameters,
                     visibility: Visibility.Private,
                     isAsync: liftedIsAsync,
-                    isRefReturn: staticLocal.ReturnsByRef));
+                    isRefReturn: staticLocal.ReturnsByRef || staticLocal.ReturnsByRefReadonly,
+                    isReadOnlyRefReturn: staticLocal.ReturnsByRefReadonly));
                 return new GStatement[]
                 {
                     new RawStatement($"// lifted static local function {liftedName}"),
@@ -1684,7 +1686,8 @@ public sealed partial class CSharpToGSharpTranslator
             // preserves ref-aliasing through a func literal, so this gaps loudly
             // rather than emitting a form that either drops the aliasing (a
             // silent semantic change) or fails to compile.
-            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol { ReturnsByRef: true })
+            if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol refLocalFunction
+                && (refLocalFunction.ReturnsByRef || refLocalFunction.ReturnsByRefReadonly))
             {
                 this.context.ReportUnsupported(
                     localFunction,

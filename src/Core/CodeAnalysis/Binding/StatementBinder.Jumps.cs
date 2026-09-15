@@ -437,7 +437,7 @@ internal sealed partial class StatementBinder
         var isRefReturn = false;
         if (function != null && !function.IsExpressionInitializer)
         {
-            var fnIsRefReturning = function.ReturnRefKind == RefKind.Ref;
+            var fnIsRefReturning = function.ReturnRefKind != RefKind.None;
 
             if (syntax.IsRefReturn && !fnIsRefReturning)
             {
@@ -545,7 +545,8 @@ internal sealed partial class StatementBinder
         // method signature returns T&. Validate lvalue-ness and ref-safe-to-escape scope.
         if (isRefReturn && expression != null && expression.Type != TypeSymbol.Error)
         {
-            if (!IsLvalueForRefReturn(expression))
+            if (!IsLvalueForRefReturn(expression)
+                || (function?.ReturnRefKind == RefKind.Ref && RefCapabilities.IsReadOnlyStorage(expression)))
             {
                 Diagnostics.ReportRefReturnRequiresLvalue(
                     Invariant.Required(syntax.Expression, "a ref return expression is present").Location);
@@ -560,8 +561,8 @@ internal sealed partial class StatementBinder
                 ? new BoundBlockExpression(
                     syntax.Expression,
                     block.Statements,
-                    new BoundAddressOfExpression(syntax.Expression, block.Expression))
-                : new BoundAddressOfExpression(syntax.Expression, expression);
+                    new BoundAddressOfExpression(syntax.Expression, block.Expression, unmanaged: false, isReadOnly: function?.ReturnRefKind == RefKind.RefReadOnly))
+                : new BoundAddressOfExpression(syntax.Expression, expression, unmanaged: false, isReadOnly: function?.ReturnRefKind == RefKind.RefReadOnly);
         }
 
         return new BoundReturnStatement(syntax, expression, isRefReturn);
@@ -578,9 +579,9 @@ internal sealed partial class StatementBinder
             case BoundVariableExpression:
                 return true;
             case BoundFieldAccessExpression:
-                return true;
+            case BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo }:
             case BoundIndexExpression:
-                return true;
+                return ExpressionBinder.IsLvalue(expr);
             case BoundDereferenceExpression:
                 return true;
             case BoundBlockExpression block:
@@ -606,7 +607,7 @@ internal sealed partial class StatementBinder
                 // Plain locals die with the frame; non-scoped parameters / globals survive.
                 if (v.Variable is ParameterSymbol p)
                 {
-                    return p.IsScoped;
+                    return p.IsScoped || p.RefKind == RefKind.None;
                 }
 
                 if (v.Variable is GlobalVariableSymbol)
@@ -615,7 +616,8 @@ internal sealed partial class StatementBinder
                 }
 
                 // Any other LocalVariableSymbol (let/var inside the function body) is local-scope.
-                return v.Variable is LocalVariableSymbol;
+                return v.Variable is LocalVariableSymbol local
+                    && (local.RefKind == RefKind.None || local.IsScoped);
             case BoundFieldAccessExpression fa:
                 // Reference type fields live in a heap object — safe regardless of receiver scope.
                 if (fa.Receiver is { Type: StructSymbol s } && s.IsClass)
@@ -636,10 +638,16 @@ internal sealed partial class StatementBinder
                 // the element's storage outlives the function frame regardless of the local
                 // alias used to reach it.
                 return false;
+            case BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo } field:
+                return field.Receiver != null
+                    && !Binder.IsReferenceTypeForConstraint(field.Receiver.Type)
+                    && HasFunctionLocalRefScope(field.Receiver);
             case BoundDereferenceExpression deref:
-                // *p has whatever scope `p` itself yields; conservative — if p is a local
-                // variable of *T, its current value points into the local frame.
-                return HasFunctionLocalRefScope(deref.Operand);
+                // A pointer parameter's referent is not its by-value parameter slot.
+                // Local pointers conservatively retain function-local scope.
+                return deref.Operand is BoundVariableExpression { Variable: ParameterSymbol pointerParameter }
+                    ? pointerParameter.IsScoped
+                    : HasFunctionLocalRefScope(deref.Operand);
             case BoundBlockExpression block:
                 return HasFunctionLocalRefScope(block.Expression);
             default:

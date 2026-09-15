@@ -1678,7 +1678,7 @@ internal sealed partial class OverloadResolver
                         break;
                     }
 
-                    inferTypeArguments(paramType, permutedArguments[i].Type, substitution);
+                    inferTypeArguments(paramType, RefCapabilities.GetInferenceType(method.Parameters[i + parameterOffset], permutedArguments[i].Type), substitution);
                 }
 
                 // Issue #3760: sibling of the free-function path — a method

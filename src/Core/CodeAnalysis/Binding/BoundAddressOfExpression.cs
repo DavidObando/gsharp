@@ -35,11 +35,13 @@ public sealed class BoundAddressOfExpression : BoundExpression
     /// <see langword="false"/> (the default) the result is a managed by-ref
     /// pointer (<see cref="ByRefTypeSymbol"/>, <c>T&amp;</c>).
     /// </param>
-    public BoundAddressOfExpression(SyntaxNode? syntax, BoundExpression operand, bool unmanaged)
+    /// <param name="isReadOnly">Whether the reference permits only reads of its referent.</param>
+    public BoundAddressOfExpression(SyntaxNode? syntax, BoundExpression operand, bool unmanaged, bool isReadOnly = false)
         : base(syntax)
     {
         Operand = operand;
         IsUnmanaged = unmanaged;
+        IsReadOnly = isReadOnly || RefCapabilities.IsReadOnlyReference(operand);
         Type = unmanaged ? PointerTypeSymbol.Get(operand.Type) : ByRefTypeSymbol.Get(operand.Type);
     }
 
@@ -49,6 +51,9 @@ public sealed class BoundAddressOfExpression : BoundExpression
     /// ADR-0122 / issue #1014.
     /// </summary>
     public bool IsUnmanaged { get; }
+
+    /// <summary>Gets a value indicating whether the managed reference prohibits writes to its referent.</summary>
+    public bool IsReadOnly { get; }
 
     /// <inheritdoc/>
     public override BoundNodeKind Kind => BoundNodeKind.AddressOfExpression;

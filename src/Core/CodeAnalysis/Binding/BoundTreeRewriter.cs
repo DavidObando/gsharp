@@ -986,7 +986,7 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundAddressOfExpression(node.Syntax, operand);
+        return new BoundAddressOfExpression(node.Syntax, operand, node.IsUnmanaged, node.IsReadOnly);
     }
 
     /// <summary>

@@ -1839,6 +1839,7 @@ internal sealed partial class StatementBinder
     /// </summary>
     private BoundStatement BindRefAliasLocalDeclaration(VariableDeclarationSyntax syntax)
     {
+        var isReadOnly = syntax.ReadOnlyRefModifier != null;
         var refModifierLoc = Invariant.Required(
             syntax.RefKindModifier,
             "a ref-alias declaration has a ref modifier").Location;
@@ -1868,21 +1869,20 @@ internal sealed partial class StatementBinder
             return new BoundVariableDeclaration(syntax, errorVar, initializer);
         }
 
-        // Validate the RHS is a writable lvalue: a variable that is not read-only,
-        // a field/property access, an indexer access, or a managed-pointer dereference.
+        // Validate addressable storage and, for writable aliases, write permission.
         // The same restrictions that govern `&expr` apply here (issue #491 / ADR-0039 §3).
         var rhsValid = true;
-        if (initializer is BoundVariableExpression bve && bve.Variable.IsReadOnly)
+        if (!isReadOnly && RefCapabilities.IsReadOnlyStorage(initializer))
         {
             // Aliasing a read-only binding would let the alias mutate it; mirror
             // the existing `&readonly` rejection (GS9005 / GS0242 for `in`).
-            if (bve.Variable is ParameterSymbol inParam && inParam.RefKind == RefKind.In)
+            if (initializer is BoundVariableExpression { Variable: ParameterSymbol inParam } && inParam.RefKind == RefKind.In)
             {
                 Diagnostics.ReportCannotAssignToInParameter(refModifierLoc, inParam.Name);
             }
             else
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(refModifierLoc, bve.Variable.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(refModifierLoc, syntax.Initializer.ToString());
             }
 
             rhsValid = false;
@@ -1905,8 +1905,7 @@ internal sealed partial class StatementBinder
 
         var slotType = declaredType ?? pointeeType;
 
-        // Context restrictions: a ref-aliasing local cannot escape its declaring
-        // function frame. The CLR cannot encode a managed pointer as a static
+        // Context restrictions: the CLR cannot encode a managed pointer as a static
         // field (top-level / `customize` partial) or as a hoisted state-machine
         // field (`async`/iterator functions).
         if (function == null || function.IsTopLevelEntryPoint)
@@ -1922,12 +1921,11 @@ internal sealed partial class StatementBinder
         }
 
         var accessibility = resolveAccessibility(syntax.AccessibilityModifier);
-        var variable = bindLocalVariableWithAccessibility(syntax.Identifier, isReadOnly: false, slotType, accessibility);
+        var variable = bindLocalVariableWithAccessibility(syntax.Identifier, isReadOnly, slotType, accessibility);
         if (variable is LocalVariableSymbol localVar)
         {
-            // The alias slot itself is function-local; never returnable.
-            localVar.RefKind = RefKind.Ref;
-            localVar.IsScoped = true;
+            localVar.RefKind = isReadOnly ? RefKind.RefReadOnly : RefKind.Ref;
+            localVar.IsScoped = syntax.ScopedModifier != null || HasFunctionLocalRefScope(initializer);
         }
 
         // Annotations attach to the symbol unchanged (e.g. @Obsolete on a top-level
@@ -1957,11 +1955,11 @@ internal sealed partial class StatementBinder
             boundInitializer = new BoundBlockExpression(
                 syntax.Initializer,
                 block.Statements,
-                new BoundAddressOfExpression(syntax.Initializer, block.Expression));
+                new BoundAddressOfExpression(syntax.Initializer, block.Expression, unmanaged: false, isReadOnly));
         }
         else
         {
-            boundInitializer = new BoundAddressOfExpression(syntax.Initializer, initializer);
+            boundInitializer = new BoundAddressOfExpression(syntax.Initializer, initializer, unmanaged: false, isReadOnly);
         }
 
         return new BoundVariableDeclaration(

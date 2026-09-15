@@ -376,10 +376,13 @@ on a ref property (GS0579 forbids one), so the same source reports **GS0127**
 write-through property assignment, not a by-ref return — and the failure it
 leaves behind is a compile error at the assignment, not a silent copy.
 
-**`ref readonly` is still not in the language.** G# has no read-only by-ref return,
-so cs2gs continues to gap a C# `ref readonly` property or indexer. Rendering one as
-a plain `ref` would hand the caller a writable alias to storage the author declared
-read-only — a different silent behaviour change, not a smaller one.
+**Readonly references added by issue #4220 / ADR-0181.** Named methods and
+concrete computed properties/indexers can declare `ref readonly T`, and local
+aliases can use `let ref readonly` or `var ref readonly`. Existing `let ref`
+remains writable. See [ADR-0181](0181-readonly-managed-reference-contracts.md)
+for shallow permissions, independent lifetime rules, CLR metadata, and cs2gs
+translation. Source call/getter-result alias retention remains #4219; readonly
+support does not silently turn an alias into a snapshot.
 
 ## Consequences
 

@@ -370,7 +370,8 @@ public sealed partial class CSharpToGSharpTranslator
                     name,
                     pointeeType,
                     initializer,
-                    isRefAlias: true));
+                    isRefAlias: true,
+                    isReadOnlyRefAlias: localSymbol.RefKind == RefKind.RefReadOnly));
             }
 
             return results;
