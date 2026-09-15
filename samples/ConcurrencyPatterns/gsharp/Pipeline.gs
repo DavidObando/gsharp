@@ -1,8 +1,8 @@
 package Patterns
 
+import Gsharp.Concurrency
 import System
 import System.Threading
-import Gsharp.Concurrency
 
 class PipelineState {
     public var Exited int32
@@ -10,9 +10,13 @@ class PipelineState {
 
 func pipelineProduce(count int32, output out chan[int32], state PipelineState, context Context) {
     try {
-        for value in 0 ... count { output <- value }
+        for value in 0 ... count {
+            output <- value
+        }
     } catch (e OperationCanceledException) {
-        if !context.IsCancelled { rethrow }
+        if !context.IsCancelled {
+            rethrow
+        }
     } finally {
         output.Close()
         Interlocked.Increment(ref state.Exited)
@@ -21,16 +25,20 @@ func pipelineProduce(count int32, output out chan[int32], state PipelineState, c
 
 func pipelineDouble(input in chan[int32], output out chan[int32], state PipelineState, context Context) {
     try {
-        for value in input { output <- value * 2 }
+        for value in input {
+            output <- value * 2
+        }
     } catch (e OperationCanceledException) {
-        if !context.IsCancelled { rethrow }
+        if !context.IsCancelled {
+            rethrow
+        }
     } finally {
         output.Close()
         Interlocked.Increment(ref state.Exited)
     }
 }
 
-func runPipeline(size int32, stopAfter int32) (int32, int32) {
+func runPipeline(size int32, stopAfter int32)(int32, int32) {
     let first = chan[int32](2)
     let second = chan[int32](2)
     let state = PipelineState()

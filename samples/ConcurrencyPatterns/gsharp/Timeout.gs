@@ -5,7 +5,9 @@ import System
 import System.Threading
 import System.Threading.Tasks
 
-class TimeoutState { public var Exited int32 }
+class TimeoutState {
+    public var Exited int32
+}
 
 func timeoutWork(input in chan[int32], started out chan[bool], state TimeoutState, context Context) {
     try {
@@ -13,8 +15,12 @@ func timeoutWork(input in chan[int32], started out chan[bool], state TimeoutStat
         let unexpected = <-input
         verify(false, "unexpected timeout work result")
     } catch (e OperationCanceledException) {
-        if !context.IsCancelled { rethrow }
-    } finally { Interlocked.Increment(ref state.Exited) }
+        if !context.IsCancelled {
+            rethrow
+        }
+    } finally {
+        Interlocked.Increment(ref state.Exited)
+    }
 }
 
 func timeoutExample() {
@@ -24,8 +30,12 @@ func timeoutExample() {
     scope {
         using let readyDeadline = after(TimeSpan.FromMinutes(1))
         select {
-            case let result = <-ready { value = result }
-            case <-readyDeadline { verify(false, "ready value timed out") }
+            case let result = <- ready {
+                value = result
+            }
+            case <- readyDeadline {
+                verify(false, "ready value timed out")
+            }
         }
     }
     verify(value == 42, "ready result")
@@ -39,8 +49,10 @@ func timeoutExample() {
         verify(ok, "timeout start barrier")
         using let deadline = after(TimeSpan.FromMilliseconds(5))
         select {
-            case let unexpected = <-ready { verify(false, "unexpected result") }
-            case <-deadline {
+            case let unexpected = <- ready {
+                verify(false, "unexpected result")
+            }
+            case <- deadline {
                 timedOut = true
                 ctx.TryCancel()
             }
@@ -50,8 +62,12 @@ func timeoutExample() {
     scope {
         ctx.TryCancel()
         select {
-            case let unexpected = <-quiet { verify(false, "unexpected cancellation result") }
-            case cancelled { cancelled = true }
+            case let unexpected = <- quiet {
+                verify(false, "unexpected cancellation result")
+            }
+            case cancelled {
+                cancelled = true
+            }
         }
     }
     verify(timedOut && cancelled && state.Exited == 1, "timeout cleanup")

@@ -1099,15 +1099,11 @@ Cause/fix:
 
 These diagnostics explain channel direction, receive bindings, and migration from retired spellings. See [Go-flavored concurrency](../extensions/go-concurrency.md) for complete examples.
 
-| ID | Severity | Cause and remedy |
-| --- | --- | --- |
-| GS0548 | Warning | `chan[T]()` creates a rendezvous channel: a send waits for a receiver. Pass a capacity for buffering, or use `Chan.Unbounded[T]()` when an unbounded buffer is intended. |
-| GS0549 | Error | A receive-only `in chan[T]` handle cannot send. Use a bidirectional or send-only handle for sending. |
-| GS0550 | Error | A send-only `out chan[T]` handle cannot receive. Use a bidirectional or receive-only handle for receiving. |
-| GS0554 | Error | A receive binding has the wrong number of variables. A two-value receive supplies the element and an `ok` flag; a channel iteration yields one element at a time. |
-| GS0555 | Error | `while let value = channel` binds the channel, not a received value. Use `while let value = <-channel` to receive until closure. |
-| GS0566 | Error | A retired built-in or channel-construction spelling was used. Follow the diagnostic's member replacement, such as `xs.Length`, `m.Remove(key)`, `ch.Close()`, or `chan[T](capacity)`. |
-| GS0567 | Error | The old `chan T` type spelling was used. Write `chan[T]` instead. |
+**GS0548** warns that `chan[T]()` creates a rendezvous channel: a send waits for a receiver. Pass a capacity for buffering, or use `Chan.Unbounded[T]()` when an unbounded buffer is intended. **GS0549** rejects sending through a receive-only `in chan[T]` handle; **GS0550** rejects receiving through a send-only `out chan[T]` handle.
+
+**GS0554** reports the wrong number of receive variables: a two-value receive supplies the element and an `ok` flag, while channel iteration yields one element at a time. **GS0555** explains that `while let value = channel` binds the channel itself; use `while let value = <-channel` to receive until closure.
+
+**GS0566** reports retired built-ins and channel construction. Follow its member replacement, such as `xs.Length`, `m.Remove(key)`, `ch.Close()`, or `chan[T](capacity)`. **GS0567** replaces the old `chan T` type spelling with `chan[T]`.
 
 <span id="go-flavored-concurrency-requires-import-gsharpextensionsgo-gs0316"></span>
 

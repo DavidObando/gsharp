@@ -23,7 +23,9 @@ func limitedWork(id int32, permits SemaphoreSlim, state LimitState) {
             }
             Thread.Yield()
         } catch (e InvalidOperationException) {
-            lock state.Gate { state.Failed++ }
+            lock state.Gate {
+                state.Failed++
+            }
         } finally {
             lock state.Gate {
                 state.Active--

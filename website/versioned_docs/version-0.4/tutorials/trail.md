@@ -29,7 +29,7 @@ Open `Program.gs`. The following excerpts come from the complete downloaded proj
 
 ```gsharp
 public data class FileEntry(Path string, Bytes int64, Sha256 string?, Error string?)
-public data class Inventory(Files []FileEntry, TotalBytes int64, Failed int32)
+public data class Inventory(Files[]FileEntry, TotalBytes int64, Failed int32)
 ```
 
 The nullable fields make the result shape explicit: a successful read has a hash and no error; a failed read records an error and no hash. `Bytes` and `TotalBytes` are `int64`, not counters limited to a 32-bit file size.

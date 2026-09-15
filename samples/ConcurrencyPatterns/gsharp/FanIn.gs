@@ -1,17 +1,23 @@
 package Patterns
 
+import Gsharp.Concurrency
 import System
 import System.Collections.Generic
-import Gsharp.Concurrency
 
 func fanProduce(output out chan[int32], offset int32) {
     try {
-        for value in 0 ... 5 { output <- offset + value }
-    } finally { output.Close() }
+        for value in 0 ... 5 {
+            output <- offset + value
+        }
+    } finally {
+        output.Close()
+    }
 }
 
 func fanForward(input in chan[int32], output out chan[int32]) {
-    for value in input { output <- value }
+    for value in input {
+        output <- value
+    }
 }
 
 func fanSources(count int32, output out chan[int32]) {
@@ -23,7 +29,9 @@ func fanSources(count int32, output out chan[int32]) {
                 go fanForward(input, output)
             }
         }
-    } finally { output.Close() }
+    } finally {
+        output.Close()
+    }
 }
 
 func mergeSources(count int32) int32 {
@@ -51,10 +59,14 @@ func fanInExample() {
     left.Close()
     right.Close()
     var helperSum = 0
-    for value in merge[int32](left, right) { helperSum += value }
+    for value in merge[int32](left, right) {
+        helperSum += value
+    }
     verify(helperSum == 3, "SDK merge helper")
     var empty = 0
-    for value in merge[int32]() { empty++ }
+    for value in merge[int32]() {
+        empty++
+    }
     verify(empty == 0, "empty SDK merge")
     Console.WriteLine("fan-in count=15 sum=180 empty=0")
 }

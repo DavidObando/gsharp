@@ -4,8 +4,12 @@ import System
 
 func ownedProduce(output out chan[int32], count int32) {
     try {
-        for value in 0 ... count { output <- value }
-    } finally { output.Close() }
+        for value in 0 ... count {
+            output <- value
+        }
+    } finally {
+        output.Close()
+    }
 }
 
 func runOwned(count int32) int32 {

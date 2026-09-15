@@ -10,9 +10,9 @@ class TtlCache {
     private let gate ReaderWriterLockSlim = ReaderWriterLockSlim()
     private let entries Dictionary[string, CacheEntry] = Dictionary[string, CacheEntry]()
     private let ttl int64
-    private let now () -> int64
+    private let now() -> int64
 
-    init(ttl int64, now () -> int64) {
+    init(ttl int64, now() -> int64) {
         verify(ttl > 0, "TTL must be positive")
         this.ttl = ttl
         this.now = now
@@ -29,12 +29,16 @@ class TtlCache {
     func Get(key string) string? {
         gate.EnterReadLock()
         defer gate.ExitReadLock()
-        if !entries.ContainsKey(key) { return nil }
+        if !entries.ContainsKey(key) {
+            return nil
+        }
         let entry = entries[key]
-        return now() < entry.Expires ? entry.Value : nil
+        return now() < entry.Expires ? entry.Value: nil
     }
 
-    func Dispose() { gate.Dispose() }
+    func Dispose() {
+        gate.Dispose()
+    }
 }
 
 func cacheAccess(cache TtlCache, id int32) {
@@ -54,14 +58,20 @@ func ttlCacheExample() {
         tick = 10
         verify(cache.Get("a") == nil, "expiry boundary")
         scope {
-            for id in 0 ... 40 { go cacheAccess(cache, id) }
+            for id in 0 ... 40 {
+                go cacheAccess(cache, id)
+            }
         }
         tick = Int64.MaxValue
         var rejected = false
-        try { cache.Set("overflow", "value") } catch (e InvalidOperationException) {
+        try {
+            cache.Set("overflow", "value")
+        } catch (e InvalidOperationException) {
             rejected = e.Message == "TTL overflow"
         }
         verify(rejected, "expiry overflow")
-    } finally { cache.Dispose() }
+    } finally {
+        cache.Dispose()
+    }
     Console.WriteLine("ttl-cache hit=1 expired=1 missing=1 concurrent=40")
 }

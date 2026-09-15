@@ -48,6 +48,15 @@ test('ordinary documentation links retain their version', () => {
   }
 });
 
+test('current and released diagnostic catalogues contain one row per ID', () => {
+  for (const directory of ['docs', `versioned_docs/version-${versions[0]}`]) {
+    const source = readFileSync(path.join(site, directory, 'ref/diagnostics.md'), 'utf8');
+    const ids = [...source.matchAll(/^\|\s*(GS\d{4})\s*\|/gm)].map((match) => match[1]);
+    assert.ok(ids.length > 400, `${directory}: non-vacuous diagnostic inventory`);
+    assert.equal(new Set(ids).size, ids.length, `${directory}: duplicate diagnostic rows`);
+  }
+});
+
 test('tutorial source and output match the canonical showcase fixture', () => {
   const checkedDocs = {
     WebsiteData: ['tutorials/getting-started.md'],
@@ -154,11 +163,20 @@ test('Trail and its editor evidence match the advertised release and source', ()
   assert.equal(capture.applicationSdk, release.version);
   assert.equal(capture.sourceSha256, createHash('sha256').update(source).digest('hex'));
   for (const directory of ['docs', `versioned_docs/version-${versions[0]}`]) {
-    assert.ok(
-      readFileSync(path.join(site, directory, 'tutorials/trail.md'), 'utf8').includes(
-        `trail-${release.version}.zip`,
-      ),
-    );
+    const tutorial = readFileSync(path.join(site, directory, 'tutorials/trail.md'), 'utf8');
+    assert.ok(tutorial.includes(`trail-${release.version}.zip`));
+    for (const [, excerpt] of tutorial.matchAll(/```gsharp\n([\s\S]*?)\n```/g)) {
+      const unindentedSource = source
+        .toString()
+        .split('\n')
+        .map((line) => line.trim())
+        .join('\n');
+      const unindentedExcerpt = excerpt
+        .split('\n')
+        .map((line) => line.trim())
+        .join('\n');
+      assert.ok(unindentedSource.includes(unindentedExcerpt), `${directory}: Trail source excerpt`);
+    }
   }
 });
 

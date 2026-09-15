@@ -3,6 +3,6 @@
   "extension": "gsharplang.vscode-gsharp 0.4.591",
   "sdk": ".NET 10.0.401",
   "applicationSdk": "0.4.591",
-  "sourceSha256": "e6e53df01917569688fb64cf8ebefc04253188eeb2c0d17959de07bdc0751d35",
+  "sourceSha256": "135f8c0559f082dbbb742962dedf925773db4b3de9005ae6c1b00e80722d8c2f",
   "evidence": "Actual editor completion and terminal execution in an isolated VS Code profile."
 }

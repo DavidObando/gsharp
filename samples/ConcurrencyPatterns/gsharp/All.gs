@@ -4,9 +4,13 @@ import Gsharp.Concurrency
 import System
 import System.Threading
 
-class AllState { public var Exited int32 }
+class AllState {
+    public var Exited int32
+}
 
-func allValue(output out chan[int32], value int32) { output <- value }
+func allValue(output out chan[int32], value int32) {
+    output <- value
+}
 
 func allHealthy(output out chan[int32], ready out chan[bool]) {
     output <- 7
@@ -19,8 +23,12 @@ func allBlocked(quiet in chan[int32], started out chan[bool], state AllState, co
         let unexpected = <-quiet
         verify(false, "blocked child received unexpected data")
     } catch (e OperationCanceledException) {
-        if !context.IsCancelled { rethrow }
-    } finally { Interlocked.Increment(ref state.Exited) }
+        if !context.IsCancelled {
+            rethrow
+        }
+    } finally {
+        Interlocked.Increment(ref state.Exited)
+    }
 }
 
 func allFail(ready in chan[bool], started in chan[bool]) {
@@ -38,7 +46,9 @@ func allExample() {
     scope { }
     let successful = chan[int32](3)
     scope {
-        for value in 1 ... 4 { go allValue(successful, value) }
+        for value in 1 ... 4 {
+            go allValue(successful, value)
+        }
     }
     verify(<-successful + <-successful + <-successful == 6, "successful children")
     let output = chan[int32](1)
@@ -60,7 +70,9 @@ func allExample() {
     verify(failures == 1 && state.Exited == 1 && <-output == 7, "failure propagation and join")
     var unrelated = 0
     try {
-        scope { go allUnrequestedCancellation() }
+        scope {
+            go allUnrequestedCancellation()
+        }
     } catch (e ScopeException) {
         unrelated = e.InnerExceptions.Count
     }

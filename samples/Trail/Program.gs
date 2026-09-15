@@ -7,7 +7,7 @@ import System.Security.Cryptography
 import System.Text.Json
 
 public data class FileEntry(Path string, Bytes int64, Sha256 string?, Error string?)
-public data class Inventory(Files []FileEntry, TotalBytes int64, Failed int32)
+public data class Inventory(Files[]FileEntry, TotalBytes int64, Failed int32)
 
 func inspect(path string, root string) FileEntry {
     let relative = Path.GetRelativePath(root, path).Replace('\\', '/')
@@ -27,7 +27,7 @@ func inspect(path string, root string) FileEntry {
 
 func discover(root string, extension string?, jobs out chan[string]) {
     try {
-        let options = EnumerationOptions {
+        let options = EnumerationOptions{
             RecurseSubdirectories: true,
             IgnoreInaccessible: false,
             AttributesToSkip: FileAttributes.ReparsePoint
@@ -86,7 +86,7 @@ func inventory(root string, extension string?) Inventory {
     return Inventory(entries.ToArray(), bytes, failed)
 }
 
-func run(args []string) int32 {
+func run(args[]string) int32 {
     const usage = "Usage: Trail <folder> [extension]\nExample: Trail demo .txt"
     if args.Length == 2 && args[1] == "--help" {
         Console.WriteLine(usage)
@@ -105,7 +105,7 @@ func run(args []string) int32 {
         Console.Error.WriteLine("Trail: choose a real folder, not a symbolic link.")
         return 2
     }
-    let extension string? = args.Length == 3 ? args[2] : nil
+    let extension string? = args.Length == 3 ? args[2]: nil
     if let suffix = extension {
         if suffix.Length < 2 || !suffix.StartsWith(".") || suffix.Contains("/") || suffix.Contains("\\") {
             Console.Error.WriteLine("Trail: an extension must look like .txt, without a path.")
@@ -113,13 +113,13 @@ func run(args []string) int32 {
         }
     }
     let report = inventory(root, extension)
-    let options = JsonSerializerOptions {
+    let options = JsonSerializerOptions{
         WriteIndented: true,
         IncludeFields: true,
         PropertyNamingPolicy: JsonNamingPolicy.CamelCase
     }
     Console.WriteLine(JsonSerializer.Serialize[Inventory](report, options))
-    return report.Failed == 0 ? 0 : 1
+    return report.Failed == 0 ? 0: 1
 }
 
 try {

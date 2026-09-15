@@ -27,25 +27,33 @@ class KeyedLimiter {
 
     func Allow(key string, now int64) bool {
         lock gate {
-            if !buckets.ContainsKey(key) { buckets[key] = Bucket(capacity, now) }
+            if !buckets.ContainsKey(key) {
+                buckets[key] = Bucket(capacity, now)
+            }
             let bucket = buckets[key]
             verify(now >= bucket.Last, "clock moved backwards")
             let added = (now - bucket.Last) / period
             if added > 0 {
-                bucket.Tokens = added >= capacity - bucket.Tokens ? capacity : bucket.Tokens + int32(added)
+                bucket.Tokens = added >= capacity - bucket.Tokens ? capacity: bucket.Tokens + int32(added)
                 bucket.Last += added * period
             }
-            if bucket.Tokens == 0 { return false }
+            if bucket.Tokens == 0 {
+                return false
+            }
             bucket.Tokens--
             return true
         }
     }
 }
 
-class RateState { public var Accepted int32 }
+class RateState {
+    public var Accepted int32
+}
 
 func requestToken(limiter KeyedLimiter, state RateState) {
-    if limiter.Allow("parallel", 200) { Interlocked.Increment(ref state.Accepted) }
+    if limiter.Allow("parallel", 200) {
+        Interlocked.Increment(ref state.Accepted)
+    }
 }
 
 func rateLimitExample() {
@@ -57,11 +65,15 @@ func rateLimitExample() {
     verify(limiter.Allow("a", 100) && limiter.Allow("a", 100) && !limiter.Allow("a", 100), "capacity cap")
     let state = RateState()
     scope {
-        for id in 0 ... 40 { go requestToken(limiter, state) }
+        for id in 0 ... 40 {
+            go requestToken(limiter, state)
+        }
     }
     verify(state.Accepted == 2, "atomic token admission")
     var rejected = false
-    try { limiter.Allow("a", 0) } catch (e InvalidOperationException) {
+    try {
+        limiter.Allow("a", 0)
+    } catch (e InvalidOperationException) {
         rejected = e.Message == "clock moved backwards"
     }
     verify(rejected, "backwards clock")

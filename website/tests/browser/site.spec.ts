@@ -125,14 +125,26 @@ for (const colorScheme of ['light', 'dark'] as const) {
     ]) {
       await page.goto(route);
       await expect(page.locator('html')).toHaveAttribute('data-has-hydrated', 'true');
+      await expect(page.locator('html')).toHaveAttribute('data-theme', colorScheme);
+      await page.evaluate(() => document.fonts.ready);
+      await expect(page.locator('body')).toHaveCSS(
+        'color',
+        colorScheme === 'dark' ? 'rgb(242, 237, 232)' : 'rgb(36, 33, 38)',
+      );
       const results = await new AxeBuilder({page})
         .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
         .analyze();
       expect(
         results.violations.map(({id, nodes}) => ({
           id,
-          targets: nodes.map((node) => node.target),
+          count: nodes.length,
+          examples: nodes.slice(0, 5).map(({target, failureSummary, any, all, none}) => ({
+            target,
+            failureSummary,
+            checks: [...any, ...all, ...none].map(({id, data}) => ({id, data})),
+          })),
         })),
+        `${colorScheme} theme: ${route}`,
       ).toEqual([]);
     }
   });
