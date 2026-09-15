@@ -620,9 +620,25 @@ internal sealed class LambdaBinder
                 try
                 {
                     var literal = BindFunctionLiteralBody(literalSyntax, function, functionType);
-                    if (literal.CapturedVariables.Length > 0)
+
+                    // Issue #4221: allow generic locals to capture ordinary values.
+                    // Reject ref-like, managed-pointer, and unmanaged-pointer captures.
+                    foreach (var capturedVariable in literal.CapturedVariables)
                     {
-                        Diagnostics.ReportGenericLocalFunctionCannotCapture(syntax.Identifier.Location, name);
+                        if (TypeSymbol.IsByRefLike(capturedVariable.Type))
+                        {
+                            Diagnostics.ReportByRefLikeEscape(syntax.Identifier.Location, capturedVariable.Type, $"be captured by a generic local function (variable '{capturedVariable.Name}')");
+                        }
+                        else if (capturedVariable.Type is ByRefTypeSymbol)
+                        {
+                            Diagnostics.ReportByRefCannotEscape(
+                                syntax.Identifier.Location,
+                                $"managed pointer '{capturedVariable.Name}' cannot be captured by a generic local function; the closure may outlive the pointed-to variable");
+                        }
+                        else if (capturedVariable.Type is PointerTypeSymbol)
+                        {
+                            Diagnostics.ReportFixedPointerCannotEscape(syntax.Identifier.Location, capturedVariable.Name);
+                        }
                     }
 
                     // The emitted method owns only its own generic slots (#1940).

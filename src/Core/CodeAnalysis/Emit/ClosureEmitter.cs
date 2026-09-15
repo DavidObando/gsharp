@@ -318,6 +318,36 @@ internal sealed class ClosureEmitter
                 continue;
             }
 
+            // Issue #4221: handle generic locals with captures by routing through a
+            // closure class with a generic Invoke method, preserving type parameters.
+            if (literal.Function.IsGeneric && literal.CapturedVariables.Length > 0)
+            {
+                var genericClosureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+                var genericInfo = this.SynthesizeDisplayClass(
+                    genericClosureName,
+                    literal.CapturedVariables,
+                    literal.Function.Parameters,
+                    literal.Function.Type,
+                    literal.Body,
+                    hostPackage,
+                    invokeName: "Invoke");
+
+                // Transfer the generic local's type parameters to the Invoke method
+                genericInfo.InvokeMethod.TypeParameters = literal.Function.TypeParameters;
+
+                this.ClosureInfos[literal] = genericInfo;
+
+                // Nest inside enclosing type if accessible
+                if (literal.Function.LexicalEnclosingType is { } genericEnclosing
+                    && genericEnclosing is StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }
+                    && genericInfo.ClassSym.ContainingType == null)
+                {
+                    genericInfo.ClassSym.SetContainingType(genericEnclosing);
+                }
+
+                continue;
+            }
+
             var closureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
             var info = this.SynthesizeDisplayClass(
                 closureName,
