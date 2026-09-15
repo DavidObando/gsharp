@@ -249,6 +249,15 @@ public enum SyntaxKind
     StructLiteralExpression,
     FieldInitializer,
 
+    // ADR-0180: a bare content element or `...source` content spread inside a
+    // struct/class composite literal (StructLiteralExpressionSyntax), ordered
+    // alongside FieldInitializer members in one Elements list — reachable
+    // either interleaved with members (`Type{ Member: v, elem, ...src }`) or
+    // as the leading entry under the explicit `Type(){ ...src, Member: v }`
+    // marker. Both shapes lower to Add(...)/Add(item) on the constructed
+    // receiver, in lexical order.
+    StructLiteralContentElement,
+
     // Issue #2224: anonymous-class literal expression `object { let Name string = "Foo" }`.
     AnonymousClassExpression,
     AnonymousClassMemberInitializer,
@@ -432,6 +441,9 @@ public enum SyntaxKind
 
     // An indexed element of a dictionary collection initializer (`[key] = value`).
     IndexedCollectionElement,
+
+    // ADR-0180: `.Member: value` explicitly assigns the initializer receiver.
+    MemberCollectionElement,
 }
 
 #pragma warning restore SA1602 // Enumeration items should be documented

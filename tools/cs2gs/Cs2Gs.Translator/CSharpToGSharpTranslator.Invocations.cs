@@ -24,6 +24,57 @@ public sealed partial class CSharpToGSharpTranslator
     {
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
         {
+            if (this.RequiresFunctionArgumentSpillSeam(invocation))
+            {
+                foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
+                {
+                    if (argument.Expression is DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax designation }
+                        && this.context.GetDeclaredSymbol(designation) is ILocalSymbol local)
+                    {
+                        (this.state.FunctionArgumentOutDeclarations ?? this.state.PendingSpillPrologue)?.Add(new LocalDeclarationStatement(
+                            BindingKind.Var,
+                            this.EmittedName(local, local.Name),
+                            this.typeMapper.Map(local.Type, this.context, argument.GetLocation())));
+                    }
+                }
+
+                // Keep reordered operands at the call's evaluation point, not
+                // ahead of a sibling expression, loop condition or null guard.
+                GExpression translated = this.TranslateWithLocalAssignmentSeam(
+                    invocation,
+                    () => this.TranslateInvocationCore(invocation, snapshotDelegateTarget: true));
+                if (translated is BlockExpression block
+                    && this.entryType != null
+                    && SymbolEqualityComparer.Default.Equals(
+                        this.context.SemanticModel.GetEnclosingSymbol(invocation.SpanStart),
+                        this.context.Compilation.GetEntryPoint(default))
+                    && block.Statements.OfType<LocalDeclarationStatement>().Any(s => s.IsRefAlias))
+                {
+                    // G# top-level locals are static fields, even in a block
+                    // expression. A managed reference needs a stack frame.
+                    var statements = block.Statements.ToList();
+                    bool returnsVoid = this.context.GetTypeInfo(invocation).Type?.SpecialType
+                        == SpecialType.System_Void;
+                    statements.Add(returnsVoid
+                        ? new ExpressionStatement(block.Value)
+                        : new ReturnStatement(block.Value));
+                    return new InvocationExpression(
+                        new ParenthesizedExpression(new LambdaExpression(
+                            Array.Empty<Parameter>(),
+                            blockBody: new BlockStatement(statements))),
+                        Array.Empty<GExpression>());
+                }
+
+                return translated;
+            }
+
+            return this.TranslateInvocationCore(invocation);
+        }
+
+        private GExpression TranslateInvocationCore(
+            InvocationExpressionSyntax invocation,
+            bool snapshotDelegateTarget = false)
+        {
             if (invocation.Expression is IdentifierNameSyntax { Identifier.ValueText: "nameof" }
                 && this.context.SemanticModel.GetConstantValue(invocation) is { HasValue: true, Value: string name })
             {
@@ -146,6 +197,11 @@ public sealed partial class CSharpToGSharpTranslator
                 && delegateInvoke.MethodKind == MethodKind.DelegateInvoke
                 && TryGetDelegateInvokeReceiver(invocation.Expression, out GExpression invokeTarget))
             {
+                if (snapshotDelegateTarget && invocation.Expression is not MemberBindingExpressionSyntax)
+                {
+                    invokeTarget = this.SnapshotReorderedDelegateTarget(invokeTarget, invocation);
+                }
+
                 var invokeArguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
                 return new InvocationExpression(invokeTarget, invokeArguments, null);
             }
@@ -384,8 +440,6 @@ public sealed partial class CSharpToGSharpTranslator
                 target = this.TranslateExpression(invocation.Expression);
             }
 
-            var arguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
-
             // Directly invoking a nullable delegate value needs the same receiver
             // forgiveness as `.Invoke(...)`: fields/properties retain #1594's
             // behavior, while issue #2506 adds promoted method/property/indexer
@@ -403,6 +457,15 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 target = new NonNullAssertionExpression(target);
             }
+
+            if (snapshotDelegateTarget
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol snapshotMethod
+                && snapshotMethod.MethodKind == MethodKind.DelegateInvoke)
+            {
+                target = this.SnapshotReorderedDelegateTarget(target, invocation);
+            }
+
+            var arguments = this.TranslateCallArguments(invocation, invocation.ArgumentList.Arguments);
 
             // Issue #3501 (GS0155): C# inferred a generic overload whose type
             // arguments include a same-compilation user type (e.g.
@@ -573,7 +636,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 case MemberBindingExpressionSyntax binding
                     when binding.Name.Identifier.ValueText == "Invoke":
-                    receiver = new ConditionalReceiverExpression();
+                    receiver = this.state.ConditionalReceiverReplacement ?? new ConditionalReceiverExpression();
                     return true;
 
                 default:
@@ -797,7 +860,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression helperReceiver = new NonNullAssertionExpression(receiver);
             if (chainedReceiver != null)
             {
-                helperReceiver = this.TranslateConditionalStaticHelperReceiver(
+                helperReceiver = this.TranslateWithConditionalReceiver(
                     chainedReceiver,
                     helperReceiver);
             }
@@ -830,7 +893,7 @@ public sealed partial class CSharpToGSharpTranslator
             (expression is MemberAccessExpressionSyntax member &&
              IsSupportedConditionalStaticHelperReceiver(member.Expression));
 
-        private GExpression TranslateConditionalStaticHelperReceiver(
+        private GExpression TranslateWithConditionalReceiver(
             ExpressionSyntax expression,
             GExpression conditionalReceiver)
         {
@@ -1221,35 +1284,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.TranslateArguments(arguments);
             }
 
-            if (targetMethod?.MethodKind == MethodKind.DelegateInvoke
-                && operationArguments.Any(a => a.ArgumentKind == ArgumentKind.DefaultValue))
+            if (this.RequiresFunctionArgumentReassembly(targetMethod, operationArguments))
             {
-                return this.TranslateDelegateInvokeArgumentsWithDefaults(callSyntax, arguments, operationArguments);
-            }
-
-            // Issue #4197 follow-up: a local function claimed by the #3399
-            // nullable-function-local scheme is called as `Name!!(args)` — a
-            // structural function-type invocation that, exactly like the
-            // delegate-invoke case above, cannot fall back to a C#-level
-            // default (GS0144 "requires N arguments but was given M"). Roslyn
-            // has already resolved the omitted argument to its constant
-            // default, so materialize it here rather than dropping it. Only a
-            // call site that actually OMITTED something takes this path, so a
-            // claimed member called at full arity keeps its existing output
-            // byte for byte. Every argument must also NAME the parameter it
-            // binds to, because the reassembly addresses slots by
-            // `Parameter.Ordinal` — `IInvocationOperation.Arguments` is in
-            // EVALUATION order, not parameter order (PR #4211 review).
-            if (targetMethod?.MethodKind == MethodKind.LocalFunction
-                && this.state.RecursiveLocalFunctionGroups.TryGetValue(
-                    targetMethod, out RecursiveLocalFunctionGroup claimedGroup)
-                && claimedGroup.Members.Contains(targetMethod, SymbolEqualityComparer.Default)
-                && operationArguments.Any(a => a.ArgumentKind == ArgumentKind.DefaultValue)
-                && operationArguments.All(a => a.Parameter != null
-                    && (a.ArgumentKind == ArgumentKind.DefaultValue
-                        || (a.ArgumentKind == ArgumentKind.Explicit && a.Syntax is ArgumentSyntax))))
-            {
-                return this.TranslateClaimedLocalFunctionArgumentsWithDefaults(
+                return this.TranslateFunctionTypeArguments(
                     callSyntax, operationArguments);
             }
 
@@ -1426,123 +1463,102 @@ public sealed partial class CSharpToGSharpTranslator
             return result;
         }
 
-        /// <summary>
-        /// Rebuilds a delegate-invoke call's full argument list — issue #1901 —
-        /// walking Roslyn's already-resolved <paramref name="operationArguments"/>
-        /// in parameter order: an <c>Explicit</c> slot consumes the next syntax
-        /// argument (translated exactly as any ordinary argument would be, so
-        /// numeric coercion/spill behavior is unchanged), and a <c>DefaultValue</c>
-        /// slot materializes that parameter's constant default directly — the
-        /// explicit value gsc's structural function-type call has no other way to
-        /// supply.
-        /// </summary>
-        /// <remarks>
-        /// The "parameter order" above holds for a POSITIONAL call site only.
-        /// This comment used to assert that C# forbids a named argument through
-        /// a delegate invocation; it does not — a delegate DECLARATION keeps its
-        /// parameter names, so `D d; d(b: 5);` is legal C# and reaches here with
-        /// `Arguments` in EVALUATION order (`[b Explicit, a DefaultValue]`), the
-        /// same shape PR #4211's review found on the local-function path below.
-        /// The consequence differs though: this path keeps the `name:` wrapper
-        /// (<c>TranslateArgument</c>), so a named delegate-invoke call site emits
-        /// `f(b: 5, 10)` and gsc rejects it loudly ("Named argument 'b' does not
-        /// match any parameter") rather than binding the wrong parameter
-        /// silently. Left as a separate follow-up: the shape is unrepresented in
-        /// the corpus and the fix belongs with its own test, not with #4197's.
-        /// </remarks>
-        private List<GExpression> TranslateDelegateInvokeArgumentsWithDefaults(
-            SyntaxNode callSyntax,
-            SeparatedSyntaxList<ArgumentSyntax> arguments,
+        private bool RequiresFunctionArgumentReassembly(
+            IMethodSymbol targetMethod,
             ImmutableArray<IArgumentOperation> operationArguments)
         {
-            var result = new List<GExpression>(operationArguments.Length);
-            int nextSyntaxArgument = 0;
-            foreach (IArgumentOperation argumentOperation in operationArguments)
+            if (operationArguments.IsDefaultOrEmpty
+                || !operationArguments.Any(a => a.ArgumentKind == ArgumentKind.DefaultValue
+                    || a.Syntax is ArgumentSyntax { NameColon: not null })
+                || !operationArguments.All(a => a.Parameter != null
+                    && (a.ArgumentKind == ArgumentKind.DefaultValue
+                        || IsEmptyParamsArgument(a)
+                        || (a.ArgumentKind == ArgumentKind.Explicit && a.Syntax is ArgumentSyntax))))
             {
-                if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
-                {
-                    result.Add(this.TranslateOperationDefaultArgument(
-                        callSyntax,
-                        argumentOperation,
-                        "lambda parameter",
-                        coerceToParameterType: false));
-                    continue;
-                }
-
-                result.Add(this.TranslateArgument(arguments[nextSyntaxArgument]));
-                nextSyntaxArgument++;
+                return false;
             }
 
-            return result;
+            return targetMethod?.MethodKind == MethodKind.DelegateInvoke
+                || (targetMethod?.MethodKind == MethodKind.LocalFunction
+                    && this.state.RecursiveLocalFunctionGroups.TryGetValue(
+                        targetMethod, out RecursiveLocalFunctionGroup claimedGroup)
+                    && claimedGroup.Members.Contains(targetMethod, SymbolEqualityComparer.Default));
         }
 
+        private bool ContainsFunctionArgumentSpillSeam(ExpressionSyntax expression) =>
+            expression.DescendantNodesAndSelf(
+                    descendIntoChildren: node => node is not AnonymousFunctionExpressionSyntax)
+                .OfType<InvocationExpressionSyntax>()
+                .Any(this.RequiresFunctionArgumentSpillSeam);
+
+        private bool RequiresFunctionArgumentSpillSeam(InvocationExpressionSyntax invocation) =>
+            invocation.ArgumentList.Arguments.Any(a => a.NameColon != null)
+                && this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation
+                && this.RequiresFunctionArgumentReassembly(operation.TargetMethod, operation.Arguments)
+                && PermutesExplicitArguments(operation.Arguments);
+
+        private GExpression SnapshotReorderedDelegateTarget(
+            GExpression target,
+            InvocationExpressionSyntax invocation)
+        {
+            if (this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation
+                && operation.Arguments.All(a => a.Value.ConstantValue.HasValue || IsEmptyParamsArgument(a)))
+            {
+                return target;
+            }
+
+            // Reading a null delegate succeeds; invoking it throws only AFTER
+            // its arguments run. Do not execute G#'s runtime `!!` in the spill.
+            bool assertTarget = false;
+            while (target is ParenthesizedExpression or NonNullAssertionExpression)
+            {
+                if (target is ParenthesizedExpression parenthesized)
+                {
+                    target = parenthesized.Inner;
+                }
+                else if (target is NonNullAssertionExpression assertion)
+                {
+                    assertTarget = true;
+                    target = assertion.Operand;
+                }
+            }
+
+            GExpression snapshot = this.SpillOperand(target, forceNonTrivial: true);
+            return assertTarget ? new NonNullAssertionExpression(snapshot) : snapshot;
+        }
+
+        private static bool IsEmptyParamsArgument(IArgumentOperation argument) =>
+            argument.ArgumentKind == ArgumentKind.ParamArray
+                && argument.Value is IArrayCreationOperation { Initializer: { ElementValues.IsEmpty: true } };
+
         /// <summary>
-        /// Rebuilds the full argument list of a call to a local function claimed
-        /// by the #3399 nullable-function-local scheme (issue #4197 follow-up),
-        /// when the C# call site omitted a defaulted argument. Every argument is
-        /// placed in the slot named by its own
-        /// <see cref="IParameterSymbol.Ordinal"/>: that both materializes the
-        /// omitted default (which the rewritten `Name!!(…)` function-type call
-        /// has no other way to supply) and normalizes a named-argument call site
-        /// into the positional form that call shape requires — a named argument
-        /// carries no meaning through a structural arrow type, whose parameters
-        /// have types but no names. The argument VALUE is translated (never the
-        /// `name:` wrapper) for that reason. A ref-kind argument cannot occur
-        /// here at all: a local function with a `ref`/`out`/`in` parameter is
-        /// carved out of the scheme at registration time, since
-        /// `ArrowTypeReference` cannot declare a ref-kind.
+        /// Normalizes delegate and claimed-local-function calls to positional
+        /// arguments, including omitted defaults and full-arity named calls.
+        /// Roslyn arguments arrive in evaluation order: snapshot permuted
+        /// operands in that order, then place each in its parameter's slot.
         /// </summary>
-        /// <remarks>
-        /// <para>
-        /// <see cref="IInvocationOperation.Arguments"/> is in EVALUATION order,
-        /// not parameter order — PR #4211's review (Copilot) caught the original
-        /// version of this method assuming the opposite. For
-        /// <c>void Add(int a = 10, int b = 20)</c>, the call <c>Add(b: X())</c>
-        /// arrives as <c>[b Explicit, a DefaultValue]</c>, so a positional walk
-        /// emitted <c>Add!!(X(), 10)</c> — silently binding <c>X()</c> to
-        /// <c>a</c> and <c>10</c> to <c>b</c>. Addressing each slot by ordinal
-        /// is what makes the result correct regardless of source order.
-        /// </para>
-        /// <para>
-        /// Explicit operands are still TRANSLATED in the array's (source)
-        /// order, so any spill they hoist keeps its relative position. When the
-        /// ordinal permutation would additionally move one explicit operand
-        /// before another that was written first, EVERY explicit operand that
-        /// is not a literal or type name — a bare identifier very much
-        /// included, see
-        /// <see cref="SnapshotPermutedArgumentOperand"/> — is spilled to a
-        /// `let __spillN` in the enclosing statement
-        /// seam, so the emitted program still EVALUATES them in source order
-        /// (C# §12.6.2.2) and only the already-constant defaults move. A call
-        /// site whose explicit ordinals are already ascending — which includes
-        /// every purely POSITIONAL call site, the overwhelming majority — never
-        /// permutes and so spills nothing; those keep their previous output
-        /// byte for byte. A NAMED call site's output does change, because the
-        /// previous output was wrong.
-        /// </para>
-        /// </remarks>
-        private List<GExpression> TranslateClaimedLocalFunctionArgumentsWithDefaults(
+        private List<GExpression> TranslateFunctionTypeArguments(
             SyntaxNode callSyntax,
             ImmutableArray<IArgumentOperation> operationArguments)
         {
             bool permutesExplicitArguments = PermutesExplicitArguments(operationArguments);
-            var slots = new GExpression[operationArguments.Length];
+            var slots = new GExpression[operationArguments.Count(a => !IsEmptyParamsArgument(a))];
             foreach (IArgumentOperation argumentOperation in operationArguments)
             {
                 int ordinal = argumentOperation.Parameter.Ordinal;
+                if (IsEmptyParamsArgument(argumentOperation))
+                {
+                    continue;
+                }
+
                 if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
                 {
-                    // Not coerced to the parameter type: `MapConstantValue`
-                    // already maps the constant AGAINST that type, and the
-                    // target here is a structural arrow whose parameter types
-                    // are exactly the declaration's — the same reasoning that
-                    // keeps the delegate-invoke path above uncoerced, and
-                    // what makes a `nil` default print as `nil` rather than a
-                    // `default(((T) -> R)?)` envelope.
+                    // MapConstantValue already uses the parameter's type.
+                    // Keep nullable defaults as `nil`, not a cast envelope.
                     slots[ordinal] = this.TranslateOperationDefaultArgument(
                         callSyntax,
                         argumentOperation,
-                        "local function parameter",
+                        "function parameter",
                         coerceToParameterType: false);
                     continue;
                 }
@@ -1550,53 +1566,78 @@ public sealed partial class CSharpToGSharpTranslator
                 var argumentSyntax = (ArgumentSyntax)argumentOperation.Syntax;
                 GExpression value = this.TranslateArgumentValue(argumentSyntax);
 
-                // A `ref`/`out`/`in` argument is left in place. Its translation
-                // is an ADDRESS form (`&x`), and binding that to a
-                // `let __spillN` would hand the callee the temp instead of the
-                // caller's variable. The branch is inert rather than a
-                // judgement call: a local function with ANY ref-kind parameter
-                // is carved out of the claimed-cycle scheme entirely
-                // (`RegisterCapturingRecursiveLocalFunctions`), because
-                // `ArrowTypeReference` has no ref-kind to declare — so no
-                // ref-kind argument ever reaches this method. It is kept as a
-                // guard so that loosening the carve-out cannot silently start
-                // rebinding an address to a temp. (PR #4211 review: the earlier
-                // claim here — that a ref lvalue "has no evaluation side effect
-                // of its own" — was simply false, e.g. `ref slots[Next()]`;
-                // the carve-out, not that claim, is what makes this safe.)
                 slots[ordinal] = permutesExplicitArguments
-                    && argumentSyntax.RefKindKeyword.IsKind(SyntaxKind.None)
-                    ? this.SnapshotPermutedArgumentOperand(value, argumentOperation.Syntax)
+                    ? this.SnapshotPermutedArgument(value, argumentOperation)
                     : value;
             }
 
             return slots.ToList();
         }
 
-        // Evaluates one explicit by-value operand of a PERMUTED claimed-cycle
-        // call into a `let __spillN` so that the emitted program still runs the
-        // explicit operands in source order (C# §12.6.2.2) even though the
-        // reassembled call lists them in parameter order.
-        //
-        // Unlike an ordinary spill this does NOT honor
-        // `IsTrivialOperand`. That shortcut exists for DUPLICATION ("reading
-        // this twice is the same as reading it once"), and duplication is not
-        // what happens here: the operand is read exactly once, but at a
-        // different POINT IN TIME relative to the other operands. A bare
-        // identifier is the exact shape that breaks — `Add(c: x, a: MutateX())`
-        // must read `x` before `MutateX()` runs, and leaving `x` embedded in
-        // the reassembled call `Add!!(__spill0, 2, x)` reads it after
-        // (PR #4211 review, verified end to end: the call printed 219 where C#
-        // prints 125).
-        //
-        // A literal or a type name is genuinely immune — nothing can change
-        // what it denotes — so those stay embedded and keep the output free of
-        // pointless temps. `this` is NOT assumed immune: a struct receiver is a
-        // value, and a later operand can mutate its fields.
-        private GExpression SnapshotPermutedArgumentOperand(GExpression value, SyntaxNode operandSyntax) =>
-            value is LiteralExpression or TypeExpression
-                ? value
-                : this.SpillOperand(value, operandSyntax, forceNonTrivial: true);
+        private GExpression SnapshotPermutedArgument(GExpression value, IArgumentOperation argument)
+        {
+            if (argument.Parameter.RefKind == RefKind.None)
+            {
+                return this.SnapshotPermutedArgumentOperand(value, argument);
+            }
+
+            // Capture an address, never a copy of its pointee. This also runs
+            // an array index/getter and its exceptions in source order.
+            if (value is UnaryExpression { Operator: "&" } address)
+            {
+                bool needsValueTemporary = argument.Parameter.RefKind == RefKind.In
+                    && argument.Syntax is ArgumentSyntax syntax
+                    && syntax.RefKindKeyword.IsKind(SyntaxKind.None)
+                    && argument.Value is not ILocalReferenceOperation
+                        and not IParameterReferenceOperation
+                        and not IFieldReferenceOperation
+                        and not IArrayElementReferenceOperation;
+                string temp = $"__spill{this.state.SpillCounter++}";
+                this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
+                    BindingKind.Var,
+                    temp,
+                    this.typeMapper.Map(argument.Parameter.Type, this.context, argument.Syntax.GetLocation()),
+                    address.Operand,
+                    isRefAlias: !needsValueTemporary));
+                return new UnaryExpression("&", new IdentifierExpression(temp));
+            }
+
+            if (value is OutArgumentExpression outArgument)
+            {
+                return outArgument.Keyword == "out var"
+                    ? new OutArgumentExpression("out", outArgument.Name)
+                    : value;
+            }
+
+            return this.SnapshotPermutedArgumentOperand(value, argument);
+        }
+
+        // Reorder-safety differs from duplication-safety: even a bare local
+        // must be read before a later argument can mutate it (#4211).
+        private GExpression SnapshotPermutedArgumentOperand(GExpression value, IArgumentOperation argument)
+        {
+            if (argument.Value.ConstantValue.HasValue && value is LiteralExpression or TypeExpression)
+            {
+                return value;
+            }
+
+            // An implicit conversion (including a user-defined operator) is
+            // part of argument evaluation, not something to postpone until the
+            // reordered call. A callable/default also needs its target type.
+            if (argument.Value is IConversionOperation or IDelegateCreationOperation
+                || value is DefaultValueExpression)
+            {
+                string temp = $"__spill{this.state.SpillCounter++}";
+                this.state.PendingSpillPrologue.Add(new LocalDeclarationStatement(
+                    BindingKind.Let,
+                    temp,
+                    this.typeMapper.Map(argument.Parameter.Type, this.context, argument.Syntax.GetLocation()),
+                    value));
+                return new IdentifierExpression(temp);
+            }
+
+            return this.SpillOperand(value, forceNonTrivial: true);
+        }
 
         // True when reassembling `operationArguments` by parameter ordinal
         // would emit two EXPLICIT operands in an order other than the one they
@@ -1610,7 +1651,8 @@ public sealed partial class CSharpToGSharpTranslator
             var previousOrdinal = -1;
             foreach (IArgumentOperation argumentOperation in operationArguments)
             {
-                if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue)
+                if (argumentOperation.ArgumentKind == ArgumentKind.DefaultValue
+                    || IsEmptyParamsArgument(argumentOperation))
                 {
                     continue;
                 }

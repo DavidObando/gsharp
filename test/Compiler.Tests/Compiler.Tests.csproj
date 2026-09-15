@@ -13,6 +13,7 @@
     <Compile Include="..\Shared\EmittedFixture.cs" Link="EmittedFixture.cs" />
     <Compile Include="..\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
     <Compile Include="..\Shared\Issue3081CompositeLiteralCases.cs" Link="Issue3081CompositeLiteralCases.cs" />
+    <Compile Include="..\Shared\Issue3785MixedInitializerCases.cs" Link="Issue3785MixedInitializerCases.cs" />
     <!-- Issue #2215: only this test project needs a real gsgen.dll build output
          (to resolve via /gsgentool:) plus Roslyn (to compile a fixture
          generator DLL for the /analyzer: end-to-end test). gsc itself

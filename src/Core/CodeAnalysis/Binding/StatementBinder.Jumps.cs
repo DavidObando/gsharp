@@ -144,6 +144,8 @@ internal sealed partial class StatementBinder
     /// between body completion and the next iteration.</param>
     /// <param name="backEdgeCondition">Optional condition that must be true
     /// before control reaches the next iteration.</param>
+    /// <param name="bindIteration">Optional binder for a repeated header and
+    /// body, so both are rebound after inherited narrowing is invalidated.</param>
     private BoundStatement BindLoopBody(
         StatementSyntax body,
         string? labelName,
@@ -151,7 +153,8 @@ internal sealed partial class StatementBinder
         out BoundLabel continueLabel,
         int inheritedNarrowingFrameCount = -1,
         BoundStatement? backEdgeTail = null,
-        BoundExpression? backEdgeCondition = null)
+        BoundExpression? backEdgeCondition = null,
+        Func<(BoundStatement Body, BoundStatement? Tail, BoundExpression? Condition)>? bindIteration = null)
     {
         inheritedNarrowingFrameCount = inheritedNarrowingFrameCount < 0
             ? binderCtx.NarrowedVariables.Count
@@ -248,6 +251,14 @@ internal sealed partial class StatementBinder
             binderCtx.LoopStack.Push((labelName, localBreakLabel, localContinueLabel));
             try
             {
+                if (bindIteration != null)
+                {
+                    var iteration = bindIteration();
+                    backEdgeTail = iteration.Tail;
+                    backEdgeCondition = iteration.Condition;
+                    return iteration.Body;
+                }
+
                 return Invariant.Required(BindStatement(body), "a loop body has a bound statement");
             }
             finally

@@ -218,6 +218,16 @@ initializer**.
 
 ### 3. Semantics and lowering
 
+**ADR-0180 amendment:** call-headed collection initializers also accept
+`.Member: value` entries. The dot selects receiver member initialization;
+an unmarked `key: value` remains keyed `Add`, even if `key` names a receiver
+member. Empty and non-empty call argument lists use the same rule. The
+member-first no-parentheses family additionally permits bare elements and
+non-leading content spreads. See ADR-0180 for ordered execution, zero-value
+invariants, and the required acceptance regressions. Existing leading
+`Identifier =` object initializers and leading no-parentheses structural
+spreads are unchanged.
+
 A collection initializer binds to a `BoundBlockExpression` that:
 
 1. evaluates the constructor call into a fresh synthetic local

@@ -187,6 +187,11 @@ internal sealed class DocumentTranslationState
     // unrelated enclosing scope.
     public List<GStatement> PendingSpillPrologue { get; set; }
 
+    // Storage for reordered out declarations belongs to the enclosing statement
+    // or expression body, outside nested argument/null-guard evaluation seams.
+    // Lambda/local-function boundaries suspend this declaration seam as well.
+    public List<GStatement> FunctionArgumentOutDeclarations { get; set; }
+
     // A fallback pattern spill inside a conditionally evaluated short-circuit
     // operand declares its reusable temp in the enclosing expression's seam,
     // then assigns it inside the operand's block expression. This keeps the temp

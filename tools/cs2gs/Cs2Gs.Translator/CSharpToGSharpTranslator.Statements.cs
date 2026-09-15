@@ -2013,8 +2013,8 @@ public sealed partial class CSharpToGSharpTranslator
             if (expression is ConditionalAccessExpressionSyntax voidConditionalAccess
                 && this.context.GetTypeInfo(voidConditionalAccess).Type?.SpecialType
                     == SpecialType.System_Void
-                && this.RequiresLocalAssignmentSeam(
-                    voidConditionalAccess.WhenNotNull))
+                && (this.RequiresLocalAssignmentSeam(voidConditionalAccess.WhenNotNull)
+                    || this.ContainsFunctionArgumentSpillSeam(voidConditionalAccess.WhenNotNull)))
             {
                 return this.TranslateVoidConditionalAccessWithLocalAssignmentSeam(
                     voidConditionalAccess);

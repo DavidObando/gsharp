@@ -1511,7 +1511,7 @@ public partial class Parser
     {
         var typeIdentifier = MatchToken(SyntaxKind.IdentifierToken);
         var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-        var (spreadToken, spreadExpression, spreadSeparator, initializers) = ParseStructLiteralInitializers();
+        var (spreadToken, spreadExpression, spreadSeparator, elements) = ParseStructLiteralInitializers();
         var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
         return new StructLiteralExpressionSyntax(
             syntaxTree,
@@ -1520,7 +1520,7 @@ public partial class Parser
             spreadToken,
             spreadExpression,
             spreadSeparator,
-            initializers,
+            elements,
             closeBrace);
     }
 
@@ -1528,7 +1528,7 @@ public partial class Parser
         SyntaxToken? SpreadToken,
         ExpressionSyntax? SpreadExpression,
         SyntaxToken? SpreadSeparator,
-        SeparatedSyntaxList<FieldInitializerSyntax> Initializers)
+        SeparatedSyntaxList<StructLiteralElementSyntax> Elements)
         ParseStructLiteralInitializers()
     {
         SyntaxToken? spreadToken = null;
@@ -1544,13 +1544,22 @@ public partial class Parser
             }
         }
 
+        // ADR-0180: once a leading structural spread (ADR-0148) has claimed
+        // the first slot, every remaining entry stays a plain
+        // `Identifier: value` member, exactly as before this ADR — mixing a
+        // bare/`...` content element in there would blur an explicit member
+        // override with an Add-call element, which ADR-0148 §B does not
+        // allow. Content elements are only legal when there is no leading
+        // structural spread.
+        var allowContentElements = spreadToken == null;
+
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
         var parseNext = Current.Kind != SyntaxKind.CloseBraceToken;
         while (parseNext &&
                Current.Kind != SyntaxKind.CloseBraceToken &&
                Current.Kind != SyntaxKind.EndOfFileToken)
         {
-            nodesAndSeparators.Add(ParseFieldInitializer());
+            nodesAndSeparators.Add(ParseStructLiteralElement(allowContentElements));
             if (Current.Kind == SyntaxKind.CommaToken)
             {
                 nodesAndSeparators.Add(MatchToken(SyntaxKind.CommaToken));
@@ -1565,7 +1574,49 @@ public partial class Parser
             spreadToken,
             spreadExpression,
             spreadSeparator,
-            new SeparatedSyntaxList<FieldInitializerSyntax>(nodesAndSeparators.ToImmutable()));
+            new SeparatedSyntaxList<StructLiteralElementSyntax>(nodesAndSeparators.ToImmutable()));
+    }
+
+    // ADR-0180: an ordered struct-literal element is a `Identifier: value`
+    // member (always), or — when no leading ADR-0148 structural spread is in
+    // effect — a bare content element or a `...source` content spread, both
+    // of which lower to Add(...) on the constructed receiver, mirroring
+    // ADR-0117's collection-element shapes. `allowContentElements` is false
+    // only for the entries following a leading structural spread, where
+    // ParseFieldInitializer's own MatchToken error recovery reports an
+    // unexpected token exactly as it did before this ADR.
+    private StructLiteralElementSyntax ParseStructLiteralElement(bool allowContentElements)
+    {
+        if (!allowContentElements
+            || (Current.Kind == SyntaxKind.IdentifierToken && Peek(1).Kind == SyntaxKind.ColonToken))
+        {
+            return ParseFieldInitializer();
+        }
+
+        // Element values live inside the braces — a fresh expression context
+        // where trailing object/collection initializers are again allowed,
+        // mirroring ParseCollectionElement.
+        var savedSuppress = suppressTrailingObjectInitializer;
+        suppressTrailingObjectInitializer = 0;
+        var savedStructLiteral = suppressStructLiteral;
+        suppressStructLiteral = 0;
+        try
+        {
+            if (Current.Kind == SyntaxKind.EllipsisToken)
+            {
+                var ellipsis = MatchToken(SyntaxKind.EllipsisToken);
+                var spread = new SpreadElementExpressionSyntax(syntaxTree, ellipsis, ParseExpression());
+                return new StructLiteralContentElementSyntax(syntaxTree, spread);
+            }
+
+            var expression = ParseExpression();
+            return new StructLiteralContentElementSyntax(syntaxTree, expression);
+        }
+        finally
+        {
+            suppressTrailingObjectInitializer = savedSuppress;
+            suppressStructLiteral = savedStructLiteral;
+        }
     }
 
     private FieldInitializerSyntax ParseFieldInitializer()

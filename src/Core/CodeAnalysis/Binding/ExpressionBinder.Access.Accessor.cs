@@ -1083,6 +1083,8 @@ internal sealed partial class ExpressionBinder
                 return true;
             case ObjectCreationExpressionSyntax objectCreation:
                 return TryGetHeadIdentifier(objectCreation.Target, out identifier);
+            case CollectionInitializerExpressionSyntax collection:
+                return TryGetHeadIdentifier(collection.Target, out identifier);
             default:
                 identifier = null;
                 return false;
@@ -2371,6 +2373,8 @@ internal sealed partial class ExpressionBinder
 
             case ObjectCreationExpressionSyntax objCreate:
                 return TryGetAccessorChainHead(objCreate.Target, out headName, out isCall);
+            case CollectionInitializerExpressionSyntax collection:
+                return TryGetAccessorChainHead(collection.Target, out headName, out isCall);
 
             default:
                 headName = null;
@@ -2575,6 +2579,9 @@ internal sealed partial class ExpressionBinder
 
             case CallExpressionSyntax ce:
                 return BindUserTypeStaticCall(structSym, ce);
+
+            case CollectionInitializerExpressionSyntax { Target: { } target } collection:
+                return BindCollectionInitializerSuffix(collection, BindUserTypeStaticAccessorStep(structSym, target));
 
             // Issue #1537: a composite literal for a type nested inside a
             // CONSTRUCTED generic enclosing type

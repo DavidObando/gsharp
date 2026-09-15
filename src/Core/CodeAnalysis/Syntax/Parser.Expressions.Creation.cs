@@ -1433,7 +1433,7 @@ public partial class Parser
             }
 
             var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
-            var (spreadToken, spreadExpression, spreadSeparator, initializers) = ParseStructLiteralInitializers();
+            var (spreadToken, spreadExpression, spreadSeparator, elements) = ParseStructLiteralInitializers();
             var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
             var literal = new StructLiteralExpressionSyntax(
                 syntaxTree,
@@ -1442,7 +1442,7 @@ public partial class Parser
                 spreadToken,
                 spreadExpression,
                 spreadSeparator,
-                initializers,
+                elements,
                 closeBrace);
             literal.TypeArgumentList = typeArguments;
             return literal;
@@ -1533,6 +1533,13 @@ public partial class Parser
         if (k1 == SyntaxKind.CloseBraceToken)
         {
             return false;
+        }
+
+        // A leading dot cannot begin a statement body; admit incomplete
+        // member designators too so completion can recover `.Partial`.
+        if (k1 == SyntaxKind.DotToken)
+        {
+            return true;
         }
 
         if (k1 == SyntaxKind.OpenSquareBracketToken)
@@ -1637,6 +1644,12 @@ public partial class Parser
         suppressStructLiteral = 0;
         try
         {
+            if (Current.Kind == SyntaxKind.DotToken)
+            {
+                var dot = MatchToken(SyntaxKind.DotToken);
+                return new MemberCollectionElementSyntax(syntaxTree, dot, ParseFieldInitializer());
+            }
+
             // Native spread element `...source`.
             if (Current.Kind == SyntaxKind.EllipsisToken)
             {

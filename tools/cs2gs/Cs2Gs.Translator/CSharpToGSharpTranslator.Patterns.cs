@@ -302,6 +302,13 @@ public sealed partial class CSharpToGSharpTranslator
                         return enumExtResult;
                     }
 
+                    if (this.ContainsFunctionArgumentSpillSeam(conditionalAccess.WhenNotNull))
+                    {
+                        return this.TranslateWithLocalAssignmentSeam(
+                            conditionalAccess,
+                            () => this.TranslateConditionalAccessWithLocalAssignmentSeam(conditionalAccess));
+                    }
+
                     if (this.RequiresLocalAssignmentSeam(conditionalAccess.WhenNotNull))
                     {
                         return this.TranslateConditionalAccessWithLocalAssignmentSeam(
@@ -337,7 +344,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     return new ConditionalAccessExpression(
                         this.TranslateExpression(conditionalAccess.Expression),
-                        this.TranslateExpression(conditionalAccess.WhenNotNull));
+                        this.TranslateWithConditionalReceiver(conditionalAccess.WhenNotNull, null));
 
                 case ElementBindingExpressionSyntax replacedBinding
                     when this.state.ConditionalElementBindingReplacements.TryGetValue(
