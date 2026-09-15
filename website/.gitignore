@@ -3,6 +3,10 @@
 
 # Production
 /build
+/playwright-report
+/test-results
+/src/data/trail-report.json
+/src/data/concurrency-examples.json
 
 # Generated files
 .docusaurus

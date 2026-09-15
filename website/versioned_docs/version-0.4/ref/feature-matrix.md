@@ -2,6 +2,7 @@
 title: "Feature matrix"
 sidebar_position: 4
 draft: false
+description: "Check G# feature support and known implementation limits before relying on a capability."
 ---
 
 # Feature matrix
@@ -30,9 +31,9 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Numeric conversions | Supported | Supported | Widening numeric conversions plus explicit conversions. |
 | `object` universal upper bound | Supported | Supported | Boxing and object equality are implemented. |
 | Nullable `T?`, `nil`, `!!`, `??`, `?.`, `?[i]` | Supported | Supported | The evaluator threw on a nil `!!`; `?[i]` short-circuited indexing to `nil` when the receiver was nil. |
-| Arrays and slices | Supported | Supported | Slices are backed by arrays; `append` copies. `len` / `cap` / `append` require `import Gsharp.Extensions.Go` (GS0317); the .NET-idiomatic alternative is `.Length` and (for mutable lists) `List[T].Add`. |
-| Maps | Supported | Supported | Backed by `Dictionary[K,V]`; `delete` and `len` are implemented. Both require `import Gsharp.Extensions.Go` (GS0317); .NET-idiomatic alternatives are `.Remove(k)` and `.Count`. Iterable with range `for`: `for k, v in m` destructures entries, `for kv in m` yields `KeyValuePair[K,V]`; order unspecified. |
-| Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. |
+| Arrays and slices | Supported | Supported | Slices are CLR arrays (`[]T` is `T[]`): length is `.Length`; the growable shape is `List[T].Add`. The Go-style `len` / `cap` / `append` built-ins are retired (ADR-0174, GS0566 names the replacement). |
+| Maps | Supported | Supported | Backed by `Dictionary[K,V]`: `.Remove(k)` and `.Count` are the members (the Go-style `delete` / `len` built-ins are retired, ADR-0174). Iterable with range `for`: `for k, v in m` destructures entries, `for kv in m` yields `KeyValuePair[K,V]`; order unspecified. |
+| Tuples and multi-return | Supported | Supported | Multi-value return syntax is represented as tuple literals. Tuple `==` / `!=` compare element-wise with short-circuit, single-evaluation semantics (ADR-0171). Named elements `(line int32, column int32)` / `(line: 1, column: 2)` resolve positionally; names are metadata (ADR-0172). |
 | Struct literals | Supported | Supported | Field initialization and field access are implemented. |
 | Data classes, data structs, `with`/copy | Supported | Supported | `data class` (reference) and `data struct` (value) synthesise equality, `with`-copy, and deconstruction. The `record` keyword is not supported; migrate to `data struct` (preserves value semantics) or `data class` (reference semantics). |
 | Inline structs | Supported | Supported | Exactly one field; participates in structural equality. |
@@ -65,7 +66,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Default parameter values in G# declarations | Supported | Supported | Optional parameters carry compile-time-constant defaults; rule violations report `GS0265`. |
 | Method overloading (user functions) | Supported | Supported | Functions can carry overload sets differing by parameter types, ref-kinds, or generic-parameter constraints (`where T : class` / `where T : struct`); duplicates report `GS0264`, ambiguous calls report `GS0266` or `GS0160`, no-applicable reports `GS0267`. |
 | Variadic parameters (`name ...T`) | Supported (all declaration sites) | Supported (all declaration sites) | Canonical Go-style spelling `name ...T`; body sees `[]T`; at most one variadic per signature and must be last (`GS0145`, `GS0364`). Call site packs N trailing args into a fresh `[]T`; a single trailing `[]T` argument passes through unwrapped (identity preserved). The emitter stamps `[System.ParamArrayAttribute]` so C# / F# / VB consumers see it as `params T[]`. The C# `params` keyword is rejected with `GS0363` pointing at the canonical form. Accepted on top-level `func`, class instance/static methods, interface methods (incl. default-body), constructors, lambdas, and named delegate declarations. |
-| Named delegate types | Supported | Supported | `type X = delegate func(...)` declares a real CLR `MulticastDelegate`-derived type; generic delegates (`type X[T any] = delegate func(...)`) supported; diagnostic `GS0233`. |
+| Named delegate types | Supported | Supported | `delegate X(...) ` declares a real CLR `MulticastDelegate`-derived type;; generic delegates (`delegate X[T any](...) `) supported;; diagnostic `GS0233`. |
 
 ## Statements and control flow
 
@@ -80,13 +81,13 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Ellipsis loops | Supported | Supported | `for i in start ... end`. The legacy `for i := start ... end` spelling is not supported. |
 | `while`, `while let`, and `do`-`while` | Supported | Supported | `while cond { ... }` (boolean pre-test), `while let name = nullableExpr { ... }` (body-scoped nullable binding re-evaluated before each iteration), and `do { ... } while cond` (post-test). |
 | `break` and `continue` (with optional loop labels) | Supported | Supported | Invalid locations are diagnosed. Loop labels (`label: for ...`, `break label`, `continue label`) are supported; diagnostics `GS0293`–`GS0295`. |
-| Multi-assignment and deconstruction | Supported | Supported | Multi-assignment accepts locals, fields, properties, arrays, maps, CLR indexers, nested member targets, pointer dereferences, and a tuple-valued single RHS. Target components evaluate before RHS values; writes occur left-to-right. Arity and invalid-target diagnostics are `GS0167` and `GS0526`. |
+| Multi-assignment and deconstruction | Supported | Supported | Multi-assignment accepts locals, inline `let`/`var` bindings, fields, properties, arrays, maps, CLR indexers, nested member targets, pointer dereferences, and a tuple-valued single RHS. Tuple declarations support both `let (a, b)` and `var (a, b)`. Target components evaluate before RHS values; writes/declarations occur left-to-right. Arity and invalid-target diagnostics are `GS0167` and `GS0526`. |
 | Null-coalescing compound assignment (`??=`) | Supported | Supported | `a ??= b` writes `b` only when `a` reads as `nil`; RHS short-circuits otherwise. Receiver and index expressions evaluated exactly once. Works on locals, fields, properties, and indexers. Non-nullable LHS reports `GS0298`; non-assignable LHS reports `GS0299`. |
 | `switch` statements | Supported | Supported | Cases do not fall through. Flow analysis narrows the discriminator inside type-pattern arms (`case d is T`) and lifts a common narrowing into the rest of the enclosing block when the switch is exhaustive and every non-exiting arm contributes the same narrowing. |
 | Switch expressions | Supported | Supported | Exhaustiveness and arm type diagnostics implemented. |
-| Patterns | Supported | Supported | Constant, relational, type, property, list/rest, discard, parenthesized, and `not` / `and` / `or` patterns work in switches and boolean `is`; type-plus-property patterns narrow composed `and` operands. |
-| `fallthrough` | Not supported | Not supported | Reserved and diagnosed as `GS0168`. |
-| `try`, `catch`, `finally`, `throw` | Supported | Supported | CLR exception model. |
+| Patterns | Supported | Supported | Constant, relational, type, property, list/rest, discard, total `var name`, parenthesized, and `not` / `and` / `or` patterns work in switches and boolean `is`; type-plus-property patterns narrow composed `and` operands. A designation after a type, type-plus-property, property, or slice pattern (`value is string text`, `{ Length: > 0 } text`, `[..rest]`) introduces a read-only pattern variable scoped to the regions where the match is known to have happened. `var name` always matches and binds the exact static input type, including nullable values (ADR-0166). |
+| `fallthrough` | Supported | Not supported | Explicit transfer to the next eligible switch-statement body; no implicit fall-through. Placement and target restrictions are `GS0168`, `GS0533`, and `GS0534`. |
+| `try`, `catch`, `finally`, `throw` | Supported | Supported | CLR exception model. Catch clauses are at C# parity (ADR-0177): `catch (name T)`, type-only `catch (T)`, bare `catch`, and `when` filters emitted as real CLR filter regions. `rethrow` re-raises the handled exception (ADR-0176). |
 | `using` | Supported | Supported if lowered/bound disposable | Resource-scope variable declaration. |
 | `defer` | Supported by binding/lowering intent | Supported when lowered before evaluation | Binder requires a call expression. |
 | `goto` | Supported | Supported | `label: statement` and `goto label` support forward references and outward jumps; entering a nested block or exception handler is rejected. |
@@ -114,11 +115,12 @@ This matrix summarizes current feature support in the emitter, which every drive
 
 | Feature | Emit (current) | Evaluator (removed Phase 3c) | Notes |
 | --- | --- | --- | --- |
-| `go` | Supported | Supported with scheduling limits | Operand must be a call expression. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
+| `go` | Supported | Supported with scheduling limits | Operand must be a call expression. No import (ADR-0174). |
 | `scope` structured concurrency | Supported | Supported | Child tasks are joined and failures propagate. Not gated. |
-| Channels, send, receive, `close` | Supported | Supported | Backed by `System.Threading.Channels`. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
-| `select` | Supported | Supported | Receive, receive-bind, send, and default cases. Per-file `import Gsharp.Extensions.Go` is required (GS0316). |
-| `async func` and `await` | Supported | Supported by blocking | Emit has state machines; the evaluator blocked on awaiters. Not gated. |
+| Channels: `chan[T]`, `in` / `out` handles, send, receive, two-value receive, `for v in ch`, `while let v = <-ch`, `ch.Close()` | Supported | Supported | `chan[T]` **is** `System.Threading.Channels.Channel<T>`; `chan[T](…)` constructs the runtime's `Chan<T>` (rendezvous at capacity 0). No import (ADR-0174). |
+| `select` | Supported | Supported | Receive, receive-bind, send, and default cases. No import (ADR-0174). |
+| `async func` and `await` | Supported | Supported by blocking | Emit has state machines; the evaluator blocked on awaiters. `await` is legal in a plain `func` and colours it suspending (ADR-0174 D4); rejected in a `lock` body (`GS0575`) and nested in a `go` operand (`GS0576`). Not gated. |
+| `suspend func` and inferred suspension | Supported | N/A | ADR-0174 D4: a plain `func` that performs a channel operation, awaits, or calls a function that suspends, is compiled as a `ValueTask[R]` state machine labelled `[Suspending]` and awaited implicitly by G# callers; `suspend func` pins the same shape at boundaries (`open`/`override`, interface members, lambdas). A call from a non-suspending, non-`async` function blocks and warns (GS0558). |
 | Async state-machine edge cases | Partial | N/A | Unsupported emit shapes report `GS0190`. |
 | `sequence[T]` and `yield` | Supported | Supported | Sync iterator state machines in emit; the evaluator collected sequence values. |
 | `async sequence[T]` and `await for` | Supported | Supported by blocking | Maps to `IAsyncEnumerable[T]`. |
@@ -145,7 +147,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | --- | --- | --- | --- |
 | `Gsharp.Extensions.Optional` | Supported | Supported | Extension helpers on `T?` (`Map`, `FlatMap`, `OrElse`, `OrCompute`, `OrThrow`, `IfPresent`, `Filter`). Value-typed (`T : struct`) helpers carry a `*Value` suffix and require `import Gsharp.Extensions.Optional`. |
 | `Gsharp.Extensions.Sequences` | Supported | Supported | Static builders (`Range`, `RangeStep`, `Iterate`, `Repeat`, `Of`, `Empty`), transformers (`Windowed`, `Chunked`, `Indexed`, `Pairwise`, `Interleave`), safe terminals (`FirstOrNil`, `LastOrNil`, `SingleOrNil` plus `*ValueOrNil` companions), and G#-shaped collectors (`ToSlice`, `ToMap`). Requires `import Gsharp.Extensions.Sequences`. |
-| `Gsharp.Extensions.Go` (gate) | Supported | Supported | Per-file `import Gsharp.Extensions.Go` unlocks the Go-flavored concurrency surface and the Go-style built-ins `len`, `cap`, `append`, `delete`, `make`. |
+| `Gsharp.Extensions.Go` (gate) | Removed | Removed | ADR-0174: the concurrency surface is the language, the Go-style built-ins are retired (GS0566), and the namespace is deleted. |
 | No auto-import policy | N/A | N/A | Nothing under `Gsharp.Extensions.*` is auto-imported — even when implicit imports are enabled. Each namespace is opt-in per file. |
 
 ## Tooling and build

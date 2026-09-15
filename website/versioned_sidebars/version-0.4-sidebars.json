@@ -30,6 +30,7 @@
       "label": "Tutorials",
       "items": [
         "tutorials/getting-started",
+        "tutorials/trail",
         "tutorials/project-and-packages",
         "tutorials/data-and-types",
         "tutorials/control-flow",
@@ -64,11 +65,14 @@
       "label": "Coming from another language",
       "items": [
         "bridges/gsharp-for-go-developers",
-        "bridges/gsharp-for-csharp-developers"
+        "bridges/gsharp-for-csharp-developers",
+        "bridges/gsharp-for-kotlin-developers",
+        "bridges/gsharp-for-swift-developers"
       ]
     }
   ],
   "referenceSidebar": [
+    "ref/quick-reference",
     "ref/spec",
     "ref/standard-library",
     "ref/clr-interop",
@@ -79,13 +83,15 @@
     "faq"
   ],
   "toolingSidebar": [
-    "tooling/gsc",
-    "tooling/repl",
     "tooling/sdk-projects",
-    "tooling/cs2gs",
     "tooling/vscode",
-    "tooling/lsp",
+    "tooling/repl",
+    "tooling/gsfmt",
     "tooling/debugging",
+    "tooling/analyzers",
+    "tooling/cs2gs",
+    "tooling/gsc",
+    "tooling/lsp",
     "tooling/compiler-architecture",
     "playground",
     "contributing/docs-authoring"

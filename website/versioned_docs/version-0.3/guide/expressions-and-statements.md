@@ -6,7 +6,7 @@ draft: false
 
 # Expressions and statements
 
-G# expression syntax is compact, with CLR-oriented additions for nullability, async, exceptions, and interop. The exact precedence table is in the [language specification](/docs/ref/spec#precedence).
+G# expression syntax is compact, with CLR-oriented additions for nullability, async, exceptions, and interop. The exact precedence table is in the [language specification](../ref/spec.md#precedence).
 
 ## Operators
 
@@ -141,7 +141,7 @@ done: Console.WriteLine("done")
 
 ## Exceptions and cleanup statements
 
-`throw`, `try`, `catch`, and `finally` use CLR exception semantics. `throw e` is also an expression in value position, so `name ?? throw ArgumentNullException("name")`, ternary arms, return operands, lambda bodies, and arguments can throw without a separate guard. `using` introduces a disposable resource variable. `defer` schedules a call for scope exit. See [Errors and cleanup](/docs/guide/errors-and-cleanup).
+`throw`, `try`, `catch`, and `finally` use CLR exception semantics. `throw e` is also an expression in value position, so `name ?? throw ArgumentNullException("name")`, ternary arms, return operands, lambda bodies, and arguments can throw without a separate guard. `using` introduces a disposable resource variable. `defer` schedules a call for scope exit. See [Errors and cleanup](errors-and-cleanup.md).
 
 ## Concurrency statements
 

@@ -2,6 +2,7 @@
 title: "Tour: Control flow"
 sidebar_position: 4
 draft: false
+description: "Make decisions, repeat work, and handle nullable values with G# control flow."
 ---
 
 # Tour: Control flow
@@ -276,7 +277,7 @@ Unknown `goto` labels report `GS0469`; duplicate labels in a function report `GS
 
 ## Switch statements
 
-Switch cases have block bodies and do not fall through. The `fallthrough` token is reserved, but using it is diagnosed rather than executed.
+Switch cases have block bodies and do not fall through implicitly. A trailing `fallthrough` can explicitly enter the next arm's body, subject to the placement rules below.
 
 ```gsharp title="PatternSwitch.gs"
 package GSharp.Samples.PatternSwitch
@@ -299,6 +300,63 @@ func Main() {
     describe(250)
 }
 ```
+
+### Explicit fallthrough
+
+`fallthrough` must be the direct last statement of a non-final switch arm. It enters the next arm's body without testing that arm's pattern. The destination pattern must not declare bindings, and the destination arm must not have a `when` guard.
+
+This complete program is checked in as `samples/WebsiteFallthrough.gs`:
+
+```gsharp title="fallthrough.gs"
+package Examples.Fallthrough
+
+import System
+
+func trace(value int32) string {
+    var result = ""
+    switch value {
+        case 1 {
+            result += "one/"
+            fallthrough
+        }
+        case 2 {
+            result += "two/"
+            fallthrough
+        }
+        default {
+            result += "end"
+        }
+    }
+    return result
+}
+
+Console.WriteLine(trace(1))
+Console.WriteLine(trace(2))
+Console.WriteLine(trace(3))
+
+switch 1 {
+    case 1 {
+        Console.WriteLine("selected")
+        fallthrough
+    }
+    case 99 {
+        Console.WriteLine("explicit target")
+    }
+    default {
+        Console.WriteLine("not reached")
+    }
+}
+```
+
+```text
+one/two/end
+two/end
+end
+selected
+explicit target
+```
+
+The constant switch enters `case 99` even though `1` does not match it, then exits because that body has no `fallthrough`. `GS0168` reports invalid placement, `GS0533` reports a final-arm use, and `GS0534` reports a destination with pattern bindings or a guard. This is a switch-statement feature, not a switch-expression arm value.
 
 ## Switch expressions and patterns
 
@@ -408,4 +466,4 @@ func FirstRest(values []int32) string {
 
 Reading a pattern variable outside its region reports `GS0532`. Type patterns with a designation (`case Dog dog { ... }`) are also accepted in `switch` arms alongside the `case dog is Dog` spelling.
 
-Next: [Tour: Concurrency](/docs/tour/concurrency).
+Next: [Tour: Concurrency](concurrency.md).

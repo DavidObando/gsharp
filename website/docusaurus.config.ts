@@ -1,12 +1,41 @@
-import {themes as prismThemes} from 'prism-react-renderer';
+import type {PrismTheme} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import path from 'node:path';
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
+const codeTheme: PrismTheme = {
+  plain: {color: 'var(--gs-code-text)', backgroundColor: 'var(--gs-code-background)'},
+  styles: [
+    {
+      types: ['comment', 'prolog', 'doctype', 'cdata'],
+      style: {color: 'var(--gs-code-comment)', fontStyle: 'italic'},
+    },
+    {
+      types: ['keyword', 'selector', 'atrule', 'boolean'],
+      style: {color: 'var(--gs-code-keyword)'},
+    },
+    {
+      types: ['string', 'char', 'attr-value', 'raw-string'],
+      style: {color: 'var(--gs-code-string)'},
+    },
+    {types: ['number', 'constant', 'symbol'], style: {color: 'var(--gs-code-number)'}},
+    {types: ['function', 'tag'], style: {color: 'var(--gs-code-function)'}},
+    {
+      types: ['class-name', 'attr-name', 'annotation', 'builtin', 'builtin-type'],
+      style: {color: 'var(--gs-code-type)'},
+    },
+    {
+      types: ['operator', 'punctuation', 'parameter', 'variable', 'property'],
+      style: {color: 'var(--gs-code-text)'},
+    },
+  ],
+};
+
 const config: Config = {
   title: 'G#',
-  tagline: 'A modern .NET language with Go, Kotlin, and Swift ergonomics',
+  tagline: 'A fresh way to build on .NET',
   favicon: 'img/favicon.ico',
 
   future: {
@@ -21,6 +50,7 @@ const config: Config = {
   projectName: 'gsharp',
 
   onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
 
   markdown: {
     hooks: {
@@ -33,6 +63,27 @@ const config: Config = {
     locales: ['en'],
   },
 
+  plugins: [
+    function sourceExamples() {
+      return {
+        name: 'gsharp-source-examples',
+        configureWebpack() {
+          return {
+            module: {
+              rules: [
+                {
+                  test: /\.(gs|golden)$/,
+                  include: path.resolve(__dirname, '../samples'),
+                  type: 'asset/source',
+                },
+              ],
+            },
+          };
+        },
+      };
+    },
+  ],
+
   presets: [
     [
       'classic',
@@ -40,9 +91,7 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           editUrl: 'https://github.com/DavidObando/gsharp/tree/main/website/',
-          // Docs versioning is enabled. While authoring, "current" is served at
-          // /docs/. A released version snapshot (e.g. 0.1) is cut before
-          // release, after which the version dropdown lists released + "Next".
+          // Released 0.4 docs use /docs; development docs use /docs/next.
         },
         blog: false,
         theme: {
@@ -57,7 +106,7 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: 'img/gsharp-icon.png',
+    image: 'img/social-preview.png',
     colorMode: {
       respectPrefersColorScheme: true,
     },
@@ -76,31 +125,35 @@ const config: Config = {
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'learnSidebar',
+          to: '/learn',
+          activeBaseRegex:
+            '/(learn|trail|concurrency|docs/(next/|[0-9.]+/)?(intro|getting-started|tour|tutorials|guide|bridges|extensions))(/|$)',
           position: 'left',
           label: 'Learn',
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'referenceSidebar',
+          to: '/reference',
+          activeBaseRegex: '/(reference|docs/(next/|[0-9.]+/)?(ref|faq))(/|$)',
           position: 'left',
           label: 'Reference',
         },
         {
-          type: 'docSidebar',
-          sidebarId: 'toolingSidebar',
+          to: '/tooling',
+          activeBaseRegex: '/(tooling|docs/(next/|[0-9.]+/)?tooling)(/|$)',
           position: 'left',
           label: 'Tooling',
         },
         {
-          to: '/docs/tour',
-          label: 'Tour',
+          to: '/project',
+          activeBaseRegex:
+            '/(project|docs/(next/|[0-9.]+/)?(project|release-notes|design-decisions|contributing))(/|$)',
+          label: 'Project',
           position: 'left',
         },
         {
           type: 'docsVersionDropdown',
           position: 'right',
+          className: 'gs-docs-version',
         },
         {
           href: 'https://github.com/DavidObando/gsharp',
@@ -115,26 +168,38 @@ const config: Config = {
         {
           title: 'Learn',
           items: [
-            {label: 'Introduction', to: '/docs/intro'},
+            {label: 'Learning paths', to: '/learn'},
             {label: 'Install', to: '/docs/getting-started/install'},
             {label: 'Tour of G#', to: '/docs/tour'},
             {label: 'Tutorials', to: '/docs/tutorials/getting-started'},
             {label: 'Effective G#', to: '/docs/guide/effective-gsharp'},
+            {label: 'Go / G# concurrency', to: '/concurrency'},
           ],
         },
         {
           title: 'Reference',
           items: [
+            {label: 'Find a reference', to: '/reference'},
             {label: 'Language specification', to: '/docs/ref/spec'},
             {label: 'CLR interop', to: '/docs/ref/clr-interop'},
             {label: 'Diagnostics', to: '/docs/ref/diagnostics'},
             {label: 'Feature matrix', to: '/docs/ref/feature-matrix'},
-            {label: 'Quality dashboard', to: '/docs/next/project/quality-dashboard'},
           ],
         },
         {
-          title: 'More',
+          title: 'Tooling',
           items: [
+            {label: 'The toolchain', to: '/tooling'},
+            {label: 'SDK projects', to: '/docs/tooling/sdk-projects'},
+            {label: 'VS Code', to: '/docs/tooling/vscode'},
+            {label: 'REPL and scripts', to: '/docs/tooling/repl'},
+          ],
+        },
+        {
+          title: 'Project',
+          items: [
+            {label: 'About the project', to: '/project'},
+            {label: 'Quality dashboard', to: '/docs/next/project/quality-dashboard'},
             {label: 'FAQ', to: '/docs/faq'},
             {label: 'Release notes', to: '/docs/release-notes'},
             {label: 'Design decisions', to: '/docs/design-decisions'},
@@ -145,9 +210,9 @@ const config: Config = {
       copyright: `Copyright © ${new Date().getFullYear()} The G# Authors. Built with Docusaurus.`,
     },
     prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
-      additionalLanguages: ['csharp', 'go', 'bash', 'json'],
+      theme: codeTheme,
+      darkTheme: codeTheme,
+      additionalLanguages: ['csharp', 'go', 'kotlin', 'swift', 'bash', 'json'],
       magicComments: [
         {
           className: 'theme-code-block-highlighted-line',

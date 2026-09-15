@@ -2,11 +2,12 @@
 title: "Tutorial: Control flow"
 sidebar_position: 4
 draft: false
+description: "Use conditions, loops, and pattern matching to express program logic."
 ---
 
 # Tutorial: Control flow
 
-In this tutorial, you will write G# branches, loops, switches, and patterns. G# keeps compact `if` and `for` syntax, adds expression switches, and deliberately does not support fallthrough.
+In this tutorial, you will write G# branches, loops, switches, and patterns. Switch statements do not fall through implicitly; an explicit trailing `fallthrough` can enter the next eligible arm.
 
 ## Prerequisites
 
@@ -386,5 +387,5 @@ positive / bookended
 
 - Use `for` for infinite, condition, counted, and collection loops.
 - Use `for x in xs` for collection iteration.
-- Switch cases do not fall through, and `fallthrough` is reserved only for a clear diagnostic.
+- Switch cases do not fall through implicitly. Explicit `fallthrough` is allowed only as the last statement of a non-final arm, and the next arm must have no pattern bindings or guard. See the [checked Tour example](../tour/control-flow.md#explicit-fallthrough).
 - Patterns work in both switch statements and switch expressions.

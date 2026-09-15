@@ -2,6 +2,8 @@
 title: "Language specification"
 sidebar_position: 1
 draft: false
+description: "The G# language specification: grammar, types, expressions, statements, and execution rules."
+toc_max_heading_level: 2
 ---
 
 # Language specification
@@ -135,12 +137,13 @@ G# has `const`, `let`, and `var` declarations. A constant or `let` binding requi
 
 ```ebnf
 VariableDecl = ( "const" | "let" | "var" ) identifier TypeClause? "=" Expression
+             | "async" "let" identifier TypeClause? "=" Expression   (* ADR-0174 D15: starts a child of the enclosing scope; read with `await name` *)
              | "var" identifier TypeClause
              | "let" "(" identifier { "," identifier } ")" "=" Expression
              | "let" "{" identifier "=" identifier { "," identifier "=" identifier } "}" "=" Expression .
 ```
 
-An initializer-less `var` binds the named type's **zero value**: `0`/`false`/`""` for the scalar types, the all-zero value for structs and enums, and — for the magic collection types — a **sound empty instance** rather than a null reference. `var m map[K,V]` is an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-`N` array, and `var q sequence[T]` an empty sequence, so the bare (non-`?`) spelling's non-null promise holds and the slot is immediately usable. This applies to locals, top-level (REPL-hoisted) globals, and struct/class fields alike (fields receive a synthesized field initializer), and recurses into a struct-typed slot's own fields at any nesting depth — a bare `var s S` local/global/field binds a sound empty instance for every magic-collection field reachable through `S`'s own field composition, whether `S` is the slot's direct type or nested inside another struct or class. `chan T` is carved out — an auto-created channel has no sensible default, so a channel declaration without an initializer is rejected (`GS0520`; initialize with `make(chan T)` or `make(chan T, capacity)`). Array/slice *elements* of collection type keep the CLR default (null) — only declaration slots get empty instances — and the explicit `= default` spelling keeps its literal CLR meaning (null), including for a struct's magic-collection fields; only an *omitted* initializer gets the sound empty instance. A struct's non-magic field explicit initializer (e.g. `var Count int32 = 5`) still does not run for a bare declaration, at any nesting depth — only the sound zero value for a magic-collection field is synthesized.
+An initializer-less `var` binds the named type's **zero value**: `0`/`false`/`""` for the scalar types, the all-zero value for structs and enums, and — for the magic collection types — a **sound empty instance** rather than a null reference. `var m map[K,V]` is an empty map, `var s []T` an empty slice, `var a [N]T` a zeroed length-`N` array, and `var q sequence[T]` an empty sequence, so the bare (non-`?`) spelling's non-null promise holds and the slot is immediately usable. This applies to locals, top-level (REPL-hoisted) globals, and struct/class fields alike (fields receive a synthesized field initializer), and recurses into a struct-typed slot's own fields at any nesting depth — a bare `var s S` local/global/field binds a sound empty instance for every magic-collection field reachable through `S`'s own field composition, whether `S` is the slot's direct type or nested inside another struct or class. `chan[T]` is carved out — an auto-created channel has no sensible default, so a channel declaration without an initializer is rejected (`GS0520`; initialize with `chan[T]()`, `chan[T](capacity)`, or `Chan.Unbounded[T]()`). Array/slice *elements* of collection type keep the CLR default (null) — only declaration slots get empty instances — and the explicit `= default` spelling keeps its literal CLR meaning (null), including for a struct's magic-collection fields; only an *omitted* initializer gets the sound empty instance. A struct's non-magic field explicit initializer (e.g. `var Count int32 = 5`) still does not run for a bare declaration, at any nesting depth — only the sound zero value for a magic-collection field is synthesized.
 
 `let` communicates immutability of the binding. `var` introduces a mutable variable. `const` is for compile-time constants. Tuple deconstruction and named deconstruction use `let` forms. Multi-target assignment is statement syntax over existing writable storage and accepts either one RHS per target or one matching tuple-valued RHS. The legacy `identifier ":=" Expression` short variable-declaration form was removed; use `let name = expr` (immutable) or `var name = expr` (mutable) instead.
 
@@ -171,11 +174,11 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 
 ### Object and nil
 
-`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. **Nil comparison** (`x == nil` / `x != nil`, either operand order) is defined once, for **every reference-backed builtin type** — `object`, classes, interfaces, function and delegate types, `sequence[T]`/`asyncSequence[T]`, `map[K,V]`, `[]T`, `[N]T`, `[,]T` (and higher ranks), and `chan T` — with or without a `?` annotation; comparison is the interop-boundary observation tool. The comparison surface is comparison-*only*: assigning `nil` into a bare (non-`?`) slot of any of these types remains an error. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` and `T? → U?` are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. Postfix `!!` asserts non-null; applying `!!` to a value that is actually nil fails at runtime with the underlying CLR exception (`System.InvalidOperationException` when unwrapping a value-type `T?`, `System.NullReferenceException` when dereferencing a nil reference) — the compiled semantics are the language contract. `??` is null coalescing. A **tuple type** `(T1, …, Tn)` converts implicitly to `(U1, …, Un)` when both are tuple types of the same arity and **each** element `Ti → Ui` has an implicit conversion (identity, reference/interface upcast, the lifted nullable-reference upcast above, numeric widening, boxing, …) — element-wise, mirroring C# §10.2.13. So `(A, Derived)` converts to `(A, Base)` and `(A, Derived?)` to `(A, Base?)`. The conversion applies in argument, assignment/`let`-target, and return positions. Because the source and target `System.ValueTuple<…>` are distinct CLR instantiations, the conversion is materialised by rebuilding the destination tuple from the per-element converted values rather than by reinterpreting the source. A tuple with any element lacking an implicit conversion (a downcast such as `(A, Base) → (A, Derived)`, or an unrelated pair such as `(A, int32) → (A, string)`) or a differing arity is not convertible and requires the elements to match.
+`object` is the universal upper bound. Values backed by CLR types and user value types can implicitly convert or box to `object`; explicit conversions can unbox to CLR value types. Nullable types are written by appending `?` to a type clause. `nil` converts implicitly to nullable types but not to non-nullable types. **Nil comparison** (`x == nil` / `x != nil`, either operand order) is defined once, for **every reference-backed builtin type** — `object`, classes, interfaces, function and delegate types, `sequence[T]`/`asyncSequence[T]`, `map[K,V]`, `[]T`, `[N]T`, `[,]T` (and higher ranks), and `chan[T]` / `in chan[T]` / `out chan[T]` — with or without a `?` annotation; comparison is the interop-boundary observation tool. The comparison surface is comparison-*only*: assigning `nil` into a bare (non-`?`) slot of any of these types remains an error. A reference upcast lifts through nullable annotations: when `U` is a base class or implemented interface of `T`, both `T → U?` and `T? → U?` are implicit reference conversions — for reference types a nullable annotation shares the underlying reference representation, so the lifted upcast is a metadata-only no-op that maps `nil` to `nil` and reference-upcasts a non-null value. The narrowing `T? → U` (dropping the nullable annotation) is not implicit and still requires `!!`. This holds for the **enumerable aliases** too: `sequence[T]` and `async sequence[T]` are identity aliases for `IEnumerable[T]` and `IAsyncEnumerable[T]`, but the alias relates the *underlying* types only — a `(sequence[T])?`, an `(async sequence[T])?` or an `IEnumerable[T]?` reaching a non-nullable slot of either spelling reports `GS0154`, exactly as a `string?` at a `string` parameter does; adding or preserving the annotation (`sequence[T] → IEnumerable[T]?`, `(sequence[T])? → IEnumerable[T]?`) still converts. The same rule applies to `map[K, V]?` and to every structural shape whose element is still an open type parameter. Arrays and slices are **invariant** in their element type for *implicit* conversions: `[]Derived` does not implicitly convert to `[]Base` even though the CLR permits array reference covariance, because a covariant write through the widened reference fails at run time (`System.ArrayTypeMismatchException`). The widening is available *explicitly*, one dimension only, when the element conversion is itself an implicit reference conversion: `cast[[]Base](derived)` (equally `cast[[]Base]` over an imported `Derived[]`) is a representation-level no-op that yields the **same** array instance, and the bare form is rejected with `GS0156` pointing at that cast. Unrelated or narrowing element types remain unconvertible. Postfix `!!` asserts non-null; applying `!!` to a value that is actually nil fails at runtime with the underlying CLR exception (`System.InvalidOperationException` when unwrapping a value-type `T?`, `System.NullReferenceException` when dereferencing a nil reference) — the compiled semantics are the language contract. `??` is null coalescing. A **tuple type** `(T1, …, Tn)` converts implicitly to `(U1, …, Un)` when both are tuple types of the same arity and **each** element `Ti → Ui` has an implicit conversion (identity, reference/interface upcast, the lifted nullable-reference upcast above, numeric widening, boxing, …) — element-wise, mirroring C# §10.2.13. So `(A, Derived)` converts to `(A, Base)` and `(A, Derived?)` to `(A, Base?)`. The conversion applies in argument, assignment/`let`-target, and return positions. Because the source and target `System.ValueTuple<…>` are distinct CLR instantiations, the conversion is materialised by rebuilding the destination tuple from the per-element converted values rather than by reinterpreting the source. A tuple with any element lacking an implicit conversion (a downcast such as `(A, Base) → (A, Derived)`, or an unrelated pair such as `(A, int32) → (A, string)`) or a differing arity is not convertible and requires the elements to match. **Tuple equality** (ADR-0171): `==` and `!=` are defined whenever both operands are tuple types of the same arity (differing arity is error GS0539; a tuple against a non-tuple is GS0129). The comparison is element-wise: each operand is evaluated exactly once, then the element pairs are compared left-to-right through the ordinary equality rules (user-declared element operators, string equality, lifted nullable elements, nested tuples recursively), folded with short-circuiting `&&` (`!=` folds the element `!=` comparisons with `||`) — mirroring C# §12.12.10. An element pair with no defined equality reports GS0129 with the element types. The result is `bool`. **Named tuple elements** (ADR-0172): a tuple type may name elements name-first — `(line int32, column int32)` — and a tuple literal may label elements — `(line: 1, column: 2)` (partial naming allowed; a lone labeled or named single element is GS0543 because `(T)` is grouping). Names are metadata over the positional shape: a declared name resolves member access to its position (`pos.line` ≡ `pos.Item1`, and `ItemN`/`.N` stay valid), same-shape tuples differing only in names are identical types related by an identity conversion (an explicit literal label that the target renames warns GS0541; a named-value conversion to a differently-named target is silent), equality ignores names, and generic substitution preserves them. Duplicate names are GS0540; `ItemN` at the wrong position and `Rest` are reserved (GS0542).
 
 ### Arrays and slices
 
-Fixed arrays are written `[N]T`, slices are written `[]T`, and native CLR rectangular arrays are written `[,]T`, `[,,]T`, and so on through rank 32. Rank is part of rectangular-array type identity; runtime dimension lengths are not. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) remain distinct from rectangular arrays. Arrays may also contain pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan T`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
+Fixed arrays are written `[N]T`, slices are written `[]T`, and native CLR rectangular arrays are written `[,]T`, `[,,]T`, and so on through rank 32. Rank is part of rectangular-array type identity; runtime dimension lengths are not. A fixed array's declared length is part of its identity when it appears as a **generic type argument**: `List[[3]int32]` and `List[[4]int32]` are different types and do not convert, in either direction and at any nesting depth, because the length is retained beside the erased CLR shape (`List<T[]>`, which cannot represent it) rather than compared through it. The **spelling** is part of that identity too: `List[[]int32]` and `List[[3]int32]` are likewise different types and do not convert in either direction, because a slice type argument is retained beside the erased shape for the same reason a fixed length is — `[]T` and `[N]T` share the one CLR `T[]`. Note that this deliberately does not mirror the bare rule below, where `[3]int32` *does* widen implicitly to `[]int32`: a generic's type argument is matched by **identity**, not by convertibility, so `List` being invariant in `T` makes the two instantiations as unrelated as `List[Derived]` and `List[Base]`. Generic **variance** does not readmit such a pair either, so `IEnumerable[[3]int32]` does not convert to `IEnumerable[[4]int32]` or to `IEnumerable[[]int32]` despite `IEnumerable`'s covariance. A matching length is still one type, a matching spelling is still one type, a covariant widening over the same argument still widens, and an array recovered from imported metadata still converts either way and against *either* spelling — reflection records neither a length nor a slice-ness to disagree with, so a G# `List[[3]int32]` and a G# `List[[]int32]` both reach a C# `List<int[]>` parameter, and a C# `List<int[]>` return fills either slot. The same rule holds between the bare array types themselves, stated as a **widening**: `[N]T` converts implicitly to `[]T` — dropping a known length for an unknown one is a representation no-op, so a fixed array still reaches every `[]T` slot — while **nothing converts implicitly *into* a `[N]T`** except a `[N]T` of the same length. So `[3]int32` does not convert to `[4]int32`, `[]int32` does not convert to `[3]int32`, and `var lit [3]int32 = [2]int32{1, 2}` is rejected rather than binding a length-2 value into a length-3 slot. Each rejected pair keeps its explicit `cast[…]`, exactly as slice covariance does (`GS0156` points at it); the cast reinterprets and does not change the value, so a `[3]int32` cast to `[4]int32` still reports `.Length` 3. An array recovered from imported metadata is exempt in both directions — reflection records no length to disagree with — so a G# `[3]int32` still reaches a C# `int[]` parameter and a C# `int[]` return still fills a `[3]int32` slot. The rule reaches a **generic's member slot** as well: `List[[3]int32]`'s `Add` takes a `[3]int32`, because the slot is projected through the type argument the receiver retained rather than read off the erased `List<int32[]>`, so `xs.Add([4]int32{…})` reports `GS0156` and `xs.Add([]Foo{…})` does too. A member slot over a **slice** argument keeps the bare widening, because `[]T` and the CLR `T[]` describe the same shape: `List[[]int32]`'s `Add` still takes a `[3]int32`. So retaining the slice makes the two *instantiations* distinct without narrowing what either one's members accept. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) remain distinct from rectangular arrays. Arrays may also contain pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan[T]`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
 
 ```gsharp
 let xs = []int32{1, 2, 3}
@@ -211,13 +214,13 @@ let matrix = [2, 3]int32{1, 2, 3, 4, 5, 6}
 
 A non-empty rectangular initializer requires non-negative constant dimensions whose product equals the element count. Empty/no-initializer forms allow runtime dimensions. Reads, writes, compound assignments, increments/decrements, `??=`, address-taking, multi-target assignment, and async operands preserve receiver/dimension/index/value evaluation order.
 
-Rectangular arrays expose the ordinary `System.Array` surface: `.Length` is total element count, `.Rank` is dimension count, and `.GetLength(d)`, `.GetLowerBound(d)`, and `.GetUpperBound(d)` inspect a dimension. `for … in` enumerates elements in row-major order; a two-variable loop uses a flat zero-based enumeration index. `len(rectangular)` also returns total element count when the Go built-ins import is present. Rectangular arrays are not slices: `cap` and `append` do not apply.
+Rectangular arrays expose the ordinary `System.Array` surface: `.Length` is total element count, `.Rank` is dimension count, and `.GetLength(d)`, `.GetLowerBound(d)`, and `.GetUpperBound(d)` inspect a dimension. `for … in` enumerates elements in row-major order; a two-variable loop uses a flat zero-based enumeration index. Rectangular arrays are not slices; `.Length` is their element count.
 
 Source and imported CLR rectangular arrays retain rank in fields, properties, parameters, returns, generic substitutions, nullable metadata, and reflection. G# emits the CLR `T[,]`/`T[,,]` shape directly rather than flattening it.
 
 Like other bare magic collection types, an uninitialized non-null rectangular slot receives a sound empty instance: every dimension has length zero. A nullable rectangular slot (`[,]?T`) retains `nil` as its zero value.
 
-Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation. The `len`, `cap`, `append`, `delete`, and `make` built-ins are Go-style and require `import Gsharp.Extensions.Go`; see [Go-style built-ins (`import Gsharp.Extensions.Go`)](#go-style-built-ins-import-gsharpextensionsgo) for the gate and the .NET-idiomatic alternatives (`.Length`, `.Count`, `.Remove(k)`, `List[T].Add`).
+Slices are backed by CLR arrays: `[]T` **is** `T[]`, so a slice's length is `.Length` and it has no separate capacity. The growable shape is `List[T]` + `Add`. The Go-style `len`, `cap`, `append`, `delete`, and `make` built-ins are retired (ADR-0174 D13, `GS0566`); see [Retired Go-style built-ins](#retired-go-style-built-ins) for the replacement table.
 
 #### Nullable arrays vs arrays of nullable elements
 
@@ -248,7 +251,7 @@ Array and slice element access (`a[i]`, read or write) accepts **any** integer-t
 
 ### Maps
 
-Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries. Maps are iterable with the range `for`: `for k, v in m` destructures each entry into key and value, and `for kv in m` yields each entry as a `KeyValuePair[K,V]`; iteration order is unspecified (see the `for` statement section). Maps carry no implicit synchronization: concurrent access from multiple goroutines is not goroutine-safe (consistent with Go), and callers must synchronize explicitly with `lock`, `SyncMap[K,V]`, or concurrent CLR collections via interop.
+Maps are written `map[K,V]` and are backed by `Dictionary<K,V>` in the implementation. A `map[K,V]` therefore converts implicitly to the interfaces that backing implements over its own key and value — `IDictionary[K,V]`, `IReadOnlyDictionary[K,V]`, and `ICollection`/`IReadOnlyCollection`/`IEnumerable` of `KeyValuePair[K,V]` (and so to `sequence[KeyValuePair[K,V]]`, which is the alias spelling of the last) — in that direction only, and regardless of whether the key and value are closed or still open. The reverse does not hold: an `IDictionary[K,V]` need not be a `map[K,V]`. Map literals use key-value entries, indexing reads values, and indexed assignment updates entries. Maps are iterable with the range `for`: `for k, v in m` destructures each entry into key and value, and `for kv in m` yields each entry as a `KeyValuePair[K,V]`; iteration order is unspecified (see the `for` statement section). Maps carry no implicit synchronization: concurrent access from multiple goroutines is not goroutine-safe (consistent with Go), and callers must synchronize explicitly with `lock`, `SyncMap[K,V]`, or concurrent CLR collections via interop.
 
 ```gsharp
 let counts = map[string,int32]{"g": 1, "sharp": 2}
@@ -260,21 +263,20 @@ let counts = map[string,int32]{"g": 1, "sharp": 2}
 
 ### Channels
 
-Channels are written `chan T`. A channel value is created with `make(chan T)` or `make(chan T, capacity)`. Prefix receive is `<-ch`; send statements are `ch <- value`; `select` multiplexes receive and send cases. Channels are backed by `System.Threading.Channels`. A channel declaration **must** carry an initializer — an auto-created channel has no sensible default (buffer size, ownership), so `var ch chan T` without one is rejected with `GS0520`; this is the deliberate carve-out from the empty-instance zero values the other collection types get.
+Channels are written `chan[T]` (ADR-0174 D2) — the element type inside brackets, like `sequence[T]` and `map[K, V]`. `in chan[T]` is a receive-only handle and `out chan[T]` a send-only one; a `chan[T]` converts implicitly to either, never the reverse, which is what makes channel ownership checkable. A channel value is constructed by applying the type clause to arguments: `chan[T]()` is a **rendezvous** channel (capacity 0 — a send completes only when a receiver takes the value), `chan[T](capacity)` is buffered, and `Chan.Unbounded[T]()` is the one unbounded form, spelled through the runtime class deliberately. Prefix receive is `<-ch` (the element's zero value on a closed, drained channel — no exception); send statements are `ch <- value`; `ch.Close()` closes (closing twice throws; `Dispose()` is the idempotent close, so `using let` works); `select` multiplexes receive and send cases. `chan[T]` **is** `System.Threading.Channels.Channel<T>` (`in`/`out` are `ChannelReader<T>`/`ChannelWriter<T>`), so any BCL channel flows in with no adapter, and the conversions run in both directions and across assemblies: the lattice reads the types, not the spelling, so a `Channel<T>` — from C#, from NuGet, or read back from a G# library's own metadata — converts implicitly to a `ChannelWriter<T>` or `ChannelReader<T>` target exactly as `chan[T]` converts to `out chan[T]` or `in chan[T]`, which is also C#'s rule for the same pair (`Channel<TWrite, TRead>` declares implicit operators to both); what `chan[T](…)` constructs is the runtime's `Gsharp.Concurrency.Chan<T>` subclass, which also carries `Length()` (a racy snapshot, hence a method) and `Capacity` (fixed, hence a property). A channel declaration **must** carry an initializer — an auto-created channel has no sensible default, so `var ch chan[T]` without one is rejected with `GS0520`; this is the deliberate carve-out from the empty-instance zero values the other collection types get. A trailing `?` marks the whole channel nullable (`chan[int32]?`); a nullable element is `chan[int32?]`.
 
-The Go-flavored channel surface — `chan T`, `<-` (send and receive), `make(chan T)`, `select`, and `close(ch)` — is gated behind a per-file `import Gsharp.Extensions.Go`. Files that use any of these forms without the import get diagnostic `GS0316`.
+The retired spellings are rejected with a replacement named in the message: the juxtaposed type clause `chan T` (`GS0567` — use `chan[T]`), and the built-ins `make(chan T[, n])` and `close(ch)` (`GS0566` — use `chan[T](…)` / `Chan.Unbounded[T]()` and `ch.Close()`). The syntax needs no import (ADR-0174 D13 retired the `import Gsharp.Extensions.Go` gate, GS0316); the concurrency library lives in the implicitly imported `Gsharp.Concurrency` namespace.
 
 ```gsharp title="samples/Channels.gs"
 package GSharp.Samples.Channels
 
 import System
-import Gsharp.Extensions.Go
 
-let ch = make(chan int32, 3)
+let ch = chan[int32](3)
 ch <- 1
 ch <- 2
 ch <- 3
-close(ch)
+ch.Close()
 
 let a = <-ch
 let b = <-ch
@@ -294,45 +296,38 @@ Console.WriteLine(d)
 0
 ```
 
-### Go-style built-ins (`import Gsharp.Extensions.Go`)
+<span id="go-style-built-ins-import-gsharpextensionsgo"></span>
 
-G# inherits a small set of Go-style built-in functions —
-`len`, `cap`, `append`, `delete`, and the `make(chan T[, cap])`
-constructor — that operate on the Go-flavored collection /
-channel surface. Every built-in in
-this cluster is gated behind the same per-file
-`import Gsharp.Extensions.Go` as the channel surface. Files that call any of these without the import get
-diagnostic `GS0317` (or `GS0316` for `make(chan T)`, anchored
-at the inner `chan` clause, and for `close(ch)` — see
-"Deconfliction").
+### Retired Go-style built-ins
 
-| Built-in | Resolves to | .NET-idiomatic alternative |
-|---|---|---|
-| `len(arr)` / `len(slice)` / `len(string)` | array / slice / string length | `arr.Length` / `s.Length` |
-| `len(map)` | map entry count | `m.Count` |
-| `cap(slice)` | underlying-storage capacity | — (use the import) |
-| `append(slice, elem)` | grow-and-copy on a slice | `List[T].Add` for mutable lists |
-| `delete(map, key)` | erase a map entry | `m.Remove(k)` |
-| `make(chan T[, cap])` | channel constructor | — (use the import) |
-| `close(ch)` | channel-writer complete | — (use the import) |
+G# 0.4 inherited a small set of Go-style built-in functions — `len`, `cap`,
+`append`, `delete`, and the channel forms `make(chan T[, cap])` and
+`close(ch)` — gated behind a per-file `import Gsharp.Extensions.Go`.
+ADR-0174 (D12, D13) retired all of them, and the namespace with them: every
+receiver already carries the member, so a free function that adds no syntax
+only competed with it. A call to a retired name reports `GS0566`, whose
+message names the replacement for that exact site; the names are free for
+user-defined functions, which bind as ordinary calls.
 
-The GS0317 diagnostic message names the offending built-in and,
-where a .NET-idiomatic alternative exists, names it too — so a
-file that writes `len(arr)` without the import is told "call
-'.Length' directly" instead of being forced to add the import.
-The recovery strategy is identical to 's: the binder
-reports GS0317 once per offending site and continues binding
-the call as if the import were present, so subsequent type /
-shape diagnostics still surface in the same pass.
+| Retired | Write instead |
+|---|---|
+| `len(arr)` / `len(slice)` / `len(string)` / `len(rectangular)` | `arr.Length` / `s.Length` |
+| `len(map)` | `m.Count` |
+| `len(ch)` / `cap(ch)` | `ch.Length()` / `ch.Capacity` (on a channel you constructed) |
+| `cap(slice)` | removed — a slice is a fixed CLR array whose capacity is its length, `xs.Length` |
+| `append(slice, elem)` | keep a growable `List[T]` and call `.Add(elem)` |
+| `delete(map, key)` | `m.Remove(k)` |
+| `make(chan T[, cap])` | `chan[T]()` / `chan[T](cap)` / `Chan.Unbounded[T]()` |
+| `close(ch)` | `ch.Close()` |
 
 ```gsharp title="samples/Slices.gs (excerpt)"
-import Gsharp.Extensions.Go
+import System.Collections.Generic
 
 var nums = []int32{10, 20, 30}
-Console.WriteLine(len(nums))     // 3
-Console.WriteLine(cap(nums))     // 3
-nums = append(nums, 40)
-Console.WriteLine(len(nums))     // 4
+Console.WriteLine(nums.Length)   // 3
+var grown = List[int32]()
+grown.Add(40)
+Console.WriteLine(grown.Count)   // 1
 ```
 
 ### Function types
@@ -386,7 +381,7 @@ The parser desugars each payload-bearing case into a class deriving from a seale
 
 ### Generics
 
-Generic declarations and instantiations use brackets rather than angle brackets. Type parameters can have variance markers `in` and `out` and zero or more constraints inside the same bracket section: the legacy single-identifier slot accepts `any`, `comparable`, or an **interface name** — a G# interface or an imported CLR interface, non-generic (e.g. `[T IDisposable]`) or constructed-generic, including the self-referential form `[T IComparable[T]]` where the type parameter appears in its own constraint. The same legacy slot also accepts a **base class** as a constraint, mirroring C#'s `where T : BaseClass`: a user-declared class — open or sealed, generic or not, including the CRTP-style self-referential `[T Box]` / `[T Box[T]]` forms where the class names itself in its own constraint — or an imported reference-type class. C# permits at most one base-class constraint; G#'s single legacy slot enforces this structurally. A *value type* (a non-class struct or an enum) is still rejected with **GS0153**. Inside the body of a function so constrained, the instance members of the constraint interface are available on values of `T` (e.g. `a.CompareTo(b)` binds because `T : IComparable[T]`); the call is emitted as the verifiable CLR `constrained. !!T  callvirt <iface>::M(...)` sequence and a matching `GenericParamConstraint` metadata row is written so the produced assembly verifies. The instance members of a base-class constraint bind the same way (e.g. `x.Speak()` binds because `T : Animal`), emitted as `constrained. !!T  callvirt <class>::M(...)` over the class's own method so virtual dispatch resolves the most-derived override at runtime, again with a `GenericParamConstraint` row pointing at the class. A type argument that does not implement the constraint interface — or, for a base-class constraint, does not equal or derive from the constraint class — is rejected with **GS0152**. G# adds three repeatable flag-style constraints — `class`, `struct`, and `init()` (the default-constructor constraint was formerly spelled `new()`) — that may appear in any order after the legacy slot. The flag constraints map directly to the matching CLR `GenericParameterAttributes` bits (`ReferenceTypeConstraint`, `NotNullableValueTypeConstraint` + the implied `DefaultConstructorConstraint`, and `DefaultConstructorConstraint` respectively). Mutually exclusive combinations (`class struct`, `struct init()`) are rejected as **GS0361**. A type parameter that carries an `init()` constraint may be **constructed** inside the generic body with the call-like spelling `T()`: the construction lowers to a reified `System.Activator.CreateInstance<T>()` (the standard C# `new()`-constraint lowering), which produces a real instance for both reference types with a public parameterless constructor and value types. Constructing a type parameter that lacks an `init()` constraint is rejected with **GS0389** (mirrors C# CS0304); a type **argument** that cannot satisfy an `init()` constraint at the instantiation site is rejected with **GS0152**. Construction works for both generic types (`class Factory[T init()]`) and generic functions (`func make[T init()]()`). A non-generic type and a same-named generic of a different arity may coexist (`Op` and `Op[T]`, mirroring `Task`/`Task[T]`); name resolution keys candidates by `(name, generic arity)`. This disambiguation applies uniformly to type references, struct/class literals, **and constructor invocations**: a construction carrying an explicit type-argument list — `Op[int32](5)` — selects the generic definition whose arity matches the supplied type-argument count even when a sibling non-generic `Op` exists, while `Op(...)` with no type arguments resolves the arity-0 type. A type-argument count that matches no same-named candidate is rejected with **GS0148**.
+Generic declarations and instantiations use brackets rather than angle brackets. Type parameters can have variance markers `in` and `out` and zero or more constraints inside the same bracket section: the legacy single-identifier slot accepts `any`, `comparable`, or an **interface name** — a G# interface or an imported CLR interface, non-generic (e.g. `[T IDisposable]`) or constructed-generic, including the self-referential form `[T IComparable[T]]` where the type parameter appears in its own constraint. The same legacy slot also accepts a **base class** as a constraint, mirroring C#'s `where T : BaseClass`: a user-declared class — open or sealed, generic or not, including the CRTP-style self-referential `[T Box]` / `[T Box[T]]` forms where the class names itself in its own constraint — or an imported reference-type class. C# permits at most one base-class constraint; G#'s single legacy slot enforces this structurally. A *value type* (a non-class struct or an enum) is still rejected with **GS0153**. The same legacy slot also accepts **another type parameter** — C#'s `where TDerived : TBase`, spelled `[TBase, TDerived TBase]` — at every placement: a generic function's own list, a generic type's own list, and a generic method's parameter bounded by the *enclosing* type's parameter (`class Box[T] { func Accept[U T](u U) }`). The bounding parameter need not come first, and the bound projects onto a `GenericParamConstraint` metadata row whose `TypeDefOrRefOrSpec` is a TypeSpec naming `VAR(n)` / `MVAR(n)` — the same encoding C# emits — so the produced assembly verifies. A type argument that does not equal, derive from, or implement the argument supplied for the bounding parameter is rejected with **GS0152**; where the relation cannot be answered in a closed form (either side still mentions an unsubstituted type parameter) the instantiation is accepted, since the CLR only loads it once it is closed. A dependent bound does *not* propagate the bounding parameter's own reference-type or value-type nature — `[TBase class, TDerived TBase]` does not make `TDerived` a reference type for the purposes of `nil` — because the CLR carries no such implication on the constraint row. A **circular** chain of type-parameter constraints (`[T T]`, `[A B, B A]`) is rejected with **GS0581** (C# spells the same rule CS0454). Inside the body of a function so constrained, the instance members of the constraint interface are available on values of `T` (e.g. `a.CompareTo(b)` binds because `T : IComparable[T]`); the call is emitted as the verifiable CLR `constrained. !!T  callvirt <iface>::M(...)` sequence and a matching `GenericParamConstraint` metadata row is written so the produced assembly verifies. The instance members of a base-class constraint bind the same way (e.g. `x.Speak()` binds because `T : Animal`), emitted as `constrained. !!T  callvirt <class>::M(...)` over the class's own method so virtual dispatch resolves the most-derived override at runtime, again with a `GenericParamConstraint` row pointing at the class. A type argument that does not implement the constraint interface — or, for a base-class constraint, does not equal or derive from the constraint class — is rejected with **GS0152**. G# adds three repeatable flag-style constraints — `class`, `struct`, and `init()` (the default-constructor constraint was formerly spelled `new()`) — that may appear in any order after the legacy slot. The flag constraints map directly to the matching CLR `GenericParameterAttributes` bits (`ReferenceTypeConstraint`, `NotNullableValueTypeConstraint` + the implied `DefaultConstructorConstraint`, and `DefaultConstructorConstraint` respectively). Mutually exclusive combinations (`class struct`, `struct init()`) are rejected as **GS0361**. A type parameter that carries an `init()` constraint may be **constructed** inside the generic body with the call-like spelling `T()`: the construction lowers to a reified `System.Activator.CreateInstance<T>()` (the standard C# `new()`-constraint lowering), which produces a real instance for both reference types with a public parameterless constructor and value types. Constructing a type parameter that lacks an `init()` constraint is rejected with **GS0389** (mirrors C# CS0304); a type **argument** that cannot satisfy an `init()` constraint at the instantiation site is rejected with **GS0152**. Construction works for both generic types (`class Factory[T init()]`) and generic functions (`func make[T init()]()`). A non-generic type and a same-named generic of a different arity may coexist (`Op` and `Op[T]`, mirroring `Task`/`Task[T]`); name resolution keys candidates by `(name, generic arity)`. This disambiguation applies uniformly to type references, struct/class literals, **and constructor invocations**: a construction carrying an explicit type-argument list — `Op[int32](5)` — selects the generic definition whose arity matches the supplied type-argument count even when a sibling non-generic `Op` exists, while `Op(...)` with no type arguments resolves the arity-0 type. A type-argument count that matches no same-named candidate is rejected with **GS0148**.
 
 ```gsharp
 func Identity[T any](value T) T {
@@ -414,7 +409,8 @@ TypeClause = identifier TypeArgList? "?"?
            | "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "async" "(" TypeClauseList? ")" "->" TypeClause "?"?
            | "map" "[" TypeClause "]" TypeClause "?"?
-           | "chan" TypeClause "?"?
+           | ( "in" | "out" )? "chan" "[" TypeClause "]" "?"?
+           | "chan" TypeClause                                                    (* legacy; GS0567 *)
            | "sequence" "[" TypeClause "]" "?"?
            | "async" "sequence" "[" TypeClause "]" "?"?
            | "func" "(" TypeClauseList? ")" TypeClause? "?"?                  (* deprecated, GS0303 *)
@@ -424,7 +420,7 @@ TypeClauseList = TypeClause { "," TypeClause } .
 TypeArgList = "[" TypeClause { "," TypeClause } "]" .
 ```
 
-The function-type productions disambiguate against the tuple-type production by bounded look-ahead: in a type-clause slot, an opening `(` is a function-type clause iff the matching `)` is followed by `->`, otherwise it is a tuple-type clause. The arrow form is the canonical spelling  the legacy `func(T) R` and `async func(T) R` shapes still parse for one release and emit `GS0303`.
+The function-type productions disambiguate against the tuple-type production by bounded look-ahead: in a type-clause slot, an opening `(` is a function-type clause iff the matching `)` is followed by `->`, otherwise it is a tuple-type clause. The parenthesized-nullable function-type form `((T) -> R)?` adds one more shape starting with `((`: the outer parentheses are read as the nullable-wrapping form only when the group they delimit contains exactly one function type — no comma at the outer nesting level. When a top-level comma is present, the outer parentheses are a tuple type whose elements are themselves resolved by the same look-ahead, so a tuple may have function-type elements — `((int32) -> int32, (int32) -> int32)`, `(() -> int32, string)`, and the named-element form `(f (int32) -> int32, g () -> int32)` — in declared-type and type-argument positions alike. The arrow form is the canonical spelling  the legacy `func(T) R` and `async func(T) R` shapes still parse for one release and emit `GS0303`.
 
 A type clause may name a type with a **dotted qualifier** (`Container.Nested`, `Outer.Middle.Inner`), and each segment may itself carry a type-argument list (`Outer.Box[int32]`). A source-declared nested type is normally referenceable by its **simple name** within the package, but when a top-level type (or a nested type of a different container) shares that simple name, the bare name binds to the homonym that owns the simple name; the nested type then remains referenceable **only** through its qualified `Container.Nested` form. The qualified form resolves robustly against the nested type in every position — as a type clause (variable/return type), in a **generic-argument** position (`List[C.E]`, including nested generics `List[Outer.Box[int32]]`), and in a **struct-literal** position (`C.E{X: 1u}`) — so the constructed value's members resolve against the nested type. A genuine duplicate (two top-level types of the same name, or two nested types with the same name in the *same* container) is still a `GS0102` error.
 
@@ -495,7 +491,7 @@ RefReturnClause   = "ref"? TypeClause .
 
 A function declared `func f(...) ref T` returns a managed pointer and pairs with the `return ref <lvalue>` statement form (diagnostics `GS0248`–`GS0255`). The `scoped` modifier on a `ref struct` / managed-pointer parameter constrains the value from escaping the call (enforced by the by-ref-like rules in `GS9004` / `GS9006`).
 
-A function declared `func f(name ...T)` is **variadic**: the source-level element type is `T`, the parameter is seen inside the body as a slice `[]T`, and the call site may supply either *N* trailing positional arguments (packed into a freshly allocated `[]T`) or exactly one trailing `[]T` value (forwarded unwrapped — array identity is preserved). At most one variadic parameter is allowed per signature (`GS0364`) and it must be the last parameter (`GS0145`). Variadic declarations are accepted on top-level `func`, class instance / static methods, interface methods (including default-body methods), constructors, lambdas (function-literal and arrow form), named delegate declarations, and primary-constructor parameter lists on `class` / `struct` / `data class` / `data struct` / `inline struct`. On a primary-constructor parameter list the trailing variadic promotes to a `[]T` auto-field with the same name, exactly as the explicit `init(…)` lowering would. The emitter stamps `[System.ParamArrayAttribute]` on the last parameter so the method is consumable by C# / F# / VB callers using their native variadic syntax. The C# `params` keyword is not recognised in G# source; encountering it reports `GS0363` pointing at the canonical `...T` form.
+A function declared `func f(name ...T)` is **variadic**: the source-level element type is `T`, the parameter is seen inside the body as a slice `[]T`, and the call site may supply either *N* trailing positional arguments (packed into a freshly allocated `[]T`) or exactly one trailing `[]T` value (forwarded unwrapped — array identity is preserved). **Generalized carriers** (ADR-0173): when the type written after `...` is itself a supported collection shape, it is the parameter's CARRIER — mirroring C#13 params collections — and its single type argument is the element type: `...[]T` ≡ C# `params T[]`, `...List[T]` ≡ `params List<T>`, the five `IEnumerable`-family interfaces likewise, and `...Span[T]`/`...ReadOnlySpan[T]` ≡ `params (ReadOnly)Span<T>`. The callee's body sees the carrier itself; expanded call-site arguments are element-coerced and packed into the carrier (array upcast for interfaces, `new List<T>(T[])`, the span's `T[]` constructor), and a single trailing argument implicitly convertible to the carrier passes through. Any non-carrier type after `...` keeps the element interpretation above. A List/span carrier over a same-compilation element that cannot be constructed at the call site reports `GS0544`. At most one variadic parameter is allowed per signature (`GS0364`) and it must be the last parameter (`GS0145`). Variadic declarations are accepted on top-level `func`, class instance / static methods, interface methods (including default-body methods), constructors, lambdas (function-literal and arrow form), named delegate declarations, and primary-constructor parameter lists on `class` / `struct` / `data class` / `data struct` / `inline struct`. On a primary-constructor parameter list the trailing variadic promotes to a `[]T` auto-field with the same name, exactly as the explicit `init(…)` lowering would. The emitter stamps `[System.ParamArrayAttribute]` on an array-carrier last parameter — and C#13's `[System.Runtime.CompilerServices.ParamCollectionAttribute]` on a collection-carrier one — so the method is consumable by C# / F# / VB callers using their native variadic syntax. The C# `params` keyword is not recognised in G# source; encountering it reports `GS0363` pointing at the canonical `...T` form.
 
 A `;` in place of the `Block` body marks the declaration as "no managed body". The body-less form is reserved for functions annotated with `@DllImport("libname", ...)` — see [Native interop (P/Invoke)](#native-interop-pinvoke). An unannotated `;` body is rejected with `GS0325`.
 
@@ -517,7 +513,7 @@ The binder picks a callee in three steps: (1) collect every name- and arity-comp
 
 For generic candidates the filter step additionally validates the inferred (or explicitly supplied) type arguments against each generic parameter's CLR constraints — `where T : class`, `where T : struct`, `where T : new()`, and base/interface bounds. A candidate whose constraints are violated by the inferred type arguments is dropped before ranking. Constraints are checked **after** type inference: the type arguments inference picked are what the check sees. (See .)
 
-When multiple candidates survive parameter-shape ranking, the binder applies a final tie-break that prefers the candidate with the more specific generic-parameter constraints. The per-parameter ordering is `where T : struct` > `where T : class` > (no constraint); a candidate dominates another iff every type-parameter slot's score is greater-or-equal and at least one is strictly greater. Mutually-incomparable candidates remain ambiguous and report `GS0160`.
+When multiple candidates survive parameter-shape ranking, the binder applies a final tie-break that prefers the candidate with the more specific generic-parameter constraints. The per-parameter ordering is `where T : struct` > `where T : class` > (no constraint); a candidate dominates another iff every type-parameter slot's score is greater-or-equal and at least one is strictly greater. Mutually-incomparable candidates remain ambiguous and report `GS0160`. An **explicitly-implemented interface member is not part of the implementing type's own surface** and is therefore not collected as a candidate for an ordinary call on that type: reaching it requires an interface-typed receiver (`cast[IList](xs).Add(v)`), as in C#. A **default-interface method** the type does not re-declare IS collected, since the type need not implement it at all; and on an *interface* receiver the members of its base interfaces are collected, being members of the derived interface. The same holds for a **collection literal**, whose synthesized `Add` binds through the ordinary call path: a member of a non-generic interface such as `System.Collections.IList.Add(object)` is reachable there only where the argument or the receiver has no CLR identity of its own and the widening is repairing that erasure, so `List[int32]{"x"}` is a compile-time error exactly as `List[int32]().Add("x")` is. A member of a *generic* interface is closed over the receiver's own type arguments and cannot widen, so it is unaffected.
 
 This rule lets `Gsharp.Extensions.Optional.Map` carry two overloads — `where T : class` and `where T : struct` — under one name, with the binder picking the right one based on the receiver type.
 
@@ -542,7 +538,7 @@ The aggregate keyword IS the declaration keyword. Unsupported modifier combinati
 
 `partial` is a contextual modifier on `class`, `struct`, and `interface` declarations. Multiple partial declarations with the same package, containing type, and name merge into one emitted CLR type. Every declaration in a multi-part group must carry `partial` (`GS0475`); non-partial duplicates still report `GS0102`. Parts must agree on aggregate kind (`GS0476`), accessibility (`GS0477`), type parameters (`GS0480`), and base-class shape (`GS0481`); `open` and `sealed` cannot conflict (`GS0478`); `data` / `inline` / `ref` must be repeated on every part (`GS0479`); only one part may declare a primary constructor (`GS0482`) or `deinit` (`GS0483`). Interfaces implemented by different parts are unioned, members and annotations concatenate in deterministic source order, and `shared { init { ... } }` blocks from all parts concatenate into the single `.cctor`. `partial enum` is rejected (`GS0484`). A single partial declaration with no siblings is legal. Nested partial types merge recursively within their containing type.
 
-A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`type Predicate[T any] = delegate func(value T) bool`) are supported, emitting a generic delegate `TypeDef`. Diagnostic `GS0233` covers malformed declarations.
+A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool`) are supported, emitting a generic delegate `TypeDef`. Diagnostic `GS0233` covers malformed declarations.;
 
 ### Members
 
@@ -594,6 +590,27 @@ parameter, or a named one via `set(name)`). The C# fat arrow `=>` is **not** a
 G# token: `get => e` or `add => e` remains a syntax error (GS0005). This narrows
 the  rule, which previously rejected every non-block accessor body;
 event accessors (`add`/`remove`/`raise`) still take a block `{ … }` or `;` only.
+
+A property or indexer may declare a **by-ref return** by writing `ref` between
+the member name (or the indexer's `]`) and the type clause — `prop Value ref
+int32 { get { return ref this.slot } }`, `prop Value ref int32 -> this.slot`, or
+`prop this[i int32] ref int32 -> this.items[i]`. The getter is emitted returning
+`T&` (both the PropertyDef signature and `get_Value` carry the by-ref return), so
+a CLR consumer can alias the storage with `ref int x = ref holder.Value`. On the
+arrow form the `ref` on the declaration makes the desugared return a `return ref`
+— there is no `-> ref e` spelling. The form is restricted to **computed,
+read-only** properties: an auto-property, a bodiless `{ get }`, an abstract slot,
+and an interface requirement are all rejected with **GS0578** (none of them names
+storage a reference can point at), and a `set`/`init` accessor alongside `ref` is
+rejected with **GS0579** (the returned reference is already the write path).
+Inside the getter, the existing `ref`-return rules apply unchanged: the body must
+`return ref <lvalue>` (GS0252 for a plain `return`, GS0253 for a non-lvalue,
+GS0254 for a getter-local). A G# *read* of such a member loads through the
+returned pointer and observes the pointee, exactly as a read of an imported
+ref-returning member does; G# itself cannot bind the result as an alias. The
+by-ref return is part of the signature for override purposes: `override prop P
+ref T` matches only a `ref` base slot, and a by-value override may not take over
+a `ref` one — both mismatches report **GS0185**. See ADR-0060 §14.
 
 #### Protected accessibility
 
@@ -796,7 +813,7 @@ Postfix `!!`, member access `.`, null-conditional access `?.`, null-conditional 
 
 ### Primary expressions and calls
 
-Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, general block expressions, switch expressions, if expressions, tuple literals, anonymous-object literals, `make(chan ...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
+Primary expressions include literals, identifiers, calls, generic calls, struct literals, array or slice literals, map literals, function literals, general block expressions, switch expressions, if expressions, tuple literals, anonymous-object literals, channel construction `chan[T](...)`, `typeof(...)`, `nameof(...)`, and `default(...)`. Calls accept positional, named, and ref-kind-prefixed arguments:
 
 - **Named arguments** — `Foo(timeout: 30, retries: 3)` for free functions, user methods, user constructors, user extension functions, imported CLR methods and constructors, imported extension methods, and inherited CLR instance methods (including delegate `Invoke`). The separator is `:`. In argument position, `=` is an ordinary assignment expression; a bare assignment whose target also names a parameter reports `GS0524` so the author can choose `Foo(timeout: 30)` or `Foo((timeout = 30))` explicitly. Indirect calls through a function-typed or delegate-typed variable, and variadic call sites, do not accept named arguments because the call target does not preserve parameter names. Diagnostics `GS0244`–`GS0247` cover ordering, duplicates, and unknown names.
 - **Ref-kind arguments** — `f(ref x)`, `f(out var n)`, `f(in z)`. The call-site modifier must match the parameter's declared kind (`GS0235`); `in` requires an explicit `in` at the call site to prevent silent spilling (`GS0242`).
@@ -1021,13 +1038,40 @@ type-first meaning, then falls back to a value. A property suffix forces the
 type interpretation. Use `== name` to force a value interpretation after
 boolean `is`.
 
-Boolean `is` patterns cannot introduce names. A binding type pattern or slice
-capture reports `GS0525`; use `if let` / `guard let` when a matched value needs a
-name, or `while let` when the binding controls a loop.
+A pattern may name the value it matches by writing a **designation** identifier
+after it, C# style (ADR-0166): `value is string text`, `value is Dog { Name:
+"Rex" } dog`, `value is { Length: > 0 } text`, `box is { Value: Dog d }`,
+`value is { } present` (the empty property pattern is a pure non-nil test over
+any input), and `values is [1, ..rest]`. The designation must follow the
+pattern on the same line and cannot be one of the contextual pattern words
+`and`, `or`, `when`; `_` discards. A pattern variable is a read-only local of
+the tested type that is assigned exactly once, when its pattern matches, and it
+is in scope exactly where C# would consider it definitely assigned: the right
+operand of `&&` (of `||` after a negated test), the branch an `if` or `?:`
+selects, the body of a `for`/`while` whose condition tests it, a `switch` arm
+whose `when` guard binds it, and the statements after an `if` whose other
+branch always exits (`if !(value is string text) { return }` makes `text`
+usable afterwards). Reading it anywhere else reports `GS0532`; binding the same
+name twice on one path (`a is T t && b is U t`) reports `GS0102`. The switch
+spelling `name is Type` stays a switch-only form — in boolean position it
+reports `GS0525` — while `Type name` is accepted in every pattern position,
+including `switch` arms.
+
+The total pattern `var name` always matches, including when the input is
+`nil`, and binds the input at its exact static type without narrowing. It may
+appear anywhere a pattern may appear, including property and list
+subpatterns. `var _` is a total discard.
+
+```gsharp
+if value is string text && text.Length > 3 { use(text) }
+if !(node is Leaf leaf) { return }
+Console.WriteLine(leaf.Value)
+let label = value is int32 n ? n.ToString() : "?"
+```
 
 A list pattern (`[p1, p2, ...]`) may include at most one **slice ("rest") subpattern**: a bare `..` discards the middle slice, `..name` captures it into a `[]T` binding, and `..pattern` matches it against a nested pattern (e.g. `[first, .., last]`, `[head, ..rest]`, `[.., > 0]`). The slice subpattern greedily absorbs whichever elements are not matched by the fixed-position patterns before and after it.
 
-Patterns may be combined with the **combinators** `and`, `or`, and `not`, mirroring C#. `not P` matches when `P` does not; `P and Q` matches when both match (left-to-right, with `Q` evaluated only if `P` matched); `P or Q` matches when either matches (short-circuit). The combinators are contextual keywords usable in pattern position only and remain ordinary identifiers everywhere else. Precedence — matching C# — is `not` (tightest), then `and`, then `or`, so `a or b and c` parses as `a or (b and c)` and `not a and b` as `(not a) and b`; parentheses `( … )` override the default grouping. Combinators compose with every pattern kind, e.g. `case > 0 and < 10:`, `case < 0 or > 100:`, `case _ is Dog and { Name: "Rex" }:`. A type pattern that introduces a binding variable is **not** permitted under `or`/`not` — the variable would not be definitely assigned — and is rejected with `GS0390`; use the discard `_` instead. Smart-cast narrowing of the discriminator is applied under `and` (the union of the sub-patterns' narrowings) and, soundly, only under `or` when **both** branches prove the same narrowing; `not` contributes no positive narrowing. A combined pattern is treated conservatively by exhaustiveness analysis: it never acts as a total/`default` arm, so it cannot by itself make a value-returning `switch` exhaustive.
+Patterns may be combined with the **combinators** `and`, `or`, and `not`, mirroring C#. `not P` matches when `P` does not; `P and Q` matches when both match (left-to-right, with `Q` evaluated only if `P` matched); `P or Q` matches when either matches (short-circuit). The combinators are contextual keywords usable in pattern position only and remain ordinary identifiers everywhere else. Precedence — matching C# — is `not` (tightest), then `and`, then `or`, so `a or b and c` parses as `a or (b and c)` and `not a and b` as `(not a) and b`; parentheses `( … )` override the default grouping. Combinators compose with every pattern kind, e.g. `case > 0 and < 10:`, `case < 0 or > 100:`, `case _ is Dog and { Name: "Rex" }:`. A direct designation under the top-level negation of a boolean is-expression is permitted (`value is not Dog dog`); the variable is definitely assigned when the expression is false. Bindings under `or`, nested `not`, and switch-pattern `not` remain rejected with `GS0390`. Smart-cast narrowing of the discriminator is applied under `and` (the union of the sub-patterns' narrowings) and, soundly, only under `or` when **both** branches prove the same narrowing; `not` contributes no positive narrowing. A combined pattern is treated conservatively by exhaustiveness analysis: it never acts as a total/`default` arm, so it cannot by itself make a value-returning `switch` exhaustive.
 
 A pattern in a `switch` arm — in both the expression form and the statement form — may be followed by an optional `when <bool-expr>` guard, mirroring C#. `when` is a contextual keyword: it introduces a guard only in this position and remains usable as an ordinary identifier everywhere else. An arm with a guard is selected only when **both** the pattern matches **and** the guard expression evaluates to `true`; otherwise control falls through to the next arm. The guard applies to the whole arm after the (possibly combined) pattern matches, and sees any pattern narrowing / smart-cast in effect for the arm (so the guard of `case x is T when …` observes the discriminator as `T`). A non-`bool` guard is rejected with the standard conversion diagnostic. Because a guarded arm can fail at run time, it never contributes to exhaustiveness: a guarded discard (`case _ when …`) does **not** act as a total/`default` arm, so a value-returning `switch` whose only catch-all is guarded still requires a reachable `default` arm (`GS0176`).
 
@@ -1148,7 +1192,7 @@ PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" | "++" 
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
 (* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions. Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`).. *)
 IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
-PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | BlockExpression | SwitchExpr | IfExpression | IfLetExpression | "(" Expression ")" | TupleLiteral | MakeChannel | TypeOf | NameOf .
+PrimaryExpression = Literal | identifier | Call | GenericCall | StructLiteral | ArrayLiteral | MapLiteral | FunctionLiteral | LambdaExpression | BlockExpression | SwitchExpr | IfExpression | IfLetExpression | "(" Expression ")" | TupleLiteral | ChannelCreation | TypeOf | NameOf .
 (* Postfix chains apply to every PrimaryExpression except a bare numeric Literal: `42.Member` is not accepted; use `(42).Member`.. *)
 Literal           = Number | String | InterpolatedString | "true" | "false" | "nil" | char .
 InterpolatedString = '"' { InterpolationText | "$$" | "$" identifier | InterpolationHole } '"' .
@@ -1164,7 +1208,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -1294,11 +1338,12 @@ write only fires when `HasValue == false`.
 
 ### Switch statements
 
-Switch statement cases use block bodies and never fall through. The `fallthrough` keyword is reserved and parsed only to report an unsupported-fallthrough diagnostic.
+Switch statement cases use block bodies and never fall through implicitly. A `fallthrough` statement is permitted only as the direct last statement of a non-final arm body. It transfers control to the next arm's body in source order without testing its pattern. The destination pattern must not introduce bindings, and the destination arm must not have a `when` guard. Invalid placement reports `GS0168`, a final-arm use reports `GS0533`, and an ineligible destination reports `GS0534`.
 
 ```ebnf
 SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
 SwitchCase = "case" Pattern [ "when" Expression ] Block | "default" Block .
+FallthroughStmt = "fallthrough" .
 ```
 
 When an arm pattern is a type pattern (`T`, `T { ... }`, or `<ident> is T`) or
@@ -1361,6 +1406,7 @@ ForStmt = "for" Statement
         | "for" Expression Statement
         | "for" SimpleStmt? ";" Expression? ";" SimpleStmt? Statement
         | "for" identifier ( "," identifier )? "in" Expression Statement
+        | "for" identifier TypeClause "in" Expression Statement
         | "for" identifier "in" Expression "..." Expression Statement
         | "for" "(" identifier ( "," identifier )* ")" "in" Expression Statement .
 ```
@@ -1372,6 +1418,12 @@ sequence into the parenthesized identifier list, one binding per tuple slot
 The `for … in` range form iterates arrays, slices, strings (over `char`),
 `sequence[T]` and other CLR/pattern enumerables, and `map[K,V]`. The meaning
 of the identifier list depends on the operand:
+
+The single-variable form may declare an element type:
+`for item T in collection`. Each source element is explicitly converted to
+`T` before the body executes, matching C# `foreach (T item in collection)`.
+An impossible conversion is diagnosed at compile time; a failed runtime cast
+throws the normal CLR exception.
 
 - **Indexed and enumerable collections** (arrays, slices, strings, sequences,
   CLR enumerables): the single-variable form `for v in coll` binds each
@@ -1494,16 +1546,22 @@ DeferStmt = "defer" Expression .
 
 `go expr` starts a concurrent call; binding requires the operand to be a call (`GS0137` otherwise). The operand may return `void` — the natural goroutine shape, matching Go — and any result a value-returning operand produces is discarded. `scope { ... }` is structured concurrency and joins registered child tasks at scope exit. Channel receive is a prefix expression `<-ch`; channel send is a statement `ch <- value`. `select` supports default, receive-discard, receive-bind (via `case let v = <-ch`), and send cases.
 
-The `go`, `chan T`, `<-` (send and receive), `select`, `close(ch)`, and `make(chan T)` forms are the **Go-flavored concurrency surface** and are gated behind a per-file `import Gsharp.Extensions.Go`. The binder reports `GS0316` at each offending keyword/operator (`go`, `chan`, `<-`, `select`, `close`) when the import is absent in the same compilation unit. `scope` itself is **not** gated. The gate is always opt-in and is independent of `/noimplicitimports`.
+The `go`, `chan[T]`, `<-` (send and receive), and `select` forms are part of the language and need no import (ADR-0174 D13 retired the ADR-0082 gate, GS0316). A send through an `in chan[T]` is `GS0549`; a receive through an `out chan[T]` is `GS0550`. Channel operations lower onto the `Gsharp.Runtime.Channels` runtime (`Gsharp.Concurrency.ChannelOps`), which the SDK references implicitly.
+
+A `select` arm may also select on a **timer selectable** rather than a channel: `after(d)` (ADR-0174 D8) becomes ready once, `d` after it is created, and `tick(d)` (D9) becomes ready every `d` until it is disposed, holding at most one pending tick. These are library functions in the implicitly imported `Gsharp.Concurrency` namespace, not language forms, and either may be shadowed by a declaration of the same name. Both are backed by `System.Threading.Timer`, whose resolution is one whole millisecond, so a delay or period is quantized **upwards**: the interval actually armed is never shorter than the one requested, and 1 ms is the shortest period `tick` can deliver. `tick` requires a strictly positive period.
 
 ```ebnf
-GoStmt     = "go" Expression .
+GoStmt     = "go" ( Expression | Block ) .   (* ADR-0174 D14: `go { … }` spawns the block as a zero-parameter goroutine *)
 ScopeStmt  = "scope" Block .
 SelectStmt = "select" "{" SelectCase* "}" .
 SelectCase = "default" Block
-           | "case" "<-" Expression Block
-           | "case" "let" identifier "=" "<-" Expression Block
-           | "case" Expression "<-" Expression Block .
+           | "case" "<-" Expression Guard? Block
+           | "case" "let" identifier "=" "<-" Expression Guard? Block
+           | "case" Expression "<-" Expression Guard? Block
+           | "case" "await" Expression Guard? Block                      (* ADR-0174 D8: a Task arm *)
+           | "case" "let" identifier "=" "await" Expression Guard? Block (* ADR-0174 D8: a Task[T] arm *)
+           | "case" "cancelled" Guard? Block .                           (* ADR-0174 D8: the ambient context's cancellation *)
+Guard      = "when" Expression .   (* ADR-0174 D8: evaluated once on entry; a false guard keeps the arm out of the select *)
 ```
 
 ### Throw, try, catch, and finally
@@ -1512,10 +1570,35 @@ G# uses CLR-style exceptions. A `try` statement must have at least one catch or 
 
 ```ebnf
 TryStmt       = "try" Block CatchClause* FinallyClause? .
-CatchClause   = "catch" "(" identifier TypeClause? ")" Block .
+CatchClause   = "catch" CatchHeader? CatchFilter? Block .
+CatchHeader   = "(" ( identifier TypeClause | Type ) ")" .
+CatchFilter   = "when" Expression .
 FinallyClause = "finally" Block .
 ThrowStmt     = "throw" Expression .
 ```
+
+A catch clause has four forms, matching C#: `catch (name T)` binds the exception
+to `name`; `catch (T)` names the type it handles and binds nothing; a bare
+`catch` is `catch (Exception)` without a binder; and any of these may carry a
+`when` filter. `when` is contextual here, exactly as in a `switch` arm guard.
+
+A filter expression must be `bool`. It is emitted as a **CLR exception filter
+region**, so its semantics are the runtime's: it is evaluated during the *first
+pass*, before any intervening `finally` unwinds the stack; when it evaluates to
+`false`, or throws (in which case the thrown exception is discarded), the clause
+declines and matching continues with the next clause, and if no clause accepts,
+the exception propagates with its original throw site intact.
+
+Because a filter runs on the throwing thread with no suspension point available,
+`await` inside one is rejected (`GS0572`), as is `rethrow` (`GS0570` — a filter
+is not a handler). A clause that an earlier **unfiltered** clause already covers
+can never run and is rejected (`GS0573`); an earlier *filtered* clause may
+decline, so it does not shadow a later clause.
+
+The handler is reached only when its filter evaluates to `true`. Pattern
+variables in the filter's definitely-assigned-when-true set are therefore in
+scope throughout the handler, including after an `await` in an async handler.
+Variables assigned only on a false path are not in scope there.
 
 #### Throw expressions
 
@@ -1553,18 +1636,28 @@ ThrowExpr     = "throw" Expression .
 `await expr` is a prefix expression and must appear in an async context with an awaitable operand. `await for` iterates asynchronous sequences.
 
 ```ebnf
-AwaitForRangeStmt = "await" "for" identifier "in" Expression Block .
+AwaitForRangeStmt = "await" "for" identifier TypeClause? "in" Expression Block .
 ```
 
 ## Concurrency
 
 `go` launches concurrent function calls. Emitted code supports channels, `go`, `scope`, and `select` through lowering and CLR primitives. Outside `scope`, launched-task exceptions can be unobserved; inside `scope`, child tasks are registered and joined when the scope exits.
 
-Channels are typed, can be buffered, and support `close`, send, receive, and `select`. Receiving from a closed channel yields the element default value in the implemented channel path, as shown by the `Channels` sample. The production concurrency surface is `scope` + `async`/`await`. The Go-flavored shapes (`go`, `chan T`, `<-` send, `<-` receive, `select`, `close(ch)`, and `make(chan T)`) remain fully supported but are opt-in: each consuming file must contain `import Gsharp.Extensions.Go`. The binder emits `GS0316` for each gated form when the import is missing.
+Channels are typed (`chan[T]`, with `in`/`out` directional handles), are rendezvous by default or buffered by capacity, and support `Close()`, send, receive, and `select`. Receiving from a closed channel yields the element's zero value without an exception, as shown by the `Channels` sample. The Go-flavored shapes (`go`, `chan[T]`, `<-` send, `<-` receive, `select`) are part of the language and need no import (ADR-0174).
 
 ## Async and iterators
 
-`async func` declarations and literals are supported. The emitter lowers async methods and lambdas to state machines, including exception handler rewriting, spill management, and capture analysis.
+`async func` declarations and literals are supported. An omitted return type is Task-observable, and declaring `T` is observable as `Task[T]`. Explicit `async func ... void` instead emits CLR `void` with `AsyncVoidMethodBuilder`, matching C# async-void timing and exception propagation; it is intended for void delegate/event handlers and cannot be awaited. Async function type clauses remain Task-shaped per ADR-0043. The emitter lowers async methods and lambdas to state machines, including exception handler rewriting, spill management, and capture analysis.
+
+### Suspending functions (`suspend func`)
+
+A `suspend func f(...) R` (ADR-0174 D4) is `async func`'s sibling with **no observable task**: the same state machine, but the emitted CLR method returns `ValueTask[R]` (`ValueTask` for `void`), is built with the pooling `ValueTask` builder, and carries `[Gsharp.Concurrency.Suspending]`. G# call sites see the logical type `R`: inside another suspending function, an `async func`, or an async iterator the call is an **implicit await**; inside a function that is neither, the call has nowhere to await, so it blocks the thread through the runtime's root bridge and reports the warning `GS0558` — except in the synthesized entry point, which is the root where blocking is correct. The body of a `suspend func` may use `await`. A declaration is exactly one of `async` or `suspend`. Channel operations inside any state-machine body (`async func`, `suspend func`, `async sequence[T]`) park the state machine rather than a thread; inside a `lock` body they keep the blocking lowering because the monitor is thread-affine.
+
+**Suspension is inferred.** A plain `func` whose body performs a suspension point — a channel operation outside a `lock` body, an `await`, or a call to a function that suspends — is compiled as a suspending function too, exactly as if it had been declared `suspend func`; the inference is a fixed point over the assembly's call graph, so mutual recursion converges, and `suspend func` is only ever *needed* at a boundary. Inference stops at: the synthesized entry point (the root, which blocks once), `async func` (its task is observable), `open`/`override`/abstract methods, interface members and the methods that implement them, constructors, property and event accessors, operators, P/Invoke stubs, iterators (`sequence[T]`), `Dispose`, and function literals. A suspension point inside one of those keeps the blocking lowering, and a call from one of those to a suspending function blocks through the root bridge with `GS0558`; an `await` there has no blocking form to fall back to, so it reports `GS0574` instead and names the two declared colorings. A `go` operand does not color its caller: `go f(x)` starts `f` and returns immediately whatever `f` does. Every inferred function is emitted with the `ValueTask` shape and `[Suspending]`, so another assembly reads the coloring from metadata without re-running any analysis.
+
+**`await` colours the awaiting function** (ADR-0174 D4, issue #3954). `await` is not restricted to an `async func`: awaiting is itself a suspension point, so a plain `func` may await an ordinary `Task`/`ValueTask` and inference colours it exactly as a channel operation would. Two positions reject it rather than colouring: a `lock` body, because the monitor is thread-affine and a continuation resuming on another thread would exit a lock it does not hold (`GS0575`, the rule C# spells CS1996), and nested inside a `go` operand's arguments, where the spawn takes the call and the await has no place to suspend (`GS0576` — bind the value to a local first). `GS0132` remains only for an `await` with no enclosing function at all.
+
+The compiler inserts an await for you **only where the syntax is a channel operation** — `ch <- v`, `<-ch`, `select`, channel `for..in` — and at a call to a function that is itself suspending. It never does so because a method returns a task: an awaitable type means in G# what it means in C#, so `ReceiveBatch`/`SendBatch` are ordinary `ValueTask[int32]` calls you `await`, and `.AsTask()` on one names the task.
 
 Iterator functions return `sequence[T]` and contain `yield`. Async sequences use `async sequence[T]` and `await for`. The emitter has synchronous and asynchronous iterator state-machine rewriters.
 
@@ -1628,13 +1721,13 @@ Classes follow a stricter rule: a `class` must carry an explicit `@StructLayout(
 
  /  lifts the v1 deferral on function-typed and delegate-typed P/Invoke parameters and returns. Two shapes are supported:
 
-**Shape A — managed delegate callbacks.** A `type Name = delegate func(...) R` declaration annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or any of `Stdcall`, `Thiscall`, `Fastcall`) may appear as a P/Invoke parameter type. The runtime synthesizes a stable C-ABI thunk via `Marshal.GetFunctionPointerForDelegate`. A delegate-typed P/Invoke parameter without `@UnmanagedFunctionPointer` is rejected with GS0353.
+**Shape A — managed delegate callbacks.** A `delegate Name(...) R` declaration annotated with `@UnmanagedFunctionPointer(CallingConvention.Cdecl)` (or any of `Stdcall`, `Thiscall`, `Fastcall`) may appear as a P/Invoke parameter type. The runtime synthesizes a stable C-ABI thunk via `Marshal.GetFunctionPointerForDelegate`. A delegate-typed P/Invoke parameter without `@UnmanagedFunctionPointer` is rejected with GS0353.;
 
 **Shape B — raw function pointers.** A type clause of the form `unmanaged[CC] (T1, T2, ...) -> R` denotes a CLR function-pointer type (encoded as `ELEMENT_TYPE_FNPTR` in the metadata blob). The bracketed calling-convention slot is mandatory; omitting it is GS0356. The four accepted conventions are `Cdecl`, `Stdcall`, `Thiscall`, `Fastcall` — any other identifier is rejected with GS0354. Returning a managed delegate from a P/Invoke is rejected with GS0355 because the runtime cannot infer the lifetime contract; use Shape B or `nint` + `Marshal.GetDelegateForFunctionPointer` instead.
 
 ```gs
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Int64Comparer = delegate func(a nint, b nint) int32
+delegate Int64Comparer(a nint, b nint) int32;
 
 @DllImport("libc", EntryPoint: "qsort")
 func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;
@@ -1723,7 +1816,7 @@ Member            ::= Annotation* Accessibility?
                       | VariableDecl                 (* requires Accessibility *)
                       | GlobalStatement )
 Accessibility     ::= 'public' | 'internal' | 'protected' | 'private'  (* 'protected' is valid only on members of an inheritable 'open class'; see  *)
-Async             ::= 'async'
+Async             ::= 'async' | 'suspend'                            (* ADR-0174 D4: 'suspend func' is a suspending function; see Async and iterators *)
 Annotation        ::= '@' (AnnotationTarget ':')? identifier ('.' identifier)* ('(' Arguments? ')')?
 AnnotationTarget  ::= 'field' | 'param' | 'return' | 'type' | 'method' | 'property' | 'event' | 'module' | 'assembly' | 'genericparam'
 
@@ -1735,7 +1828,7 @@ OperatorName      ::= 'operator' OperatorToken
 ConversionOperatorName ::= 'operator' ('implicit' | 'explicit')
 TypeParamList     ::= '[' TypeParameter (',' TypeParameter)* ']'
 TypeParameter     ::= ('in' | 'out')? identifier ConstraintRef? ConstraintFlag*
-ConstraintRef     ::= identifier TypeArgList?           (* legacy slot: any | comparable | interface name (G# or imported CLR); generic-instantiated e.g. [T IAdd[T]] or [T IComparable[T]] *)
+ConstraintRef     ::= identifier TypeArgList?           (* legacy slot: any | comparable | interface name (G# or imported CLR); generic-instantiated e.g. [T IAdd[T]] or [T IComparable[T]]; a base class; or ANOTHER TYPE PARAMETER, e.g. [TBase, TDerived TBase] *)
 ConstraintFlag    ::= 'class' | 'struct' | 'init' '(' ')'  (* repeatable flag constraints; 'init()' renamed from 'new()' *)
 Parameters        ::= Parameter (',' Parameter)*
 Parameter         ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause ('=' Expression)?
@@ -1788,16 +1881,17 @@ ArrayTypePrefix   ::= '[' Number? ']' | '[' ',' (',')* ']'
 TypeClause        ::= identifier ('.' identifier)* TypeArgList? '?'?
                     | ArrayTypePrefix '?'? identifier ('.' identifier)* '?'?
                     | '(' TypeClause ')' '?'?                                             (* parenthesized (grouping) type clause; the trailing '?' marks
-                                                                                             the WHOLE inner type nullable, e.g. '(chan int32)?',  *)
-                    | '(' TypeClause (',' TypeClause)+ ')' '?'?                          (* tuple type *)
+                                                                                             the WHOLE inner type nullable, e.g. '([]int32)?',  *)
+                    | '(' TupleTypeElement (',' TupleTypeElement)+ ')' '?'?                          (* tuple type; TupleTypeElement ::= identifier? TypeClause (ADR-0172) *)
                     | '(' FnTypeParamList? ')' '->' TypeClause                            (* arrow function type, ; `?` in TypeClause is return nullability *)
                     | '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?               (* parenthesized arrow function type,  *)
                     | 'async' '(' FnTypeParamList? ')' '->' TypeClause
                     | 'async' '(' '(' FnTypeParamList? ')' '->' TypeClause ')' '?'?       (* parenthesized async arrow function type,  *)
                     | 'map' '[' TypeClause ',' TypeClause ']' '?'?                        (* canonical,  *)
                     | 'map' '[' TypeClause ']' TypeClause '?'?                            (* legacy; GS0366 *)
-                    | 'chan' TypeClause                                                   (* a trailing '?' binds to the ELEMENT ('chan int32?' = 'chan (int32?)');
-                                                                                             a nullable CHANNEL is spelled '(chan T)?',  *)
+                    | ('in' | 'out')? 'chan' '[' TypeClause ']' '?'?                       (* ADR-0174 D2: 'chan[int32]?' is a nullable channel,
+                                                                                             'chan[int32?]' a channel of nullable; 'in' receive-only, 'out' send-only *)
+                    | 'chan' TypeClause                                                   (* legacy; GS0567 *)
                     | 'sequence' '[' TypeClause ']' '?'?
                     | 'async' 'sequence' '[' TypeClause ']' '?'?
                     | 'func' '(' FnTypeParamList? ')' TypeClause? '?'?                    (* deprecated; GS0303 *)
@@ -1815,7 +1909,12 @@ Statement         ::= Block
                     | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | AwaitUsingStmt | DeferStmt | GoStmt | ScopeStmt | LockStmt
                     | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | GotoStmt | CheckedStmt
                     | IncDecStmt | ChannelSendStmt | ExpressionStmt
-VariableDecl      ::= ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeParamList? TypeClause? '=' Expression
+VariableDecl      ::= 'async' 'let' identifier TypeClause? '=' Expression
+                      (* ADR-0174 D15: `async let` starts the initializer as a child of the enclosing `scope`
+                         and binds the name to its eventual result. The binding is a value of type R, not a
+                         handle, so it cannot outlive its owner; every read is `await name` (GS0569). Outside
+                         a `scope` it is GS0551; never read, GS0559. *)
+                    | ('const' | 'let' | 'var') 'scoped'? 'ref'? identifier TypeParamList? TypeClause? '=' Expression
                       (* TypeParamList is 'let'-only: `let Name[T] = func (...) ... { ... }` hangs a generic
                          parameter list off the binding, since the anonymous function-literal initializer has nowhere
                          else to carry one. *)
@@ -1830,7 +1929,7 @@ AssignmentTarget    ::= identifier
                       | '*' Expression
                       | 'base' '[' TypeClause ']' '.' identifier
 IncDecStmt        ::= identifier ('++' | '--')
-FallthroughStmt   ::= 'fallthrough'                       (* recognised then reported as unsupported,  *)
+FallthroughStmt   ::= 'fallthrough'                       (* direct last statement of a non-final switch arm; next arm has no pattern bindings or guard *)
 
 IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
 IfLetStmt         ::= 'if' LetBindingList Statement ('else' Statement)?
@@ -1872,8 +1971,9 @@ AndPattern        ::= UnaryPattern ('and' UnaryPattern)*
 UnaryPattern      ::= 'not' UnaryPattern | PrimaryPattern
 PrimaryPattern    ::= '(' Pattern ')'
                     | '[' ListPatternElement (',' ListPatternElement)* ']'
-                    | PropertyPattern
-                    | TypeClause PropertyPattern?             (* bare type pattern; name-shaped forms are semantically disambiguated from value patterns *)
+                    | 'var' identifier                        (* total pattern; identifier may be '_' *)
+                    | PropertyPattern identifier?             (* optional designation *)
+                    | TypeClause PropertyPattern? identifier? (* bare type pattern with optional designation; name-shaped forms are semantically disambiguated from value patterns *)
                     | identifier 'is' TypeClause PropertyPattern?
                     | '_'                                  (* discard: identifier '_' not followed by '(' or '.' *)
                     | ('<' | '<=' | '>' | '>=' | '==' | '!=') Expression
@@ -1883,20 +1983,26 @@ ListPatternElement ::= Pattern | SlicePattern
 SlicePattern      ::= '..' (identifier | Pattern)?           (* slice ("rest") subpattern, : bare '..' discards the middle slice; '..name' captures it into a '[]T' binding; '..pattern' matches it against a nested pattern *)
 
 TryStmt           ::= 'try' Block CatchClause* FinallyClause?
-CatchClause       ::= 'catch' '(' identifier TypeClause? ')' Block
+CatchClause       ::= 'catch' CatchHeader? CatchFilter? Block
+CatchHeader       ::= '(' ( identifier TypeClause | Type ) ')'   (* binder-and-type, or type only *)
+CatchFilter       ::= 'when' Expression                          (* bool; emitted as a CLR filter region *)
 FinallyClause     ::= 'finally' Block
 ThrowStmt         ::= 'throw' Expression
 UsingStmt         ::= 'using' VariableDecl
 AwaitUsingStmt    ::= 'await' 'using' VariableDecl
 DeferStmt         ::= 'defer' Expression
-GoStmt            ::= 'go' Expression
+GoStmt            ::= 'go' (Expression | Block)                                   (* ADR-0174 D14 *)
 ScopeStmt         ::= 'scope' Block
-AwaitForRangeStmt ::= 'await' 'for' identifier 'in' Expression Block
+AwaitForRangeStmt ::= 'await' 'for' identifier TypeClause? 'in' Expression Block
 SelectStmt        ::= 'select' '{' SelectCase* '}'
 SelectCase        ::= 'default' Block
-                    | 'case' '<-' Expression Block
-                    | 'case' 'let' identifier '=' '<-' Expression Block
-                    | 'case' Expression '<-' Expression Block
+                    | 'case' '<-' Expression Guard? Block
+                    | 'case' 'let' identifier '=' '<-' Expression Guard? Block
+                    | 'case' Expression '<-' Expression Guard? Block
+                    | 'case' 'await' Expression Guard? Block
+                    | 'case' 'let' identifier '=' 'await' Expression Guard? Block
+                    | 'case' 'cancelled' Guard? Block
+Guard             ::= 'when' Expression
 ChannelSendStmt   ::= Expression '<-' Expression
 
 Expression        ::= Assignment
@@ -1938,7 +2044,7 @@ PrimaryExpression ::= Literal | identifier
                     | FunctionLiteral | LambdaExpression
                     | SwitchExpr | IfExpression | IfLetExpression
                     | '(' Expression ')' | TupleLiteral
-                    | MakeChannel | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall | CheckedExpression
+                    | ChannelCreation | TypeOf | NameOf | DefaultExpression | BaseInterfaceCall | CheckedExpression
                     | ThrowExpr                                          (* throw-expression,  *)
 Literal           ::= Number | String | InterpolatedString | 'true' | 'false' | 'nil' | char
 InterpolatedString ::= '"' ( InterpolationText | '$$' | '$' identifier | InterpolationHole )* '"'
@@ -1972,7 +2078,7 @@ LambdaExpression  ::= 'async'? '(' LambdaParameters? ')' '->' ( Expression | Blo
 LambdaParameters  ::= LambdaParameter (',' LambdaParameter)*
 LambdaParameter   ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause? ('=' Expression)?
 TrailingLambda    ::= FunctionLiteral
-MakeChannel       ::= 'make' '(' 'chan' TypeClause (',' Expression)? ')'
+ChannelCreation   ::= 'chan' '[' TypeClause ']' '(' Expression? ')'                 (* ADR-0174 D12; 'make(chan T[, n])' is retired, GS0566 *)
 TypeOf            ::= 'typeof' '(' TypeClause ')'
 NameOf            ::= 'nameof' '(' Expression ')'
 DefaultExpression ::= 'default' ('(' TypeClause ')')?                     (*  *)
@@ -1981,7 +2087,8 @@ CheckedExpression ::= ('checked' | 'unchecked') '(' Expression ')'         (* : 
 IfExpression      ::= 'if' Expression Block ('else' (IfExpression | Block))?   (* if-as-expression,  *)
 IfLetExpression   ::= 'if' LetBindingList ('&&' Expression)? Block
                       'else' (IfExpression | IfLetExpression | Block)         (* if-let-as-expression *)
-TupleLiteral      ::= '(' Expression ',' Expression (',' Expression)* ')'
+TupleLiteral      ::= '(' TupleLiteralElement ',' TupleLiteralElement (',' TupleLiteralElement)* ')'
+TupleLiteralElement ::= (identifier ':')? Expression                     (* ADR-0172 labeled element *)
 Arguments         ::= Argument (',' Argument)*
 Argument          ::= identifier ':' (RefArgument | Expression)
                     | RefArgument

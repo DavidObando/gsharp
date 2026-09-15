@@ -2,6 +2,7 @@
 title: "The gsc compiler"
 sidebar_position: 1
 draft: false
+description: "Compile and run G# directly with gsc, including references, target frameworks, and output options."
 ---
 
 # The gsc compiler

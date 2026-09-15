@@ -219,4 +219,4 @@ The same zero value can be spelled directly as `default(T)` for any type `T`. Th
 
 The null literal in G# is spelled `nil`, not `null`. Typing `null` in a value position reports `GS0273` and the binder treats it as `nil` so the rest of the expression still typechecks.
 
-Next: [Tour: Control flow](/docs/tour/control-flow).
+Next: [Tour: Control flow](control-flow.md).

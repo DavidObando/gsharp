@@ -2,6 +2,7 @@
 title: "G# for C# developers"
 sidebar_position: 2
 draft: false
+description: "Bring your C# and .NET experience to G#: compare syntax, data models, and runtime conventions."
 ---
 
 # G# for C# developers
@@ -28,16 +29,18 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | partial type | `partial class` / `partial struct` / `partial interface` | Partial enums and partial members are not supported. |
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
+| `async void` | `async func ... void` | Intended for void delegate/event handlers; not awaitable. |
 | `IEnumerable<T>` iterator | `sequence[T]` with `yield` | Async streams use `async sequence[T]`. |
-| `lock` and tasks | `go`, `chan T`, `select`, `scope` | G# adds structured concurrency over .NET tasks and channels. |
+| `lock` and tasks | `go`, `chan[T]`, `select`, `scope` | G# adds structured concurrency over .NET tasks and channels. |
 | `using var` or `using (...)` | `using` and `defer` | Defer and using cleanup at block exit. |
 | `void M(int x = 0)` | `func M(x int32 = 0)` | G# functions support optional parameters with constant defaults. |
 | `void M(int x, int y); void M(int x);` | overloads of `M(int32, int32)` / `M(int32)` | G# functions support overloading on parameter shape; duplicates report `GS0264`. |
 | `ref int M(int[] a, int i)` | `func M(a []int32, i int32) ref int32` paired with `return ref a[i]` | Ref returns. |
 | `ref int local = ref arr[i]` | `let ref local = arr[i]` or `var ref local = arr[i]` | Ref-aliasing locals. |
 | `out int n` parameter / `M(out var n)` | `out n int32` / `M(out var n)` | Ref-kind parameters and inline `out` declarations. |
-| `delegate void Handler(object sender)` | `type Handler = delegate func(sender Object)` | Named delegate types. |
+| `delegate void Handler(object sender)` | `delegate Handler(sender Object) ` | Named delegate types. |;
 | `cond ? a : b` | `cond ? a : b` | Ternary expression. |
+| `if (x is Foo f && f.Ok)`, `if (x is var value)`, `if (x is not Foo f) return;` | `if x is Foo f && f.Ok`, `if x is var value`, `if !(x is Foo f) { return }` | Pattern variables (ADR-0166) are read-only and scoped to where the match is known to have happened. `var name` always matches and keeps the input's exact static type. `is not T name` is spelled `!(x is T name)`. `switch` arms accept both `case Foo f` and `case f is Foo`. |
 | `a ?? b`, `a ??= b` | `a ?? b`, `a ??= b` | The old G# `?:` null-coalescing spelling is removed. |
 | `using static System.Math;` | `import System.Math` | Static members are available as an unqualified fallback. |
 | `unsafe`, pointers, `stackalloc`, `fixed` | `unsafe`, `*T`, `stackalloc [n]T`, `fixed p *T = source { ... }` | `*void` maps C# `void*`; raw-pointer operations require an unsafe context. |
@@ -117,10 +120,10 @@ let (px, py) = p
 
 ## Concurrency is structured and .NET-backed
 
-G# adds `go`, `chan T`, `select`, and `scope`. The lowering targets .NET tasks and channels, so code can coordinate with CLR async APIs while retaining concise channel syntax.
+G# adds `go`, `chan[T]`, `select`, and `scope`. The lowering targets .NET tasks and channels, so code can coordinate with CLR async APIs while retaining concise channel syntax.
 
 ```gsharp
-let ch = make(chan string, 1)
+let ch = chan[string](1)
 ch <- "ready"
 select {
 case let msg = <-ch {
@@ -169,7 +172,7 @@ Use `partial` on every split declaration of a class, struct, or interface. The c
 
 ## Where to go next
 
-- [Getting started](/docs/tutorials/getting-started)
-- [Projects and packages](/docs/tutorials/project-and-packages)
-- [.NET interop](/docs/tutorials/dotnet-interop)
-- [SDK projects](/docs/tooling/sdk-projects)
+- [Getting started](../tutorials/getting-started.md)
+- [Projects and packages](../tutorials/project-and-packages.md)
+- [.NET interop](../tutorials/dotnet-interop.md)
+- [SDK projects](../tooling/sdk-projects.md)

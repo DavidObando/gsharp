@@ -1,0 +1,132 @@
+.hub {
+  padding-bottom: 4rem;
+}
+.header {
+  background: var(--gs-surface-alt);
+  border-bottom: 1px solid var(--gs-border);
+  padding: 4.5rem 0 3.5rem;
+}
+.header h1 {
+  font-size: clamp(2.8rem, 5.5vw, 4.5rem);
+  line-height: 1.08;
+  letter-spacing: -0.055em;
+  max-width: 850px;
+}
+.description {
+  max-width: 720px;
+  color: var(--gs-muted);
+  font-size: 1.12rem;
+  margin-top: 1.5rem;
+}
+.group {
+  padding-top: 3rem;
+}
+.group h2 {
+  font-size: 1.6rem;
+  letter-spacing: -0.035em;
+}
+.group :global(.gs-card-grid) {
+  margin-top: 1.4rem;
+}
+.learningPath {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+  margin: 2rem 0;
+}
+.learningPath li {
+  display: flex;
+  gap: 1.2rem;
+  border-top: 1px solid var(--gs-border);
+  padding-top: 1.3rem;
+}
+.learningPath li > span {
+  color: var(--ifm-color-primary);
+  font-size: 1.4rem;
+  font-weight: 650;
+}
+.learningPath h3 {
+  font-size: 1.2rem;
+  margin-bottom: 0.5rem;
+}
+.learningPath p {
+  font-size: 0.9rem;
+  color: var(--gs-muted);
+  margin: 0;
+}
+.learningCards {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.referenceList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem 3rem;
+  margin-top: 1.5rem;
+}
+.referenceList > div {
+  padding: 1.25rem 0;
+  border-top: 1px solid var(--gs-border);
+}
+.referenceList dt {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.referenceList dt span {
+  margin-left: 0.5rem;
+}
+.referenceList dd {
+  margin: 0.6rem 0 0;
+  color: var(--gs-muted);
+  font-size: 0.9rem;
+}
+.featured {
+  display: grid;
+  grid-template-columns: 0.8fr 1.2fr;
+  gap: 3rem;
+  align-items: center;
+  padding-top: 3rem;
+}
+.status {
+  margin-top: 2.5rem;
+  padding: 2rem;
+  background: var(--gs-surface-alt);
+  border: 1px solid var(--gs-border);
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+}
+.status span {
+  display: block;
+  color: var(--gs-muted);
+  font-size: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.status strong {
+  font-size: 1.4rem;
+}
+.status p {
+  grid-column: 1/-1;
+  margin: 0;
+  color: var(--gs-muted);
+  font-size: 0.85rem;
+}
+@media (max-width: 767px) {
+  .learningPath,
+  .learningCards,
+  .referenceList,
+  .featured {
+    grid-template-columns: 1fr;
+  }
+  .status {
+    grid-template-columns: 1fr;
+  }
+  .header {
+    padding-block: 3rem 2rem;
+  }
+  .description {
+    font-size: 1rem;
+  }
+}

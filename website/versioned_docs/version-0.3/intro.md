@@ -56,13 +56,13 @@ operators, unsafe pointers, `stackalloc`, `fixed`, `unmanaged` /
 
 ## Where to start
 
-- [Install G#](/docs/getting-started/install) to set up the SDK,
+- [Install G#](getting-started/install.md) to set up the SDK,
   templates, or a source-built compiler.
-- [Quickstart: Hello, G#](/docs/getting-started/quickstart) to compile
+- [Quickstart: Hello, G#](getting-started/quickstart.md) to compile
   and run your first program.
-- [A Tour of G#](/docs/tour) for a short guided walk through syntax,
+- [A Tour of G#](tour/index.md) for a short guided walk through syntax,
   types, control flow, concurrency, and .NET interop.
-- [Tutorials](/docs/tutorials/getting-started) for task-oriented
+- [Tutorials](tutorials/getting-started.md) for task-oriented
   walkthroughs.
-- [Language specification](/docs/ref/spec) when you need the reference
+- [Language specification](ref/spec.md) when you need the reference
   details.

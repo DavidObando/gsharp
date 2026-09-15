@@ -1,6 +1,6 @@
 ---
-title: Quality dashboard
-description: Public G# conformance and benchmark snapshot
+title: "Quality dashboard"
+description: "Inspect the latest G# project conformance and benchmark snapshot with its environment and methodology."
 ---
 
 import data from '@site/static/data/quality-dashboard.json';
@@ -57,6 +57,8 @@ process startup vary. Compare snapshots from the same OS/architecture and
 investigate sustained movement, not a single run.
 
 ## Concurrency
+
+The [ten-pattern Go/G# comparison](/concurrency) also presents a separately sourced `concurrency-bench.yml` snapshot with NativeAOT, JIT, Go, and full provenance. It is not the same measurement run as this dashboard's data.
 
 {data.benchmarks.concurrency ? (
   <>

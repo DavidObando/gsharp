@@ -2,6 +2,7 @@
 title: "Errors and cleanup"
 sidebar_position: 7
 draft: false
+description: "Handle exceptions and release resources with try, using, and defer."
 ---
 
 # Errors and cleanup

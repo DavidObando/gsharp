@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800" fill="none">
+  <defs>
+    <linearGradient id="ember" x1="80" y1="100" x2="700" y2="700" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB347"/><stop offset=".55" stop-color="#E05B32"/><stop offset="1" stop-color="#C0392B" stop-opacity=".05"/>
+    </linearGradient>
+  </defs>
+  <path d="M400 50 700 223V570L400 743 100 570V223Z" stroke="url(#ember)" stroke-width="2"/>
+  <path d="M400 135 625 265V525L400 655 175 525V265Z" fill="url(#ember)" opacity=".14"/>
+  <path d="M400 135 625 265 400 395 175 265Z" fill="url(#ember)" opacity=".25"/>
+  <path d="M400 395 625 265V525L400 655Z" fill="url(#ember)" opacity=".3"/>
+  <path d="M400 135V395L175 525M400 395 625 525M400 50V135M625 265 700 223M625 525 700 570M400 655V743M175 525 100 570M175 265 100 223" stroke="url(#ember)" stroke-width="1.5"/>
+</svg>

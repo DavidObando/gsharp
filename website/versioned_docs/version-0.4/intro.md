@@ -1,65 +1,39 @@
 ---
 title: "Introduction to G#"
+description: "Meet G#: expressive syntax, explicit nullable types, and structured concurrency on the .NET runtime."
 sidebar_position: 1
-draft: false
 ---
 
 # Introduction to G#
 
-G# is a modern, simple, and accessible programming language for the
-.NET runtime. It draws on the everyday ergonomics of Go, Kotlin, and
-Swift — small surface, explicit types, sealed hierarchies, nullable
-handling that the binder helps you with — and compiles down to ordinary
-managed assemblies that any .NET tool can consume.
+G# is a programming language for .NET with expressive data types, explicit nullability, and structured concurrency. It brings familiar ideas from Go, Kotlin, and Swift to the libraries and tools of the .NET ecosystem.
 
-If you already know .NET, G# gives you another way to build managed
-assemblies and call CLR APIs — classes, interfaces, properties,
-events, delegates, exceptions, async workflows, and so on — under the
-normal `dotnet` toolchain. If you are coming from Go, Kotlin, Swift,
-or TypeScript, much of the syntax will already feel familiar.
-
-## How G# runs
-
-Every driver parses, binds, lowers, and emits CIL. SDK projects use
-the emitter through MSBuild. Direct `gsc` uses it both with and
-without `/out`; without `/out`, `gsc` runs the emitted program
-immediately. File-mode `gsi` and the interactive REPL also use the
-emitter. G# function literals can be passed to CLR delegate parameters
-on these file paths, including bare `gsc`.
-
-The legacy tree-walking evaluator and its `--engine evaluator` /
-`GSI_ENGINE=evaluator` forms were removed.
-`gsi` now accepts only the `emit` engine choice.
-
-The default emitted target framework is `net10.0`; the compiler also
-recognizes `net8.0` and `net9.0` target framework mappings.
+Start with a small program. Add a project when you need one. Your source compiles into ordinary managed assemblies that can work alongside C# and F#.
 
 ## Who G# is for
 
-G# is for people who want a small, predictable language with direct
-access to the .NET ecosystem. It is especially useful if you want to
-learn or teach .NET without starting from C#, or if you prefer a
-modern, Kotlin-/Swift-shaped syntax but still need CLR interop,
-MSBuild projects, Portable PDBs, and the broader .NET ecosystem.
+If you already use .NET, G# offers a different way to express programs without starting over with a separate runtime and library ecosystem. If you know Go, packages, functions, and channels will look familiar, but G# uses .NET exceptions, nullable types, and CLR libraries.
 
-The language is still growing. The documentation highlights what
-works today and calls out known implementation limits where they
-matter.
+Coming from Kotlin? Data classes and nullable flow provide familiar starting points, while library APIs, project tooling, and concurrency contracts change with the runtime. Start with [G# for Kotlin developers](bridges/gsharp-for-kotlin-developers.md).
 
-The 0.4 line adds sound empty collection defaults, full boolean
-patterns, `while let`, value-producing block expressions, native CLR
-rectangular arrays, map iteration, explicit extension receivers,
-goroutine-safe `SyncMap`, and SDK hot reload.
+Coming from Swift? Use the [Swift bridge](bridges/gsharp-for-swift-developers.md) to compare optionals, value types, resource lifetime, and .NET concurrency.
+
+G# is pre-1.0 and still evolving. Read the [feature matrix](ref/feature-matrix.md) and [release notes](release-notes.md) before relying on a capability or upgrading a project. Published releases and Next documentation are distinct; the version selector tells you which documentation you are reading.
 
 ## Where to start
 
-- [Install G#](/docs/getting-started/install) to set up the SDK,
-  templates, or a source-built compiler.
-- [Quickstart: Hello, G#](/docs/getting-started/quickstart) to compile
-  and run your first program.
-- [A Tour of G#](/docs/tour) for a short guided walk through syntax,
-  types, control flow, concurrency, and .NET interop.
-- [Tutorials](/docs/tutorials/getting-started) for task-oriented
-  walkthroughs.
-- [Language specification](/docs/ref/spec) when you need the reference
-  details.
+| Your goal | Start here |
+| --- | --- |
+| Run your first project | [Install G#](getting-started/install.md), then [Hello, G#](getting-started/quickstart.md) |
+| Get a feel for the language | [A Tour of G#](tour/index.md) |
+| Transfer your existing experience | [C#](bridges/gsharp-for-csharp-developers.md), [Go](bridges/gsharp-for-go-developers.md), [Kotlin](bridges/gsharp-for-kotlin-developers.md), or [Swift](bridges/gsharp-for-swift-developers.md) |
+| Build something step by step | [Trail: a real .NET project](tutorials/trail.md) |
+| Look up a concept or precise rule | [Concept quick reference](ref/quick-reference.md), then the [specification](ref/spec.md) |
+
+## How G# runs
+
+Use `dotnet build`, `dotnet run`, and an SDK-style `.gsproj` for normal project work. `Gsharp.NET.Sdk` connects the G# compiler to MSBuild.
+
+For a single file, the `gsc` compiler can emit and run a program directly. The `gsi` REPL provides interactive exploration and script execution. All of these paths use the compiler emitter.
+
+The published compiler requires .NET 10. Application target frameworks are a separate choice; see [SDK and project files](tooling/sdk-projects.md) for supported cross-targeting and reference assemblies. Compiler internals and historical execution engines belong in the [architecture reference](tooling/compiler-architecture.md), not in your first program.

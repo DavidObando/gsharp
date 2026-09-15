@@ -6,14 +6,18 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
-    "build": "docusaurus build",
+    "prestart": "python3 scripts/prepare-showcase.py",
+    "build": "python3 scripts/prepare-showcase.py && docusaurus build && pagefind --site build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
     "serve": "docusaurus serve",
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
-    "typecheck": "tsc",
+    "typecheck": "python3 scripts/prepare-showcase.py && tsc",
+    "test:browser": "playwright test --project=chromium --project=webkit --project=firefox",
+    "test:visual": "playwright test --project=visual-chromium",
+    "test:content": "node --test tests/content.test.mjs",
     "postinstall": "patch-package"
   },
   "dependencies": {
@@ -31,6 +35,9 @@
     "@docusaurus/tsconfig": "3.10.1",
     "@docusaurus/types": "3.10.1",
     "@types/react": "^19.0.0",
+    "@playwright/test": "1.63.0",
+    "@axe-core/playwright": "^4.10.2",
+    "pagefind": "1.5.2",
     "patch-package": "^8.0.0",
     "typescript": "~6.0.2"
   },

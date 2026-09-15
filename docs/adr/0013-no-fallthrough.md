@@ -1,11 +1,13 @@
 ﻿# ADR-0013: Drop Go's `fallthrough` (cases never fall through)
 
-- **Status**: Accepted
+- **Status**: Partially superseded by the switch-family implementation (#3501 A3); no implicit fall-through remains the rule
 - **Date**: 2026-05-22
 - **Phase**: Phase 2 (statement form), Phase 6 (expression form)
 - **Related**: ADR-0009 (`switch` semantics); execution plan §2.6, §2.9
 
 ## Context
+
+> **Implementation update:** The original decision below is retained as history. Explicit `fallthrough` was subsequently implemented by #3501 A3: it must be the direct last statement of a non-final switch arm and cannot target an arm with pattern bindings or a guard. It jumps to the next body without retesting the pattern. The parser, binder, lowering, and emitted-runtime coverage are recorded in `Issue3501SwitchFamilyTests`; the website Tour now includes a published-SDK-checked example. This does not introduce implicit fall-through.
 
 Go's `switch` cases do not fall through by default (unlike C / C++), but a case body can opt back into fall-through with a trailing `fallthrough` statement. C#, Kotlin, Rust, and Swift all reject implicit fall-through; C# specifically prohibits fall-through and forces an explicit `goto case` for the rare cases where it's desired.
 

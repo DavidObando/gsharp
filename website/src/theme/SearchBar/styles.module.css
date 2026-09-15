@@ -1,0 +1,145 @@
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--gs-border);
+  border-radius: 6px;
+  background: var(--gs-surface);
+  color: var(--gs-muted);
+  padding: 0.45rem 0.7rem;
+  font: inherit;
+  font-size: 0.78rem;
+  min-height: 40px;
+  cursor: pointer;
+}
+.trigger kbd {
+  font-size: 0.6rem;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 0 0.2rem;
+}
+.trigger:hover {
+  border-color: var(--ifm-color-primary);
+  color: var(--gs-text);
+}
+.dialog {
+  color: var(--gs-text);
+  background: var(--gs-surface);
+  border: 1px solid var(--gs-border);
+  border-radius: 12px;
+  width: min(760px, calc(100% - 2rem));
+  max-height: 85dvh;
+  padding: 0;
+  overflow: hidden;
+}
+.dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.controls {
+  padding: 1.25rem;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--gs-border);
+}
+.results {
+  padding: 1rem 1.25rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: -0.3rem 0 1rem;
+}
+.suggestions button {
+  font: inherit;
+  font-size: 0.7rem;
+  color: var(--ifm-color-primary);
+  background: var(--gs-surface-alt);
+  border: 1px solid var(--gs-border);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  min-height: 36px;
+}
+.suggestions button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+.dialog::backdrop {
+  background: #101014b3;
+}
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.header h2 {
+  font-size: 1.4rem;
+  letter-spacing: -0.035em;
+  margin: 0;
+}
+.header button {
+  padding: 0.55rem 0.8rem;
+  min-height: 44px;
+  background: var(--gs-surface-alt);
+  border: 1px solid var(--gs-border);
+  border-radius: 6px;
+  color: var(--gs-text);
+  cursor: pointer;
+}
+.version {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  font-size: 0.82rem;
+}
+.version select {
+  background: var(--gs-surface-alt);
+  color: var(--gs-text);
+  border: 1px solid var(--gs-border);
+  padding: 0.5rem;
+  border-radius: 5px;
+  font: inherit;
+}
+.hint {
+  font-size: 0.75rem;
+  color: var(--gs-muted);
+  margin: 0.7rem 0 1.2rem;
+}
+.error {
+  padding: 1rem;
+  border: 1px solid var(--ifm-color-primary);
+  border-radius: 6px;
+}
+.error button {
+  color: var(--ifm-color-primary);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+@media (max-width: 1100px) {
+  .trigger kbd {
+    display: none;
+  }
+}
+@media (max-width: 767px) {
+  .controls,
+  .results {
+    padding: 1rem;
+  }
+  .trigger span {
+    display: none;
+  }
+  .trigger {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+}

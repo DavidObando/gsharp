@@ -2,6 +2,7 @@
 title: "C# to G# migration (cs2gs)"
 sidebar_position: 3
 draft: false
+description: "Translate C# projects to G# and understand the migration tool's verification stages and limits."
 ---
 
 # C# to G# migration (`cs2gs`)
@@ -64,6 +65,14 @@ Useful `migrate` options:
 | `--config <name>` | Build configuration used to find tools; default is `Release`. |
 | `--baseline <file>` | Gate on the gap ledger. New and regressed fingerprints fail; known-open gaps are tolerated. |
 | `--baseline-strict` | Also fail on stale ledger entries. Intended for nightly checks. |
+| `--format` | Run the canonical formatter over emitted G#. Opt-in during ADR-0179 phase 7a while corpus round-trip gaps are measured. |
+| `--no-format` | Keep the printer layout. This remains the default until phase 7b. |
+
+## Roslyn analyzer projects
+
+When a project in the migration declares Roslyn analyzers, `cs2gs` switches that project into analyzer translation mode: `Microsoft.CodeAnalysis` usage is rewritten to the [G# analyzer API](./analyzers.md) instead of passing through as an ordinary library reference. The `[DiagnosticAnalyzer]` attribute, base class, analysis contexts, `SyntaxKind` values, and node/symbol members all map to their G# counterparts, and common idioms are rewritten (`GetLocation()` becomes `.Location`, operation actions become bound-node actions, and so on). The project file is retargeted too: the Roslyn compiler packages are dropped in favor of a `GSharp.Core` reference, and consumers' `OutputItemType="Analyzer"` wiring becomes `OutputItemType="GsharpCodeAnalyzer"`.
+
+Where C# and G# syntax genuinely differ in shape, the translator adapts the detection logic and flags the site with a `CS2GS-ANALYZER-SHAPE` warning for review; APIs it cannot map are reported loudly rather than translated wrong. Analyzer *test* snippets translate as well, with their `[|…|]` expected-diagnostic markers re-placed in the G# source and any unplaceable marker called out with `CS2GS-ANALYZER-SNIPPET`.
 
 ## Coverage and triage
 

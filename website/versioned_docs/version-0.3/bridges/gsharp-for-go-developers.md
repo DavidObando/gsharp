@@ -87,7 +87,7 @@ Go code normally returns `error`. G# can still model results explicitly, but imp
 
 ## Where to go next
 
-- [Getting started](/docs/tutorials/getting-started)
-- [Data and types](/docs/tutorials/data-and-types)
-- [Concurrency](/docs/tutorials/concurrency)
-- [CLR interop reference](/docs/ref/clr-interop)
+- [Getting started](../tutorials/getting-started.md)
+- [Data and types](../tutorials/data-and-types.md)
+- [Concurrency](../tutorials/concurrency.md)
+- [CLR interop reference](../ref/clr-interop.md)

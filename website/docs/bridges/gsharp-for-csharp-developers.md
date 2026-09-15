@@ -2,6 +2,7 @@
 title: "G# for C# developers"
 sidebar_position: 2
 draft: false
+description: "Bring your C# and .NET experience to G#: compare syntax, data models, and runtime conventions."
 ---
 
 # G# for C# developers
@@ -171,7 +172,7 @@ Use `partial` on every split declaration of a class, struct, or interface. The c
 
 ## Where to go next
 
-- [Getting started](/docs/tutorials/getting-started)
-- [Projects and packages](/docs/tutorials/project-and-packages)
-- [.NET interop](/docs/tutorials/dotnet-interop)
-- [SDK projects](/docs/tooling/sdk-projects)
+- [Getting started](../tutorials/getting-started.md)
+- [Projects and packages](../tutorials/project-and-packages.md)
+- [.NET interop](../tutorials/dotnet-interop.md)
+- [SDK projects](../tooling/sdk-projects.md)

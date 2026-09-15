@@ -6,7 +6,7 @@ draft: false
 
 # Lexical structure
 
-This guide explains the tokens G# recognizes today. For the normative grammar, see the [language specification](/docs/ref/spec).
+This guide explains the tokens G# recognizes today. For the normative grammar, see the [language specification](../ref/spec.md).
 
 ## Source text and comments
 

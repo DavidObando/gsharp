@@ -1,18 +1,18 @@
 ---
 title: "Quickstart: Hello, G#"
+description: "Write, run, and understand your first complete G# program."
 sidebar_position: 2
-draft: false
 ---
 
 # Quickstart: Hello, G#
 
-This page builds the smallest checked-in G# program two ways: with an SDK project and with `gsc` directly.
+Run a small program, understand its parts, then make a change. If you have not installed G# yet, follow the [installation guide](install.md) first.
 
 ## The program
 
-`samples/HelloWorld.gs` contains:
+Replace your project's `Program.gs` with the checked-in `samples/HelloWorld.gs` example:
 
-```gsharp title="HelloWorld.gs"
+```gsharp title="Program.gs"
 // file: HelloWorld.gs
 
 package HelloWorld
@@ -22,58 +22,50 @@ import System
 Console.WriteLine("Hello, world!")
 ```
 
+There are three ideas here:
+
+- `package HelloWorld` gives the source a package identity.
+- `import System` brings a .NET namespace into scope.
+- `Console.WriteLine` calls the familiar .NET console API. Top-level statements become the executable entry point, so you do not need to declare `Main`.
+
+## Run it with the SDK
+
+From the project directory:
+
+```bash
+dotnet run
+```
+
 Expected output:
 
 ```text
 Hello, world!
 ```
 
-The first non-comment line declares the package. Packages give code a namespace-like identity for compilation and imports. `import System` brings the CLR `System` namespace into scope, so the program can call `Console.WriteLine`. The last line is a top-level statement: G# can synthesize the executable entry point for simple programs without requiring an explicit `func Main`.
+Change the message and run it again. `dotnet run` builds the project when needed; a separate `dotnet build` is useful when you want to compile without executing.
 
-## Run it with the SDK
-
-Create a console project, replace its `Program.gs` with the program above, then build and run:
-
-```bash
-dotnet new install Gsharp.Templates
-dotnet new gsharp-console -n HelloWorld
-cd HelloWorld
-dotnet build
-dotnet run
-```
-
-The SDK path is the everyday workflow. `Gsharp.NET.Sdk` wires `.gs` files into MSBuild, passes project references and target framework information to `gsc`, and emits a normal .NET executable.
+**Next:** follow the [Tour's basics chapter](../tour/basics.md), or [build a small data model](../tutorials/getting-started.md).
 
 ## Run it with `gsc` directly
 
-When you pass source files to `gsc` without `/out`, the compiler emits the program and runs it immediately:
+The SDK is the recommended project workflow. If you are working with a source-built compiler, you can also execute the sample directly:
 
 ```bash
 dotnet path/to/gsc.dll samples/HelloWorld.gs
 ```
 
-Output:
+The compiler prints:
 
 ```text
 Hello, world!
 Success.
 ```
 
-The `Success.` line is printed by `gsc` after the emitted program completes.
-
-To save the emitted assembly, add `/out`. For an executable, keep `/target:exe`; `/tfm` selects the target framework runtime config.
+Use `/out` when you want an assembly rather than immediate execution:
 
 ```bash
 dotnet path/to/gsc.dll samples/HelloWorld.gs /out:artifacts/HelloWorld.dll /target:exe /tfm:net10.0
 dotnet artifacts/HelloWorld.dll
 ```
 
-Output:
-
-```text
-Hello, world!
-```
-
-Both direct commands use the compiler emitter. Omit `/out` for immediate execution; add it when you need a reusable assembly.
-
-Next: [A Tour of G#](/docs/tour).
+The saved program prints `Hello, world!` without the compiler's `Success.` line. See the [compiler reference](../tooling/gsc.md) for advanced invocation options.

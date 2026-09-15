@@ -2,6 +2,7 @@
 title: "The REPL and script runner (gsi)"
 sidebar_position: 2
 draft: false
+description: "Explore G# interactively or run a script with the gsi REPL and file runner."
 ---
 
 # The REPL and script runner (`gsi`)

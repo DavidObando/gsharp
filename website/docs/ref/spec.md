@@ -2,6 +2,8 @@
 title: "Language specification"
 sidebar_position: 1
 draft: false
+description: "The G# language specification: grammar, types, expressions, statements, and execution rules."
+toc_max_heading_level: 2
 ---
 
 # Language specification
@@ -293,6 +295,8 @@ Console.WriteLine(d)
 3
 0
 ```
+
+<span id="go-style-built-ins-import-gsharpextensionsgo"></span>
 
 ### Retired Go-style built-ins
 
@@ -1204,7 +1208,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -1334,11 +1338,12 @@ write only fires when `HasValue == false`.
 
 ### Switch statements
 
-Switch statement cases use block bodies and never fall through. The `fallthrough` keyword is reserved and parsed only to report an unsupported-fallthrough diagnostic.
+Switch statement cases use block bodies and never fall through implicitly. A `fallthrough` statement is permitted only as the direct last statement of a non-final arm body. It transfers control to the next arm's body in source order without testing its pattern. The destination pattern must not introduce bindings, and the destination arm must not have a `when` guard. Invalid placement reports `GS0168`, a final-arm use reports `GS0533`, and an ineligible destination reports `GS0534`.
 
 ```ebnf
 SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
 SwitchCase = "case" Pattern [ "when" Expression ] Block | "default" Block .
+FallthroughStmt = "fallthrough" .
 ```
 
 When an arm pattern is a type pattern (`T`, `T { ... }`, or `<ident> is T`) or
@@ -1924,7 +1929,7 @@ AssignmentTarget    ::= identifier
                       | '*' Expression
                       | 'base' '[' TypeClause ']' '.' identifier
 IncDecStmt        ::= identifier ('++' | '--')
-FallthroughStmt   ::= 'fallthrough'                       (* recognised then reported as unsupported,  *)
+FallthroughStmt   ::= 'fallthrough'                       (* direct last statement of a non-final switch arm; next arm has no pattern bindings or guard *)
 
 IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
 IfLetStmt         ::= 'if' LetBindingList Statement ('else' Statement)?

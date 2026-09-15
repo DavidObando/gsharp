@@ -2,11 +2,12 @@
 title: "Types and values"
 sidebar_position: 4
 draft: false
+description: "Understand how G# types describe values, collections, references, and nullability."
 ---
 
 # Types and values
 
-G# combines concise aggregate and collection syntax with CLR type identity. Use the [language specification](/docs/ref/spec#types) for exact syntax.
+G# combines concise aggregate and collection syntax with CLR type identity. Use the [language specification](../ref/spec.md#types) for exact syntax.
 
 ## Nil and nullable values
 

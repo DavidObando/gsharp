@@ -64,7 +64,7 @@ cp /path/to/Gsharp.NET.Sdk.VERSION.nupkg packages/
 dotnet build
 ```
 
-See [SDK projects](/docs/tooling/sdk-projects) for the full project-system walkthrough.
+See [SDK projects](../tooling/sdk-projects.md) for the full project-system walkthrough.
 
 ## Install the VS Code extension
 
@@ -74,7 +74,7 @@ The G# VS Code extension is published on the [Visual Studio Marketplace](https:/
 code --install-extension gsharplang.vscode-gsharp
 ```
 
-See [the VS Code extension reference](/docs/tooling/vscode) for the full feature list and settings.
+See [the VS Code extension reference](../tooling/vscode.md) for the full feature list and settings.
 
 ## Build the compiler from source
 
@@ -94,4 +94,4 @@ dotnet src/Compiler/bin/Debug/net10.0/gsc.dll samples/HelloWorld.gs /out:artifac
 dotnet artifacts/HelloWorld.dll
 ```
 
-Common `gsc` flags include `/out`, `/target:exe`, `/target:library`, `/tfm`, `/r`, `/noimplicitimports`, `/debug`, `/pdb`, `/nowarn`, and `/warnaserror`. See [the `gsc` reference](/docs/tooling/gsc) for details.
+Common `gsc` flags include `/out`, `/target:exe`, `/target:library`, `/tfm`, `/r`, `/noimplicitimports`, `/debug`, `/pdb`, `/nowarn`, and `/warnaserror`. See [the `gsc` reference](../tooling/gsc.md) for details.

@@ -1,0 +1,102 @@
+[
+  {
+    "id": "worker-pool", "title": "Worker pool", "gsharpFile": "WorkerPool.gs", "goFile": "worker_pool.go",
+    "output": "worker-pool count=40 sum=1560 empty=0",
+    "contract": "Four workers consume a bounded queue; every input produces exactly one result, and completion closes the result stream.",
+    "checks": "Empty input and forty jobs, with a uniqueness set, exact count, and independently expected sum.",
+    "gsharpNotes": "Directional handles express what each stage can do. Nested scope joins the workers before the coordinator closes results.",
+    "goNotes": "Channels and WaitGroup.Go express the same topology. A coordinator explicitly waits before closing results.",
+    "limits": "Result order is unspecified. Queue capacity bounds buffered values, not worker count or total report memory.",
+    "benchmarks": ["buf64", "spawn"]
+  },
+  {
+    "id": "bounded", "title": "Bounded concurrency", "gsharpFile": "Bounded.gs", "goFile": "bounded.go",
+    "output": "bounded limit=3 completed=24 failures=1 permits=3",
+    "contract": "Acquire admission before spawning work, keep at most three operations active, and return every permit even on a handled failure.",
+    "checks": "Runtime checks cover twenty-four operations, one injected failure, peak active work, and returned permits. A separate source-order regression rejects moving acquisition inside either worker; it is not inferred from the active-work counter.",
+    "gsharpNotes": "Await SemaphoreSlim.WaitAsync before go so admission does not block a thread. finally returns the permit and scope joins the admitted work.",
+    "goNotes": "A buffered channel acts as the semaphore. defer releases admission and WaitGroup.Go tracks completion.",
+    "limits": "Neither example promises fairness or an admission deadline. Expected work failures are counted as results rather than silently discarded.",
+    "benchmarks": ["spawn"]
+  },
+  {
+    "id": "pipeline", "title": "Cancellable pipeline", "gsharpFile": "Pipeline.gs", "goFile": "pipeline.go",
+    "output": "pipeline full=8/56 cancelled=3/6 joined=2 empty=0",
+    "contract": "Stages own and close their outputs. A consumer can stop early without leaving a producer or transformer blocked.",
+    "checks": "Empty input, full delivery of eight values, early stop after three of one hundred values, and both stage finalizers observed.",
+    "gsharpNotes": "Scoped channel operations observe the context. The published-SDK example explicitly normalizes expected OperationCanceledException when that context was cancelled.",
+    "goNotes": "Context cancellation is selected alongside channel operations at both stages; the caller cancels and then joins.",
+    "limits": "Cancellation remains cooperative. A CPU loop or unrelated blocking API does not become cancellable merely because it sits in a scope or goroutine.",
+    "benchmarks": ["buf64", "chunk64-arrays", "chunk1k-arrays"]
+  },
+  {
+    "id": "fan-in", "title": "Fan-in merge", "gsharpFile": "FanIn.gs", "goFile": "fan_in.go",
+    "output": "fan-in count=15 sum=180 empty=0",
+    "contract": "Forward multiple independently closed inputs into one output, closing the output only after all forwarders finish.",
+    "checks": "Zero inputs and three producers; all fifteen values are unique and accounted for, including zero.",
+    "gsharpNotes": "A nested scope makes the bounded topology explicit. The SDK also provides merge[T], checked here with empty and nonempty inputs; its full-channel inputs and unbounded output differ from this bounded, directional forwarding example.",
+    "goNotes": "WaitGroup.Go tracks the forwarders and producers; a separate closer waits before closing the merged stream.",
+    "limits": "Cross-input ordering is unspecified. This finite-stream example does not add early-consumer cancellation; use the pipeline protocol when that is required.",
+    "benchmarks": ["buf64"]
+  },
+  {
+    "id": "ttl-cache", "title": "TTL cache with reader/writer locking", "gsharpFile": "TtlCache.gs", "goFile": "ttl_cache.go",
+    "output": "ttl-cache hit=1 expired=1 missing=1 concurrent=40",
+    "contract": "Reads and writes synchronize access, and an entry is unavailable exactly at its expiry boundary.",
+    "checks": "A missing key, a hit immediately before expiry, a miss at expiry, expiry-overflow rejection, and forty concurrent key-specific round trips using a controlled clock.",
+    "gsharpNotes": "ReaderWriterLockSlim supplies the lock; defer releases it and a nullable string communicates a miss.",
+    "goNotes": "RWMutex and a value/present pair provide the corresponding contract.",
+    "limits": "The injected clock must suit elapsed-time decisions. ReaderWriterLockSlim is thread-affine: do not add await or channel operations while it is held; Get and Set are synchronous here. TTL controls visibility, not eviction, so expired keys remain allocated until overwritten or removed.",
+    "benchmarks": []
+  },
+  {
+    "id": "rate-limit", "title": "Keyed token-bucket rate limiting", "gsharpFile": "RateLimit.gs", "goFile": "rate_limit.go",
+    "output": "rate-limit burst=2 refill=1 parallel=2 rollback=rejected",
+    "contract": "Each key has an independent bounded token balance; refill and admission are atomic under concurrent calls.",
+    "checks": "Initial burst, fractional-time carry, refill boundary, independent keys, capacity cap, concurrent admission, and rejection of a backwards clock.",
+    "gsharpNotes": "A lock and Dictionary implement the state transition; ordinary .NET synchronization is sufficient.",
+    "goNotes": "A mutex and map express the same transition with explicit integer tick arithmetic.",
+    "limits": "This is a discrete integer-token example, not a production policy library. Both use one global lock and retain keys; fairness, eviction, and distributed coordination are separate requirements.",
+    "benchmarks": []
+  },
+  {
+    "id": "all", "title": "Structured-concurrency All", "gsharpFile": "All.gs", "goFile": "all.go",
+    "output": "all success=6 failures=1 blocked-child-joined=1 empty=0",
+    "contract": "Wait for owned work, preserve a real failure, cancel cooperative siblings, and do not return while the blocked sibling is still active.",
+    "checks": "Empty and successful scopes, a barrier-controlled failure with a blocked sibling whose finalizer must run, and unrequested cancellation while the parent is not cancelled.",
+    "gsharpNotes": "Normal use is scope with go calls; the barriers and counters shown here are verification scaffolding. ScopeException carries failures, and the example normalizes cancellation using the context state.",
+    "goNotes": "The self-contained standard-library runner combines Context, error returns, and WaitGroup.Go. A library such as errgroup is another idiomatic option.",
+    "limits": "Go errors and panics are not CLR exceptions, and this runner does not recover panics. Both normalization policies use error category plus current context state, not cancellation provenance: an independent cancellation concurrent with group cancellation can be normalized. Failure ordering is not promised.",
+    "benchmarks": ["spawn"]
+  },
+  {
+    "id": "timeout", "title": "Timeout wrapper", "gsharpFile": "Timeout.gs", "goFile": "timeout.go",
+    "output": "timeout ready=42 deadline=1 cancellation=1 joined=1",
+    "contract": "Distinguish ready work, a deadline, and explicit cancellation, and join a cooperative operation after stopping it.",
+    "checks": "An already-ready result, an owned timer with no competing result, explicit cancellation, worker cleanup, and a Context.WithTimeout-backed .NET task; no tight latency assertion.",
+    "gsharpNotes": "after and case cancelled integrate with select; using let owns the timer and scope supplies the join. Context.WithTimeout is also checked as an alternative for APIs accepting a .NET cancellation token.",
+    "goNotes": "Timers and Context deadlines integrate with select; the example explicitly stops timers/cancels contexts and waits for the worker.",
+    "limits": "A timeout does not guarantee arbitrary work has stopped. after starts a one-shot timer that remains armed until it fires or is disposed; losing-select deregistration alone does not stop it. Cleanup may exceed the deadline, and multiple ready select arms do not establish priority.",
+    "benchmarks": []
+  },
+  {
+    "id": "ownership", "title": "Channel ownership and routing", "gsharpFile": "Ownership.gs", "goFile": "ownership.go",
+    "output": "ownership count=6 sum=15 closed-ok=0 empty=0",
+    "contract": "A producer owns sending and closure; the consumer receives through a read-only handle and distinguishes closed state from a legitimate zero value.",
+    "checks": "Empty and nonempty streams, zero as data, a closed two-value receive, and negative compilation checks for sending through a receive-only handle.",
+    "gsharpNotes": "in chan[T] and out chan[T] expose capabilities in signatures; channel iteration and the ok flag avoid a nil/zero sentinel protocol.",
+    "goNotes": "The directional <-chan and chan<- types offer the corresponding capability split and closed-receive check.",
+    "limits": "Directional handles are not a linear ownership proof. The application must still choose one closer and define multi-writer coordination.",
+    "benchmarks": ["closed-recv", "pingpong"]
+  },
+  {
+    "id": "atomic-lazy", "title": "Atomic counter and lazy initialization", "gsharpFile": "AtomicLazy.gs", "goFile": "atomic_lazy.go",
+    "output": "atomic-lazy count=40 factories=1 value=42",
+    "contract": "Concurrent increments are not lost, and the lazy factory runs once while every caller observes the initialized value.",
+    "checks": "No eager initialization, forty concurrent users, exact final count, one factory invocation, and a repeated read.",
+    "gsharpNotes": "Interlocked and Lazy[T] with ExecutionAndPublication are .NET library tools, not special G# syntax.",
+    "goNotes": "Typed atomic values and sync.OnceValue supply the corresponding successful-initialization behavior.",
+    "limits": "An atomic field does not make a compound object invariant atomic. Factory failure/retry policies differ and are outside this successful-factory example.",
+    "benchmarks": []
+  }
+]

@@ -2,6 +2,7 @@
 title: "Errors and cleanup"
 sidebar_position: 7
 draft: false
+description: "Handle exceptions and release resources with try, using, and defer."
 ---
 
 # Errors and cleanup
@@ -37,7 +38,41 @@ try {
 Console.WriteLine(caught)
 ```
 
-Catch clauses name a local and may specify a type. Prefer specific exception types at library boundaries and reserve broad catches for top-level reporting or cleanup.
+A catch clause takes one of four forms: `catch (name Type)` binds the exception
+to `name`, `catch (Type)` names the type it handles without binding anything,
+`catch` alone is `catch (Exception)` with no binder, and any of them may carry a
+`when` filter. Prefer specific exception types at library boundaries and reserve
+broad catches for top-level reporting or cleanup.
+
+```gsharp
+try {
+    process(request)
+} catch (e HttpRequestException) when e.StatusCode == 429 {
+    retryLater(request)
+} catch (OperationCanceledException) {
+    // The type is all this handler needs; no local is bound.
+    Console.WriteLine("cancelled")
+} catch {
+    Console.WriteLine("unexpected")
+}
+```
+
+A `when` filter must be a `bool` expression, and it is emitted as a real CLR
+filter region: it runs during the first pass — before any intervening `finally`
+unwinds the stack — and when it is false the exception falls through to the next
+clause exactly as it does in C#. A filter cannot `await` (`GS0572`) because there
+is no suspension point in the first pass, and a clause that an earlier
+*unfiltered* clause already covers can never run (`GS0573`).
+
+A pattern variable definitely assigned when the filter succeeds is visible
+throughout the handler:
+
+```gsharp
+catch (e InvalidOperationException)
+    when e.InnerException is ArgumentException arg {
+    Console.WriteLine(arg.ParamName)
+}
+```
 
 ```gsharp
 func requireName(name string?) string {
@@ -45,6 +80,27 @@ func requireName(name string?) string {
 }
 ```
 
+
+## Rethrowing
+
+Inside a `catch` handler, `rethrow` re-raises the exception being handled while
+keeping its original throw site. Re-throwing the caught binder instead
+(`throw e`) raises the same object but resets `StackTrace` to the line that
+re-threw it, which loses the frames that actually failed.
+
+```gsharp
+try {
+    process(order)
+} catch (e IOException) {
+    Console.WriteLine("retrying: " + e.Message)
+    rethrow
+}
+```
+
+`rethrow` is only valid lexically inside a `catch` body. Writing it anywhere
+else is `GS0570`, and writing it in a `finally` nested inside that `catch` is
+`GS0571` — by then the runtime has already left the handler. A `rethrow` inside
+a nested `catch` re-raises that inner exception, not the outer one.
 
 ## Nullable absence is not an exception
 

@@ -1,11 +1,20 @@
 ---
 title: "Frequently asked questions"
 draft: false
+description: "Answers to common questions about G#, .NET compatibility, installation, language choices, and tooling."
 ---
 
 # Frequently asked questions
 
-This page answers common questions about G# as it exists today. For formal details, see the [language specification](/docs/ref/spec), the [feature matrix](/docs/ref/feature-matrix), and the [design decisions index](/docs/design-decisions).
+Start here for practical questions about choosing and using G#. The [feature matrix](ref/feature-matrix.md) records support limits; the [language specification](ref/spec.md) provides formal details.
+
+## Is G# ready for my project?
+
+G# is pre-1.0 and evolving. Evaluate the features your project needs, pin the tool versions you use, and read the [release notes](release-notes.md) before upgrading. A feature being supported does not establish a long-term compatibility promise.
+
+## Where should I start?
+
+[Install the published release](getting-started/install.md), run [Hello, G#](getting-started/quickstart.md), then take the [Tour](tour/index.md). If you already know .NET or Go, the [C#](bridges/gsharp-for-csharp-developers.md) and [Go](bridges/gsharp-for-go-developers.md) bridge guides focus on the differences.
 
 ## What is G#?
 
@@ -17,7 +26,7 @@ G# borrows many ideas from Go: package-oriented source files, `func`, slices, ma
 
 ## How does G# relate to C#.NET?
 
-G# targets the same runtime and libraries as C# rather than defining a separate platform. It emits managed assemblies, can call CLR constructors, methods, properties, fields, events, operators, conversions, delegates, and generic types, and uses normal .NET project builds through the G# MSBuild SDK. See the [CLR interop reference](/docs/ref/clr-interop).
+G# targets the same runtime and libraries as C# rather than defining a separate platform. It emits managed assemblies, can call CLR constructors, methods, properties, fields, events, operators, conversions, delegates, and generic types, and uses normal .NET project builds through the G# MSBuild SDK. See the [CLR interop reference](ref/clr-interop.md).
 
 ## What runtime does G# target?
 
@@ -25,11 +34,11 @@ G# targets the .NET CLR. The compiler can emit executables or libraries with man
 
 ## How do I install G#?
 
-Start with the [installation guide](/docs/getting-started/install). The project flow uses `dotnet new install Gsharp.Templates`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
+Start with the [installation guide](getting-started/install.md). The project flow uses `dotnet new install Gsharp.Templates`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
 
 ## Where is the language specification?
 
-The public specification page is [Language specification](/docs/ref/spec). It is the place to look for grammar, lexical structure, types, expressions, statements, packages, and runtime behavior as the documentation matures.
+The public specification page is [Language specification](ref/spec.md). It is the place to look for grammar, lexical structure, types, expressions, statements, packages, and runtime behavior as the documentation matures.
 
 ## Why use `int32` and `uint64` instead of `int` and `long`?
 
@@ -41,7 +50,7 @@ G# uses `nil`, not `null`, and nullability is part of the type. A non-nullable `
 
 ## How is concurrency modeled?
 
-G# combines a structured concurrency surface with .NET primitives. `go f` starts a concurrent call, `chan T` is backed by `System.Threading.Channels`, sends and receives use `<-`, and `select` chooses among channel operations. `scope` provides structured concurrency so child tasks are joined and failures propagate at the end of the scope. See [Concurrency](./guide/concurrency).
+G# combines a structured concurrency surface with .NET primitives. `go f` starts a concurrent call, `chan[T]` is backed by `System.Threading.Channels`, sends and receives use `<-`, and `select` chooses among channel operations. `scope` provides structured concurrency so child tasks are joined and failures propagate at the end of the scope. See [Concurrency](./guide/concurrency).
 
 ## How does `async` work?
 
@@ -67,15 +76,15 @@ A `struct` is value-like, while a `class` is reference-like and can participate 
 
 ## How do I call .NET libraries?
 
-Import the relevant CLR namespace or reference the assembly through the compiler or SDK project, then call the .NET type members from G#. Imported constructors, overloads, properties, fields, events, delegates, extension methods, operators, conversions, generics, and optional CLR arguments are part of the interop surface. See the [CLR interop reference](/docs/ref/clr-interop).
+Import the relevant CLR namespace or reference the assembly through the compiler or SDK project, then call the .NET type members from G#. Imported constructors, overloads, properties, fields, events, delegates, extension methods, operators, conversions, generics, and optional CLR arguments are part of the interop surface. See the [CLR interop reference](ref/clr-interop.md).
 
 ## What is the difference between the direct `gsc` modes?
 
-Every driver uses the emitter, including bare `gsc`, file-mode `gsi`, and the interactive REPL. Without `/out:`, `gsc` runs the emitted program immediately and prints `Success.` afterward; with `/out:`, it saves the assembly for later use. `gsi` accepts `emit` as its only engine choice. See the [`gsc` reference](/docs/tooling/gsc).
+Every driver uses the emitter, including bare `gsc`, file-mode `gsi`, and the interactive REPL. Without `/out:`, `gsc` runs the emitted program immediately and prints `Success.` afterward; with `/out:`, it saves the assembly for later use. `gsi` accepts `emit` as its only engine choice. See the [`gsc` reference](tooling/gsc.md).
 
 ## Does G# have a Playground?
 
-A Playground page exists in the documentation at [Playground](/docs/playground), but the browser execution service is deferred. Today, use the local compiler, templates, SDK projects, samples, and tests for runnable code.
+A Playground page exists in the documentation at [Playground](playground.md), but the browser execution service is deferred. Today, use the local compiler, templates, SDK projects, samples, and tests for runnable code.
 
 ## Does G# have classes and object-oriented features?
 
@@ -91,7 +100,7 @@ Yes. Fixed arrays use `[N]T`, slices use `[]T`, maps use `map[K,V]`, and sequenc
 
 ## What editor and debugging support exists?
 
-A language server and a VS Code extension support `.gs` files, plus Portable PDB support enables normal .NET/CoreCLR debugging of emitted assemblies. The VS Code extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). See [VS Code support](/docs/tooling/vscode), [LSP support](/docs/tooling/lsp), and [Debugging](/docs/tooling/debugging).
+A language server and a VS Code extension support `.gs` files, plus Portable PDB support enables normal .NET/CoreCLR debugging of emitted assemblies. The VS Code extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). See [VS Code support](tooling/vscode.md), [LSP support](tooling/lsp.md), and [Debugging](tooling/debugging.md).
 
 ## Can G# use C# source generators?
 

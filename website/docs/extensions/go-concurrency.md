@@ -2,6 +2,7 @@
 title: "Go-flavored concurrency"
 sidebar_position: 1
 draft: false
+description: "Use G# channels, goroutines, select, and structured scopes with .NET-backed runtime types."
 ---
 
 # Go-flavored concurrency
@@ -233,6 +234,7 @@ entered, and a false guard keeps the arm out of the select entirely — G#'s
 spelling of Go's "set the channel to `nil` to disable this case".
 
 ```gs
+using let deadline = after(TimeSpan.FromSeconds(2))
 select {
 case let job = <-work when accepting {
     handle(job)
@@ -240,7 +242,7 @@ case let job = <-work when accepting {
 case let page = await fetch {
     render(page)
 }
-case <-after(TimeSpan.FromSeconds(2)) {
+case <-deadline {
     Console.WriteLine("timed out")
 }
 case cancelled {
@@ -254,6 +256,8 @@ observe: an enclosing `scope`, a declared `ctx Context` parameter, or the one
 the compiler threads through a suspending call. Without one the arm would be
 unreachable, and `GS0557` says so. A select with no such arm unwinds with an
 `OperationCanceledException` when its context is cancelled.
+
+The timer selectable in the example is explicitly owned. An `after` timer remains armed until it fires or is disposed; a losing select registration alone does not stop it. `using let` releases a deadline that is no longer needed.
 
 ```gsharp title="Select.gs"
 package GSharp.Samples.Select

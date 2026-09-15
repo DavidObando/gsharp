@@ -327,4 +327,4 @@ func Describe(a Animal) string {
 
 Reassignment to a narrowed receiver inside the narrowed region drops the narrowing for the remainder of the region. Fields, properties, and indexed expressions are never narrowed because their reads are not idempotent.
 
-Next: [Tour: Concurrency](/docs/tour/concurrency).
+Next: [Tour: Concurrency](concurrency.md).

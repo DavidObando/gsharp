@@ -2,6 +2,7 @@
 title: "G# for Go developers"
 sidebar_position: 1
 draft: false
+description: "Bring your Go experience to G#: understand the familiar syntax and the .NET differences."
 ---
 
 # G# for Go developers
@@ -24,8 +25,17 @@ G# brings Go-style ergonomics — packages, `func`, `defer`, `for`, slices — t
 | `struct` | `struct`, `data struct`, `data class`, or `class` | G# also has CLR classes and structural data aggregates. |
 | exported by `Name` | `public Name` | Visibility is explicit: `public`, `private`, or `internal`. |
 | goroutine `go f()` | `go f()` | Scoped `go` joins through `scope`. |
-| channel `chan T` | `chan T` | Lowered to `System.Threading.Channels`. |
-| `select` | `select` | Cases cover sends, receives, and `default`. |
+| channel `chan T` | `chan[T]` | A `chan[T]` **is** `System.Threading.Channels.Channel<T>`; `<-chan T` / `chan<- T` are `in chan[T]` / `out chan[T]`. |
+| `make(chan T)` / `make(chan T, n)` | `chan[T]()` / `chan[T](n)` | `chan[T]()` is a rendezvous channel, exactly Go's unbuffered channel. |
+| `close(ch)`, `len(ch)`, `cap(ch)` | `ch.Close()`, `ch.Length()`, `ch.Capacity` | Members, not built-ins; closing twice throws like Go's panic. |
+| `v, ok := <-ch` | `let (v, ok) = <-ch` | `ok` is `false` once the channel is closed and drained. |
+| `for v := range ch` | `for v in ch` (or `while let v = <-ch`) | Both loop until the channel is closed; a `nil` element of a `chan[T?]` is delivered, not mistaken for close. |
+| `select` | `select` | Cases cover sends, receives, `default`, a `Task`, and cancellation. The ready arm is chosen uniformly at random, as in Go. |
+| `case <-time.After(d)` | `case <-after(d)` | `after` and `tick` come from `Gsharp.Concurrency`, which is imported implicitly. |
+| `case <-ctx.Done()` | `case cancelled` | The arm observes the enclosing `scope`'s context; without one the select unwinds on cancellation instead. |
+| set a channel variable to `nil` to disable an arm | `case <-ch when enabled` | The guard is evaluated once when the select is entered; a false guard keeps the arm out entirely. |
+| no equivalent | `case let v = await task` | A `Task` or `Task[T]` races the channels on the same waiter. |
+| `len(xs)`, `append(xs, v)`, `delete(m, k)` | `xs.Length`, `List[T]` + `.Add(v)`, `m.Remove(k)` | The Go-style built-ins are retired (GS0566 names the member). |
 | `defer cleanup()` | `defer cleanup()` | Defers run at block exit. |
 | `interface{}` | `object` or an interface type | CLR object identity and interfaces apply. |
 | `error` returns | exceptions or result values | G# interoperates with .NET exceptions. |
@@ -66,7 +76,7 @@ This matches CLR metadata and lets `PascalCase` or `camelCase` be stylistic choi
 
 ## Control flow is familiar, but switches do not fall through
 
-G# keeps compact `if`, `for`, `for in`, `switch`, and `select` forms. Switch cases do not fall through. The `fallthrough` keyword is reserved only so the compiler can issue a clear diagnostic.
+G# keeps compact `if`, `for`, `for in`, `switch`, and `select` forms. Switch cases do not fall through implicitly. A direct trailing `fallthrough` in a non-final arm enters the next arm's body without testing its pattern; that destination must not declare pattern bindings or have a guard. See the [runnable fallthrough example](../tour/control-flow.md#explicit-fallthrough).
 
 ## Generics and CLR interop use bracket syntax
 
@@ -87,7 +97,7 @@ Go code normally returns `error`. G# can still model results explicitly, but imp
 
 ## Where to go next
 
-- [Getting started](/docs/tutorials/getting-started)
-- [Data and types](/docs/tutorials/data-and-types)
-- [Concurrency](/docs/tutorials/concurrency)
-- [CLR interop reference](/docs/ref/clr-interop)
+- [Getting started](../tutorials/getting-started.md)
+- [Data and types](../tutorials/data-and-types.md)
+- [Concurrency](../tutorials/concurrency.md)
+- [CLR interop reference](../ref/clr-interop.md)

@@ -6,7 +6,7 @@ draft: false
 
 # Types and values
 
-G# combines concise aggregate and collection syntax with CLR type identity. Use the [language specification](/docs/ref/spec#types) for exact syntax.
+G# combines concise aggregate and collection syntax with CLR type identity. Use the [language specification](../ref/spec.md#types) for exact syntax.
 
 ## Nil and nullable values
 

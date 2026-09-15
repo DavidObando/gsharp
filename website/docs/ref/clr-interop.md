@@ -2,6 +2,7 @@
 title: "CLR interop reference"
 sidebar_position: 3
 draft: false
+description: "Reference G# interoperation with CLR types, members, generics, delegates, and native APIs."
 ---
 
 # CLR interop reference

@@ -6,7 +6,7 @@ draft: false
 
 # Declarations and packages
 
-Declarations define the package-level and type-level shape of a G# program. This guide summarizes the current parser and binder behavior; the full EBNF is in the [language specification](/docs/ref/spec#appendix-full-parser-grammar).
+Declarations define the package-level and type-level shape of a G# program. This guide summarizes the current parser and binder behavior; the full EBNF is in the [language specification](../ref/spec.md#appendix-full-parser-grammar).
 
 ## Packages
 
@@ -90,7 +90,7 @@ func (value int32) Abs() int32 {
 
 Generic functions use bracketed type parameters and bracketed type arguments.
 
-Parameters may carry a ref-kind modifier (`ref`, `out`, `in`, or `scoped`) and may declare a compile-time-constant default value to become optional. Two functions sharing a name are overloads when they differ by parameter types, arity, or ref-kinds; differing by return type alone is not a distinguishing signature. See the [feature matrix](/docs/ref/feature-matrix) for the full capability table.
+Parameters may carry a ref-kind modifier (`ref`, `out`, `in`, or `scoped`) and may declare a compile-time-constant default value to become optional. Two functions sharing a name are overloads when they differ by parameter types, arity, or ref-kinds; differing by return type alone is not a distinguishing signature. See the [feature matrix](../ref/feature-matrix.md) for the full capability table.
 
 ```gsharp
 func greet(name string = "world", excited bool = false) string {

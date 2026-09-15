@@ -2,6 +2,7 @@
 title: "Tutorial: Async and sequences"
 sidebar_position: 6
 draft: false
+description: "Write asynchronous functions and produce synchronous or asynchronous sequences."
 ---
 
 # Tutorial: Async and sequences
@@ -17,8 +18,10 @@ In this tutorial, you will call .NET `Task` APIs from `async func`,
 
 ## 1. Write an async function
 
-An `async func` returns a `Task` (or `Task[T]` for a value return). The
-body can `await` any `Task`/`Task[T]` from the .NET BCL:
+An `async func` with an omitted return type returns `Task`; declaring a value
+type returns `Task[T]`. Explicit `async func handler() void` uses C# async-void
+semantics for event handlers and cannot be awaited. The body can `await` any
+`Task`/`Task[T]` from the .NET BCL:
 
 ```gsharp title="AsyncTask.gs"
 package GSharp.Samples.AsyncTask

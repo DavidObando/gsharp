@@ -1,0 +1,429 @@
+{
+  "schemaVersion": 1,
+  "status": "available",
+  "reason": null,
+  "checkedAt": "2026-09-15T02:07:20.605875+00:00",
+  "source": {
+    "runId": 34809938364,
+    "runUrl": "https://github.com/DavidObando/gsharp/actions/runs/34809938364",
+    "commit": "5f1b653ab1ae61c7fb23ec0ad2bacde6e44f8597",
+    "artifactId": 10334920904,
+    "artifactExpiresAt": "2026-12-13T05:31:20Z",
+    "artifactSha256": "b08b4de95fb64e9dca726013604ceb8ee9041194b1ae310387b91f34705e15eb",
+    "compilerVersion": "0.4.666"
+  },
+  "measurement": {
+    "startedAt": "2026-09-14T05:33:53.111583+00:00",
+    "finishedAt": "2026-09-14T05:37:57.382432+00:00",
+    "hardwareClass": "linux-x86_64-4-amd-epyc-9v74-80-core-processor",
+    "cpuModel": "AMD EPYC 9V74 80-Core Processor",
+    "logicalCpuCount": 4,
+    "system": "Linux",
+    "architecture": "x86_64",
+    "kernel": "6.17.0-1022-azure",
+    "toolchains": {
+      "dotnetSdk": "10.0.401",
+      "dotnetRuntime": [
+        "10.0.12"
+      ],
+      "nativeAotRuntime": [
+        "10.0.12"
+      ],
+      "go": [
+        "go1.27.0"
+      ]
+    },
+    "wholeRuns": 3,
+    "launchesPerRun": 6,
+    "intervalMethod": "range-of-run-medians",
+    "launchOrder": "rotating-interleaved",
+    "jitMode": "tiered-pgo-steady-state",
+    "jitEnvironment": {
+      "DOTNET_TieredCompilation": "1",
+      "DOTNET_TieredPGO": "1",
+      "DOTNET_TC_CallCountingDelayMs": "0"
+    },
+    "comparable": false,
+    "warnings": [
+      "the host exposes no observable power-state identity"
+    ],
+    "comparisonKey": "91e1b80233a0841c6dd4395da918b3bc65b9cc4ccb017268fb2443d956cfa08e",
+    "aggregationKey": "401c38d4ee3ec7753990393faa7ab60e15d766d1c68f93f40e1eb5ffe2c534e2",
+    "benchmarkDefinitionSha256": "3936c2c63568a507b67cdcdc4131a7ba5ad3854c90e149825bcd326f4d0ad9d3",
+    "sourceRunIds": [
+      "440426ee-aac4-48a1-bd0f-450858cab6b8",
+      "2b5ac6a4-77fb-4478-89c8-a9bb121590bc",
+      "1a017313-746c-44f9-839c-dcfcffc07b79"
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "buf64",
+      "description": "A bounded channel driven producer-to-consumer: one pipeline stage.",
+      "goScenario": "go-buf64",
+      "jit": {
+        "medianNs": 110.97,
+        "intervalNs": [
+          108.03,
+          111.62
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 127.66,
+        "intervalNs": [
+          127.59,
+          128.81
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": {
+        "medianNs": 31.65,
+        "intervalNs": [
+          31.65,
+          32.05
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "jitOverGo": 3.5061611374407584,
+      "aotOverGo": 4.03349131121643
+    },
+    {
+      "name": "rendezvous",
+      "description": "Capacity 0, so the number is the hand-off rather than the buffer. ONE hand-off per operation; `pingpong` is the Go-paired counterpart.",
+      "goScenario": null,
+      "jit": {
+        "medianNs": 110.12,
+        "intervalNs": [
+          108.52,
+          111.09
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 128.31,
+        "intervalNs": [
+          127.47,
+          129.05
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": null,
+      "jitOverGo": null,
+      "aotOverGo": null
+    },
+    {
+      "name": "pingpong",
+      "description": "A round trip over two rendezvous channels: TWO hand-offs per counted operation, shaped exactly like Go's.",
+      "goScenario": "go-pingpong",
+      "jit": {
+        "medianNs": 220.84,
+        "intervalNs": [
+          220.24,
+          220.89
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 254.13,
+        "intervalNs": [
+          252.14,
+          254.29
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": {
+        "medianNs": 245.85,
+        "intervalNs": [
+          237.7,
+          246.85
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "jitOverGo": 0.8982713036404312,
+      "aotOverGo": 1.0336790726052472
+    },
+    {
+      "name": "closed-recv",
+      "description": "A receive from a closed, drained channel \u2014 the exception-based defect D2 removes.",
+      "goScenario": "go-closed",
+      "jit": {
+        "medianNs": 11.04,
+        "intervalNs": [
+          10.91,
+          11.04
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 11.75,
+        "intervalNs": [
+          11.74,
+          11.75
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": {
+        "medianNs": 10.75,
+        "intervalNs": [
+          10.7,
+          10.85
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "jitOverGo": 1.0269767441860465,
+      "aotOverGo": 1.0930232558139534
+    },
+    {
+      "name": "spawn",
+      "description": "Spawn cost: `go` is a thread-pool work item, not a Task. Times the spawn and the join only, as Go's WaitGroup row does.",
+      "goScenario": "go-spawn",
+      "jit": {
+        "medianNs": 88.31,
+        "intervalNs": [
+          87.15,
+          93.62
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 87.98,
+        "intervalNs": [
+          86.26,
+          95.14
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": {
+        "medianNs": 148.65,
+        "intervalNs": [
+          147.7,
+          150.15
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "jitOverGo": 0.5940800538176926,
+      "aotOverGo": 0.5918600739993273
+    },
+    {
+      "name": "select-ready",
+      "description": "A select whose arms are ready: no registration, no park. Four channel operations per counted iteration, so G#-only; `select-stream` is the Go-paired row.",
+      "goScenario": null,
+      "jit": {
+        "medianNs": 153.47,
+        "intervalNs": [
+          152.3,
+          153.74
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 167.62,
+        "intervalNs": [
+          166.94,
+          167.91
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": null,
+      "jitOverGo": null,
+      "aotOverGo": null
+    },
+    {
+      "name": "select-stream",
+      "description": "One select receive per operation against a producer filling one buffered arm \u2014 a mix of ready and parked selects, as Go's row is.",
+      "goScenario": "go-select2",
+      "jit": {
+        "medianNs": 261.0,
+        "intervalNs": [
+          257.5,
+          263.07
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 250.57,
+        "intervalNs": [
+          250.4,
+          252.62
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": {
+        "medianNs": 67.45,
+        "intervalNs": [
+          66.8,
+          68.55
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "jitOverGo": 3.8695329873980726,
+      "aotOverGo": 3.7148999258710154
+    },
+    {
+      "name": "select-park",
+      "description": "A select with no ready arm: registration on every arm, a park, a hand-off. Wave 1 could not measure this at all.",
+      "goScenario": null,
+      "jit": {
+        "medianNs": 260.1,
+        "intervalNs": [
+          258.33,
+          265.48
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 239.32,
+        "intervalNs": [
+          234.58,
+          248.17
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": null,
+      "jitOverGo": null,
+      "aotOverGo": null
+    },
+    {
+      "name": "chunk64",
+      "description": "D10 batching at 64 elements per chunk. G#-only: `chunks()` copies elements where Go passes a slice header.",
+      "goScenario": null,
+      "jit": {
+        "medianNs": 10.49,
+        "intervalNs": [
+          10.36,
+          10.55
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 11.51,
+        "intervalNs": [
+          11.48,
+          11.54
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": null,
+      "jitOverGo": null,
+      "aotOverGo": null
+    },
+    {
+      "name": "chunk1k",
+      "description": "D10 batching at 1024 elements per chunk. The curve between this and chunk64 is the point, not either number.",
+      "goScenario": null,
+      "jit": {
+        "medianNs": 7.29,
+        "intervalNs": [
+          7.23,
+          7.38
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 7.17,
+        "intervalNs": [
+          7.16,
+          7.17
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": null,
+      "jitOverGo": null,
+      "aotOverGo": null
+    },
+    {
+      "name": "chunk64-arrays",
+      "description": "Whole arrays over a `chan[[]int32]` at 64 elements: the transport Go's `chan []int` actually is.",
+      "goScenario": "go-chunk64",
+      "jit": {
+        "medianNs": 4.54,
+        "intervalNs": [
+          4.44,
+          4.58
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 4.94,
+        "intervalNs": [
+          4.92,
+          4.96
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": {
+        "medianNs": 4.1,
+        "intervalNs": [
+          4.1,
+          4.3
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "jitOverGo": 1.1073170731707318,
+      "aotOverGo": 1.204878048780488
+    },
+    {
+      "name": "chunk1k-arrays",
+      "description": "Whole arrays over a `chan[[]int32]` at 1024 elements.",
+      "goScenario": "go-chunk1k",
+      "jit": {
+        "medianNs": 2.56,
+        "intervalNs": [
+          2.54,
+          2.58
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "aot": {
+        "medianNs": 2.73,
+        "intervalNs": [
+          2.72,
+          2.75
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "go": {
+        "medianNs": 1.0,
+        "intervalNs": [
+          1.0,
+          1.05
+        ],
+        "samples": 18,
+        "runs": 3
+      },
+      "jitOverGo": 2.56,
+      "aotOverGo": 2.73
+    }
+  ]
+}

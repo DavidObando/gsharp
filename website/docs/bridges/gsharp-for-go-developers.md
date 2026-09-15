@@ -2,6 +2,7 @@
 title: "G# for Go developers"
 sidebar_position: 1
 draft: false
+description: "Bring your Go experience to G#: understand the familiar syntax and the .NET differences."
 ---
 
 # G# for Go developers
@@ -75,7 +76,7 @@ This matches CLR metadata and lets `PascalCase` or `camelCase` be stylistic choi
 
 ## Control flow is familiar, but switches do not fall through
 
-G# keeps compact `if`, `for`, `for in`, `switch`, and `select` forms. Switch cases do not fall through. The `fallthrough` keyword is reserved only so the compiler can issue a clear diagnostic.
+G# keeps compact `if`, `for`, `for in`, `switch`, and `select` forms. Switch cases do not fall through implicitly. A direct trailing `fallthrough` in a non-final arm enters the next arm's body without testing its pattern; that destination must not declare pattern bindings or have a guard. See the [runnable fallthrough example](../tour/control-flow.md#explicit-fallthrough).
 
 ## Generics and CLR interop use bracket syntax
 
@@ -96,7 +97,7 @@ Go code normally returns `error`. G# can still model results explicitly, but imp
 
 ## Where to go next
 
-- [Getting started](/docs/tutorials/getting-started)
-- [Data and types](/docs/tutorials/data-and-types)
-- [Concurrency](/docs/tutorials/concurrency)
-- [CLR interop reference](/docs/ref/clr-interop)
+- [Getting started](../tutorials/getting-started.md)
+- [Data and types](../tutorials/data-and-types.md)
+- [Concurrency](../tutorials/concurrency.md)
+- [CLR interop reference](../ref/clr-interop.md)

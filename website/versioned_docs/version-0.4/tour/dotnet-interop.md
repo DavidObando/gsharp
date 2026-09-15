@@ -2,6 +2,7 @@
 title: "Tour: .NET interop"
 sidebar_position: 6
 draft: false
+description: "Use familiar .NET types, libraries, and extension methods from G#."
 ---
 
 # Tour: .NET interop
@@ -172,7 +173,7 @@ func Display(value object) string {
 
 The SDK bundles a `Gsharp.Extensions` assembly with opt-in helper namespaces. Imports are always explicit — nothing under `Gsharp.Extensions.*` is auto-imported.
 
-`Optional` adds `Map` / `FlatMap` / `OrElse` / `OrCompute` / `OrThrow` / `IfPresent` / `Filter` over `T?`. `Sequences` adds builders and transformers. See the [standard-library reference](/docs/ref/standard-library) for the full surface.
+`Optional` adds `Map` / `FlatMap` / `OrElse` / `OrCompute` / `OrThrow` / `IfPresent` / `Filter` over `T?`. `Sequences` adds builders and transformers. See the [standard-library reference](../ref/standard-library.md) for the full surface.
 
 File execution uses emitted code, including bare `gsc`, so G# function literals can be passed to imported CLR delegate parameters without `/out`.
 
@@ -242,7 +243,7 @@ package Tour.Interop.NativeFunctionPointers
 import System.Runtime.InteropServices
 
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Comparer = delegate func(a nint, b nint) int32
+delegate Comparer(a nint, b nint) int32;
 
 @DllImport("libc", EntryPoint: "qsort")
 func NativeQsort(base nint, nmemb nint, size nint, cmp Comparer) void;
@@ -268,4 +269,4 @@ func native_set_flag(@MarshalAs(UnmanagedType.I4) on bool) int32;
 
 See the [native-interop section of the CLR interop reference](../ref/clr-interop.md#unmanaged-interop-pinvoke) for the full attribute surface and diagnostics.
 
-Next: [Tutorials](/docs/tutorials/getting-started), or go deeper with the [CLR interop reference](/docs/ref/clr-interop).
+Next: [Tutorials](../tutorials/getting-started.md), or go deeper with the [CLR interop reference](../ref/clr-interop.md).

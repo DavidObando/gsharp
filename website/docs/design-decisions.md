@@ -1,6 +1,7 @@
 ---
 title: "Design decisions (ADRs)"
 draft: false
+description: "Explore the reasoning behind G# language and runtime choices through its design-decision index."
 ---
 
 # Design decisions (ADRs)
@@ -71,7 +72,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | --- | --- | --- |
 | [0005](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0005-error-handling.md) | Error handling — exceptions only, unchecked | Uses CLR exceptions instead of checked exceptions or Go-style error returns. |
 | [0009](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0009-switch-semantics.md) | `switch` semantics — expression + statement, patterns, exhaustive | Defines switch statements, switch expressions, patterns, and exhaustiveness. |
-| [0013](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0013-no-fallthrough.md) | Drop Go's `fallthrough` | Reserves `fallthrough` but rejects it; cases never fall through. |
+| [0013](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0013-no-fallthrough.md) | Original no-fallthrough decision | Historical rejection was superseded by explicit, constrained `fallthrough` in the switch-family work; implicit fall-through remains disallowed. |
 | [0031](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0031-canonical-for-in.md) | Canonical `for x in collection` | Establishes `for x in collection` as the preferred range iteration spelling. |
 | [0166](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0166-is-pattern-variables.md) | Pattern variables in boolean `is` expressions | Adds C#-style `Type name` designations to patterns and scopes the variable to the regions where its match is known to have happened. |
 
@@ -172,6 +173,8 @@ The 0.3 documentation audit covers these ADRs landed after the 0.2 snapshot. The
 | [0144](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0144-partial-types.md) | partial types (`partial` on class / struct / interface) |
 | [0145](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0145-source-generator-host-native-gsharp.md) | Roslyn source-generator host for native G# projects (`gsgen`) |
 | [0146](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0146-anonymous-class-literal.md) | Anonymous-object literal (`object { ... }`, Kotlin-style) |
+
+<span id="04-adrs-0157-0165"></span>
 
 ## 0.4 ADRs (0157-0166)
 

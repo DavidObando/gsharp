@@ -76,4 +76,4 @@ Hello, world!
 
 Use the emit path for application builds and for CLR interop scenarios that need real delegates, metadata, Portable PDBs, or runtime config files. The interpreter is convenient for quick checks, but it does not model every emitted CLR behavior.
 
-Next: [A Tour of G#](/docs/tour).
+Next: [A Tour of G#](../tour/index.md).

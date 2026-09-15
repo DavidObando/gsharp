@@ -2,6 +2,8 @@
 title: "Diagnostics reference"
 sidebar_position: 5
 draft: false
+description: "Look up a G# diagnostic code, understand its cause, and find the corresponding remedy."
+toc_max_heading_level: 2
 ---
 
 # Diagnostics reference
@@ -1094,6 +1096,24 @@ Cause/fix:
   normally with no diagnostic. See
   for the full rule, scope, and recovery rationale.
 
+<span id="adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567"></span>
+
+## Channel operations and retired spellings
+
+These diagnostics explain channel direction, receive bindings, and migration from retired spellings. See [Go-flavored concurrency](../extensions/go-concurrency.md) for complete examples.
+
+| ID | Severity | Cause and remedy |
+| --- | --- | --- |
+| GS0548 | Warning | `chan[T]()` creates a rendezvous channel: a send waits for a receiver. Pass a capacity for buffering, or use `Chan.Unbounded[T]()` when an unbounded buffer is intended. |
+| GS0549 | Error | A receive-only `in chan[T]` handle cannot send. Use a bidirectional or send-only handle for sending. |
+| GS0550 | Error | A send-only `out chan[T]` handle cannot receive. Use a bidirectional or receive-only handle for receiving. |
+| GS0554 | Error | A receive binding has the wrong number of variables. A two-value receive supplies the element and an `ok` flag; a channel iteration yields one element at a time. |
+| GS0555 | Error | `while let value = channel` binds the channel, not a received value. Use `while let value = <-channel` to receive until closure. |
+| GS0566 | Error | A retired built-in or channel-construction spelling was used. Follow the diagnostic's member replacement, such as `xs.Length`, `m.Remove(key)`, `ch.Close()`, or `chan[T](capacity)`. |
+| GS0567 | Error | The old `chan T` type spelling was used. Write `chan[T]` instead. |
+
+<span id="go-flavored-concurrency-requires-import-gsharpextensionsgo-gs0316"></span>
+
 ## Go-flavored concurrency gate (GS0316, retired)
 
 ADR-0082 gated the Go-shaped concurrency surface (`go`, `chan`, `<-`, `select`,
@@ -1107,6 +1127,8 @@ reported again and its identifier is not reused.
 |---|---|---|
 | GS0316 | Retired | Retired by ADR-0174 (D13): the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
 
+<span id="go-style-built-ins-require-import-gsharpextensionsgo-gs0317"></span>
+
 ## Go-style built-ins gate (GS0317, retired)
 
 ADR-0083 gated the Go-style built-in functions `len`, `cap`, `append`, and
@@ -1114,7 +1136,7 @@ ADR-0083 gated the Go-style built-in functions `len`, `cap`, `append`, and
 the import was missing. ADR-0174 (D13) retired the built-ins themselves: every
 receiver already carries the member (`xs.Length`, `m.Count`, `m.Remove(k)`,
 `List[T].Add`, `ch.Length()`, `ch.Capacity`), so there is nothing left to gate.
-A call to a retired name reports [GS0566](#adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567)
+A call to a retired name reports [GS0566](#channel-operations-and-retired-spellings)
 with a replacement computed for that site; a user-defined function of the same
 name is an ordinary call. The `Gsharp.Extensions.Go` namespace no longer exists,
 so the import itself is the ordinary unresolved-import error. GS0317 is never
