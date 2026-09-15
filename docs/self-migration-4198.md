@@ -286,10 +286,31 @@ export TMPDIR="$evidence/runtime"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 export SELFMIG_GATE_ROOT="$evidence/selfmig"
 
+require_full_translation() {
+  local manifest_run
+  manifest_run=$(cat "$SELFMIG_GATE_ROOT/migrate-run-dir.txt")
+  if ! jq -e --slurpfile baseline tools/cs2gs/selfmig-baseline.json '
+    .apps as $apps
+    | (($baseline[0].greenApps + ($baseline[0].stageFloor | keys)) | unique) as $expected
+    | ($apps | type) == "array"
+      and ($apps | length) == 56
+      and ($expected | length) == 56
+      and ([$apps[].appId] | sort) == $expected
+      and all($apps[];
+        .succeeded == true
+        and (.stages | map(select(.stage == "translate"))
+          | length == 1 and .[0].status == "passed"))
+  ' "$manifest_run/run.json" > /dev/null; then
+    echo "Expected all 56 baseline apps to pass translation: $manifest_run/run.json" >&2
+    return 1
+  fi
+}
+
 dotnet restore GSharp.sln --locked-mode -v:minimal
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj \
   -c Release --no-restore -graph -v:minimal
 bash build/run-cs2gs-selfmig-migrate.sh || exit 1
+require_full_translation
 
 repo_root=$PWD
 source build/selfmig-common.sh
@@ -298,6 +319,7 @@ selfmig_hash_tree "$SELFMIG_GATE_ROOT/migrated" \
 
 export SELFMIG_GATE_ROOT="$evidence/selfmig-final"
 bash build/run-cs2gs-selfmig-migrate.sh || exit 1
+require_full_translation
 selfmig_hash_tree "$SELFMIG_GATE_ROOT/migrated" \
   > artifacts/issue-4198/final-pre-validation.sha256 || exit 1
 cmp -s artifacts/issue-4198/first-pre-validation.sha256 \
@@ -320,6 +342,12 @@ python3 build/generate-selfmig-shard-matrix.py \
   --run-dir "$run_dir" \
   --costs artifacts/issue-4198/nightly-34759865620/selfmig-shard-costs.json \
   --shards 4 > artifacts/issue-4198/validation-matrix.json
+jq -e --slurpfile run "$run_dir/run.json" '
+  . as $matrix
+  | [$matrix.include[].apps | split(" ")[]] as $selected
+  | ([$matrix.include[].name] | sort) == ["1", "2", "3", "4"]
+    and ($selected | sort) == ([$run[0].apps[].appId] | sort)
+' artifacts/issue-4198/validation-matrix.json > /dev/null
 
 # This listing runs the same invocations serially. Locally their validation
 # stages ran concurrently on separate copies, with prerequisite builds serialized.
@@ -327,20 +355,24 @@ for shard in 1 2 3 4; do
   mkdir -p "$evidence/validation-$shard"
   cp -a "$SELFMIG_GATE_ROOT/migrated" "$evidence/validation-$shard/migrated"
   cp "$SELFMIG_GATE_ROOT/migrate-run-dir.txt" "$evidence/validation-$shard/"
-  mapfile -t apps < <(jq -r --arg name "$shard" \
-    '.include[] | select(.name == $name) | .apps | split(" ")[]' \
+  app_ids=$(jq -er --arg name "$shard" \
+    '.include[] | select(.name == $name) | .apps' \
     artifacts/issue-4198/validation-matrix.json)
+  read -r -a apps <<< "$app_ids"
   SELFMIG_GATE_ROOT="$evidence/validation-$shard" \
     bash build/run-cs2gs-selfmig-validate.sh "$shard" "${apps[@]}"
 done
 
 python3 - "$evidence" <<'PY' || exit 1
 import hashlib
+import json
 import shutil
 import sys
+from collections import Counter
 from pathlib import Path
 
 root = Path(sys.argv[1])
+validated = []
 for shard in ("1", "2", "3", "4"):
     source = root / f"validation-{shard}" / f"shard-{shard}"
     target = root / "final-shards" / shard
@@ -355,6 +387,13 @@ for shard in ("1", "2", "3", "4"):
         if actual != expected:
             raise SystemExit(f"SHA-256 mismatch: {src} -> {dst}")
         print(f"{shard}/{artifact}: {actual}")
+    validated.extend(json.loads((target / "shard-run.json").read_text())["apps"])
+manifest_run = Path((root / "selfmig-final/migrate-run-dir.txt").read_text().strip())
+translated = json.loads((manifest_run / "run.json").read_text())["apps"]
+if len(validated) != 56 or Counter(a["appId"] for a in validated) != Counter(
+    a["appId"] for a in translated
+):
+    raise SystemExit("Validated shard apps do not match the complete 56-app translation.")
 PY
 gate_exit=0
 bash build/run-cs2gs-selfmig-gate.sh \
