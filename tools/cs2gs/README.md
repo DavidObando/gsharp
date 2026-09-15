@@ -173,7 +173,7 @@ errors in new `src/Core` files, 16 apps), #3905 (a gsc stack overflow on
 `Gsharp.Runtime.Channels`, 11 apps blinded).
 
 `build/run-cs2gs-selfmig-pr-guard.sh` (workflow
-`.github/workflows/cs2gs-pr-guard.yml`) migrates and compiles just the **hot
+`.github/workflows/build.yml`) migrates and compiles just the **hot
 core** — the projects whose migration failures cascade widest:
 
 ```

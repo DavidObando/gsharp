@@ -160,10 +160,6 @@ unknown_cause=$(printf '%s' '[{"message":"The operation was canceled."}]' |
 [[ "$unknown_cause" == unknown ]]
 
 grep -qx '    timeout-minutes: 90' "$workflow"
-grep -qx '    concurrency:' "$workflow"
-grep -qx '    name: hot-core cancellation cause' "$workflow"
-grep -q '::notice title=Hot-core guard superseded::' \
-  "$workflow"
 grep -qx '          if-no-files-found: ignore' \
   "$workflow"
 
