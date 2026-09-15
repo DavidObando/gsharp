@@ -53,6 +53,7 @@ public static class ClrNullability
     {
         if (property.PropertyType.IsByRef)
         {
+            // PropertyType.IsByRef guarantees that GetElementType returns the referent type.
             return ByRefTypeSymbol.Get(GetPropertyElementTypeSymbol(property, property.PropertyType.GetElementType()!));
         }
 
@@ -119,6 +120,7 @@ public static class ClrNullability
     /// <returns>The mapped type symbol.</returns>
     public static TypeSymbol GetReturnTypeSymbol(MethodInfo method)
     {
+        // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
         var returnType = method.ReturnType.IsByRef ? method.ReturnType.GetElementType()! : method.ReturnType;
         var baseSymbol = TypeSymbol.FromClrType(returnType);
         var definition = GetMetadataDefinition(method) as MethodInfo;

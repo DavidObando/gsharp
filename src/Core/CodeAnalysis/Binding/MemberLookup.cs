@@ -3794,6 +3794,7 @@ internal sealed class MemberLookup
             return false;
         }
 
+        // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
         var clrReturnType = clrMethod.ReturnType.IsByRef ? clrMethod.ReturnType.GetElementType()! : clrMethod.ReturnType;
         var clrParams = clrMethod.GetParameters();
 
@@ -3961,6 +3962,7 @@ internal sealed class MemberLookup
             return false;
         }
 
+        // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
         if (candidate.ReturnRefKind != RefCapabilities.GetReturnRefKind(openMethod)
             || !ReturnTypeMatchesSubstituted(candidate.Type, openMethod.ReturnType.IsByRef ? openMethod.ReturnType.GetElementType()! : openMethod.ReturnType, symbolicArgs))
         {
@@ -4070,6 +4072,7 @@ internal sealed class MemberLookup
             return false;
         }
 
+        // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
         if (method.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot.Method)
             || !ReturnTypeMatchesSubstituted(method.Type, slot.Method.ReturnType.IsByRef ? slot.Method.ReturnType.GetElementType()! : slot.Method.ReturnType, slot.SymbolicArgs))
         {
@@ -4245,6 +4248,7 @@ internal sealed class MemberLookup
     {
         foreach (var implProp in structSymbol.Properties)
         {
+            // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
             if (implProp.Name == openProp.Name
                 && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(openProp)
                 && ParameterTypeMatchesSubstituted(implProp.Type, openProp.PropertyType.IsByRef ? openProp.PropertyType.GetElementType()! : openProp.PropertyType, symbolicArgs))
@@ -4318,6 +4322,7 @@ internal sealed class MemberLookup
     {
         foreach (var implProp in structSymbol.Properties)
         {
+            // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
             if (implProp.Name == clrProp.Name
                 && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(clrProp)
                 && ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(implProp.Type), clrProp.PropertyType.IsByRef ? clrProp.PropertyType.GetElementType()! : clrProp.PropertyType))
