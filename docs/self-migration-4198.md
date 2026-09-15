@@ -13,6 +13,13 @@ residual. The independently motivated capability work remains
 [#4219](https://github.com/DavidObando/gsharp/issues/4219); the remaining ordinary
 helper is outside #4198's conditional scope.
 
+The repository owner merged [#4232](https://github.com/DavidObando/gsharp/pull/4232)
+as `13c96e6e1f18f64886ba291b0b07757f022f2ecb` and closed #4198 on September 14,
+while the longer full validation was still running. This documentation follow-up
+records its completed result. The measured source remains the explicit
+`b9cd4a4fe1` base below: the concurrently merged ADR-0180 changes in #4218 were
+**not** part of these runs. No later-main or fully-green-corpus claim is made.
+
 ## Reproducible measurement
 
 Measured September 14, 2026, from a dedicated worktree at
@@ -27,6 +34,12 @@ Run `2026-09-14T19-58-29Z_a6ced4` translated **56/56 projects**, using the uncha
 `selfmig_excludes` list, in one process so linked-source consistency checks remain
 active. The resulting source tree contains **3,911 `.gs` files** after the
 counter's existing generated-directory pruning.
+
+The independent local repeat, `2026-09-14T20-37-39Z_f92f65`, also translated
+**56/56** with the same metrics. `selfmig_hash_tree` compared both complete
+pre-validation trees: **zero differing `.gs` files**. This pristine repeat is the
+input to four isolated validation shards; their partition includes all 56
+projects exactly once.
 
 | Measurement | Value |
 | --- | ---: |
@@ -105,23 +118,223 @@ occurrence fails with `GATE: __local_ count 4 exceeded ceiling 3.` The lift comm
 does not inflate the code count. No compiler, translator, parser, or emitter
 behavior changes.
 
+## Completed local regression results
+
+- Release CLI and `Cs2Gs.Tests` project builds: **0 warnings, 0 errors**.
+- Complete native `Cs2Gs.Tests` suite: **3,067 passed, 0 failed, 0 skipped**,
+  duration **30 minutes 26 seconds**. TRX counters also report zero errors,
+  timeouts, aborted, inconclusive, or not-executed cases.
+- Exact migrated `Cs2Gs.Tests`: **3,067 passed, 0 failed, 0 skipped**, duration
+  **39 minutes 37 seconds**, after passing compile and ILVerify. Its existing
+  72-minute parity budget and 2,680-original-`[Fact]` lower bound were unchanged.
+- All **14** existing `Issue4197CapturingRecursiveLocalFunctionWideningTests`
+  cases passed, including the ordinary default-parameter residual, non-capturing
+  and capturing cycles, ref-returning lift, and explicit generic negative guard.
+- Shared counter contract suite, including the new ceiling boundary: **passed**.
+- Stage-floor regression suite: **13 passed**.
+- `bash -n build/test-cs2gs-counters.sh` and `git diff --check`: **passed**.
+- JSON comparison against the measured base: the only changed baseline value is
+  `liftedLocalCeiling`, **31 → 3**.
+
+## Complete full-corpus gate result
+
+All four canonical validation shards completed. Their manifests were checked
+against the complete translation manifest: **56 apps, each exactly once**.
+For this evidenced run, all 12 shard artifacts were required and each copied
+file's SHA-256 was compared with its source. This provenance check does not
+change the canonical gate's policy for other runs.
+The existing merge/gate script replayed every shard's polish delta and produced
+`run.merged.json` for `2026-09-14T20-37-39Z_f92f65`.
+
+| Stage | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: |
+| Translate | 56 | 0 | 0 |
+| Compile | 55 | 1 | 0 |
+| ILVerify | 54 | 1 | 1 |
+| Test-parity | 52 | 2 | 2 |
+
+These are the pipeline's stage verdicts, not a claim that every library has a
+runtime oracle. Its existing no-oracle library handling is unchanged; the native
+and migrated test-suite counts above are actual executed cases.
+
+| Final metric | Measured | Unchanged limit, except the banked lift ceiling |
+| --- | ---: | ---: |
+| Fully green apps | 52/56 | floor 54 |
+| Synthetic labels | 0 | ceiling 0 |
+| Code `__local_` occurrences | 3 | ceiling 3, previously 31 |
+| Reducible lines over 300 characters | 1 | ceiling 10 |
+| Single-atom-bounded long lines | 40 | report only |
+| Post-polish `!!` occurrences | 9,915 | ceiling 12,100 |
+
+**The full gate exits 1.** Every readability ceiling passes, including the
+tightened lift ceiling. The unchanged functional gates correctly reject:
+
+- **Green count:** 52 is below 54.
+- **Banked identities:** `Compiler.Tests`, `Extensions.Tests`, and
+  `Runtime.Channels.Tests` are no longer fully green in this measured run.
+- **Stage floor:** `Core.Tests` reaches ILVerify, below its test-parity floor.
+
+| Red app | Actual failure | Separate tracker |
+| --- | --- | --- |
+| `test/Core.Tests/Core.Tests.csproj` | ILVerify `MethodAccess` | #4233 |
+| `test/Extensions.Tests/Extensions.Tests.csproj` | Parity test-host abort, missing `ChannelExtensions` | #4234 |
+| `test/Runtime.Channels.Tests/Runtime.Channels.Tests.csproj` | Compile `GS0113`, missing `ChannelExtensions` | #4234 |
+| `test/Compiler.Tests/Compiler.Tests.csproj` | One runtime parity failure in `ReceiveValueAsync<T>` | #4236 |
+
+No failure is a generic/ref-returning local-function residual. No floor is
+lowered, green identity removed, test filtered out of the full run, or exception
+allowlisted. The newly green `Cs2Gs.Tests` app does not conceal the other apps'
+regressions. The initial implementation commit's PR CI completed with 38 passing
+checks and three policy skips, including the 8/8 hot-core guard; that narrower
+green result is **not** substituted for this red whole-corpus gate.
+
+## Independently reproduced blockers
+
+[#4233](https://github.com/DavidObando/gsharp/issues/4233) separately tracks the
+exact `Core.Tests` ILVerify regression discovered during this validation:
+
+```text
+MethodAccess: Issue4216ReceiverAttributeEmitTests::NotNullWhen_OnExtensionReceiver_RoundTripsThroughReflection()
+[offset 0x00000049] Method is not visible.
+```
+
+Fingerprint:
+`sha256:76e60a0828996d39bf043173515d59ced7cf2bf488de715ab06f88f3415c5909`.
+The local artifact (`2026-09-14T21-02-22Z_783bd4`, gsc
+`0.4.686+b9cd4a4fe1`) and the September 14 main nightly's artifact
+(`2026-09-14T14-13-16Z_e7652d`, gsc `0.4.680+5748a89616`) have the same fingerprint,
+method, offset, and diagnostic. The exact C# control passes **1/1**, with zero
+skips; its Debug build has zero warnings/errors.
+
+This is not a generic/ref-returning local-function residual. `Core.Tests`
+compiles but cannot reach parity until the inaccessible emitted call is fixed.
+Its existing test-parity stage floor remains intact. The older parity failures
+under [#4214](https://github.com/DavidObando/gsharp/issues/4214) are masked, not
+fixed, by this earlier-stage failure. No fixture rewrite, exclusion, exemption,
+or unrelated compiler fix is included here.
+
+[#4234](https://github.com/DavidObando/gsharp/issues/4234) tracks a separate
+`Extensions.Tests` runtime failure. Translate, compile, and ILVerify pass, but a
+free goroutine terminates the test host with `TypeLoadException` for
+`Gsharp.Concurrency.ChannelExtensions` from `Gsharp.Runtime.Channels`. The build
+log reports conflicting runtime assembly versions, and the already-G# Extensions
+assembly expects a C# extension-owner type absent from the translated runtime.
+The precise reference/metadata correction remains outside #4198's scope.
+
+The native Extensions suite passes **180/180**, zero skips. A rerun from an
+isolated copy of the migrated test output reproduces the crash. Its partial
+`Passed!` summaries (53 cases in the pipeline, 63 in the copied-output rerun) are
+**not passing suites**: both runs abort. The existing parity/coverage guard
+correctly rejects them, and the banked green app remains banked.
+
+The same missing owner also breaks the banked `Runtime.Channels.Tests` app at
+compile: `ChannelOpsTests.gs:157` reports
+`GS0113: Type 'ChannelExtensions' doesn't exist` for the translated
+`typeof(ChannelExtensions).GetMethods()` reflection assertion. Its native suite
+passes **208/208**, zero skips. This sibling is tracked under #4234 as well;
+neither assertion nor app identity is removed.
+
+[#4236](https://github.com/DavidObando/gsharp/issues/4236) separately tracks the
+one failure in the complete migrated `Compiler.Tests` run: **5,855 passed,
+1 failed, 0 skipped, 5,856 total**, completed in 3,759 seconds within its existing
+90-minute budget. `ChannelElementMatrix_LoadsVerifiesAndRuns` executes a program
+that throws `InvalidProgramException` in
+`ChannelOps.ReceiveValueAsync<T>`, propagated through a `ScopeException`.
+Project compile and ILVerify both pass; runtime execution still fails.
+
+The exact native C# control passes **1/1**. A one-test rerun against the original
+migrated output reproduces the same failure, **0 passed / 1 failed**. Its
+fingerprint is
+`sha256:3dc53ea4f337f3a5ff3d6b1ef62863d4ed15c75246d6fefdbf1ce2eda3d1f142`.
+This async runtime failure is not assumed to share #4234's missing-owner cause
+and is not a generic mutual-recursion group.
+
 ## Local commands
 
-Commands run from the dedicated implementation worktree. The evidence directory
-is its sibling, not a descendant: the migration correctly rejects overlapping
-source/destination trees. All output and scratch paths remain inside the parent
-project directory.
+For reproduction, use a fresh, clean worktree at the #4232 implementation commit,
+`f19f3d2bd83a5213b3e68c5ff8f4260e737383c5`. Its compiler, translator, and project
+sources are identical to its parent, the measured `b9cd4a4fe1`, but it also
+contains the ceiling-3 baseline and boundary regression. A fresh build can carry
+a different Git-derived version stamp from the recorded `0.4.686` binaries.
+Do not use the later documentation branch containing ADR-0180.
+
+Run this as a Bash script. Unexpected command failures stop it immediately. The
+recorded gate exit 1 is checked explicitly so the remaining controls can run;
+even if those controls pass, the script finishes with that red gate status.
+Use a fresh evidence directory to avoid stale inputs or overwriting retained
+results. The evidence directory is a sibling of the worktree, not its descendant;
+all output and scratch paths stay inside the parent project directory.
+The exact historical shard-cost input is embedded below so reproducing the
+partition does not depend on an expiring Actions artifact.
 
 ```bash
+set -euo pipefail
+if [[ "$(git rev-parse HEAD)" != f19f3d2bd83a5213b3e68c5ff8f4260e737383c5 ]]; then
+  echo "Use a clean worktree at the #4232 implementation commit." >&2
+  exit 1
+fi
+worktree_status=$(git status --porcelain=v1 --untracked-files=all)
+if [[ -n "$worktree_status" ]]; then
+  printf 'Tracked, staged, or untracked inputs would change the corpus:\n%s\n' \
+    "$worktree_status" >&2
+  exit 1
+fi
+if [[ -e ../issue-4198-evidence ]]; then
+  echo "Choose a fresh evidence directory; refusing to reuse existing results." >&2
+  exit 1
+fi
+mkdir -p ../issue-4198-evidence/runtime artifacts/issue-4198
 evidence="$(cd ../issue-4198-evidence && pwd)"
+git init --quiet "$evidence/runtime"
+printf '<Project />\n' > "$evidence/runtime/Directory.Build.props"
+printf '<Project />\n' > "$evidence/runtime/Directory.Build.targets"
+printf '<Project />\n' > "$evidence/runtime/Directory.Packages.props"
 export TMPDIR="$evidence/runtime"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 export SELFMIG_GATE_ROOT="$evidence/selfmig"
 
+require_full_translation() {
+  local manifest_run
+  manifest_run=$(cat "$SELFMIG_GATE_ROOT/migrate-run-dir.txt")
+  if ! jq -e --slurpfile baseline tools/cs2gs/selfmig-baseline.json '
+    .apps as $apps
+    | (($baseline[0].greenApps + ($baseline[0].stageFloor | keys)) | unique) as $expected
+    | .succeeded == true
+      and ($apps | type) == "array"
+      and ($apps | length) == 56
+      and ($expected | length) == 56
+      and ([$apps[].appId] | sort) == $expected
+      and all($apps[];
+        .succeeded == true
+        and (.stages | map(select(.stage == "translate"))
+          | length == 1 and .[0].status == "passed"))
+  ' "$manifest_run/run.json" > /dev/null; then
+    echo "Expected a successful repository run with all 56 apps translated: $manifest_run/run.json" >&2
+    return 1
+  fi
+}
+
 dotnet restore GSharp.sln --locked-mode -v:minimal
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj \
   -c Release --no-restore -graph -v:minimal
-bash build/run-cs2gs-selfmig-migrate.sh
+bash build/run-cs2gs-selfmig-migrate.sh || exit 1
+require_full_translation
+
+repo_root=$PWD
+source build/selfmig-common.sh
+selfmig_hash_tree "$SELFMIG_GATE_ROOT/migrated" \
+  > artifacts/issue-4198/first-pre-validation.sha256 || exit 1
+
+export SELFMIG_GATE_ROOT="$evidence/selfmig-final"
+bash build/run-cs2gs-selfmig-migrate.sh || exit 1
+require_full_translation
+selfmig_hash_tree "$SELFMIG_GATE_ROOT/migrated" \
+  > artifacts/issue-4198/final-pre-validation.sha256 || exit 1
+cmp -s artifacts/issue-4198/first-pre-validation.sha256 \
+  artifacts/issue-4198/final-pre-validation.sha256 || {
+  echo "Pre-validation trees differ." >&2
+  exit 1
+}
 
 dotnet build tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj \
   -c Release --no-restore -graph -v:minimal
@@ -131,21 +344,178 @@ dotnet test tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj \
   --results-directory artifacts/issue-4198/test-results
 
 run_dir=$(cat "$SELFMIG_GATE_ROOT/migrate-run-dir.txt")
-mapfile -t apps < <(jq -r '.apps[].appId' "$run_dir/run.json")
-bash build/run-cs2gs-selfmig-validate.sh full "${apps[@]}"
+cat > artifacts/issue-4198/shard-costs.json <<'JSON'
+{
+  "schema": 1,
+  "runId": "2026-09-13T13-31-09Z_88fc8c",
+  "note": "Per-app validation wall time in seconds (issue #3721). Copy over build/selfmig-shard-costs.json to reseed the shard planner.",
+  "apps": {
+    "test/Compiler.Tests/Compiler.Tests.csproj": 4222.0,
+    "tools/cs2gs/Cs2Gs.Tests/Cs2Gs.Tests.csproj": 2940.6,
+    "src/Formatting/GSharp.Formatting/GSharp.Formatting.csproj": 751.8,
+    "src/Sdk/Gsharp.Templates/Gsharp.Templates.csproj": 4.3,
+    "test-assets/Issue3119.CrossConstants/Issue3119.CrossConstants.csproj": 3.7,
+    "test/Core.Tests/Core.Tests.csproj": 2358.9,
+    "test/Formatting.Tests/Formatting.Tests.csproj": 709.3,
+    "test/InternalAnalyzers.Tests/InternalAnalyzers.Tests.csproj": 11.3,
+    "test/Runtime.Channels.Tests/Runtime.Channels.Tests.csproj": 16.0,
+    "tools/cs2gs/Cs2Gs.Tests/Fixtures/Issue3086GeneratedRegex/Issue3086GeneratedRegex.csproj": 3.7,
+    "tools/cs2gs/corpus/L1-Console/L1-Console.csproj": 3.2,
+    "tools/cs2gs/corpus/L2-Library.Tests/L2-Library.Tests.csproj": 5.8,
+    "tools/cs2gs/corpus/L3-Library.Tests/L3-Library.Tests.csproj": 7.1,
+    "tools/cs2gs/corpus/grid/G05-Collections-Console/G05-Collections-Console.csproj": 3.2,
+    "tools/cs2gs/corpus/grid/G06-Types-Console/G06-Types-Console.csproj": 3.3,
+    "tools/cs2gs/corpus/grid/G13-Extensions-Console/G13-Extensions-Console.csproj": 3.2,
+    "tools/cs2gs/corpus/grid/G14-Strings-Console/G14-Strings-Console.csproj": 2.9,
+    "tools/gsgen/GSharp.GeneratorHost/GSharp.GeneratorHost.csproj": 929.8,
+    "src/Compiler/Compiler.csproj": 643.8,
+    "src/Core/Core.csproj": 133.1,
+    "src/LanguageServer/LanguageServer.csproj": 293.3,
+    "test/LanguageServer.Tests/LanguageServer.Tests.csproj": 341.5,
+    "test/Sdk.Tests/Sdk.Tests.csproj": 724.0,
+    "tools/cs2gs/Cs2Gs.Pipeline/Cs2Gs.Pipeline.csproj": 806.9,
+    "tools/cs2gs/corpus/L3-Library/L3-Library.csproj": 4.6,
+    "tools/cs2gs/corpus/grid/G02-Operators-Console/G02-Operators-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/grid/G03-ControlFlow-Console/G03-ControlFlow-Console.csproj": 4.7,
+    "tools/gsgen/GSharp.GeneratorHost.Tests/GSharp.GeneratorHost.Tests.csproj": 819.4,
+    "src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj": 627.1,
+    "src/Analyzers/InternalAnalyzers/InternalAnalyzers.csproj": 6.8,
+    "src/Formatting/Gsfmt.Cli/Gsfmt.Cli.csproj": 272.6,
+    "src/Repl/Repl.csproj": 595.1,
+    "src/Sdk/Gsharp.HotReload.Runtime/Gsharp.HotReload.Runtime.csproj": 12.3,
+    "src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj": 20.7,
+    "src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.csproj": 8.0,
+    "test/Extensions.Tests/Extensions.Tests.csproj": 569.4,
+    "tools/cs2gs/Cs2Gs.Report/Cs2Gs.Report.csproj": 808.3,
+    "tools/cs2gs/Cs2Gs.Tests/Fixtures/Issue2546ImplicitUsings/Issue2546ImplicitUsings.csproj": 4.9,
+    "tools/cs2gs/corpus/L4-Console/L4-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/L5-Console/L5-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/grid/G04-Patterns-Console/G04-Patterns-Console.csproj": 7.8,
+    "tools/cs2gs/corpus/grid/G08-Generics-Console/G08-Generics-Console.csproj": 4.5,
+    "tools/cs2gs/corpus/grid/G09-Functions-Console/G09-Functions-Console.csproj": 8.0,
+    "tools/cs2gs/corpus/grid/G10-Async-Console/G10-Async-Console.csproj": 4.7,
+    "tools/cs2gs/corpus/grid/G11-Linq-Console/G11-Linq-Console.csproj": 4.9,
+    "tools/cs2gs/corpus/grid/G12-Unsafe-Console/G12-Unsafe-Console.csproj": 4.3,
+    "out/scratch/ildump/ildump.csproj": 75.3,
+    "test/Interpreter.Tests/Interpreter.Tests.csproj": 1076.7,
+    "tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj": 991.7,
+    "tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.csproj": 174.3,
+    "tools/cs2gs/Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.csproj": 192.1,
+    "tools/cs2gs/Cs2Gs.Translator/Cs2Gs.Translator.csproj": 187.8,
+    "tools/cs2gs/corpus/L2-Library/L2-Library.csproj": 2.7,
+    "tools/cs2gs/corpus/grid/G01-Literals-Console/G01-Literals-Console.csproj": 2.9,
+    "tools/cs2gs/corpus/grid/G07-Members-Console/G07-Members-Console.csproj": 3.2,
+    "tools/gsgen/Gsgen.Cli/Gsgen.Cli.csproj": 763.9
+  }
+}
+JSON
+python3 build/generate-selfmig-shard-matrix.py \
+  --run-dir "$run_dir" \
+  --costs artifacts/issue-4198/shard-costs.json \
+  --shards 4 > artifacts/issue-4198/validation-matrix.json
+jq -e --slurpfile run "$run_dir/run.json" '
+  . as $matrix
+  | [$matrix.include[].apps | split(" ")[]] as $selected
+  | ([$matrix.include[].name] | sort) == ["1", "2", "3", "4"]
+    and ($selected | sort) == ([$run[0].apps[].appId] | sort)
+' artifacts/issue-4198/validation-matrix.json > /dev/null
+
+# This listing runs the same invocations serially. Locally their validation
+# stages ran concurrently on separate copies, with prerequisite builds serialized.
+for shard in 1 2 3 4; do
+  mkdir -p "$evidence/validation-$shard"
+  cp -a "$SELFMIG_GATE_ROOT/migrated" "$evidence/validation-$shard/migrated"
+  cp "$SELFMIG_GATE_ROOT/migrate-run-dir.txt" "$evidence/validation-$shard/"
+  app_ids=$(jq -er --arg name "$shard" \
+    '.include[] | select(.name == $name) | .apps' \
+    artifacts/issue-4198/validation-matrix.json)
+  read -r -a apps <<< "$app_ids"
+  SELFMIG_GATE_ROOT="$evidence/validation-$shard" \
+    bash build/run-cs2gs-selfmig-validate.sh "$shard" "${apps[@]}"
+done
+
+python3 - "$evidence" <<'PY' || exit 1
+import hashlib
+import json
+import shutil
+import sys
+from collections import Counter
+from pathlib import Path
+
+root = Path(sys.argv[1])
+validated = []
+for shard in ("1", "2", "3", "4"):
+    source = root / f"validation-{shard}" / f"shard-{shard}"
+    target = root / "final-shards" / shard
+    target.mkdir(parents=True, exist_ok=True)
+    for artifact in ("shard-run.json", "shard-costs.json", "polished.tar.gz"):
+        src, dst = source / artifact, target / artifact
+        if not src.is_file():
+            raise SystemExit(f"Missing required artifact: {src}")
+        shutil.copy2(src, dst)
+        expected = hashlib.sha256(src.read_bytes()).hexdigest()
+        actual = hashlib.sha256(dst.read_bytes()).hexdigest()
+        if actual != expected:
+            raise SystemExit(f"SHA-256 mismatch: {src} -> {dst}")
+        print(f"{shard}/{artifact}: {actual}")
+    validated.extend(json.loads((target / "shard-run.json").read_text())["apps"])
+manifest_run = Path((root / "selfmig-final/migrate-run-dir.txt").read_text().strip())
+translated = json.loads((manifest_run / "run.json").read_text())["apps"]
+if len(validated) != 56 or Counter(a["appId"] for a in validated) != Counter(
+    a["appId"] for a in translated
+):
+    raise SystemExit("Validated shard apps do not match the complete 56-app translation.")
+PY
+gate_exit=0
 bash build/run-cs2gs-selfmig-gate.sh \
-  "$SELFMIG_GATE_ROOT" "$SELFMIG_GATE_ROOT"
+  "$SELFMIG_GATE_ROOT" "$evidence/final-shards" \
+  > artifacts/issue-4198/reproduced-gate.log 2>&1 || gate_exit=$?
+cat artifacts/issue-4198/reproduced-gate.log
+if (( gate_exit != 1 )); then
+  echo "Expected recorded gate exit 1, got $gate_exit." >&2
+  exit 1
+fi
+grep -Fq 'self-migration: 52/56 green (floor 54);' \
+  artifacts/issue-4198/reproduced-gate.log
 
 bash build/test-cs2gs-counters.sh
 python3 build/test-check-selfmig-stage-floor.py
+dotnet build test/Core.Tests/Core.Tests.csproj \
+  -c Debug --no-restore -graph -v:minimal
+dotnet test test/Core.Tests/Core.Tests.csproj -c Debug --no-build --no-restore \
+  --filter FullyQualifiedName~Issue4216ReceiverAttributeEmitTests.NotNullWhen_OnExtensionReceiver_RoundTripsThroughReflection
+dotnet build test/Extensions.Tests/Extensions.Tests.csproj \
+  -c Debug --no-restore -graph -v:minimal
+dotnet test test/Extensions.Tests/Extensions.Tests.csproj \
+  -c Debug --no-build --no-restore
+dotnet build test/Runtime.Channels.Tests/Runtime.Channels.Tests.csproj \
+  -c Debug --no-restore -graph -v:minimal
+dotnet test test/Runtime.Channels.Tests/Runtime.Channels.Tests.csproj \
+  -c Debug --no-build --no-restore
+dotnet build test/Compiler.Tests/Compiler.Tests.csproj \
+  -c Debug --no-restore -graph -v:minimal
+dotnet test test/Compiler.Tests/Compiler.Tests.csproj -c Debug --no-build --no-restore \
+  --filter FullyQualifiedName~Issue2965ChannelElementSlotTests.ChannelElementMatrix_LoadsVerifiesAndRuns
 git diff --check
+printf 'Controls passed; the full gate remains red (exit %s).\n' "$gate_exit"
+exit "$gate_exit"
 ```
 
-The project-local runtime scratch directory is initialized as an empty Git
-repository and contains neutral `<Project />` `Directory.Build.props` and
-`Directory.Build.targets`. This prevents standalone test fixtures from inheriting
-the enclosing repository's ignores or build settings. An initial suite attempt
+The recorded project-local runtime scratch directory was initialized as an empty
+Git repository with neutral `<Project />` `Directory.Build.props` and
+`Directory.Build.targets`. The reproduction recipe additionally supplies an empty
+`Directory.Packages.props` to stop NuGet's independent ancestor lookup; an empty
+file does not enable central package management. This hardens reproduction under
+a CPM-enabled parent without claiming such a parent affected the recorded runs.
+These boundaries keep standalone fixtures from inheriting enclosing repository
+ignores, build settings, or central package configuration. An initial suite attempt
 under the worktree's ignored `artifacts/` directory exposed that environmental
 problem; the mirror-ordering reproducer passed after isolation, without modifying
 tests or gates. The initial CLI build also required the solution's locked restore
 to supply the SDK packaging target's compiler assets.
+
+The original serial validation attempt was stopped when the prior run's measured
+app costs showed a roughly six-hour serial workload. It is not counted as a
+completed validation. A fresh, byte-identical whole-corpus translation was taken
+before copying the shard inputs; no partially polished or interrupted build tree
+was reused.
