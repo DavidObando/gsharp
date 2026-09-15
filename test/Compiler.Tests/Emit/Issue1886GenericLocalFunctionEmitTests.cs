@@ -18,8 +18,8 @@ namespace GSharp.Compiler.Tests.Emit;
 /// with GS0113 (`T` doesn't exist). These tests exercise the new
 /// `let Name[T, ...] = func (...) ... { ... }` generic function-literal
 /// syntax end to end: parse, bind, emit, and run, for both single and
-/// multi type-parameter shapes, plus the capture-rejection diagnostic
-/// (GS0463) for a generic local function that reads an outer variable.
+/// multi type-parameter shapes, plus capture behavior for a generic local
+/// function that reads and mutates an outer variable.
 /// </summary>
 public class Issue1886GenericLocalFunctionEmitTests
 {
@@ -110,25 +110,26 @@ public class Issue1886GenericLocalFunctionEmitTests
     }
 
     [Fact]
-    public void GenericLocalFunction_CapturingOuterVariable_ReportsGS0463()
+    public void GenericLocalFunction_CapturingOuterVariable_SharesStateAcrossInstantiations()
     {
         var source = """
             package P
 
-            func Foo() {
-                let outer = 5
-                let Bad[T] = func (a T) T {
-                    Console.WriteLine(outer)
-                    return a
+            func Foo() int32 {
+                var count = 0
+                let Add[T] = func (value T) T {
+                    count = count + 1
+                    return value
                 }
-                Console.WriteLine(Bad(1))
+                Add(1)
+                Add("a")
+                return count
             }
-            Foo()
+            Console.WriteLine(Foo())
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0463", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)

@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -155,6 +156,8 @@ internal sealed class ClosureEmitter
     /// <c>EmitFunctionLiteral</c> path).
     /// </summary>
     public Dictionary<BoundFunctionLiteralExpression, ClosureInfo> ClosureInfos { get; } = [];
+
+    public Dictionary<FunctionSymbol, (BoundFunctionLiteralExpression Literal, ClosureInfo Info)> GenericLocalClosures { get; } = [];
 
     /// <summary>
     /// Gets per-<c>go</c>-site closure metadata. The display class wraps the
@@ -330,12 +333,14 @@ internal sealed class ClosureEmitter
                     literal.Function.Type,
                     literal.Body,
                     hostPackage,
-                    invokeName: "Invoke");
+                    invokeName: "Invoke",
+                    excludedTypeParameters: literal.Function.TypeParameters);
 
                 // Transfer the generic local's type parameters to the Invoke method
                 genericInfo.InvokeMethod.TypeParameters = literal.Function.TypeParameters;
 
                 this.ClosureInfos[literal] = genericInfo;
+                this.GenericLocalClosures[literal.Function] = (literal, genericInfo);
 
                 // Nest inside enclosing type if accessible
                 if (literal.Function.LexicalEnclosingType is { } genericEnclosing
@@ -462,7 +467,8 @@ internal sealed class ClosureEmitter
         BoundBlockStatement body,
         PackageSymbol hostPackage,
         string invokeName,
-        ImmutableArray<TypeParameterSymbol> requiredTypeParameters = default)
+        ImmutableArray<TypeParameterSymbol> requiredTypeParameters = default,
+        ImmutableArray<TypeParameterSymbol> excludedTypeParameters = default)
     {
         var packageName = hostPackage?.Name ?? string.Empty;
         var fieldBuilder = ImmutableArray.CreateBuilder<FieldSymbol>(capturedVariables.Length);
@@ -526,7 +532,9 @@ internal sealed class ClosureEmitter
         var bodyTypeParameters = new List<TypeParameterSymbol>();
         LambdaEnclosingTypeParameterCollector.Collect(body, bodyTypeParameters);
         enclosingRefSink.AddRange(bodyTypeParameters);
-        var origTPs = SynthesizedClosureReifier.CollectOrdered(enclosingRefSink);
+        var origTPs = SynthesizedClosureReifier.CollectOrdered(enclosingRefSink)
+            .Where(tp => excludedTypeParameters.IsDefaultOrEmpty || !excludedTypeParameters.Contains(tp))
+            .ToImmutableArray();
 
         // Issue #3933: when the display class is about to be nested inside a
         // GENERIC encloser, re-declare that encloser's type parameters

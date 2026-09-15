@@ -133,6 +133,38 @@ internal sealed partial class MethodBodyEmitter
                 // `Nullable<X>` — see TryPlanUnconstrainedNullableLift.
                 var nullableLift = this.TryPlanUnconstrainedNullableLift(call);
 
+                if (this.outer.closures.GenericLocalClosures.TryGetValue(call.Function, out var genericLocal))
+                {
+                    this.EmitGenericLocalClosureInstance(genericLocal.Literal, genericLocal.Info);
+                    for (int i = 0; i < call.Arguments.Length; i++)
+                    {
+                        this.EmitExpression(call.Arguments[i]);
+                        if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
+                        {
+                            this.EmitUnconstrainedNullableLiftWrap(liftWrap);
+                        }
+                    }
+
+                    if (!this.outer.cache.MethodHandles.TryGetValue(genericLocal.Info.InvokeMethod, out var invokeHandle))
+                    {
+                        throw new InvalidOperationException(
+                            $"Closure invoke method '{genericLocal.Info.InvokeMethod.Name}' has no emitted MethodDef.");
+                    }
+
+                    EntityHandle invokeToken = invokeHandle;
+                    if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
+                    {
+                        invokeToken = nullableLift != null
+                            ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(invokeToken, nullableLift.TypeArguments)
+                            : this.outer.userTokens.BuildMethodSpecForGenericCall(invokeToken, call);
+                    }
+
+                    this.il.OpCode(ILOpCode.Call);
+                    this.il.Token(invokeToken);
+                    this.EmitRefReturnDereferenceIfNeeded(call.Function.ReturnRefKind, call.Type);
+                    break;
+                }
+
                 for (int i = 0; i < call.Arguments.Length; i++)
                 {
                     var arg = call.Arguments[i];
