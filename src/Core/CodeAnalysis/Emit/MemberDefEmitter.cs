@@ -195,7 +195,7 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
-            this.EmitReadOnlyRefPropertyAttribute(propDef, prop);
+            this.EmitReadOnlyRefAttribute(propDef, prop);
 
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the PropertyDef (parity with the class/interface member path).
@@ -239,7 +239,7 @@ internal sealed class MemberDefEmitter
         this.encodeTypeSymbol(encoder.Type(isByRef: prop.ReturnRefKind != RefKind.None), prop.Type);
     }
 
-    private void EmitReadOnlyRefPropertyAttribute(PropertyDefinitionHandle handle, PropertySymbol property)
+    private void EmitReadOnlyRefAttribute(EntityHandle handle, PropertySymbol property)
     {
         if (property.ReturnRefKind != RefKind.RefReadOnly)
         {
@@ -253,6 +253,19 @@ internal sealed class MemberDefEmitter
             handle,
             this.wellKnown.GetIsReadOnlyAttributeCtorRef(),
             this.emitCtx.Metadata.GetOrAddBlob(value));
+    }
+
+    private ParameterHandle GetPropertyGetterParameterList(PropertySymbol property)
+    {
+        var firstParameter = this.nextParameterHandle();
+        if (property.ReturnRefKind == RefKind.RefReadOnly)
+        {
+            var returnParameter = this.emitCtx.Metadata.AddParameter(
+                ParameterAttributes.None, default, sequenceNumber: 0);
+            this.EmitReadOnlyRefAttribute(returnParameter, property);
+        }
+
+        return firstParameter;
     }
 
     /// <summary>
@@ -441,7 +454,7 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(getterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle());
+            parameterList: this.GetPropertyGetterParameterList(prop));
     }
 
     /// <summary>
@@ -670,7 +683,7 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
-            this.EmitReadOnlyRefPropertyAttribute(propDef, prop);
+            this.EmitReadOnlyRefAttribute(propDef, prop);
 
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the PropertyDef (parity with the class/interface member path).
@@ -716,7 +729,7 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle());
+            parameterList: this.GetPropertyGetterParameterList(prop));
     }
 
     /// <summary>
@@ -1741,7 +1754,7 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
-            this.EmitReadOnlyRefPropertyAttribute(propDef, prop);
+            this.EmitReadOnlyRefAttribute(propDef, prop);
 
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the PropertyDef (parity with the class/interface member path).

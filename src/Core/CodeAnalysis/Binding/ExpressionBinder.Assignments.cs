@@ -2479,11 +2479,9 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        // For `out` we allow writes to a read-only target only if it's an
-        // out-parameter or a writable local. The existing GS9005 check fires
-        // for true constants; preserve that for `ref` (read-only operand is
-        // fine for `in`).
-        if (syntax.RefKindModifier.Text != "in" && RefCapabilities.IsReadOnlyStorage(operand))
+        // Constructor-owned readonly fields retain their initialization permissions.
+        if (syntax.RefKindModifier.Text != "in" && RefCapabilities.IsReadOnlyStorage(operand)
+            && !(operand is BoundFieldAccessExpression && IsWritableStructFieldReceiver(operand)))
         {
             Diagnostics.ReportCannotTakeAddressOfConstant(syntax.RefKindModifier.Location, syntax.Expression.ToString());
             return new BoundErrorExpression(null);

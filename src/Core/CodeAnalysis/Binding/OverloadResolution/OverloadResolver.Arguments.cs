@@ -1584,12 +1584,6 @@ internal sealed partial class OverloadResolver
 
             if (rk == RefKind.Ref || rk == RefKind.Out)
             {
-                if (RefCapabilities.IsReadOnlyStorage(arguments[i]))
-                {
-                    Diagnostics.ReportArgumentMustBePassedByRef(callLocation, i + 1, methodName);
-                    continue;
-                }
-
                 // ADR-0061: BoundConditionalAddressExpression is also a valid
                 // byref-producing argument (selects one of two addresses at
                 // runtime).
@@ -1604,6 +1598,11 @@ internal sealed partial class OverloadResolver
                     && !IsByRefInterpolatedHandlerArgument(arguments[i], rk))
                 {
                     Diagnostics.ReportArgumentMustBePassedByRef(callLocation, i + 1, methodName);
+                }
+                else if (RefCapabilities.IsReadOnlyStorage(arguments[i]))
+                {
+                    Diagnostics.ReportReadOnlyArgumentForWritableRef(
+                        callLocation, i + 1, methodName, rk == RefKind.Ref ? "ref" : "out");
                 }
             }
 

@@ -13,8 +13,10 @@ using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
 
-public class Issue4220ReadOnlyRefInteropTests
+public class Issue4220ReadOnlyRefInteropTests : IDisposable
 {
+    private readonly string workspace = Path.Combine(AppContext.BaseDirectory, "issue4220-artifacts", Guid.NewGuid().ToString("N"));
+
     private const string Source = """
         package Parity
         public interface IView[T] {
@@ -387,11 +389,106 @@ public class Issue4220ReadOnlyRefInteropTests
         Assert.DoesNotContain("error GS0005", result.Diagnostics, StringComparison.Ordinal);
     }
 
-    private static string NewDirectory()
+    [Theory]
+    [InlineData("Write", "ref", "in view", "GS9009")]
+    [InlineData("Fill", "out", "in view", "GS9009")]
+    [InlineData("Write", "ref", "view", "GS9002")]
+    [InlineData("Fill", "out", "view", "GS9002")]
+    public void ReadOnlyArgumentDiagnosticExplainsMissingWritePermission(string methodName, string refKind, string argument, string diagnostic)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, "issue4220-artifacts", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(path);
-        return path;
+        string directory = NewDirectory();
+        string imported = CompileCSharp(Imported, directory, "Imported");
+        var result = CompileResult($$"""
+            package Consumer
+            import Imported
+            func Run() {
+                var value = 10
+                let ref readonly view = value
+                Calls.{{methodName}}({{argument}})
+            }
+            """, directory, "Consumer", imported);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("error " + diagnostic, result.Diagnostics, StringComparison.Ordinal);
+        if (diagnostic == "GS9009")
+        {
+            Assert.Contains($"cannot be passed to a writable '{refKind}' parameter", result.Diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9002", result.Diagnostics, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ReferenceAssemblyGettersPreserveReadOnlyContracts()
+    {
+        string directory = NewDirectory();
+        string reference = Path.Combine(directory, "Parity.ref.dll");
+        var result = CompileResult(Source + """
+
+            public class Statics {
+                shared {
+                    var value int32 = 10
+                    public prop Value ref readonly int32 -> value
+                    public func Set(next int32) { value = next }
+                }
+            }
+            public class Box[T] {
+                public var Value T
+                public prop View ref readonly T -> Value
+            }
+            """, directory, "Parity", Array.Empty<string>(), reference);
+        Assert.True(result.ExitCode == 0, result.Diagnostics);
+
+        foreach (string assemblyPath in new[] { result.Path, reference })
+        {
+            var paths = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator).Append(assemblyPath);
+            using var metadata = new MetadataLoadContext(new PathAssemblyResolver(paths));
+            Assembly assembly = metadata.LoadFromAssemblyPath(assemblyPath);
+            foreach (var (typeName, propertyName) in new[] {
+                ("Parity.Source", "Property"), ("Parity.Source", "Item"),
+                ("Parity.Statics", "Value"), ("Parity.Box`1", "View"),
+            })
+            {
+                PropertyInfo property = assembly.GetType(typeName)!.GetProperty(propertyName)!;
+                Assert.True(property.PropertyType.IsByRef);
+                Assert.Contains(property.GetCustomAttributesData(),
+                    a => a.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute");
+                Assert.Contains(property.GetMethod!.ReturnParameter.GetRequiredCustomModifiers(),
+                    t => t.FullName == "System.Runtime.InteropServices.InAttribute");
+                Assert.Contains(property.GetMethod.ReturnParameter.GetCustomAttributesData(),
+                    a => a.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute");
+            }
+        }
+
+        string consumer = CompileCSharp("""
+            public static class Driver {
+                public static int Run() {
+                    var source = new Parity.Source();
+                    var box = new Parity.Box<int>();
+                    ref readonly int property = ref source.Property;
+                    ref readonly int index = ref source[1];
+                    ref readonly int shared = ref Parity.Statics.Value;
+                    ref readonly int generic = ref box.View;
+                    source.Set(42);
+                    Parity.Statics.Set(42);
+                    box.Value = 42;
+                    return property + index + shared + generic;
+                }
+            }
+            """, directory, "RefConsumer", reference);
+        Assert.Equal(168, EmittedFixture.LoadTogether(result.Path, consumer)[1].GetType("Driver")!.GetMethod("Run")!.Invoke(null, null));
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(this.workspace))
+        {
+            Directory.Delete(this.workspace, recursive: true);
+        }
+    }
+
+    private string NewDirectory()
+    {
+        Directory.CreateDirectory(this.workspace);
+        return this.workspace;
     }
 
     private static CSharpCompilation CreateCSharp(string source, string name, params string[] references)
@@ -416,6 +513,10 @@ public class Issue4220ReadOnlyRefInteropTests
     }
 
     private static (int ExitCode, string Diagnostics, string Path) CompileResult(string source, string directory, string name, params string[] references)
+        => CompileResult(source, directory, name, references, referenceOutputPath: null);
+
+    private static (int ExitCode, string Diagnostics, string Path) CompileResult(
+        string source, string directory, string name, string[] references, string referenceOutputPath)
     {
         string sourcePath = Path.Combine(directory, name + ".gs");
         string path = Path.Combine(directory, name + ".dll");
@@ -428,6 +529,7 @@ public class Issue4220ReadOnlyRefInteropTests
             Console.SetOut(output);
             Console.SetError(output);
             int code = Program.Main(new[] { "/target:library", "/targetframework:net10.0", "/out:" + path, sourcePath }
+                .Concat(referenceOutputPath == null ? Array.Empty<string>() : new[] { "/refout:" + referenceOutputPath })
                 .Concat(references.Select(r => "/reference:" + r)).ToArray());
             return (code, output.ToString(), path);
         }

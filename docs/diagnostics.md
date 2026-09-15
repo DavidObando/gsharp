@@ -313,7 +313,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | GS0423 | Error | Type does not implement a usable `GetEnumerator()` method and cannot be iterated with `for ... in`. | `for x in 42 { }` where `42`'s type has no usable `GetEnumerator()`. Previously misfiled under GS0268. |
 | GS0424 | Error | A ref-kind modifier (`ref`/`out`/`in`) is not legal on a primary-constructor parameter. | `class Vec(ref x int32) { }` — primary-constructor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Previously misfiled under GS0241. |
 
-### Pointer / by-ref diagnostics (GS9001–GS9008)
+### Pointer / by-ref diagnostics (GS9001–GS9009)
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
@@ -326,6 +326,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type **outside an `unsafe` context**. Inside an `unsafe` context `*T` is an unmanaged pointer and IS legal as a field type. |
 | GS9007 | Error | A type may contain at most one `shared` block. | A class or struct with two `shared { ... }` blocks; merge them into one. |
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
+| GS9009 | Error | Readonly storage cannot be passed to a writable `ref` or `out` parameter. | An imported `ref`/`out` parameter receives the readonly address `in view`. |
 
 ### Reference closure diagnostics (GS9100)
 

@@ -129,6 +129,8 @@ address and escape representation as writable refs, not a readonly-only path.
 The property attribute matters independently of the getter return attribute:
 omitting it makes otherwise plausible metadata unsupported to a C# consumer.
 Abstract/interface method return rows follow the same rules.
+Metadata-only `/refout` getter fallbacks also emit the sequence-zero readonly
+return attribute; implementation and reference assemblies must agree.
 
 Imports inspect required return modifiers and return attributes centrally.
 Byref return nullability and tuple names describe the pointee, not a nullable

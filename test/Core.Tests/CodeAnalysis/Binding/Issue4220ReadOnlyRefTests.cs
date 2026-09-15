@@ -344,4 +344,37 @@ public class Issue4220ReadOnlyRefTests
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0254");
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998" || d.Id == "GS0005");
     }
+
+    [Theory]
+    [InlineData("Fill(out Value)")]
+    [InlineData("Fill(out this.Value)")]
+    [InlineData("Write(ref Value)")]
+    [InlineData("Write(ref this.Value)")]
+    [InlineData("System.Int32.TryParse(\"42\", out Value)")]
+    public void ReadOnlyFieldInitializationKeepsConstructorWritePermission(string statement)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            func Fill(out value int32) { value = 42 }
+            func Write(ref value int32) { value = 42 }
+            class Box {
+                let Value int32 = 10
+                init() { {{statement}} }
+            }
+            var answer = Box{}.Value
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.ReadGlobals()["answer"]);
+    }
+
+    [Theory]
+    [InlineData("class Box { let Value int32\nfunc Change() { Fill(out Value) } }")]
+    [InlineData("class Box { let Value int32\ninit(other Box) { Fill(out other.Value) } }")]
+    [InlineData("class Box { let Value int32\ninit() { let ref readonly view = Value\nFill(out view) } }")]
+    [InlineData("open class Base { protected let Value int32 }\nclass Derived : Base { init() { Fill(out Value) } }")]
+    public void ConstructorPermissionDoesNotGrantOtherReadOnlyWrites(string declaration)
+    {
+        var result = EmittedOracle.Evaluate("func Fill(out value int32) { value = 42 }\n" + declaration);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS9005");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998" || d.Id == "GS0005");
+    }
 }
