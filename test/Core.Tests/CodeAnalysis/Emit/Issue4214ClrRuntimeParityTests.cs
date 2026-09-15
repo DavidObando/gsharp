@@ -4,6 +4,7 @@
 
 using System.Collections.Immutable;
 using System.IO;
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -17,6 +18,22 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 public class Issue4214ClrRuntimeParityTests
 {
+    [Fact]
+    public void ScalarGlobalReader_PreservesNullAndItsContract()
+    {
+        var method = typeof(EmittedOracleResult).GetMethod(nameof(EmittedOracleResult.ReadGlobal));
+        Assert.Equal(NullabilityState.Nullable, new NullabilityInfoContext().Create(method.ReturnParameter).ReadState);
+        var result = EmittedOracle.Evaluate("let value string? = nil");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.ReadGlobal("value"));
+        Assert.Null(result.ReadGlobal("missing"));
+        Assert.Null(result.ReadGlobal(string.Empty));
+        Assert.Null(result.ReadGlobal(null));
+        var failed = EmittedOracle.Evaluate("let value = unknownName");
+        Assert.NotEmpty(failed.Diagnostics);
+        Assert.Null(failed.ReadGlobal("value"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

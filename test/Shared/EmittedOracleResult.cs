@@ -139,7 +139,8 @@ public sealed class EmittedOracleResult
     /// </summary>
     /// <param name="name">The top-level variable's source name.</param>
     /// <returns>The global's current value, or <see langword="null"/>.</returns>
-    public object ReadGlobal(string name)
+#nullable enable annotations
+    public object? ReadGlobal(string? name)
     {
         if (string.IsNullOrEmpty(name))
         {
@@ -166,7 +167,6 @@ public sealed class EmittedOracleResult
     /// values of submission-declared types.
     /// </summary>
     /// <returns>A name-to-value map of the top-level globals.</returns>
-#nullable enable annotations
     public IReadOnlyDictionary<string, object?> ReadGlobals()
     {
         var globals = new Dictionary<string, object?>(StringComparer.Ordinal);

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+#nullable enable annotations
+
 using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
@@ -41,7 +43,7 @@ public class Issue2616CharNumericPromotionEmittedOracleTests
         Assert.Equal('C', Value("value"));
         Assert.Equal((char)2, Value("lifted"));
 
-        object Value(string name) => result.ReadGlobal(name);
+        object? Value(string name) => result.ReadGlobal(name);
     }
 
     [Fact]
@@ -77,6 +79,6 @@ public class Issue2616CharNumericPromotionEmittedOracleTests
         Assert.Equal("yes", Value("operatorCaught"));
         Assert.Equal("yes", Value("decimalCaught"));
 
-        object Value(string name) => result.ReadGlobal(name);
+        object? Value(string name) => result.ReadGlobal(name);
     }
 }
