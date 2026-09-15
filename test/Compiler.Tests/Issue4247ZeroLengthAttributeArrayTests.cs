@@ -83,6 +83,53 @@ public class Issue4247ZeroLengthAttributeArrayTests
     }
 
     /// <summary>
+    /// Issue #4247 follow-up (Copilot review): the issue's own repro is an
+    /// <c>object</c>-VALUED attribute constructor parameter (Roslyn's
+    /// <c>[Value(new Kind[0])]</c>), not a directly array-typed one — a
+    /// different constructor-argument shape from
+    /// <see cref="NoInitializerZeroLengthArray_CompilesAndReifiesAsEmptyArray"/>.
+    /// Confirmed this is a genuinely separate gap: reverting the product fix
+    /// reproduces the identical <c>GS0202</c> for this shape too, so this
+    /// pins the exact scenario the issue named.
+    /// </summary>
+    [Fact]
+    public void NoInitializerZeroLengthArray_AsObjectValuedConstructorArgument_CompilesAndReifiesAsEmptyArray()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4247_object_valued_").FullName;
+        try
+        {
+            const string Source = """
+                package P
+                import System
+                enum Kind { First = 7 }
+                class EAttribute(Values object) : Attribute {}
+                @E([0]Kind)
+                class Target {}
+                Console.WriteLine("ok")
+                """;
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var log = Compile(tempDir, "App.gs", Source, appPath, "/target:exe");
+
+            Assert.True(ErrorIds(log).Length == 0, log);
+            Assert.True(File.Exists(appPath), log);
+
+            IlVerifier.Verify(appPath);
+
+            var (argumentType, values) = ReadArrayArgument(appPath, "Target");
+            Assert.Equal("P.Kind[]", argumentType);
+            Assert.Empty(values);
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"the emitted program must run to completion. Exit {exit}:\n{output}");
+            Assert.Equal("ok", output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// Issue #4247 follow-up (Copilot review): the fix's scope is the
     /// attribute-constant binder, but the SAME no-initializer zero-length
     /// syntax is ordinary, non-attribute array-creation syntax too. Boxing
