@@ -1264,6 +1264,35 @@ public sealed partial class CSharpToGSharpTranslator
             && named.ContainingNamespace?.ToDisplayString() == "System"
             && named.Name is "Span" or "ReadOnlySpan";
 
+        private List<GExpression> TranslateArgumentsWithCallerInfo(
+            SyntaxNode callSyntax,
+            SeparatedSyntaxList<ArgumentSyntax> arguments,
+            ImmutableArray<IArgumentOperation> operationArguments)
+        {
+            var translated = this.TranslateArguments(arguments);
+            if (operationArguments.IsDefaultOrEmpty)
+            {
+                return translated;
+            }
+
+            foreach (var argument in operationArguments)
+            {
+                if (argument.ArgumentKind == ArgumentKind.DefaultValue
+                    && argument.Parameter.GetAttributes().Any(attribute =>
+                        attribute.AttributeClass?.ContainingNamespace?.ToDisplayString() == "System.Runtime.CompilerServices"
+                        && attribute.AttributeClass.Name is "CallerArgumentExpressionAttribute"
+                            or "CallerMemberNameAttribute" or "CallerFilePathAttribute" or "CallerLineNumberAttribute"))
+                {
+                    translated.Add(new NamedArgumentExpression(
+                        this.EmittedName(argument.Parameter, argument.Parameter.Name),
+                        this.TranslateOperationDefaultArgument(
+                            callSyntax, argument, "caller information", coerceToParameterType: false)));
+                }
+            }
+
+            return translated;
+        }
+
         private List<GExpression> TranslateCallArguments(SyntaxNode callSyntax, SeparatedSyntaxList<ArgumentSyntax> arguments)
         {
             IMethodSymbol targetMethod = this.context.SemanticModel.GetOperation(callSyntax) switch
@@ -1281,7 +1310,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (operationArguments.IsDefaultOrEmpty)
             {
-                return this.TranslateArguments(arguments);
+                return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments);
             }
 
             if (this.RequiresFunctionArgumentReassembly(targetMethod, operationArguments))
@@ -1295,7 +1324,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (paramsCollectionArg == null)
             {
-                return this.TranslateArguments(arguments);
+                return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments);
             }
 
             if (arguments.Any(a => a.NameColon != null))
@@ -1309,7 +1338,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.ReportUnsupported(
                     callSyntax,
                     "a named argument alongside an expanded 'params' collection call has no canonical G# lowering yet.");
-                return this.TranslateArguments(arguments);
+                return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments);
             }
 
             // ADR-0173 / issue #3627: a SOURCE-DECLARED callee's params
@@ -1322,7 +1351,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool sourceDeclaredCallee = targetMethod?.DeclaringSyntaxReferences.IsEmpty == false;
             if (sourceDeclaredCallee && IsSupportedParamsCollectionType(paramsCollectionArg.Parameter.Type))
             {
-                return this.TranslateArguments(arguments);
+                return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments);
             }
 
             // Referenced span-params callees (e.g. BCL
@@ -1335,7 +1364,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && !spanObjectCreation
                 && IsSpanParamsCollectionType(paramsCollectionArg.Parameter.Type))
             {
-                return this.TranslateArguments(arguments);
+                return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments);
             }
 
             if (!IsSupportedParamsCollectionType(paramsCollectionArg.Parameter.Type)
@@ -1366,7 +1395,7 @@ public sealed partial class CSharpToGSharpTranslator
                         $"params collection of type '{paramsCollectionArg.Parameter.Type}' has no gsc construction form.");
                 }
 
-                return this.TranslateArguments(arguments);
+                return this.TranslateArgumentsWithCallerInfo(callSyntax, arguments, operationArguments);
             }
 
             var translatedArguments = this.TranslateArgumentsBeforeParamsCollection(

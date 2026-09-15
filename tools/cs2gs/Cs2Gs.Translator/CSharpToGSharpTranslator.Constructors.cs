@@ -1604,6 +1604,8 @@ public sealed partial class CSharpToGSharpTranslator
                         return new IdentifierExpression(b ? "true" : "false");
                     case char c:
                         return LiteralExpression.Char(c.ToString());
+                    case long n when n == long.MinValue:
+                        return new MemberAccessExpression(new IdentifierExpression("System.Int64"), "MinValue");
                     case double d when MapSpecialFloatConstant(d, isDouble: true) is { } specialD:
                         return specialD;
                     case float f when MapSpecialFloatConstant(f, isDouble: false) is { } specialF:
@@ -1611,8 +1613,12 @@ public sealed partial class CSharpToGSharpTranslator
                     default:
                         if (IsIntegral(constant.Value))
                         {
-                            return LiteralExpression.Int(
+                            var literal = LiteralExpression.Int(
                                 System.Convert.ToString(constant.Value, CultureInfo.InvariantCulture));
+                            var type = this.context.GetTypeInfo(argument.Expression).Type;
+                            return type == null
+                                ? literal
+                                : this.CoerceOperandTo(literal, type, argument.GetLocation());
                         }
 
                         break;

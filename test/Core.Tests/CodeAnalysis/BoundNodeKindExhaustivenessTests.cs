@@ -584,19 +584,5 @@ public class BoundNodeKindExhaustivenessTests
         return map;
     }
 
-    private static string FindRepoRoot()
-    {
-        var dir = Path.GetDirectoryName(typeof(BoundNodeKindExhaustivenessTests).Assembly.Location);
-        while (!string.IsNullOrEmpty(dir))
-        {
-            if (File.Exists(Path.Combine(dir, ".config", "dotnet-tools.json")))
-            {
-                return dir;
-            }
-
-            dir = Path.GetDirectoryName(dir);
-        }
-
-        return Environment.CurrentDirectory;
-    }
+    private static string FindRepoRoot() => TestSource.Root;
 }

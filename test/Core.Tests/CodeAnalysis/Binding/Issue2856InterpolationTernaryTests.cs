@@ -191,7 +191,21 @@ public class Issue2856InterpolationTernaryTests
         Assert.Equal("[     3]", Value(result, "text"));
     }
 
-    private static (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object> Variables) Evaluate(string source)
+#nullable enable annotations
+    [Fact]
+    public void NullableGlobalForwarder_PreservesNullAndItsContract()
+    {
+        var method = typeof(Issue2856InterpolationTernaryTests).GetMethod(
+            nameof(Value), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.Equal(
+            System.Reflection.NullabilityState.Nullable,
+            new System.Reflection.NullabilityInfoContext().Create(method.ReturnParameter).ReadState);
+        var result = Evaluate("let value string? = nil");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(Value(result, "value"));
+    }
+
+    private static (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object?> Variables) Evaluate(string source)
     {
         // Post-run globals read back through the oracle (issue #3176 Phase
         // 3b.2): the emitted equivalent of the evaluator's variables
@@ -200,8 +214,8 @@ public class Issue2856InterpolationTernaryTests
         return (result.Diagnostics, result.ReadGlobals());
     }
 
-    private static object Value(
-        (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object> Variables) result,
+    private static object? Value(
+        (ImmutableArray<Diagnostic> Diagnostics, IReadOnlyDictionary<string, object?> Variables) result,
         string name) =>
         result.Variables[name];
 }

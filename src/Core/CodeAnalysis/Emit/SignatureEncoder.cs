@@ -917,6 +917,25 @@ internal sealed class SignatureEncoder
         }
     }
 
+    internal void EncodeParameterClr(ParameterTypeEncoder encoder, ParameterInfo parameter)
+    {
+        var modifiers = encoder.CustomModifiers();
+        foreach (var modifier in parameter.GetRequiredCustomModifiers())
+        {
+            modifiers.AddModifier(this.outer.memberRefs.GetTypeReference(modifier), isOptional: false);
+        }
+
+        foreach (var modifier in parameter.GetOptionalCustomModifiers())
+        {
+            modifiers.AddModifier(this.outer.memberRefs.GetTypeReference(modifier), isOptional: true);
+        }
+
+        var type = parameter.ParameterType;
+
+        // IsByRef guarantees reflection supplies the parameter's element type.
+        this.EncodeClrType(encoder.Type(isByRef: type.IsByRef), type.IsByRef ? type.GetElementType()! : type);
+    }
+
     internal void EncodeReturnClr(ReturnTypeEncoder encoder, ParameterInfo returnParameter, Type type)
     {
         if (type?.FullName == "System.Void")

@@ -764,15 +764,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
+            ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ITypeSymbol leftType = this.GetAssignmentTargetType(assignment.Left, leftSymbol);
             if (leftType is not { IsReferenceType: true }
                 || leftType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return false;
             }
 
-            return this.context.GetSymbolInfo(assignment.Left).Symbol
-                    is not IPropertySymbol indexer
+            return leftSymbol is not IPropertySymbol indexer
                 || !this.ShouldPromoteToNullableReference(indexer);
         }
 
@@ -810,15 +810,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedRhs;
             }
 
-            ITypeSymbol leftType = this.context.GetTypeInfo(assignment.Left).Type;
+            ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ITypeSymbol leftType = this.GetAssignmentTargetType(assignment.Left, leftSymbol);
             if (leftType is not { IsReferenceType: true }
                 || leftType.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return translatedRhs;
             }
 
-            if (this.context.GetSymbolInfo(assignment.Left).Symbol is { } leftSymbol
-                && this.ShouldPromoteToNullableReference(leftSymbol))
+            if (leftSymbol != null && this.ShouldPromoteToNullableReference(leftSymbol))
             {
                 return translatedRhs;
             }
@@ -2138,14 +2138,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol assignmentTarget = this.context.GetSymbolInfo(assignment.Left).Symbol;
-            ITypeSymbol assignmentTargetType = assignmentTarget switch
-            {
-                ILocalSymbol local => local.Type,
-                IParameterSymbol parameter => parameter.Type,
-                IFieldSymbol field => field.Type,
-                IPropertySymbol property => property.Type,
-                _ => this.context.GetTypeInfo(assignment.Left).Type,
-            };
+            ITypeSymbol assignmentTargetType = this.GetAssignmentTargetType(assignment.Left, assignmentTarget);
             ISymbol promotionTarget = assignmentTarget;
             if (assignmentTarget is ILocalSymbol inferredAssignmentLocal
                 && inferredAssignmentLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
@@ -2180,6 +2173,20 @@ public sealed partial class CSharpToGSharpTranslator
                 promotionTarget,
                 includePromotedValue: true);
         }
+
+        // Expression nullability is absent when warnings are disabled, even
+        // when the declared indexer or array element explicitly permits null.
+        private ITypeSymbol GetAssignmentTargetType(ExpressionSyntax left, ISymbol target) =>
+            target switch
+            {
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                _ when left is ElementAccessExpressionSyntax element
+                    && this.context.GetTypeInfo(element.Expression).Type is IArrayTypeSymbol array => array.ElementType,
+                _ => this.context.GetTypeInfo(left).Type,
+            };
 
         // Translates the target (left-hand side) of an assignment. Two member-access
         // LHS shapes that gsc cannot bind through the usual receiver path are fixed

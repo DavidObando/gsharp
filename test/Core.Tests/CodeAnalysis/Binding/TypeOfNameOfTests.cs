@@ -192,7 +192,8 @@ var n = nameof(List[List[int32]])
         throw new Xunit.Sdk.XunitException($"variable '{name}' not found");
     }
 
-    private static (EmittedOracleResult Result, IReadOnlyDictionary<string, object> Variables) EvaluateWithVariables(string source)
+#nullable enable annotations
+    private static (EmittedOracleResult Result, IReadOnlyDictionary<string, object?> Variables) EvaluateWithVariables(string source)
     {
         // Post-run globals read back through the oracle (issue #3176 Phase
         // 3b.2): the emitted equivalent of the evaluator's variables

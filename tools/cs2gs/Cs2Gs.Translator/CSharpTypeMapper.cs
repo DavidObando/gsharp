@@ -1593,7 +1593,8 @@ public sealed class CSharpTypeMapper
             // `(Line int32, Column int32)` — and named access stays by-name
             // at the use site (ADR-0115 §B.4 as amended). A default
             // positional name (`Item1` at position 1, …) counts as unnamed.
-            if (named.IsTupleType)
+            // `(T)` is a parenthesized type, not System.ValueTuple<T>.
+            if (named.IsTupleType && named.TupleElements.Length > 1)
             {
                 List<GTypeReference> elementTypes = named.TupleElements
                     .Select(e => this.Map(e.Type, context, location))

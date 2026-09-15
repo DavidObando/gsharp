@@ -969,7 +969,8 @@ internal sealed class MemberDefEmitter
                     continue;
                 }
 
-                foreach (var clrProp in clrIface.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                foreach (var clrProp in MemberLookup.EnumerateSelfAndInterfaces(clrIface)
+                    .SelectMany(inherited => inherited.GetProperties(BindingFlags.Public | BindingFlags.Instance)))
                 {
                     var indexParameters = clrProp.GetIndexParameters();
 
@@ -1097,7 +1098,8 @@ internal sealed class MemberDefEmitter
                     continue;
                 }
 
-                foreach (var clrEvent in clrIface.GetEvents(BindingFlags.Public | BindingFlags.Instance))
+                foreach (var clrEvent in MemberLookup.EnumerateSelfAndInterfaces(clrIface)
+                    .SelectMany(inherited => inherited.GetEvents(BindingFlags.Public | BindingFlags.Instance)))
                 {
                     if (clrEvent.Name == ev.Name
                         && (evClr == null

@@ -139,7 +139,8 @@ public sealed class EmittedOracleResult
     /// </summary>
     /// <param name="name">The top-level variable's source name.</param>
     /// <returns>The global's current value, or <see langword="null"/>.</returns>
-    public object ReadGlobal(string name)
+#nullable enable annotations
+    public object? ReadGlobal(string? name)
     {
         if (string.IsNullOrEmpty(name))
         {
@@ -166,9 +167,9 @@ public sealed class EmittedOracleResult
     /// values of submission-declared types.
     /// </summary>
     /// <returns>A name-to-value map of the top-level globals.</returns>
-    public IReadOnlyDictionary<string, object> ReadGlobals()
+    public IReadOnlyDictionary<string, object?> ReadGlobals()
     {
-        var globals = new Dictionary<string, object>(StringComparer.Ordinal);
+        var globals = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var field in EnumerateGlobalFields())
         {
             if (field.Name.IndexOf('<') >= 0)
@@ -191,7 +192,7 @@ public sealed class EmittedOracleResult
             yield break;
         }
 
-        Type[] types;
+        Type?[] types;
         try
         {
             types = Assembly.GetTypes();

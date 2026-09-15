@@ -1025,16 +1025,7 @@ internal sealed class ImportedMemberRefFactory
                 {
                     foreach (var p in openForMethodGenerics.GetParameters())
                     {
-                        var paramType = p.ParameterType;
-                        if (paramType.IsByRef)
-                        {
-                            // out / ref parameters: encode as managed pointer to the element type.
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
-                        }
-                        else
-                        {
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(), paramType);
-                        }
+                        this.signatures.EncodeParameterClr(ps.AddParameter(), p);
                     }
                 });
 
@@ -1266,15 +1257,7 @@ internal sealed class ImportedMemberRefFactory
             {
                 foreach (var p in openForMethodGenerics.GetParameters())
                 {
-                    var paramType = p.ParameterType;
-                    if (paramType.IsByRef)
-                    {
-                        this.signatures.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
-                    }
-                    else
-                    {
-                        this.signatures.EncodeClrType(ps.AddParameter().Type(), paramType);
-                    }
+                    this.signatures.EncodeParameterClr(ps.AddParameter(), p);
                 }
             });
 
@@ -1614,18 +1597,7 @@ internal sealed class ImportedMemberRefFactory
                 {
                     foreach (var p in openCtor.GetParameters())
                     {
-                        var paramType = p.ParameterType;
-                        if (paramType.IsByRef)
-                        {
-                            // out/ref parameter (e.g. an interpolated-string
-                            // handler ctor's `out bool shouldAppend`): emit the
-                            // BYREF prefix, then encode the element type.
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
-                        }
-                        else
-                        {
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(), paramType);
-                        }
+                        this.signatures.EncodeParameterClr(ps.AddParameter(), p);
                     }
                 });
 
@@ -1688,15 +1660,7 @@ internal sealed class ImportedMemberRefFactory
                 {
                     foreach (var p in openCtor.GetParameters())
                     {
-                        var paramType = p.ParameterType;
-                        if (paramType.IsByRef)
-                        {
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
-                        }
-                        else
-                        {
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(), paramType);
-                        }
+                        this.signatures.EncodeParameterClr(ps.AddParameter(), p);
                     }
                 });
 
@@ -2126,15 +2090,7 @@ internal sealed class ImportedMemberRefFactory
                 {
                     foreach (var p in openCtor.GetParameters())
                     {
-                        var paramType = p.ParameterType;
-                        if (paramType.IsByRef)
-                        {
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(isByRef: true), paramType.GetElementType()!);
-                        }
-                        else
-                        {
-                            this.signatures.EncodeClrType(ps.AddParameter().Type(), paramType);
-                        }
+                        this.signatures.EncodeParameterClr(ps.AddParameter(), p);
                     }
                 });
 
@@ -2281,7 +2237,7 @@ internal sealed class ImportedMemberRefFactory
                 {
                     foreach (var p in openCtor.GetParameters())
                     {
-                        this.signatures.EncodeClrType(ps.AddParameter().Type(), p.ParameterType);
+                        this.signatures.EncodeParameterClr(ps.AddParameter(), p);
                     }
                 });
 

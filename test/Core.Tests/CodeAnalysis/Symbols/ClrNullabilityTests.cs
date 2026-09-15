@@ -336,7 +336,23 @@ public class ClrNullabilityTests
     [Fact]
     public void StructConstrainedGenericParameter_ConsumesObliviousSlot()
     {
-        var pairMethod = typeof(Sample).GetMethod(nameof(Sample.MakeStructPair));
+        // Pin Roslyn's scalar compression as an imported metadata contract.
+        using var fixture = new CSharpFixture("""
+            #nullable enable
+            public class PairContainer<T, U> {}
+            public struct ValueContainer<T> {}
+            public static class Sample
+            {
+                public static string First => "";
+                public static string Second => "";
+                public static string Third => "";
+                public static PairContainer<T, string?> MakeStructPair<T>() where T : struct => new();
+                public static ValueContainer<T> MakeStructValue<T>() where T : struct => default;
+            }
+            """);
+        // throwOnError guarantees the fixture type is returned or the lookup throws.
+        var sample = fixture.Load().GetType("Sample", throwOnError: true)!;
+        var pairMethod = sample.GetMethod(nameof(Sample.MakeStructPair));
         Assert.NotNull(pairMethod);
         var pairFlags = ClrNullability.ReadNullableFlags(
             pairMethod.ReturnParameter,
@@ -350,7 +366,7 @@ public class ClrNullabilityTests
         Assert.IsType<NullableTypeSymbol>(pair.GetTypeArgumentSymbol(1));
         Assert.Equal(pairFlags.ToArray(), NullableFlagsBuilder.Build(pair).ToArray());
 
-        var valueMethod = typeof(Sample).GetMethod(nameof(Sample.MakeStructValue));
+        var valueMethod = sample.GetMethod(nameof(Sample.MakeStructValue));
         Assert.NotNull(valueMethod);
         var valueFlags = ClrNullability.ReadNullableFlags(
             valueMethod.ReturnParameter,

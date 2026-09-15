@@ -1926,9 +1926,14 @@ public partial class Parser
             // lexed as code, so filtering its diagnostics would change malformed-hole
             // recovery. Reparse only the bounded expression instead.
             var innerParser = new Parser(syntaxTree, fragment.Position, fragment.Position + exprText.Length);
-            var innerRoot = innerParser.ParseCompilationUnit();
+
+            // A hole is a value position: statement parsing makes `ordinal++`
+            // yield its updated value instead of the original one.
+            var innerExpression = innerParser.Current.Kind == SyntaxKind.EndOfFileToken
+                ? null
+                : innerParser.ParseExpression();
+            innerParser.MatchToken(SyntaxKind.EndOfFileToken);
             Diagnostics.AddRange(innerParser.Diagnostics);
-            var innerExpression = ExtractFirstExpression(innerRoot);
             if (innerExpression == null)
             {
                 // Fall back to a synthetic missing-name node anchored on the
@@ -1973,18 +1978,5 @@ public partial class Parser
         {
             format = hole.Substring(expressionLength + 1);
         }
-    }
-
-    private static ExpressionSyntax? ExtractFirstExpression(CompilationUnitSyntax innerRoot)
-    {
-        foreach (var member in innerRoot.Members)
-        {
-            if (member is GlobalStatementSyntax gs && gs.Statement is ExpressionStatementSyntax es)
-            {
-                return es.Expression;
-            }
-        }
-
-        return null;
     }
 }

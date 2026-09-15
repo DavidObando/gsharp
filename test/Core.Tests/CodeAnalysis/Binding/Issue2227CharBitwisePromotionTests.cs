@@ -135,7 +135,8 @@ while i < 4 {{
         Assert.Equal(expectedDiff, vars["diff"]);
     }
 
-    private static (EmittedOracleResult Result, IReadOnlyDictionary<string, object> Variables) EvaluateWithVariables(string source)
+#nullable enable annotations
+    private static (EmittedOracleResult Result, IReadOnlyDictionary<string, object?> Variables) EvaluateWithVariables(string source)
     {
         // Post-run globals read back through the oracle (issue #3176 Phase
         // 3b.2): the emitted equivalent of the evaluator's variables

@@ -1500,7 +1500,13 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #4074: filtering the invocation's result says nothing about
             // an unrelated callback's fixed return contract (e.g. Func<string>).
             if (this.IsGenericSelectorResultArgument(argument, lambda)
-                && this.LambdaResultFeedsNullFilteringInvocation(invocation))
+                && (this.LambdaResultFeedsNullFilteringInvocation(invocation)
+                    || (invocation.Expression is not GenericNameSyntax
+                        and not MemberAccessExpressionSyntax { Name: GenericNameSyntax }
+                        and not MemberBindingExpressionSyntax { Name: GenericNameSyntax }
+                        && this.context.SemanticModel.GetNullableContext(value.SpanStart)
+                            .HasFlag(NullableContext.AnnotationsEnabled)
+                        && this.ReceiverValueIsObliviouslyReadAnnotatedResult(value))))
             {
                 return true;
             }

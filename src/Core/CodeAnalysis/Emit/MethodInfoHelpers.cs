@@ -163,16 +163,19 @@ internal static class MethodInfoHelpers
                 // implementation and is promoted to a virtual interface slot.
                 if (MemberLookup.TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var symbolicArgs))
                 {
-                    foreach (var openMethod in openDefinition.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                    foreach (var inherited in MemberLookup.EnumerateSelfAndInterfaces(openDefinition))
                     {
-                        if (openMethod.IsSpecialName || openMethod.Name != method.Name)
+                        foreach (var openMethod in inherited.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
                         {
-                            continue;
-                        }
+                            if (openMethod.IsSpecialName || openMethod.Name != method.Name)
+                            {
+                                continue;
+                            }
 
-                        if (MemberLookup.HasMatchingMethodForSymbolicClrInterface(structSym, openMethod, symbolicArgs))
-                        {
-                            return true;
+                            if (MemberLookup.MethodMatchesSymbolicClrInterfaceSignature(method, openMethod, symbolicArgs))
+                            {
+                                return true;
+                            }
                         }
                     }
 
@@ -185,17 +188,21 @@ internal static class MethodInfoHelpers
                     continue;
                 }
 
-                foreach (var clrMethod in clrIface.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+                // GetMethods on an interface omits inherited slots (#4214).
+                foreach (var inherited in MemberLookup.EnumerateSelfAndInterfaces(clrIface))
                 {
-                    if (clrMethod.Name != method.Name
-                        || (clrMethod.IsSpecialName && !method.IsSpecialName))
+                    foreach (var clrMethod in inherited.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
                     {
-                        continue;
-                    }
+                        if (clrMethod.Name != method.Name
+                            || (clrMethod.IsSpecialName && !method.IsSpecialName))
+                        {
+                            continue;
+                        }
 
-                    if (MemberLookup.MethodMatchesClrSignature(method, clrMethod))
-                    {
-                        return true;
+                        if (MemberLookup.MethodMatchesClrSignature(method, clrMethod))
+                        {
+                            return true;
+                        }
                     }
                 }
             }
