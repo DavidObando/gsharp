@@ -219,20 +219,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // declaration site translates, and gsc's emitter loads
                     // through the returned managed pointer at the read — so a
                     // plain index expression is now the correct lowering, with
-                    // the same read semantics C# gives it. `ref readonly` is
-                    // still gapped: its DECLARATION does not translate (there is
-                    // no read-only by-ref return in G#), so an element access
-                    // through one would name a member that was never emitted.
-                    if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol refIndexer &&
-                        refIndexer.RefKind == RefKind.RefReadOnly &&
-                        refIndexer.Locations.Any(l => l.IsInSource))
-                    {
-                        this.context.ReportUnsupported(
-                            elementAccess,
-                            $"element access '{elementAccess}' targets `ref readonly`-returning indexer '{refIndexer.ContainingType?.Name}.this[]', whose declaration has no G# form: G#'s by-ref return has no read-only variant, so the indexer itself is not emitted (issues #1987 / #3879). A plain `ref` indexer translates.");
-                        return new IdentifierExpression("nil");
-                    }
-
+                    // the same read semantics C# gives it. Issue #4220 also
+                    // preserves the readonly form at its declaration.
                     GExpression index = elementAccess.ArgumentList.Arguments.Count > 0
                         ? this.CoerceIndexToInt32(
                             elementAccess,

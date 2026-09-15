@@ -1599,6 +1599,11 @@ internal sealed partial class OverloadResolver
                 {
                     Diagnostics.ReportArgumentMustBePassedByRef(callLocation, i + 1, methodName);
                 }
+                else if (RefCapabilities.IsReadOnlyStorage(arguments[i]))
+                {
+                    Diagnostics.ReportReadOnlyArgumentForWritableRef(
+                        callLocation, i + 1, methodName, rk == RefKind.Ref ? "ref" : "out");
+                }
             }
 
             // For imported `in`: accept either &expr or plain value — the

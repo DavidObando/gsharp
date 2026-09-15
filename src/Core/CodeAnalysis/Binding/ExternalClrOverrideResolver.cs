@@ -134,7 +134,7 @@ internal static class ExternalClrOverrideResolver
             // A mismatch falls through to the `sawName` arm below, which is the
             // signature-mismatch diagnostic rather than "no base to override".
             bool externalIsByRef = property.PropertyType?.IsByRef == true;
-            if (externalIsByRef != (returnRefKind == RefKind.Ref))
+            if (RefCapabilities.GetReturnRefKind(property) != returnRefKind)
             {
                 continue;
             }
@@ -880,7 +880,8 @@ internal static class ExternalClrOverrideResolver
         }
 
         var clrReturnsByRef = clrReturnType.IsByRef;
-        if ((returnRefKind == RefKind.Ref) != clrReturnsByRef)
+        if ((returnRefKind != RefKind.None) != clrReturnsByRef
+            || (openMethodDefinition != null && RefCapabilities.GetReturnRefKind(openMethodDefinition) != returnRefKind))
         {
             return false;
         }

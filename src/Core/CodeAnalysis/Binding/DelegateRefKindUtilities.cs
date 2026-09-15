@@ -102,7 +102,7 @@ internal static class DelegateRefKindUtilities
             return ImmutableArray.CreateRange(Enumerable.Repeat(RefKind.None, parameterCount));
         }
 
-        returnRefKind = invoke.ReturnType.IsByRef ? RefKind.Ref : RefKind.None;
+        returnRefKind = RefCapabilities.GetReturnRefKind(invoke);
         return GetParameterRefKinds(invoke);
     }
 

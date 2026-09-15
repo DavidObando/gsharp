@@ -1469,7 +1469,7 @@ public static class GSharpPrinter
             case LocalDeclarationStatement local:
                 var typeClause = local.Type == null ? string.Empty : $" {RenderType(local.Type)}";
                 var usingPrefix = local.IsUsing ? (local.IsAwait ? "await using " : "using ") : string.Empty;
-                var refPrefix = local.IsRefAlias ? "ref " : string.Empty;
+                var refPrefix = local.IsReadOnlyRefAlias ? "ref readonly " : local.IsRefAlias ? "ref " : string.Empty;
                 var declHead = $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {refPrefix}{local.Name}{typeClause}";
                 var initClause = local.Initializer == null
                     ? string.Empty
@@ -2263,7 +2263,7 @@ public static class GSharpPrinter
     // it. gsc's parser consumes it only when a type clause can start at the next
     // token, so the modifier never collides with a property NAMED `ref`.
     private static string RenderPropertyReturnPrefix(PropertyDeclaration property)
-        => property.IsRefReturn ? "ref " : string.Empty;
+        => property.IsReadOnlyRefReturn ? "ref readonly " : property.IsRefReturn ? "ref " : string.Empty;
 
     private static string RenderAccessor(PropertyAccessor accessor, int indent)
     {
@@ -2376,11 +2376,11 @@ public static class GSharpPrinter
         if (method.ReturnType != null)
         {
             sb.Append(' ');
-            if (method.IsRefReturn)
+            if (method.IsRefReturn || method.IsReadOnlyRefReturn)
             {
                 // Issue #1900: G#'s native ref-return modifier (`func F(...) ref T`,
                 // ADR-0060 §follow-up, issue #490) — mapped from a C# ref-returning method.
-                sb.Append("ref ");
+                sb.Append(method.IsReadOnlyRefReturn ? "ref readonly " : "ref ");
             }
 
             sb.Append(RenderType(method.ReturnType));

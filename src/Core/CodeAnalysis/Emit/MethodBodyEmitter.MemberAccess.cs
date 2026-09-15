@@ -1159,7 +1159,9 @@ internal sealed partial class MethodBodyEmitter
         var isStatic = receiver == null;
         if (receiver != null)
         {
-            this.EmitInstanceReceiver(receiver);
+            var isReadOnlyAccess = access.Member is FieldInfo
+                || (access.Member is PropertyInfo { GetMethod: { } readGetter } && RefCapabilities.IsReadOnlyMethod(readGetter));
+            this.EmitInstanceReceiver(receiver, isReadOnlyCall: isReadOnlyAccess);
         }
 
         // Issue #454: use IsValueTypeSymbol — same predicate that
@@ -1411,7 +1413,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         // Phase 4 emit parity: indexer read. `d[k]` -> `callvirt get_Item(k)`.
-        this.EmitInstanceReceiver(idx.Target);
+        this.EmitInstanceReceiver(idx.Target, isReadOnlyCall: idx.Indexer.GetMethod is { } readGetter && RefCapabilities.IsReadOnlyMethod(readGetter));
         foreach (var arg in idx.Arguments)
         {
             this.EmitExpression(arg);
@@ -1554,7 +1556,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.LoadLocal(slot);
     }
 
-    private void EmitInstanceReceiver(BoundExpression receiver)
+    private void EmitInstanceReceiver(BoundExpression receiver, bool isReadOnlyCall = false)
     {
         // Value-type receivers need a managed pointer (the implicit `this`
         // of an instance method on a value type is a `ref` parameter). For
@@ -1570,6 +1572,12 @@ internal sealed partial class MethodBodyEmitter
         // these symbol-only value types alongside enums and built-ins.
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type))
         {
+            if (!isReadOnlyCall && RefCapabilities.IsReadOnlyReference(receiver)
+                && this.TryEmitCachedReceiver(receiver, needAddress: true))
+            {
+                return;
+            }
+
             if (receiver is BoundDereferenceExpression dereference)
             {
                 this.EmitExpression(dereference.Operand);
@@ -1740,6 +1748,12 @@ internal sealed partial class MethodBodyEmitter
     /// <param name="receiver">The constrained type-parameter receiver expression.</param>
     private void EmitConstrainedTypeParameterReceiver(BoundExpression receiver)
     {
+        if (RefCapabilities.IsReadOnlyReference(receiver)
+            && this.TryEmitCachedReceiver(receiver, needAddress: true))
+        {
+            return;
+        }
+
         if (receiver is BoundDereferenceExpression dereference)
         {
             this.EmitExpression(dereference.Operand);
@@ -2210,7 +2224,7 @@ internal sealed partial class MethodBodyEmitter
             // side-effecting reference-type root shared by compound read/write
             // (`GetHolder().Value.Id += 5`). Route the owner through the
             // receiver cache instead of evaluating that root again.
-            this.EmitInstanceReceiver(fa.Receiver);
+            this.EmitInstanceReceiver(fa.Receiver, isReadOnlyCall: true);
         }
 
         this.il.OpCode(ILOpCode.Ldflda);
@@ -2257,7 +2271,7 @@ internal sealed partial class MethodBodyEmitter
     /// <param name="resultType">The type the bound tree gives the read.</param>
     private void EmitRefReturnDereferenceIfNeeded(RefKind returnRefKind, TypeSymbol? resultType)
     {
-        if (returnRefKind != RefKind.Ref
+        if (returnRefKind == RefKind.None
             || resultType == null
             || resultType is ByRefTypeSymbol
             || resultType == TypeSymbol.Void

@@ -322,6 +322,14 @@ internal sealed class WellKnownReferences
         return this.getTypeReference(attrType);
     }
 
+    public EntityHandle GetInAttributeTypeRef()
+    {
+        var attrType = this.emitCtx.References.TryResolveType("System.Runtime.InteropServices.InAttribute", requireExternalVisibility: false, out var resolved)
+            ? resolved
+            : typeof(System.Runtime.InteropServices.InAttribute);
+        return this.getTypeReference(attrType);
+    }
+
     /// <summary>
     /// Issue #946: returns the TypeRef handle for
     /// <c>System.Runtime.CompilerServices.IsExternalInit</c>, used as the

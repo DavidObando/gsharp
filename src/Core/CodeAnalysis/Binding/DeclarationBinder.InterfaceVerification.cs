@@ -335,12 +335,17 @@ internal sealed partial class DeclarationBinder
         TypeSymbol target,
         PropertyInfo slot)
     {
+        var slotType = MemberLookup.GetClrPropertyTypeSymbol(target, slot);
+        if (slotType is ByRefTypeSymbol byRef)
+        {
+            slotType = byRef.PointeeType;
+        }
+
         if (slot.Name != property.Name
+            || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot)
             || (slot.GetMethod != null) != property.HasGetter
             || (slot.SetMethod != null) != property.HasSetter
-            || !TypeSignaturesEquivalent(
-                property.Type,
-                MemberLookup.GetClrPropertyTypeSymbol(target, slot)))
+            || !TypeSignaturesEquivalent(property.Type, slotType))
         {
             return false;
         }
@@ -489,8 +494,8 @@ internal sealed partial class DeclarationBinder
                     Diagnostics.ReportOverrideReturnRefKindMismatch(
                         syntax.Identifier.Location,
                         imethod.Name,
-                        imethod.ReturnRefKind == RefKind.Ref ? "by ref" : "by value",
-                        impl.ReturnRefKind == RefKind.Ref ? "by ref" : "by value");
+                        RefCapabilities.DescribeReturn(imethod.ReturnRefKind),
+                        RefCapabilities.DescribeReturn(impl.ReturnRefKind));
                 }
                 else
                 {

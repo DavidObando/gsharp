@@ -31,6 +31,8 @@ public class Issue1675SyntaxNodeChildEnumerationTests
     /// </summary>
     private static readonly IReadOnlyList<string> Snippets = new[]
     {
+        "package p\nfunc View(ref value int32) ref readonly int32 { return ref value }\nclass Box {\n var value int32\n prop View ref readonly int32 -> value\n prop this[i int32] ref readonly int32 -> value\n}\nfunc Read() { var value = 1\n let ref readonly view = value }\n",
+
         // as / typeof / nameof / throw statement
         "package p\nimport System\nfunc F(x any) {\n  let s = x as string\n  let t = typeof(int32)\n  let n = nameof(x)\n  throw Exception(\"boom\")\n}\n",
 

@@ -394,10 +394,11 @@ internal sealed partial class ExpressionBinder
     /// <returns><see langword="true"/> when the member write must be rejected.</returns>
     private bool ReceiverBlocksValueTypeMemberWrite(BoundExpression receiver)
     {
-        return receiver is BoundVariableExpression bve
-            && bve.Variable.IsReadOnly
-            && !ReceiverVariableIsThis(bve.Variable)
-            && !ReceiverTypeIsReference(bve.Variable.Type);
+        return (receiver is BoundVariableExpression bve
+                && bve.Variable.IsReadOnly
+                && !ReceiverVariableIsThis(bve.Variable)
+                && !ReceiverTypeIsReference(bve.Variable.Type))
+            || RefCapabilities.IsReadOnlyValueReference(receiver);
     }
 
     /// <summary>
@@ -967,7 +968,8 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(instanceMember, assignmentReceiverType, out var instTargetType, out var instTargetSymbol, out var instWritable))
+            if (!TryGetWritableClrMember(instanceMember, assignmentReceiverType, out var instTargetType, out var instTargetSymbol, out var instWritable)
+                || RefCapabilities.IsReadOnlyValueReference(assignmentReceiver))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 return new BoundErrorExpression(null);
@@ -2077,7 +2079,8 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        if (!TryGetWritableClrMember(instanceMember, boundReceiver.Type, out _, out var targetSymbol, out _))
+        if (!TryGetWritableClrMember(instanceMember, boundReceiver.Type, out _, out var targetSymbol, out _)
+            || RefCapabilities.IsReadOnlyValueReference(boundReceiver))
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             return new BoundErrorExpression(null);
@@ -2476,18 +2479,15 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        // For `out` we allow writes to a read-only target only if it's an
-        // out-parameter or a writable local. The existing GS9005 check fires
-        // for true constants; preserve that for `ref` (read-only operand is
-        // fine for `in`).
-        if (operand is BoundVariableExpression vex && vex.Variable.IsReadOnly
-            && string.Equals(syntax.RefKindModifier.Text, "ref", System.StringComparison.Ordinal))
+        // Constructor-owned readonly fields retain their initialization permissions.
+        if (syntax.RefKindModifier.Text != "in" && RefCapabilities.IsReadOnlyStorage(operand)
+            && !(operand is BoundFieldAccessExpression && IsWritableStructFieldReceiver(operand)))
         {
-            Diagnostics.ReportCannotTakeAddressOfConstant(syntax.RefKindModifier.Location, vex.Variable.Name);
+            Diagnostics.ReportCannotTakeAddressOfConstant(syntax.RefKindModifier.Location, syntax.Expression.ToString());
             return new BoundErrorExpression(null);
         }
 
-        return new BoundAddressOfExpression(null, operand);
+        return new BoundAddressOfExpression(null, operand, unmanaged: false, isReadOnly: syntax.RefKindModifier.Text == "in");
     }
 
     /// <summary>
@@ -3099,7 +3099,8 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(instanceMember, receiverType, out var instTargetType, out var instTargetSymbol, out var instWritable))
+            if (!TryGetWritableClrMember(instanceMember, receiverType, out var instTargetType, out var instTargetSymbol, out var instWritable)
+                || RefCapabilities.IsReadOnlyValueReference(receiver))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                 return new BoundErrorExpression(null);

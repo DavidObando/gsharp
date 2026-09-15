@@ -195,6 +195,7 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
+            this.EmitReadOnlyRefAttribute(propDef, prop);
 
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the PropertyDef (parity with the class/interface member path).
@@ -229,7 +230,43 @@ internal sealed class MemberDefEmitter
     /// <param name="encoder">The signature's return-type encoder.</param>
     /// <param name="prop">The property whose type is encoded.</param>
     private void EncodePropertyType(ReturnTypeEncoder encoder, PropertySymbol prop)
-        => this.encodeTypeSymbol(encoder.Type(isByRef: prop.ReturnRefKind == RefKind.Ref), prop.Type);
+    {
+        if (prop.ReturnRefKind == RefKind.RefReadOnly)
+        {
+            encoder.CustomModifiers().AddModifier(this.wellKnown.GetInAttributeTypeRef(), isOptional: false);
+        }
+
+        this.encodeTypeSymbol(encoder.Type(isByRef: prop.ReturnRefKind != RefKind.None), prop.Type);
+    }
+
+    private void EmitReadOnlyRefAttribute(EntityHandle handle, PropertySymbol property)
+    {
+        if (property.ReturnRefKind != RefKind.RefReadOnly)
+        {
+            return;
+        }
+
+        var value = new BlobBuilder();
+        value.WriteUInt16(1);
+        value.WriteUInt16(0);
+        this.emitCtx.Metadata.AddCustomAttribute(
+            handle,
+            this.wellKnown.GetIsReadOnlyAttributeCtorRef(),
+            this.emitCtx.Metadata.GetOrAddBlob(value));
+    }
+
+    private ParameterHandle GetPropertyGetterParameterList(PropertySymbol property)
+    {
+        var firstParameter = this.nextParameterHandle();
+        if (property.ReturnRefKind == RefKind.RefReadOnly)
+        {
+            var returnParameter = this.emitCtx.Metadata.AddParameter(
+                ParameterAttributes.None, default, sequenceNumber: 0);
+            this.EmitReadOnlyRefAttribute(returnParameter, property);
+        }
+
+        return firstParameter;
+    }
 
     /// <summary>
     /// Emits a property accessor's method body, shared by all four property
@@ -417,7 +454,7 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString(getterName),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle());
+            parameterList: this.GetPropertyGetterParameterList(prop));
     }
 
     /// <summary>
@@ -646,6 +683,7 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
+            this.EmitReadOnlyRefAttribute(propDef, prop);
 
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the PropertyDef (parity with the class/interface member path).
@@ -691,7 +729,7 @@ internal sealed class MemberDefEmitter
             name: this.emitCtx.Metadata.GetOrAddString($"get_{prop.Name}"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob),
             bodyOffset: bodyOffset,
-            parameterList: this.nextParameterHandle());
+            parameterList: this.GetPropertyGetterParameterList(prop));
     }
 
     /// <summary>
@@ -1716,6 +1754,7 @@ internal sealed class MemberDefEmitter
             }
 
             this.emitNullableAttributeOnProperty(propDef, prop.Type);
+            this.EmitReadOnlyRefAttribute(propDef, prop);
 
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the PropertyDef (parity with the class/interface member path).

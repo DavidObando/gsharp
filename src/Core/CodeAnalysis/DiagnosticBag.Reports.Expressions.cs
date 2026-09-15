@@ -645,6 +645,14 @@ public sealed partial class DiagnosticBag
     public void ReportArgumentMustBePassedByRef(TextLocation location, int argumentIndex, string methodName)
     => Report(location, DiagnosticDescriptors.ArgumentMustBePassedByRef, argumentIndex, methodName);
 
+    /// <summary>GS9009: Readonly storage cannot satisfy a writable ref/out parameter.</summary>
+    /// <param name="location">The call location.</param>
+    /// <param name="argumentIndex">The 1-based argument position.</param>
+    /// <param name="methodName">The target method name.</param>
+    /// <param name="refKind">The writable parameter modifier.</param>
+    public void ReportReadOnlyArgumentForWritableRef(TextLocation location, int argumentIndex, string methodName, string refKind)
+    => Report(location, DiagnosticDescriptors.ReadOnlyArgumentForWritableRef, argumentIndex, methodName, refKind);
+
     /// <summary>GS9004: By-ref value cannot escape its declaring scope.</summary>
     /// <param name="location">The text location of the escape attempt.</param>
     /// <param name="reason">Description of the escape (capture in lambda, return, store in field).</param>

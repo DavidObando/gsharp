@@ -419,9 +419,9 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>
     /// Gets or sets the by-reference passing mode of this function's return value
     /// (issue #490 / ADR-0060 follow-up). Defaults to <see cref="Binding.RefKind.None"/>.
-    /// When set to <see cref="Binding.RefKind.Ref"/>, the function returns a managed
+    /// When set to <see cref="Binding.RefKind.Ref"/> or <see cref="Binding.RefKind.RefReadOnly"/>, the function returns a managed
     /// pointer (<c>T&amp;</c>) and the body must use <c>return ref &lt;lvalue&gt;</c>.
-    /// Only <see cref="Binding.RefKind.None"/> and <see cref="Binding.RefKind.Ref"/> are
+    /// Only <see cref="Binding.RefKind.None"/>, <see cref="Binding.RefKind.Ref"/>, and <see cref="Binding.RefKind.RefReadOnly"/> are
     /// valid here; <c>out</c>/<c>in</c> are not meaningful on a return position.
     /// </summary>
     public RefKind ReturnRefKind { get; set; } = RefKind.None;

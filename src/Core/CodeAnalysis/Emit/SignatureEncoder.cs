@@ -737,7 +737,12 @@ internal sealed class SignatureEncoder
         }
         else
         {
-            this.EncodeTypeSymbol(encoder.Type(isByRef: returnRefKind == RefKind.Ref), type);
+            if (returnRefKind == RefKind.RefReadOnly)
+            {
+                encoder.CustomModifiers().AddModifier(this.outer.wellKnown.GetInAttributeTypeRef(), isOptional: false);
+            }
+
+            this.EncodeTypeSymbol(encoder.Type(isByRef: returnRefKind != RefKind.None), type);
         }
     }
 

@@ -1224,8 +1224,8 @@ internal sealed partial class DeclarationBinder
                                 Diagnostics.ReportOverrideReturnRefKindMismatch(
                                     methodSyntax.Identifier.Location,
                                     methodName,
-                                    baseMethod.ReturnRefKind == RefKind.Ref ? "by ref" : "by value",
-                                    methodReturnRefKind == RefKind.Ref ? "by ref" : "by value");
+                                    RefCapabilities.DescribeReturn(baseMethod.ReturnRefKind),
+                                    RefCapabilities.DescribeReturn(methodReturnRefKind));
                             }
                             else
                             {

@@ -778,15 +778,15 @@ internal sealed partial class ExpressionBinder
         bool requiresWritable = outerText == "ref" || outerText == "out" || outerText == "&";
         if (requiresWritable)
         {
-            if (TryGetReadOnlyAddressTarget(whenTrue, out var whenTrueReadOnly))
+            if (RefCapabilities.IsReadOnlyStorage(whenTrue))
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, whenTrueReadOnly.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenTrue.Location, syntax.WhenTrue.ToString());
                 return new BoundErrorExpression(null);
             }
 
-            if (TryGetReadOnlyAddressTarget(whenFalse, out var whenFalseReadOnly))
+            if (RefCapabilities.IsReadOnlyStorage(whenFalse))
             {
-                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, whenFalseReadOnly.Name);
+                Diagnostics.ReportCannotTakeAddressOfConstant(syntax.WhenFalse.Location, syntax.WhenFalse.ToString());
                 return new BoundErrorExpression(null);
             }
         }

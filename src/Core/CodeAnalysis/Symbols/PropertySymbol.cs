@@ -210,8 +210,8 @@ public sealed class PropertySymbol : Symbol
     /// means the property was declared <c>prop P ref T</c>: the PropertyDef
     /// signature and the <c>get_P</c> MethodDef signature both encode
     /// <c>T&amp;</c>, so a CLR consumer can alias the storage
-    /// (<c>ref int slot = ref holder.P</c>). Only <see cref="Binding.RefKind.None"/>
-    /// and <see cref="Binding.RefKind.Ref"/> are valid here, mirroring
+    /// (<c>ref int slot = ref holder.P</c>). Only <see cref="Binding.RefKind.None"/>,
+    /// <see cref="Binding.RefKind.Ref"/>, and <see cref="Binding.RefKind.RefReadOnly"/> are valid here, mirroring
     /// <see cref="FunctionSymbol.ReturnRefKind"/>. <see cref="Type"/> stays the
     /// POINTEE type <c>T</c> throughout, exactly as it does for a ref-returning
     /// function — the by-ref-ness is a separate bit, not a

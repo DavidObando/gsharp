@@ -345,7 +345,7 @@ internal sealed partial class MethodBodyEmitter
                     }
                     else
                     {
-                        this.EmitInstanceReceiver(instCall.Receiver);
+                        this.EmitInstanceReceiver(instCall.Receiver, isReadOnlyCall: RefCapabilities.IsReadOnlyMethod(instCall.Method));
                     }
 
                     this.EmitImportedCallArguments(instCall.Arguments, instCall.ArgumentRefKinds);
@@ -2018,7 +2018,7 @@ internal sealed partial class MethodBodyEmitter
                 // address of the trailing lvalue. Keeping address-of as the
                 // outer bound shape preserves ref/out call classification.
                 this.EmitBlockExpressionPrefix(block);
-                this.EmitAddressOf(new BoundAddressOfExpression(node.Syntax, block.Expression, node.IsUnmanaged));
+                this.EmitAddressOf(new BoundAddressOfExpression(node.Syntax, block.Expression, node.IsUnmanaged, node.IsReadOnly));
                 break;
 
             case BoundConditionalExpression conditional:
@@ -2045,6 +2045,18 @@ internal sealed partial class MethodBodyEmitter
 
             case BoundFieldAccessExpression fa:
                 this.EmitFieldAddress(fa);
+                break;
+
+            case BoundClrPropertyAccessExpression { Member: FieldInfo field } access:
+                if (access.Receiver != null)
+                {
+                    this.EmitInstanceReceiver(access.Receiver, isReadOnlyCall: true);
+                }
+
+                this.il.OpCode(field.IsStatic ? ILOpCode.Ldsflda : ILOpCode.Ldflda);
+                this.il.Token(access.StaticContainerType != null
+                    ? this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
+                    : this.outer.memberRefs.GetFieldReference(field));
                 break;
 
             case BoundIndexExpression idx:

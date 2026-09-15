@@ -1902,7 +1902,7 @@ internal sealed class UserTokenResolver
             new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: isInstanceAccessor)
                 .Parameters(
                     indexParams.Length,
-                    r => this.signatures.EncodeTypeSymbol(r.Type(), property.Type),
+                    r => this.signatures.EncodeReturnSymbol(r, property.Type, property.ReturnRefKind),
                     ps =>
                     {
                         foreach (var p in indexParams)

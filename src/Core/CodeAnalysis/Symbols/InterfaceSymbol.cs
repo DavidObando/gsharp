@@ -755,6 +755,7 @@ public sealed class InterfaceSymbol : TypeSymbol
             m.Package,
             m.Accessibility,
             receiverType: isPrivate ? instance : null);
+        substMethod.ReturnRefKind = m.ReturnRefKind;
         if (isStatic)
         {
             substMethod.IsStatic = true;

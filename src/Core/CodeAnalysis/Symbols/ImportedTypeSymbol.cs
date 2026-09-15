@@ -454,9 +454,10 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 continue;
             }
 
+            var propertyType = ClrNullability.GetPropertyTypeSymbol(property);
             propertyBuilder.Add(new PropertySymbol(
                 property.Name,
-                ClrNullability.GetPropertyTypeSymbol(property),
+                propertyType is ByRefTypeSymbol byRefProperty ? byRefProperty.PointeeType : propertyType,
                 GetPropertyAccessibility(property),
                 hasGetter: getter != null && IsVisible(getter, includeInternal),
                 hasSetter: setter != null && IsVisible(setter, includeInternal),
@@ -465,7 +466,10 @@ public sealed class ImportedTypeSymbol : TypeSymbol
                 isOverride: (getter ?? setter) is { } accessor && ClrTypeUtilities.SafeIsOverride(accessor),
                 isStatic: (getter ?? setter)?.IsStatic == true,
                 isInitOnly: setter != null && IsInitOnlySetter(setter),
-                metadataIsAbstract: (getter ?? setter)?.IsAbstract == true));
+                metadataIsAbstract: (getter ?? setter)?.IsAbstract == true)
+            {
+                ReturnRefKind = RefCapabilities.GetReturnRefKind(property),
+            });
         }
 
         var primaryConstructorParameters = BuildPrimaryConstructorParameters(
@@ -737,14 +741,18 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         }
 
         var parameters = parameterBuilder.MoveToImmutable();
+        var returnType = ClrNullability.GetReturnTypeSymbol(method);
         return new FunctionSymbol(
             method.Name,
             parameters,
-            ClrNullability.GetReturnTypeSymbol(method),
+            returnType is ByRefTypeSymbol byRefReturn ? byRefReturn.PointeeType : returnType,
             declaration: null,
             package: null,
             accessibility: MapAccessibility(method),
-            receiverType: isStatic ? null : aggregate);
+            receiverType: isStatic ? null : aggregate)
+        {
+            ReturnRefKind = RefCapabilities.GetReturnRefKind(method),
+        };
     }
 
     private static RefKind GetRefKind(ParameterInfo parameter)

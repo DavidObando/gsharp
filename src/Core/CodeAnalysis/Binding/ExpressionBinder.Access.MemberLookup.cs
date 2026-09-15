@@ -1858,11 +1858,12 @@ internal sealed partial class ExpressionBinder
                 indexSyntax,
                 combined,
                 diagnosticLocation,
-                sharedIndex);
+                sharedIndex,
+                boundReceiver);
         }
         else if (boundValueOverride != null)
         {
-            assignment = BindIndexedAssignmentToVariableWithBoundValue(tempVar, indexSyntax, boundValueOverride, diagnosticLocation);
+            assignment = BindIndexedAssignmentToVariableWithBoundValue(tempVar, indexSyntax, boundValueOverride, diagnosticLocation, receiverCapabilitySource: boundReceiver);
         }
         else
         {
@@ -1871,7 +1872,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            assignment = BindIndexedAssignmentToVariable(tempVar, indexSyntax, resolvedValueSyntax, diagnosticLocation);
+            assignment = BindIndexedAssignmentToVariable(tempVar, indexSyntax, resolvedValueSyntax, diagnosticLocation, boundReceiver);
         }
 
         if (assignment is BoundErrorExpression)
@@ -1986,10 +1987,11 @@ internal sealed partial class ExpressionBinder
         VariableSymbol variable,
         ExpressionSyntax indexSyntax,
         ExpressionSyntax valueSyntax,
-        TextLocation diagnosticLocation)
+        TextLocation diagnosticLocation,
+        BoundExpression? receiverCapabilitySource = null)
     {
         return BindIndexedAssignmentToVariableCore(
-            variable, indexSyntax, valueSyntax, boundValueOverride: null, diagnosticLocation);
+            variable, indexSyntax, valueSyntax, boundValueOverride: null, diagnosticLocation, receiverCapabilitySource: receiverCapabilitySource);
     }
 
     private BoundExpression BindIndexedAssignmentToVariableWithBoundValue(
@@ -1997,10 +1999,11 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax indexSyntax,
         BoundExpression boundValue,
         TextLocation diagnosticLocation,
-        BoundExpression? boundIndexOverride = null)
+        BoundExpression? boundIndexOverride = null,
+        BoundExpression? receiverCapabilitySource = null)
     {
         return BindIndexedAssignmentToVariableCore(
-            variable, indexSyntax, valueSyntax: null, boundValueOverride: boundValue, diagnosticLocation, boundIndexOverride);
+            variable, indexSyntax, valueSyntax: null, boundValueOverride: boundValue, diagnosticLocation, boundIndexOverride, receiverCapabilitySource);
     }
 
     private BoundExpression BindIndexedAssignmentToVariableCore(
@@ -2009,7 +2012,8 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax? valueSyntax,
         BoundExpression? boundValueOverride,
         TextLocation diagnosticLocation,
-        BoundExpression? boundIndexOverride = null)
+        BoundExpression? boundIndexOverride = null,
+        BoundExpression? receiverCapabilitySource = null)
     {
         // Issue #2488: direct indexed writes bypass the ordinary name-expression
         // read binder, so explicitly reuse its narrowed receiver construction.
@@ -2017,6 +2021,8 @@ internal sealed partial class ExpressionBinder
         // to the original variable slot.
         var target = BuildNarrowedVariableRead(variable);
         var targetType = target.Type;
+        var permissionReceiver = receiverCapabilitySource ?? target;
+        var isReadOnlyReceiver = RefCapabilities.IsReadOnlyValueReference(permissionReceiver);
         var hasNarrowedTarget = target is not BoundVariableExpression targetVariable
             || targetVariable.NarrowedType != null;
 
@@ -2044,6 +2050,12 @@ internal sealed partial class ExpressionBinder
             TypeParameterSymbol? constrainedReceiverTypeParameter = null,
             TypeSymbol? constrainedInterfaceType = null)
         {
+            if (indexer.SetMethod != null && isReadOnlyReceiver)
+            {
+                Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                return new BoundErrorExpression(indexSyntax);
+            }
+
             return hasNarrowedTarget
                 ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
                     null,
@@ -2071,6 +2083,12 @@ internal sealed partial class ExpressionBinder
             BoundExpression value,
             TypeSymbol elementType)
         {
+            if (isReadOnlyReceiver)
+            {
+                Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                return new BoundErrorExpression(indexSyntax);
+            }
+
             var indexName =
                 $"<idxAsnIndex{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
             var capturedIndex = new LocalVariableSymbol(indexName, isReadOnly: true, index.Type);
@@ -2111,13 +2129,13 @@ internal sealed partial class ExpressionBinder
             && ClrTypeUtilities.AreSame(boundIndexOverride.Type?.ClrType, typeof(System.Index)))
         {
             return BindSystemIndexAssignment(
-                variable, target, targetType, hasNarrowedTarget, boundIndexOverride, BindValue, diagnosticLocation);
+                variable, target, targetType, hasNarrowedTarget, boundIndexOverride, BindValue, diagnosticLocation, isReadOnlyReceiver);
         }
 
         if (boundIndexOverride == null && TryBindSystemIndexValue(indexSyntax, out var systemIndex))
         {
             return BindSystemIndexAssignment(
-                variable, target, targetType, hasNarrowedTarget, systemIndex, BindValue, diagnosticLocation);
+                variable, target, targetType, hasNarrowedTarget, systemIndex, BindValue, diagnosticLocation, isReadOnlyReceiver);
         }
 
         BoundExpression BindIndexValue() => boundIndexOverride ?? BindExpression(indexSyntax);
@@ -2287,7 +2305,7 @@ internal sealed partial class ExpressionBinder
                     var refGetter = GetVisibleGetter(idxProp);
                     if (refGetter != null && refGetter.ReturnType.IsByRef)
                     {
-                        if (IsReadOnlyRefReturn(idxProp, refGetter))
+                        if (IsReadOnlyRefReturn(idxProp))
                         {
                             Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType);
                             return new BoundErrorExpression(null);
@@ -2602,13 +2620,6 @@ internal sealed partial class ExpressionBinder
             return TypeSymbol.FromClrType(null);
         }
 
-        var returnClrType = method.ReturnType;
-        if (returnClrType != null && returnClrType.IsByRef)
-        {
-            // Preserve by-ref-return handling exactly as MapClrMemberType does.
-            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(returnClrType.GetElementType()!));
-        }
-
         return ImportedTypeSymbol.NormalizeSemanticAggregate(
             ClrNullability.GetReturnTypeSymbol(method),
             method.ReturnType,
@@ -2729,28 +2740,8 @@ internal sealed partial class ExpressionBinder
         }
     }
 
-    private static bool IsReadOnlyRefReturn(PropertyInfo indexer, MethodInfo getter)
-    {
-        static bool HasInModifier(System.Type[] modifiers)
-        {
-            foreach (var m in modifiers)
-            {
-                if (m.Name == "InAttribute")
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        if (HasInModifier(indexer.GetRequiredCustomModifiers()))
-        {
-            return true;
-        }
-
-        return HasInModifier(getter.ReturnParameter.GetRequiredCustomModifiers());
-    }
+    private static bool IsReadOnlyRefReturn(PropertyInfo indexer)
+        => RefCapabilities.GetReturnRefKind(indexer) == RefKind.RefReadOnly;
 
     // Issue #1016: bind a range/slice expression `target[lo..hi]` (and the
     // open-ended forms). The bound representation reuses existing nodes wrapped
@@ -2887,7 +2878,8 @@ internal sealed partial class ExpressionBinder
         bool hasNarrowedTarget,
         BoundExpression indexValue,
         Func<TypeSymbol, BoundExpression> bindValue,
-        TextLocation diagnosticLocation)
+        TextLocation diagnosticLocation,
+        bool isReadOnlyReceiver)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
@@ -2931,6 +2923,12 @@ internal sealed partial class ExpressionBinder
             // Either indexer lookup succeeded, so the property is present here.
             var getter = ClrMemberVisibility.GetVisibleGetter(indexer!, CanAccessInternalsOf(indexer!.DeclaringType));
             var valueType = ResolveIndexerElementType(targetType, indexer);
+            if (indexer.SetMethod != null && isReadOnlyReceiver)
+            {
+                Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                return new BoundErrorExpression(indexValue.Syntax);
+            }
+
             if (!indexer.CanWrite)
             {
                 if (getter == null || !getter.ReturnType.IsByRef)
@@ -2939,7 +2937,7 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                if (IsReadOnlyRefReturn(indexer, getter))
+                if (IsReadOnlyRefReturn(indexer))
                 {
                     Diagnostics.ReportCannotAssignReadOnlySpanElement(diagnosticLocation, targetType);
                     return new BoundErrorExpression(null);

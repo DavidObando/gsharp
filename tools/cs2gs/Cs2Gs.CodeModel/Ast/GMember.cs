@@ -146,6 +146,7 @@ public sealed class PropertyDeclaration : GMember
     /// the ADR-0060 amendment) — mapped from a C# ref-returning property or
     /// indexer (issue #3839).
     /// </param>
+    /// <param name="isReadOnlyRefReturn">Whether the return reference is readonly.</param>
     public PropertyDeclaration(
         string name,
         GTypeReference type,
@@ -157,7 +158,8 @@ public sealed class PropertyDeclaration : GMember
         IReadOnlyList<Parameter> indexerParameters = null,
         GStatement expressionBody = null,
         GTypeReference explicitInterfaceType = null,
-        bool isRefReturn = false)
+        bool isRefReturn = false,
+        bool isReadOnlyRefReturn = false)
     {
         Name = name;
         Type = type;
@@ -170,6 +172,7 @@ public sealed class PropertyDeclaration : GMember
         ExpressionBody = expressionBody;
         ExplicitInterfaceType = explicitInterfaceType;
         IsRefReturn = isRefReturn;
+        IsReadOnlyRefReturn = isReadOnlyRefReturn;
     }
 
     /// <summary>Gets the property name.</summary>
@@ -222,6 +225,9 @@ public sealed class PropertyDeclaration : GMember
     /// property/indexer always has.
     /// </summary>
     public bool IsRefReturn { get; }
+
+    /// <summary>Gets a value indicating whether the return reference is readonly.</summary>
+    public bool IsReadOnlyRefReturn { get; }
 }
 
 /// <summary>
@@ -264,6 +270,7 @@ public sealed class MethodDeclaration : GMember
     /// implementation, so callers never set both.
     /// </param>
     /// <param name="isSuspend">ADR-0174: whether the method renders as a <c>suspend func</c>; see <see cref="IsSuspend"/>.</param>
+    /// <param name="isReadOnlyRefReturn">Whether the return reference is readonly.</param>
     public MethodDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
@@ -279,7 +286,8 @@ public sealed class MethodDeclaration : GMember
         GStatement expressionBody = null,
         bool isRefReturn = false,
         GTypeReference explicitInterfaceType = null,
-        bool isSuspend = false)
+        bool isSuspend = false,
+        bool isReadOnlyRefReturn = false)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
@@ -294,6 +302,7 @@ public sealed class MethodDeclaration : GMember
         Attributes = attributes ?? new List<AttributeUse>();
         ExpressionBody = expressionBody;
         IsRefReturn = isRefReturn;
+        IsReadOnlyRefReturn = isReadOnlyRefReturn;
         ExplicitInterfaceType = explicitInterfaceType;
         IsSuspend = isSuspend;
     }
@@ -352,6 +361,9 @@ public sealed class MethodDeclaration : GMember
     /// G#'s <c>ref</c> return modifier (issue #1900).
     /// </summary>
     public bool IsRefReturn { get; }
+
+    /// <summary>Gets a value indicating whether the return reference is readonly.</summary>
+    public bool IsReadOnlyRefReturn { get; }
 
     /// <summary>
     /// Gets the ADR-0149 explicit-interface qualifier clause type, or

@@ -36,9 +36,9 @@ namespace Cs2Gs.Tests;
 /// feature; there was no <c>prop P ref T</c> spelling), so the honest verdict
 /// was a loud gap. Issue #3879 then added the spelling, and the plain-<c>ref</c>
 /// property and indexer now TRANSLATE — see
-/// <c>Issue3879RefReturningPropertyTranslationTests</c>. What remains gapped here
-/// is <c>ref readonly</c>, which still has no G# form. Silently emitting the
-/// copy-returning form is the one outcome that must not happen.</item>
+/// <c>Issue3879RefReturningPropertyTranslationTests</c>. Issue #4220 extends
+/// this to <c>ref readonly</c>. Neither a copy-returning nor a writable-ref
+/// translation may replace that readonly contract.</item>
 /// </list>
 /// <para>
 /// The method half is proven by EXECUTION, not by printed shape: a printed-shape
@@ -59,6 +59,7 @@ public sealed class Issue3839RefReturningMemberTranslationTests
                 public ref int GetValue(int index) => ref values[index];
 
                 public int Read(int index) => values[index];
+                public void Set(int index, int value) { values[index] = value; }
             }
         }
         """;
@@ -113,13 +114,15 @@ public sealed class Issue3839RefReturningMemberTranslationTests
     /// any shape assertion, cannot be satisfied by a member that lost its
     /// <c>ref</c>.
     /// </summary>
-    [Fact]
-    public void TranslatedRefMethod_ReturnsAnAliasThatWritesThrough()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TranslatedRefMethod_ReturnsALiveAlias(bool readOnly)
     {
         string compiler = FindCompiler();
         Assert.NotNull(compiler);
 
-        string printed = Translate(RefMethodSource);
+        string printed = Translate(readOnly ? RefMethodSource.Replace("public ref int", "public ref readonly int") : RefMethodSource);
         string workDir = NewDirectory("runtime");
         string sourcePath = Path.Combine(workDir, "Repro.gs");
         string libraryPath = Path.Combine(workDir, "Repro.dll");
@@ -135,7 +138,7 @@ public sealed class Issue3839RefReturningMemberTranslationTests
                 "\nTranslated G#:\n" + printed);
 
         var loadContext = new AssemblyLoadContext(
-            nameof(TranslatedRefMethod_ReturnsAnAliasThatWritesThrough), isCollectible: true);
+            nameof(TranslatedRefMethod_ReturnsALiveAlias), isCollectible: true);
         try
         {
             Assembly library = loadContext.LoadFromAssemblyPath(libraryPath);
@@ -153,7 +156,7 @@ public sealed class Issue3839RefReturningMemberTranslationTests
                     getValue.ReturnType.FullName);
 
             // Behaviour direction: a C# consumer writes through the reference.
-            string driverPath = CompileDriver(workDir, libraryPath);
+            string driverPath = CompileDriver(workDir, libraryPath, readOnly);
             Assembly driver = loadContext.LoadFromAssemblyPath(driverPath);
             object result = driver.GetType("Repro.Driver")!.GetMethod("Run")!.Invoke(null, null);
 
@@ -168,18 +171,12 @@ public sealed class Issue3839RefReturningMemberTranslationTests
     }
 
     /// <summary>
-    /// <c>ref readonly</c> remains the gap after #3879: the reference is
-    /// read-only, but it is still a reference. A copy-returning property is a
-    /// behaviour change (the caller observes a stale snapshot rather than live
-    /// storage), and a plain-<c>ref</c> property is a different one (the caller
-    /// gets a WRITABLE alias to storage declared read-only). G# has no read-only
-    /// by-ref return, so neither rendering is faithful.
+    /// Issue #4220: readonly returns preserve both aliasing and write permission.
     /// </summary>
     [Fact]
-    public void RefReadonlyProperty_StaysLoudGap()
+    public void RefReadonlyProperty_PreservesContract()
     {
-        Assert.Contains(
-            Diagnose("""
+        string printed = Translate("""
                 namespace Repro
                 {
                     public class Holder
@@ -189,9 +186,8 @@ public sealed class Issue3839RefReturningMemberTranslationTests
                         public ref readonly int Property => ref values[0];
                     }
                 }
-                """),
-            d => d.Severity == TranslationSeverity.Unsupported
-                && d.Message.Contains("ref readonly", StringComparison.Ordinal));
+                """);
+        Assert.Contains("prop Property ref readonly int32", printed, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -222,9 +218,9 @@ public sealed class Issue3839RefReturningMemberTranslationTests
             d => d.Severity == TranslationSeverity.Unsupported);
     }
 
-    private static string CompileDriver(string workDir, string libraryPath)
+    private static string CompileDriver(string workDir, string libraryPath, bool readOnly)
     {
-        const string DriverSource = """
+        string driverSource = $$"""
             namespace Repro
             {
                 public static class Driver
@@ -232,9 +228,9 @@ public sealed class Issue3839RefReturningMemberTranslationTests
                     public static int Run()
                     {
                         var holder = new Holder();
-                        ref int slot = ref holder.GetValue(1);
-                        slot = 99;
-                        return holder.Read(1);
+                        ref {{(readOnly ? "readonly " : "")}}int slot = ref holder.GetValue(1);
+                        {{(readOnly ? "holder.Set(1, 99);" : "slot = 99;")}}
+                        return {{(readOnly ? "slot" : "holder.Read(1)")}};
                     }
                 }
             }
@@ -247,7 +243,7 @@ public sealed class Issue3839RefReturningMemberTranslationTests
 
         CSharpCompilation compilation = CSharpCompilation.Create(
             "Repro.Driver",
-            new[] { CSharpSyntaxTree.ParseText(DriverSource, new CSharpParseOptions(LanguageVersion.Latest)) },
+            new[] { CSharpSyntaxTree.ParseText(driverSource, new CSharpParseOptions(LanguageVersion.Latest)) },
             references,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 

@@ -20,4 +20,7 @@ public enum RefKind
 
     /// <summary>The parameter is <c>in</c> (readonly ref) — the argument may be passed with <c>&amp;</c> or by value (emitter spills to temp).</summary>
     In,
+
+    /// <summary>A readonly managed-reference return or local alias, distinct from an <c>in</c> parameter.</summary>
+    RefReadOnly,
 }
