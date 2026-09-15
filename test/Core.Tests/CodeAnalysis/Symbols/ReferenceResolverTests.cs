@@ -205,11 +205,22 @@ public class ReferenceResolverTests
                 publicPath,
             });
 
+            // Issue #4233: infrastructure's ungated lookup (`false`) exists so
+            // genuinely internal-only well-known types (no public alternative
+            // anywhere in the reference set, e.g. IsReadOnlyAttribute) still
+            // resolve — see TryResolveType_WithoutExternalVisibility_Resolves_
+            // Internal_Type_By_Name. It must NOT prefer an inaccessible shim
+            // over an accessible duplicate when one exists: gsc previously
+            // emitted a TypeRef into Microsoft.TestPlatform.Utilities' private
+            // System.Diagnostics.CodeAnalysis.NotNullWhenAttribute polyfill
+            // instead of the public framework type, and the CLR rejected the
+            // resulting IL with MethodAccessException despite a clean compile.
             Assert.True(resolver.TryResolveType(
                 "ResolverCollision3445.MarkerAttribute",
                 requireExternalVisibility: false,
                 out var raw));
-            Assert.Equal("InternalAttributeShim", raw.Assembly.GetName().Name);
+            Assert.True(raw.IsPublic);
+            Assert.Equal("PublicFrameworkType", raw.Assembly.GetName().Name);
 
             Assert.True(resolver.TryResolveType(
                 "ResolverCollision3445.MarkerAttribute",
