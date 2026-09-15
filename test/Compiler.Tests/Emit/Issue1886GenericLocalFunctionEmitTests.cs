@@ -7,6 +7,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -192,6 +195,11 @@ public class Issue1886GenericLocalFunctionEmitTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath);
+            if (source.Contains("let Add[T]", StringComparison.Ordinal))
+            {
+                AssertGenericLocalClosureShape(outPath);
+            }
 
             var psi = new ProcessStartInfo("dotnet")
             {
@@ -212,10 +220,28 @@ public class Issue1886GenericLocalFunctionEmitTests
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
             return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
+
         finally
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static void AssertGenericLocalClosureShape(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new PEReader(stream);
+        var reader = pe.GetMetadataReader();
+        var closure = reader.TypeDefinitions
+            .Select(handle => (handle, definition: reader.GetTypeDefinition(handle)))
+            .FirstOrDefault(pair => reader.GetString(pair.definition.Name).StartsWith("<closure_Add_", StringComparison.Ordinal));
+        Assert.False(closure.handle.IsNil);
+        Assert.Empty(closure.definition.GetGenericParameters());
+
+        var invoke = closure.definition.GetMethods()
+            .Select(handle => reader.GetMethodDefinition(handle))
+            .Single(method => reader.GetString(method.Name) == "Invoke");
+        Assert.Single(invoke.GetGenericParameters());
     }
 
     private static readonly Lazy<IReadOnlyList<string>> BclReferences = new(() =>
