@@ -115,4 +115,4 @@ func Main() {
 
 G# also offers a Go-flavored layer — `go`, `chan T`, `select`, `close`, `make(chan T, ...)` — in the `Gsharp.Extensions.Go` package for projects that prefer that style. See [Extensions: Go-flavored concurrency](../extensions/go-concurrency) for the full surface and the matching opt-in semantics.
 
-Next: [Tour: .NET interop](/docs/tour/dotnet-interop).
+Next: [Tour: .NET interop](dotnet-interop.md).

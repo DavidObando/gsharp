@@ -2,20 +2,25 @@
 title: "Go-style built-ins (retired)"
 sidebar_position: 2
 draft: false
+description: "Replace retired Go-style built-ins with the corresponding G# and .NET members."
 ---
 
 # Go-style built-ins (retired)
 
-G# 0.4 shipped the Go-style built-in functions `len`, `cap`, `append`, and
+Early G# 0.4 packages shipped the Go-style built-in functions `len`, `cap`, `append`, and
 `delete` behind a per-file `import Gsharp.Extensions.Go`. ADR-0174 (D13)
 retired them, together with the import gate and the `Gsharp.Extensions.Go`
 namespace itself: every receiver already carries the member, so a free
 function that adds no syntax of its own only competed with it. A call to a
 retired name reports
-[`GS0566`](../ref/diagnostics#adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567),
+[`GS0566`](../ref/diagnostics.md#channel-operations-and-retired-spellings),
 whose message names the replacement for that exact site (`xs.Length`,
 `m.Count`, `m.Remove(k)`, …). The names are free for your own functions: a
 user-defined `func len(...)` is an ordinary call.
+
+<span id="length-and-capacity--len--cap"></span>
+<span id="append--append"></span>
+<span id="delete--delete"></span>
 
 ## Replacements
 

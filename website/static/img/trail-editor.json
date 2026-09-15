@@ -1,0 +1,8 @@
+{
+  "editor": "Visual Studio Code 1.137.0",
+  "extension": "gsharplang.vscode-gsharp 0.4.591",
+  "sdk": ".NET 10.0.401",
+  "applicationSdk": "0.4.591",
+  "sourceSha256": "135f8c0559f082dbbb742962dedf925773db4b3de9005ae6c1b00e80722d8c2f",
+  "evidence": "Actual editor completion and terminal execution in an isolated VS Code profile."
+}

@@ -42,8 +42,8 @@ One practical shape would be:
 
 Use the local toolchain and the static Tour while the live Playground is deferred:
 
-- install G# locally with the [installation guide](/docs/getting-started/install);
-- work through the [Tour](/docs/tour);
+- install G# locally with the [installation guide](getting-started/install.md);
+- work through the [Tour](tour/index.md);
 - run examples with `dotnet run` for `.gsproj` projects or `gsc` for direct compiler experiments.
 
 ```bash

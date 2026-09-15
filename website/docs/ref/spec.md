@@ -2,6 +2,8 @@
 title: "Language specification"
 sidebar_position: 1
 draft: false
+description: "The G# language specification: grammar, types, expressions, statements, and execution rules."
+toc_max_heading_level: 2
 ---
 
 # Language specification
@@ -294,6 +296,8 @@ Console.WriteLine(d)
 0
 ```
 
+<span id="go-style-built-ins-import-gsharpextensionsgo"></span>
+
 ### Retired Go-style built-ins
 
 G# 0.4 inherited a small set of Go-style built-in functions — `len`, `cap`,
@@ -516,9 +520,9 @@ This rule lets `Gsharp.Extensions.Optional.Map` carry two overloads — `where T
 ### Type declarations
 
 ```ebnf
-TypeDecl          = TypeAliasDecl | DelegateAliasDecl | AggregateDecl .
+TypeDecl          = TypeAliasDecl | DelegateDecl | AggregateDecl .
 TypeAliasDecl     = "type" identifier TypeParamList? "=" identifier .
-DelegateAliasDecl = "type" identifier TypeParamList? "=" "delegate" "func" "(" Parameters? ")" TypeClause? .
+DelegateDecl      = Visibility? "delegate" identifier TypeParamList? "(" Parameters? ")" TypeClause? ";" .
 AggregateDecl     = Visibility? OpenOrSealed? Data? Inline? Partial? Unsafe? AggregateKeyword identifier TypeParamList? PrimaryCtor? BaseClause? AggregateBody? .
 AggregateKeyword  = "class" | "struct" | "enum" | "interface" .
 Visibility        = "public" | "internal" | "private" .  (* type-level; "protected" is a member-only modifier *)
@@ -530,11 +534,11 @@ BaseClause        = ":" QualifiedTypeName ( "(" Arguments? ")" )? { "," Qualifie
 AggregateBody     = "{" Member* "}" .
 ```
 
-The aggregate keyword IS the declaration keyword. Unsupported modifier combinations are rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case. The `type` keyword is retained only for the alias and named-delegate forms above.
+The aggregate keyword IS the declaration keyword. Unsupported modifier combinations are rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case. Contextual `type` introduces aliases; named delegates use the separate `delegate` declaration.
 
 `partial` is a contextual modifier on `class`, `struct`, and `interface` declarations. Multiple partial declarations with the same package, containing type, and name merge into one emitted CLR type. Every declaration in a multi-part group must carry `partial` (`GS0475`); non-partial duplicates still report `GS0102`. Parts must agree on aggregate kind (`GS0476`), accessibility (`GS0477`), type parameters (`GS0480`), and base-class shape (`GS0481`); `open` and `sealed` cannot conflict (`GS0478`); `data` / `inline` / `ref` must be repeated on every part (`GS0479`); only one part may declare a primary constructor (`GS0482`) or `deinit` (`GS0483`). Interfaces implemented by different parts are unioned, members and annotations concatenate in deterministic source order, and `shared { init { ... } }` blocks from all parts concatenate into the single `.cctor`. `partial enum` is rejected (`GS0484`). A single partial declaration with no siblings is legal. Nested partial types merge recursively within their containing type.
 
-A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool`) are supported, emitting a generic delegate `TypeDef`. Diagnostic `GS0233` covers malformed declarations.;
+A `DelegateDecl` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool;`) are supported, emitting a generic delegate `TypeDef`. The trailing semicolon is required, including when the return type is omitted for a void delegate. The retired `type Name = delegate func(...)` spelling reports `GS0535`.
 
 ### Members
 
@@ -1239,7 +1243,7 @@ A block is a braced statement list. Expression statements are accepted for expre
 
 ```ebnf
 Block     = "{" Statement* "}" .
-Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
+Statement = Block | Annotation* VariableDecl | IfStmt | IfLetStmt | GuardLetStmt | ForStmt | WhileStmt | WhileLetStmt | DoWhileStmt | LabeledLoopStmt | BreakStmt | ContinueStmt | ReturnStmt | YieldStmt | SwitchStmt | FallthroughStmt | TryStmt | ThrowStmt | UsingStmt | DeferStmt | GoStmt | ScopeStmt | AwaitForRangeStmt | SelectStmt | MultiAssignmentStmt | NullCoalescingAssignmentStmt | IncDecStmt | ChannelSendStmt | ExpressionStmt .
 ```
 
 ### Assignment and variable statements
@@ -1369,11 +1373,12 @@ write only fires when `HasValue == false`.
 
 ### Switch statements
 
-Switch statement cases use block bodies and never fall through. The `fallthrough` keyword is reserved and parsed only to report an unsupported-fallthrough diagnostic.
+Switch statement cases use block bodies and never fall through implicitly. A `fallthrough` statement is permitted only as the direct last statement of a non-final arm body. It transfers control to the next arm's body in source order without testing its pattern. The destination pattern must not introduce bindings, and the destination arm must not have a `when` guard. Invalid placement reports `GS0168`, a final-arm use reports `GS0533`, and an ineligible destination reports `GS0534`.
 
 ```ebnf
 SwitchStmt = "switch" Expression "{" SwitchCase* "}" .
 SwitchCase = "case" Pattern [ "when" Expression ] Block | "default" Block .
+FallthroughStmt = "fallthrough" .
 ```
 
 When an arm pattern is a type pattern (`T`, `T { ... }`, or `<ident> is T`) or
@@ -1864,7 +1869,7 @@ Parameters        ::= Parameter (',' Parameter)*
 Parameter         ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause ('=' Expression)?
 
 TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' identifier
-DelegateDecl      ::= 'type' identifier TypeParamList? '=' 'delegate' 'func' '(' Parameters? ')' TypeClause?   (* named CLR delegate,  *)
+DelegateDecl      ::= 'delegate' identifier TypeParamList? '(' Parameters? ')' TypeClause? ';'   (* named CLR delegate; omit the return type for void *)
 AggregateDecl     ::= ClassDecl | StructDecl | EnumDecl | InterfaceDecl    (* leading modifiers may appear in any order; per-kind validity is enforced by the binder *)
 ClassDecl         ::= ('open' | 'sealed')? 'data'? 'class' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
 StructDecl        ::= 'data'? 'inline'? 'ref'? 'struct' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
@@ -1959,7 +1964,7 @@ AssignmentTarget    ::= identifier
                       | '*' Expression
                       | 'base' '[' TypeClause ']' '.' identifier
 IncDecStmt        ::= identifier ('++' | '--')
-FallthroughStmt   ::= 'fallthrough'                       (* recognised then reported as unsupported,  *)
+FallthroughStmt   ::= 'fallthrough'                       (* direct last statement of a non-final switch arm; next arm has no pattern bindings or guard *)
 
 IfStmt            ::= 'if' (SimpleStmt ';')? Expression Statement ('else' Statement)?
 IfLetStmt         ::= 'if' LetBindingList Statement ('else' Statement)?

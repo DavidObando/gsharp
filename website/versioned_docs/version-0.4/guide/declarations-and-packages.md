@@ -2,11 +2,12 @@
 title: "Declarations and packages"
 sidebar_position: 3
 draft: false
+description: "Declare names, organize packages, and control visibility in G# programs."
 ---
 
 # Declarations and packages
 
-Declarations define the package-level and type-level shape of a G# program. This guide summarizes the current parser and binder behavior; the full EBNF is in the [language specification](/docs/ref/spec#appendix-full-parser-grammar).
+Declarations define the package-level and type-level shape of a G# program. This guide summarizes the current parser and binder behavior; the full EBNF is in the [language specification](../ref/spec.md#appendix-full-parser-grammar).
 
 ## Packages
 
@@ -93,7 +94,7 @@ func (value int32) Abs() int32 {
 
 Generic functions use bracketed type parameters and bracketed type arguments.
 
-Parameters may carry a ref-kind modifier (`ref`, `out`, `in`, or `scoped`) and may declare a compile-time-constant default value to become optional. Two functions sharing a name are overloads when they differ by parameter types, arity, or ref-kinds; differing by return type alone is not a distinguishing signature. See the [feature matrix](/docs/ref/feature-matrix) for the full capability table.
+Parameters may carry a ref-kind modifier (`ref`, `out`, `in`, or `scoped`) and may declare a compile-time-constant default value to become optional. Two functions sharing a name are overloads when they differ by parameter types, arity, or ref-kinds; differing by return type alone is not a distinguishing signature. See the [feature matrix](../ref/feature-matrix.md) for the full capability table.
 
 ```gsharp
 func greet(name string = "world", excited bool = false) string {
@@ -122,17 +123,17 @@ A function can declare a managed-pointer return with `ref` before the return typ
 
 Expression-bodied members use the G# arrow `->`, not C# `=>`. The form is available for free functions, methods, read-only properties, accessors, indexers, operators, and conversion operators; constructors, finalizers, and local functions keep block bodies.
 
-A named delegate type is a top-level type alias whose RHS is `delegate func(...)`:
+A named delegate type uses the standalone `delegate Name(parameters) ReturnType;` declaration, not a `type` alias. Omit the return type for a void delegate; the trailing semicolon is required:
 
 ```gsharp
-type Handler = delegate func(sender Object, e EventArgs)
+delegate Handler(sender Object, e EventArgs);
 ```
 
 Named delegates emit as real CLR `MulticastDelegate`-derived types so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types.
 
 ## Type declarations
 
-The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head. `data` adds structural synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `partial class`, `partial struct`, and `partial interface` split one type across files or generated sources; every duplicate part must carry `partial`, and partial enums are not supported. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. The `type` keyword is retained for aliases (`type Count = int32`) and named delegates (`type Greeter = delegate func(name string)`).
+The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head. `data` adds structural synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `partial class`, `partial struct`, and `partial interface` split one type across files or generated sources; every duplicate part must carry `partial`, and partial enums are not supported. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. Use contextual `type` for aliases (`type Count = int32`); named delegates have a separate declaration head (`delegate Greeter(name string);`).
 
 ```gsharp
 data struct Point {

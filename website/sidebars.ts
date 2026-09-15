@@ -28,6 +28,7 @@ const sidebars: SidebarsConfig = {
       label: 'Tutorials',
       items: [
         'tutorials/getting-started',
+        'tutorials/trail',
         'tutorials/project-and-packages',
         'tutorials/data-and-types',
         'tutorials/control-flow',
@@ -52,10 +53,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Extensions',
-      items: [
-        'extensions/go-concurrency',
-        'extensions/go-builtins',
-      ],
+      items: ['extensions/go-concurrency', 'extensions/go-builtins'],
     },
     {
       type: 'category',
@@ -63,11 +61,14 @@ const sidebars: SidebarsConfig = {
       items: [
         'bridges/gsharp-for-go-developers',
         'bridges/gsharp-for-csharp-developers',
+        'bridges/gsharp-for-kotlin-developers',
+        'bridges/gsharp-for-swift-developers',
       ],
     },
   ],
 
   referenceSidebar: [
+    'ref/quick-reference',
     'ref/spec',
     'ref/standard-library',
     'ref/clr-interop',
@@ -80,15 +81,15 @@ const sidebars: SidebarsConfig = {
   ],
 
   toolingSidebar: [
-    'tooling/gsc',
-    'tooling/gsfmt',
-    'tooling/repl',
     'tooling/sdk-projects',
+    'tooling/vscode',
+    'tooling/repl',
+    'tooling/gsfmt',
+    'tooling/debugging',
     'tooling/analyzers',
     'tooling/cs2gs',
-    'tooling/vscode',
+    'tooling/gsc',
     'tooling/lsp',
-    'tooling/debugging',
     'tooling/compiler-architecture',
     'playground',
     'contributing/docs-authoring',

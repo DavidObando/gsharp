@@ -2,6 +2,7 @@
 title: "Tutorial: Projects and packages"
 sidebar_position: 2
 draft: false
+description: "Organize G# source into packages and connect projects through the .NET build system."
 ---
 
 # Tutorial: Projects and packages

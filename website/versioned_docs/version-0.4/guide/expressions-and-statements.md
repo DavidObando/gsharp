@@ -2,15 +2,16 @@
 title: "Expressions and statements"
 sidebar_position: 5
 draft: false
+description: "Combine expressions and statements to compute values and control execution."
 ---
 
 # Expressions and statements
 
-G# expression syntax is compact, with CLR-oriented additions for nullability, async, exceptions, and interop. The exact precedence table is in the [language specification](/docs/ref/spec#precedence).
+G# expression syntax is compact, with CLR-oriented additions for nullability, async, exceptions, and interop. The exact precedence table is in the [language specification](../ref/spec.md#precedence).
 
 ## Operators
 
-Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative except `??`, which is right-associative and sits below `||` and above the ternary conditional. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, null-coalescing, and range levels are implemented. The pattern-test operator `expr is pattern` returns `bool` and accepts constants, relational/list/property patterns, bare types, parentheses, and `not` / `and` / `or`; the safe-cast operator `expr as T` always returns nullable `T?` because failure produces `nil`. Both sit at the comparison precedence level. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression; both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver or in-body `operator` declarations.
+Unary operators include numeric identity and negation, logical not, bitwise complement, address-of, dereference, channel receive, and `await`. Binary operators are left-associative except `??`, which is right-associative and sits below `||` and above the ternary conditional. Multiplicative, shift, bitwise, additive, comparison, logical-and, logical-or, null-coalescing, and range levels are implemented. The pattern-test operator `expr is pattern` returns `bool` and accepts constants, relational/list/property patterns, bare types, parentheses, `not` / `and` / `or`, and a trailing designation that names the matched value (`expr is string text`, usable in the `&&` continuation and the selected branch — ADR-0166); the safe-cast operator `expr as T` always returns nullable `T?` because failure produces `nil`. Both sit at the comparison precedence level. The conditional (ternary) expression `cond ? whenTrue : whenFalse` is a normal expression; both arms must share a common type, otherwise `GS0263` fires. User operator overloads are supported through receiver or in-body `operator` declarations.
 
 ## Calls, access, and literals
 
@@ -105,7 +106,7 @@ greeting ??= "ignored" // no-op — RHS not evaluated
 
 ## If and switch
 
-`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through. `fallthrough` is reserved and diagnosed if used. Switch expressions use `:` arms and require semantic coverage or a default arm.
+`if` can include a simple statement before the condition. Switch statements use block-bodied cases and do not fall through implicitly. A direct trailing `fallthrough` in a non-final arm jumps to the next body without retesting its pattern; targets with pattern bindings or a `when` guard are rejected. Switch expressions use `:` arms and require semantic coverage or a default arm. See [explicit fallthrough](../tour/control-flow.md#explicit-fallthrough) for a complete program and the placement diagnostics.
 
 ```gsharp
 let label = switch n {
@@ -208,7 +209,7 @@ done: Console.WriteLine("done")
 
 ## Exceptions and cleanup statements
 
-`throw`, `try`, `catch`, and `finally` use CLR exception semantics. `throw e` is also an expression in value position, so `name ?? throw ArgumentNullException("name")`, ternary arms, return operands, lambda bodies, and arguments can throw without a separate guard. `using` introduces a disposable resource variable. `defer` schedules a call for scope exit. See [Errors and cleanup](/docs/guide/errors-and-cleanup).
+`throw`, `try`, `catch`, and `finally` use CLR exception semantics. `throw e` is also an expression in value position, so `name ?? throw ArgumentNullException("name")`, ternary arms, return operands, lambda bodies, and arguments can throw without a separate guard. `using` introduces a disposable resource variable. `defer` schedules a call for scope exit. See [Errors and cleanup](errors-and-cleanup.md).
 
 ## Concurrency statements
 

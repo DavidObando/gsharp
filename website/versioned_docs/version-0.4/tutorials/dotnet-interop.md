@@ -2,6 +2,7 @@
 title: "Tutorial: .NET interop"
 sidebar_position: 7
 draft: false
+description: "Call .NET libraries and work with events, delegates, and extension functions."
 ---
 
 # Tutorial: .NET interop

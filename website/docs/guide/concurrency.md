@@ -2,11 +2,12 @@
 title: "Concurrency and async"
 sidebar_position: 6
 draft: false
+description: "Understand structured concurrency, async tasks, and sequence lifetimes in G#."
 ---
 
 # Concurrency and async
 
-G#'s production concurrency surface is built on three pieces:
+G#'s concurrency model is built on three pieces:
 
 - **`scope { ... }`** — structured-concurrency blocks that wait for the
   work they own and surface its failures.
@@ -18,6 +19,8 @@ G#'s production concurrency surface is built on three pieces:
 This guide focuses on the structured surface. The Go-flavored layer
 (`go`, `chan[T]`, `select`, `for v in ch`) is part of the language too and
 is documented in [Go-flavored concurrency](../extensions/go-concurrency).
+
+For runnable examples and cross-language tradeoffs, see [Ten concurrency patterns: Go and G#](/concurrency). It separates the published-SDK correctness examples from the benchmark workflow's measured compiler and operations.
 
 ## `scope` — structured concurrency
 
@@ -40,25 +43,33 @@ A `scope` is a suspension point: a function containing one is compiled as
 a suspending function (see below), so the join parks the state machine
 rather than a thread; only the entry point blocks.
 
-```gsharp
-import System
-import System.Threading.Tasks
+The following complete example is checked in as `samples/WebsiteConcurrency.gs`:
 
-async func work(label string) {
-    await Task.Delay(1)
-    Console.WriteLine("done: $label")
+```gsharp title="workers.gs"
+package Website.Concurrency
+
+import System
+
+func send(value int32, results chan[int32]) {
+    results <- value
 }
+
+let results = chan[int32](2)
 
 scope {
-    work("a").Wait()
-    work("b").Wait()
+    go send(10, results)
+    go send(32, results)
 }
 
-Console.WriteLine("after scope")
+Console.WriteLine(<-results + <-results)
+```
+
+```text
+42
 ```
 
 Use `scope` when a parent operation should not return before its
-children. If you find yourself reaching for a `Task[]` array and
+children. The example's two-slot buffer lets both children finish before the parent receives; arbitrary untracked .NET tasks do not automatically become scope children. If you find yourself reaching for a `Task[]` array and
 `Task.WhenAll`, a `scope` block is usually the simpler shape.
 
 ## `async func` and `await`
@@ -162,11 +173,12 @@ Two helpers come with the language, by bare name — the namespace they live in 
 imported for you:
 
 ```gs
+using let deadline = after(TimeSpan.FromSeconds(2))
 select {
 case let job = <-work {
     handle(job)
 }
-case <-after(TimeSpan.FromSeconds(2)) {
+case <-deadline {
     Console.WriteLine("timed out")
 }
 }
@@ -183,6 +195,8 @@ it in a `using let` when you select on it in a loop. Both take a `TimeSpan`:
 using let beat = tick(TimeSpan.FromMilliseconds(500))
 ```
 
+An `after` timer is armed when created and remains armed until it fires or is disposed. Losing a select removes that select's registration, not the timer itself. Keep an owned deadline in `using let` when another arm can finish first, especially for long deadlines. `Context.None.WithTimeout(duration)` is another option for .NET APIs that accept a cancellation token; dispose that context when finished.
+
 Both are backed by `System.Threading.Timer`, whose resolution is one whole
 millisecond, so a delay or period is rounded **up** to the next millisecond and
 the interval a timer is armed at is never shorter than the one you asked for. A
@@ -193,6 +207,7 @@ rejects a period of zero or less. A delay of zero is still immediate.
 
 `merge` drains every input concurrently and closes its result once the last
 input closes; the result is receive-only, because only `merge` writes to it.
+The published helper accepts full `chan[T]` inputs and uses an unbounded output. Use an explicit bounded forwarding topology when output capacity or different ownership contracts matter.
 Declaring your own `after`, `tick` or `merge` shadows these.
 
 ### Choosing among more than channels

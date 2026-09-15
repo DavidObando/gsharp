@@ -2,6 +2,7 @@
 title: "Tour: Concurrency"
 sidebar_position: 5
 draft: false
+description: "Explore structured scopes, async functions, and asynchronous sequences in G#."
 ---
 
 # Tour: Concurrency
@@ -10,40 +11,38 @@ G# uses `scope` for structured concurrency, `async func` and `await` for task-ba
 
 ## `scope` — structured concurrency
 
-`scope { ... }` runs its body and, before returning, joins every async operation registered with it. Awaiting inside a scope registers the awaited task; failures propagate as the scope unwinds, so child work is never silently lost.
+`scope { ... }` joins the children started with `go` inside it and observes their failures. It does not make sequential calls concurrent or adopt every unrelated .NET task.
 
-```gsharp title="ScopeBasic.gs"
-package GSharp.Tour.ScopeBasic
+This complete, checked example starts two children and collects their results:
+
+```gsharp title="workers.gs"
+package Website.Concurrency
 
 import System
-import System.Threading.Tasks
 
-async func tick(label string) {
-    await Task.Delay(1)
-    Console.WriteLine("done: $label")
+func send(value int32, results chan[int32]) {
+    results <- value
 }
 
-func Main() {
-    scope {
-        tick("a").Wait()
-        tick("b").Wait()
-    }
+let results = chan[int32](2)
 
-    Console.WriteLine("after scope")
+scope {
+    go send(10, results)
+    go send(32, results)
 }
+
+Console.WriteLine(<-results + <-results)
 ```
 
 ```text
-done: a
-done: b
-after scope
+42
 ```
 
-Use `scope` whenever a parent operation should not return before its children.
+The buffer holds both results while the parent waits for the children. Completion order may vary, but the sum does not. Use `scope` when a parent should not return before its children; [Trail](../tutorials/trail.md) expands this into a bounded worker pool.
 
 ## `async func` and `await`
 
-`async func` declares a function that returns a `Task` or `Task[T]`. `await expr` suspends the surrounding async function until the awaited task completes and yields its result.
+`async func` returns `Task` when its return type is omitted or `Task[T]` when it declares `T`. Explicit `async func handler() void` is a fire-and-forget, non-awaitable event-handler shape matching C# `async void`. `await expr` suspends the surrounding async function until the awaited task completes and yields its result.
 
 ```gsharp title="AsyncBasics.gs"
 package GSharp.Tour.AsyncBasics
@@ -113,6 +112,6 @@ func Main() {
 
 ## Channels and goroutines
 
-G# also offers a Go-flavored layer — `go`, `chan T`, `select`, `close`, `make(chan T, ...)` — in the `Gsharp.Extensions.Go` package for projects that prefer that style. See [Extensions: Go-flavored concurrency](../extensions/go-concurrency) for the full surface and the matching opt-in semantics.
+G# also offers a Go-flavored layer — `go`, `chan[T]` (with `in` / `out` handles), `select`, `ch.Close()`, and `for v in ch` — as part of the language, no import required. See [Extensions: Go-flavored concurrency](../extensions/go-concurrency) for the full surface.
 
-Next: [Tour: .NET interop](/docs/tour/dotnet-interop).
+Next: [Tour: .NET interop](dotnet-interop.md).

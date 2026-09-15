@@ -2,6 +2,7 @@
 title: "C# to G# migration (cs2gs)"
 sidebar_position: 3
 draft: false
+description: "Translate C# projects to G# and understand the migration tool's verification stages and limits."
 ---
 
 # C# to G# migration (`cs2gs`)

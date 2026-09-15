@@ -2,6 +2,7 @@
 title: "Tutorial: Concurrency"
 sidebar_position: 5
 draft: false
+description: "Coordinate concurrent work with scopes, channels, and G# runtime primitives."
 ---
 
 # Tutorial: Concurrency
@@ -11,11 +12,7 @@ surface: `scope` for structured concurrency, `async func` and `await`
 for task-based asynchrony, and `async sequence[T]` for asynchronous
 streams.
 
-The Go-flavored layer — `go`, channels, and `select` — is an opt-in
-extension and lives in
-[Extensions: Go-flavored concurrency](../extensions/go-concurrency).
-Read that page when you specifically want goroutine-shaped code; this
-tutorial focuses on the surface that ships unannotated.
+`go`, channels, and `select` are also part of the language, without an opt-in import. This tutorial starts with scoped child work, then introduces .NET async APIs. See [Go-flavored concurrency](../extensions/go-concurrency.md) for channel ownership and [Trail](trail.md) for a complete worker-pool application.
 
 ## Prerequisites
 
@@ -24,40 +21,38 @@ tutorial focuses on the surface that ships unannotated.
 
 ## 1. Run async work inside `scope`
 
-`scope { ... }` runs its body and waits for every async operation
-registered with it before returning. Awaiting inside a scope registers
-the awaited task — so unlike a bare `Task.Run` that you forget about,
-work inside a `scope` cannot silently outlive its parent.
+Start child work with `go` inside a `scope`. The scope joins those children before execution continues. Simply creating an unrelated .NET task inside a block is not a substitute for registering owned child work.
 
-```gsharp title="ScopeBasic.gs"
-package GSharp.Tour.ScopeBasic
+This complete example is `samples/WebsiteConcurrency.gs`:
+
+```gsharp title="workers.gs"
+package Website.Concurrency
 
 import System
-import System.Threading.Tasks
 
-async func tick(label string) {
-    await Task.Delay(1)
-    Console.WriteLine("done: $label")
+func send(value int32, results chan[int32]) {
+    results <- value
 }
+
+let results = chan[int32](2)
 
 scope {
-    tick("a").Wait()
-    tick("b").Wait()
+    go send(10, results)
+    go send(32, results)
 }
 
-Console.WriteLine("after scope")
+Console.WriteLine(<-results + <-results)
 ```
 
 Expected output:
 
 ```text
-done: a
-done: b
-after scope
+42
 ```
 
-If `tick` throws, the exception propagates out of the scope and you can
-catch it (or let it bubble) just like any other exception.
+The children can run concurrently; their completion order is unspecified. The sum is deterministic, and both sends have finished when the scope exits. The buffer has room for both values, so the parent can receive them after the join. A bounded pipeline that consumes while workers run is shown in [Trail](trail.md).
+
+If a child fails, the scope observes the failure; see [scope failure behavior](../guide/concurrency.md#scope--structured-concurrency) for cancellation and exception details.
 
 ## 2. Write an `async func`
 
@@ -197,12 +192,9 @@ total: 3
 
 ## What you learned
 
-- `scope { ... }` is the structured-concurrency block: child async work
-  is joined before the scope returns, and failures propagate.
+- `scope { ... }` joins its owned children before returning and observes their failures.
 - `async func` integrates with .NET `Task`/`Task[T]` APIs.
-- `await` is a prefix expression usable only inside async contexts.
+- `await` is a prefix expression for allowed async or suspending contexts; see the [concurrency guide](../guide/concurrency.md) for inference and restrictions.
 - Awaits compose with loops, nested loops, and ordinary control flow
   with no special handling required.
-- The Go-flavored concurrency layer (`go`, channels, `select`) is an
-  opt-in extension — see
-  [Extensions: Go-flavored concurrency](../extensions/go-concurrency).
+- `go`, channels, and `select` are language features, not opt-in imports. See [Go-flavored concurrency](../extensions/go-concurrency.md).

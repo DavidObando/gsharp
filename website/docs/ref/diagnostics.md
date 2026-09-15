@@ -2,6 +2,8 @@
 title: "Diagnostics reference"
 sidebar_position: 5
 draft: false
+description: "Look up a G# diagnostic code, understand its cause, and find the corresponding remedy."
+toc_max_heading_level: 2
 ---
 
 # Diagnostics reference
@@ -378,7 +380,7 @@ Every `data struct` synthesizes a fixed contract of value-semantics members — 
 
 ## Named delegate type diagnostics (GS0233)
 
-`delegate Name(...) ` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type (and so G# events can carry first-class custom delegate types). Anything other than a function signature on the right-hand side is rejected. Generic delegate declarations such as `type Predicate[T any] = delegate func(value T) bool` now bind and emit a verifiable generic delegate `TypeDef` (one `GenericParam` row per type parameter, threaded through the `Invoke`/`.ctor` signatures), so the former GS0234 (;"generic delegate declaration not yet supported") has been retired.
+`delegate Name(parameters) ReturnType;` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic declarations such as `delegate Predicate[T any](value T) bool;` emit a generic delegate `TypeDef`, so the former GS0234 ("generic delegate declaration not yet supported") has been retired. GS0233 applies only while recovering a malformed legacy declaration; GS0535 rejects the retired `type Name = delegate func(...)` spelling.
 
 | Code | Severity | Message |
 |------|----------|---------|
@@ -690,7 +692,7 @@ Cause/fix:
 
 Cause/fix:
 
-- **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), `delegate func(...)` named-delegate declarations, and `*func(...) R` managed function-pointer types all keep `func`. Rewriting a function pointer as `*((...) -> R)` changes its meaning to a pointer to a managed delegate and produces GS0398. A future release will remove the legacy type-clause spelling and turn it into a parse error.
+- **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), and `*func(...) R` managed function-pointer types keep `func`. Named delegates instead use `delegate Name(parameters) ReturnType;`, without `func`. Rewriting a function pointer as `*((...) -> R)` changes its meaning to a pointer to a managed delegate and produces GS0398. A future release will remove the legacy type-clause spelling and turn it into a parse error.
 
 
 ## Lambda binding type-inference diagnostics (GS0304)
@@ -1095,6 +1097,20 @@ Cause/fix:
   normally with no diagnostic. See
   for the full rule, scope, and recovery rationale.
 
+<span id="adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567"></span>
+
+## Channel operations and retired spellings
+
+These diagnostics explain channel direction, receive bindings, and migration from retired spellings. See [Go-flavored concurrency](../extensions/go-concurrency.md) for complete examples.
+
+**GS0548** warns that `chan[T]()` creates a rendezvous channel: a send waits for a receiver. Pass a capacity for buffering, or use `Chan.Unbounded[T]()` when an unbounded buffer is intended. **GS0549** rejects sending through a receive-only `in chan[T]` handle; **GS0550** rejects receiving through a send-only `out chan[T]` handle.
+
+**GS0554** reports the wrong number of receive variables: a two-value receive supplies the element and an `ok` flag, while channel iteration yields one element at a time. **GS0555** explains that `while let value = channel` binds the channel itself; use `while let value = <-channel` to receive until closure.
+
+**GS0566** reports retired built-ins and channel construction. Follow its member replacement, such as `xs.Length`, `m.Remove(key)`, `ch.Close()`, or `chan[T](capacity)`. **GS0567** replaces the old `chan T` type spelling with `chan[T]`.
+
+<span id="go-flavored-concurrency-requires-import-gsharpextensionsgo-gs0316"></span>
+
 ## Go-flavored concurrency gate (GS0316, retired)
 
 ADR-0082 gated the Go-shaped concurrency surface (`go`, `chan`, `<-`, `select`,
@@ -1108,6 +1124,8 @@ reported again and its identifier is not reused.
 |---|---|---|
 | GS0316 | Retired | Retired by ADR-0174 (D13): the concurrency syntax (`go`, `chan[T]`, `<-`, `select`) is part of the language and no longer gated behind `import Gsharp.Extensions.Go`. |
 
+<span id="go-style-built-ins-require-import-gsharpextensionsgo-gs0317"></span>
+
 ## Go-style built-ins gate (GS0317, retired)
 
 ADR-0083 gated the Go-style built-in functions `len`, `cap`, `append`, and
@@ -1115,7 +1133,7 @@ ADR-0083 gated the Go-style built-in functions `len`, `cap`, `append`, and
 the import was missing. ADR-0174 (D13) retired the built-ins themselves: every
 receiver already carries the member (`xs.Length`, `m.Count`, `m.Remove(k)`,
 `List[T].Add`, `ch.Length()`, `ch.Capacity`), so there is nothing left to gate.
-A call to a retired name reports [GS0566](#adr-0174-channels-and-goroutines-wave-2-gs0548-gs0550-gs0554-gs0555-gs0566-gs0567)
+A call to a retired name reports [GS0566](#channel-operations-and-retired-spellings)
 with a replacement computed for that site; a user-defined function of the same
 name is an ordinary call. The `Gsharp.Extensions.Go` namespace no longer exists,
 so the import itself is the ordinary unresolved-import error. GS0317 is never

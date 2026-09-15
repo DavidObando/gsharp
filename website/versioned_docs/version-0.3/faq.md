@@ -5,7 +5,7 @@ draft: false
 
 # Frequently asked questions
 
-This page answers common questions about G# as it exists today. For formal details, see the [language specification](/docs/ref/spec), the [feature matrix](/docs/ref/feature-matrix), and the [design decisions index](/docs/design-decisions).
+This page answers common questions about G# as it exists today. For formal details, see the [language specification](ref/spec.md), the [feature matrix](ref/feature-matrix.md), and the [design decisions index](design-decisions.md).
 
 ## What is G#?
 
@@ -17,7 +17,7 @@ G# borrows many ideas from Go: package-oriented source files, `func`, slices, ma
 
 ## How does G# relate to C#.NET?
 
-G# targets the same runtime and libraries as C# rather than defining a separate platform. It emits managed assemblies, can call CLR constructors, methods, properties, fields, events, operators, conversions, delegates, and generic types, and uses normal .NET project builds through the G# MSBuild SDK. See the [CLR interop reference](/docs/ref/clr-interop).
+G# targets the same runtime and libraries as C# rather than defining a separate platform. It emits managed assemblies, can call CLR constructors, methods, properties, fields, events, operators, conversions, delegates, and generic types, and uses normal .NET project builds through the G# MSBuild SDK. See the [CLR interop reference](ref/clr-interop.md).
 
 ## What runtime does G# target?
 
@@ -25,11 +25,11 @@ G# targets the .NET CLR. The compiler can emit executables or libraries with man
 
 ## How do I install G#?
 
-Start with the [installation guide](/docs/getting-started/install). The project flow uses `dotnet new install Gsharp.Templates`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
+Start with the [installation guide](getting-started/install.md). The project flow uses `dotnet new install Gsharp.Templates`, a `gsharp-console` template, and `.gsproj` files that use the `Gsharp.NET.Sdk` MSBuild SDK. Both [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) and [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) are published on NuGet.
 
 ## Where is the language specification?
 
-The public specification page is [Language specification](/docs/ref/spec). It is the place to look for grammar, lexical structure, types, expressions, statements, packages, and runtime behavior as the documentation matures.
+The public specification page is [Language specification](ref/spec.md). It is the place to look for grammar, lexical structure, types, expressions, statements, packages, and runtime behavior as the documentation matures.
 
 ## Why use `int32` and `uint64` instead of `int` and `long`?
 
@@ -66,15 +66,15 @@ A `struct` is value-like, while a `class` is reference-like and can participate 
 
 ## How do I call .NET libraries?
 
-Import the relevant CLR namespace or reference the assembly through the compiler or SDK project, then call the .NET type members from G#. Imported constructors, overloads, properties, fields, events, delegates, extension methods, operators, conversions, generics, and optional CLR arguments are part of the interop surface. See the [CLR interop reference](/docs/ref/clr-interop).
+Import the relevant CLR namespace or reference the assembly through the compiler or SDK project, then call the .NET type members from G#. Imported constructors, overloads, properties, fields, events, delegates, extension methods, operators, conversions, generics, and optional CLR arguments are part of the interop surface. See the [CLR interop reference](ref/clr-interop.md).
 
 ## What is the difference between the `gsc` interpreter path and emit path?
 
-`gsc` shares lexing, parsing, binding, and lowering between both paths. If you invoke it without `/out:`, it interprets the program in-process; if you provide `/out:`, it emits a managed executable or library, with optional PDBs and reference assemblies. The interpreter is useful for REPL-style execution and tests, while emit is the production compilation path. See the [`gsc` reference](/docs/tooling/gsc).
+`gsc` shares lexing, parsing, binding, and lowering between both paths. If you invoke it without `/out:`, it interprets the program in-process; if you provide `/out:`, it emits a managed executable or library, with optional PDBs and reference assemblies. The interpreter is useful for REPL-style execution and tests, while emit is the production compilation path. See the [`gsc` reference](tooling/gsc.md).
 
 ## Does G# have a Playground?
 
-A Playground page exists in the documentation at [Playground](/docs/playground), but the browser execution service is deferred. Today, use the local compiler, templates, SDK projects, samples, and tests for runnable code.
+A Playground page exists in the documentation at [Playground](playground.md), but the browser execution service is deferred. Today, use the local compiler, templates, SDK projects, samples, and tests for runnable code.
 
 ## Does G# have classes and object-oriented features?
 
@@ -90,7 +90,7 @@ Yes. Fixed arrays use `[N]T`, slices use `[]T`, maps use `map[K,V]`, and sequenc
 
 ## What editor and debugging support exists?
 
-A language server and a VS Code extension support `.gs` files, plus Portable PDB support enables normal .NET/CoreCLR debugging of emitted assemblies. The VS Code extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). See [VS Code support](/docs/tooling/vscode), [LSP support](/docs/tooling/lsp), and [Debugging](/docs/tooling/debugging).
+A language server and a VS Code extension support `.gs` files, plus Portable PDB support enables normal .NET/CoreCLR debugging of emitted assemblies. The VS Code extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). See [VS Code support](tooling/vscode.md), [LSP support](tooling/lsp.md), and [Debugging](tooling/debugging.md).
 
 ## Can G# use C# source generators?
 

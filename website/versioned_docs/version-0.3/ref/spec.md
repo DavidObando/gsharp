@@ -2,6 +2,7 @@
 title: "Language specification"
 sidebar_position: 1
 draft: false
+toc_max_heading_level: 2
 ---
 
 # Language specification

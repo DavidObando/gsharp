@@ -1,84 +1,90 @@
 ---
 title: "Install G#"
+description: "Install the published G# tools and run your first console project with the .NET SDK."
 sidebar_position: 1
-draft: false
 ---
 
 # Install G#
 
-G# projects build with the normal .NET tools. The recommended path is to use the MSBuild SDK and project template, both published on NuGet; compiler developers can also build `gsc` from source.
-
-The published packages are [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) (the MSBuild SDK) and [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) (the `dotnet new` templates). They resolve from the public NuGet feed, so no extra feed configuration is required.
+Create and run a G# project with your usual .NET tools. The recommended path uses the published project templates and MSBuild SDK, not a source build of the compiler.
 
 ## Prerequisites
 
-Install a .NET runtime and SDK that can run the G# compiler and build SDK-style projects. The bundled compiler currently runs as a `net10.0` tool, and emitted executable runtime configs default to `net10.0` unless you pass `/targetframework` or `/tfm`. The compiler's runtime mapping also recognizes `net8.0` and `net9.0`.
+Install the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) for your operating system. The runtime alone is not enough to create and build projects.
 
-For SDK projects, `Gsharp.NET.Sdk` handles `.gs` files during `dotnet build`. The SDK usage tests cover `net8.0` and `net10.0`, and the compiler can emit for `net8.0`, `net9.0`, or `net10.0` when the matching reference assemblies are supplied by the project build.
-
-Verify your .NET installation with:
+Check that the SDK is available:
 
 ```bash
-dotnet --info
+dotnet --list-sdks
 ```
+
+The list should include a `10.0` SDK. If `dotnet` is not found, finish installing the SDK and open a new terminal.
 
 ## Start with the project template
 
-The fastest path is the `Gsharp.Templates` package. It scaffolds a console app that uses `Gsharp.NET.Sdk` and can be built and run like any other .NET project.
+These commands install the published **0.4.591** template and create a console application:
 
 ```bash
-dotnet new install Gsharp.Templates
+dotnet new install Gsharp.Templates::0.4.591
 dotnet new gsharp-console -n MyApp
-cd MyApp && dotnet build && dotnet run
-# -> Hello from GSharp!
-```
-
-The generated project includes a `.gsproj`, a starter `Program.gs`, a `NuGet.config` that enables optional local SDK side-loading, and a README.
-
-## Author a project by hand
-
-A minimal project file looks like this:
-
-```xml title="HelloWorld.gsproj"
-<Project Sdk="Gsharp.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>HelloWorld</RootNamespace>
-  </PropertyGroup>
-</Project>
-```
-
-The SDK automatically includes `.gs` files in the project directory, forwards references and build settings to `gsc`, and supports regular commands such as:
-
-```bash
-dotnet build
+cd MyApp
 dotnet run
 ```
 
-If you are developing the SDK itself and want to side-load a locally packed build, copy the package into the project's configured package source before building:
+Expected output:
 
-```bash
-mkdir -p packages
-cp /path/to/Gsharp.NET.Sdk.VERSION.nupkg packages/
-dotnet build
+```text
+Hello from GSharp!
 ```
 
-See [SDK projects](/docs/tooling/sdk-projects) for the full project-system walkthrough.
+The template pins `Gsharp.NET.Sdk` in the generated project. Packages restore from the public NuGet feed; you do not need to configure a private feed.
+
+**Next:** open `Program.gs` and follow [Quickstart: Hello, G#](quickstart.md).
+
+:::note Published release or Next?
+These commands install the published release. Features described only in Next may require a source-built compiler. Use the version selector to read the matching documentation; see [Build the compiler from source](#build-the-compiler-from-source) for development work.
+:::
 
 ## Install the VS Code extension
 
-The G# VS Code extension is published on the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp). It adds syntax highlighting, language-server features, build/run commands, and debugger configuration for `.gs` and `.gsproj` files. Install it from within VS Code (search for "G#" in the Extensions view) or from the command line:
+Install [G# from the Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gsharplang.vscode-gsharp), or run:
 
 ```bash
 code --install-extension gsharplang.vscode-gsharp
 ```
 
-See [the VS Code extension reference](/docs/tooling/vscode) for the full feature list and settings.
+Open the project folder in VS Code for highlighting, completion, navigation, diagnostics, and debugging. The `code` command is optional; you can install the extension through the editor UI instead.
+
+See [VS Code setup](../tooling/vscode.md) for configuration and [debugging](../tooling/debugging.md) for breakpoints and launch settings.
+
+## Troubleshooting the first run
+
+| Symptom | Check |
+| --- | --- |
+| `dotnet` is not found | Install the SDK, then reopen the terminal so it sees the updated PATH. |
+| No template named `gsharp-console` | Run the template installation command above before creating the project. |
+| The G# SDK cannot be resolved | Check network access to NuGet and the project's `NuGet.config`. Keep the version generated by the template. |
+| A compatible runtime is missing | Verify the .NET 10 installation; the compiler's runtime requirement is separate from your application's target framework. |
+| An example uses unfamiliar syntax | Check the documentation version and [release notes](../release-notes.md). Do not mix preview examples with an older installed package. |
+
+## Author a project by hand
+
+For an existing source directory, a minimal `.gsproj` is:
+
+```xml title="HelloWorld.gsproj"
+<Project Sdk="Gsharp.NET.Sdk/0.4.591">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+```
+
+The SDK includes `.gs` files automatically. Use `dotnet build` and `dotnet run` as you would with another .NET project. See [SDK and project files](../tooling/sdk-projects.md) for references, library projects, packaging, and application target frameworks.
 
 ## Build the compiler from source
 
-From a clone of the repository, restore and build the solution:
+This is the contributor/preview path, not a prerequisite for using the release:
 
 ```bash
 git clone https://github.com/DavidObando/gsharp.git
@@ -86,12 +92,10 @@ cd gsharp
 dotnet build GSharp.sln
 ```
 
-After the build, run the compiler DLL with `dotnet`. Both direct `gsc` modes use the emitter: passing `/out:path` saves an assembly, while omitting `/out` runs the emitted program immediately.
+Then run a checked-in sample:
 
 ```bash
 dotnet src/Compiler/bin/Debug/net10.0/gsc.dll samples/HelloWorld.gs
-dotnet src/Compiler/bin/Debug/net10.0/gsc.dll samples/HelloWorld.gs /out:artifacts/HelloWorld.dll /target:exe /tfm:net10.0
-dotnet artifacts/HelloWorld.dll
 ```
 
-Common `gsc` flags include `/out`, `/target:exe`, `/target:library`, `/tfm`, `/r`, `/noimplicitimports`, `/debug`, `/pdb`, `/nowarn`, and `/warnaserror`. See [the `gsc` reference](/docs/tooling/gsc) for details.
+Without `/out`, `gsc` emits and runs the program. Add `/out` to save an assembly. Read the [compiler CLI reference](../tooling/gsc.md) for references, target frameworks, and output options.

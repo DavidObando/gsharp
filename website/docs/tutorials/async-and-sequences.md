@@ -2,6 +2,7 @@
 title: "Tutorial: Async and sequences"
 sidebar_position: 6
 draft: false
+description: "Write asynchronous functions and produce synchronous or asynchronous sequences."
 ---
 
 # Tutorial: Async and sequences

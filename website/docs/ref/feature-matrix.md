@@ -2,6 +2,7 @@
 title: "Feature matrix"
 sidebar_position: 4
 draft: false
+description: "Check G# feature support and known implementation limits before relying on a capability."
 ---
 
 # Feature matrix
@@ -65,7 +66,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | Default parameter values in G# declarations | Supported | Supported | Optional parameters carry compile-time-constant defaults; rule violations report `GS0265`. |
 | Method overloading (user functions) | Supported | Supported | Functions can carry overload sets differing by parameter types, ref-kinds, or generic-parameter constraints (`where T : class` / `where T : struct`); duplicates report `GS0264`, ambiguous calls report `GS0266` or `GS0160`, no-applicable reports `GS0267`. |
 | Variadic parameters (`name ...T`) | Supported (all declaration sites) | Supported (all declaration sites) | Canonical Go-style spelling `name ...T`; body sees `[]T`; at most one variadic per signature and must be last (`GS0145`, `GS0364`). Call site packs N trailing args into a fresh `[]T`; a single trailing `[]T` argument passes through unwrapped (identity preserved). The emitter stamps `[System.ParamArrayAttribute]` so C# / F# / VB consumers see it as `params T[]`. The C# `params` keyword is rejected with `GS0363` pointing at the canonical form. Accepted on top-level `func`, class instance/static methods, interface methods (incl. default-body), constructors, lambdas, and named delegate declarations. |
-| Named delegate types | Supported | Supported | `delegate X(...) ` declares a real CLR `MulticastDelegate`-derived type;; generic delegates (`delegate X[T any](...) `) supported;; diagnostic `GS0233`. |
+| Named delegate types | Supported | Supported | `delegate X(...);` declares a real CLR `MulticastDelegate`-derived type; generic delegates (`delegate X[T any](...);`) are supported. The retired `type`-based form reports `GS0535`. |
 
 ## Statements and control flow
 
@@ -85,7 +86,7 @@ This matrix summarizes current feature support in the emitter, which every drive
 | `switch` statements | Supported | Supported | Cases do not fall through. Flow analysis narrows the discriminator inside type-pattern arms (`case d is T`) and lifts a common narrowing into the rest of the enclosing block when the switch is exhaustive and every non-exiting arm contributes the same narrowing. |
 | Switch expressions | Supported | Supported | Exhaustiveness and arm type diagnostics implemented. |
 | Patterns | Supported | Supported | Constant, relational, type, property, list/rest, discard, total `var name`, parenthesized, and `not` / `and` / `or` patterns work in switches and boolean `is`; type-plus-property patterns narrow composed `and` operands. A designation after a type, type-plus-property, property, or slice pattern (`value is string text`, `{ Length: > 0 } text`, `[..rest]`) introduces a read-only pattern variable scoped to the regions where the match is known to have happened. `var name` always matches and binds the exact static input type, including nullable values (ADR-0166). |
-| `fallthrough` | Not supported | Not supported | Reserved and diagnosed as `GS0168`. |
+| `fallthrough` | Supported | Not supported | Explicit transfer to the next eligible switch-statement body; no implicit fall-through. Placement and target restrictions are `GS0168`, `GS0533`, and `GS0534`. |
 | `try`, `catch`, `finally`, `throw` | Supported | Supported | CLR exception model. Catch clauses are at C# parity (ADR-0177): `catch (name T)`, type-only `catch (T)`, bare `catch`, and `when` filters emitted as real CLR filter regions. `rethrow` re-raises the handled exception (ADR-0176). |
 | `using` | Supported | Supported if lowered/bound disposable | Resource-scope variable declaration. |
 | `defer` | Supported by binding/lowering intent | Supported when lowered before evaluation | Binder requires a call expression. |

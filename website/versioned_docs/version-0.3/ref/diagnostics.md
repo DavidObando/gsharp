@@ -2,6 +2,7 @@
 title: "Diagnostics reference"
 sidebar_position: 5
 draft: false
+toc_max_heading_level: 2
 ---
 
 # Diagnostics reference

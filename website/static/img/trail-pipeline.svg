@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="310" viewBox="0 0 1200 310">
+  <title>Trail's bounded worker pipeline</title>
+  <rect width="1200" height="310" rx="12" fill="#242128"/>
+  <g font-family="Arial,sans-serif" text-anchor="middle">
+    <g fill="#342d35" stroke="#78616b"><rect x="30" y="100" width="180" height="110" rx="9"/><rect x="270" y="100" width="150" height="110" rx="9"/><rect x="720" y="100" width="150" height="110" rx="9"/><rect x="930" y="100" width="240" height="110" rx="9"/></g>
+    <g fill="#46362e" stroke="#e5ac88"><rect x="480" y="30" width="180" height="48" rx="7"/><rect x="480" y="98" width="180" height="48" rx="7"/><rect x="480" y="166" width="180" height="48" rx="7"/><rect x="480" y="234" width="180" height="48" rx="7"/></g>
+    <g fill="none" stroke="#ffb347" stroke-width="2"><path d="M210 155h60m150 0h30V54h30m-30 101v-33h30m-30 33v35h30m-30-35v103h30m180-204h30v101h30m-60-33h30m-30 68h30m-30 68h30V155m180 0h60"/></g>
+    <g fill="#fff2e5" font-size="22"><text x="120" y="147">Discover files</text><text x="345" y="147">Jobs</text><text x="795" y="147">Results</text><text x="1050" y="147">Collect + sort</text></g>
+    <g fill="#e3c8b5" font-size="16"><text x="120" y="180">one producer</text><text x="345" y="180">8 slots</text><text x="795" y="180">8 slots</text><text x="1050" y="180">one report owner</text></g>
+    <g fill="#fff2e5" font-size="18"><text x="570" y="61">Worker 1</text><text x="570" y="129">Worker 2</text><text x="570" y="197">Worker 3</text><text x="570" y="265">Worker 4</text></g>
+  </g>
+</svg>

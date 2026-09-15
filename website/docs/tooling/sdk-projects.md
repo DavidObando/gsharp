@@ -2,6 +2,7 @@
 title: "SDK and project files"
 sidebar_position: 2
 draft: false
+description: "Build, run, test, and package G# projects using the Gsharp.NET.Sdk and ordinary .NET commands."
 ---
 
 # SDK and project files

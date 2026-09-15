@@ -2,6 +2,7 @@
 title: "CLR interop reference"
 sidebar_position: 3
 draft: false
+description: "Reference G# interoperation with CLR types, members, generics, delegates, and native APIs."
 ---
 
 # CLR interop reference
@@ -453,7 +454,7 @@ import System
 import System.Runtime.InteropServices
 
 @UnmanagedFunctionPointer(CallingConvention.Cdecl)
-type Int64Comparer = delegate func(a nint, b nint) int32
+delegate Int64Comparer(a nint, b nint) int32;
 
 @DllImport("libc", EntryPoint: "qsort")
 func native_qsort(base nint, nmemb nint, size nint, cmp Int64Comparer) void;

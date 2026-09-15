@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-09-15T04:28:11.389272+00:00",
+  "sdkVersion": "0.4.591",
+  "dotnetSdk": "10.0.401",
+  "goVersion": "go version go1.27.1 darwin/arm64",
+  "goRaceDetector": true,
+  "bundleSha256": "7f4592ef17c43a8c12ed727ab43ce2bf2b421426bc8474d11c5123cf9a52a89b",
+  "patterns": [
+    {
+      "id": "worker-pool",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "bounded",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "pipeline",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "fan-in",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "ttl-cache",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "rate-limit",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "all",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "timeout",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "ownership",
+      "repetitions": 3,
+      "passed": true
+    },
+    {
+      "id": "atomic-lazy",
+      "repetitions": 3,
+      "passed": true
+    }
+  ],
+  "receiveOnlyRejection": {
+    "gsharp": "GS0549",
+    "go": "receive-only"
+  },
+  "reviewRegressions": {
+    "admissionBeforeSpawn": "source-order check with acquire-inside-worker mutations rejected",
+    "specificErrors": [
+      "rate-limit",
+      "ttl-cache"
+    ]
+  }
+}

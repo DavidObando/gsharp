@@ -2,6 +2,7 @@
 title: "Tour: Types and values"
 sidebar_position: 3
 draft: false
+description: "Model values with data types, classes, collections, and explicit nullability."
 ---
 
 # Tour: Types and values
@@ -225,4 +226,4 @@ The CLR default of a type can be spelled directly as `default(T)` for any type `
 
 The null literal in G# is spelled `nil`, not `null`. Typing `null` in a value position reports `GS0273` and the binder treats it as `nil` so the rest of the expression still typechecks.
 
-Next: [Tour: Control flow](/docs/tour/control-flow).
+Next: [Tour: Control flow](control-flow.md).

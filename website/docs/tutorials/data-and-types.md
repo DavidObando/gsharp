@@ -2,6 +2,7 @@
 title: "Tutorial: Data and types"
 sidebar_position: 3
 draft: false
+description: "Build practical data models with G# value types, reference types, and collections."
 ---
 
 # Tutorial: Data and types

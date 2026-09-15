@@ -1,5 +1,6 @@
 ---
 title: "Authoring these docs"
+description: "Write and preview G# documentation with verified examples and version-safe links."
 ---
 
 # Authoring these docs
@@ -15,6 +16,9 @@ cd website
 npm ci
 npm start      # local dev server with hot reload
 npm run build  # production build; fails on broken links
+npm run serve  # production preview, including the generated search index
+npm run typecheck
+npm run test:content
 ```
 
 The production build (`npm run build`) runs with `onBrokenLinks: 'throw'`, so a broken internal link fails the build and the CI check. Always run it before opening a pull request.
@@ -31,6 +35,8 @@ sidebar_position: 4
 ```
 
 Use sentence case for headings. Start each page with a single `#` H1 that matches the title, then use `##`/`###` for sections. Keep one concept per page where practical.
+
+Write an intentional `description` in front matter: one concise sentence about what the reader will learn or accomplish. Lead with the user-facing concept or task before implementation history.
 
 Do not hard-wrap continuous prose. Let the renderer handle line wrapping; only insert line breaks between paragraphs and list items. This keeps diffs small and readable.
 
@@ -62,6 +68,8 @@ When you add a new example to the docs:
 
 For expected-output blocks in tutorials and the Tour, copy the text from the sample's `.golden` file.
 
+The homepage imports the complete `samples/Website*.gs` fixtures and their `.golden` output directly. Run `python3 website/tests/verify-examples.py` from the repository root when changing them or the advertised release. It checks the published template and SDK in an isolated workspace; a pass with a development compiler alone does not establish compatibility with the release.
+
 ## Source material
 
 The site content is grounded in two research artifacts produced while planning the site, plus the in-repo references:
@@ -72,4 +80,22 @@ The site content is grounded in two research artifacts produced while planning t
 
 ## Links
 
-Use root-relative doc links (for example `/docs/ref/spec`) or relative Markdown links between pages. Avoid absolute `https://davidobando.github.io/gsharp/...` links within the site, because the base path (`/gsharp/`) is applied automatically and hard-coding it breaks local preview.
+Use **relative Markdown links between documentation pages**, including the `.md` or `.mdx` extension. They retain the selected documentation version. A root-relative `/docs/...` link inside Next instead sends the reader to the released snapshot.
+
+From React marketing pages, use Docusaurus `Link` with site-relative paths. The homepage deliberately links to the release; an explicit Next link must be labeled as preview or as a current project snapshot.
+
+Do not hard-code the deployed `/gsharp/` prefix in internal links. Preserve document IDs and existing anchors when changing headings; add a legacy anchor at the corresponding section when a rename is necessary.
+
+## Versions and releases
+
+`website/docs` is development documentation at `/docs/next`. The first entry in `versions.json` is the default released snapshot at `/docs`; older snapshots retain their versioned paths.
+
+When refreshing a release, use the source from its actual Git tag, not a wholesale copy of unreleased main. The 0.4 snapshot was refreshed against `v0.4.591`. Update the advertised package in `src/data/release.json`, the matching installation instructions, and the public-installation checks together. Historical versions must retain their own syntax and commands.
+
+## Presentation and search
+
+Reuse the semantic tokens in `src/css/custom.css`, CSS Modules for page-specific layout, and native Docusaurus components. Keep code selectable, diagrams lightweight, and keyboard focus visible. Check narrow layouts, both themes, and reduced motion.
+
+Pagefind indexes the production HTML after `npm run build`. Use `npm run serve` to check search; the hot-reload server does not generate an index. Search failure should be reported, not hidden.
+
+Keep source and license information for font and image assets. Reference-site screenshots are design research, not artwork to redistribute in the website.

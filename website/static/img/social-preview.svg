@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <title>G# - A fresh way to build on .NET</title>
+  <defs><linearGradient id="ember" x2="1" y2="1"><stop stop-color="#FFB347"/><stop offset="1" stop-color="#C0392B"/></linearGradient></defs>
+  <path fill="#19171A" d="M0 0h1200v630H0z"/>
+  <g fill="none" stroke="url(#ember)" stroke-width="2" opacity=".65">
+    <path d="m1040 20 290 167v334l-290 167-290-167V187Z"/>
+    <path d="m1040 110 212 123v244l-212 123-212-123V233Z"/>
+    <path d="m1040 110 212 123-212 122-212-122Zm0 245v245"/>
+  </g>
+  <path fill="url(#ember)" d="m105 54 43 25v50l-43 25-43-25V79Z"/>
+  <text x="77" y="119" fill="white" font-family="Arial, sans-serif" font-size="36" font-weight="600">G#</text>
+  <g font-family="Arial, sans-serif">
+    <text x="70" y="231" fill="#E5AC88" font-size="19" letter-spacing="3">DIFFERENT SYNTAX. FAMILIAR GROUND.</text>
+    <text x="64" y="340" fill="#FAF7F2" font-size="82" font-weight="600" letter-spacing="-3">A fresh way to</text>
+    <text x="64" y="435" fill="#FAF7F2" font-size="82" font-weight="600" letter-spacing="-3">build on <tspan fill="#FFB347">.NET.</tspan></text>
+    <text x="70" y="542" fill="#D7CEC9" font-size="24">Expressive code. Explicit nullability. Structured concurrency.</text>
+  </g>
+</svg>

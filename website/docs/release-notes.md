@@ -1,13 +1,26 @@
 ---
 title: "Release notes"
 draft: false
+description: "Review G# release highlights, compatibility changes, and detailed migration notes."
 ---
 
 # Release notes
 
 G# is pre-1.0. The repository's version base is currently `0.4`, and product versions are derived by Nerdbank.GitVersioning from that base and the Git commit. Until the project reaches a stable compatibility promise, release notes should be read as implementation status notes rather than a long-term compatibility contract.
 
+## Reading these notes
+
+You are reading development documentation. Select **0.4** in the version menu for the published release snapshot. Check the selected documentation version before applying a migration or copying a command.
+
+The published **0.4.591** release is the version used by the website's installation instructions and executable showcase examples. Start with [installation](getting-started/install.md), [data types](tour/types.md), [channel concurrency](extensions/go-concurrency.md), and [canonical formatting](tooling/gsfmt.md). Detailed changes and compatibility notes follow.
+
 ## Unreleased (0.5 line)
+
+### Reader's overview
+
+For changes after the published snapshot, pay particular attention to stricter generic-constraint and nullable-argument diagnostics. Code previously accepted with an invalid CLR contract may now be rejected at compile time; the detailed entries below identify the diagnostic and remedy.
+
+Before moving an application to a different compiler version, pin the intended SDK, select its documentation, run the project's tests, and review the affected diagnostics. Do not treat the development branch's implementation notes as a stable compatibility promise.
 
 ### Breaking changes
 

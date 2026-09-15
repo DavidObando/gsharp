@@ -1,0 +1,5 @@
+[*]
+end_of_line = lf
+
+[*.{ts,tsx,js,mjs,css,json,yml,yaml}]
+indent_size = 2

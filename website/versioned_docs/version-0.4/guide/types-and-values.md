@@ -2,11 +2,12 @@
 title: "Types and values"
 sidebar_position: 4
 draft: false
+description: "Understand how G# types describe values, collections, references, and nullability."
 ---
 
 # Types and values
 
-G# combines concise aggregate and collection syntax with CLR type identity. Use the [language specification](/docs/ref/spec#types) for exact syntax.
+G# combines concise aggregate and collection syntax with CLR type identity. Use the [language specification](../ref/spec.md#types) for exact syntax.
 
 ## Nil and nullable values
 
@@ -188,16 +189,16 @@ enum Status { Pending, Complete, Failed }
 
 ## Sequences and channels
 
-`sequence[T]` maps to `IEnumerable<T>` and is produced with iterator functions that use `yield`. `async sequence[T]` maps to asynchronous enumeration and is consumed with `await for`. `chan T` represents channels created with `make(chan T)` or `make(chan T, capacity)`.
+`sequence[T]` maps to `IEnumerable<T>` and is produced with iterator functions that use `yield`. `async sequence[T]` maps to asynchronous enumeration and is consumed with `await for`. `chan[T]` is a channel (`System.Threading.Channels.Channel<T>`), constructed with `chan[T]()` (rendezvous), `chan[T](capacity)`, or `Chan.Unbounded[T]()`; `in chan[T]` / `out chan[T]` are its receive-only / send-only handles.
 
 ## Function types and delegates
 
 Function types use the arrow form `(T1, T2, ...) -> R`. Async function type clauses use `async (T) -> R` and represent task-returning functions (lowered to `(T) -> Task[R]`, or `(T) -> Task` for void). Function values can convert to compatible CLR delegate types, including named delegates and common `Action` or `Func` shapes.
 
-A **named delegate type** is declared with `type Name = delegate func(...)` and emits as a real CLR `MulticastDelegate`-derived type. Named-delegate declarations keep the `func` keyword — only function-*type clauses* moved to the arrow form. Use a named delegate when you want a stable, C#-visible handler type (for example, as the type of a G# `event`):
+A **named delegate type** uses the standalone `delegate Name(parameters) ReturnType;` declaration and emits as a real CLR `MulticastDelegate`-derived type. Neither `type` nor `func` is part of this declaration. Omit the return type for a void delegate, but keep the required trailing semicolon. Use a named delegate when you want a stable, C#-visible handler type (for example, as the type of a G# `event`):
 
 ```gsharp
-type Handler = delegate func(sender Object, e EventArgs)
+delegate Handler(sender Object, e EventArgs);
 
 class Button {
     event Click Handler

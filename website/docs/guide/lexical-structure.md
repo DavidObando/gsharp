@@ -2,11 +2,12 @@
 title: "Lexical structure"
 sidebar_position: 2
 draft: false
+description: "Understand G# source text, identifiers, comments, literals, and token boundaries."
 ---
 
 # Lexical structure
 
-This guide explains the tokens G# recognizes today. For the normative grammar, see the [language specification](/docs/ref/spec).
+This guide explains the tokens G# recognizes today. For the normative grammar, see the [language specification](../ref/spec.md).
 
 ## Source text and comments
 

@@ -6,7 +6,7 @@ draft: false
 
 # Effective G#
 
-Effective G# favors small packages, explicit data shapes, readable control flow, and direct use of CLR libraries when they are the best tool. This guide is idiomatic advice, not a second specification; use the [language specification](/docs/ref/spec) for exact grammar.
+Effective G# favors small packages, explicit data shapes, readable control flow, and direct use of CLR libraries when they are the best tool. This guide is idiomatic advice, not a second specification; use the [language specification](../ref/spec.md) for exact grammar.
 
 ## Format code for readers
 

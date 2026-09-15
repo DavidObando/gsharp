@@ -2,6 +2,7 @@
 title: "Compiler architecture"
 sidebar_position: 6
 draft: false
+description: "Understand the compiler pipeline and source layout when contributing to G#."
 ---
 
 # Compiler architecture

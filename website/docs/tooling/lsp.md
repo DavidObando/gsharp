@@ -2,6 +2,7 @@
 title: "Language Server (LSP)"
 sidebar_position: 4
 draft: false
+description: "Connect an editor to the G# language server and inspect its supported capabilities."
 ---
 
 # Language Server (LSP)

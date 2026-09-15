@@ -1,0 +1,203 @@
+.hero {
+  background: #211e24;
+  color: #faf7f2;
+  padding: 4rem 0;
+}
+.page p a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.hero :global(.gs-eyebrow) {
+  color: #ffbf78;
+}
+.hero h1 {
+  font-size: clamp(3rem, 6vw, 5.5rem);
+  line-height: 1.05;
+  letter-spacing: -0.055em;
+}
+.hero p {
+  max-width: 760px;
+}
+.hero > div > p:not(:first-child) {
+  color: #ddd0cb;
+}
+.version {
+  font-size: 0.8rem;
+  margin: 1.5rem 0 0;
+}
+.intro,
+.run,
+.next {
+  padding: 4rem 0;
+}
+.intro h2,
+.pattern h2,
+.run h2,
+.next h2 {
+  font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+  letter-spacing: -0.04em;
+}
+.questions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2rem;
+  margin: 2rem 0;
+}
+.questions h3 {
+  font-size: 1.2rem;
+}
+.questions p,
+.verification {
+  color: var(--gs-muted);
+  font-size: 0.9rem;
+}
+.index {
+  columns: 2;
+  column-gap: 3rem;
+  margin: 2rem 0 0;
+  padding-left: 1.5rem;
+}
+.index li {
+  padding: 0.4rem 0;
+  break-inside: avoid;
+}
+.pattern {
+  padding: 3rem 0;
+  border-top: 1px solid var(--gs-border);
+}
+.contract {
+  max-width: 900px;
+  font-size: 1.15rem;
+}
+.assessment {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem 3rem;
+  margin: 2rem 0;
+}
+.assessment dt {
+  font-size: 0.75rem;
+  color: var(--ifm-color-primary);
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.assessment dd {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+  color: var(--gs-muted);
+}
+.code {
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--gs-border);
+  background: var(--gs-surface-alt);
+  border-radius: 9px;
+}
+.page summary {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.6rem 0;
+}
+.codePair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.2rem;
+  margin-top: 1rem;
+}
+.codePair > * {
+  min-width: 0;
+}
+.related {
+  font-size: 0.8rem;
+  margin-top: 1rem;
+  color: var(--gs-muted);
+}
+.related a {
+  text-decoration: underline;
+}
+.page :global(.gs-comparison-notice) {
+  padding: 1.2rem 1.5rem;
+  border-left: 3px solid var(--ifm-color-primary);
+  background: var(--gs-surface-alt);
+  margin: 1.5rem 0;
+}
+.page :global(.gs-comparison-notice p:last-child) {
+  margin-bottom: 0;
+}
+.page :global(.gs-benchmark) {
+  border-top: 1px solid var(--gs-border);
+  padding: 3rem 0;
+}
+.page :global(.gs-benchmark h2) {
+  font-size: 2.4rem;
+  letter-spacing: -0.04em;
+}
+.page :global(.gs-bench-provenance) {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem 2rem;
+}
+.page :global(.gs-bench-provenance dt) {
+  font-size: 0.75rem;
+  color: var(--gs-muted);
+}
+.page :global(.gs-bench-provenance dd) {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.page :global(.gs-bench-scroll) {
+  overflow-x: auto;
+  margin: 1.5rem 0;
+}
+.page :global(.gs-bench-scroll table) {
+  display: table;
+  width: 100%;
+  min-width: 900px;
+}
+.page :global(.gs-bench-scroll th h3) {
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem;
+}
+.page :global(.gs-bench-scroll th small) {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 400;
+  max-width: 300px;
+  color: var(--gs-muted);
+}
+.page :global(.gs-bench-scroll td) {
+  white-space: nowrap;
+  vertical-align: top;
+}
+.page :global(.gs-bench-range) {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--gs-muted);
+}
+.page :global(.gs-benchmark details code) {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 767px) {
+  .hero {
+    padding: 3rem 0;
+  }
+  .questions,
+  .assessment,
+  .codePair,
+  .page :global(.gs-bench-provenance) {
+    grid-template-columns: 1fr;
+  }
+  .index {
+    columns: 1;
+  }
+  .intro,
+  .run,
+  .next {
+    padding: 3rem 0;
+  }
+  .code {
+    padding: 0.7rem;
+  }
+}

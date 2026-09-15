@@ -183,4 +183,4 @@ func Main() {
 
 Use `??` for null-coalescing reads. `??=` remains the compound assignment form for writable nullable values.
 
-Next: [Tour: Types and values](/docs/tour/types).
+Next: [Tour: Types and values](types.md).

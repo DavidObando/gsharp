@@ -1,97 +1,71 @@
 ---
 title: "Tutorial: Getting started"
+description: "Create a G# project and build a small data model with structural equality and copy-with-update."
 sidebar_position: 1
-draft: false
 ---
 
 # Tutorial: Getting started
 
-In this tutorial, you will create a G# console project, replace the template body with a checked-in sample program, build it with the G# MSBuild SDK, and run it with `dotnet run`.
+Build a small data model and observe how values behave. You will create a point, copy it with one change, and compare the original with another point.
 
 ## Prerequisites
 
-- The .NET SDK that can target `net10.0`.
-- A terminal in a directory where you can create a project.
-- The [`Gsharp.Templates`](https://www.nuget.org/packages/Gsharp.Templates/) package, available on NuGet. It installs the [`Gsharp.NET.Sdk`](https://www.nuget.org/packages/Gsharp.NET.Sdk/) used by the generated project, both resolved from the public NuGet feed.
+Complete [installation](../getting-started/install.md) first. You need the .NET 10 SDK and the published G# project templates.
 
 ## 1. Scaffold a console app
 
-Install the template and create a project:
-
 ```bash
-$ dotnet new install Gsharp.Templates
-$ dotnet new gsharp-console -n MyApp
-$ cd MyApp
+dotnet new gsharp-console -n PointApp
+cd PointApp
 ```
-
-The template follows the same three-command flow shown in the repository README:
-
-```bash
-$ dotnet build
-$ dotnet run
-Hello from GSharp!
-```
-
-That proves the SDK, template, compiler, and runtime are all wired together.
 
 ## 2. Inspect the project file
 
-A scaffolded project is an ordinary .NET project whose SDK is `Gsharp.NET.Sdk`:
+Open `PointApp.gsproj`. The template selects `Gsharp.NET.Sdk`, declares an executable, and targets `net10.0`. The SDK includes `.gs` files automatically; you do not need to list `Program.gs` manually.
 
-```xml title="MyApp.gsproj"
-<Project Sdk="Gsharp.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>MyApp</RootNamespace>
-  </PropertyGroup>
-</Project>
-```
-
-The SDK automatically includes `.gs` files in the project directory. You only need explicit `Compile` items for source files outside the project directory.
+That is enough project configuration for this tutorial. [Projects and packages](project-and-packages.md) explains how to organize larger programs.
 
 ## 3. Replace the program
 
-Replace `Program.gs` with the checked-in `HelloWorld` sample:
+Replace `Program.gs` with the checked-in `samples/WebsiteData.gs` example:
 
 ```gsharp title="Program.gs"
-// file: HelloWorld.gs
-
-package HelloWorld
+package Website.Data
 
 import System
 
-Console.WriteLine("Hello, world!")
+data class Point(X int32, Y int32)
+
+let origin = Point(0, 0)
+let moved = origin with{X = 3}
+
+Console.WriteLine("(${moved.X}, ${moved.Y})")
+Console.WriteLine(origin == Point(0, 0))
 ```
 
-A G# source file starts with a `package` declaration. Imports then bring .NET namespaces into scope. The top-level call to `Console.WriteLine` becomes the console app entry point.
+`data class` declares a reference-typed data model with structural equality. The `with` expression creates a copy with a changed `X`; it does not modify `origin`.
+
+String interpolation puts the coordinate values into the printed message. The second line compares points by their data rather than requiring them to be the same object.
 
 ## 4. Build and run
 
-Run the project again:
-
 ```bash
-$ dotnet build
-$ dotnet run
+dotnet run
 ```
 
 Expected output:
 
 ```text
-Hello, world!
+(3, 0)
+True
 ```
+
+Try changing the copied `X` value or adding a `Y` update. The first output changes; the comparison of the unchanged original still prints `True`.
 
 ## 5. Try direct compiler output
 
-The SDK is the normal project workflow, but the command-line compiler can also emit an executable when you pass `/out`:
-
-```bash
-$ dotnet path/to/gsc.dll Program.gs /out:bin/hello.dll /target:exe /tfm:net10.0
-$ dotnet bin/hello.dll
-```
-
-When `/out` is omitted, `gsc` still emits the program and runs it immediately. Add `/out` when you want to save the assembly.
+Direct compiler invocation is optional. If you already have a source-built `gsc`, you can emit this same file with `/out` and run the resulting assembly. The [quickstart](../getting-started/quickstart.md#run-it-with-gsc-directly) shows the commands; ordinary application work can stay with the SDK.
 
 ## Next steps
 
-Continue with [Projects and packages](./project-and-packages) to learn how packages map to CLR namespaces and how `.gsproj` files organize larger programs.
+Continue with [Projects and packages](project-and-packages.md), or explore [data and types](data-and-types.md) for value types, nullable data, and collections.

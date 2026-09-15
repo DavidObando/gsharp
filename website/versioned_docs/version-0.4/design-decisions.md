@@ -1,11 +1,12 @@
 ---
 title: "Design decisions (ADRs)"
 draft: false
+description: "Explore the reasoning behind G# language and runtime choices through its design-decision index."
 ---
 
 # Design decisions (ADRs)
 
-This is a curated reference index of the Architecture Decision Records in the repository. ADRs explain design intent and tradeoffs; they are not the normative language specification. Each link points to the source ADR on GitHub. The repository currently has accepted/proposed ADRs through **ADR-0165** (plus the `0000` template).
+This is a curated reference index of the Architecture Decision Records in the repository. ADRs explain design intent and tradeoffs; they are not the normative language specification. Each link points to the source ADR on GitHub. The repository currently has accepted/proposed ADRs through **ADR-0174** (plus the `0000` template).
 
 ## Null model, values, and primitives
 
@@ -35,6 +36,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0041](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0041-async-sequence-alias.md) | `sequence[T]` in an `async` context aliases `IAsyncEnumerable[T]` | Explores async sequence feasibility and binding shape. |
 | [0042](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0042-async-sequence-type-clause.md) | `async sequence[T]` as a type-clause spelling for `IAsyncEnumerable[T]` | Chooses an explicit type-clause spelling for async streams. |
 | [0043](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0043-async-func-type-clause.md) | `async func(P) R` as a type-clause spelling for `func(P) Task[R]` | Defines async function type clauses as task-returning function types. Re-spelled as `async (P) -> R` by ADR-0075. |
+| [0174](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0174-goroutines-and-channels-wave-2.md) | Goroutines and channels, wave 2 — suspension over blocking, a G#-owned channel runtime, observable completion | Respells `chan T` as `chan[T]` with `in`/`out` directions, replaces the `make`/`close`/`len`/`cap` built-ins with construction and members, retires the ADR-0082 import gate, adds a rendezvous-capable `Chan<T>` runtime, inferred suspension for channel-touching functions, transactional `select`, `go { … }`, `async let`, and a Go-comparative performance program. Accepted 2026-09-04: every phase landed, and gates G5 (select allocation) and G6 (inline hand-off completion) are resolved by measurement. Performance budgets remain unrecorded until three nightlies have run. |
 
 ## Object model, OO, and data types
 
@@ -70,8 +72,9 @@ This is a curated reference index of the Architecture Decision Records in the re
 | --- | --- | --- |
 | [0005](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0005-error-handling.md) | Error handling — exceptions only, unchecked | Uses CLR exceptions instead of checked exceptions or Go-style error returns. |
 | [0009](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0009-switch-semantics.md) | `switch` semantics — expression + statement, patterns, exhaustive | Defines switch statements, switch expressions, patterns, and exhaustiveness. |
-| [0013](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0013-no-fallthrough.md) | Drop Go's `fallthrough` | Reserves `fallthrough` but rejects it; cases never fall through. |
+| [0013](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0013-no-fallthrough.md) | Original no-fallthrough decision | Historical rejection was superseded by explicit, constrained `fallthrough` in the switch-family work; implicit fall-through remains disallowed. |
 | [0031](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0031-canonical-for-in.md) | Canonical `for x in collection` | Establishes `for x in collection` as the preferred range iteration spelling. |
+| [0166](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0166-is-pattern-variables.md) | Pattern variables in boolean `is` expressions | Adds C#-style `Type name` designations to patterns and scopes the variable to the regions where its match is known to have happened. |
 
 ## Syntax, naming, and documentation policy
 
@@ -108,7 +111,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0047](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0047-attribute-syntax-and-declaration.md) | Attribute consumption and declaration (Kotlin-style annotations) | Defines `@` annotation syntax, use-site targets, attribute arguments, and `@Attribute` sugar. |
 | [0056](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0056-span-consumption-v1.md) | Span consumption v1 — ref-returning members, span element access, closed generic value-type fields | Auto-dereferences ref-returning members in rvalue position, makes spans indexable (read/write), applies `[]T → Span[T]` conversion in argument position, and gives closed generic value-type fields real layout. |
 | [0058](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0058-ref-safe-to-escape.md) | Ref-safe-to-escape and the `scoped` modifier | Adds the `scoped` parameter modifier and the supporting `GS9004`/`GS9006` ref-pointer escape diagnostics. |
-| [0059](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0059-named-delegate-types.md) | Named delegate types | `type Name = delegate func(...)` declares a real CLR `MulticastDelegate`-derived type, including generic delegates; diagnostic `GS0233`. |
+| [0059](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0059-named-delegate-types.md) | Named delegate types | `delegate Name(...);` declares a real CLR `MulticastDelegate`-derived type, including generic delegates. The retired `type`-based form reports `GS0535`. |
 | [0060](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0060-ref-out-in-parameters.md) | `ref`/`out`/`in` parameters | Declaration-site and call-site ref-kind modifiers with diagnostics `GS0235`–`GS0243`; ref-aliasing locals (`let ref`/`var ref`) and ref returns are follow-ups (`GS0248`–`GS0258`). |
 | [0061](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0061-conditional-ref-arguments.md) | Conditional ref-arguments | Narrow `ref cond ? a : b` form inside ref-kind argument payloads; diagnostics `GS0259`–`GS0262`. |
 | [0063](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0063-method-overloading-and-optional-parameters.md) | Method overloading and optional parameters | Lifts the v0 "one declaration per name" rule and adds default parameter values; diagnostics `GS0264`–`GS0267`. |
@@ -171,7 +174,9 @@ The 0.3 documentation audit covers these ADRs landed after the 0.2 snapshot. The
 | [0145](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0145-source-generator-host-native-gsharp.md) | Roslyn source-generator host for native G# projects (`gsgen`) |
 | [0146](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0146-anonymous-class-literal.md) | Anonymous-object literal (`object { ... }`, Kotlin-style) |
 
-## 0.4 ADRs (0157-0165)
+<span id="04-adrs-0157-0165"></span>
+
+## 0.4 ADRs (0157-0166)
 
 The 0.4 documentation audit covers these ADRs landed after the 0.3 snapshot.
 
@@ -186,3 +191,4 @@ The 0.4 documentation audit covers these ADRs landed after the 0.3 snapshot.
 | [0163](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0163-while-let-loop-condition-bindings.md) | `while let` loop-condition bindings |
 | [0164](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0164-native-rectangular-arrays.md) | Native CLR rectangular arrays |
 | [0165](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0165-explicit-extension-receiver-clauses.md) | Explicit extension receiver clauses |
+| [0166](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0166-is-pattern-variables.md) | Pattern variables in boolean `is` expressions |

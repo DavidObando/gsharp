@@ -2,6 +2,7 @@
 title: "Debugging and PDBs"
 sidebar_position: 5
 draft: false
+description: "Debug G# programs with managed debugging tools and Portable PDB source information."
 ---
 
 # Debugging and PDBs

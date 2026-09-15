@@ -2,11 +2,12 @@
 title: "Effective G#"
 sidebar_position: 1
 draft: false
+description: "Write clear, idiomatic G# with practical conventions for naming, types, and control flow."
 ---
 
 # Effective G#
 
-Effective G# favors small packages, explicit data shapes, readable control flow, and direct use of CLR libraries when they are the best tool. This guide is idiomatic advice, not a second specification; use the [language specification](/docs/ref/spec) for exact grammar.
+Effective G# favors small packages, explicit data shapes, readable control flow, and direct use of CLR libraries when they are the best tool. This guide is idiomatic advice, not a second specification; use the [language specification](../ref/spec.md) for exact grammar.
 
 ## Format code for readers
 
@@ -36,15 +37,29 @@ G# accepts ten friendly aliases on top of the canonical width-bearing names: `in
 
 Prefer the canonical width-bearing spellings in documentation, public library APIs, and conformance samples — the explicit width keeps cross-library readability stable as a project grows. The friendly aliases are appropriate inside function bodies, lambdas, and local examples where brevity helps reading.
 
-```gsharp
-// Public API: prefer the canonical width-bearing names.
-func Encode(values []int32) []uint8 { ... }
+The following declaration is illustrative; its implementation is omitted:
 
-// Local code: the friendly aliases are appropriate.
-let count int = 0
-for x in values {
-    count = count + 1
+```gsharp
+func Encode(values []int32) []uint8 { ... }
+```
+
+A counter that changes must use `var`. This complete program is checked in as `samples/WebsiteBindings.gs`:
+
+```gsharp title="bindings.gs"
+package Examples.Bindings
+
+import System
+
+let values = []int32{10, 20, 30}
+var count int32 = 0
+for value in values {
+    count++
 }
+Console.WriteLine(count)
+```
+
+```text
+3
 ```
 
 The formatter does not rewrite either spelling — author intent wins. Aliases are reserved type names: `type int = string` (and the equivalent `struct` / `class` / `enum` / `delegate` forms) is rejected with `GS0102` the same way `type int32 = string` already is.
@@ -55,7 +70,9 @@ Use `let` when a binding should not be reassigned, `var` when mutation is part o
 
 ## Prefer simple data declarations
 
-Start with `struct` for value-like aggregates and `class` for identity, mutation, or inheritance. Use `data struct` when structural equality and copy/update behavior are part of the model (value-typed); use `data class` when reference identity matters. Use `inline struct` for a single-field value wrapper when you want a domain-specific class without identity. Reach for `sealed class` (or a payload-bearing `enum` — a discriminated union) when you need a closed hierarchy with exhaustiveness checking.
+Start with `struct` for value-like aggregates and `class` for identity, mutation, or inheritance. Use `data struct` for value-typed data with structural equality and copy/update behavior. Use `data class` for reference-typed data with structural equality; its data equality is not an identity comparison. A `let` binding does not make the entire referenced object graph immutable.
+
+Use `inline struct` for a single-field value wrapper. Reach for `sealed class` or a payload-bearing `enum` when you need a closed hierarchy with exhaustiveness checking.
 
 ```gsharp
 data struct Point {
@@ -108,14 +125,9 @@ Use `using` for disposable resources because the compiler can require a disposab
 
 For I/O-shaped asynchrony, prefer `async func` and `await`. Use `scope` so child work is joined before the block exits and failures propagate. Use `async sequence[T]` and `await for` when a stream is naturally asynchronous. See [Concurrency and async](./concurrency) for the full surface.
 
-```gsharp
-scope {
-    runStage("a").Wait()
-    runStage("b").Wait()
-}
-```
+Use `go call(...)` to start a child owned by the surrounding scope; calling two tasks with `.Wait()` one after the other is sequential, not a worker-pool example. See the complete [Tour example](../tour/concurrency.md) and [Trail walkthrough](../tutorials/trail.md) for runnable patterns.
 
-For Go-shaped concurrency primitives — `go`, channels, `select` — see [Extensions: Go-flavored concurrency](../extensions/go-concurrency), which opt in with `import Gsharp.Extensions.Go`.
+`go`, channels, and `select` are part of the language; they do not require the retired `Gsharp.Extensions.Go` import. See [Go-flavored concurrency](../extensions/go-concurrency.md). Other `Gsharp.Extensions.*` helper namespaces still have their own explicit imports.
 
 ## Use CLR interop instead of wrappers when possible
 
