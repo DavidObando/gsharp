@@ -4,6 +4,8 @@
 
 using System;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.LanguageServer.Protocol;
 using Xunit;
 
@@ -52,5 +54,33 @@ public class Issue4219GenericLocalRecursionTests
         var hover = HoverComputer.ComputeHover(content, position);
         Assert.NotNull(hover);
         Assert.Contains("second", hover.Contents.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericDeclaration_AndShadowingVariableKeepDistinctCachedIdentities()
+    {
+        var source = Source.Replace("return first(\"x\", 2)", """
+            {
+                let first = 9
+                let copied = first
+            }
+            return first("x", 2)
+            """, StringComparison.Ordinal);
+        var content = LanguageServerTestHelpers.Content(source);
+        var compilation = new Compilation(content.SyntaxTree);
+        var tokens = SemanticLookup.EnumerateIdentifierTokens(content.SyntaxTree).ToArray();
+        var model = SemanticLookup.BuildModelForTest(compilation, useIncrementalCaches: true);
+        var cold = SemanticLookup.BuildModelForTest(compilation, useIncrementalCaches: false);
+        var warm = SemanticLookup.BuildModelForTest(compilation, useIncrementalCaches: true);
+        Assert.All(tokens, token =>
+        {
+            Assert.Same(cold.Resolve(token), model.Resolve(token));
+            Assert.Same(model.Resolve(token), warm.Resolve(token));
+        });
+        var identifiers = tokens.Where(token => token.Text == "first").ToArray();
+        Assert.IsType<FunctionSymbol>(model.Resolve(identifiers[0]));
+        Assert.IsType<LocalVariableSymbol>(model.Resolve(identifiers[2]));
+        Assert.Same(model.Resolve(identifiers[2]), model.Resolve(identifiers[3]));
+        Assert.Same(model.Resolve(identifiers[0]), model.Resolve(identifiers[4]));
     }
 }

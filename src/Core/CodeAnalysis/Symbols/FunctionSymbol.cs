@@ -521,6 +521,11 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;
 
+    /// <summary>Gets a value indicating whether a fieldless direct-call host needs no enclosing generic slots.</summary>
+    internal bool HasNonGenericStructLexicalOwner =>
+        LexicalEnclosingType is StructSymbol { TypeParameters.IsEmpty: true } owner
+        && StructSymbol.CollectEnclosingTypeParameters(owner).IsEmpty;
+
     /// <summary>Gets or sets a value indicating whether this synthetic function represents a type's static-constructor context.</summary>
     internal bool IsStaticInitializer { get; set; }
 

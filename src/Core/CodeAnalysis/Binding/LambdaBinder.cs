@@ -546,7 +546,7 @@ internal sealed class LambdaBinder
             return;
         }
 
-        var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParametersInScope.Values.ToImmutableArray());
+        var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParametersInScope.Values.ToImmutableArray(), out _);
         if (offender != null)
         {
             Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(location, name, offender.Name);
@@ -626,13 +626,16 @@ internal sealed class LambdaBinder
                     }
 
                     // The emitted method owns only its own generic slots (#1940).
-                    if (enclosingTypeParameters.Length > 0)
+                    var offender = FindEnclosingTypeParameterReference(function, literal.Body, enclosingTypeParameters, out var requiresLexicalOwner);
+                    if (offender != null)
                     {
-                        var offender = FindEnclosingTypeParameterReference(function, literal.Body, enclosingTypeParameters);
-                        if (offender != null)
-                        {
-                            Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
-                        }
+                        Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
+                    }
+                    else if (function.LexicalEnclosingType is { } owner
+                        && (owner is InterfaceSymbol
+                            || (requiresLexicalOwner && !function.HasNonGenericStructLexicalOwner)))
+                    {
+                        Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(syntax.Identifier.Location, name, owner);
                     }
 
                     return new BoundLocalFunctionDeclaration(syntax, literal);
@@ -2310,20 +2313,28 @@ internal sealed class LambdaBinder
     /// <param name="function">The generic local function's symbol (already carrying its own type parameters).</param>
     /// <param name="body">The bound body to scan.</param>
     /// <param name="enclosingTypeParameters">The in-scope type parameters owned by an enclosing method or class.</param>
+    /// <param name="requiresLexicalOwner">Whether a direct generic local needs its lexical access domain.</param>
     /// <returns>The first offending enclosing type parameter found, or <see langword="null"/> if none.</returns>
     private static TypeParameterSymbol? FindEnclosingTypeParameterReference(
         FunctionSymbol function,
         BoundStatement body,
-        ImmutableArray<TypeParameterSymbol> enclosingTypeParameters)
+        ImmutableArray<TypeParameterSymbol> enclosingTypeParameters,
+        out bool requiresLexicalOwner)
     {
-        var walker = new EnclosingTypeParameterReferenceWalker(enclosingTypeParameters);
+        var walker = new EnclosingTypeParameterReferenceWalker(enclosingTypeParameters, function.IsGeneric);
         foreach (var parameter in function.Parameters)
         {
             walker.CheckType(parameter.Type);
         }
 
         walker.CheckType(function.Type);
+        foreach (var typeParameter in function.TypeParameters)
+        {
+            walker.CheckType(typeParameter.ConstraintReferenceType);
+        }
+
         walker.Visit(body);
+        requiresLexicalOwner = walker.RequiresLexicalOwner;
         return walker.Found;
     }
 
@@ -3063,18 +3074,37 @@ internal sealed class LambdaBinder
     private sealed class EnclosingTypeParameterReferenceWalker : BoundTreeWalker
     {
         private readonly ImmutableArray<TypeParameterSymbol> enclosingTypeParameters;
+        private readonly bool checkOwners;
 
-        public EnclosingTypeParameterReferenceWalker(ImmutableArray<TypeParameterSymbol> enclosingTypeParameters)
+        public EnclosingTypeParameterReferenceWalker(ImmutableArray<TypeParameterSymbol> enclosingTypeParameters, bool checkOwners)
         {
             this.enclosingTypeParameters = enclosingTypeParameters;
+            this.checkOwners = checkOwners;
         }
 
         public TypeParameterSymbol? Found { get; private set; }
+
+        public bool RequiresLexicalOwner { get; private set; }
 
         public void CheckType(TypeSymbol? type)
         {
             if (Found != null || type == null)
             {
+                return;
+            }
+
+            if (checkOwners)
+            {
+                var referenced = new List<TypeParameterSymbol>();
+                TypeSymbol.CollectReferencedTypeParameters(type, referenced);
+                Found = enclosingTypeParameters.FirstOrDefault(referenced.Contains);
+                RequiresLexicalOwner |= type switch
+                {
+                    StructSymbol owner => NeedsAccessDomain(owner.Accessibility),
+                    InterfaceSymbol owner => NeedsAccessDomain(owner.Accessibility),
+                    EnumSymbol owner => NeedsAccessDomain(owner.Accessibility),
+                    _ => false,
+                };
                 return;
             }
 
@@ -3097,6 +3127,39 @@ internal sealed class LambdaBinder
             }
 
             CheckType(node.Type);
+            if (checkOwners)
+            {
+                switch (node)
+                {
+                    case BoundCallExpression call:
+                        CheckType((TypeSymbol?)call.StaticGenericOwnerType ?? call.StaticGenericInterfaceOwnerType ?? call.Function.StaticOwnerType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(call.Function.Accessibility);
+                        break;
+                    case BoundUserInstanceCallExpression call:
+                        RequiresLexicalOwner |= NeedsAccessDomain(call.Method.Accessibility);
+                        break;
+                    case BoundFieldAccessExpression field:
+                        CheckType((TypeSymbol?)field.StructType ?? field.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(field.Field.Accessibility);
+                        break;
+                    case BoundFieldAssignmentExpression field:
+                        CheckType((TypeSymbol?)field.StructType ?? field.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(field.Field.Accessibility);
+                        break;
+                    case BoundPropertyAccessExpression property:
+                        CheckType((TypeSymbol?)property.StructType ?? property.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(property.Property.GetterAccessibility);
+                        break;
+                    case BoundPropertyAssignmentExpression property:
+                        CheckType((TypeSymbol?)property.StructType ?? property.InterfaceType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(property.Property.SetterAccessibility);
+                        break;
+                    case BoundFunctionLiteralExpression literal when !literal.Function.IsGeneric:
+                        RequiresLexicalOwner |= literal.Function.LexicalEnclosingType != null;
+                        break;
+                }
+            }
+
             switch (node)
             {
                 case BoundCallExpression call:
@@ -3166,6 +3229,9 @@ internal sealed class LambdaBinder
             CheckType(node.Variable.Type);
             base.VisitVariableDeclaration(node);
         }
+
+        private static bool NeedsAccessDomain(Accessibility accessibility)
+            => accessibility is Accessibility.Private or Accessibility.Protected;
 
         private void CheckTypeArguments(ImmutableArray<TypeSymbol> typeArguments)
         {

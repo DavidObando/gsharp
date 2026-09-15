@@ -254,4 +254,74 @@ public class Issue4219GenericLocalRecursionTests
         Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(31, result.Value);
     }
+
+    [Theory]
+    [InlineData("return Secret()", "GS0468")]
+    [InlineData("return secret", "GS0468")]
+    [InlineData("return Holder[int32].Secret()", "GS0586")]
+    [InlineData("return Holder[int32].secret", "GS0586")]
+    [InlineData("let nested = func() int32 { return 42 }\nreturn nested()", "GS0586")]
+    public void GenericOwnerDependencies_FailBeforeEmission(string body, string diagnostic)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            class Holder[Outer] {
+                shared {
+                    private var secret int32 = 42
+                    private func Secret() int32 { return 42 }
+                    func Run() int32 {
+                        let first[T] = func(x T) int32 { return second(x) }
+                        let second[U] = func(x U) int32 { {{body}} }
+                        return first(1)
+                    }
+                }
+            }
+            Holder[string].Run()
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == diagnostic);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+    }
+
+    [Theory]
+    [InlineData("return 42")]
+    [InlineData("return Holder[int32].Public()")]
+    public void GenericOwnerIndependentHelpers_RemainSupported(string body)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            class Holder[Outer] {
+                shared {
+                    func Public() int32 { return 42 }
+                    func Run() int32 {
+                        let first[T] = func(x T) int32 { return second(x) }
+                        let second[U] = func(x U) int32 { {{body}} }
+                        return first(1)
+                    }
+                }
+            }
+            Holder[string].Run()
+            """);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(42, result.Value);
+    }
+
+    [Theory]
+    [InlineData("return Secret()")]
+    [InlineData("return 42")]
+    public void InterfaceOwner_FailsBeforeUnplannedMethodEmission(string body)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            interface Holder {
+                shared {
+                    private func Secret() int32 { return 42 }
+                    func Run() int32 {
+                        let first[T] = func(x T) int32 { return second(x) }
+                        let second[U] = func(x U) int32 { {{body}} }
+                        return first(1)
+                    }
+                }
+            }
+            Holder.Run()
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0586");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+    }
 }

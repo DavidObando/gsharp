@@ -50,6 +50,16 @@ regressions supply explicit type arguments when the type parameter occurs only
 behind a by-reference parameter. This milestone does not claim broader
 generic-call inference parity.
 
+An owner-independent helper in a generic class can still use only its own type
+parameters, including public accesses through a closed construction. Accesses
+that implicitly require enclosing generic slots are rejected with GS0468.
+Private/protected accesses or nested literals needing an unsupported generic
+lexical host are rejected with GS0586 instead of producing inaccessible or
+malformed IL. Direct generic locals in interface bodies also receive GS0586;
+their method-host planning is not part of this milestone. Non-generic nested
+classes within generic enclosing types do not bypass these enclosing-generic-
+context restrictions.
+
 Ref-returning literals are **not** enabled by this milestone. Their syntax,
 callable/delegate identity, metadata, conversions, invocation, alias-preserving
 consumption, lifetime/escape checks and tooling form a separate end-to-end
