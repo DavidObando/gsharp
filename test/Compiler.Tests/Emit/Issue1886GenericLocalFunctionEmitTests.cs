@@ -135,6 +135,79 @@ public class Issue1886GenericLocalFunctionEmitTests
         Assert.Equal($"2{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void GenericLocalFunction_CapturingByRefLikeVariable_ReportsGS0219()
+    {
+        // A `ref struct` (Span[T]) capture is still rejected for a generic
+        // local function, same as for an ordinary closure — hoisting it into
+        // the closure's display class would violate the ref-struct's
+        // stack-only lifetime.
+        var source = """
+            package P
+
+            func Foo(s Span[int32]) {
+                let Bad[T] = func (a T) T {
+                    var y = s
+                    return a
+                }
+                Bad(1)
+            }
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0219", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CapturingManagedPointer_ReportsGS9004()
+    {
+        // A managed pointer (*T / &x) capture is rejected — the closure may
+        // outlive the pointed-to stack variable.
+        var source = """
+            package P
+
+            func Foo() {
+                var x = 10
+                var p = &x
+                let Bad[T] = func (a T) T {
+                    var y = *p
+                    return a
+                }
+                Bad(1)
+            }
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS9004", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CapturingFixedPointer_ReportsGS9008()
+    {
+        // An unmanaged pointer bound by `fixed` is rejected — the pin is
+        // released when the enclosing `fixed` block exits.
+        var source = """
+            package P
+
+            unsafe func Foo() {
+                var buf = []uint8{uint8(1), uint8(2), uint8(3)}
+                fixed pD *uint8 = buf {
+                    let Bad[T] = func (a T) T {
+                        var y = pD[0]
+                        return a
+                    }
+                    Bad(1)
+                }
+            }
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS9008", stdout + stderr);
+    }
+
     private static string CompileAndRun(string source)
     {
         var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: true);

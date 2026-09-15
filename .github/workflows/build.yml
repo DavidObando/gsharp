@@ -550,8 +550,18 @@ jobs:
   hot-core-translation-guard:
     name: hot-core translation guard
     runs-on: ubuntu-latest
+    # NOTE: this group must NOT collide with cs2gs-pr-guard.yml's own
+    # `cs2gs-pr-guard-<PR>` concurrency group. That workflow is kept
+    # triggering on `pull_request` for backwards compatibility (see its
+    # header) and starts immediately, while this job only starts once
+    # `needs` completes (~20+ min in); a shared group name lets this job's
+    # later start cancel the legacy one mid-run via cancel-in-progress,
+    # which reports as a CANCELLED "hot-core translation guard" check —
+    # the exact required-status-check context — even though this job (the
+    # authoritative one) goes on to succeed. Keep the group scoped to this
+    # workflow so the two never race.
     concurrency:
-      group: cs2gs-pr-guard-${{ github.event.pull_request.number || github.ref }}
+      group: hot-core-translation-guard-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: true
     needs: [build, tests, test-partition, e2e, ilverify, nullable-hygiene, cs2gs-corpus]
     if: github.event_name == 'pull_request'
