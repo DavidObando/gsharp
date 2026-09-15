@@ -1078,7 +1078,7 @@ internal sealed partial class OverloadResolver
         // private) `shared` method, with no diagnostic.
         // Restricted to `Package != null` so a GENERIC LOCAL FUNCTION —
         // declared into this same scope table via `Scope.TryDeclareFunction`
-        // (LambdaBinder.BindGenericLocalFunctionDeclaration) but built with
+        // (LambdaBinder.PrepareGenericLocalFunctionDeclaration) but built with
         // the no-package `FunctionSymbol` constructor — is never treated as
         // a shadowable package function. Ordinary lexical shadowing must
         // still let a local function of the same name win over a sibling

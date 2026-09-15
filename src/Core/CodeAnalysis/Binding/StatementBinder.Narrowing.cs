@@ -1460,9 +1460,9 @@ internal sealed partial class StatementBinder
         // delegate stored in a variable.
         if (syntax.TypeParameterList != null)
         {
-            return bindGenericLocalFunctionDeclaration != null
-                ? bindGenericLocalFunctionDeclaration(syntax)
-                : throw new InvalidOperationException("Generic local-function declarations require bindGenericLocalFunctionDeclaration to be wired.");
+            return prepareGenericLocalFunctionDeclaration != null
+                ? prepareGenericLocalFunctionDeclaration(syntax)()
+                : throw new InvalidOperationException("Generic local-function declarations require prepareGenericLocalFunctionDeclaration to be wired.");
         }
 
         var isReadOnly = syntax.Keyword?.Kind == SyntaxKind.ConstKeyword

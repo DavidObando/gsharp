@@ -208,9 +208,14 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public FunctionDeclarationSyntax? Declaration { get; private set; }
 
+    /// <summary>Gets the source declaration of a directly callable generic local function.</summary>
+    public VariableDeclarationSyntax? LocalDeclaration { get; internal set; }
+
     /// <inheritdoc/>
     public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
-        Declaration is { } declaration ? ImmutableArray.Create<SyntaxNode>(declaration) : ImmutableArray<SyntaxNode>.Empty;
+        ((SyntaxNode?)Declaration ?? LocalDeclaration) is { } declaration
+            ? ImmutableArray.Create(declaration)
+            : ImmutableArray<SyntaxNode>.Empty;
 
     /// <summary>
     /// Gets the package this function belongs to. <c>null</c> for built-in

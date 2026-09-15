@@ -3094,7 +3094,8 @@ internal sealed class ReflectionMetadataEmitter
                 // and its body is already registered against the synthesized
                 // Invoke method, so it must NOT also be hosted as a top-level
                 // <Program> static method.
-                if (this.closures.ClosureInfos.ContainsKey(literal))
+                if (this.closures.ClosureInfos.ContainsKey(literal)
+                    || literal.Function is { LocalDeclaration: not null, StaticOwnerType: not null })
                 {
                     continue;
                 }

@@ -945,6 +945,27 @@ public static class SemanticLookup
             return;
         }
 
+        foreach (var root in EnumerateBoundRoots(program))
+        {
+            foreach (var local in FindBoundNodes<BoundLocalFunctionDeclaration>(root))
+            {
+                if (local.Literal.Function.LocalDeclaration is { } declaration)
+                {
+                    declarations[declaration.Identifier] = local.Literal.Function;
+                }
+            }
+
+            // Use the binder's selected symbol, not a by-name approximation:
+            // nested regions, overloads and calls before a region must agree.
+            foreach (var call in FindBoundNodes<BoundCallExpression>(root))
+            {
+                if (call.Function.LocalDeclaration != null && call.Syntax is CallExpressionSyntax syntax)
+                {
+                    declarations[syntax.Identifier] = call.Function;
+                }
+            }
+        }
+
         // Issue #894: constructor (`init`) bodies are keyed in
         // BoundProgram.Functions by a synthesized instance-method-shaped
         // FunctionSymbol whose Declaration is null (the declaring syntax is a

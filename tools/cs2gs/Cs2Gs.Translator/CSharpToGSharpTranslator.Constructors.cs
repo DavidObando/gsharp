@@ -2140,9 +2140,9 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (SyntaxNode node in pair.Syntax.DescendantNodes())
                 {
                     if (this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency
-                        && symbols.Contains(dependency))
+                        && symbols.Contains(dependency.OriginalDefinition))
                     {
-                        dependencies.Add(dependency);
+                        dependencies.Add(dependency.OriginalDefinition);
                     }
                 }
 
@@ -2460,6 +2460,7 @@ public sealed partial class CSharpToGSharpTranslator
                 .Distinct()
                 .ToList();
             var functions = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
+            var excluded = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             foreach (LocalFunctionStatementSyntax localFunction in localFunctionStatements.OfType<LocalFunctionStatementSyntax>())
             {
                     using IDisposable modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree);
@@ -2487,7 +2488,7 @@ public sealed partial class CSharpToGSharpTranslator
                         || symbol.Parameters.Any(IsVariadicCarrierParameter)
                         || symbol.Parameters.Any(parameter => parameter.RefKind != RefKind.None))
                     {
-                        continue;
+                        excluded.Add(symbol);
                     }
 
                     // A static local function already lifted as a shared helper has
@@ -2517,9 +2518,9 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (SyntaxNode node in syntax.DescendantNodes())
                 {
                     if (this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency
-                        && reachableFunctions.Contains(dependency))
+                        && reachableFunctions.Contains(dependency.OriginalDefinition))
                     {
-                        dependencies.Add(dependency);
+                        dependencies.Add(dependency.OriginalDefinition);
                     }
                 }
 
@@ -2630,9 +2631,10 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (SyntaxNode node in syntax.DescendantNodes())
                 {
                     if (this.context.GetSymbolInfo(node).Symbol is IMethodSymbol dependency
-                        && allSymbols.Contains(dependency)
-                        && !SymbolEqualityComparer.Default.Equals(dependency, symbol))
+                        && allSymbols.Contains(dependency.OriginalDefinition)
+                        && !SymbolEqualityComparer.Default.Equals(dependency.OriginalDefinition, symbol))
                     {
+                        dependency = dependency.OriginalDefinition;
                         if (!callers.TryGetValue(dependency, out HashSet<IMethodSymbol> callerSet))
                         {
                             callerSet = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
@@ -2688,7 +2690,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // captures — no nullable-forward-declaration scheme needed.
                 // Only MUTUAL recursion still requires it (a partner would be
                 // referenced before its `let` declaration).
-                if (group.Count == 1)
+                if (group.Count == 1 || group.Any(f => excluded.Contains(f.Symbol)))
                 {
                     continue;
                 }
@@ -2717,6 +2719,7 @@ public sealed partial class CSharpToGSharpTranslator
                     foreach ((LocalFunctionStatementSyntax syntax, IMethodSymbol symbol) in functions)
                     {
                         if (claimed.Contains(symbol)
+                            || excluded.Contains(symbol)
                             || foldSymbols.Contains(symbol)
                             || sccMembers.Contains(symbol)
                             || this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol))
@@ -2821,10 +2824,10 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     bool usedHere = statements[i]
                         .DescendantNodes()
-                        .OfType<IdentifierNameSyntax>()
+                        .OfType<SimpleNameSyntax>()
                         .Any(id => id.Identifier.ValueText == localFunction.Identifier.ValueText
                             && SymbolEqualityComparer.Default.Equals(
-                                this.context.GetSymbolInfo(id).Symbol, funcSymbol));
+                                this.context.GetSymbolInfo(id).Symbol?.OriginalDefinition, funcSymbol));
                     if (usedHere)
                     {
                         firstUseIndex = i;
@@ -2867,12 +2870,12 @@ public sealed partial class CSharpToGSharpTranslator
                 .ToDictionary(pair => pair.Function, pair => pair.Symbol);
             List<LocalFunctionStatementSyntax> SiblingDependenciesOf(LocalFunctionStatementSyntax function) =>
                 function.DescendantNodes()
-                    .OfType<IdentifierNameSyntax>()
+                    .OfType<SimpleNameSyntax>()
                     .Select(id => this.context.GetSymbolInfo(id).Symbol)
                     .OfType<IMethodSymbol>()
                     .SelectMany(symbol => functionSymbols
                         .Where(pair => !ReferenceEquals(pair.Key, function)
-                            && SymbolEqualityComparer.Default.Equals(pair.Value, symbol))
+                            && SymbolEqualityComparer.Default.Equals(pair.Value, symbol.OriginalDefinition))
                         .Select(pair => pair.Key))
                     .Distinct()
                     .ToList();

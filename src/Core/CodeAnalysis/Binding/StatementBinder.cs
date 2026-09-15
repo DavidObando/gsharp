@@ -99,7 +99,7 @@ internal sealed partial class StatementBinder
     /// <c>onSignatureBound</c> parameter.
     /// </summary>
     private readonly Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration;
-    private readonly Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration;
+    private readonly Func<VariableDeclarationSyntax, Func<BoundStatement>>? prepareGenericLocalFunctionDeclaration;
     private readonly Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
@@ -126,7 +126,7 @@ internal sealed partial class StatementBinder
         BindVariableDeclarationAttributesDelegate bindVariableDeclarationAttributes,
         Func<FunctionSymbol?> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType = null,
-        Func<VariableDeclarationSyntax, BoundStatement>? bindGenericLocalFunctionDeclaration = null,
+        Func<VariableDeclarationSyntax, Func<BoundStatement>>? prepareGenericLocalFunctionDeclaration = null,
         Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null,
         Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration = null)
     {
@@ -147,7 +147,7 @@ internal sealed partial class StatementBinder
         this.bindVariableDeclarationAttributes = bindVariableDeclarationAttributes ?? throw new ArgumentNullException(nameof(bindVariableDeclarationAttributes));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindLambdaWithTargetType = bindLambdaWithTargetType;
-        this.bindGenericLocalFunctionDeclaration = bindGenericLocalFunctionDeclaration;
+        this.prepareGenericLocalFunctionDeclaration = prepareGenericLocalFunctionDeclaration;
         this.checkNonGenericLocalFunctionEnclosingTypeParameterReference = checkNonGenericLocalFunctionEnclosingTypeParameterReference;
         this.bindFunctionLiteralWithSelfDeclaration = bindFunctionLiteralWithSelfDeclaration;
     }
@@ -328,6 +328,16 @@ internal sealed partial class StatementBinder
         return statements.ToImmutable();
     }
 
+    private static bool IsGenericLocalFunctionDeclaration(StatementSyntax syntax)
+        => syntax is VariableDeclarationSyntax
+        {
+            Keyword.Kind: SyntaxKind.LetKeyword,
+            TypeParameterList: not null,
+            Initializer: FunctionLiteralExpressionSyntax,
+            HasRefKindModifier: false,
+            IsAsyncLet: false,
+        };
+
     private void BindBlockStatements(
         ImmutableArray<StatementSyntax> statementSyntaxes,
         int startIndex,
@@ -347,6 +357,33 @@ internal sealed partial class StatementBinder
             {
                 var statementSyntax = statementSyntaxes[i];
                 beforeBind?.Invoke(statementSyntax);
+
+                if (IsGenericLocalFunctionDeclaration(statementSyntax)
+                    && prepareGenericLocalFunctionDeclaration != null)
+                {
+                    // Only consecutive generic declarations share forward visibility.
+                    // Ordinary variables and statements remain sequential; file boundaries
+                    // also end a region, preserving per-file import resolution.
+                    var bodies = new List<Func<BoundStatement>>();
+                    var end = i;
+                    while (end < statementSyntaxes.Length
+                        && statementSyntaxes[end].SyntaxTree == statementSyntax.SyntaxTree
+                        && IsGenericLocalFunctionDeclaration(statementSyntaxes[end]))
+                    {
+                        beforeBind?.Invoke(statementSyntaxes[end]);
+                        bodies.Add(prepareGenericLocalFunctionDeclaration((VariableDeclarationSyntax)statementSyntaxes[end]));
+                        end++;
+                    }
+
+                    for (var member = 0; member < bodies.Count; member++)
+                    {
+                        beforeBind?.Invoke(statementSyntaxes[i + member]);
+                        statements.Add(bodies[member]());
+                    }
+
+                    i = end - 1;
+                    continue;
+                }
 
                 if (statementSyntax is DeferStatementSyntax deferSyntax)
                 {

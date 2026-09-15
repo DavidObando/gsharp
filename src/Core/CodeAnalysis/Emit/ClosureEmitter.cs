@@ -212,6 +212,29 @@ internal sealed class ClosureEmitter
     {
         foreach (var literal in literals)
         {
+            if (literal.Function.LocalDeclaration != null
+                && literal.CapturedVariables.IsEmpty
+                && literal.Function.LexicalEnclosingType is StructSymbol { TypeParameters.IsEmpty: true } localEnclosing)
+            {
+                // Keep direct generic MethodDef/MethodSpec identity while sharing the
+                // lexical type's accessibility domain. No delegate or host instance.
+                var host = new StructSymbol(
+                    name: "<local_host_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">",
+                    fields: ImmutableArray<FieldSymbol>.Empty,
+                    accessibility: Accessibility.Internal,
+                    declaration: null,
+                    packageName: hostPackage.Name,
+                    isData: false,
+                    isInline: false,
+                    isClass: true);
+                host.SetContainingType(localEnclosing);
+                literal.Function.IsStatic = true;
+                literal.Function.StaticOwnerType = host;
+                host.SetMethods(ImmutableArray.Create(literal.Function));
+                this.SynthesizedClosureClasses.Add(host);
+                continue;
+            }
+
             if (literal.CapturedVariables.Length == 0)
             {
                 // Issue #1469: a non-capturing lambda is normally hoisted to a
@@ -260,10 +283,9 @@ internal sealed class ClosureEmitter
                 // `closure.InvokeMethod`. Nesting it here would also require
                 // this display class's fieldless Invoke method to itself be
                 // generic, which SynthesizeDisplayClass does not model. Since
-                // generic local functions can never capture (and therefore
-                // never need the accessibility-domain trick this nesting
-                // exists for), always keep them on the top-level `<Program>`
-                // static placement.
+                // generic local functions cannot capture, use a direct static
+                // host above rather than an instance Invoke method. Enclosing
+                // type-parameter reification remains outside this milestone.
                 if (literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not StructSymbol zeroCaptureEnclosing)
                 {
