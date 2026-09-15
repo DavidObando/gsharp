@@ -57,6 +57,34 @@ test('current and released diagnostic catalogues contain one row per ID', () => 
   }
 });
 
+test('active delegate documentation uses standalone declarations, not type aliases', () => {
+  for (const directory of ['docs', `versioned_docs/version-${versions[0]}`]) {
+    for (const page of ['guide/declarations-and-packages.md', 'guide/types-and-values.md']) {
+      const source = readFileSync(path.join(site, directory, page), 'utf8');
+      assert.ok(
+        source.includes('standalone `delegate Name(parameters) ReturnType;`'),
+        `${directory}/${page}: canonical declaration`,
+      );
+      assert.doesNotMatch(
+        source,
+        /type alias whose RHS is `delegate|Named-delegate declarations keep the `func`|aliases .* and named delegates|[.:];/,
+        `${directory}/${page}: obsolete or malformed delegate guidance`,
+      );
+    }
+    const spec = readFileSync(path.join(site, directory, 'ref/spec.md'), 'utf8');
+    assert.match(spec, /DelegateDecl\s+= Visibility\? "delegate" identifier .* ";" \./);
+    assert.match(spec, /DelegateDecl\s+::= 'delegate' identifier .* ';'/);
+    assert.doesNotMatch(spec, /DelegateAliasDecl|DelegateAliasTail|alias and named-delegate forms/);
+    const diagnostics = readFileSync(path.join(site, directory, 'ref/diagnostics.md'), 'utf8');
+    const delegates = diagnostics
+      .split('## Named delegate type diagnostics (GS0233)')[1]
+      .split('\n## ')[0];
+    assert.ok(delegates.includes('delegate Predicate[T any](value T) bool;'));
+    assert.doesNotMatch(delegates, /right-hand side|type Predicate/);
+    assert.doesNotMatch(diagnostics, /`delegate func\(\.\.\.\)` named-delegate declarations/);
+  }
+});
+
 test('tutorial source and output match the canonical showcase fixture', () => {
   const checkedDocs = {
     WebsiteData: ['tutorials/getting-started.md'],

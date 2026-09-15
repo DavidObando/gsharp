@@ -195,7 +195,7 @@ enum Status { Pending, Complete, Failed }
 
 Function types use the arrow form `(T1, T2, ...) -> R`. Async function type clauses use `async (T) -> R` and represent task-returning functions (lowered to `(T) -> Task[R]`, or `(T) -> Task` for void). Function values can convert to compatible CLR delegate types, including named delegates and common `Action` or `Func` shapes.
 
-A **named delegate type** is declared with `delegate Name(...) ` and emits as a real CLR `MulticastDelegate`-derived type. Named-delegate declarations keep the `func` keyword — only function-*type clauses* moved to the arrow form. Use a named delegate when you want a stable, C#-visible handler type (for example, as the type of a G# `event`):;
+A **named delegate type** uses the standalone `delegate Name(parameters) ReturnType;` declaration and emits as a real CLR `MulticastDelegate`-derived type. Neither `type` nor `func` is part of this declaration. Omit the return type for a void delegate, but keep the required trailing semicolon. Use a named delegate when you want a stable, C#-visible handler type (for example, as the type of a G# `event`):
 
 ```gsharp
 delegate Handler(sender Object, e EventArgs);

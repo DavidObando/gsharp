@@ -123,7 +123,7 @@ A function can declare a managed-pointer return with `ref` before the return typ
 
 Expression-bodied members use the G# arrow `->`, not C# `=>`. The form is available for free functions, methods, read-only properties, accessors, indexers, operators, and conversion operators; constructors, finalizers, and local functions keep block bodies.
 
-A named delegate type is a top-level type alias whose RHS is `delegate func(...)`:
+A named delegate type uses the standalone `delegate Name(parameters) ReturnType;` declaration, not a `type` alias. Omit the return type for a void delegate; the trailing semicolon is required:
 
 ```gsharp
 delegate Handler(sender Object, e EventArgs);
@@ -133,7 +133,7 @@ Named delegates emit as real CLR `MulticastDelegate`-derived types so C# consume
 
 ## Type declarations
 
-The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head. `data` adds structural synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `partial class`, `partial struct`, and `partial interface` split one type across files or generated sources; every duplicate part must carry `partial`, and partial enums are not supported. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. The `type` keyword is retained for aliases (`type Count = int32`) and named delegates (`delegate Greeter(name string) `).;
+The aggregate keyword (`class`, `struct`, `enum`, `interface`) is the declaration head. `data` adds structural synthesis (equality, `with`-copy, deconstruction). `inline struct` declares a single-field value wrapper. `partial class`, `partial struct`, and `partial interface` split one type across files or generated sources; every duplicate part must carry `partial`, and partial enums are not supported. `sealed class` / `sealed interface` declare Kotlin-style closed hierarchies. Payload-bearing enums (`enum Shape { Circle(r float64); Square(s float64) }`) are discriminated unions. Use contextual `type` for aliases (`type Count = int32`); named delegates have a separate declaration head (`delegate Greeter(name string);`).
 
 ```gsharp
 data struct Point {

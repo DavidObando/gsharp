@@ -379,7 +379,7 @@ Every `data struct` synthesizes a fixed contract of value-semantics members — 
 
 ## Named delegate type diagnostics (GS0233)
 
-`delegate Name(...) ` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type (and so G# events can carry first-class custom delegate types). Anything other than a function signature on the right-hand side is rejected. Generic delegate declarations such as `type Predicate[T any] = delegate func(value T) bool` now bind and emit a verifiable generic delegate `TypeDef` (one `GenericParam` row per type parameter, threaded through the `Invoke`/`.ctor` signatures), so the former GS0234 (;"generic delegate declaration not yet supported") has been retired.
+`delegate Name(parameters) ReturnType;` declares a real CLR `MulticastDelegate`-derived named delegate type so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic declarations such as `delegate Predicate[T any](value T) bool;` emit a generic delegate `TypeDef`, so the former GS0234 ("generic delegate declaration not yet supported") has been retired. GS0233 applies only while recovering a malformed legacy declaration; GS0535 rejects the retired `type Name = delegate func(...)` spelling.
 
 | Code | Severity | Message |
 |------|----------|---------|
@@ -691,7 +691,7 @@ Cause/fix:
 
 Cause/fix:
 
-- **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), `delegate func(...)` named-delegate declarations, and `*func(...) R` managed function-pointer types all keep `func`. Rewriting a function pointer as `*((...) -> R)` changes its meaning to a pointer to a managed delegate and produces GS0398. A future release will remove the legacy type-clause spelling and turn it into a parse error.
+- **GS0303** — `var f func(int32) int32 = (x int32) -> x + 1`. Fix: rewrite the type clause as `var f (int32) -> int32 = (x int32) -> x + 1`. Async variant: `async func(int32) int32` → `async (int32) -> int32`. The deprecation applies **only** to `func` in *type-clause* positions; function *declarations* (`func name(...) R { … }`), function *literals* (`func(...) R { … }` expressions), and `*func(...) R` managed function-pointer types keep `func`. Named delegates instead use `delegate Name(parameters) ReturnType;`, without `func`. Rewriting a function pointer as `*((...) -> R)` changes its meaning to a pointer to a managed delegate and produces GS0398. A future release will remove the legacy type-clause spelling and turn it into a parse error.
 
 
 ## Lambda binding type-inference diagnostics (GS0304)

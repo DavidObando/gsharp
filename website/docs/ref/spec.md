@@ -520,9 +520,9 @@ This rule lets `Gsharp.Extensions.Optional.Map` carry two overloads — `where T
 ### Type declarations
 
 ```ebnf
-TypeDecl          = TypeAliasDecl | DelegateAliasDecl | AggregateDecl .
+TypeDecl          = TypeAliasDecl | DelegateDecl | AggregateDecl .
 TypeAliasDecl     = "type" identifier TypeParamList? "=" identifier .
-DelegateAliasDecl = "type" identifier TypeParamList? "=" "delegate" "func" "(" Parameters? ")" TypeClause? .
+DelegateDecl      = Visibility? "delegate" identifier TypeParamList? "(" Parameters? ")" TypeClause? ";" .
 AggregateDecl     = Visibility? OpenOrSealed? Data? Inline? Partial? Unsafe? AggregateKeyword identifier TypeParamList? PrimaryCtor? BaseClause? AggregateBody? .
 AggregateKeyword  = "class" | "struct" | "enum" | "interface" .
 Visibility        = "public" | "internal" | "private" .  (* type-level; "protected" is a member-only modifier *)
@@ -534,11 +534,11 @@ BaseClause        = ":" QualifiedTypeName ( "(" Arguments? ")" )? { "," Qualifie
 AggregateBody     = "{" Member* "}" .
 ```
 
-The aggregate keyword IS the declaration keyword. Unsupported modifier combinations are rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case. The `type` keyword is retained only for the alias and named-delegate forms above.
+The aggregate keyword IS the declaration keyword. Unsupported modifier combinations are rejected at parse time (diagnostics GS0306–GS0312). Discriminated-union enums (members that carry a payload parameter list) are desugared at parse time to a sealed base class plus one subclass per case. Contextual `type` introduces aliases; named delegates use the separate `delegate` declaration.
 
 `partial` is a contextual modifier on `class`, `struct`, and `interface` declarations. Multiple partial declarations with the same package, containing type, and name merge into one emitted CLR type. Every declaration in a multi-part group must carry `partial` (`GS0475`); non-partial duplicates still report `GS0102`. Parts must agree on aggregate kind (`GS0476`), accessibility (`GS0477`), type parameters (`GS0480`), and base-class shape (`GS0481`); `open` and `sealed` cannot conflict (`GS0478`); `data` / `inline` / `ref` must be repeated on every part (`GS0479`); only one part may declare a primary constructor (`GS0482`) or `deinit` (`GS0483`). Interfaces implemented by different parts are unioned, members and annotations concatenate in deterministic source order, and `shared { init { ... } }` blocks from all parts concatenate into the single `.cctor`. `partial enum` is rejected (`GS0484`). A single partial declaration with no siblings is legal. Nested partial types merge recursively within their containing type.
 
-A `DelegateAliasTail` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool`) are supported, emitting a generic delegate `TypeDef`. Diagnostic `GS0233` covers malformed declarations.;
+A `DelegateDecl` declares a real CLR `MulticastDelegate`-derived named delegate type, so C# consumers see a conventional handler type and G# events can carry first-class custom delegate types. Generic delegate declarations (`delegate Predicate[T any](value T) bool;`) are supported, emitting a generic delegate `TypeDef`. The trailing semicolon is required, including when the return type is omitted for a void delegate. The retired `type Name = delegate func(...)` spelling reports `GS0535`.
 
 ### Members
 
@@ -1869,7 +1869,7 @@ Parameters        ::= Parameter (',' Parameter)*
 Parameter         ::= Annotation* 'scoped'? ('ref' | 'out' | 'in')? identifier '...'? TypeClause ('=' Expression)?
 
 TypeAliasDecl     ::= 'type' identifier TypeParamList? '=' identifier
-DelegateDecl      ::= 'type' identifier TypeParamList? '=' 'delegate' 'func' '(' Parameters? ')' TypeClause?   (* named CLR delegate,  *)
+DelegateDecl      ::= 'delegate' identifier TypeParamList? '(' Parameters? ')' TypeClause? ';'   (* named CLR delegate; omit the return type for void *)
 AggregateDecl     ::= ClassDecl | StructDecl | EnumDecl | InterfaceDecl    (* leading modifiers may appear in any order; per-kind validity is enforced by the binder *)
 ClassDecl         ::= ('open' | 'sealed')? 'data'? 'class' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
 StructDecl        ::= 'data'? 'inline'? 'ref'? 'struct' identifier TypeParamList? PrimaryCtor? BaseClause? StructBody?
