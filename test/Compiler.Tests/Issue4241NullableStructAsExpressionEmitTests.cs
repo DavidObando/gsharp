@@ -141,6 +141,8 @@ public class Issue4241NullableStructAsExpressionEmitTests
         }
     }
 
+    private const int RunTimeoutMilliseconds = 60_000;
+
     private static (int Exit, string Output) RunDotnet(string assemblyPath)
     {
         var psi = new ProcessStartInfo("dotnet", $"\"{assemblyPath}\"")
@@ -153,10 +155,30 @@ public class Issue4241NullableStructAsExpressionEmitTests
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("could not start dotnet");
+
+        // Draining stdout to EOF before touching stderr deadlocks if the child
+        // fills the stderr pipe first — read both concurrently and bound the
+        // wait, or a hanging/misbehaving program takes the whole test run
+        // down with it (mirrors Issue3958NullableDirectionalChannelTests).
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(RunTimeoutMilliseconds))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between the timeout and the kill.
+            }
+
+            return (-1, $"timed out after {RunTimeoutMilliseconds / 1000}s (deadlock).");
+        }
+
         var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
-        process.WaitForExit();
+        output.Append(stdout.GetAwaiter().GetResult());
+        output.Append(stderr.GetAwaiter().GetResult());
         return (process.ExitCode, output.ToString());
     }
 
