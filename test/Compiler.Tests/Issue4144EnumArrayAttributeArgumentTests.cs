@@ -152,7 +152,45 @@ public class Issue4144EnumArrayAttributeArgumentTests
         }
     }
 
-    private static (string ArgumentType, object[] Values) ReadEnumArrayArgument(string assemblyPath, string typeName)
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void NestedEnumArrayInObjectArray_PreservesMetadataIdentity(bool imported, bool empty)
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4214_nested_enum_").FullName;
+        try
+        {
+            var elementType = imported ? "DayOfWeek" : "Status";
+            var elements = empty ? string.Empty : imported
+                ? "DayOfWeek.Monday, DayOfWeek.Friday"
+                : "Status.Active, Status.Retired";
+            var source = $$"""
+                package P
+                import System
+                enum Status { Active, Retired }
+                class EAttribute(Values object) : Attribute {}
+                @E([]object{[]{{elementType}}{ {{elements}} } })
+                class Target {}
+                Console.WriteLine("ok")
+                """;
+            var appPath = Path.Combine(tempDir, "P.dll");
+            var log = Compile(tempDir, "App.gs", source, appPath, "/target:exe");
+            Assert.True(ErrorIds(log).Length == 0, log);
+            Assert.True(File.Exists(appPath), log);
+            IlVerifier.Verify(appPath);
+            var (argumentType, values) = ReadEnumArrayArgument(appPath, "Target", nested: true);
+            Assert.Equal(imported ? "System.DayOfWeek[]" : "P.Status[]", argumentType);
+            Assert.Equal(empty ? Array.Empty<object>() : imported ? new object[] { 1, 5 } : new object[] { 0, 1 }, values);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    private static (string ArgumentType, object[] Values) ReadEnumArrayArgument(string assemblyPath, string typeName, bool nested = false)
     {
         var paths = new List<string>(TrustedPlatformAssemblies()) { assemblyPath };
         using var context = new MetadataLoadContext(new PathAssemblyResolver(paths.Distinct(StringComparer.Ordinal)));
@@ -161,6 +199,12 @@ public class Issue4144EnumArrayAttributeArgumentTests
         var attribute = target.GetCustomAttributesData()
             .Single(candidate => candidate.AttributeType.Name == "EAttribute");
         var arrayArgument = attribute.ConstructorArguments.Single();
+        if (nested)
+        {
+            arrayArgument = Assert.Single(
+                Assert.IsAssignableFrom<IReadOnlyCollection<CustomAttributeTypedArgument>>(arrayArgument.Value));
+        }
+
         var elements = Assert.IsAssignableFrom<IReadOnlyCollection<CustomAttributeTypedArgument>>(arrayArgument.Value);
         var values = elements.Select(element => element.Value).ToArray();
         return (arrayArgument.ArgumentType.FullName!, values);

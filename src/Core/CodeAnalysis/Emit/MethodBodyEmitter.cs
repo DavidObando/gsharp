@@ -1055,7 +1055,7 @@ internal sealed partial class MethodBodyEmitter
 
         // Issue #2140 / #3354: a G# slice, fixed array, or rectangular array
         // (any element type) is CLR array-backed. Upcasting it to the base
-        // class `System.Array` — or to any of the element-INDEPENDENT non-
+        // classes `object` / `System.Array` — or to any element-INDEPENDENT non-
         // generic array supertype interfaces (IEnumerable, ICollection,
         // IList, ICloneable, IStructuralComparable, IStructuralEquatable) —
         // is a no-op reference conversion: the slot already holds an array
@@ -1068,7 +1068,8 @@ internal sealed partial class MethodBodyEmitter
         {
             var bClr = b?.ClrType;
             if (bClr != null
-                && (bClr.IsSameAs(typeof(System.Array))
+                && (bClr.IsSameAs(typeof(object))
+                    || bClr.IsSameAs(typeof(System.Array))
                     || bClr.IsSameAs(typeof(System.Collections.IEnumerable))
                     || bClr.IsSameAs(typeof(System.Collections.ICollection))
                     || bClr.IsSameAs(typeof(System.Collections.IList))
