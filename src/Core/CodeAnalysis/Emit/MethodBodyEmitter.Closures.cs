@@ -763,6 +763,34 @@ internal sealed partial class MethodBodyEmitter
         this.EmitFunctionLiteral(literal, overrideDelegateType, symbolicDelegateCtorRef: null);
     }
 
+    private void EmitGenericLocalClosureInstance(
+        BoundFunctionLiteralExpression literal,
+        ClosureEmitter.ClosureInfo closure)
+    {
+        if (!this.outer.cache.ClassCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
+        {
+            throw new InvalidOperationException(
+                $"Closure class '{closure.ClassSym.Name}' has no emitted constructor.");
+        }
+
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(ctorHandle);
+        foreach (var captured in literal.CapturedVariables)
+        {
+            if (!closure.CaptureFields.TryGetValue(captured, out var field)
+                || !this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Closure for '{literal.Function.Name}' has no emitted field for captured '{captured.Name}'.");
+            }
+
+            this.il.OpCode(ILOpCode.Dup);
+            this.EmitCapturedVariableLoad(captured);
+            this.il.OpCode(ILOpCode.Stfld);
+            this.il.Token(fieldHandle);
+        }
+    }
+
     private void EmitFunctionLiteral(BoundFunctionLiteralExpression literal, Type? overrideDelegateType, EntityHandle? symbolicDelegateCtorRef)
     {
         if (this.outer.closures.ClosureInfos.TryGetValue(literal, out var closure))

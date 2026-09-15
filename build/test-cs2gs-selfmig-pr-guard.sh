@@ -97,7 +97,7 @@ linked_path=$(printf 'test/Shared/GoldenFile.cs\0' | "$control" relevant-paths)
 config_path=$(printf '.editorconfig\0' | "$control" relevant-paths)
 [[ "$config_path" == .editorconfig ]]
 
-workflow="$repo_root/.github/workflows/cs2gs-pr-guard.yml"
+workflow="$repo_root/.github/workflows/build.yml"
 scope_root="$test_root/scope"
 scope_script="$scope_root/scope.sh"
 mkdir -p "$scope_root/build" "$scope_root/tmp"

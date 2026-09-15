@@ -7,6 +7,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -18,8 +21,8 @@ namespace GSharp.Compiler.Tests.Emit;
 /// with GS0113 (`T` doesn't exist). These tests exercise the new
 /// `let Name[T, ...] = func (...) ... { ... }` generic function-literal
 /// syntax end to end: parse, bind, emit, and run, for both single and
-/// multi type-parameter shapes, plus the capture-rejection diagnostic
-/// (GS0463) for a generic local function that reads an outer variable.
+/// multi type-parameter shapes, plus capture behavior for a generic local
+/// function that reads and mutates an outer variable.
 /// </summary>
 public class Issue1886GenericLocalFunctionEmitTests
 {
@@ -110,25 +113,99 @@ public class Issue1886GenericLocalFunctionEmitTests
     }
 
     [Fact]
-    public void GenericLocalFunction_CapturingOuterVariable_ReportsGS0463()
+    public void GenericLocalFunction_CapturingOuterVariable_SharesStateAcrossInstantiations()
     {
         var source = """
             package P
 
-            func Foo() {
-                let outer = 5
+            func Foo() int32 {
+                var count = 0
+                let Add[T] = func (value T) T {
+                    count = count + 1
+                    return value
+                }
+                Add(1)
+                Add("a")
+                return count
+            }
+            Console.WriteLine(Foo())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CapturingByRefLikeVariable_ReportsGS0219()
+    {
+        // A `ref struct` (Span[T]) capture is still rejected for a generic
+        // local function, same as for an ordinary closure — hoisting it into
+        // the closure's display class would violate the ref-struct's
+        // stack-only lifetime.
+        var source = """
+            package P
+
+            func Foo(s Span[int32]) {
                 let Bad[T] = func (a T) T {
-                    Console.WriteLine(outer)
+                    var y = s
                     return a
                 }
-                Console.WriteLine(Bad(1))
+                Bad(1)
             }
-            Foo()
             """;
 
         var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
         Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0463", stdout + stderr);
+        Assert.Contains("GS0219", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CapturingManagedPointer_ReportsGS9004()
+    {
+        // A managed pointer (*T / &x) capture is rejected — the closure may
+        // outlive the pointed-to stack variable.
+        var source = """
+            package P
+
+            func Foo() {
+                var x = 10
+                var p = &x
+                let Bad[T] = func (a T) T {
+                    var y = *p
+                    return a
+                }
+                Bad(1)
+            }
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS9004", stdout + stderr);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CapturingFixedPointer_ReportsGS9008()
+    {
+        // An unmanaged pointer bound by `fixed` is rejected — the pin is
+        // released when the enclosing `fixed` block exits.
+        var source = """
+            package P
+
+            unsafe func Foo() {
+                var buf = []uint8{uint8(1), uint8(2), uint8(3)}
+                fixed pD *uint8 = buf {
+                    let Bad[T] = func (a T) T {
+                        var y = pD[0]
+                        return a
+                    }
+                    Bad(1)
+                }
+            }
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS9008", stdout + stderr);
     }
 
     private static string CompileAndRun(string source)
@@ -191,6 +268,11 @@ public class Issue1886GenericLocalFunctionEmitTests
             Assert.True(
                 compileExit == 0,
                 $"gsc failed:\nstdout:\n{compileOut}\nstderr:\n{compileErr}");
+            IlVerifier.Verify(outPath);
+            if (source.Contains("let Add[T]", StringComparison.Ordinal))
+            {
+                AssertGenericLocalClosureShape(outPath);
+            }
 
             var psi = new ProcessStartInfo("dotnet")
             {
@@ -211,10 +293,28 @@ public class Issue1886GenericLocalFunctionEmitTests
             Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
             return (proc.ExitCode, stdout.ReplaceLineEndings(Environment.NewLine), stderr.ReplaceLineEndings(Environment.NewLine));
         }
+
         finally
         {
             try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
+    }
+
+    private static void AssertGenericLocalClosureShape(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new PEReader(stream);
+        var reader = pe.GetMetadataReader();
+        var closure = reader.TypeDefinitions
+            .Select(handle => (handle, definition: reader.GetTypeDefinition(handle)))
+            .FirstOrDefault(pair => reader.GetString(pair.definition.Name).StartsWith("<closure_Add_", StringComparison.Ordinal));
+        Assert.False(closure.handle.IsNil);
+        Assert.Empty(closure.definition.GetGenericParameters());
+
+        var invoke = closure.definition.GetMethods()
+            .Select(handle => reader.GetMethodDefinition(handle))
+            .Single(method => reader.GetString(method.Name) == "Invoke");
+        Assert.Single(invoke.GetGenericParameters());
     }
 
     private static readonly Lazy<IReadOnlyList<string>> BclReferences = new(() =>

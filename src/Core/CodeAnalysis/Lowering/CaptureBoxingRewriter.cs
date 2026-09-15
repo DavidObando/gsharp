@@ -496,6 +496,13 @@ internal static class CaptureBoxingRewriter
             this.RewriteStatement(node.Body);
             return node;
         }
+
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            this.sink.UnionWith(node.Literal.CapturedVariables);
+            this.RewriteStatement(node.Literal.Body);
+            return node;
+        }
     }
 
     private sealed class BoxingRewriter : BoundTreeRewriter
@@ -1038,6 +1045,14 @@ internal static class CaptureBoxingRewriter
                 node.FunctionType,
                 newBody,
                 newCaptured.ToImmutable());
+        }
+
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            var literal = (BoundFunctionLiteralExpression)this.RewriteFunctionLiteralExpression(node.Literal);
+            return ReferenceEquals(literal, node.Literal)
+                ? node
+                : new BoundLocalFunctionDeclaration(node.Syntax, literal);
         }
 
         // Issue #2329: a catch-clause variable, a select-arm receive-bind

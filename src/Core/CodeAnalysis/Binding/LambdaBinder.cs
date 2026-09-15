@@ -620,10 +620,6 @@ internal sealed class LambdaBinder
                 try
                 {
                     var literal = BindFunctionLiteralBody(literalSyntax, function, functionType);
-                    if (literal.CapturedVariables.Length > 0)
-                    {
-                        Diagnostics.ReportGenericLocalFunctionCannotCapture(syntax.Identifier.Location, name);
-                    }
 
                     // The emitted method owns only its own generic slots (#1940).
                     var offender = FindEnclosingTypeParameterReference(function, literal.Body, enclosingTypeParameters, out var requiresLexicalOwner);
