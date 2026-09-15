@@ -842,25 +842,54 @@ public sealed class ReferenceResolver : IDisposable
             return false;
         }
 
-        if (requireExternalVisibility && !IsExternallyResolvable(resolved))
+        if (!IsExternallyResolvable(resolved))
         {
-            // Issue #3445 follow-through: dependency assemblies can carry
-            // internal compatibility shims with the same full name as a public
-            // framework type. The raw index intentionally keeps first-writer
-            // precedence for infrastructure lookups, but user-written names
-            // must skip an inaccessible shim and continue to an accessible
-            // duplicate, matching C# reference resolution.
+            // Issue #3445 follow-through, issue #4233: dependency assemblies
+            // can carry internal compatibility shims with the same full name
+            // as a public framework type (e.g. Microsoft.TestPlatform.Utilities
+            // embeds a private System.Diagnostics.CodeAnalysis.NotNullWhenAttribute
+            // polyfill for its own netstandard2.0 build). The raw index
+            // intentionally keeps first-writer precedence for infrastructure
+            // lookups, so an ambiguous name can land on the inaccessible shim
+            // even when an accessible duplicate exists elsewhere in the
+            // reference set. Prefer that accessible duplicate unconditionally —
+            // both the user-facing (`requireExternalVisibility: true`) path and
+            // infrastructure's well-known-type lookups (`false`) must agree
+            // with what the binder already accepted, or gsc can emit a TypeRef
+            // the CLR refuses to load (MethodAccessException) despite a clean
+            // compile. `requireExternalVisibility` only controls the fallback
+            // when NO accessible duplicate exists: infrastructure still
+            // resolves genuinely internal well-known types (e.g.
+            // IsReadOnlyAttribute) by exact name; user-written names fail.
+            //
+            // Scan with `resolved.FullName` — the type's raw CLR metadata
+            // name — rather than the caller-supplied `fullName`. `fullName`
+            // may be a G#-canonical spelling (reserved segments gain `_`,
+            // nested types may use `.` instead of `+`) that `TryResolveTypeRaw`
+            // mapped through `emittedTypeNameIndex` to reach `resolved`;
+            // `Assembly.GetType(fullName)` on that canonical spelling finds no
+            // duplicate at all, silently skipping this whole preference.
+            string scanName = resolved.FullName ?? fullName;
             foreach (Assembly assembly in this.assemblies)
             {
-                Type? candidate = SafeGetType(assembly, fullName);
+                Type? candidate = SafeGetType(assembly, scanName);
                 if (candidate != null && IsExternallyResolvable(candidate))
                 {
+                    // The raw first-writer-wins result is already cached under
+                    // `fullName` (by TryResolveTypeRaw, above) — overwrite it
+                    // with the preferred accessible candidate so repeated
+                    // lookups hit the O(1) cache instead of re-scanning the
+                    // whole reference closure every time.
+                    resolveCache[fullName] = candidate;
                     type = candidate;
                     return true;
                 }
             }
 
-            return false;
+            if (requireExternalVisibility)
+            {
+                return false;
+            }
         }
 
         type = resolved;
