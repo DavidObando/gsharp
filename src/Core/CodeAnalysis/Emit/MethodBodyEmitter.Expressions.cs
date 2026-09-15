@@ -2438,8 +2438,18 @@ internal sealed partial class MethodBodyEmitter
         // `isinst` targets the underlying type T (reference nullability is not a
         // distinct CLR type, and a value-type `Nullable<T>` is never the isinst
         // operand). For value-type targets we additionally unbox.any to Nullable<T>.
+        //
+        // Issue #4241: a same-compilation user value type (struct/enum) has no
+        // `ClrType` at emit time, so the raw `ClrType is { IsValueType: true }`
+        // probe missed it and `unbox.any` was skipped entirely — the `isinst`
+        // result (a boxed-object reference or null) was left on the stack and
+        // stored straight into the `Nullable<T>`-typed spill slot, reinterpreting
+        // the pointer's bytes as the struct's fields. `IsAnyValueTypeNullable`
+        // additionally recognises symbolic user value types (and other
+        // ClrType-less value-type underlyings), matching the emit-side
+        // `GetElementTypeToken`/`NullableValueTypeUnwrapCollector` predicate.
         var isNullableValueTarget = node.TargetType is NullableTypeSymbol nts2
-            && nts2.UnderlyingType?.ClrType is { IsValueType: true };
+            && NullableLifting.IsAnyValueTypeNullable(nts2);
 
         var isinstTarget = node.TargetType is NullableTypeSymbol nts3
             ? nts3.UnderlyingType
