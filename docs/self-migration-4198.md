@@ -288,6 +288,7 @@ evidence="$(cd ../issue-4198-evidence && pwd)"
 git init --quiet "$evidence/runtime"
 printf '<Project />\n' > "$evidence/runtime/Directory.Build.props"
 printf '<Project />\n' > "$evidence/runtime/Directory.Build.targets"
+printf '<Project />\n' > "$evidence/runtime/Directory.Packages.props"
 export TMPDIR="$evidence/runtime"
 export TMP="$TMPDIR" TEMP="$TMPDIR"
 export SELFMIG_GATE_ROOT="$evidence/selfmig"
@@ -500,10 +501,14 @@ printf 'Controls passed; the full gate remains red (exit %s).\n' "$gate_exit"
 exit "$gate_exit"
 ```
 
-The project-local runtime scratch directory is initialized as an empty Git
-repository and contains neutral `<Project />` `Directory.Build.props` and
-`Directory.Build.targets`. This prevents standalone test fixtures from inheriting
-the enclosing repository's ignores or build settings. An initial suite attempt
+The recorded project-local runtime scratch directory was initialized as an empty
+Git repository with neutral `<Project />` `Directory.Build.props` and
+`Directory.Build.targets`. The reproduction recipe additionally supplies an empty
+`Directory.Packages.props` to stop NuGet's independent ancestor lookup; an empty
+file does not enable central package management. This hardens reproduction under
+a CPM-enabled parent without claiming such a parent affected the recorded runs.
+These boundaries keep standalone fixtures from inheriting enclosing repository
+ignores, build settings, or central package configuration. An initial suite attempt
 under the worktree's ignored `artifacts/` directory exposed that environmental
 problem; the mirror-ordering reproducer passed after isolation, without modifying
 tests or gates. The initial CLI build also required the solution's locked restore
