@@ -52,7 +52,7 @@ public class Issue4246ReverseEnumArrayCastTests
             let values = []Kind{Kind.First}
             var boxed object = values
             let back = (boxed as []Kind)!!
-            Console.WriteLine(back[0])
+            Console.WriteLine(int32(back[0]))
             Console.WriteLine(back.GetType().Name)
             """,
             new[] { "7", "Kind[]" },
@@ -67,8 +67,8 @@ public class Issue4246ReverseEnumArrayCastTests
             let values = []Kind{Kind.First, Kind.Second}
             var boxed object = values
             if boxed is []Kind arr {
-                Console.WriteLine(arr[0])
-                Console.WriteLine(arr[1])
+                Console.WriteLine(int32(arr[0]))
+                Console.WriteLine(int32(arr[1]))
             } else {
                 Console.WriteLine("no match")
             }
@@ -85,7 +85,7 @@ public class Issue4246ReverseEnumArrayCastTests
             let values = []Kind{Kind.First}
             var boxed object = values
             let back = []Kind(boxed)
-            Console.WriteLine(back[0])
+            Console.WriteLine(int32(back[0]))
             Console.WriteLine(back.GetType().Name)
             """,
             new[] { "7", "Kind[]" },
