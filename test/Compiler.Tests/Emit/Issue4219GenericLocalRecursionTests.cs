@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
@@ -15,8 +16,10 @@ namespace GSharp.Compiler.Tests.Emit;
 
 public class Issue4219GenericLocalRecursionTests
 {
-    [Fact]
-    public void GenericRegions_EmitStaticMethodDefsAndConstructedCalls()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GenericRegions_EmitStaticMethodDefsAndConstructedCalls(bool interfaceOwner)
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root != null && !File.Exists(Path.Combine(root.FullName, "samples", "GenericLocalRecursion.gs")))
@@ -30,12 +33,20 @@ public class Issue4219GenericLocalRecursionTests
         try
         {
             var assembly = Path.Combine(directory, "group.dll");
+            var source = Path.Combine(directory, "group.gs");
+            var text = File.ReadAllText(Path.Combine(root.FullName, "samples", "GenericLocalRecursion.gs"));
+            if (interfaceOwner)
+            {
+                text = text.Replace("class Example", "interface Example", StringComparison.Ordinal);
+            }
+
+            File.WriteAllText(source, text);
             Assert.Equal(0, Program.Main(new[]
             {
                 "/target:exe",
                 "/targetframework:net10.0",
                 "/out:" + assembly,
-                Path.Combine(root.FullName, "samples", "GenericLocalRecursion.gs"),
+                source,
             }));
             IlVerifier.Verify(assembly);
 
@@ -64,6 +75,11 @@ public class Issue4219GenericLocalRecursionTests
                 Assert.False(signature.IsInstance);
                 var owner = reader.GetTypeDefinition(method.GetDeclaringType());
                 Assert.Equal(name is "left" or "right", !owner.GetDeclaringType().IsNil);
+                if (!owner.GetDeclaringType().IsNil)
+                {
+                    var parent = reader.GetTypeDefinition(owner.GetDeclaringType());
+                    Assert.Equal(interfaceOwner, (parent.Attributes & TypeAttributes.Interface) != 0);
+                }
             }
 
             var constructedTargets = Enumerable.Range(1, reader.GetTableRowCount(TableIndex.MethodSpec))

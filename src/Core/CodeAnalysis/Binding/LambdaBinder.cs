@@ -632,8 +632,7 @@ internal sealed class LambdaBinder
                         Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
                     }
                     else if (function.LexicalEnclosingType is { } owner
-                        && (owner is InterfaceSymbol
-                            || (requiresLexicalOwner && !function.HasNonGenericStructLexicalOwner)))
+                        && requiresLexicalOwner && !function.HasNonGenericLexicalOwner)
                     {
                         Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(syntax.Identifier.Location, name, owner);
                     }
@@ -3131,12 +3130,24 @@ internal sealed class LambdaBinder
             {
                 switch (node)
                 {
-                    case BoundCallExpression call:
+                    case BoundCallExpression call when !call.IsConditionalElided:
                         CheckType((TypeSymbol?)call.StaticGenericOwnerType ?? call.StaticGenericInterfaceOwnerType ?? call.Function.StaticOwnerType);
                         RequiresLexicalOwner |= NeedsAccessDomain(call.Function.Accessibility);
                         break;
                     case BoundUserInstanceCallExpression call:
                         RequiresLexicalOwner |= NeedsAccessDomain(call.Method.Accessibility);
+                        break;
+                    case BoundConstructorCallExpression { SelectedConstructor: { } constructor }:
+                        RequiresLexicalOwner |= NeedsAccessDomain(constructor.Function.Accessibility);
+                        break;
+                    case BoundMethodGroupExpression { Function: { } method } group:
+                        CheckType(group.StaticOwnerType ?? method.StaticOwnerType);
+                        CheckTypeArguments(group.MethodTypeArguments);
+                        RequiresLexicalOwner |= NeedsAccessDomain(method.Accessibility);
+                        break;
+                    case BoundFunctionPointerFromMethodExpression pointer:
+                        CheckType(pointer.Method.StaticOwnerType);
+                        RequiresLexicalOwner |= NeedsAccessDomain(pointer.Method.Accessibility);
                         break;
                     case BoundFieldAccessExpression field:
                         CheckType((TypeSymbol?)field.StructType ?? field.InterfaceType);

@@ -45,6 +45,15 @@ internal static class AccessibilityChecker
         TypeSymbol? declaringType,
         FunctionSymbol? currentFunction)
     {
+        // A direct generic local cannot borrow a lexical access domain that
+        // its emitted host cannot preserve. Keep source lookup lexical, but
+        // apply the ordinary Program-host checks to every member reference.
+        if (currentFunction?.LocalDeclaration != null
+            && !currentFunction.HasNonGenericLexicalOwner)
+        {
+            currentFunction = null;
+        }
+
         if (declaringType is InterfaceSymbol declaringInterface)
         {
             if (accessibility != Accessibility.Protected

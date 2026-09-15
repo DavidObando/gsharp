@@ -256,18 +256,24 @@ public class Issue4219GenericLocalRecursionTests
     }
 
     [Theory]
-    [InlineData("return Secret()", "GS0468")]
-    [InlineData("return secret", "GS0468")]
-    [InlineData("return Holder[int32].Secret()", "GS0586")]
-    [InlineData("return Holder[int32].secret", "GS0586")]
+    [InlineData("return Public()", "GS0468")]
+    [InlineData("return Secret()", "GS0472")]
+    [InlineData("return secret", "GS0472")]
+    [InlineData("return Holder[int32].Secret()", "GS0472")]
+    [InlineData("return Holder[int32].secret", "GS0472")]
+    [InlineData("let value = Holder[int32]()\nreturn 42", "GS0472")]
+    [InlineData("let callback () -> int32 = Holder[int32].Secret\nreturn callback()", "GS0586")]
+    [InlineData("unsafe { let callback = &Holder[int32].Secret\nreturn callback() }", "GS0472")]
     [InlineData("let nested = func() int32 { return 42 }\nreturn nested()", "GS0586")]
     public void GenericOwnerDependencies_FailBeforeEmission(string body, string diagnostic)
     {
         var result = EmittedOracle.Evaluate($$"""
             class Holder[Outer] {
+                private init() { }
                 shared {
                     private var secret int32 = 42
                     private func Secret() int32 { return 42 }
+                    func Public() int32 { return 42 }
                     func Run() int32 {
                         let first[T] = func(x T) int32 { return second(x) }
                         let second[U] = func(x U) int32 { {{body}} }
@@ -284,6 +290,8 @@ public class Issue4219GenericLocalRecursionTests
     [Theory]
     [InlineData("return 42")]
     [InlineData("return Holder[int32].Public()")]
+    [InlineData("let value = Holder[int32]()\nreturn 42")]
+    [InlineData("let callback () -> int32 = Holder[int32].Public\nreturn callback()")]
     public void GenericOwnerIndependentHelpers_RemainSupported(string body)
     {
         var result = EmittedOracle.Evaluate($$"""
@@ -306,7 +314,7 @@ public class Issue4219GenericLocalRecursionTests
     [Theory]
     [InlineData("return Secret()")]
     [InlineData("return 42")]
-    public void InterfaceOwner_FailsBeforeUnplannedMethodEmission(string body)
+    public void NonGenericInterfaceOwner_PreservesPrivateAccessAndMethodPlanning(string body)
     {
         var result = EmittedOracle.Evaluate($$"""
             interface Holder {
@@ -321,7 +329,7 @@ public class Issue4219GenericLocalRecursionTests
             }
             Holder.Run()
             """);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0586");
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(42, result.Value);
     }
 }

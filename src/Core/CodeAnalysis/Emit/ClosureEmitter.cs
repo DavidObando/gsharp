@@ -214,7 +214,7 @@ internal sealed class ClosureEmitter
         {
             if (literal.Function.LocalDeclaration != null
                 && literal.CapturedVariables.IsEmpty
-                && literal.Function.HasNonGenericStructLexicalOwner
+                && literal.Function.HasNonGenericLexicalOwner
                 && literal.Function.LexicalEnclosingType is { } localEnclosing)
             {
                 // Keep direct generic MethodDef/MethodSpec identity while sharing the

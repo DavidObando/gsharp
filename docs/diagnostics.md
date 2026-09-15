@@ -317,6 +317,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
+| GS0586 | Error | Generic local function requires a lexical owner whose direct generic-local hosting is unsupported. | A generic local inside a generic class takes a closed private method group or creates a nested literal requiring that class's generic access domain. Use a named member or an owner-independent helper. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |

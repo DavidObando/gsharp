@@ -53,10 +53,14 @@ generic-call inference parity.
 An owner-independent helper in a generic class can still use only its own type
 parameters, including public accesses through a closed construction. Accesses
 that implicitly require enclosing generic slots are rejected with GS0468.
-Private/protected accesses or nested literals needing an unsupported generic
-lexical host are rejected with GS0586 instead of producing inaccessible or
-malformed IL. Direct generic locals in interface bodies also receive GS0586;
-their method-host planning is not part of this milestone. Non-generic nested
+The ordinary accessibility checker evaluates unsupported direct helpers in
+their emitted program-host domain, so private/protected member references
+(including constructors and function pointers) receive the existing access
+diagnostics. Late-resolved method groups and nested literals needing an
+unsupported generic lexical host receive GS0586 instead of producing
+inaccessible or malformed IL. Non-generic interface owners use the same nested
+static hosts as non-generic classes/structs, preserving private access and
+interface-accessor compatibility. Non-generic nested
 classes within generic enclosing types do not bypass these enclosing-generic-
 context restrictions.
 

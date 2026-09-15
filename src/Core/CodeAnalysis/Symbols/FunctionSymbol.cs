@@ -522,8 +522,9 @@ public sealed class FunctionSymbol : Symbol
     public bool IsPInvoke => PInvokeMetadata != null;
 
     /// <summary>Gets a value indicating whether a fieldless direct-call host needs no enclosing generic slots.</summary>
-    internal bool HasNonGenericStructLexicalOwner =>
-        LexicalEnclosingType is StructSymbol { TypeParameters.IsEmpty: true } owner
+    internal bool HasNonGenericLexicalOwner =>
+        LexicalEnclosingType is { } owner
+        && owner is StructSymbol { TypeParameters.IsEmpty: true } or InterfaceSymbol { TypeParameters.IsEmpty: true }
         && StructSymbol.CollectEnclosingTypeParameters(owner).IsEmpty;
 
     /// <summary>Gets or sets a value indicating whether this synthetic function represents a type's static-constructor context.</summary>
