@@ -534,6 +534,20 @@ internal sealed class TypeDefEmitter
                 classAttrs |= TypeAttributes.Abstract;
             }
 
+            // Issue #4234: a class hosting an `@ExtensionOwner`-routed
+            // extension method (see DeclarationBinder.Functions.cs) stands in
+            // for a migrated C# `static class` — ECMA-334 §13.6.9 requires an
+            // extension method's container be non-generic, abstract, and
+            // sealed for C#/F# callers (and gsc's own MemberLookup.IsStaticClass
+            // import check) to recognise it as an extension host, exactly how
+            // the package's `<Program>` is already always emitted. Force both
+            // bits unconditionally: a real extension-method container can
+            // never legally be open/subclassable in the first place.
+            if (HostsExtensionMethod(structSym))
+            {
+                classAttrs |= TypeAttributes.Sealed | TypeAttributes.Abstract;
+            }
+
             typeAttrs = classAttrs;
             if (structSym.IsAttributeClass)
             {
@@ -578,6 +592,27 @@ internal sealed class TypeDefEmitter
         }
 
         return (typeAttrs, baseType);
+    }
+
+    /// <summary>
+    /// Issue #4234: true when any of <paramref name="structSym"/>'s static
+    /// methods is an <c>@ExtensionOwner</c>-routed extension function (see
+    /// DeclarationBinder.Functions.cs) rather than an ordinary shared-block
+    /// static method.
+    /// </summary>
+    /// <param name="structSym">The class or struct to check.</param>
+    /// <returns><see langword="true"/> when it hosts at least one such extension function.</returns>
+    internal static bool HostsExtensionMethod(StructSymbol structSym)
+    {
+        foreach (var method in structSym.StaticMethods)
+        {
+            if (method.IsExtension && !method.IsInstanceMethod)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static TypeAttributes SuppressBeforeFieldInitForStruct(StructSymbol structSym, TypeAttributes typeAttrs)

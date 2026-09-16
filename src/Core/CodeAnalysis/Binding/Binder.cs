@@ -2437,6 +2437,22 @@ public sealed class Binder
                     continue;
                 }
 
+                // Issue #4234: an `@ExtensionOwner`-routed extension function
+                // (DeclarationBinder.Functions.cs) is added to
+                // `structSym.StaticMethods` purely so the emitter hosts its
+                // MethodDef here instead of the package's `<Program>` — it is
+                // still a genuine top-level declaration, registered (and
+                // already body-bound, with no `structSym` lowering context,
+                // which it does not need) through the ordinary
+                // `globalScope.Functions` loop above via
+                // `scope.TryDeclareExtensionFunction`. Binding it again here
+                // would both waste work and throw on the second
+                // `functionBodies.Add` for the same key.
+                if (method.IsExtension)
+                {
+                    continue;
+                }
+
                 // ADR-0086 / issue #1203: a bodyless `shared`-block method (a
                 // static `@DllImport` P/Invoke extern) has no managed body to
                 // bind. Register an empty synthetic block so the emitter still

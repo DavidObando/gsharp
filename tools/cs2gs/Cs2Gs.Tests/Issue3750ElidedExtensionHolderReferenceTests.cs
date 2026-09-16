@@ -15,12 +15,22 @@ namespace Cs2Gs.Tests;
 
 /// <summary>
 /// Issue #3750: a C# <c>static class</c> holding only extension methods is
-/// lowered to top-level receiver-clause funcs and the holder itself is elided
-/// (ADR-0115 §B.5) — but a surviving reference to the holder BY NAME then
-/// names a type that no longer exists (<c>GS0113</c>), and where the result
-/// feeds a member lookup it cascades into <c>GS0159</c>. The lifted funcs
-/// carry the holder's behaviour but not its identity, so a holder whose
-/// identity is still observed must survive the lowering.
+/// lowered to top-level receiver-clause funcs; originally the holder itself
+/// was elided (ADR-0115 §B.5) unless a surviving reference to it BY NAME
+/// would otherwise name a type that no longer exists (<c>GS0113</c>, or
+/// <c>GS0159</c> where the result feeds a member lookup).
+///
+/// Issue #4234 removed the elision entirely: the lifted funcs carried the
+/// holder's behaviour but not its CLR owner-type identity, which a
+/// self-hosted build of the SAME method still needs (reflection tests,
+/// analyzer owner-specific recognition key off the exact declaring type) —
+/// a need the single-file view here can never rule out. The holder now
+/// always survives, empty, and the lifted func carries an
+/// <c>@ExtensionOwner(typeof(T))</c> back-reference so gsc hosts its
+/// MethodDef on the holder's TypeDef instead of the package's
+/// <c>&lt;Program&gt;</c>. The class name kept its original #3750 framing
+/// (surviving-reference cases) since those assertions are still valid; the
+/// elision-still-happens tests below were updated to assert survival instead.
 /// </summary>
 public class Issue3750ElidedExtensionHolderReferenceTests
 {
@@ -140,11 +150,17 @@ public sealed class Consumer
     }
 
     /// <summary>
-    /// The elision itself is unchanged for the overwhelmingly common case: a
-    /// holder nothing names keeps producing extension-only output.
+    /// Issue #4234: the holder is no longer elided even in the overwhelmingly
+    /// common case where nothing in THIS translation unit names it by
+    /// identity. A self-hosted build of the migrated method still needs the
+    /// holder's CLR TypeDef to give the extension its native owner-type
+    /// identity back (reflection tests, analyzer owner-specific recognition)
+    /// — a concern the single-file view here cannot rule out — so the holder
+    /// survives empty and the lifted func carries an
+    /// <c>@ExtensionOwner(typeof(T))</c> back-reference to it.
     /// </summary>
     [Fact]
-    public void UnreferencedHolder_IsStillElided()
+    public void UnreferencedHolder_StillSurvivesForOwnerIdentity()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
             ("Extensions.cs", @"
@@ -164,15 +180,19 @@ public sealed class Consumer
 }"));
 
         Assert.Contains("func (source string) Describe(", printed["Extensions.cs"]);
-        Assert.DoesNotContain("QuietExtensions", printed["Extensions.cs"]);
+        Assert.Contains("class QuietExtensions {\n}", printed["Extensions.cs"]);
+        Assert.Contains("@ExtensionOwner(typeof(QuietExtensions))", printed["Extensions.cs"]);
     }
 
     /// <summary>
-    /// A static-form call through the holder is already rewritten to the
-    /// receiver form, so it names no type and does not keep the holder alive.
+    /// Issue #4234: a static-form call through the holder is already
+    /// rewritten to the receiver form, so nothing in <c>Use.cs</c> names the
+    /// holder — but <c>Extensions.cs</c> still keeps its own declaration for
+    /// the same owner-identity reason as
+    /// <see cref="UnreferencedHolder_StillSurvivesForOwnerIdentity"/>.
     /// </summary>
     [Fact]
-    public void StaticFormCallThroughHolder_DoesNotKeepHolderDeclaration()
+    public void StaticFormCallThroughHolder_StillKeepsHolderDeclarationForOwnerIdentity()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
             ("Extensions.cs", @"
@@ -191,17 +211,20 @@ public sealed class Consumer
     public string Call() => StaticFormExtensions.Describe(""x"", 200);
 }"));
 
-        Assert.DoesNotContain("StaticFormExtensions", printed["Extensions.cs"]);
+        Assert.Contains("class StaticFormExtensions {\n}", printed["Extensions.cs"]);
         Assert.DoesNotContain("StaticFormExtensions", printed["Use.cs"]);
         Assert.Contains(@"""x"".Describe(200)", printed["Use.cs"]);
     }
 
     /// <summary>
-    /// <c>nameof(Holder)</c> constant-folds to a string literal before the
-    /// printer sees it, so it never names a type and never dangles.
+    /// Issue #4234: <c>nameof(Holder)</c> constant-folds to a string literal
+    /// before the printer sees it, so <c>Use.cs</c> never names the holder —
+    /// but <c>Extensions.cs</c> still keeps its own declaration for the same
+    /// owner-identity reason as
+    /// <see cref="UnreferencedHolder_StillSurvivesForOwnerIdentity"/>.
     /// </summary>
     [Fact]
-    public void NameOfHolder_FoldsToLiteralAndLeavesHolderElided()
+    public void NameOfHolder_FoldsToLiteralButHolderStillSurvives()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
             ("Extensions.cs", @"
@@ -219,16 +242,20 @@ public sealed class Consumer
     public string Name() => nameof(NameOfExtensions);
 }"));
 
-        Assert.DoesNotContain("class NameOfExtensions", printed["Extensions.cs"]);
+        Assert.Contains("class NameOfExtensions {\n}", printed["Extensions.cs"]);
         Assert.Contains(@"""NameOfExtensions""", printed["Use.cs"]);
     }
 
     /// <summary>
-    /// A <c>typeof</c> that lives in a file this translation does not emit
-    /// cannot keep the holder alive — that file produces no G# output.
+    /// Issue #4234: a <c>typeof</c> reference living in a file this
+    /// translation does not emit cannot itself keep the holder alive — but
+    /// the holder now survives regardless, for the same owner-identity
+    /// reason as <see cref="UnreferencedHolder_StillSurvivesForOwnerIdentity"/>,
+    /// so this no longer distinguishes an excluded-file reference from no
+    /// reference at all.
     /// </summary>
     [Fact]
-    public void TypeOfInExcludedFile_LeavesHolderElided()
+    public void TypeOfInExcludedFile_HolderStillSurvives()
     {
         IReadOnlyDictionary<string, string> printed = TranslateFiles(
             new CSharpToGSharpTranslator(retainedFilePaths: new[] { "Extensions.cs" }),
@@ -250,7 +277,7 @@ public sealed class Consumer
     public string Location() => typeof(ExcludedReferenceExtensions).Assembly.Location;
 }"));
 
-        Assert.DoesNotContain("ExcludedReferenceExtensions", printed["Extensions.cs"]);
+        Assert.Contains("class ExcludedReferenceExtensions {\n}", printed["Extensions.cs"]);
     }
 
     private static IReadOnlyDictionary<string, string> TranslateFiles(

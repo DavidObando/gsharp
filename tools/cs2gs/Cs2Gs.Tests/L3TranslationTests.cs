@@ -351,13 +351,18 @@ namespace Demo
     }
 
     /// <summary>
-    /// ADR-0115 §B.5: a C# extension method on a <c>static class</c> is lifted to
-    /// a top-level receiver-clause <c>func</c>, and a static class whose every
-    /// member is lifted is dropped entirely (a receiver-clause func binds only at
-    /// top level).
+    /// ADR-0115 §B.5, updated by issue #4234: a C# extension method on a
+    /// <c>static class</c> is lifted to a top-level receiver-clause
+    /// <c>func</c> (a receiver-clause func binds only at top level), but the
+    /// static class is no longer dropped — it survives, empty, tagged with
+    /// an <c>@ExtensionOwner(typeof(T))</c> back-reference on the lifted
+    /// func, so gsc can host the self-hosted MethodDef on the class's own
+    /// TypeDef instead of the package's <c>&lt;Program&gt;</c>. This keeps a
+    /// migrated runtime's metadata shape (owner-type identity for reflection
+    /// and analyzer checks) matching the native C# assembly's.
     /// </summary>
     [Fact]
-    public void ExtensionMethod_LiftsToTopLevelAndDropsStaticClass()
+    public void ExtensionMethod_LiftsToTopLevelAndKeepsStaticClassForOwnerIdentity()
     {
         string printed = TranslateUnit(@"
 namespace Demo
@@ -368,8 +373,9 @@ namespace Demo
     }
 }");
 
+        Assert.Contains("class StringExtras {\n}", printed);
+        Assert.Contains("@ExtensionOwner(typeof(StringExtras))", printed);
         Assert.Contains("func (value string) WordLen() int32 -> value.Length", printed);
-        Assert.DoesNotContain("class StringExtras", printed);
         Assert.DoesNotContain("shared {", printed);
     }
 
