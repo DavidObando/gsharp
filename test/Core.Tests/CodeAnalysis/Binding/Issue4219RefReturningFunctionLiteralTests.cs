@@ -112,6 +112,52 @@ public class Issue4219RefReturningFunctionLiteralTests
     }
 
     [Fact]
+    public void TrailingExpressionBody_ReportsNotAllPathsReturn_NotACrash()
+    {
+        // Regression pin: #893's implicit-trailing-expression-as-return
+        // rewrite (SynthesizeFunctionLiteralTrailingReturn) always
+        // synthesizes a VALUE return; applying it to a ref-returning
+        // literal produced a ref/value mismatch the emitter could not
+        // reconcile (confirmed by direct repro: internal-error crash before
+        // this fix). The rewrite is now skipped for a ref-returning
+        // literal, so a bare trailing expression (no explicit `return ref`)
+        // correctly reports the ordinary not-every-path-returns diagnostic
+        // instead of crashing.
+        var result = EmittedOracle.Evaluate("""
+            func Run() int32 {
+                let at = func(xs []int32) ref int32 {
+                    xs[0]
+                }
+                var values = []int32{10}
+                return at(values)
+            }
+            Run()
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0100");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void CapturedOuterVariable_ReturnedByRef_StillReportsGS0254()
+    {
+        // The existing escape checker treats a captured outer variable the
+        // same conservative way it treats a function-local one — this is
+        // not new leniency introduced for the literal case.
+        var result = EmittedOracle.Evaluate("""
+            func Run() int32 {
+                var x = 1
+                let f = func() ref int32 { return ref x }
+                var ref a = f()
+                a = 42
+                return x
+            }
+            Run()
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0254");
+    }
+
+    [Fact]
     public void ConvertedToExplicitDelegateType_ReportsGS0588_DeferredNotCrashed()
     {
         var result = EmittedOracle.Evaluate("""

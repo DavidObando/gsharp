@@ -363,13 +363,19 @@ internal sealed partial class StatementBinder
     /// (see the minimum-run-length gate in <see cref="BindBlockStatements"/>)
     /// opts into forward visibility — that plural shape is unambiguously a
     /// deliberate group of named local functions, not an ordinary single
-    /// closure-valued local.
+    /// closure-valued local. An explicit outer type clause
+    /// (<c>let f (int32) -> int32 = func ...</c>) is also excluded: the
+    /// direct-call path's signature comes entirely from the LITERAL (its own
+    /// parameters/return type), so a declared outer type would be silently
+    /// ignored instead of type-checked/converted against — the old path
+    /// still validates it via <c>ConversionClassifier.BindConversion</c>.
     /// </summary>
     private static bool IsNonGenericLocalFunctionLiteralDeclaration(StatementSyntax syntax)
         => syntax is VariableDeclarationSyntax
         {
             Keyword.Kind: SyntaxKind.LetKeyword,
             TypeParameterList: null,
+            TypeClause: null,
             Initializer: FunctionLiteralExpressionSyntax { IsRefReturn: false },
             HasRefKindModifier: false,
             IsAsyncLet: false,
@@ -396,6 +402,7 @@ internal sealed partial class StatementBinder
         {
             Keyword.Kind: SyntaxKind.LetKeyword,
             TypeParameterList: null,
+            TypeClause: null,
             Initializer: FunctionLiteralExpressionSyntax { IsRefReturn: true },
             HasRefKindModifier: false,
             IsAsyncLet: false,

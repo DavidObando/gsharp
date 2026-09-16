@@ -555,7 +555,22 @@ internal sealed class LambdaBinder
         // `return` so the literal actually returns its value. Void literals keep the
         // existing statement-body handling (no implicit return) so the #889
         // Action-style void-delegate path is preserved.
-        body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, synthetic.Type);
+        //
+        // Issue #4219 (umbrella remainder): a `ref`-returning literal is
+        // skipped here — the synthesized `BoundReturnStatement` is always a
+        // VALUE return, so rewriting a trailing expression into one for a
+        // by-ref-returning function produced a ref/value mismatch the
+        // emitter cannot reconcile (confirmed by direct repro: silent
+        // internal-error crash, not a diagnostic). A ref-returning literal
+        // must spell its return explicitly (`return ref expr`); leaving the
+        // trailing expression as a plain statement instead means
+        // CheckAllPathsReturn below reports the ordinary
+        // not-every-path-returns diagnostic for it.
+        if (synthetic.ReturnRefKind == RefKind.None)
+        {
+            body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, synthetic.Type);
+        }
+
         CheckAllPathsReturn((BoundBlockStatement)body, synthetic.Type, syntax.Body.Location);
 
         var captured = CollectCapturedVariables(body, synthetic);

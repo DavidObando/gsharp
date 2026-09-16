@@ -175,6 +175,47 @@ public class Issue4219NonGenericLocalRecursionTests
     }
 
     [Fact]
+    public void OuterNameShadowedBySiblingInSameRun_ReportsAmbiguous()
+    {
+        // A group member's forward reference resolves the sibling name
+        // BEFORE the sequential declaration that would otherwise shadow the
+        // outer same-named function — matching the pre-existing generic-
+        // group behavior (SameSignatureInOuterScope_RemainsAmbiguous in
+        // Issue4219GenericLocalRecursionTests) rather than silently picking
+        // one or the other.
+        var result = EmittedOracle.Evaluate("""
+            func helper(x int32) int32 { return 100 }
+            func Run() int32 {
+                let a = func(x int32) int32 { return helper(x) }
+                let helper = func(x int32) int32 { return 7 }
+                return a(1)
+            }
+            Run()
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0266");
+    }
+
+    [Fact]
+    public void ExplicitOuterTypeClause_FallsBackToOrdinaryDelegatePath_AndTypeChecks()
+    {
+        // A `let` with an explicit outer type clause is excluded from the
+        // direct-call group (IsNonGenericLocalFunctionLiteralDeclaration
+        // requires TypeClause: null) precisely because the group's
+        // signature comes entirely from the literal itself — a declared
+        // outer type would otherwise be silently ignored instead of type-
+        // checked. Falling back to the ordinary path means a genuine
+        // mismatch is still caught.
+        var result = EmittedOracle.Evaluate("""
+            func Run() int32 {
+                let f (int32) -> string = func(x int32) int32 { return x }
+                return 0
+            }
+            Run()
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0155");
+    }
+
+    [Fact]
     public void MixedGenericThenNonGenericSibling_ForwardReference_StillGS0130()
     {
         // Deliberately out of scope here (matches the existing generic/non-
