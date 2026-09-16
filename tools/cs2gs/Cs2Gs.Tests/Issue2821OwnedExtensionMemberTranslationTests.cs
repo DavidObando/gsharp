@@ -145,7 +145,7 @@ public static class HostExtensions
 }"));
 
         Assert.DoesNotContain("func M(value string)", printed["Host.cs"]);
-        Assert.Contains("func extension (host Host) M(value string)", printed["Extensions.cs"]);
+        Assert.Contains("func (host Host) M(value string)", printed["Extensions.cs"]);
 
         ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics =
             BindDiagnostics(printed.Values);
@@ -194,7 +194,7 @@ public static class User
 
         Assert.Contains("func M(value IA)", printed["Host.cs"]);
         Assert.DoesNotContain("func M(value IB)", printed["Host.cs"]);
-        Assert.Contains("func extension (host Host) M(value IB)", printed["Extensions.cs"]);
+        Assert.Contains("func (host Host) M(value IB)", printed["Extensions.cs"]);
         Assert.Contains("host.M(value)", printed["User.cs"]);
     }
 
@@ -278,8 +278,8 @@ public static class User
         Assert.Contains("class SecondExtensions", combined);
         Assert.Contains("func Describe(host Host, value object)", printed["FirstExtensions.cs"]);
         Assert.Contains("func Describe(host Host, value string)", printed["SecondExtensions.cs"]);
-        Assert.Contains("func extension (host Host) Describe(value object)", printed["FirstExtensions.cs"]);
-        Assert.Contains("func extension (host Host) Describe(value string)", printed["SecondExtensions.cs"]);
+        Assert.Contains("func (host Host) Describe(value object)", printed["FirstExtensions.cs"]);
+        Assert.Contains("func (host Host) Describe(value string)", printed["SecondExtensions.cs"]);
         Assert.DoesNotContain("func Describe(value ", printed["Host.cs"]);
         Assert.Contains("FirstExtensions.Describe(host, value)", printed["User.cs"]);
         Assert.Contains("SecondExtensions.Describe(host, value)", printed["User.cs"]);
@@ -408,8 +408,8 @@ public static class User
         string printedConsumer = TranslateProject(consumer, siblings);
         string compactConsumer = Compact(printedConsumer);
 
-        Assert.Contains("func extension (host Host) Describe(value object)", printedProducer);
-        Assert.Contains("func extension (host Host) Describe(value string)", printedProducer);
+        Assert.Contains("func (host Host) Describe(value object)", printedProducer);
+        Assert.Contains("func (host Host) Describe(value string)", printedProducer);
         Assert.Contains("SecondExtensions.Describe(host, value)", compactConsumer);
         Assert.Contains("host.Describe(value)", compactConsumer);
         Assert.Contains("host.Describe", compactConsumer);
@@ -999,7 +999,7 @@ public static class BoxExtensions
     public static T Read<T>(this Box<T> box) => box.Value;
 }"));
 
-        Assert.Contains("func extension (box Box[T]) Read[T]()", printed["Extensions.cs"]);
+        Assert.Contains("func (box Box[T]) Read[T]()", printed["Extensions.cs"]);
         Assert.DoesNotContain("func Read", printed["Box.cs"]);
     }
 
@@ -1022,7 +1022,7 @@ public static class BoxExtensions
     public static int Read(this Box<int> box) => box.Value;
 }"));
 
-        Assert.Contains("func extension (box Box[int32]) Read()", printed["Extensions.cs"]);
+        Assert.Contains("func (box Box[int32]) Read()", printed["Extensions.cs"]);
         Assert.DoesNotContain("func Read", printed["Box.cs"]);
     }
 

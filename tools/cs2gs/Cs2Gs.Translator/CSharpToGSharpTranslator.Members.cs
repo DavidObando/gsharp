@@ -584,43 +584,11 @@ public sealed partial class CSharpToGSharpTranslator
                 !this.ShouldPromoteToNullableReference(receiver);
         }
 
-        private static bool RequiresExplicitExtensionReceiver(IMethodSymbol method)
-        {
-            IMethodSymbol original = method?.ReducedFrom ?? method;
-            return RequiresExplicitExtensionReceiver(
-                original?.Parameters.FirstOrDefault()?.Type,
-                original);
-        }
-
-        private static bool RequiresExplicitExtensionReceiver(
-            ITypeSymbol receiverType,
-            ISymbol extensionOwner)
-        {
-            if (receiverType is INamedTypeSymbol nullable
-                && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
-                && nullable.TypeArguments.Length == 1)
-            {
-                receiverType = nullable.TypeArguments[0];
-            }
-
-            if (receiverType?.TypeKind == TypeKind.Enum)
-            {
-                return true;
-            }
-
-            if (receiverType is not INamedTypeSymbol named || extensionOwner == null)
-            {
-                return false;
-            }
-
-            INamedTypeSymbol definition = named.OriginalDefinition;
-            return SymbolEqualityComparer.Default.Equals(
-                    definition.ContainingAssembly,
-                    extensionOwner.ContainingAssembly) &&
-                SymbolEqualityComparer.Default.Equals(
-                    definition.ContainingNamespace,
-                    extensionOwner.ContainingNamespace);
-        }
+        // RequiresExplicitExtensionReceiver (issue #3357) retired by
+        // ADR-0182: every receiver clause prints identically now, whether
+        // the receiver is an enum, an owned type, or an ordinary
+        // cross-package/CLR type, so there is no longer a translation-time
+        // decision to make here.
 
         /// <summary>
         /// Issue #1879: translates a C# 14 <c>extension(T x) { ... }</c> /
@@ -712,10 +680,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 receiver = new Receiver(
                     this.EmittedName(receiverSymbol, receiverParameter.Identifier.ValueText),
-                    receiverType,
-                    isExplicitExtension: RequiresExplicitExtensionReceiver(
-                        receiverSymbol?.Type,
-                        receiverSymbol?.ContainingSymbol));
+                    receiverType);
             }
 
             foreach (MemberDeclarationSyntax member in node.Members)
@@ -1343,10 +1308,12 @@ public sealed partial class CSharpToGSharpTranslator
                     (forceExtensionReceiver ||
                         !this.IsStaticExtensionHelper(symbol)))
                 {
-                    // Issue #3357: enum receivers and source-owned receivers
-                    // that cannot become real in-body members use the explicit
-                    // extension receiver form. It preserves member-call syntax
-                    // without making the declaration an owned instance method.
+                    // Issue #3357 / ADR-0182: enum receivers and source-owned
+                    // receivers that cannot become real in-body members use
+                    // the ordinary receiver-clause form, which is
+                    // unconditionally an extension now — it preserves
+                    // member-call syntax without making the declaration an
+                    // owned instance method, with no marker needed.
                     // Issue #1072/#1535: an extension receiver that is null-compared
                     // or null-assigned in the body is really nullable (common in
                     // nullable-oblivious sources, e.g. `this object o => o == null`),
@@ -1357,8 +1324,7 @@ public sealed partial class CSharpToGSharpTranslator
                     receiverType = this.PromoteIfUsedAsNullable(receiverType, self);
                     receiver = new Receiver(
                         this.EmittedName(self, self.Name),
-                        receiverType,
-                        isExplicitExtension: RequiresExplicitExtensionReceiver(symbol));
+                        receiverType);
                     skipFirstParameter = true;
                     isStatic = false;
                 }

@@ -1,8 +1,14 @@
 # ADR-0165: Explicit extension receiver clauses
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR-0182
 - **Date**: 2026-08-12
 - **Related**: ADR-0019, ADR-0024, ADR-0079, ADR-0084, ADR-0115; issues #2821, #3357
+
+> **2026-09-15**: [ADR-0182](0182-receiver-clause-is-always-extension.md) makes
+> every receiver clause an extension unconditionally, retiring the
+> `extension` contextual keyword this ADR introduced. This document is kept
+> for historical accuracy; the `func extension (...)` spelling it describes
+> is a retired spelling (`GS0587`) as of ADR-0182.
 
 ## Context
 

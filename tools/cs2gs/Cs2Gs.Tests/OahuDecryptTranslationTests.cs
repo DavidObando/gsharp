@@ -739,7 +739,7 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("func extension (channels ChannelGroups) ChannelCount() int32", printed);
+        Assert.Contains("func (channels ChannelGroups) ChannelCount() int32", printed);
         Assert.Contains("g.ChannelCount()", printed);
         Assert.DoesNotContain("Ac4Extensions.ChannelCount(g)", printed);
     }

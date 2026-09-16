@@ -78,7 +78,7 @@ public class Issue1376AwaitVoidReceiverAsyncEmitTests
     }
 
     [Fact]
-    public void AwaitExplicitOwnedReceiverAsyncFunc_EmitsAndRuns()
+    public void AwaitOwnedReceiverAsyncFunc_EmitsAndRuns()
     {
         var source = """
             package P
@@ -89,7 +89,7 @@ public class Issue1376AwaitVoidReceiverAsyncEmitTests
                 var Name string
             }
 
-            async func extension (worker Worker) PrintAsync() {
+            async func (worker Worker) PrintAsync() {
                 await Task.Delay(1)
                 Console.WriteLine(worker.Name)
             }

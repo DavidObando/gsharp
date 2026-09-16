@@ -30,13 +30,8 @@ public sealed partial class DiagnosticBag
     public void ReportSymbolAlreadyDeclared(TextLocation location, string name)
     => Report(location, DiagnosticDescriptors.SymbolAlreadyDeclared, name);
 
-    /// <summary>
-    /// Reports that a same-package receiver declaration targets a non-aggregate type.
-    /// </summary>
-    /// <param name="location">The text location where the receiver type was found.</param>
-    /// <param name="receiverTypeName">The receiver type name.</param>
-    public void ReportMethodReceiverMustBeStructOrClass(TextLocation location, string receiverTypeName)
-    => Report(location, DiagnosticDescriptors.MethodReceiverMustBeStructOrClass, receiverTypeName);
+    // ReportMethodReceiverMustBeStructOrClass (GS0103) retired by ADR-0182;
+    // see DiagnosticDescriptors.cs.
 
     /// <summary>
     /// Reports that a <c>data class</c>/<c>data struct</c> was declared with
@@ -603,20 +598,8 @@ public sealed partial class DiagnosticBag
     public void ReportInitDuplicatesPrimaryCtor(TextLocation location, string className, string signature)
     => Report(location, DiagnosticDescriptors.InitDuplicatesPrimaryCtor, signature, className);
 
-    /// <summary>
-    /// ADR-0079 / issue #719: GS0314 — a receiver-clause method targets a
-    /// type declared in the same package (the package "owns" the receiver
-    /// type). Owned-type instance methods should be declared inside the
-    /// type body; the receiver-clause form is reserved for non-owned types
-    /// (imported CLR types or types from referenced packages). Soft warning
-    /// during the one-release grace period; future tightening to error is
-    /// tracked separately.
-    /// </summary>
-    /// <param name="location">The source location of the receiver type clause.</param>
-    /// <param name="receiverTypeName">The owned receiver type name.</param>
-    /// <param name="methodName">The receiver method's name.</param>
-    public void ReportReceiverClauseOnOwnedType(TextLocation location, string receiverTypeName, string methodName)
-    => Report(location, DiagnosticDescriptors.ReceiverClauseOnOwnedType, methodName, receiverTypeName);
+    // ReportReceiverClauseOnOwnedType (GS0314) retired by ADR-0182; see
+    // DiagnosticDescriptors.cs.
 
     /// <summary>
     /// ADR-0085 / issue #726: GS0318 — an aggregate implements two unrelated

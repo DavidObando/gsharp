@@ -86,7 +86,7 @@ When a compatible user `ToString` is present:
 
 **Deferred/out of scope, not fixed by this amendment:**
 
-- A receiver-clause (`func (p T) ToString() string`) declaration only reaches this new check when `T` is in the *same* package (an "owned type" receiver clause, which already emits a GS0314 warning steering users toward the in-body form). A receiver-clause `ToString` on a genuinely cross-package/imported data type is bound as an ordinary extension function and never reaches the data-type reservation logic at all — consistent with G#'s extension-function design (extension functions cannot participate in virtual dispatch), not a defect.
+- A receiver-clause (`func (p T) ToString() string`) declaration never reaches this new check at all, for an owned data type or an imported one alike: [ADR-0182](0182-receiver-clause-is-always-extension.md) (2026-09-15) made a receiver clause unconditionally an extension function, regardless of whether the package owns `T`, retiring the GS0314 warning this paragraph originally described for the owned case. Only the in-body form reaches the reservation logic now — consistent with G#'s extension-function design (extension functions cannot participate in virtual dispatch), not a defect.
 - Plain (non-`data`) classes' hand-written `ToString` overrides still always get a new vtable slot unless the G# `override` keyword resolves against a matching base declaration; this pre-existing limitation is unrelated to data types and is not addressed here.
 
 ## Amendment 2026-07-20: zero-field `data class`/`data struct` support (#2363)

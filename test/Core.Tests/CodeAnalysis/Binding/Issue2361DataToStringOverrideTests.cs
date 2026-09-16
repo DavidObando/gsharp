@@ -78,12 +78,11 @@ data struct Point {
     [Fact]
     public void DataClass_CompatibleToStringOverride_ReceiverClause_NoBlockingDiagnostics()
     {
-        // ADR-0079 (GS0314) warns when a receiver-clause method targets a
-        // same-package ("owned") type — the canonical form is the in-body
-        // declaration — but it is only a Warning, not a blocking error, so
-        // the receiver-clause code path (DeclarationBinder's
-        // `methodReceiverStruct != null` branch) is still reachable and must
-        // still apply the #2361 ToString exception (not GS0232/GS0487).
+        // ADR-0182: a receiver clause on an owned type is unconditionally an
+        // extension now, so it never reaches the synthesized-member
+        // collision check at all (that check only fires for the in-body
+        // form) — this is simply an ordinary extension method named
+        // ToString, distinct from the synthesized instance member.
         var source = @"
 open data class Point(X int32, Y int32) {
 }
@@ -116,8 +115,35 @@ func (p Point) ToString() string {
     }
 
     [Fact]
-    public void DataStruct_ToStringWithParameter_ReceiverClause_ReportsGS0487()
+    public void DataStruct_ToStringWithParameter_InBody_ReportsGS0487()
     {
+        // ADR-0182: a receiver clause is unconditionally an extension now,
+        // so an incompatible-shape ToString written that way is just an
+        // ordinary (unrelated) extension method, not a conflict — the
+        // in-body form is the only spelling that can collide with the
+        // synthesized ToString.
+        var source = @"
+data struct Point {
+    var X int32
+    var Y int32
+
+    func ToString(format string) string {
+        return format
+    }
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0487");
+    }
+
+    [Fact]
+    public void DataStruct_ToStringWithParameter_ReceiverClause_IsOrdinaryExtension_NoDiagnostics()
+    {
+        // ADR-0182: the receiver-clause spelling of this same shape no
+        // longer collides with the synthesized ToString at all — it is an
+        // ordinary extension method named ToString, distinct from the
+        // synthesized instance member of the same name.
         var source = @"
 data struct Point {
     var X int32
@@ -130,7 +156,7 @@ func (p Point) ToString(format string) string {
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0487");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0487");
     }
 
     [Fact]

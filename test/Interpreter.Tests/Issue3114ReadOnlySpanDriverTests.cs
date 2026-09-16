@@ -261,14 +261,16 @@ public class Issue3114ReadOnlySpanDriverTests
     [MemberData(nameof(Drivers))]
     public void UserRefStructInterpolation_UsesDeclaredToStringAcrossFileDrivers(Driver driver)
     {
+        // ADR-0182 / issue #4240: a receiver-clause `ToString` on an owned
+        // ref struct used to bind as an instance method (with a soft GS0314
+        // warning steering authors to the in-body form) and was therefore
+        // still usable by interpolation. It is unconditionally an extension
+        // now — a real ToString override, and the only spelling
+        // interpolation can use, requires the in-body form; see
+        // ReceiverClauseToString_IsAnOrdinaryExtension_NotUsableByInterpolation
+        // below for that (changed) behavior.
         const string Source = """
             import System
-
-            ref struct ReceiverToken {
-                var value int32
-            }
-
-            func (token ReceiverToken) ToString() string -> String.Format("Receiver#{0}", token.value)
 
             ref struct InBodyToken {
                 var value int32
@@ -276,13 +278,11 @@ public class Issue3114ReadOnlySpanDriverTests
             }
 
             func Main() {
-                var receiver ReceiverToken = ReceiverToken{value: 42}
                 var inBody InBodyToken = InBodyToken{value: 43}
-                Console.WriteLine("receiver=${receiver}")
                 Console.WriteLine("inbody=${inBody}")
             }
             """;
-        string Expected = $"receiver=Receiver#42{Environment.NewLine}inbody=InBody#43{Environment.NewLine}";
+        string Expected = $"inbody=InBody#43{Environment.NewLine}";
         var root = Path.Combine(Environment.CurrentDirectory, $".issue3220-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         Assert.Empty(Directory.EnumerateFileSystemEntries(root));
@@ -305,22 +305,54 @@ public class Issue3114ReadOnlySpanDriverTests
             if (driver == Driver.CompilerEmitToMemory)
             {
                 Assert.StartsWith(Expected, result.StandardOutput, StringComparison.Ordinal);
-                Assert.Contains("warning GS0314:", result.StandardOutput, StringComparison.Ordinal);
                 Assert.EndsWith($"Success.{Environment.NewLine}", result.StandardOutput, StringComparison.Ordinal);
                 Assert.Equal(string.Empty, result.StandardError);
             }
             else
             {
                 Assert.Equal(Expected, result.StandardOutput);
-                if (driver == Driver.ReplEmitToMemory)
-                {
-                    Assert.Contains("warning GS0314:", result.StandardError, StringComparison.Ordinal);
-                }
-                else
-                {
-                    Assert.Equal(string.Empty, result.StandardError);
-                }
+                Assert.Equal(string.Empty, result.StandardError);
             }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReceiverClauseToString_IsAnOrdinaryExtension_NotUsableByInterpolation()
+    {
+        // ADR-0182 / issue #4240: a receiver clause is unconditionally an
+        // extension now, so `func (token ReceiverToken) ToString() ...` no
+        // longer overrides the ref struct's real ToString — interpolation
+        // (which needs the real instance member) reports GS0519, the same
+        // diagnostic it reports for a ref struct with no ToString at all.
+        const string Source = """
+            import System
+
+            ref struct ReceiverToken {
+                var value int32
+            }
+
+            func (token ReceiverToken) ToString() string -> String.Format("Receiver#{0}", token.value)
+
+            func Main() {
+                var receiver ReceiverToken = ReceiverToken{value: 42}
+                Console.WriteLine("receiver=${receiver}")
+            }
+            """;
+        var root = Path.Combine(Environment.CurrentDirectory, $".issue3220-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var sourcePath = Path.Combine(root, "receiver-clause-tostring.gs");
+        File.WriteAllText(sourcePath, Source);
+
+        try
+        {
+            var result = CaptureConsole(() => GSharp.Compiler.Program.Main([sourcePath]));
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("error GS0519:", result.StandardOutput, StringComparison.Ordinal);
         }
         finally
         {

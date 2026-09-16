@@ -1,9 +1,15 @@
 # ADR-0024: Methods with receivers vs. extension functions canonical style
 
-- **Status**: Accepted
+- **Status**: Accepted; core rule superseded by ADR-0182
 - **Date**: 2026-05-24
 - **Phase**: Phase 6
 - **Related**: ADR-0019 (extension function declaration syntax); ADR-0017 (method virtuality); execution plan §6.4
+
+> **2026-09-15**: [ADR-0182](0182-receiver-clause-is-always-extension.md)
+> removes the ownership-based branch this ADR establishes: a receiver
+> clause is now always an extension function, never a method. A
+> same-package method has exactly one spelling, the in-body form. This
+> document is kept for historical accuracy.
 
 ## Context
 

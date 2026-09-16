@@ -105,6 +105,19 @@ describe('gsharp.tmLanguage.json', () => {
     expect(constantMatchers.some((r) => r.test('null'))).toBe(false);
   });
 
+  it('does not treat `extension` as a contextual keyword (ADR-0182 retired the marker)', () => {
+    // ADR-0165's explicit-extension-receiver marker `extension` (issue
+    // #3357) was retired by ADR-0182 (issue #4240): every receiver clause
+    // is unconditionally an extension now, so `extension` is an ordinary
+    // identifier again — it must not highlight as a keyword, the same way
+    // the website Prism grammar's `contextualKeywords` regex excludes it.
+    const matchers = [
+      ...repositoryMatchStrings('keywords'),
+      ...repositoryMatchStrings('declarations'),
+    ].map((m) => new RegExp(m));
+    expect(matchers.some((r) => r.test('extension'))).toBe(false);
+  });
+
   it('recognizes assembly-target annotations', () => {
     const annotationMatchers = repositoryMatchStrings('annotations').map(
       (m) => new RegExp(m),

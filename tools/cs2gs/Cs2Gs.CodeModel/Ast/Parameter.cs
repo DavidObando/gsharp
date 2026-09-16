@@ -151,7 +151,10 @@ public sealed class AttributeUse : GNode
 
 /// <summary>
 /// A receiver clause <c>(name Type)</c> for an extension function
-/// (ADR-0019/ADR-0079, ADR-0115 §B.5).
+/// (ADR-0019/ADR-0079, ADR-0115 §B.5). ADR-0182 (issue #4240) made every
+/// receiver clause unconditionally an extension, retiring the issue #3357
+/// <c>func extension (name Type)</c> marker this type used to be able to
+/// render — a receiver clause has exactly one printed form now.
 /// </summary>
 public sealed class Receiver : GNode
 {
@@ -160,15 +163,10 @@ public sealed class Receiver : GNode
     /// </summary>
     /// <param name="name">The receiver parameter name.</param>
     /// <param name="type">The receiver type.</param>
-    /// <param name="isExplicitExtension">
-    /// Whether to render the issue #3357 explicit-extension form
-    /// <c>func extension (name Type)</c>.
-    /// </param>
-    public Receiver(string name, GTypeReference type, bool isExplicitExtension = false)
+    public Receiver(string name, GTypeReference type)
     {
         Name = name;
         Type = type;
-        IsExplicitExtension = isExplicitExtension;
     }
 
     /// <summary>Gets the receiver parameter name.</summary>
@@ -176,7 +174,4 @@ public sealed class Receiver : GNode
 
     /// <summary>Gets the receiver type.</summary>
     public GTypeReference Type { get; }
-
-    /// <summary>Gets a value indicating whether this is an explicitly extension-dispatched receiver.</summary>
-    public bool IsExplicitExtension { get; }
 }
