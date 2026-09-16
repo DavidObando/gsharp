@@ -675,19 +675,28 @@ internal sealed class LambdaBinder
     /// <see cref="CollectCapturedVariables(BoundStatement, FunctionSymbol)"/>
     /// (via <see cref="CapturedVariableCollector"/>) already folds a callee's
     /// captures into its caller when the callee was declared — and therefore
-    /// bound — earlier in the group. That leaves two shapes unhandled by a
-    /// single in-order pass: a call to a sibling declared LATER in the group
-    /// (forward reference) and a call cycle between two members. Both are
-    /// legal now that generic local functions may capture at all (#4252
-    /// removed the blanket GS0463 rejection); this widens each member's
-    /// <see cref="BoundFunctionLiteralExpression.CapturedVariables"/> to a
-    /// fixed point by recomputing every member's captures, in a loop, against
-    /// the whole group's current best-known sets, until nothing grows.
-    /// Termination is guaranteed because a set only ever grows and is bounded
-    /// by the (finite) set of variables in scope; <paramref name="group"/> is
-    /// typically 1-2 members, so the pass count is bounded to be defensive
-    /// against a bug in the fixed-point logic itself, not because the
-    /// algorithm needs it.
+    /// bound — earlier in the group. That leaves shapes unhandled by a single
+    /// in-order pass: a call to a sibling declared LATER in the group
+    /// (forward reference), a call cycle between two members, and — the
+    /// reason this also walks into each member's body rather than stopping
+    /// at its top-level literal — a plain or generic local function declared
+    /// INSIDE a member's own body that itself calls a sibling. That inner
+    /// literal's own <see cref="BoundFunctionLiteralExpression.CapturedVariables"/>
+    /// was fixed the moment it was bound, which can be before the callee's
+    /// capture set has finished converging; leaving it stale would make the
+    /// enclosing member's own re-walk below (which folds a nested literal's
+    /// *cached* <c>CapturedVariables</c> via
+    /// <see cref="CapturedVariableCollector.RewriteFunctionLiteralExpression"/>,
+    /// without re-descending into it) keep missing the transitive capture
+    /// forever. All of this is legal now that generic local functions may
+    /// capture at all (#4252 removed the blanket GS0463 rejection); this
+    /// widens every reachable literal's captured set to a fixed point by
+    /// recomputing it, in a loop, against the whole group's current
+    /// best-known sets, until nothing grows. Termination is guaranteed
+    /// because a set only ever grows and is bounded by the (finite) set of
+    /// variables in scope; the reachable-literal count is typically small,
+    /// so the pass count is bounded to be defensive against a bug in the
+    /// fixed-point logic itself, not because the algorithm needs it.
     /// </summary>
     /// <param name="group">Every member of one consecutive run of
     /// <c>let Name[T, ...] = func (...) ... { ... }</c> declarations, in
@@ -698,15 +707,22 @@ internal sealed class LambdaBinder
         {
             // A single generic local function has no sibling to call, so the
             // in-order pass inside CollectCapturedVariables already saw
-            // everything it ever will.
+            // everything it ever will. (A local function nested inside that
+            // lone member still can't reach a sibling that doesn't exist.)
             return;
         }
 
-        var maxPasses = Math.Max(8, group.Count * group.Count);
+        var literals = new List<BoundFunctionLiteralExpression>(group);
+        foreach (var member in group)
+        {
+            CollectNestedFunctionLiterals(member.Body, literals);
+        }
+
+        var maxPasses = Math.Max(8, literals.Count * literals.Count);
         for (var pass = 0; pass < maxPasses; pass++)
         {
             var changed = false;
-            foreach (var literal in group)
+            foreach (var literal in literals)
             {
                 var recomputed = CollectCapturedVariables(literal.Body, literal.Function);
                 if (!new HashSet<VariableSymbol>(literal.CapturedVariables).SetEquals(recomputed))
@@ -721,6 +737,20 @@ internal sealed class LambdaBinder
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Issue #4221 follow-up: gathers every <see cref="BoundFunctionLiteralExpression"/>
+    /// reachable from <paramref name="body"/>, including literals nested
+    /// inside other literals at any depth, appending them to
+    /// <paramref name="sink"/>. <see cref="BoundTreeRewriter"/> treats a
+    /// literal as a leaf by default, so this descends explicitly — mirrors
+    /// <see cref="NestedCaptureCollector"/>'s traversal, but collects the
+    /// literal nodes themselves rather than their already-cached captures.
+    /// </summary>
+    private static void CollectNestedFunctionLiterals(BoundStatement body, List<BoundFunctionLiteralExpression> sink)
+    {
+        new NestedFunctionLiteralCollector(sink).RewriteStatement(body);
     }
 
     /// <summary>
@@ -2607,6 +2637,41 @@ internal sealed class LambdaBinder
         }
 
         /// <inheritdoc/>
+        protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
+        {
+            this.RewriteFunctionLiteralExpression(node.Literal);
+            return node;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4221 follow-up: collects every <see cref="BoundFunctionLiteralExpression"/>
+    /// reachable from a body, including a literal nested inside another
+    /// literal at any depth, into a flat list (as opposed to
+    /// <see cref="NestedCaptureCollector"/>, which flattens their already-
+    /// cached <c>CapturedVariables</c> instead of the node references
+    /// themselves). Used by <see cref="ReconcileGenericLocalFunctionGroupCaptures"/>
+    /// to find every literal whose captured-variable set may need
+    /// refreshing — not just a generic local-function group's own top-level
+    /// members, but a plain or generic local function declared inside one of
+    /// their bodies that itself calls a sibling.
+    /// </summary>
+    private sealed class NestedFunctionLiteralCollector : BoundTreeRewriter
+    {
+        private readonly List<BoundFunctionLiteralExpression> sink;
+
+        public NestedFunctionLiteralCollector(List<BoundFunctionLiteralExpression> sink)
+        {
+            this.sink = sink;
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            this.sink.Add(node);
+            this.RewriteStatement(node.Body);
+            return node;
+        }
+
         protected override BoundStatement RewriteLocalFunctionDeclaration(BoundLocalFunctionDeclaration node)
         {
             this.RewriteFunctionLiteralExpression(node.Literal);

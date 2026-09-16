@@ -388,6 +388,55 @@ public class Issue1886GenericLocalFunctionEmitTests
     }
 
     [Fact]
+    public void GenericLocalFunction_NestedLocalFunctionCallsForwardSiblingThatCaptures_PropagatesTransitively()
+    {
+        // Issue #4221 follow-up (gap found reviewing PR #4261): a plain,
+        // non-generic local function declared INSIDE a generic local
+        // function's own body — `Inner`, nested inside `First` — calls a
+        // sibling of `First` (`Second`, declared LATER, a forward reference)
+        // that captures `outer`. `Inner` never reads `outer` itself.
+        //
+        // `ReconcileGenericLocalFunctionGroupCaptures` originally only
+        // re-walked the group's own top-level members (`First`, `Second`),
+        // not a literal nested inside one of their bodies. `Inner`'s own
+        // captured-variable set is fixed the moment it is bound — before
+        // `Second`'s capture of `outer` exists in the shared map, since
+        // `Second` is declared afterward — and folding a nested literal's
+        // captures into its enclosing member only ever consults that
+        // already-cached set (it does not re-descend into `Inner`'s body).
+        // So `First`'s own re-walk during reconciliation kept missing the
+        // transitive need for `outer`, and building `Second`'s closure
+        // instance at the `Second(x)` call site inside `Inner`'s body
+        // crashed emission with GS9998 ("Variable 'outer' has no local
+        // slot"), exactly like the sibling-call case #4261 fixed, just one
+        // level of nesting deeper.
+        var source = """
+            package P
+
+            func Foo() int32 {
+                var outer = 0
+                let First[T] = func (v T) int32 {
+                    let Inner = func (x int32) int32 {
+                        return Second(x)
+                    }
+                    return Inner(1)
+                }
+                let Second[U] = func (v U) int32 {
+                    outer = outer + 1
+                    return outer
+                }
+                First(1)
+                First("z")
+                return outer
+            }
+            Console.WriteLine(Foo())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void GenericLocalFunction_CapturingByRefLikeVariable_ReportsGS0219()
     {
         // A `ref struct` (Span[T]) capture is still rejected for a generic
