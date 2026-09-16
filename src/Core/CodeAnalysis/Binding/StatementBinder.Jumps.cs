@@ -614,6 +614,11 @@ internal sealed partial class StatementBinder
         {
             case BoundVariableExpression v:
                 // Plain locals die with the frame; non-scoped parameters / globals survive.
+                // NOTE: this also covers a by-value byref-like (ref struct, e.g. Span<T>)
+                // parameter's OWN storage — its fields are a function-local copy exactly
+                // like any other by-value struct. Only the REFERENT such a value
+                // encapsulates (Span<T>'s backing pointer) gets caller scope; see
+                // HasFunctionLocalReferentScope below (issue #4265) for that narrower case.
                 if (v.Variable is ParameterSymbol p)
                 {
                     return p.IsScoped || p.RefKind == RefKind.None;
@@ -651,6 +656,24 @@ internal sealed partial class StatementBinder
                 return field.Receiver != null
                     && !Binder.IsReferenceTypeForConstraint(field.Receiver.Type)
                     && HasFunctionLocalRefScope(field.Receiver);
+
+            // Issue #4265: a CLR indexer's `ref`/`ref readonly` result (e.g.
+            // Span<T>/ReadOnlySpan<T>'s indexer) DEREFERENCES a reference the
+            // target already encapsulates (its backing pointer) — unlike an
+            // ordinary field access, which reads the target's OWN storage
+            // slot. A reference-type target is heap-backed regardless of
+            // scope; a byref-like (ref struct) target's encapsulated
+            // referent gets HasFunctionLocalReferentScope's caller-scope
+            // treatment below. A plain value-type target (never actually
+            // reached in practice — a CLR indexer's target is always a
+            // reference type or a byref-like BCL type such as Span<T> —
+            // kept for symmetry/defense-in-depth) still inherits its own
+            // storage scope via the ordinary recursive walk.
+            case BoundClrIndexExpression clrIndex:
+                return TypeSymbol.IsByRefLike(clrIndex.Target.Type)
+                    ? HasFunctionLocalReferentScope(clrIndex.Target)
+                    : !Binder.IsReferenceTypeForConstraint(clrIndex.Target.Type)
+                        && HasFunctionLocalRefScope(clrIndex.Target);
             case BoundDereferenceExpression deref:
                 // A pointer parameter's referent is not its by-value parameter slot.
                 // Local pointers conservatively retain function-local scope.
@@ -665,15 +688,19 @@ internal sealed partial class StatementBinder
 
             // Issue #4224 (root cause #4): a native ref-returning call/property
             // read escapes only as far as the storage it could be forwarding —
-            // its instance receiver (a struct receiver's storage) and any
-            // ref/in/out argument's underlying storage. The callee's OWN
-            // `return ref` was already validated against this same scope
-            // check when the callee itself was bound, so a plain by-value
-            // parameter or a class receiver can never be the source of the
-            // returned reference; only a borrowed (ref/in/out, non-`scoped`)
-            // argument or a struct receiver can.
+            // its instance receiver (a struct receiver's storage), any
+            // ref/in/out argument's underlying storage, and (issue #4265)
+            // any non-`scoped` by-value byref-like argument's encapsulated
+            // referent. The callee's OWN `return ref` was already validated
+            // against this same scope check when the callee itself was
+            // bound, so a plain (non-byref-like) by-value parameter or a
+            // class receiver can never be the source of the returned
+            // reference; only a borrowed (ref/in/out, non-`scoped`)
+            // argument, a struct receiver, or a by-value byref-like
+            // argument's referent can.
             default:
-                if (RefCapabilities.TryGetRefReturnEscapeSources(expr, out var callReceiver, out var byRefArguments))
+                if (RefCapabilities.TryGetRefReturnEscapeSources(
+                    expr, out var callReceiver, out var byRefArguments, out var byValueByRefLikeArguments))
                 {
                     if (callReceiver != null
                         && !Binder.IsReferenceTypeForConstraint(callReceiver.Type)
@@ -690,12 +717,50 @@ internal sealed partial class StatementBinder
                         }
                     }
 
+                    // Issue #4265: a by-value byref-like argument is checked against
+                    // its REFERENT's scope, not its own storage's scope — see
+                    // HasFunctionLocalReferentScope. Using HasFunctionLocalRefScope
+                    // here instead (like the ref/in/out arguments above) would be
+                    // WRONG in the other direction: it would reject every such
+                    // forwarding chain outright, since a plain by-value parameter is
+                    // always function-local by that check's own (correct, for a
+                    // field access) rule.
+                    foreach (var argument in byValueByRefLikeArguments)
+                    {
+                        if (HasFunctionLocalReferentScope(argument))
+                        {
+                            return true;
+                        }
+                    }
+
                     return false;
                 }
 
                 return true;
         }
     }
+
+    /// <summary>
+    /// Issue #4265: the ref-safe-to-escape scope of the REFERENT a by-value
+    /// byref-like (ref struct, e.g. <c>Span[T]</c>) value encapsulates — as
+    /// opposed to <see cref="HasFunctionLocalRefScope"/>, which answers for
+    /// the value's OWN storage (its fields; see that method's
+    /// <c>BoundFieldAccessExpression</c> case, which this does not change).
+    /// Mirrors the <c>BoundDereferenceExpression</c> pointer-parameter case
+    /// in <see cref="HasFunctionLocalRefScope"/> exactly: a non-scoped
+    /// by-value parameter's encapsulated reference is caller-supplied (the
+    /// caller already guaranteed its lifetime by constructing/passing the
+    /// value), so only a directly-named non-scoped parameter is
+    /// caller-scoped here; any other shape (a local, a nested call result,
+    /// ...) conservatively falls back to the function-local-by-default walk,
+    /// since this compiler does not yet track how a ref-struct LOCAL's own
+    /// encapsulated reference was constructed (e.g. <c>stackalloc</c> vs.
+    /// wrapping a heap array) with C#'s full precision.
+    /// </summary>
+    private static bool HasFunctionLocalReferentScope(BoundExpression expr)
+        => expr is BoundVariableExpression { Variable: ParameterSymbol p }
+            ? p.IsScoped
+            : HasFunctionLocalRefScope(expr);
 
     private BoundStatement BindExpressionStatement(ExpressionStatementSyntax syntax)
     {

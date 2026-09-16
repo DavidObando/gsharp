@@ -41,46 +41,59 @@ internal static class RefCapabilities
         };
 
     /// <summary>
-    /// Issue #4224 (root cause #4): decomposes a native ref-returning call or
-    /// property read into the pieces the caller-side ref-safe-scope
+    /// Issue #4224 (root cause #4) / #4265: decomposes a native ref-returning
+    /// call or property read into the pieces the caller-side ref-safe-scope
     /// computation (<c>HasFunctionLocalRefScope</c>) needs — its instance
     /// receiver (whose storage the callee could be returning a reference
-    /// into) and the argument expressions passed to <c>ref</c>/<c>in</c>/
+    /// into), the argument expressions passed to <c>ref</c>/<c>in</c>/
     /// <c>out</c> parameters (any of which the callee could likewise be
-    /// returning). A <c>scoped ref</c>/<c>scoped in</c> parameter is excluded:
-    /// the callee's own signature promises not to return that reference, so
-    /// the caller's argument does not contribute to the result's scope.
+    /// returning), and — issue #4265 — the argument expressions passed to
+    /// by-value BYREF-LIKE (ref struct, e.g. <c>Span[T]</c>) parameters,
+    /// whose ENCAPSULATED REFERENT (not their own storage) the callee could
+    /// be returning through, e.g. <c>func First(s Span[int32]) ref int32
+    /// { return ref s[0] }</c>. These two argument kinds are kept in
+    /// SEPARATE lists rather than merged, because the caller checks them
+    /// with different scope semantics (<c>HasFunctionLocalRefScope</c> vs.
+    /// <c>HasFunctionLocalReferentScope</c>) — conflating them would let a
+    /// <c>ref</c> argument bound to a byref-like value smuggle a dangling
+    /// reference through the wrong (too permissive) check. A <c>scoped</c>
+    /// parameter of any of these three kinds is excluded: the callee's own
+    /// signature promises not to return that reference, so the caller's
+    /// argument does not contribute to the result's scope.
     /// </summary>
     /// <param name="expression">The bound expression to decompose.</param>
     /// <param name="receiver">The instance receiver, or <see langword="null"/> for a static/no-receiver call.</param>
     /// <param name="byRefArguments">The underlying storage of each non-<c>scoped</c> ref/in/out argument.</param>
+    /// <param name="byValueByRefLikeArguments">Each non-<c>scoped</c> by-value byref-like argument, unchanged.</param>
     /// <returns>
     /// <see langword="false"/> when <paramref name="expression"/> is not a
-    /// native ref-returning call/property (the two out parameters are then
-    /// empty).
+    /// native ref-returning call/property (the out parameters are then empty).
     /// </returns>
     internal static bool TryGetRefReturnEscapeSources(
         BoundExpression expression,
         out BoundExpression? receiver,
-        out ImmutableArray<BoundExpression> byRefArguments)
+        out ImmutableArray<BoundExpression> byRefArguments,
+        out ImmutableArray<BoundExpression> byValueByRefLikeArguments)
     {
         switch (expression)
         {
             case BoundCallExpression { IsConditionalElided: false } call when call.Function.ReturnRefKind != RefKind.None:
                 receiver = null;
-                byRefArguments = SelectByRefArguments(call.Function.Parameters, call.Arguments);
+                SelectEscapeArguments(call.Function.Parameters, call.Arguments, out byRefArguments, out byValueByRefLikeArguments);
                 return true;
             case BoundUserInstanceCallExpression uic when uic.Method.ReturnRefKind != RefKind.None:
                 receiver = uic.Receiver;
-                byRefArguments = SelectByRefArguments(uic.Method.Parameters, uic.Arguments);
+                SelectEscapeArguments(uic.Method.Parameters, uic.Arguments, out byRefArguments, out byValueByRefLikeArguments);
                 return true;
             case BoundPropertyAccessExpression { NarrowedType: null } prop when prop.Property.ReturnRefKind != RefKind.None:
                 receiver = prop.Receiver;
                 byRefArguments = ImmutableArray<BoundExpression>.Empty;
+                byValueByRefLikeArguments = ImmutableArray<BoundExpression>.Empty;
                 return true;
             default:
                 receiver = null;
                 byRefArguments = ImmutableArray<BoundExpression>.Empty;
+                byValueByRefLikeArguments = ImmutableArray<BoundExpression>.Empty;
                 return false;
         }
     }
@@ -182,38 +195,60 @@ internal static class RefCapabilities
             && IsReadOnlyReference(expression);
 
     /// <summary>
-    /// Selects the operand each <c>ref</c>/<c>in</c>/<c>out</c> argument's
-    /// address was taken of. Conservative on any shape the caller-side scope
-    /// walk cannot decompose (a conditional address, a parameter/argument
-    /// count mismatch, or a byref argument that was not itself wrapped in a
+    /// Splits a call's arguments into the two escape-source kinds
+    /// <see cref="TryGetRefReturnEscapeSources"/> needs, keeping them in
+    /// SEPARATE lists (issue #4265) because the caller checks them with
+    /// different scope semantics: <paramref name="byRefArguments"/> holds
+    /// the operand each non-<c>scoped</c> <c>ref</c>/<c>in</c>/<c>out</c>
+    /// argument's address was taken of (checked against its own storage
+    /// scope), and <paramref name="byValueByRefLikeArguments"/> holds each
+    /// non-<c>scoped</c> by-value byref-like (e.g. <c>Span[T]</c>) argument
+    /// unchanged (checked against its ENCAPSULATED REFERENT's scope
+    /// instead — see <c>StatementBinder.HasFunctionLocalReferentScope</c>).
+    /// Conservative on any shape the caller-side scope walk cannot
+    /// decompose (a conditional address, a parameter/argument count
+    /// mismatch, or a ref/in/out argument that was not itself wrapped in a
     /// <see cref="BoundAddressOfExpression"/>): the unrecognized argument
     /// expression itself is returned unchanged so the recursive
-    /// <c>HasFunctionLocalRefScope</c> walk's default ("unrecognized shape is
-    /// function-local, i.e. unsafe") still applies, rather than silently
+    /// <c>HasFunctionLocalRefScope</c> walk's default ("unrecognized shape
+    /// is function-local, i.e. unsafe") still applies, rather than silently
     /// treating an undecomposable argument as safe to escape through.
     /// </summary>
-    private static ImmutableArray<BoundExpression> SelectByRefArguments(
+    private static void SelectEscapeArguments(
         ImmutableArray<ParameterSymbol> parameters,
-        ImmutableArray<BoundExpression> arguments)
+        ImmutableArray<BoundExpression> arguments,
+        out ImmutableArray<BoundExpression> byRefArguments,
+        out ImmutableArray<BoundExpression> byValueByRefLikeArguments)
     {
         if (parameters.IsDefaultOrEmpty || arguments.IsDefaultOrEmpty)
         {
-            return ImmutableArray<BoundExpression>.Empty;
+            byRefArguments = ImmutableArray<BoundExpression>.Empty;
+            byValueByRefLikeArguments = ImmutableArray<BoundExpression>.Empty;
+            return;
         }
 
-        var builder = ImmutableArray.CreateBuilder<BoundExpression>();
+        var refBuilder = ImmutableArray.CreateBuilder<BoundExpression>();
+        var byValueBuilder = ImmutableArray.CreateBuilder<BoundExpression>();
         var count = System.Math.Min(parameters.Length, arguments.Length);
         for (int i = 0; i < count; i++)
         {
             var parameter = parameters[i];
-            if (parameter.RefKind == RefKind.None || parameter.IsScoped)
+            if (parameter.IsScoped)
             {
                 continue;
             }
 
-            builder.Add(arguments[i] is BoundAddressOfExpression addr ? addr.Operand : arguments[i]);
+            if (parameter.RefKind != RefKind.None)
+            {
+                refBuilder.Add(arguments[i] is BoundAddressOfExpression addr ? addr.Operand : arguments[i]);
+            }
+            else if (TypeSymbol.IsByRefLike(parameter.Type))
+            {
+                byValueBuilder.Add(arguments[i]);
+            }
         }
 
-        return builder.ToImmutable();
+        byRefArguments = refBuilder.ToImmutable();
+        byValueByRefLikeArguments = byValueBuilder.ToImmutable();
     }
 }
