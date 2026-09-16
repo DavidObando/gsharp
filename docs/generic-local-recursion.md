@@ -40,11 +40,17 @@ Console.WriteLine(first(42, 3))
 
 ## Deliberate boundaries
 
-Members must remain non-capturing (GS0463) and use only their own type
-parameters (GS0468 for enclosing-parameter references). Capturing and mixed
-generic/delegate recursion groups are not enabled. Enclosing generic
-environment reification belongs to #4223/#4221. Existing validation,
-async/iterator restrictions and definite-return diagnostics still apply.
+Members may capture ordinary outer state (#4221): a shared cell is visible
+both to a direct read/write inside a member's own body and to any sibling
+member it calls, including a callee declared later in the same region or a
+call cycle between two members — capture propagation reconciles the whole
+region to a fixed point after every member's body is bound. GS0463 no longer
+fires for this. Ref locals, `ref`/`out`/`in` parameters and ref-struct
+variables remain rejected captures, same as for an ordinary closure. Members
+must still use only their own type parameters (GS0468 for
+enclosing-parameter references) — enclosing generic environment reification
+belongs to #4223. Existing validation, async/iterator restrictions and
+definite-return diagnostics still apply.
 Generic by-ref type inference is unchanged: the qualified `in`/`out`/variadic
 regressions supply explicit type arguments when the type parameter occurs only
 behind a by-reference parameter. This milestone does not claim broader

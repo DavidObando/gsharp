@@ -139,6 +139,56 @@ public class Issue4219GenericLocalRecursionTests
     }
 
     [Fact]
+    public void GenericLocalCallingNonGenericSibling_NoLongerRejected()
+    {
+        // Issue #4221 follow-up: before #4252, a generic local function
+        // calling ANY sibling local function — even a non-capturing,
+        // non-generic one — reported GS0463, because the binder rejected
+        // every capture of a generic local function wholesale. This shape
+        // (`first[T]` merely calls `second`, which captures nothing) was one
+        // of the removed GS0463 rows; restored here as the positive case
+        // #4252 should have added: it now compiles and runs correctly.
+        var result = EmittedOracle.Evaluate("""
+            func Run() int32 {
+                let second = func(x int32) int32 { return x }
+                let first[T] = func(x T) int32 { return second(0) }
+                return first(1) + first("z")
+            }
+            Run()
+            """);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0463");
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void GenericLocalCallingSiblingThatCapturesOuterState_SharesCaptureTransitively()
+    {
+        // Issue #4221 follow-up: the other removed GS0463 row — `first[T]`
+        // calls `second[U]`, a sibling generic local function that captures
+        // `outer` — `first` itself never reads `outer` directly. Before this
+        // fix, removing the blanket GS0463 rejection (#4252) left this shape
+        // crashing the emitter with GS9998 ("Variable 'outer' has no local
+        // slot"), because nothing propagated `second`'s capture into
+        // `first`'s own environment. It must now both compile AND observe
+        // the shared cell: each call to `first` still resolves to the same
+        // `outer`.
+        var result = EmittedOracle.Evaluate("""
+            func Run() int32 {
+                var outer = 1
+                let first[T] = func(x T) int32 { return second(x) }
+                let second[U] = func(x U) int32 { return outer }
+                return first(9) + first("z")
+            }
+            Run()
+            """);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0463");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
     public void EnclosingTypeParameters_StillRejected()
     {
         var result = EmittedOracle.Evaluate("""

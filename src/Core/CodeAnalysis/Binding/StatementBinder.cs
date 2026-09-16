@@ -101,6 +101,14 @@ internal sealed partial class StatementBinder
     private readonly Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration;
     private readonly Func<VariableDeclarationSyntax, Func<BoundStatement>>? prepareGenericLocalFunctionDeclaration;
     private readonly Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference;
+
+    /// <summary>
+    /// Issue #4221: after every member of a consecutive run of generic
+    /// local-function declarations has had its body bound once (in source
+    /// order), re-converges the whole group's captured-variable sets to a
+    /// fixed point — see <c>LambdaBinder.ReconcileGenericLocalFunctionGroupCaptures</c>.
+    /// </summary>
+    private readonly Action<IReadOnlyList<BoundFunctionLiteralExpression>>? reconcileGenericLocalFunctionGroupCaptures;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
         new(StringComparer.Ordinal);
@@ -128,7 +136,8 @@ internal sealed partial class StatementBinder
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType = null,
         Func<VariableDeclarationSyntax, Func<BoundStatement>>? prepareGenericLocalFunctionDeclaration = null,
         Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null,
-        Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration = null)
+        Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration = null,
+        Action<IReadOnlyList<BoundFunctionLiteralExpression>>? reconcileGenericLocalFunctionGroupCaptures = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.conversions = conversions ?? throw new ArgumentNullException(nameof(conversions));
@@ -150,6 +159,7 @@ internal sealed partial class StatementBinder
         this.prepareGenericLocalFunctionDeclaration = prepareGenericLocalFunctionDeclaration;
         this.checkNonGenericLocalFunctionEnclosingTypeParameterReference = checkNonGenericLocalFunctionEnclosingTypeParameterReference;
         this.bindFunctionLiteralWithSelfDeclaration = bindFunctionLiteralWithSelfDeclaration;
+        this.reconcileGenericLocalFunctionGroupCaptures = reconcileGenericLocalFunctionGroupCaptures;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -375,11 +385,31 @@ internal sealed partial class StatementBinder
                         end++;
                     }
 
+                    List<BoundFunctionLiteralExpression>? groupLiterals = reconcileGenericLocalFunctionGroupCaptures != null
+                        ? new List<BoundFunctionLiteralExpression>(bodies.Count)
+                        : null;
                     for (var member = 0; member < bodies.Count; member++)
                     {
                         beforeBind?.Invoke(statementSyntaxes[i + member]);
                         var bindBody = bodies[member];
-                        statements.Add(bindBody());
+                        var bound = bindBody();
+                        statements.Add(bound);
+                        if (bound is BoundLocalFunctionDeclaration { Literal: { } literal })
+                        {
+                            groupLiterals?.Add(literal);
+                        }
+                    }
+
+                    // Issue #4221: a generic local function calling a sibling
+                    // that captures outer state needs that capture folded
+                    // into its own environment even when the sibling is
+                    // declared later in the group (forward reference) or the
+                    // two call each other. The in-order bind above already
+                    // handles a callee declared earlier; this converges the
+                    // rest.
+                    if (groupLiterals is { Count: > 1 })
+                    {
+                        reconcileGenericLocalFunctionGroupCaptures!(groupLiterals);
                     }
 
                     i = end - 1;
