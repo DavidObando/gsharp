@@ -242,6 +242,26 @@ internal sealed partial class DeclarationBinder
         }
     }
 
+    /// <summary>
+    /// Issue #4234: returns <see langword="true"/> when <paramref name="annotation"/>
+    /// is the compiler-intrinsic <c>@ExtensionOwner</c>/<c>@ExtensionOwnerAttribute</c>
+    /// lead-in, checked purely by name like <c>@SuppressDiagnostic</c> — it has no
+    /// backing CLR attribute type to resolve against.
+    /// </summary>
+    /// <param name="annotation">The annotation to check.</param>
+    /// <returns><see langword="true"/> when the annotation is <c>@ExtensionOwner</c>.</returns>
+    internal static bool IsExtensionOwnerAnnotation(AnnotationSyntax annotation)
+    {
+        if (annotation.HasTypeArgumentList)
+        {
+            return false;
+        }
+
+        var name = annotation.GetNameText();
+        return string.Equals(name, "ExtensionOwner", StringComparison.Ordinal)
+            || string.Equals(name, "ExtensionOwnerAttribute", StringComparison.Ordinal);
+    }
+
     private BoundAttribute? BindAttribute(
         AnnotationSyntax annotation,
         AttributeTargetKind defaultTarget,
@@ -257,6 +277,20 @@ internal sealed partial class DeclarationBinder
         if (Analyzers.DiagnosticSuppressionMap.IsSuppressDiagnostic(annotation))
         {
             ValidateSuppressDiagnostic(annotation, Diagnostics);
+            return null;
+        }
+
+        // Issue #4234: `@ExtensionOwner(typeof(T))` is likewise compiler-
+        // intrinsic — cs2gs synthesizes it on a lifted top-level extension
+        // function to say which migrated C# static class originally
+        // declared it, so the emitter can host the MethodDef on that
+        // class's TypeDef instead of the package's `<Program>` (matching
+        // the native assembly's metadata shape for reflection/analyzer
+        // owner-identity checks). It has no CLR attribute type and produces
+        // no metadata of its own; DeclarationBinder.Functions.cs resolves
+        // and consumes the `typeof` argument directly from the syntax.
+        if (IsExtensionOwnerAnnotation(annotation))
+        {
             return null;
         }
 

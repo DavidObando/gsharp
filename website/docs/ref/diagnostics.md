@@ -345,6 +345,7 @@ passed via `/gsanalyzer:`.
 | GS9303 | Warning | An analyzer was built against a different `GSharp.Core` version than the host; the load is attempted anyway. |
 | GS9304 | Warning | An analyzer reported a diagnostic whose ID is not declared in its `SupportedDiagnostics`; the diagnostic is suppressed. |
 | GS9305 | Error | `@SuppressDiagnostic` (ADR-0175) was given an argument that is not a constant string shaped like a diagnostic ID, or no argument at all. |
+| GS9306 | Error | `@ExtensionOwner` (issue #4234), synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
 
 ### Internal diagnostics (GS9996–GS9999)
 

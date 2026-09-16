@@ -416,6 +416,22 @@ internal sealed partial class DeclarationBinder
 
         if (syntax.IsExtension)
         {
+            // Issue #4234: cs2gs lifts a migrated C# static extension
+            // class's methods to top-level G# extension functions (a
+            // receiver-clause func only binds at top level), which drops
+            // their CLR owner-type identity — the emitted MethodDef lands
+            // on the package's `<Program>` instead of e.g.
+            // `ChannelExtensions`, breaking reflection tests and analyzer
+            // owner-specific recognition that key off the exact declaring
+            // type. `@ExtensionOwner(typeof(T))` lets cs2gs say which
+            // same-package class to host the method on instead;
+            // resolve it once, up front, since it does not vary per
+            // nullable-sequence-iterator specialization below.
+            var explicitOwner = TryResolveExtensionOwnerAnnotation(syntax, package);
+            var declaredOnOwner = explicitOwner == null
+                ? null
+                : ImmutableArray.CreateBuilder<FunctionSymbol>();
+
             // Issue #1188: extension functions overload like ordinary
             // methods and free functions. A collision now means a genuine
             // duplicate signature (same receiver type, name, and callable
@@ -432,7 +448,27 @@ internal sealed partial class DeclarationBinder
                     && !scope.TryDeclareExtensionFunction(candidate))
                 {
                     Diagnostics.ReportDuplicateOverloadSignature(syntax.Identifier.Location, candidate.Name, Binder.FormatOverloadSignature(candidate));
+                    continue;
                 }
+
+                if (explicitOwner != null)
+                {
+                    // ADR-0053's static-owner shape, reused as-is: the same
+                    // `StaticOwnerType` + owner-registered-methods pairing
+                    // that already routes a shared-block static method's
+                    // MethodDef onto its declaring class's TypeDef (and, via
+                    // the receiver-clause-operator path above, a top-level
+                    // declaration's too) now does the same for an extension
+                    // function that names its owner explicitly.
+                    candidate.IsStatic = true;
+                    candidate.StaticOwnerType = explicitOwner;
+                    declaredOnOwner!.Add(candidate);
+                }
+            }
+
+            if (declaredOnOwner is { Count: > 0 })
+            {
+                explicitOwner!.AddStaticMethods(declaredOnOwner.ToImmutable());
             }
 
             return;
@@ -878,6 +914,61 @@ internal sealed partial class DeclarationBinder
         }
 
         return functionAttributes;
+    }
+
+    /// <summary>
+    /// Issue #4234: resolves a top-level extension function's
+    /// <c>@ExtensionOwner(typeof(T))</c> annotation, if present, to the
+    /// same-package non-generic class symbol <c>T</c> it names.
+    /// Returns <c>null</c> (reporting GS9306 for a malformed use) when no
+    /// such annotation is present or it does not have the one shape this
+    /// supports. <see cref="BindAttribute"/> already strips the annotation
+    /// out of <c>functionAttributes</c> before this runs, exactly like
+    /// <c>@SuppressDiagnostic</c>.
+    /// </summary>
+    private StructSymbol? TryResolveExtensionOwnerAnnotation(FunctionDeclarationSyntax syntax, PackageSymbol package)
+    {
+        AnnotationSyntax? ownerAnnotation = null;
+        foreach (var annotation in syntax.Annotations)
+        {
+            if (IsExtensionOwnerAnnotation(annotation))
+            {
+                ownerAnnotation = annotation;
+                break;
+            }
+        }
+
+        if (ownerAnnotation == null)
+        {
+            return null;
+        }
+
+        if (ownerAnnotation.Arguments is not { Count: 1 } arguments
+            || arguments[0] is not TypeOfExpressionSyntax typeOfSyntax)
+        {
+            Diagnostics.ReportExtensionOwnerInvalid(
+                ownerAnnotation.AtToken.Location,
+                "requires a single 'typeof(T)' argument naming the CLR owner type");
+            return null;
+        }
+
+        if (bindTypeOfExpression(typeOfSyntax) is not BoundTypeOfExpression { OperandType: StructSymbol ownerStruct }
+            || !ownerStruct.IsClass
+            || !ownerStruct.TypeParameters.IsDefaultOrEmpty
+            || !string.Equals(ownerStruct.PackageName, package.Name, StringComparison.Ordinal))
+        {
+            // A struct is rejected too: ECMA-334 §13.6.9 (and
+            // MemberLookup.IsStaticClass on the importing side) requires an
+            // extension method's container be a CLASS, so a value-type owner
+            // could never satisfy the very C#-interop contract this
+            // annotation exists to restore.
+            Diagnostics.ReportExtensionOwnerInvalid(
+                ownerAnnotation.AtToken.Location,
+                "must name a non-generic class declared in this package");
+            return null;
+        }
+
+        return ownerStruct;
     }
 
     private void BindFunctionParameterAttributes(
