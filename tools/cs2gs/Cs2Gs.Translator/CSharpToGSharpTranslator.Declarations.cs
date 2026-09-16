@@ -1465,6 +1465,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             var instanceMembers = new List<GMember>();
             var sharedMembers = new List<GMember>();
+
+            // Issue #4234: set when at least one extension method was lifted
+            // out of this static class (see the `isStaticClass` branch
+            // below) — the class must survive even empty so the lifted
+            // method's `@ExtensionOwner(typeof(T))` annotation still names a
+            // real declaration, and gsc can host the MethodDef on it.
+            bool hostedAnyExtensionOnStaticClass = false;
             foreach ((MemberDeclarationSyntax member, INamedTypeSymbol ownedExtensionTarget) in membersToTranslate)
             {
                 // Issue #1910: a merged-in member from another partial part lives
@@ -1521,12 +1528,33 @@ public sealed partial class CSharpToGSharpTranslator
                     // A C# extension method (`this T self`) on a `static class`
                     // translates to a receiver-clause `func`; a receiver-clause
                     // func only binds at top level (its receiver is not in scope
-                    // inside a `shared { }` block), so it is lifted out and the
-                    // enclosing static class is dropped if nothing else remains
+                    // inside a `shared { }` block), so it is lifted out
                     // (ADR-0115 §B.5).
                     if (isStaticClass &&
-                        translated is MethodDeclaration { Receiver: not null })
+                        translated is MethodDeclaration { Receiver: not null } liftedExtension)
                     {
+                        // Issue #4234: the lift above drops the CLR owner-type
+                        // identity a self-hosted build of THIS SAME method would
+                        // otherwise need — e.g. native
+                        // `Gsharp.Concurrency.ChannelExtensions::Close` becomes
+                        // `Gsharp.Concurrency.<Program>::Close` once gsc compiles
+                        // the migrated source, breaking reflection tests
+                        // (`typeof(ChannelExtensions).GetMethods()`) and analyzer
+                        // owner-specific recognition (RendezvousBatchAnalyzer's
+                        // `ChannelBatchExtensions` check) that key off the exact
+                        // declaring type. `@ExtensionOwner(typeof(T))` tells the
+                        // binder to host the MethodDef on the original class's
+                        // TypeDef instead of the package's `<Program>`, matching
+                        // the native assembly's shape; the static class is kept
+                        // below so that type still exists to name.
+                        hostedAnyExtensionOnStaticClass = true;
+                        if (liftedExtension.Attributes is List<AttributeUse> extensionAttributes)
+                        {
+                            extensionAttributes.Add(new AttributeUse(
+                                "ExtensionOwner",
+                                new[] { new AttributeArgument(new TypeOfExpression(new NamedTypeReference(node.Identifier.Text))) }));
+                        }
+
                         this.state.PendingTopLevelDeclarations.Add(translated);
                         continue;
                     }
@@ -1655,8 +1683,16 @@ public sealed partial class CSharpToGSharpTranslator
             // rewritten to the receiver form (see `TranslateInvocation`) — so a
             // holder nothing `typeof`s is still elided and the common case keeps the
             // idiomatic extension-only output.
+            //
+            // Issue #4234: also keep it when a lifted extension carries an
+            // `@ExtensionOwner(typeof(Holder))` back-reference — that
+            // annotation needs a real declaration to resolve, and the whole
+            // point of keeping it is to give the self-hosted MethodDef this
+            // class's CLR identity back (matching the native assembly's
+            // metadata shape), not the package's `<Program>`.
             if (isStaticClass &&
                 members.Count == 0 &&
+                !hostedAnyExtensionOnStaticClass &&
                 !IsTypeOfReferenced(this.context.Compilation, symbol, this.retainedFilePaths))
             {
                 return null;

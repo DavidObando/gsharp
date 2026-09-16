@@ -39,6 +39,19 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.MethodReceiverMustBeStructOrClass, receiverTypeName);
 
     /// <summary>
+    /// Issue #4234: reports that a compiler-intrinsic <c>@ExtensionOwner</c>
+    /// annotation (synthesized by cs2gs to preserve a migrated C# static
+    /// extension class's CLR owner-type identity) is malformed or used
+    /// outside the one shape it supports: a top-level extension function
+    /// carrying a single <c>typeof(T)</c> argument naming a non-generic
+    /// class declared in the same package.
+    /// </summary>
+    /// <param name="location">The text location of the leading <c>@</c>.</param>
+    /// <param name="reason">A short phrase completing "'@ExtensionOwner' &lt;reason&gt;.".</param>
+    public void ReportExtensionOwnerInvalid(TextLocation location, string reason)
+    => Report(location, DiagnosticDescriptors.ExtensionOwnerInvalid, reason);
+
+    /// <summary>
     /// Reports that a <c>data class</c>/<c>data struct</c> was declared with
     /// no fields. Zero-field data types are supported as of issue #2363 (see
     /// ADR-0029); this diagnostic is retained for source/API stability in
