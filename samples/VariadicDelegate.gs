@@ -12,9 +12,7 @@ delegate StringJoiner(sep string, parts ...string) string;
 
 var sj StringJoiner = func (sep string, parts ...string) string {
     var s = ""
-    for var i = 0;
-    i < parts.Length;
-    i++ {
+    for var i = 0; i < parts.Length; i++ {
         if i > 0 {
             s = s + sep
         }

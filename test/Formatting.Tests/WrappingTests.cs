@@ -172,6 +172,55 @@ public sealed class WrappingTests
             line => Assert.True(line.Length <= MaxLineWidth, "line exceeded the canonical width: " + line));
     }
 
+    [Fact]
+    public void Format_BreaksANullCoalescingChain()
+    {
+        // ADR-0179's phase-7b measurement counts `??` alongside `&&`/`||`/
+        // `or`/`and` as a chain family that goes fully to zero reducible long
+        // lines, but only `&&`/`||`/`or`/`and` had a wrap point implemented.
+        const string input =
+            "func run(alpha string, beta string, gamma string) string {\n"
+            + "return alpha ?? beta ?? gamma ?? alpha ?? beta ?? gamma ?? alpha ?? beta ?? gamma "
+            + "?? \"a default fallback value long enough to push this line past the width\"\n"
+            + "}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("alpha ??\n", formatted, StringComparison.Ordinal);
+        Assert.All(
+            formatted.Split('\n'),
+            line => Assert.True(line.Length <= MaxLineWidth, "line exceeded the canonical width: " + line));
+    }
+
+    [Fact]
+    public void Format_WrapsAnOverlongForClauseHeaderAtItsSeparators()
+    {
+        const string input =
+            "func run() {\n"
+            + "for initialValueForTheLoopCounterVariable = 0; "
+            + "initialValueForTheLoopCounterVariable < someUpperBoundLimitValueForTesting; "
+            + "initialValueForTheLoopCounterVariable++ {\n"
+            + "Console.WriteLine(initialValueForTheLoopCounterVariable)\n"
+            + "}\n"
+            + "}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+        string formatted = result.Text!.ToString();
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains(
+            "for initialValueForTheLoopCounterVariable = 0;\n        "
+                + "initialValueForTheLoopCounterVariable < someUpperBoundLimitValueForTesting;\n        "
+                + "initialValueForTheLoopCounterVariable++ {\n",
+            formatted,
+            StringComparison.Ordinal);
+        Assert.All(
+            formatted.Split('\n'),
+            line => Assert.True(line.Length <= MaxLineWidth, "line exceeded the canonical width: " + line));
+    }
+
     private static IEnumerable<KeyValuePair<string, string>> Shapes()
     {
         string wide = string.Join(
@@ -201,6 +250,23 @@ public sealed class WrappingTests
             "func run(alpha string, beta string, n int32) bool {\n"
             + "return alpha == \"alpha\" && beta == \"beta\" && n > 100 && alpha != beta "
             + "&& n < 1000 && alpha != \"gamma\" && true\n"
+            + "}\n");
+
+        yield return Shape(
+            "null-coalescing chain",
+            "func run(alpha string, beta string, gamma string) string {\n"
+            + "return alpha ?? beta ?? gamma ?? alpha ?? beta ?? gamma ?? alpha ?? beta ?? gamma "
+            + "?? \"a default fallback value long enough to push this line past the width\"\n"
+            + "}\n");
+
+        yield return Shape(
+            "C-style for-clause header",
+            "func run() {\n"
+            + "for initialValueForTheLoopCounterVariable = 0; "
+            + "initialValueForTheLoopCounterVariable < someUpperBoundLimitValueForTesting; "
+            + "initialValueForTheLoopCounterVariable++ {\n"
+            + "Console.WriteLine(initialValueForTheLoopCounterVariable)\n"
+            + "}\n"
             + "}\n");
 
         yield return Shape(

@@ -216,24 +216,18 @@ class Sequences {
         // ---- Private iterator bodies (state-machine entry points) --------
 
         func RangeIterator(start int32, count int32) IEnumerable[int32] {
-            for var i = 0;
-            i < count;
-            i++ {
+            for var i = 0; i < count; i++ {
                 yield start + i
             }
         }
 
         func RangeStepIterator(start int32, end int32, step int32) IEnumerable[int32] {
             if step > 0 {
-                for var i = start;
-                i < end;
-                i = i + step {
+                for var i = start; i < end; i = i + step {
                     yield i
                 }
             } else {
-                for var i = start;
-                i > end;
-                i = i + step {
+                for var i = start; i > end; i = i + step {
                     yield i
                 }
             }
