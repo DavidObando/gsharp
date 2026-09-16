@@ -63,8 +63,9 @@ a
     public void InlineStruct_HandWrittenSynthesizedMember_Diagnoses()
     {
         var result = Evaluate(@"
-inline struct UserId(value string) {}
-func (u UserId) Equals(other UserId) bool { return true }
+inline struct UserId(value string) {
+    func Equals(other UserId) bool { return true }
+}
 0
 ");
         Assert.NotEmpty(result.Diagnostics);

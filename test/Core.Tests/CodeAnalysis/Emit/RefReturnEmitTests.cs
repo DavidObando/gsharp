@@ -102,10 +102,10 @@ import System
 struct Pair {
     var A int32
     var B int32
-}
 
-func (p Pair) PickA(ref x int32) ref int32 {
-    return ref x
+    func PickA(ref x int32) ref int32 {
+        return ref x
+    }
 }
 
 var pr = Pair{A: 3, B: 4}

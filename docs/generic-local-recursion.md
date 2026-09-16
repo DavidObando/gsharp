@@ -46,11 +46,25 @@ member it calls, including a callee declared later in the same region or a
 call cycle between two members — capture propagation reconciles the whole
 region to a fixed point after every member's body is bound. GS0463 no longer
 fires for this. Ref locals, `ref`/`out`/`in` parameters and ref-struct
-variables remain rejected captures, same as for an ordinary closure. Members
-must still use only their own type parameters (GS0468 for
-enclosing-parameter references) — enclosing generic environment reification
-belongs to #4223. Existing validation, async/iterator restrictions and
-definite-return diagnostics still apply.
+variables remain rejected captures, same as for an ordinary closure.
+
+A member that captures no outer state — directly or transitively through a
+callee — may still reference an enclosing method's or type's own type
+parameter (#4223): the reference is reified as an extra type parameter on
+the member's own emitted generic method, resolved at each call site from the
+in-scope original. A member that captures ANY outer state (including only
+transitively, via the propagation above) may **not** also reference an
+enclosing type parameter — that combination remains GS0468, because the
+capturing path emits a synthesized closure class instead of a top-level
+generic method, and reification has not been extended to that path. Because
+capture propagation is a fixed point resolved only after every member in the
+region has bound, a member that looked capture-free (and therefore eligible
+for reification) when its own body bound can still be found to capture
+transitively once the region converges; that later discovery re-evaluates
+the exclusion and reports GS0468 rather than reaching the emitter with an
+enclosing type parameter its capturing host has no slot for. Existing
+validation, async/iterator restrictions and definite-return diagnostics still
+apply.
 Generic by-ref type inference is unchanged: the qualified `in`/`out`/variadic
 regressions supply explicit type arguments when the type parameter occurs only
 behind a by-reference parameter. This milestone does not claim broader

@@ -212,7 +212,7 @@ namespace Corpus.Issue1839
 }
 ");
 
-        Assert.Contains("func extension (color Color) $defer()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func (color Color) $defer()", rendered, StringComparison.Ordinal);
         Assert.Contains("color?.$defer()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("select_", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
@@ -241,7 +241,7 @@ namespace Corpus.Issue3357
 }
 ");
 
-        Assert.Contains("func extension (color Color) Describe()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func (color Color) Describe()", rendered, StringComparison.Ordinal);
         Assert.Contains("Pick()?.Describe()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("__spill", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("ColorExtensions.Describe", rendered, StringComparison.Ordinal);
