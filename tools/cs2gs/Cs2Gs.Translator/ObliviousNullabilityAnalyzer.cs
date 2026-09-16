@@ -702,9 +702,27 @@ internal static class ObliviousNullabilityAnalyzer
         ISymbol symbol,
         IReadOnlyList<CSharpCompilation> siblingCompilations)
     {
-        if (symbol == null
-            || compilation == null
-            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+        // Issue #4262: `compilation` is the ASKING translation unit's own
+        // compilation, which may be nullable-ENABLED even when `symbol` is
+        // declared in an oblivious SIBLING project loaded in the same
+        // migration run (a nullable-enabled app calling into a
+        // nullable-oblivious library project it references — e.g. Oahu's
+        // nullable-enabled CLI app calling a delegate parameter declared in
+        // its nullable-oblivious Core project). Bailing here purely on
+        // `compilation`'s own nullable setting skipped `IsTaintedCore`'s
+        // sibling walk entirely (that walk already remaps into, and checks
+        // the obliviousness of, each SIBLING independently — see the loop
+        // below), so a cross-project call into an oblivious sibling's
+        // taint-promoted (but declared non-null) parameter never widened,
+        // forcing a spurious `!!` onto a value the source legitimately
+        // passes as null. Only bail when NEITHER `compilation` NOR any
+        // sibling is oblivious: an oblivious-only fixpoint has nothing to
+        // find anywhere in that set.
+        bool anyObliviousCompilation =
+            compilation?.Options.NullableContextOptions == NullableContextOptions.Disable
+            || siblingCompilations?.Any(
+                sibling => sibling?.Options.NullableContextOptions == NullableContextOptions.Disable) == true;
+        if (symbol == null || compilation == null || !anyObliviousCompilation)
         {
             return false;
         }
@@ -733,9 +751,58 @@ internal static class ObliviousNullabilityAnalyzer
         IParameterSymbol parameter,
         IReadOnlyList<CSharpCompilation> siblingCompilations)
     {
-        if (parameter == null
-            || compilation == null
-            || compilation.Options.NullableContextOptions != NullableContextOptions.Disable)
+        // Issue #4262 (same shape as the sibling fix on `IsTainted` above): a
+        // nullable-ENABLED consumer calling a `params T[]` declared in an
+        // oblivious SIBLING must still see that sibling's own expanded-
+        // element taint evidence. The candidate loop below already gates
+        // each candidate — `compilation` included — on its OWN obliviousness
+        // before ever touching `Cache.GetValue`, so (unlike `IsTainted`) no
+        // further inner guard is needed; only this entry bail, which used to
+        // fire purely on `compilation`'s own (enabled) setting before the
+        // loop ran, needs widening.
+        bool anyObliviousCompilation =
+            compilation?.Options.NullableContextOptions == NullableContextOptions.Disable
+            || siblingCompilations?.Any(
+                sibling => sibling?.Options.NullableContextOptions == NullableContextOptions.Disable) == true;
+        if (parameter == null || compilation == null || !anyObliviousCompilation)
+        {
+            return false;
+        }
+
+        // Issue #4262 follow-up: unlike `IsTainted`'s sibling walk (which
+        // remaps `symbol` INTO each candidate compilation's own symbol table
+        // by metadata identity before trusting that candidate's cache),
+        // `ParamsElementId` matches candidates by a compilation-INDEPENDENT
+        // documentation-comment-ID string. That means ANY oblivious candidate
+        // in this run whose own syntax happens to call the SAME target
+        // method with a literal `null` can answer this query — even an
+        // oblivious project entirely unrelated to `parameter`'s actual
+        // declaring project, and even when `parameter` itself is declared in
+        // a nullable-ENABLED project with a genuinely non-nullable element
+        // (`NullableAnnotation.NotAnnotated`, never `None` — #2113's taint
+        // fixpoint is an oblivious-only heuristic with nothing trustworthy to
+        // say about an explicitly-annotated declaration). Verified empirically:
+        // an unrelated oblivious sibling calling an unrelated enabled
+        // project's `params` method with `null` in its own source suppressed
+        // the `!!` bridge (and would have repainted the enabled declaration's
+        // own emitted element type nullable) for a completely different,
+        // genuinely non-nullable caller elsewhere in the same run. `IsTainted`
+        // avoids this by construction (a symbol query only ever resolves
+        // against a candidate that remaps to the SAME declaration); mirror
+        // that guarantee here the simple way, since `parameter`'s own
+        // annotation is already known before any candidate is consulted:
+        // only trust ANY candidate's evidence when `parameter`'s own declared
+        // element position is itself oblivious.
+        // Issue #4127/#4129/#4153: deliberately NOT a nested property pattern
+        // (`is not IArrayTypeSymbol { ElementType.NullableAnnotation: ... }`)
+        // — gsc's pattern matcher does not reliably evaluate an enum-constant
+        // sub-pattern against an imported-interface-typed scrutinee
+        // (`parameter.Type` is `ITypeSymbol`) once this file is itself
+        // translated to G# and self-hosted; see `CSharpToGSharpTranslator
+        // .Constructors.cs`'s own explicit decomposition for the identical
+        // hazard. Decomposed into a plain cast plus an ordinary `!=` check.
+        if (parameter.Type is not IArrayTypeSymbol elementArrayType
+            || elementArrayType.ElementType.NullableAnnotation != NullableAnnotation.None)
         {
             return false;
         }
@@ -950,38 +1017,58 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
-        TaintResult result = Cache.GetValue(compilation, Compute);
-        if (result.Tainted.Contains(query.Symbol))
+        // Issue #4262: `Compute`'s heuristics (a bare `= null` assignment
+        // taints its target, an argument-to-parameter edge propagates that
+        // taint into the callee) read raw SYNTAX because oblivious code
+        // carries no trustworthy nullable annotation to read instead. Running
+        // them against a nullable-ENABLED `compilation` is unsound — its own
+        // `T?` locals are LEGITIMATELY, deliberately null-initialized (that is
+        // what the annotation means), and an edge from such a local into a
+        // cross-project call argument would self-taint the callee's
+        // parameter from evidence that was never oblivious in the first
+        // place, defeating the callee's OWN (correctly gated) taint result.
+        // Only ever consult `compilation`'s own cached fixpoint when
+        // `compilation` ITSELF is oblivious; an enabled `compilation` reaches
+        // this frame only as the top-level query's asking compilation (see
+        // `IsTainted`) — every RECURSIVE call below (`DelegateReturnEdges`,
+        // `ScalarTupleEdges`, and the sibling walk's own re-entry) is already
+        // nested inside this very `Disable` check, so only the SIBLING walk
+        // further down can ever answer for an enabled `compilation`.
+        if (compilation.Options.NullableContextOptions == NullableContextOptions.Disable)
         {
-            return true;
-        }
-
-        foreach ((ISymbol target, TupleElementKey source) in result.ScalarTupleEdges)
-        {
-            if (SymbolEqualityComparer.Default.Equals(target, query.Symbol)
-                && IsTupleElementTaintedCore(
-                    compilation,
-                    source.Symbol,
-                    source.Path,
-                    siblingCompilations,
-                    scalarVisited,
-                    tupleVisited))
+            TaintResult result = Cache.GetValue(compilation, Compute);
+            if (result.Tainted.Contains(query.Symbol))
             {
                 return true;
             }
-        }
 
-        foreach ((ISymbol target, ISymbol source) in result.DelegateReturnEdges)
-        {
-            if (SymbolEqualityComparer.Default.Equals(target, query.Symbol)
-                && IsTaintedCore(
-                    compilation,
-                    source,
-                    siblingCompilations,
-                    scalarVisited,
-                    tupleVisited))
+            foreach ((ISymbol target, TupleElementKey source) in result.ScalarTupleEdges)
             {
-                return true;
+                if (SymbolEqualityComparer.Default.Equals(target, query.Symbol)
+                    && IsTupleElementTaintedCore(
+                        compilation,
+                        source.Symbol,
+                        source.Path,
+                        siblingCompilations,
+                        scalarVisited,
+                        tupleVisited))
+                {
+                    return true;
+                }
+            }
+
+            foreach ((ISymbol target, ISymbol source) in result.DelegateReturnEdges)
+            {
+                if (SymbolEqualityComparer.Default.Equals(target, query.Symbol)
+                    && IsTaintedCore(
+                        compilation,
+                        source,
+                        siblingCompilations,
+                        scalarVisited,
+                        tupleVisited))
+                {
+                    return true;
+                }
             }
         }
 
