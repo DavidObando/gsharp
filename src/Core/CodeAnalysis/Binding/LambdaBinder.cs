@@ -497,6 +497,8 @@ internal sealed class LambdaBinder
         // cannot be captured — the closure may outlive the pointed-to variable.
         // Issue #2330: an unmanaged pointer (PointerTypeSymbol) bound by a
         // `fixed` statement is likewise rejected — see ReportFixedPointerCannotEscape.
+        // Issue #4259: a `ref`/`out`/`in` PARAMETER of the enclosing function is
+        // likewise rejected — see ReportRefParameterCannotBeCaptured.
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
@@ -512,6 +514,10 @@ internal sealed class LambdaBinder
             else if (capturedVariable.Type is PointerTypeSymbol)
             {
                 Diagnostics.ReportFixedPointerCannotEscape(syntax.Location, capturedVariable.Name);
+            }
+            else if (capturedVariable is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out or RefKind.In } refParameter)
+            {
+                Diagnostics.ReportRefParameterCannotBeCaptured(syntax.Location, refParameter.Name, RefKindKeyword(refParameter.RefKind));
             }
         }
 
@@ -1251,6 +1257,10 @@ internal sealed class LambdaBinder
         // Issue #367 / ADR-0058: by-ref-like or managed-pointer locals cannot
         // be captured by a closure; mirror the function-literal checks.
         // Issue #2330: same for an unmanaged `fixed` pointer.
+        // Issue #4259: same for a `ref`/`out`/`in` PARAMETER of the enclosing
+        // function — as opposed to a `ref`/`var ref` LOCAL alias, which is a
+        // distinct, separately-handled capture kind (see RefKind.RefReadOnly
+        // and CaptureBoxingRewriter.IsBoxable).
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
@@ -1266,6 +1276,10 @@ internal sealed class LambdaBinder
             else if (capturedVariable.Type is PointerTypeSymbol)
             {
                 Diagnostics.ReportFixedPointerCannotEscape(syntax.Location, capturedVariable.Name);
+            }
+            else if (capturedVariable is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out or RefKind.In } refParameter)
+            {
+                Diagnostics.ReportRefParameterCannotBeCaptured(syntax.Location, refParameter.Name, RefKindKeyword(refParameter.RefKind));
             }
         }
 
@@ -2546,6 +2560,15 @@ internal sealed class LambdaBinder
         requiresLexicalOwner = walker.RequiresLexicalOwner;
         return walker.Found;
     }
+
+    /// <summary>Issue #4259: human-readable keyword for a captured-parameter diagnostic.</summary>
+    private static string RefKindKeyword(RefKind kind) => kind switch
+    {
+        RefKind.Ref => "ref",
+        RefKind.Out => "out",
+        RefKind.In => "in",
+        _ => "ref",
+    };
 
     private ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, FunctionSymbol function)
     {

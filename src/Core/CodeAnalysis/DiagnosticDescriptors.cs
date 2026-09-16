@@ -534,6 +534,13 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor DuplicateSharedBlock = new("GS9007", DiagnosticSeverity.Error, "A type may contain at most one 'shared' block.");
     internal static readonly DiagnosticDescriptor FixedPointerCannotEscape = new("GS9008", DiagnosticSeverity.Error, "Unmanaged pointer '{0}' from a `fixed` statement cannot be captured by a closure; the pin is released when the enclosing `fixed` block exits.");
     internal static readonly DiagnosticDescriptor ReadOnlyArgumentForWritableRef = new("GS9009", DiagnosticSeverity.Error, "Argument {0} to '{1}' refers to readonly storage and cannot be passed to a writable '{2}' parameter.");
+
+    // Issue #4259: a `ref`/`out`/`in` parameter of the enclosing function cannot be
+    // captured by a closure — the closure may outlive the caller's argument, and
+    // there is no CLR mechanism to keep a managed pointer alive in a heap-allocated
+    // display class. Distinct from a `ref`/`var ref` LOCAL alias capture, which is a
+    // separately handled, legal-in-some-contexts case (see RefKind.RefReadOnly).
+    internal static readonly DiagnosticDescriptor RefParameterCannotBeCaptured = new("GS9010", DiagnosticSeverity.Error, "'{1}' parameter '{0}' cannot be captured by a closure; the closure may outlive the caller's argument.");
     internal static readonly DiagnosticDescriptor AnalyzerThrewException = new("GS9300", DiagnosticSeverity.Warning, "Analyzer '{0}' threw an exception of type '{1}' and was disabled for the remainder of the compilation: {2}");
     internal static readonly DiagnosticDescriptor AnalyzerAssemblyLoadFailure = new("GS9301", DiagnosticSeverity.Error, "Analyzer assembly '{0}' could not be used: {1}");
     internal static readonly DiagnosticDescriptor AnalyzerExceededTimeBudget = new("GS9302", DiagnosticSeverity.Info, "Analyzer '{0}' exceeded its time budget ({1} ms) and was disabled for subsequent runs in this host.");
