@@ -2329,6 +2329,25 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // Issue #4236: `T?` over an OPEN, unconstrained type parameter (e.g.
+        // an `out value T?` parameter inside a `class C[T]` with no `struct`
+        // constraint) is neither caught by the `IsAnyValueTypeNullable` arm
+        // above (T's value-type-ness isn't provable) nor by the bare
+        // `TypeParameterSymbol` arm below (pointeeType is the NullableTypeSymbol
+        // wrapper, not the parameter itself) — it fell through to `ldind.ref`,
+        // which is invalid IL once T is JIT-instantiated as a real value type
+        // (InvalidProgramException at runtime, past ILVerify). GetElementTypeToken
+        // already resolves this shape correctly (ADR-0084 §L5 / issue #814):
+        // `Nullable<T>` when T is struct-constrained, bare `T` otherwise. Route
+        // through ldobj with that token exactly like the provable-value-type arm.
+        if (pointeeType is NullableTypeSymbol loadOpenTp
+            && loadOpenTp.UnderlyingType is TypeParameterSymbol)
+        {
+            this.il.OpCode(ILOpCode.Ldobj);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
+            return;
+        }
+
         var clrType = pointeeType.ClrType;
         if (clrType.IsSameAs(typeof(int)) || clrType.IsSameAs(typeof(uint)))
         {
@@ -2385,6 +2404,23 @@ internal sealed partial class MethodBodyEmitter
         // the Nullable<T> stobj, not the underlying primitive's stind.
         if (pointeeType is NullableTypeSymbol storeNullable
             && NullableLifting.IsAnyValueTypeNullable(storeNullable))
+        {
+            this.il.OpCode(ILOpCode.Stobj);
+            this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
+            return;
+        }
+
+        // Issue #4236: mirror of the EmitLoadIndirect arm above — `T?` over an
+        // OPEN, unconstrained type parameter falls through both the
+        // provable-value-type check and the bare-TypeParameterSymbol check, so
+        // storing through the pointer used `stind.ref` (a reference-slot store)
+        // for what can be an exact value-type instantiation at runtime, which
+        // is invalid IL the JIT rejects (InvalidProgramException) even though
+        // ILVerify's abstract-over-open-T checking does not catch it. Reproduced
+        // via `Gsharp.Concurrency.Chan<T>.ReceiveOrPark`'s `out T? value`
+        // parameter self-hosted with T a non-primitive struct.
+        if (pointeeType is NullableTypeSymbol storeOpenTp
+            && storeOpenTp.UnderlyingType is TypeParameterSymbol)
         {
             this.il.OpCode(ILOpCode.Stobj);
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(pointeeType));
