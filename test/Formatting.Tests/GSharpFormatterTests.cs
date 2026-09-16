@@ -194,6 +194,52 @@ public sealed class GSharpFormatterTests
     }
 
     [Fact]
+    public void Format_JoinsACStyleForClauseHeaderOntoOneLine()
+    {
+        // ADR-0179 regression: the for-clause header's two separator `;`
+        // tokens are list separators like `,`, not statement terminators, and
+        // must not force a line break the way a real statement-ending `;`
+        // does.
+        const string input = "func run() {\nfor var i = 0;\ni < 10;\ni++ {\nConsole.WriteLine(i)\n}\n}\n";
+
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("for var i = 0; i < 10; i++ {\n", result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Format_IsAFixedPointOnAJoinedForClauseHeader()
+    {
+        const string input = "func run() {\nfor var i = 0; i < 10; i++ {\nConsole.WriteLine(i)\n}\n}\n";
+
+        FormatResult once = GSharpFormatter.Format(SourceText.From(input));
+        FormatResult twice = GSharpFormatter.Format(once.Text!);
+
+        Assert.Empty(once.Diagnostics);
+        Assert.Empty(twice.Diagnostics);
+        Assert.Equal(once.Text!.ToString(), twice.Text!.ToString());
+        Assert.False(twice.Changed);
+    }
+
+    [Theory]
+    [InlineData("func run() {\nfor ; i < 10; i++ {\nbreak\n}\n}\n", "for ; i < 10; i++ {\n")]
+    [InlineData("func run() {\nfor var i = 0; ; i++ {\nbreak\n}\n}\n", "for var i = 0; ; i++ {\n")]
+    [InlineData("func run() {\nfor var i = 0; i < 10; {\nbreak\n}\n}\n", "for var i = 0; i < 10; {\n")]
+    [InlineData("func run() {\nfor ; ; {\nbreak\n}\n}\n", "for ; ; {\n")]
+    public void Format_SpacesAnEmptyForClauseCorrectly(string input, string expectedHeader)
+    {
+        // An empty clause leaves a for-clause separator with nothing but the
+        // `for` keyword or the other separator to its left; the "no space
+        // before `;`" rule that ordinarily hugs a statement-terminating `;`
+        // to its preceding token must not glue it to `for` as `for;`.
+        FormatResult result = GSharpFormatter.Format(SourceText.From(input));
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains(expectedHeader, result.Text!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Format_ParseFailureReturnsDiagnostics()
     {
         FormatResult result = GSharpFormatter.Format(SourceText.From("func broken( {\n"));

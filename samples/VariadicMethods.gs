@@ -14,9 +14,7 @@ import System
 class Joiner {
     func Join(sep string, parts ...string) string {
         var s = ""
-        for var i = 0;
-        i < parts.Length;
-        i++ {
+        for var i = 0; i < parts.Length; i++ {
             if i > 0 {
                 s = s + sep
             }
@@ -37,9 +35,7 @@ class Sequences {
 interface IAdder {
     func Add(values ...int32) int32 {
         var total = 0
-        for var i = 0;
-        i < values.Length;
-        i++ {
+        for var i = 0; i < values.Length; i++ {
             total = total + values[i]
         }
         return total
