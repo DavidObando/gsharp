@@ -660,6 +660,21 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.ByRefCannotEscape, reason);
 
     /// <summary>
+    /// GS9010 / issue #4259: a <c>ref</c>/<c>out</c>/<c>in</c> parameter of the enclosing
+    /// function was captured by a closure (lambda or local function). Capturing a
+    /// by-ref parameter into a heap-allocated closure is unsound — the referent's
+    /// lifetime is not guaranteed to outlive the closure — so the capture is rejected
+    /// rather than silently compiled into a by-value snapshot. Distinct from a
+    /// <c>ref</c>/<c>var ref</c> LOCAL alias capture, which is a separate, legal-in-some-
+    /// contexts case handled elsewhere.
+    /// </summary>
+    /// <param name="location">The text location of the closure whose body captures the parameter.</param>
+    /// <param name="parameterName">The captured parameter's name.</param>
+    /// <param name="refKindKeyword">"ref", "out", or "in".</param>
+    public void ReportRefParameterCannotBeCaptured(TextLocation location, string parameterName, string refKindKeyword)
+    => Report(location, DiagnosticDescriptors.RefParameterCannotBeCaptured, parameterName, refKindKeyword);
+
+    /// <summary>
     /// GS0410: a from-end index marker <c>^</c> appeared where it is not
     /// allowed — at the very start of a standalone range expression
     /// (<c>^a..b</c>) or as a bare expression. The leading <c>^</c> is
