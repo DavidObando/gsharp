@@ -409,6 +409,63 @@ internal sealed partial class StatementBinder
         };
 
     /// <summary>
+    /// Issue #4219 (umbrella remainder) correctness fix: a syntactic pre-check
+    /// gating whether a consecutive run of <see cref="IsNonGenericLocalFunctionLiteralDeclaration"/>
+    /// members actually needs the forward-visible/direct-call group
+    /// representation. Without this gate, mere source-adjacency of two
+    /// non-generic <c>let name = func ...</c> locals opted them in
+    /// regardless of whether either body ever names the other — so two
+    /// unrelated, ordinary capturing callbacks declared back-to-back (a
+    /// common shape: <c>let onClick = func() {...}; let onLog = func()
+    /// {...}; Register(onClick)</c>) lost the ability to convert a
+    /// capturing member's bare name to a delegate value, a previously-legal
+    /// pattern with nothing to do with recursion. Only a run where at least
+    /// one member's body actually references another member's name needs
+    /// forward visibility; an unrelated run keeps each member's original
+    /// delegate-valued-variable representation (self-recursion is
+    /// unaffected either way — it already works via the existing
+    /// single-declaration self-reference path, so a member naming only
+    /// itself does not count as a cross-reference here).
+    /// </summary>
+    private static bool NonGenericLocalFunctionLiteralGroupHasCrossReference(
+        ImmutableArray<StatementSyntax> statementSyntaxes, int start, int end)
+    {
+        var siblingNames = new HashSet<string>();
+        for (var idx = start; idx < end; idx++)
+        {
+            siblingNames.Add(((VariableDeclarationSyntax)statementSyntaxes[idx]).Identifier.Text);
+        }
+
+        for (var idx = start; idx < end; idx++)
+        {
+            var decl = (VariableDeclarationSyntax)statementSyntaxes[idx];
+            var selfName = decl.Identifier.Text;
+            var literal = (FunctionLiteralExpressionSyntax)decl.Initializer!;
+            foreach (var node in literal.Body.DescendantNodesAndSelf())
+            {
+                // A direct call (`second(x)`) is its own syntax node with an
+                // `Identifier` token — it is NOT a NameExpressionSyntax
+                // wrapping a call, so both shapes must be checked to catch
+                // the common "sibling(...)" recursive-call reference.
+                var referencedName = node switch
+                {
+                    NameExpressionSyntax name => name.IdentifierToken.Text,
+                    CallExpressionSyntax call => call.Identifier.Text,
+                    _ => null,
+                };
+                if (referencedName != null
+                    && referencedName != selfName
+                    && siblingNames.Contains(referencedName))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Shared prepare-then-bind grouping for a consecutive run of local-
     /// function-literal declarations that all match <paramref name="isMember"/>
     /// (either <see cref="IsGenericLocalFunctionDeclaration"/> or
@@ -541,15 +598,34 @@ internal sealed partial class StatementBinder
                 // non-generic sibling declared AFTER it remains GS0130 —
                 // that broader-parity combination is deliberately out of
                 // scope here (see #4219's "mixed groups" note).
+                //
+                // Issue #4219 (umbrella remainder) correctness fix: also require an
+                // actual cross-reference between
+                // members of the run (see
+                // NonGenericLocalFunctionLiteralGroupHasCrossReference) —
+                // mere adjacency of two unrelated non-generic locals must
+                // not opt them into the direct-call representation; see that
+                // method's doc comment for the regression this prevents.
                 if (IsNonGenericLocalFunctionLiteralDeclaration(statementSyntax)
                     && prepareGenericLocalFunctionDeclaration != null
                     && i + 1 < statementSyntaxes.Length
                     && statementSyntaxes[i + 1].SyntaxTree == statementSyntax.SyntaxTree
                     && IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[i + 1]))
                 {
-                    i = BindLocalFunctionLiteralGroup(
-                        statementSyntaxes, i, statements, beforeBind, IsNonGenericLocalFunctionLiteralDeclaration);
-                    continue;
+                    var runEnd = i;
+                    while (runEnd < statementSyntaxes.Length
+                        && statementSyntaxes[runEnd].SyntaxTree == statementSyntax.SyntaxTree
+                        && IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[runEnd]))
+                    {
+                        runEnd++;
+                    }
+
+                    if (NonGenericLocalFunctionLiteralGroupHasCrossReference(statementSyntaxes, i, runEnd))
+                    {
+                        i = BindLocalFunctionLiteralGroup(
+                            statementSyntaxes, i, statements, beforeBind, IsNonGenericLocalFunctionLiteralDeclaration);
+                        continue;
+                    }
                 }
 
                 if (statementSyntax is DeferStatementSyntax deferSyntax)

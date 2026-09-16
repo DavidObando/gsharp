@@ -280,4 +280,63 @@ public class Issue4219NonGenericLocalRecursionTests
             """);
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0126");
     }
+
+    [Fact]
+    public void AdjacentUnrelatedCapturingLocals_NoCrossReference_BareNameConversionStillWorks()
+    {
+        // Review-caught regression: the group-membership gate is source
+        // ADJACENCY of two non-generic `let name = func ...` locals, not
+        // actual mutual/forward recursion. Without an additional check, two
+        // ordinary, UNRELATED capturing callbacks declared back-to-back
+        // (neither one's body ever names the other — the common
+        // callback-registration shape) were swept into the same direct-call
+        // group as a genuinely recursive pair, and lost the ability to
+        // convert a capturing member's bare name to a delegate value even
+        // though nothing about the pair is recursive. This must keep
+        // working exactly as it did before #4219's non-generic group
+        // support existed.
+        var result = EmittedOracle.Evaluate("""
+            func Register(f () -> void) int32 {
+                f()
+                return 0
+            }
+            func Run() int32 {
+                var count = 0
+                let onClick = func() { count = count + 1 }
+                let onLog = func() { Console.Write("") }
+                Register(onClick)
+                return count
+            }
+            Run()
+            """);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void AdjacentSelfRecursiveAndUnrelatedCapturingLocal_NoCrossReference_BareNameConversionStillWorks()
+    {
+        // Same regression, self-recursion variant: a self-recursive member
+        // referencing only its OWN name does not count as a cross-reference
+        // to a SIBLING — self-recursion already works without group
+        // membership (see SelfRecursion_StillWorksInsideAGroup) — so an
+        // adjacent, otherwise-unrelated capturing local must still convert.
+        var result = EmittedOracle.Evaluate("""
+            func Run() int32 {
+                var calls = 0
+                let fact = func(n int32) int32 {
+                    calls = calls + 1
+                    if n <= 1 { return 1 }
+                    return n * fact(n - 1)
+                }
+                let logCalls = func() int32 { return calls }
+                let callback () -> int32 = logCalls
+                fact(5)
+                return callback()
+            }
+            Run()
+            """);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(5, result.Value);
+    }
 }
