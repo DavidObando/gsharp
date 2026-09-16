@@ -111,6 +111,18 @@ internal sealed class UserTokenResolver
     private readonly Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>> lambdaMethodTypeArgsByFunction =
         new Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>>(ReferenceEqualityComparer.Instance);
 
+    // Issue #4223: a zero-capture local function's TRUE own (pre-promotion)
+    // type-parameter list, captured the first time TryPromoteNonCapturingGenericLambda
+    // sees it. TryPromoteNonCapturingGenericLambda runs to a FIXED POINT (a
+    // promoted callee's extra type parameters can require its caller — another
+    // zero-capture local in the same pass — to also carry them, so the call
+    // site can supply them), so on a later pass `fn.TypeParameters` already
+    // includes previously-appended clones; this is the stable baseline that
+    // distinguishes "this function's own declared slots" from "slots already
+    // promoted onto it" across repeated calls for the same function.
+    private readonly Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>> ownTypeParametersByFunction =
+        new Dictionary<FunctionSymbol, ImmutableArray<TypeParameterSymbol>>(ReferenceEqualityComparer.Instance);
+
     public UserTokenResolver(ReflectionMetadataEmitter outer)
     {
         this.outer = outer ?? throw new ArgumentNullException(nameof(outer));
@@ -122,24 +134,59 @@ internal sealed class UserTokenResolver
     }
 
     /// <summary>
-    /// Issue #2118: promotes a non-capturing lambda that references enclosing
-    /// type parameters into a generic method. Clones the referenced enclosing
-    /// type parameters (with their constraints remapped onto the clones) as the
-    /// lambda function's own method type parameters, records the
-    /// enclosing-TP -> own-clone-ordinal remap (so the signature/body encode
-    /// translates references into the method's own <c>MVar</c> slots) and the
-    /// ordered originals (used as MethodSpec type arguments at the delegate
-    /// materialization site). No-op for a lambda that references no enclosing
-    /// type parameter or that already declares its own.
+    /// Issue #2118, extended by #4223: promotes a zero-capture local
+    /// function/lambda that references one or more ENCLOSING method/class type
+    /// parameters into a genuine generic method. Clones each referenced
+    /// enclosing type parameter (with its constraints remapped onto the clone)
+    /// and appends the clones after the function's own declared type
+    /// parameters (if any — a plain, non-generic-own local function has none,
+    /// so the clones become its entire list, exactly the original #2118
+    /// shape). Records the enclosing-TP -> own-clone-ordinal remap (so the
+    /// signature/body encode translates references into the method's own
+    /// <c>MVar</c> slots) and the ordered originals (used as MethodSpec type
+    /// arguments both at the delegate-materialization <c>ldftn</c> site and,
+    /// for the direct-call generic-own-TP shape, at every call site — see
+    /// <see cref="BuildMethodSpecForGenericCall"/>). No-op for a lambda that
+    /// references no enclosing type parameter.
     /// </summary>
+    /// <remarks>
+    /// Issue #4223 (transitive case): promoting a CALLEE can, in turn, require
+    /// its CALLER (another zero-capture local in the same pass) to also carry
+    /// the same enclosing type parameters, purely so the call site has
+    /// something to pass — a caller whose own signature/body never mentions
+    /// the parameter directly (e.g. `let A = func(x T) int32 { return B(x) }`
+    /// calling `let B = func(x T) int32 { return Public() }`, where only `B`
+    /// mentions the enclosing type via an implicit static-owner call).
+    /// Confirmed by direct repro: without this, the caller's emitted call
+    /// site falls back to encoding the extra argument as a dangling `VAR`
+    /// slot (silently WRONG at runtime whenever that slot's ordinal
+    /// coincidentally collides with one of the caller's own — worse than a
+    /// crash) or an invalid one (`System.BadImageFormatException`). The
+    /// caller in turn discovers this need through <see cref="LambdaEnclosingTypeParameterCollector"/>
+    /// consulting <see cref="GetPromotedExtras"/> for every call it makes, so
+    /// this method must be invoked to a FIXED POINT over every zero-capture
+    /// literal in a pass (see <c>ReflectionMetadataEmitter.SynthesizeClosuresAndStateMachines</c>) —
+    /// a callee promoted on a later iteration still reaches its not-yet-reprocessed
+    /// callers. Each call re-derives the function's full referenced set from
+    /// scratch (including whatever was already promoted, since a caller's own
+    /// call sites are re-scanned every pass) rather than computing a delta, which
+    /// is safe because promotion runs entirely before any metadata is emitted —
+    /// no <see cref="GenericRemapState"/> push observes an intermediate state.
+    /// </remarks>
     /// <param name="literal">The non-capturing lambda literal being hosted as a top-level static method.</param>
     /// <param name="loweredBody">The lambda's lowered body (walked for type-parameter references).</param>
     internal void TryPromoteNonCapturingGenericLambda(BoundFunctionLiteralExpression literal, BoundBlockStatement loweredBody)
     {
         var fn = literal?.Function;
-        if (fn == null || fn.IsGeneric)
+        if (fn == null)
         {
             return;
+        }
+
+        if (!this.ownTypeParametersByFunction.TryGetValue(fn, out var ownTypeParameters))
+        {
+            ownTypeParameters = fn.TypeParameters;
+            this.ownTypeParametersByFunction[fn] = ownTypeParameters;
         }
 
         var referenced = new List<TypeParameterSymbol>();
@@ -149,7 +196,24 @@ internal sealed class UserTokenResolver
         }
 
         TypeSymbol.CollectReferencedTypeParameters(fn.Type, referenced);
-        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced);
+
+        // Issue #4223: a generic local function's OWN type-parameter
+        // constraint can reference an enclosing type parameter too
+        // (`Keep[T IComparable[U]]`, `U` owned by the enclosing method/class).
+        foreach (var ownTp in ownTypeParameters)
+        {
+            TypeSymbol.CollectReferencedTypeParameters(ownTp.ConstraintReferenceType, referenced);
+        }
+
+        LambdaEnclosingTypeParameterCollector.Collect(loweredBody, referenced, this.GetPromotedExtras);
+
+        // Only an ENCLOSING type parameter gets cloned/promoted here — the
+        // function's own declared type parameters (if any) already have a
+        // valid MVar slot on this very method.
+        if (!ownTypeParameters.IsDefaultOrEmpty)
+        {
+            referenced.RemoveAll(tp => ownTypeParameters.Contains(tp));
+        }
 
         if (referenced.Count == 0)
         {
@@ -159,7 +223,10 @@ internal sealed class UserTokenResolver
         // Canonical order: class type parameters (Var) before method type
         // parameters (MVar), each by original ordinal — matching
         // SynthesizedClosureReifier.CollectOrdered so the clone list is
-        // deterministic.
+        // deterministic. Deduplicated (a repeated pass, or a callee's extras,
+        // can rediscover a parameter this function's own scan already found).
+        var seen = new HashSet<TypeParameterSymbol>(ReferenceEqualityComparer.Instance);
+        referenced.RemoveAll(tp => !seen.Add(tp));
         referenced.Sort(static (a, b) =>
         {
             var ak = a.IsMethodTypeParameter ? 1 : 0;
@@ -168,21 +235,44 @@ internal sealed class UserTokenResolver
         });
 
         var origTPs = referenced.ToImmutableArray();
-        var clones = SynthesizedClosureReifier.CloneWithRemappedConstraints(origTPs);
+        var ownCount = ownTypeParameters.Length;
+        var clones = SynthesizedClosureReifier.CloneWithRemappedConstraints(origTPs, ordinalOffset: ownCount);
 
         // Setting TypeParameters flips each clone's IsMethodTypeParameter flag,
-        // so the emitter encodes body/signature references as MVar(idx).
-        fn.TypeParameters = clones;
+        // so the emitter encodes body/signature references as MVar(idx). Own
+        // type parameters (if any) keep their existing 0..ownCount-1 ordinals
+        // and are simply carried along ahead of the promoted clones. Assigned
+        // wholesale (not appended) since this recomputes the function's
+        // complete extra set from scratch every pass, and no push has yet
+        // observed the previous value.
+        fn.TypeParameters = ownCount == 0 ? clones : ownTypeParameters.AddRange(clones);
 
         var remap = new Dictionary<TypeParameterSymbol, int>(origTPs.Length, ReferenceEqualityComparer.Instance);
         for (var i = 0; i < origTPs.Length; i++)
         {
-            remap[origTPs[i]] = i;
+            remap[origTPs[i]] = ownCount + i;
         }
 
         this.remaps.RegisterLambdaMethodRemap(fn, remap);
         this.lambdaMethodTypeArgsByFunction[fn] = origTPs;
     }
+
+    /// <summary>
+    /// Issue #4223: the ordered ENCLOSING type parameters
+    /// <see cref="TryPromoteNonCapturingGenericLambda"/> promoted onto
+    /// <paramref name="fn"/> as its trailing method type parameters — the
+    /// exact type arguments a call site must append after <paramref name="fn"/>'s
+    /// own to build a valid <c>MethodSpec</c> (see
+    /// <see cref="BuildMethodSpecForGenericCall"/>) — or empty when
+    /// <paramref name="fn"/> was never promoted. Also consulted by
+    /// <see cref="LambdaEnclosingTypeParameterCollector"/> so a CALLER
+    /// discovers it must promote itself for the same parameters purely to
+    /// have something to pass at its own call site to <paramref name="fn"/>.
+    /// </summary>
+    /// <param name="fn">The (possibly promoted) callee function.</param>
+    /// <returns>The ordered promoted-extra type parameters, or empty.</returns>
+    internal ImmutableArray<TypeParameterSymbol> GetPromotedExtras(FunctionSymbol fn)
+        => this.lambdaMethodTypeArgsByFunction.TryGetValue(fn, out var extras) ? extras : ImmutableArray<TypeParameterSymbol>.Empty;
 
     /// <summary>
     /// Issue #2118: resolves the <c>ldftn</c> target token for a non-capturing
@@ -223,21 +313,51 @@ internal sealed class UserTokenResolver
     {
         var tps = call.Function.TypeParameters;
 
-        // Issue #1931: prefer the bind-time-resolved method type arguments
-        // (explicit `[T]` list or inference) stashed on the bound node — see
-        // BuildMethodSpecForGenericInstanceCall for the rationale.
-        if (!call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == tps.Length)
+        // Issue #4223: a generic local function promoted by
+        // TryPromoteNonCapturingGenericLambda to ALSO carry cloned enclosing
+        // type parameters (issue #2118) appends them after its own declared
+        // list. Those trailing slots can never be inferred from the call's
+        // arguments — the function's own parameter/return types still name
+        // the ORIGINAL enclosing type parameter, never the clone — they are
+        // exactly the in-scope originals recorded when the clones were made,
+        // valid as-is at any call site still lexically nested in that scope.
+        var extras = this.lambdaMethodTypeArgsByFunction.TryGetValue(call.Function, out var extraOriginals)
+            ? extraOriginals
+            : ImmutableArray<TypeParameterSymbol>.Empty;
+        var ownCount = tps.Length - extras.Length;
+
+        // Issue #1931: prefer the bind-time-resolved OWN method type
+        // arguments (explicit `[T]` list or inference) stashed on the bound
+        // node — see BuildMethodSpecForGenericInstanceCall for the rationale.
+        // The bound node was recorded before any enclosing-type-parameter
+        // promotion, so its arity always matches the OWN (pre-promotion) list.
+        TypeSymbol[] ownArgs;
+        if (!call.MethodTypeArguments.IsDefaultOrEmpty && call.MethodTypeArguments.Length == ownCount)
         {
-            return this.BuildMethodSpec(openMethod, call.MethodTypeArguments.ToArray());
+            ownArgs = call.MethodTypeArguments.ToArray();
+        }
+        else
+        {
+            ownArgs = new TypeSymbol[ownCount];
+            var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(
+                call.Function,
+                Invariant.Required(call.ReturnType, "a generic call has a return type for inference"));
+            for (int i = 0; i < ownCount; i++)
+            {
+                ownArgs[i] = InferMethodTypeArgument(call.Function, call.Arguments, inferenceReturn, tps[i]);
+            }
+        }
+
+        if (extras.IsDefaultOrEmpty)
+        {
+            return this.BuildMethodSpec(openMethod, ownArgs);
         }
 
         var args = new TypeSymbol[tps.Length];
-        var inferenceReturn = AsyncReturnTypeNormalizer.GetDeclaredResultType(
-            call.Function,
-            Invariant.Required(call.ReturnType, "a generic call has a return type for inference"));
-        for (int i = 0; i < tps.Length; i++)
+        Array.Copy(ownArgs, args, ownCount);
+        for (int i = 0; i < extras.Length; i++)
         {
-            args[i] = InferMethodTypeArgument(call.Function, call.Arguments, inferenceReturn, tps[i]);
+            args[ownCount + i] = extras[i];
         }
 
         return this.BuildMethodSpec(openMethod, args);

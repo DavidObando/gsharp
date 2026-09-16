@@ -293,8 +293,15 @@ internal sealed class ClosureEmitter
                 // generic parameters); this zero-field-host path always
                 // excludes every generic local function, capturing or not,
                 // and uses a direct static host above rather than an instance
-                // Invoke method. Enclosing type-parameter reification remains
-                // outside this milestone.
+                // Invoke method. A capture-free generic local function stays
+                // on the top-level `<Program>` host instead (issue #4223:
+                // UserTokenResolver.TryPromoteNonCapturingGenericLambda reifies
+                // any ENCLOSING type parameter it references as an additional
+                // method type parameter of its own MethodDef — no display-
+                // class nesting is needed for that). A generic local function
+                // that ALSO needs its lexical owner's accessibility domain
+                // (private/protected member access) remains unsupported
+                // (GS0586) when that owner is itself generic.
                 if (literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not { } zeroCaptureEnclosing
                     || zeroCaptureEnclosing is not (StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }))
