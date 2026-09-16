@@ -261,14 +261,23 @@ public class Issue4220ReadOnlyRefTests
         Assert.Equal(42, result.ReadGlobals()["answer"]);
     }
 
+    // Issue #4224: aliasing a ref-readonly-returning call/property/indexer
+    // result was the deferred limitation this test's name refers to — gsc's
+    // lvalue checks accepted only a variable, field, array element, or
+    // dereference, never a call/property result. Issue #4224 closes that gap
+    // (ExpressionBinder.IsLvalue / StatementBinder.IsLvalueForRefReturn now
+    // also accept a native ref-returning call/property), so these six forms
+    // now bind as genuine LIVE references rather than being rejected — the
+    // test proves liveness (not a snapshot) by mutating the source AFTER the
+    // alias is taken and observing the mutation through the alias.
     [Theory]
-    [InlineData("source.View")]
-    [InlineData("source.GetView()")]
-    [InlineData("source[0]")]
-    [InlineData("source.View.Value")]
-    [InlineData("source.GetView().Value")]
-    [InlineData("source[0].Value")]
-    public void DeferredSourceRefResultAliasesNeverBecomeSnapshots(string initializer)
+    [InlineData("source.View", "view.Value")]
+    [InlineData("source.GetView()", "view.Value")]
+    [InlineData("source[0]", "view.Value")]
+    [InlineData("source.View.Value", "view")]
+    [InlineData("source.GetView().Value", "view")]
+    [InlineData("source[0].Value", "view")]
+    public void SourceRefResultAliasesObserveMutation_NeverBecomeSnapshots(string initializer, string readExpression)
     {
         var result = EmittedOracle.Evaluate($$"""
             struct Counter { var Value int32 }
@@ -278,13 +287,16 @@ public class Issue4220ReadOnlyRefTests
                 prop this[i int32] ref readonly Counter -> value
                 func GetView() ref readonly Counter { return ref value }
             }
-            func Run() {
+            func Run() int32 {
                 let source = Source{}
                 let ref readonly view = {{initializer}}
+                source.value.Value = 99
+                return {{readExpression}}
             }
+            var answer = Run()
             """);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0256");
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998" || d.Id == "GS0005");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(99, result.ReadGlobals()["answer"]);
     }
 
     [Theory]

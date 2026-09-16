@@ -586,6 +586,15 @@ internal sealed partial class StatementBinder
                 return true;
             case BoundBlockExpression block:
                 return IsLvalueForRefReturn(block.Expression);
+
+            // Issue #4224: `return ref At(...)` — forwarding a native
+            // ref-returning call/property read. Delegates to the same
+            // classifier ExpressionBinder.IsLvalue uses so the two
+            // classifiers do not drift (root cause #2 of issue #4224).
+            case BoundCallExpression:
+            case BoundUserInstanceCallExpression:
+            case BoundPropertyAccessExpression:
+                return ExpressionBinder.IsLvalue(expr);
             default:
                 return false;
         }
@@ -650,7 +659,40 @@ internal sealed partial class StatementBinder
                     : HasFunctionLocalRefScope(deref.Operand);
             case BoundBlockExpression block:
                 return HasFunctionLocalRefScope(block.Expression);
+            case BoundConditionalAddressExpression condAddr:
+                return HasFunctionLocalRefScope(condAddr.WhenTrueOperand)
+                    || HasFunctionLocalRefScope(condAddr.WhenFalseOperand);
+
+            // Issue #4224 (root cause #4): a native ref-returning call/property
+            // read escapes only as far as the storage it could be forwarding —
+            // its instance receiver (a struct receiver's storage) and any
+            // ref/in/out argument's underlying storage. The callee's OWN
+            // `return ref` was already validated against this same scope
+            // check when the callee itself was bound, so a plain by-value
+            // parameter or a class receiver can never be the source of the
+            // returned reference; only a borrowed (ref/in/out, non-`scoped`)
+            // argument or a struct receiver can.
             default:
+                if (RefCapabilities.TryGetRefReturnEscapeSources(expr, out var callReceiver, out var byRefArguments))
+                {
+                    if (callReceiver != null
+                        && !Binder.IsReferenceTypeForConstraint(callReceiver.Type)
+                        && HasFunctionLocalRefScope(callReceiver))
+                    {
+                        return true;
+                    }
+
+                    foreach (var argument in byRefArguments)
+                    {
+                        if (HasFunctionLocalRefScope(argument))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+                }
+
                 return true;
         }
     }
