@@ -141,6 +141,122 @@ namespace Demo
     }
 
     [Fact]
+    public void GuardedNullableProperty_SameConditionAnd_DoesNotAssert()
+    {
+        // Issue #4262 follow-up (cs2gs nullability investigation): gsc DOES
+        // narrow a field/property/member-access-chain receiver guarded by a
+        // null check combined via `&&` in the SAME boolean expression, unlike
+        // the statement-crossing guard above (an `if`-body) — confirmed
+        // directly against the compiler. cs2gs asserted `!!` here regardless,
+        // even though the C# source itself carries no `!`; verbatim shape of
+        // Oahu.Core/Profile.cs (issue #4262's own corpus).
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token { public string? AccessToken { get; set; } }
+    public class C
+    {
+        public bool F(Token t) =>
+            t.AccessToken is not null && t.AccessToken.StartsWith(""stub"");
+    }
+}");
+
+        Assert.Contains("t.AccessToken.StartsWith(\"stub\")", printed);
+        Assert.DoesNotContain("!!", printed);
+    }
+
+    [Fact]
+    public void GuardedNullableProperty_SameConditionOr_DoesNotAssert()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token { public string? AccessToken { get; set; } }
+    public class C
+    {
+        public bool F(Token t) =>
+            !(t.AccessToken is null || !t.AccessToken.StartsWith(""stub""));
+    }
+}");
+
+        Assert.Contains("t.AccessToken.StartsWith(\"stub\")", printed);
+        Assert.DoesNotContain("!!", printed);
+    }
+
+    [Fact]
+    public void GuardedNullableProperty_SameConditionAnd_ObliviousCompilation_DoesNotAssert()
+    {
+        // The oblivious counterpart: Roslyn's own flow state is empty for an
+        // oblivious compilation, so this same-condition guard is detected
+        // purely syntactically, exactly like the real Oahu.Core (which has
+        // no `<Nullable>` element at all) — verified against the compiler.
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class Token { public string AccessToken { get; set; } }
+    public class C
+    {
+        public bool F(Token t) =>
+            t.AccessToken != null && t.AccessToken.StartsWith(""stub"");
+    }
+}");
+
+        Assert.Contains("t.AccessToken.StartsWith(\"stub\")", printed);
+        Assert.DoesNotContain("!!", printed);
+    }
+
+    [Fact]
+    public void UnrelatedGuard_SameConditionAnd_StillAsserts()
+    {
+        // Precision guard: the left operand null-checks a DIFFERENT
+        // property, so the right operand's receiver is not narrowed and must
+        // still assert.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token { public string? AccessToken { get; set; } public string? RefreshToken { get; set; } }
+    public class C
+    {
+        public bool F(Token t) =>
+            t.RefreshToken is not null && t.AccessToken.StartsWith(""stub"");
+    }
+}");
+
+        Assert.Contains("t.AccessToken!!.StartsWith(\"stub\")", printed);
+    }
+
+    [Fact]
+    public void GuardInCondition_UseInFollowingStatement_StillAsserts()
+    {
+        // Precision guard: the same-condition rule only reaches the
+        // IMMEDIATE `&&`/`||` sibling — it must not treat a guard as
+        // narrowing a LATER, separate statement's use of the same field/
+        // property, since gsc genuinely cannot narrow a field/property that
+        // far (only the pre-existing statement-crossing rules — themselves
+        // unaffected by this change — ever assert `false` there, via a
+        // DIFFERENT, syntactic guard-detection path).
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token { public string? AccessToken { get; set; } }
+    public class C
+    {
+        public bool F(Token t)
+        {
+            bool guarded = t.AccessToken is not null && t.AccessToken.StartsWith(""x"");
+            return guarded && t.AccessToken.StartsWith(""stub"");
+        }
+    }
+}");
+
+        Assert.Contains("t.AccessToken!!.StartsWith(\"stub\")", printed);
+    }
+
+    [Fact]
     public void AlreadyNullForgiving_MemberAccess_DoesNotDoubleAssert()
     {
         string printed = TranslateUnit(@"

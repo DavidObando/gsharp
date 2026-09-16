@@ -969,6 +969,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || importedGenericTupleElementRequiresAssertion
                 || (!this.IsActivePatternBinding(recv)
                 && !this.IsWithinExpressionTreeLambda(recv)
+                && !this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv)
                 && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                     || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
                     || this.NullableReferenceValueMayBeNull(recv))))
@@ -2033,6 +2034,83 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        /// <summary>
+        /// Issue #4262 follow-up (cs2gs nullability investigation): gsc's own
+        /// smart-cast narrowing DOES reach a field/property/member-access-chain
+        /// receiver guarded by a null check combined via <c>&amp;&amp;</c>/<c>||</c>
+        /// in the SAME boolean expression (<c>t.AccessToken != null &amp;&amp;
+        /// t.AccessToken.M()</c>) — confirmed directly against the compiler,
+        /// which is a strictly narrower claim than <see cref="IsGSharpFlowNarrowedLocal"/>
+        /// makes for a bare local/parameter (that method's guard MAY also cross
+        /// a statement boundary, because gsc's narrowing of a LOCAL does too).
+        /// It does NOT reach one across a statement boundary (an <c>if</c>-body,
+        /// an <c>else</c>, a ternary arm) for a field/property — that remains a
+        /// genuine gsc limitation, and <see cref="IsNullGuardNarrowedFieldUse"/>
+        /// exists BECAUSE of it: that rule detects exactly this class of guard
+        /// and INSERTS `!!` (the opposite of this method), so the two are
+        /// deliberately disjoint, not overlapping fallbacks.
+        /// <para>
+        /// Purely syntactic — not gated on Roslyn's flow state, unlike
+        /// <see cref="IsGSharpFlowNarrowedLocal"/> — because it must also
+        /// suppress the oblivious-analysis promoted-nullable / obliviously-
+        /// annotated rules below (issues #2506, #3683), which fire on ANY
+        /// dereference of such a property with no guard-awareness of their
+        /// own; an oblivious file has no Roslyn flow state to gate on in the
+        /// first place, exactly like <see cref="IsNullGuardNarrowedFieldUse"/>
+        /// and <see cref="IsLazyInitGuardedFieldUse"/> are already syntactic
+        /// for the same reason.
+        /// </para>
+        /// </summary>
+        private bool IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(ExpressionSyntax expression)
+        {
+            // Climb from the receiver expression up through the SAME "use"
+            // subtree (its own enclosing member-access/invocation/element-
+            // access/parenthesized/logical-not wrapping) until reaching a
+            // point that is exactly the RIGHT operand of an enclosing
+            // `&&`/`||` — never past a statement-level construct, which a
+            // field/property cannot be narrowed across.
+            //
+            // Deliberately syntax-only until a matching `&&`/`||` parent is
+            // actually found: at the vast majority of receivers (locals,
+            // parameters, unguarded chains) this loop hits a non-matching
+            // parent and returns before ever touching the semantic model, so
+            // this predicate costs nothing extra at sites it can't affect —
+            // it never calls into `this.context`/`SemanticModel` for them.
+            for (SyntaxNode node = expression; node.Parent != null; node = node.Parent)
+            {
+                switch (node.Parent)
+                {
+                    case ParenthesizedExpressionSyntax:
+                    case MemberAccessExpressionSyntax:
+                    case InvocationExpressionSyntax:
+                    case ElementAccessExpressionSyntax:
+                    case PrefixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.LogicalNotExpression }:
+                        continue;
+
+                    case BinaryExpressionSyntax binary
+                        when binary.IsKind(SyntaxKind.LogicalAndExpression) && binary.Right == node:
+                    {
+                        ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+                        return symbol is (IFieldSymbol or IPropertySymbol)
+                            && this.IsNonNullCheckOf(binary.Left, symbol);
+                    }
+
+                    case BinaryExpressionSyntax binary
+                        when binary.IsKind(SyntaxKind.LogicalOrExpression) && binary.Right == node:
+                    {
+                        ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+                        return symbol is (IFieldSymbol or IPropertySymbol)
+                            && this.IsNullCheckOf(binary.Left, symbol);
+                    }
+
+                    default:
+                        return false;
+                }
+            }
+
+            return false;
+        }
+
         private bool AssignmentResultHasNonNullStaticType(
             AssignmentExpressionSyntax assignment)
         {
@@ -2557,7 +2635,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (this.GSharpExpressionIsStaticallyNonNull(recv)
                 || this.IsActivePatternBinding(recv)
-                || this.IsGSharpFlowNarrowedLocal(recv))
+                || this.IsGSharpFlowNarrowedLocal(recv)
+                || this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv))
             {
                 return false;
             }
@@ -2606,7 +2685,7 @@ public sealed partial class CSharpToGSharpTranslator
             // or argument must remain `T?` instead of being blanket-forgiven.
             if (isDereferenceReceiver && this.ReceiverValueIsPromotedNullable(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2506-promoted-nullable-receiver");
             }
 
             // Issue #3683 (family F5): the sibling of the promoted-value rule
@@ -2615,7 +2694,7 @@ public sealed partial class CSharpToGSharpTranslator
             // receiver-only gate, same faithfulness argument.
             if (isDereferenceReceiver && this.ReceiverValueIsObliviouslyReadAnnotatedResult(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("3683-obliviously-annotated-result");
             }
 
             // Issue #2164: the classic lazy-singleton pattern initializes a
@@ -2629,7 +2708,7 @@ public sealed partial class CSharpToGSharpTranslator
             // detect the guard from SYNTAX and assert `F!!` instead.
             if (this.IsLazyInitGuardedFieldUse(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2164-lazy-init-guarded-field");
             }
 
             // Issue #2202: `if (F == null) {…} else { …F… }` / `F == null ? … : …F…`
@@ -2638,7 +2717,7 @@ public sealed partial class CSharpToGSharpTranslator
             // above, for a plain null-check guard instead of a lazy-init one.
             if (this.IsNullGuardNarrowedFieldUse(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2202-null-guard-narrowed-field");
             }
 
             // Issue #2202 / #2412 (round 3): a nullable-tainted field/property
@@ -2664,7 +2743,7 @@ public sealed partial class CSharpToGSharpTranslator
             // either arm).
             if (this.IsNullableTaintedArmOfReturnPreservingConditional(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2202-2412-tainted-arm-return-preserving-conditional");
             }
 
             // Issue #4211: the ELEMENT-ACCESS-SINK sibling of the rule just
@@ -2683,7 +2762,7 @@ public sealed partial class CSharpToGSharpTranslator
             // other sink the taint fixpoint structurally cannot widen.
             if (this.IsNullableTaintedArmOfElementAccessAssignment(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("4211-tainted-arm-element-access-assignment");
             }
 
             // Issue #2432: an UNCONDITIONAL (no ternary/switch, no null-check
@@ -2713,7 +2792,7 @@ public sealed partial class CSharpToGSharpTranslator
             // minimal bridge, not a widening of the interface contract.
             if (this.IsUnguardedForwardOfTaintedValueInReturnPreservingBody(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2432-unguarded-forward-return-preserving-body");
             }
 
             // Issue #2496: once callable values stop borrowing their synthesized
@@ -2723,7 +2802,7 @@ public sealed partial class CSharpToGSharpTranslator
             // expression-tree guard above deliberately excludes quoted lambdas.
             if (this.IsUnguardedForwardOfTaintedValueAsRuntimeLambdaResult(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2496-unguarded-forward-lambda-result");
             }
 
             // Issue #2434: the ARGUMENT-position counterpart of the rule just
@@ -2737,7 +2816,7 @@ public sealed partial class CSharpToGSharpTranslator
             // parameter is `IConversion`).
             if (this.IsUnguardedForwardOfTaintedValueAsArgument(recv))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2434-unguarded-forward-argument");
             }
 
             // Issue #2202: a call (or property/field read) whose result comes from
@@ -2754,7 +2833,7 @@ public sealed partial class CSharpToGSharpTranslator
             // determines how gsc imports the value.
             if (this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(recv).Symbol))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2202-imported-oblivious-nullable-member");
             }
 
             // Issue #2412: a VALUE-position read (`return foo.Name;`,
@@ -2779,7 +2858,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && !SymbolEqualityComparer.Default.Equals(foreignCandidate.ContainingAssembly, this.context.Compilation.Assembly)
                 && this.ShouldPromoteToNullableReference(foreignCandidate))
             {
-                return true;
+                return NullForgivenessTelemetry.Record("2412-cross-project-oblivious-value-read");
             }
 
             // Flow analysis must have proven the receiver non-null at this site.
@@ -2823,8 +2902,17 @@ public sealed partial class CSharpToGSharpTranslator
             // A declared non-null receiver that this pass PROMOTED to `T?`
             // (issue #1072: null-checked param/field/local) is rendered nullable
             // too, so its flow-proven uses need the same assertion for consistency.
-            return declared.NullableAnnotation == NullableAnnotation.Annotated
-                || this.ShouldPromoteToNullableReference(symbol);
+            if (declared.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return NullForgivenessTelemetry.Record("flow-proven-declared-nullable");
+            }
+
+            if (this.ShouldPromoteToNullableReference(symbol))
+            {
+                return NullForgivenessTelemetry.Record("1072-flow-proven-promoted-nullable");
+            }
+
+            return false;
         }
 
         /// <summary>
