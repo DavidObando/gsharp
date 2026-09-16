@@ -517,7 +517,7 @@ the frontier advances automatically — #938–#944 moved L3 to `translate PASS`
 
 | Issue | Construct | Diagnostic | Status |
 | --- | --- | --- | --- |
-| [#938](https://github.com/DavidObando/gsharp/issues/938) | Owned-`struct` methods (receiver-clause warning) | GS0314 | resolved |
+| [#938](https://github.com/DavidObando/gsharp/issues/938) | Owned-`struct` methods (receiver-clause warning) | GS0314 (retired by ADR-0182) | resolved |
 | [#939](https://github.com/DavidObando/gsharp/issues/939) | `for…in List[userType]` erases element type | GS0158 | resolved |
 | [#940](https://github.com/DavidObando/gsharp/issues/940) | Static (`shared`) method overloads don't resolve by arity | GS0144 | resolved |
 | [#941](https://github.com/DavidObando/gsharp/issues/941) | Binary `??` operator unsupported (only `??=` existed) | GS0005 | resolved |

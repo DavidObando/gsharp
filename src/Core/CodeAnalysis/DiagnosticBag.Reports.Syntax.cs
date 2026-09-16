@@ -367,6 +367,16 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.RetiredDelegateDeclarationForm, delegateName);
 
     /// <summary>
+    /// ADR-0182 / issue #4240: reports the retired ADR-0165
+    /// <c>func extension (receiver Type) Name(...)</c> marker. Every
+    /// receiver clause is unconditionally an extension now, so the marker
+    /// is redundant; the fix is to delete the <c>extension</c> word.
+    /// </summary>
+    /// <param name="location">The text location of the <c>extension</c> token.</param>
+    public void ReportRetiredExplicitExtensionReceiverModifier(TextLocation location)
+    => Report(location, DiagnosticDescriptors.RetiredExplicitExtensionReceiverModifier);
+
+    /// <summary>
     /// Reports that the identifier <c>null</c> was used where the G# null
     /// literal <c>nil</c> is required. G# does not recognise <c>null</c> as
     /// a keyword — the correct spelling is <c>nil</c> (ADR-0081).

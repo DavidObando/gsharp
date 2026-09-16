@@ -1,7 +1,14 @@
 # ADR-0079: Restrict receiver-clause methods to non-owned types (warning)
 
-- **Status**: Accepted
+- **Status**: Accepted; escalated to a hard rule by ADR-0182
 - **Date**: 2026-06-12
+
+> **2026-09-15**: [ADR-0182](0182-receiver-clause-is-always-extension.md)
+> takes the escalation this ADR's "Open follow-ups" deferred: `GS0314`
+> retires, and the receiver-clause form for an owned class/struct no longer
+> binds as an instance method at all — it binds as an extension, same as
+> every other receiver clause. The operator exemption below is unchanged.
+> This document is kept for historical accuracy.
 - **Phase**: Phase 6 (cleanup)
 - **Related**: ADR-0019 (extension function declaration syntax), ADR-0024
   (methods-vs-extensions canonical style), ADR-0035 (user operator

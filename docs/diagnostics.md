@@ -92,7 +92,7 @@ reported as [GS9305](#analyzer-host-diagnostics-gs9300gs9319-reserved).
 | GS0100 | Error | Not all code paths return a value. | A non-void function is missing a `return` on some branch. |
 | GS0101 | Error | Parameter already declared. | Two parameters share the same name. |
 | GS0102 | Error | Symbol already declared. | A variable or function name is used twice in the same scope. |
-| GS0103 | Error | Method receiver must be a struct or class declared in the same package. | Receiver type is a built-in or external type. |
+| GS0103 | _Retired_ | Previously: a same-package receiver clause on a non-aggregate type (enum, interface, non-struct alias) was rejected. ADR-0182 made every receiver clause an extension regardless of the receiver's owning package or kind, so any receiver type is now valid; this diagnostic is no longer emitted. | — |
 | GS0104 | Error | Reserved; not currently emitted. Zero-field `data class`/`data struct` declarations are supported with trivial equality/hash/ToString/copy semantics and no synthesized `Deconstruct`. | — |
 | GS0105 | Error | `inline struct` requires exactly one field. | `inline struct Foo { a int; b int }` has two fields. |
 | GS0106 | Error | `inline` cannot be combined with `data`. | `inline data struct Foo { … }` is not legal. (Historical: the `record` keyword was removed by; pre-removal this diagnostic also covered `inline record`.) |
@@ -318,6 +318,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
 | GS0586 | Error | Generic local function requires a lexical owner whose direct generic-local hosting is unsupported. | A generic local inside a generic class takes a closed private method group or creates a nested literal requiring that class's generic access domain. Use a named member or an owner-independent helper. |
+| GS0587 | Error | The `extension` keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove `extension` (ADR-0182). | `func extension (c Color) Rank() int32 { ... }` — drop `extension`: `func (c Color) Rank() int32 { ... }` means exactly the same thing. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
@@ -649,15 +650,15 @@ See [ADR-0077](adr/0077-drop-colon-equals-short-variable-declaration.md). The Go
 
 GS0305 fires at every parse position that previously accepted `:=` — statement scope, multi-target assignment, `for` and `await for` range and ellipsis loops, `for` / `if` simple-statement initialisers, and `select` case bindings — and recovers by synthesising the corresponding canonical token (`=` for declarations / multi-target assignment, `in` for the for-range and for-ellipsis and await-for-range forms) so subsequent binding, lowering, and emit see a well-formed tree and no cascade diagnostics fire on the same statement. The diagnostic's `Location` covers the `:=` token itself.
 
-## Owned-receiver method warning (GS0314)
+## Owned-receiver method warning, retired (GS0314)
 
-See [ADR-0079](adr/0079-restrict-receiver-clauses-to-non-owned-types.md). The Go-style receiver-clause method form (`func (r T) M() { ... }`) is now reserved for types this package does **not** own — imported CLR types, BCL primitives, and types declared by referenced packages. Owned-type instance methods should be declared inside the type body. The warning fires once per declaration, at the receiver-type location. Operator overloads (`func (a T) operator +(b T) T`) are exempt because operators have no in-body form today.
+See [ADR-0182](adr/0182-receiver-clause-is-always-extension.md), which supersedes [ADR-0079](adr/0079-restrict-receiver-clauses-to-non-owned-types.md). The Go-style receiver-clause form (`func (r T) M() { ... }`) is now unconditionally an extension, whether or not the current package owns `T`. There is no longer an owned-type meaning to warn about: a same-package instance method is declared inside the type body, full stop, with no receiver-clause alternative. Operator overloads (`func (a T) operator +(b T) T`) remain the one receiver-clause form that still attaches to an owned type, unchanged from ADR-0079.
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
-| GS0314 | Warning | `Receiver-clause methods are reserved for types this package does not own; declare '<MethodName>' as a member of '<TypeName>' instead.` | `class Point { var X int32 } func (p Point) Distance() int32 { ... }` — `Point` is owned by the current package; move `Distance` into the class body. Cross-package and CLR receivers (`func (sb StringBuilder) Reset() ...`) are unaffected. |
+| GS0314 | _Retired_ | Previously: a receiver-clause method on an owned class/struct warned that it should move into the type body. ADR-0182 removed the owned-instance-method meaning of the receiver-clause form entirely (it is always an extension now), so there is nothing left to warn about; this diagnostic is no longer emitted. | — |
 
-GS0314 is a soft warning during a one-release grace period; a future ADR may escalate it to an error. Suppress per-project via `<NoWarn>GS0314</NoWarn>` if migration must be deferred.
+Migration note: a receiver-clause method on an owned class/struct that used to trigger this warning now binds as an extension instead of an instance method — see [ADR-0182](adr/0182-receiver-clause-is-always-extension.md)'s migration section for the compile-time and (for struct field mutation) silent-behavior consequences.
 
 ## Named-argument `=` separator retired (GS0524)
 

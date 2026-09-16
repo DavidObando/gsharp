@@ -28,8 +28,7 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // (`unsafe`/`fixed`/`stackalloc`/`unmanaged`/`sizeof`), partial declarations,
   // the overflow-context
   // markers `checked`/`unchecked` (issue #1881; `lock` is a reserved keyword,
-  // not contextual — see `keywords` above), the explicit-extension-receiver
-  // marker `extension` (ADR-0165 / issue #3357), and the named-delegate
+  // not contextual — see `keywords` above), and the named-delegate
   // declaration keyword `delegate` (issue #3510).
   // `record` was removed in v0.2; the lexer still recognises it so the parser
   // can emit the GS0307 migration diagnostic, so we keep it here for fidelity.
@@ -39,8 +38,12 @@ function registerGSharp(Prism: typeof PrismNamespace): void {
   // specialization, `type Name = delegate func(...)`, is a retired recovery
   // spelling superseded by the canonical `delegate Name(...) R;`
   // declaration.
+  // ADR-0165's explicit-extension-receiver marker `extension` (issue #3357)
+  // was retired by ADR-0182 (issue #4240): every receiver clause is
+  // unconditionally an extension now, so `extension` is an ordinary
+  // identifier again — it is deliberately absent from this list.
   const contextualKeywords =
-    /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|extension|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
+    /\b(?:add|and|base|checked|convenience|data|deinit|delegate|event|explicit|fixed|get|implicit|in|init|inline|make|nameof|not|or|out|params|partial|prop|raise|record|ref|remove|scoped|set|shared|sizeof|stackalloc|this|type|typeof|unchecked|unmanaged|unsafe|when|with|yield)\b/;
 
   // Built-in primitive type names (TypeSymbol). Width-bearing names are
   // canonical; friendly aliases (`int`, `long`, etc.) are accepted by the

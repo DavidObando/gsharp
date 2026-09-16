@@ -179,8 +179,21 @@ public class DiagnosticIdUniquenessTests
             // Retired after generic explicit constructors became supported.
             ["GS0217"] = "Retired",
 
+            // Retired by ADR-0182 / issue #4240: a same-package receiver
+            // clause on a non-aggregate type is no longer rejected — every
+            // receiver clause is unconditionally an extension now,
+            // regardless of the receiver's owning package or kind.
+            ["GS0103"] = "Retired",
+
             // Retired when non-loop labels became valid goto targets.
             ["GS0294"] = "Retired",
+
+            // Retired by ADR-0182 / issue #4240: the owned-instance-method
+            // meaning of the receiver-clause form this warning steered
+            // authors away from no longer exists (a receiver clause is
+            // always an extension now), so there is nothing left to warn
+            // about.
+            ["GS0314"] = "Retired",
 
             // Retired by ADR-0095 v2 / issue #3611: bare `unmanaged (T) -> R`
             // is the platform-default unmanaged calling convention.

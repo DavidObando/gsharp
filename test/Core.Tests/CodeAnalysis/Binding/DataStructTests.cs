@@ -175,10 +175,10 @@ p
 data struct Point {
     var X int32
     var Y int32
-}
 
-func (p Point) Equals(other any) bool {
-    return false
+    func Equals(other any) bool {
+        return false
+    }
 }
 0
 ";
@@ -193,10 +193,10 @@ func (p Point) Equals(other any) bool {
 data struct Point {
     var X int32
     var Y int32
-}
 
-func (p Point) GetHashCode() int32 {
-    return 0
+    func GetHashCode() int32 {
+        return 0
+    }
 }
 0
 ";
@@ -211,9 +211,9 @@ func (p Point) GetHashCode() int32 {
 data struct Point {
     var X int32
     var Y int32
-}
 
-func (p Point) Deconstruct() {
+    func Deconstruct() {
+    }
 }
 0
 ";
@@ -226,10 +226,9 @@ func (p Point) Deconstruct() {
     {
         var source = @"
 open data class Point(X int32, Y int32) {
-}
-
-func (p Point) Equals(other any) bool {
-    return false
+    func Equals(other any) bool {
+        return false
+    }
 }
 0
 ";

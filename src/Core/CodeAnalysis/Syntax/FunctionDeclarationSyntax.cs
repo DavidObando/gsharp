@@ -19,7 +19,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     private SyntaxToken? explicitInterfaceOpenParenToken;
     private TypeClauseSyntax? explicitInterfaceType;
     private SyntaxToken? explicitInterfaceCloseParenToken;
-    private SyntaxToken? explicitExtensionModifier;
+    private SyntaxToken? retiredExtensionKeyword;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class.
@@ -426,23 +426,23 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public SyntaxToken FunctionKeyword { get; }
 
     /// <summary>
-    /// Gets or sets the optional contextual <c>extension</c> marker in
-    /// <c>func extension (receiver Type) Name(...)</c>. The marker forces a
-    /// receiver-clause declaration to remain an extension even when the
-    /// receiver type is owned by the current package.
+    /// Gets or sets the retired ADR-0165 <c>extension</c> marker token from
+    /// <c>func extension (receiver Type) Name(...)</c>, when the parser
+    /// recognized that shape. ADR-0182 retired the marker (every receiver
+    /// clause is unconditionally an extension now), so this token exists
+    /// only to preserve full-fidelity source text for the declaration the
+    /// parser reported <c>GS0587</c> against; it carries no semantic
+    /// meaning and binding never reads it.
     /// </summary>
-    public SyntaxToken? ExplicitExtensionModifier
+    public SyntaxToken? RetiredExtensionKeyword
     {
-        get => explicitExtensionModifier;
+        get => retiredExtensionKeyword;
         set
         {
-            explicitExtensionModifier = value;
+            retiredExtensionKeyword = value;
             InvalidateCachedSpan();
         }
     }
-
-    /// <summary>Gets a value indicating whether this receiver clause is explicitly extension-dispatched.</summary>
-    public bool IsExplicitExtension => ExplicitExtensionModifier != null;
 
     /// <summary>
     /// Gets the function identifier.

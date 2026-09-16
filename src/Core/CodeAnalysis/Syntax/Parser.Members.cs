@@ -1221,17 +1221,21 @@ public partial class Parser
     {
         var functionKeyword = MatchToken(SyntaxKind.FuncKeyword);
 
-        // Issue #3357: `func extension (recv Type) Name(...)` forces the
-        // receiver clause to remain an extension for enum and owned receivers.
-        // `extension` stays contextual: a normal function named `extension`
-        // is unaffected unless a complete receiver-clause shape follows.
-        SyntaxToken? explicitExtensionModifier = null;
+        // ADR-0182 / issue #4240: `func extension (recv Type) Name(...)` is a
+        // retired spelling — every receiver clause is unconditionally an
+        // extension now (ADR-0165's marker is redundant), so the keyword is
+        // reported as GS0587 and dropped rather than consumed into a
+        // semantic modifier. `extension` stays contextual: a normal function
+        // named `extension` is unaffected unless a complete receiver-clause
+        // shape follows (same lookahead ADR-0165 introduced).
+        SyntaxToken? retiredExtensionKeyword = null;
         if (allowExplicitExtension &&
             Current.Kind == SyntaxKind.IdentifierToken &&
             Current.Text == "extension" &&
             LooksLikeExplicitExtensionReceiverClause())
         {
-            explicitExtensionModifier = NextToken();
+            retiredExtensionKeyword = NextToken();
+            Diagnostics.ReportRetiredExplicitExtensionReceiverModifier(retiredExtensionKeyword.Location);
         }
 
         SyntaxToken? explicitIfaceOpenParen = null;
@@ -1334,7 +1338,7 @@ public partial class Parser
         }
 
         var decl = new FunctionDeclarationSyntax(syntaxTree, accessibilityModifier, openModifier, overrideModifier, asyncModifier, functionKeyword, receiverOpenParen, receiver, receiverCloseParen, identifier, typeParameterList, openParenthesisToken, parameters, closeParenthesisToken, type, body);
-        decl.ExplicitExtensionModifier = explicitExtensionModifier;
+        decl.RetiredExtensionKeyword = retiredExtensionKeyword;
         decl.ReturnRefModifier = returnRefModifier;
         decl.ReturnReadOnlyModifier = returnReadOnlyModifier;
         decl.SemicolonBodyToken = semicolonBody;

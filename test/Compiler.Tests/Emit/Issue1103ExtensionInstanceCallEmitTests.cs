@@ -171,7 +171,7 @@ public class Issue1103ExtensionInstanceCallEmitTests
     }
 
     [Fact]
-    public void ExplicitExtensions_OnOwnedAndEnumReceivers_Run()
+    public void OwnedAndEnumReceivers_BindAsExtensions_Run()
     {
         var source = """
             package P
@@ -183,23 +183,23 @@ public class Issue1103ExtensionInstanceCallEmitTests
                 var Value int32
             }
 
-            func extension (color Color) Describe() string {
+            func (color Color) Describe() string {
                 return color.ToString()
             }
 
-            func extension (color Color) Echo[T](value T) T {
+            func (color Color) Echo[T](value T) T {
                 return value
             }
 
-            func extension (box Box) Describe() string {
+            func (box Box) Describe() string {
                 return box.Value.ToString()
             }
 
-            func extension (box Box) Describe(prefix string) string {
+            func (box Box) Describe(prefix string) string {
                 return prefix + box.Value.ToString()
             }
 
-            func extension (box Box) Echo[T](value T) T {
+            func (box Box) Echo[T](value T) T {
                 return value
             }
 

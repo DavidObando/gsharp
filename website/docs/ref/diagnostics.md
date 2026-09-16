@@ -94,7 +94,7 @@ reported as [GS9305](#analyzer-host-diagnostics-gs9300gs9319-reserved).
 | GS0100 | Error | Not all code paths return a value. | A non-void function is missing a `return` on some branch. |
 | GS0101 | Error | Parameter already declared. | Two parameters share the same name. |
 | GS0102 | Error | Symbol already declared. | A variable or function name is used twice in the same scope. |
-| GS0103 | Error | Method receiver must be a struct or class declared in the same package. | Receiver type is a built-in or external type. |
+| GS0103 | _Retired_ | Previously: a same-package receiver clause on a non-aggregate type (enum, interface, non-struct alias) was rejected. ADR-0182 made every receiver clause an extension regardless of the receiver's owning package or kind, so any receiver type is now valid; this diagnostic is no longer emitted. | — |
 | GS0104 | Error | Reserved; not currently emitted. Zero-field `data class`/`data struct` declarations are supported with trivial equality/hash/ToString/copy semantics and no synthesized `Deconstruct`. | — |
 | GS0105 | Error | `inline struct` requires exactly one field. | `inline struct Foo { a int; b int }` has two fields. |
 | GS0106 | Error | `inline` cannot be combined with `data`. | `inline data struct Foo { … }` is not legal. (Historical: the `record` keyword was removed by; pre-removal this diagnostic also covered `inline record`.) |
@@ -299,6 +299,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
 | GS0586 | Error | Generic local function requires a lexical owner whose direct generic-local hosting is unsupported. | A generic local inside a generic class takes a closed private method group or creates a nested literal requiring that class's generic access domain. Use a named member or an owner-independent helper. |
+| GS0587 | Error | The `extension` keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove `extension` (ADR-0182). | `func extension (c Color) Rank() int32 { ... }` — drop `extension`: `func (c Color) Rank() int32 { ... }` means exactly the same thing. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |
@@ -776,33 +777,43 @@ Cause/fix:
   For `sealed class Shape` with subclasses `Circle`, `Square`, write
   `switch s { case c is Circle: ... case sq is Square: ... }`.
 
-## Owned-receiver method warning (GS0314)
+## Owned-receiver method warning, retired (GS0314)
 
-Go-style receiver-clause methods are restricted to types
-this package does **not** own. Same-package owned-type instance methods
-should be declared inside the type body; the receiver-clause form is
-reserved for non-owned types (imported CLR types, BCL primitives, and
-types declared by referenced packages).
+See [ADR-0182](adr/0182-receiver-clause-is-always-extension.md), which
+supersedes [ADR-0079](adr/0079-restrict-receiver-clauses-to-non-owned-types.md).
+Go-style receiver-clause methods (`func (r T) M() { ... }`) are
+unconditionally extensions now, whether or not the current package owns
+`T`. There is no more owned-instance-method meaning to warn about: a
+same-package instance method is declared inside the type body, full stop,
+with no receiver-clause alternative. Operator overloads (`func (a T)
+operator +(b T) T`) remain the one receiver-clause form that still attaches
+to an owned type, unchanged from ADR-0079.
 
 | ID | Severity | Message | Example trigger |
 |----|----------|--------------------------|-----------------|
-| GS0314 | Warning | `Receiver-clause methods are reserved for types this package does not own; declare '<MethodName>' as a member of '<TypeName>' instead.` | `class Point { var X int32 } func (p Point) Distance() int32 { ... }` — `Point` is owned by the current package; move `Distance` into the class body. Cross-package and CLR receivers (`func (sb StringBuilder) Reset() ...`) are unaffected. |
+| GS0314 | _Retired_ | Previously: a receiver-clause method on an owned class/struct warned that it should move into the type body. ADR-0182 removed the owned-instance-method meaning of the receiver-clause form entirely (it is always an extension now), so there is nothing left to warn about; this diagnostic is no longer emitted. | — |
 
 Cause/fix:
 
-- **GS0314** — `func (p Point) Distance() int32 { ... }` where `Point` is
-  declared in the same package. Move the declaration into the class body
-  (`class Point { ... func Distance() int32 { ... } }`) and drop the
-  receiver clause. Cross-package and CLR receivers (`func (sb StringBuilder)
-  Reset() ...`) are unaffected. Operator overloads (`func (a Vector2)
-  operator +(b Vector2) Vector2 { ... }`) are exempt because operators
-  have no in-body form today. Suppress per-project via
-  `<NoWarn>GS0314</NoWarn>` if migration must be deferred — but note
-  this is a one-release grace period; a future release may escalate to error.
+- **GS0314** was retired by ADR-0182. A receiver-clause method on an owned
+  class/struct — `func (p Point) Distance() int32 { ... }` where `Point` is
+  declared in the same package — now binds as an extension, exactly like a
+  cross-package or CLR receiver, instead of an instance method. If you
+  intend a real instance method, declare it inside the type body
+  (`class Point { ... func Distance() int32 { ... } }`); there is no
+  receiver-clause spelling for that anymore. If the declaration was
+  intentionally an extension of an owned type or enum, no change is
+  needed — the old `func extension (p Point) Distance() ...` marker is
+  itself retired ([GS0587](#gs0587)); drop the `extension` word and the
+  plain receiver clause does the same thing unconditionally.
 
-  If the declaration intentionally extends an owned type, use
-  `func extension (p Point) Distance() ...`. Explicit extension
-  receiver clauses do not produce `GS0314` and also support same-package enums.
+  Migrating off the pre-ADR-0182 warned spelling changes behavior, not just
+  style: interface conformance, `override`, and private-member access on
+  the old instance-method form now fail to compile (loudly), and a
+  receiver-clause method on an owned **struct** that mutated a field now
+  silently mutates a throwaway by-value copy instead of the caller's
+  struct (no diagnostic — the same hazard any struct extension method
+  already has). See ADR-0182's migration section for detail.
 
 ## Named-argument `=` separator retired (GS0524)
 

@@ -67,7 +67,7 @@ left, right = Pair()
 
 ## Functions and methods
 
-A function declaration starts with `func`. `async func` declares an async function. Receiver clauses attach behavior to a receiver type and are the canonical extension-function style for types this package does **not** own (imported CLR types, BCL primitives, types from referenced packages); methods on owned classes should be declared inside the class body. The same-package receiver-clause form emits the soft `GS0314` warning.
+A function declaration starts with `func`. `async func` declares an async function. Receiver clauses attach behavior to a receiver type and are unconditionally extension functions — this holds for imported CLR types, BCL primitives, types from referenced packages, and types this package owns alike (classes, structs, and enums). Methods on owned classes and structs are declared inside the type body instead; there is no receiver-clause spelling for an owned instance method.
 
 ```gsharp
 func Add(x int32, y int32) int32 {

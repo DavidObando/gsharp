@@ -18,7 +18,12 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor AllPathsMustReturn = new("GS0100", DiagnosticSeverity.Error, "Not all code paths return a value.");
     internal static readonly DiagnosticDescriptor ParameterAlreadyDeclared = new("GS0101", DiagnosticSeverity.Error, "A parameter with the name '{0}' already exists.");
     internal static readonly DiagnosticDescriptor SymbolAlreadyDeclared = new("GS0102", DiagnosticSeverity.Error, "'{0}' is already declared.");
-    internal static readonly DiagnosticDescriptor MethodReceiverMustBeStructOrClass = new("GS0103", DiagnosticSeverity.Error, "Method receiver type '{0}' must be a struct or class declared in the same package.");
+
+    // GS0103 (MethodReceiverMustBeStructOrClass) retired by ADR-0182: it
+    // rejected a same-package non-aggregate receiver under the
+    // ownership-dependent binding rule ADR-0182 removes; a receiver of any
+    // kind (owned or not) is now a valid extension receiver.
+    // internal static readonly DiagnosticDescriptor MethodReceiverMustBeStructOrClass = new("GS0103", DiagnosticSeverity.Error, "Method receiver type '{0}' must be a struct or class declared in the same package.");
     internal static readonly DiagnosticDescriptor EmptyDataStruct = new("GS0104", DiagnosticSeverity.Error, "'data {0} {1}' requires at least one field; use '{2}' instead.");
     internal static readonly DiagnosticDescriptor InlineStructRequiresExactlyOneField = new("GS0105", DiagnosticSeverity.Error, "'inline struct {0}' requires exactly one field, but has {1}.");
     internal static readonly DiagnosticDescriptor InlineCannotBeCombinedWithData = new("GS0106", DiagnosticSeverity.Error, "'inline' cannot be combined with 'data' or 'record'.");
@@ -237,7 +242,13 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor DataAndInlineCannotCombine = new("GS0311", DiagnosticSeverity.Error, "'data' and 'inline' cannot be combined; choose one (ADR-0078).");
     internal static readonly DiagnosticDescriptor OpenAndSealedCannotCombine = new("GS0312", DiagnosticSeverity.Error, "'open' and 'sealed' cannot be combined on the same declaration (ADR-0078).");
     internal static readonly DiagnosticDescriptor SealedHierarchyMissingCase = new("GS0313", DiagnosticSeverity.Warning, "Switch over sealed hierarchy '{0}' is missing a case for '{1}' (ADR-0078).");
-    internal static readonly DiagnosticDescriptor ReceiverClauseOnOwnedType = new("GS0314", DiagnosticSeverity.Warning, "Receiver-clause methods are reserved for types this package does not own; declare '{0}' as a member of '{1}' instead (ADR-0079).");
+
+    // GS0314 (ReceiverClauseOnOwnedType) retired by ADR-0182: it warned
+    // about an owned-type receiver clause carrying the same meaning as the
+    // in-body form; ADR-0182 removes that meaning entirely (the receiver
+    // clause is now always an extension), so there is nothing left to warn
+    // about.
+    // internal static readonly DiagnosticDescriptor ReceiverClauseOnOwnedType = new("GS0314", DiagnosticSeverity.Warning, "Receiver-clause methods are reserved for types this package does not own; declare '{0}' as a member of '{1}' instead (ADR-0079).");
 
     // GS0316 (GoExtensionsImportRequired) retired by ADR-0174 D13: channel syntax is the language, not a gated flavor.
     // internal static readonly DiagnosticDescriptor GoExtensionsImportRequired = new("GS0316", DiagnosticSeverity.Error, "'{0}' is provided by 'Gsharp.Extensions.Go'. Add 'import Gsharp.Extensions.Go' or use 'scope' + 'async'/'await' instead (ADR-0082).");
@@ -508,6 +519,11 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor AttributeConstructorParameterInvalidType = new("GS0585", DiagnosticSeverity.Error, "Attribute constructor parameter '{0}' has type '{1}', which is not a valid attribute parameter type. An attribute constructor parameter must be a primitive, string, System.Type, object, an enum, or a 1-D array thereof (issue #4143; C# spells the same rule CS0181).");
 
     internal static readonly DiagnosticDescriptor GenericLocalFunctionUnsupportedOwner = new("GS0586", DiagnosticSeverity.Error, "Generic local function '{0}' requires lexical owner '{1}', whose direct generic-local hosting is not supported. Use a named member or move the helper to a supported non-generic class/struct/interface or top-level context.");
+
+    // ADR-0182 / issue #4240: the explicit-extension marker ADR-0165 added
+    // (`func extension (r T) M(...)`) is retired — every receiver clause is
+    // unconditionally an extension now, so the marker is redundant.
+    internal static readonly DiagnosticDescriptor RetiredExplicitExtensionReceiverModifier = new("GS0587", DiagnosticSeverity.Error, "The 'extension' keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove 'extension' (ADR-0182).");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

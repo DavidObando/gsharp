@@ -2,7 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
@@ -16,15 +15,18 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0079 / issue #719: receiver-clause methods on owned (same-package)
-/// types emit the soft <c>GS0314</c> warning. These tests pin the
-/// fire-once-per-declaration semantics and the cross-package /
-/// in-body / operator exemptions.
+/// ADR-0182 / issue #4240: a receiver-clause function is unconditionally an
+/// extension now, regardless of the receiver type's owning package or
+/// aggregate kind. <c>GS0103</c> and <c>GS0314</c> — the diagnostics that
+/// policed the old ownership-dependent binding rule (ADR-0079, ADR-0165) —
+/// are retired. These tests pin the new, marker-free behavior; the retired
+/// <c>func extension (...)</c> spelling's migration diagnostic (GS0587) is
+/// covered by <c>RetiredExplicitExtensionReceiverModifierTests</c>.
 /// </summary>
 public class OwnedReceiverWarningTests
 {
     [Fact]
-    public void SamePackage_ReceiverClauseMethod_OnClass_EmitsGS0314_AndStillBinds()
+    public void SamePackage_ReceiverClauseFunction_OnClass_IsExtension_NoDiagnostics()
     {
         var source = @"
 class MyClass {
@@ -38,20 +40,13 @@ c.M()
 ";
         var result = Evaluate(source);
 
-        var warnings = result.Diagnostics.Where(d => d.Id == "GS0314").ToImmutableArray();
-        Assert.Single(warnings);
-        var w = warnings[0];
-        Assert.Equal(DiagnosticSeverity.Warning, w.Severity);
-        Assert.Contains("'M'", w.Message);
-        Assert.Contains("'MyClass'", w.Message);
-        Assert.Contains("ADR-0079", w.Message);
-
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
         Assert.Equal(42, result.Value);
     }
 
     [Fact]
-    public void SamePackage_ReceiverClauseMethod_OnStruct_EmitsGS0314()
+    public void SamePackage_ReceiverClauseFunction_OnStruct_IsExtension_NoDiagnostics()
     {
         var source = @"
 struct Point {
@@ -64,14 +59,12 @@ func (p Point) Distance() int32 { return p.X * p.X + p.Y * p.Y }
 ";
         var result = Evaluate(source);
 
-        var warnings = result.Diagnostics.Where(d => d.Id == "GS0314").ToImmutableArray();
-        Assert.Single(warnings);
-        Assert.Equal(DiagnosticSeverity.Warning, warnings[0].Severity);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 
     [Fact]
-    public void SamePackage_ReceiverClauseMethod_OnSealedClass_EmitsGS0314()
+    public void SamePackage_ReceiverClauseFunction_OnSealedClass_IsExtension_NoDiagnostics()
     {
         var source = @"
 sealed class Shape {
@@ -82,14 +75,12 @@ func (s Shape) Tag() int32 { return 1 }
 ";
         var result = Evaluate(source);
 
-        var warnings = result.Diagnostics.Where(d => d.Id == "GS0314").ToImmutableArray();
-        Assert.Single(warnings);
-        Assert.Equal(DiagnosticSeverity.Warning, warnings[0].Severity);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 
     [Fact]
-    public void SamePackage_ReceiverClauseMethod_OnDataClass_EmitsGS0314()
+    public void SamePackage_ReceiverClauseFunction_OnDataClass_IsExtension_NoDiagnostics()
     {
         var source = @"
 data class Person(Name string)
@@ -99,14 +90,69 @@ func (p Person) Greet() int32 { return 1 }
 ";
         var result = Evaluate(source);
 
-        var warnings = result.Diagnostics.Where(d => d.Id == "GS0314").ToImmutableArray();
-        Assert.Single(warnings);
-        Assert.Equal(DiagnosticSeverity.Warning, warnings[0].Severity);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 
     [Fact]
-    public void CrossPackage_ReceiverClauseMethod_DoesNotWarn()
+    public void SamePackage_ReceiverClauseFunction_OnEnum_IsExtension_NoDiagnostics()
+    {
+        // Pre-ADR-0165 this was rejected with GS0103; ADR-0165 required the
+        // explicit `extension` marker to allow it. ADR-0182 makes it the
+        // unmarked default.
+        var source = @"
+enum Color { Red, Green }
+
+func (c Color) Rank() int32 {
+    if c == Color.Green {
+        return 2
+    }
+
+    return 1
+}
+
+Color.Green.Rank()
+";
+        var result = Evaluate(source);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void SamePackage_ReceiverClauseFunction_OnInterface_IsExtension_NoDiagnostics()
+    {
+        var source = @"
+interface I {
+    func F() int32;
+}
+
+func (i I) G() int32 { return 1 }
+0
+";
+        var result = Evaluate(source);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void SamePackage_ReceiverClauseFunction_OnAlias_IsExtension_NoDiagnostics()
+    {
+        var source = @"
+type Count = int32
+func (c Count) G() int32 { return c + 1 }
+0
+";
+        var result = Evaluate(source);
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void CrossPackage_ReceiverClauseFunction_RemainsExtension_NoDiagnostics()
     {
         var definingTree = SyntaxTree.Parse(SourceText.From(@"
 package Geometry
@@ -124,11 +170,8 @@ func (p Point) Next() int32 { return p.X + 1 }
     }
 
     [Fact]
-    public void CrossAssembly_ReceiverClauseOnClrType_DoesNotWarn()
+    public void CrossAssembly_ReceiverClauseOnClrType_RemainsExtension_NoDiagnostics()
     {
-        // StringBuilder is an imported BCL CLR type, so the package does
-        // not own it and the receiver-clause method is a real extension
-        // function — GS0314 must not fire.
         var source = @"
 import System.Text
 
@@ -138,48 +181,7 @@ func (sb StringBuilder) Reset() {
 0
 ";
         var result = Evaluate(source);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0314");
-    }
-
-    [Fact]
-    public void ExplicitExtension_OnOwnedClass_DoesNotWarnAndDispatchesAsExtension()
-    {
-        var source = @"
-class Counter {
-    var Value int32
-}
-
-func extension (c Counter) Bump() int32 { return c.Value + 1 }
-
-let c = Counter{Value: 41}
-c.Bump()
-";
-        var result = Evaluate(source);
         Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
-        Assert.Equal(42, result.Value);
-    }
-
-    [Fact]
-    public void ExplicitExtension_OnOwnedEnum_DoesNotReportReceiverError()
-    {
-        var source = @"
-enum Color { Red, Green }
-
-func extension (c Color) Rank() int32 {
-    if c == Color.Green {
-        return 2
-    }
-
-    return 1
-}
-
-Color.Green.Rank()
-";
-        var result = Evaluate(source);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
-        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
-        Assert.Equal(2, result.Value);
     }
 
     [Fact]
@@ -195,7 +197,19 @@ extension(41)
     }
 
     [Fact]
-    public void InBodyMethod_OnClass_DoesNotWarn()
+    public void Extension_RemainsAvailableAsExtensionMethodName()
+    {
+        var source = @"
+func (s string) extension() int32 { return s.Length }
+""hi"".extension()
+";
+        var result = Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void InBodyMethod_OnClass_IsTheOnlyInstanceMethodSpelling()
     {
         var source = @"
 class Greeter(name string) {
@@ -206,17 +220,40 @@ let g = Greeter(""x"")
 g.Greet()
 ";
         var result = Evaluate(source);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0314");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id is "GS0103" or "GS0314");
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
         Assert.Equal("hi", result.Value);
     }
 
     [Fact]
-    public void OperatorReceiverClause_OnOwnedClass_DoesNotWarn()
+    public void InBodyMethod_OwnedInstanceSemantics_NotAvailableViaReceiverClause()
     {
-        // ADR-0035: operators must use receiver-clause syntax; ADR-0079
-        // exempts them from GS0314 because there is no in-body operator
-        // form today.
+        // The in-body form gets implicit-this bare member access and
+        // interface conformance; the receiver-clause form is an extension
+        // and gets neither. A bare (unqualified) field reference inside a
+        // receiver-clause function body does not resolve — only an
+        // in-body method sees the type's own member scope implicitly.
+        var source = @"
+struct Counter {
+    var Value int32
+}
+
+func (c Counter) Inc() int32 {
+    return Value + 1
+}
+0
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void OperatorReceiverClause_OnOwnedClass_StillAttachesToType()
+    {
+        // ADR-0035: operators must use receiver-clause syntax; ADR-0182
+        // keeps ADR-0079's operator carve-out — an operator has no in-body
+        // form, so it keeps ownership-based routing unlike ordinary
+        // receiver-clause functions.
         var source = @"
 class Vector2 {
     var X int32
@@ -226,68 +263,33 @@ class Vector2 {
 func (a Vector2) operator +(b Vector2) Vector2 {
     return Vector2{X: a.X + b.X, Y: a.Y + b.Y}
 }
-0
+
+let sum = Vector2{X: 1, Y: 2} + Vector2{X: 3, Y: 4}
+sum.X + sum.Y
 ";
         var result = Evaluate(source);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0314");
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(10, result.Value);
     }
 
     [Fact]
-    public void WarningFiresOncePerDeclaration_RegardlessOfCallCount()
+    public void TopLevelExtension_SameNameAsInBodyMethod_DoesNotCollide()
     {
+        // The extension and instance-member declaration tables are
+        // separate (ADR-0165's consequence, now the default rule): a
+        // same-name receiver-clause extension no longer collides with an
+        // in-body method the way two same-package receiver-clause
+        // declarations used to under the pre-ADR-0182 rule.
         var source = @"
-class Counter {
-    var Value int32
+class Point {
+    func Sum() int32 { return 1 }
 }
 
-func (c Counter) Bump() int32 { return c.Value + 1 }
-
-let c = Counter{Value: 1}
-c.Bump()
-c.Bump()
-c.Bump()
-c.Bump()
-";
-        var result = Evaluate(source);
-        var warnings = result.Diagnostics.Where(d => d.Id == "GS0314").ToImmutableArray();
-        Assert.Single(warnings);
-    }
-
-    [Fact]
-    public void WarningFiresPerDeclaration_OnceEach()
-    {
-        var source = @"
-class Counter {
-    var Value int32
-}
-
-func (c Counter) Bump() int32 { return c.Value + 1 }
-func (c Counter) Reset() int32 { return 0 }
+func (p Point) Sum() int32 { return 2 }
 0
 ";
         var result = Evaluate(source);
-        var warnings = result.Diagnostics.Where(d => d.Id == "GS0314").ToImmutableArray();
-        Assert.Equal(2, warnings.Length);
-    }
-
-    [Fact]
-    public void Warning_Location_PointsAtReceiverTypeClause()
-    {
-        var source = @"
-class MyClass {
-}
-
-func (m MyClass) Do() int32 { return 1 }
-0
-";
-        var result = Evaluate(source);
-        var warning = result.Diagnostics.Single(d => d.Id == "GS0314");
-
-        // Span should fall over the receiver type token "MyClass".
-        var span = warning.Location.Span;
-        var text = warning.Location.Text.ToString(span);
-        Assert.Equal("MyClass", text);
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
     }
 
     private static EmittedOracleResult Evaluate(string source)
