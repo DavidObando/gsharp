@@ -769,6 +769,44 @@ internal static class ObliviousNullabilityAnalyzer
             return false;
         }
 
+        // Issue #4262 follow-up: unlike `IsTainted`'s sibling walk (which
+        // remaps `symbol` INTO each candidate compilation's own symbol table
+        // by metadata identity before trusting that candidate's cache),
+        // `ParamsElementId` matches candidates by a compilation-INDEPENDENT
+        // documentation-comment-ID string. That means ANY oblivious candidate
+        // in this run whose own syntax happens to call the SAME target
+        // method with a literal `null` can answer this query — even an
+        // oblivious project entirely unrelated to `parameter`'s actual
+        // declaring project, and even when `parameter` itself is declared in
+        // a nullable-ENABLED project with a genuinely non-nullable element
+        // (`NullableAnnotation.NotAnnotated`, never `None` — #2113's taint
+        // fixpoint is an oblivious-only heuristic with nothing trustworthy to
+        // say about an explicitly-annotated declaration). Verified empirically:
+        // an unrelated oblivious sibling calling an unrelated enabled
+        // project's `params` method with `null` in its own source suppressed
+        // the `!!` bridge (and would have repainted the enabled declaration's
+        // own emitted element type nullable) for a completely different,
+        // genuinely non-nullable caller elsewhere in the same run. `IsTainted`
+        // avoids this by construction (a symbol query only ever resolves
+        // against a candidate that remaps to the SAME declaration); mirror
+        // that guarantee here the simple way, since `parameter`'s own
+        // annotation is already known before any candidate is consulted:
+        // only trust ANY candidate's evidence when `parameter`'s own declared
+        // element position is itself oblivious.
+        // Issue #4127/#4129/#4153: deliberately NOT a nested property pattern
+        // (`is not IArrayTypeSymbol { ElementType.NullableAnnotation: ... }`)
+        // — gsc's pattern matcher does not reliably evaluate an enum-constant
+        // sub-pattern against an imported-interface-typed scrutinee
+        // (`parameter.Type` is `ITypeSymbol`) once this file is itself
+        // translated to G# and self-hosted; see `CSharpToGSharpTranslator
+        // .Constructors.cs`'s own explicit decomposition for the identical
+        // hazard. Decomposed into a plain cast plus an ordinary `!=` check.
+        if (parameter.Type is not IArrayTypeSymbol elementArrayType
+            || elementArrayType.ElementType.NullableAnnotation != NullableAnnotation.None)
+        {
+            return false;
+        }
+
         string parameterId = ParamsElementId(parameter);
         if (parameterId == null)
         {
