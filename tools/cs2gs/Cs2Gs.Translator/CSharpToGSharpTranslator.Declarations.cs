@@ -1547,12 +1547,41 @@ public sealed partial class CSharpToGSharpTranslator
                         // TypeDef instead of the package's `<Program>`, matching
                         // the native assembly's shape; the static class is kept
                         // below so that type still exists to name.
+                        //
+                        // Issue #3413 exception: when the owner has a private
+                        // nested aggregate, the translator already keeps this
+                        // extension's real body as an in-owner shared-block
+                        // method of the SAME NAME (so it retains access to the
+                        // private nested type) and emits this lifted func as a
+                        // thin forwarding wrapper. Tagging the wrapper with
+                        // `@ExtensionOwner(typeof(Owner))` would route it onto
+                        // the owner too — a second MethodDef with the identical
+                        // name and signature as the real one already there,
+                        // which is a duplicate, not a fix. That owner already
+                        // keeps its identity by construction, so skip tagging.
+                        if (this.context.GetDeclaredSymbol(member) is IMethodSymbol extensionMethodSymbol &&
+                            RequiresOwnerScopedExtension(extensionMethodSymbol))
+                        {
+                            this.state.PendingTopLevelDeclarations.Add(translated);
+                            continue;
+                        }
+
                         hostedAnyExtensionOnStaticClass = true;
                         if (liftedExtension.Attributes is List<AttributeUse> extensionAttributes)
                         {
+                            // Issue #1839-style keyword collisions: reuse the
+                            // SAME name-allocation this class's own
+                            // TypeDeclaration below is built from (keyed by
+                            // `symbol`, so it returns the identical cached
+                            // spelling) rather than the raw C# identifier —
+                            // `node.Identifier.Text` can carry a C#-only `@`
+                            // verbatim marker (`@select`) that means nothing in
+                            // G# and isn't the name G#'s own keyword-collision
+                            // escaping gives the class (`$select`).
+                            var ownerName = this.EmittedName(symbol, node.Identifier.ValueText);
                             extensionAttributes.Add(new AttributeUse(
                                 "ExtensionOwner",
-                                new[] { new AttributeArgument(new TypeOfExpression(new NamedTypeReference(node.Identifier.Text))) }));
+                                new[] { new AttributeArgument(new TypeOfExpression(new NamedTypeReference(ownerName))) }));
                         }
 
                         this.state.PendingTopLevelDeclarations.Add(translated);
