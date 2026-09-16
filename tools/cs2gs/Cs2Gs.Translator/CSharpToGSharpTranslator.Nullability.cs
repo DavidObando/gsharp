@@ -375,8 +375,24 @@ public sealed partial class CSharpToGSharpTranslator
                 return type;
             }
 
-            return ObliviousNullabilityAnalyzer.IsTainted(
-                this.context.Compilation, symbol, this.context.SiblingCompilations)
+            // Issue #4262 follow-up: unlike `ShouldPromoteToNullableReference`
+            // (which requires `declared.NullableAnnotation == None` before ever
+            // consulting `IsTainted`), this call site had no such guard — so
+            // once #4262 widened `IsTainted`'s entry gate to also answer for an
+            // ENABLED asking compilation, a genuinely non-nullable, EXPLICITLY
+            // annotated async return type (`NullableAnnotation.NotAnnotated`)
+            // could be repainted nullable purely from an oblivious SIBLING's own
+            // taint evidence (e.g. an oblivious override/interface-implementation
+            // returning `null` — #2285's bidirectional interface/override edges
+            // link the two compilations' symbols together in exactly this
+            // shape). Verified empirically: an oblivious override of an enabled
+            // `virtual async Task<string> M()` returning `null` repainted the
+            // ENABLED base declaration itself to `Task<string?>`. Only trust
+            // `IsTainted` here when `awaitedType` is itself oblivious (`None`) —
+            // the same condition the ordinary declaration path already requires.
+            return awaitedType.NullableAnnotation == NullableAnnotation.None
+                && ObliviousNullabilityAnalyzer.IsTainted(
+                    this.context.Compilation, symbol, this.context.SiblingCompilations)
                 ? MakeNullable(type)
                 : type;
         }
@@ -1244,9 +1260,14 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #2113: in a nullable-OBLIVIOUS compilation, a reference
             // declaration is rendered `T?` iff the whole-program transitive
             // null-taint analysis proved this symbol null-tainted. This is the
-            // ONLY behavioral change for oblivious code — for a nullable-enabled
-            // compilation `IsTainted` short-circuits to false, so every existing
-            // path stays byte-identical.
+            // ONLY behavioral change for oblivious code. Issue #4262 widened
+            // `IsTainted`'s entry gate to also answer for a nullable-ENABLED
+            // asking compilation when a SIBLING is oblivious, but the
+            // `declared.NullableAnnotation == NullableAnnotation.None` guard
+            // immediately below still keeps every enabled-compilation path
+            // byte-identical: an enabled declaration's own annotation is
+            // `NotAnnotated`/`Annotated`, never `None`, so this branch is
+            // unreachable for it regardless of what `IsTainted` would answer.
             //
             // Issue #914 (oblivious deferred-return-promotion): a REFERENCE-
             // constrained type parameter (`where T : class`) is eligible too. The

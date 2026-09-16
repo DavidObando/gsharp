@@ -365,10 +365,14 @@ public sealed class Binder
             {
                 return Lambdas.PrepareGenericLocalFunctionDeclaration(syntax);
             },
-            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal),
+            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckAsyncNonGenericLocalFunctionEnclosingTypeParameterInParameter(location, name, literal),
             bindFunctionLiteralWithSelfDeclaration: (literalSyntax, onSignatureBound) =>
             {
                 return Lambdas.BindFunctionLiteralExpression(literalSyntax, explicitName: null, onSignatureBound: onSignatureBound);
+            },
+            reconcileGenericLocalFunctionGroupCaptures: group =>
+            {
+                Lambdas.ReconcileGenericLocalFunctionGroupCaptures(group);
             });
         BoundExpression BindTypeOfExpressionForDeclarations(TypeOfExpressionSyntax syntax) =>
             Expressions.BindTypeOfExpression(syntax);

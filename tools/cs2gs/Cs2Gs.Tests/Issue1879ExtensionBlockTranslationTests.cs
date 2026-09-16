@@ -384,7 +384,7 @@ namespace Corpus.Issue1879
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string rendered = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        Assert.Contains("func extension (c Color) Describe()", rendered, StringComparison.Ordinal);
+        Assert.Contains("func (c Color) Describe()", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain(context.Diagnostics, d => d.Message.Contains("enum receiver", StringComparison.Ordinal));
         AssertRoundTripParses(rendered);
     }

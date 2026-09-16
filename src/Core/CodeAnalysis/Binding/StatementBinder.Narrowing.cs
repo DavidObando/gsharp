@@ -1631,21 +1631,39 @@ internal sealed partial class StatementBinder
                     convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
                 }
 
-                // Issue #2016: a NON-generic named local function (`let`/`var`/`const
-                // Name = func (...) ... {...}`, no `[T, ...]` of its own — the sibling
-                // case of #1940's generic local function) that directly references an
-                // enclosing type parameter in its own parameter/return type or body
-                // can silently emit invalid IL. Check the just-bound literal now,
-                // while it's still available with its identifier's name/location.
+                // Issue #4223: a NON-generic named local function (`let`/`var`/`const
+                // Name = func (...) ... {...}`, no `[T, ...]` of its own) that
+                // references an enclosing type parameter used to be rejected here
+                // unconditionally (GS0468, issue #2016) on the assumption that the
+                // zero-capture hoisting path could never give the enclosing type
+                // parameter a valid emitted slot. That assumption was wrong for the
+                // general case: UserTokenResolver.TryPromoteNonCapturingGenericLambda
+                // (issue #2118) now promotes such a literal to a genuine generic
+                // method, cloning every referenced enclosing type parameter as the
+                // hoisted method's own — the same reification
+                // ClosureEmitter.SynthesizeClosures's display-class path applies
+                // when the literal is nested inside a user type for accessibility.
                 //
-                // Follow-up review of #2024: the original gate here required
-                // `syntax.Keyword?.Kind == SyntaxKind.LetKeyword`, which let a `var`-
-                // declared local function of the exact same zero-capture shape sail
-                // through uncaught (the emitter's hoisting path doesn't distinguish
-                // let/var/const — only "is this a function-literal initializer").
-                // The check now keys off the bound initializer's kind
-                // (BoundFunctionLiteralExpression) rather than the declaring keyword,
-                // so it fires uniformly for `let`, `var`, and `const` forms.
+                // One narrow combination is NOT proven safe yet and keeps the
+                // diagnostic: an ASYNC zero-capture local function whose OWN
+                // PARAMETER type references the enclosing type parameter. That
+                // shape routes through the async "erased delegate" adapter (predates
+                // #2118, used whenever a function-literal's declared type mentions an
+                // open type parameter) rather than through
+                // RegisterStateMachineEnclosingGenerics's reification, and the
+                // adapter's parameter-unboxing conversion has a confirmed defect for
+                // a value-typed instantiation (confirmed by direct repro:
+                // `func Outer[U](seed U) U { let Local = async func (x U) U { return
+                // x }; return Local(seed).Result }` compiles clean and then throws
+                // `NullReferenceException` for `Outer(42)`, though `Outer("hi")`
+                // succeeds — reproduced identically on an already-legal CAPTURING
+                // async lambda of the same shape, so the adapter defect itself is
+                // pre-existing and unrelated to #4223, but relaxing GS0468 here
+                // would newly route a previously-rejected program through it). An
+                // enclosing-type-parameter reference confined to the return type or
+                // body (proven safe; see Issue4223EnclosingTypeParameterReificationTests)
+                // and the GENERIC-own-type-parameter async case (which is hosted as a
+                // real generic method, not the erased-delegate adapter) are unaffected.
                 if (initializer is BoundFunctionLiteralExpression functionLiteral
                     && checkNonGenericLocalFunctionEnclosingTypeParameterReference != null)
                 {

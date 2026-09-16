@@ -86,7 +86,7 @@ let moved = origin with { X = 10 }
 
 ## Methods, receiver functions, and extension functions
 
-Use class methods when behavior depends on class identity, virtual dispatch, or private representation. Use receiver-style functions for value-oriented behavior on types this package does **not** own (BCL primitives, imported CLR types, types from referenced packages). The in-body form is canonical for owned-type instance methods; a receiver clause that targets an owned class or struct emits the soft `GS0314` warning.
+Use class methods when behavior depends on class identity, virtual dispatch, or private representation. Use receiver-style functions for extension behavior — value-oriented helpers on BCL primitives, imported CLR types, types from referenced packages, or even a type this package owns when you deliberately want extension semantics (static dispatch, no interface conformance) rather than a real member. The in-body form is the only spelling for an owned-type instance method; a receiver clause on an owned class, struct, or enum is always an extension, never an instance method.
 
 ```gsharp
 class Point(X int32, Y int32) {

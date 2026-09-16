@@ -495,6 +495,33 @@ internal sealed class ReflectionMetadataEmitter
             ordinal++;
         }
 
+        // Issue #4223: when the kickoff method is a zero-capture local
+        // function/lambda that TryPromoteNonCapturingGenericLambda (#2118)
+        // promoted to ALSO carry cloned ENCLOSING type parameters, `methodTPs`
+        // above are those CLONES, not the originals the lowered body actually
+        // names (the promotion never rewrites parameter/body references, only
+        // the method's own declared type-parameter list — see
+        // UserTokenResolver.TryPromoteNonCapturingGenericLambda). Without an
+        // entry keyed by each ORIGINAL enclosing type parameter, a body
+        // reference to it falls through to a dangling `MVar` slot that
+        // MoveNext (a non-generic member of the now-generic SM struct) does
+        // not have, producing invalid metadata
+        // (System.BadImageFormatException at load). Alias each original onto
+        // the same SM class slot its clone occupies — this is the exact
+        // pattern RegisterGeneratedGenericRemaps already applies to the
+        // ITERATOR sibling of this promotion (issue #810 + #2118 combined).
+        if (this.remaps.TryGetLambdaMethodRemap(kickoff, out var lambdaRemap))
+        {
+            // `pair.Value` is already the promoted clone's absolute ordinal
+            // within `kickoff.TypeParameters` (== methodTPs above), so the
+            // same `classTPs.Length` base the methodTPs loop just used
+            // relocates it onto the matching SM class slot.
+            foreach (var pair in lambdaRemap)
+            {
+                remap[pair.Key] = classTPs.Length + pair.Value;
+            }
+        }
+
         // Issue #2180: when the async state machine nests inside a synthesized
         // closure that was itself reified over an enclosing generic method /
         // type (`RunG[T]`'s `T`), the receiver's own type parameters (`T`
@@ -1312,6 +1339,7 @@ internal sealed class ReflectionMetadataEmitter
 
         // Lower non-capturing literals once so iterator plans and emitted bodies
         // share the same synthesized local symbols.
+        var zeroCaptureLiterals = new List<BoundFunctionLiteralExpression>();
         foreach (var literal in lambdaLiterals)
         {
             if (literal.CapturedVariables.Length == 0
@@ -1319,11 +1347,38 @@ internal sealed class ReflectionMetadataEmitter
             {
                 var body = (BoundBlockStatement)Lowerer.Lower(literal.Body);
                 this.lambdaBodies[literal.Function] = body;
-                this.userTokens.TryPromoteNonCapturingGenericLambda(
-                    literal,
-                    body);
+                zeroCaptureLiterals.Add(literal);
             }
         }
+
+        // Issue #4223: promoting a callee to carry extra enclosing type
+        // parameters (UserTokenResolver.TryPromoteNonCapturingGenericLambda)
+        // can in turn require its CALLER — another zero-capture local
+        // function in this same pass — to also carry them, purely so its own
+        // call site has something to supply (LambdaEnclosingTypeParameterCollector
+        // discovers this via UserTokenResolver.GetPromotedExtras). A single
+        // forward pass over `zeroCaptureLiterals` therefore depends on
+        // declaration order — a caller processed before its (later-declared)
+        // callee would miss the requirement entirely. Iterate to a fixed
+        // point instead: keep re-running the promotion over every literal
+        // until a full pass promotes nothing further.
+        bool promotedAnyThisPass;
+        do
+        {
+            promotedAnyThisPass = false;
+            foreach (var literal in zeroCaptureLiterals)
+            {
+                var beforeCount = literal.Function.TypeParameters.Length;
+                this.userTokens.TryPromoteNonCapturingGenericLambda(
+                    literal,
+                    this.lambdaBodies[literal.Function]);
+                if (literal.Function.TypeParameters.Length != beforeCount)
+                {
+                    promotedAnyThisPass = true;
+                }
+            }
+        }
+        while (promotedAnyThisPass);
 
         this.RetargetIteratorPlans(lambdaLiterals);
         if (hostPackageGuess != null)

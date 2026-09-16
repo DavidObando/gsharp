@@ -232,10 +232,10 @@ import System
 
 struct Counter {
     var Value int32
-}
 
-func (c Counter) Bump(ref delta int32) {
-    delta = delta + 1
+    func Bump(ref delta int32) {
+        delta = delta + 1
+    }
 }
 
 var d = 10

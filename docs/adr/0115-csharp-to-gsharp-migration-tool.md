@@ -138,7 +138,17 @@ Since issue #948, the inline field initializers the translator emits here — `p
 
 #### B.5 Methods: in-body vs receiver-clause — ADR-0079, ADR-0024, spec §Functions and methods
 
-Instance methods on a **`class`** (or `data class`) the package **owns** are declared **in-body** as `func M(...) R { ... }`. The inferred receiver-clause form `func (r T) M(...) R` is **reserved for non-owned receiver types** — CLR/BCL types, primitives, and types from other packages. ADR-0165 adds `func extension (r T) M(...) R` when a C# extension must remain an extension despite an enum or owned receiver. ADR-0079 (issue #719) still emits `GS0314` only for the unmarked owned receiver form. Operator overloads keep the unmarked receiver-clause form and are exempt from `GS0314` (spec §Functions and methods).
+Instance methods on a **`class`** (or `data class`) the package **owns** are declared **in-body** as `func M(...) R { ... }` — the only spelling for one, as of [ADR-0182](0182-receiver-clause-is-always-extension.md). The receiver-clause form `func (r T) M(...) R` is unconditionally an extension now, for any receiver type — owned or not, aggregate or not. Operator overloads keep the receiver-clause form regardless of ownership, since there is still no in-body operator spelling.
+
+> **2026-09-15 — superseded by [ADR-0182](0182-receiver-clause-is-always-extension.md).**
+> The ownership-dependent rule this section originally described (owned
+> receiver-clause methods emitting a soft `GS0314` warning; the ADR-0165
+> `func extension (r T) M(...) R` marker forcing extension binding for
+> enum/owned receivers) is gone. A receiver clause is always an extension;
+> `GS0314`, `GS0103`, and the `extension` marker are all retired
+> (`GS0587` flags the retired marker spelling). The paragraphs below are
+> kept for historical accuracy about the tool's behavior when ADR-0165 was
+> current.
 
 > **Owned-`struct` methods — RESOLVED (issue #938).** ADR-0079 frames the
 > in-body canonical form as applying to owned `class` **and** `struct` receivers.
@@ -158,7 +168,7 @@ Instance methods on a **`class`** (or `data class`) the package **owns** are dec
 > reasons; emitting the in-body form instead would now be warning-free and is
 > a possible future translator improvement.
 
-C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` for non-owned receivers and `func extension (self T) M(…) R` for enum/owned receivers that cannot become canonical in-body members (ADR-0019/0165).
+C# **extension methods** (`static R M(this T self, …)`) translate to `func (self T) M(…) R` (ADR-0019; historically `func extension (self T) M(…) R` for enum/owned receivers per ADR-0165, superseded above — the plain form now covers every receiver kind and ownership).
 
 Issue #3413 adds one ownership-preserving exception: when the declaring static
 class contains a private nested aggregate, its extension methods stay as
@@ -304,7 +314,7 @@ A **non-`data` `struct`** that *explicitly* implements an interface (`struct Mon
 
 #### B.14 Owned value-aggregate methods → lifted receiver-clause funcs — issue #938, ADR-0079
 
-As of issue #938 a `struct`/`data struct` instance method **can** live in the type body — the parser and binder accept an in-body `func` on a value aggregate and bind it warning-free (§B.5). The cs2gs translator nonetheless still **lifts** such a method to a top-level receiver-clause `func (self T) Name(...)` emitted as a sibling immediately after the type, for mechanical reasons (its declaration-lifting pipeline predates the compiler fix). A top-level receiver-clause `func` has no implicit `this`, so inside the lifted body every bare instance-member reference is made explicit through the receiver (`self.X`). This compiles and runs correctly but emits the soft `GS0314` warning (ADR-0079, owned-type receiver clause). Emitting the in-body form instead — now warning-free — is a possible future translator improvement; the `GS0314` it currently produces is an expected, known diagnostic rather than a parity failure. Plain structs also admit explicit `init` constructors for ABI-preserving C# translation (issue #2766); data/inline structs retain their canonical primary-constructor-only shape.
+As of issue #938 a `struct`/`data struct` instance method **can** live in the type body — the parser and binder accept an in-body `func` on a value aggregate and bind it (§B.5). The cs2gs translator emits the in-body form directly for an owned value aggregate's instance method (verified empirically: `public struct Counter { public int Value; public void Bump() => Value++; }` translates to `struct Counter { var Value int32; func Bump() { Value++ } }`, no top-level lift). This section previously described an older lifting pipeline that predated that fix; per [ADR-0182](0182-receiver-clause-is-always-extension.md), a lifted receiver-clause spelling would no longer even be equivalent — it would be a hard binding-semantics change (an extension, not an instance method), not a soft `GS0314` warning. Plain structs also admit explicit `init` constructors for ABI-preserving C# translation (issue #2766); data/inline structs retain their canonical primary-constructor-only shape.
 
 #### B.15 `with`-expressions — spec §Records and `with`
 
@@ -326,7 +336,7 @@ Inside a G# `shared { }` block a bare sibling static call does **not** resolve (
 
 #### B.19 Extension methods → top-level receiver-clause funcs; emptied static class dropped — ADR-0079
 
-A C# extension method (`static R M(this T self, …)` on a `static class`) translates to a **top-level** receiver-clause `func (self T) M(…) R` (§B.5), or the ADR-0165 explicit form `func extension (self T) M(…) R` for enum/owned extension receivers. A receiver-clause `func` only binds at top level, so the translator lifts it out of the enclosing static class. Cross-container overload sets may retain their original static helpers for explicitly qualified C# calls while also emitting explicit receiver companions; reduced calls, null-conditional calls, and method groups use the companion directly and no longer require static-helper spills.
+A C# extension method (`static R M(this T self, …)` on a `static class`) translates to a **top-level** receiver-clause `func (self T) M(…) R` (§B.5) — one plain form for every receiver, per [ADR-0182](0182-receiver-clause-is-always-extension.md); the ADR-0165 explicit `func extension (self T) M(…) R` form for enum/owned extension receivers this paragraph previously described is retired. A receiver-clause `func` only binds at top level, so the translator lifts it out of the enclosing static class. Cross-container overload sets may retain their original static helpers for explicitly qualified C# calls while also emitting explicit receiver companions; reduced calls, null-conditional calls, and method groups use the companion directly and no longer require static-helper spills.
 
 Once every member has been lifted the holder `static class` has no remaining body and is **dropped**. The lifted funcs carry the holder's *behaviour* but not its *identity*, so the drop is conditional on nothing observing that identity: a holder named by a `typeof(Holder)` anywhere in a file the migration still emits is **kept**, as an empty type declaration alongside the lifted funcs (issue #3750). Eliding it instead leaves the reference naming a type that no longer exists (`GS0113`, cascading to `GS0159` where the result feeds a member lookup). `typeof` is the only surviving reference form: `nameof(Holder)` constant-folds to a string literal, and the static-form (`Holder.M(recv, …)`) and bare sibling (`M(recv, …)`) call shapes are already rewritten to the receiver form and name no type.
 
@@ -852,7 +862,7 @@ re-greening earlier stages and surfacing the next layer of gaps:
 
 | Issue | Construct | Diagnostic | Status |
 | --- | --- | --- | --- |
-| #938 | owned-`struct` instance methods (no warning-free spelling) | GS0314 | resolved (in-body `func` binds on value types) |
+| #938 | owned-`struct` instance methods (no warning-free spelling) | GS0314 (retired by ADR-0182) | resolved (in-body `func` binds on value types) |
 | #939 | `for…in List[userType]` element-type erasure | GS0158 | resolved |
 | #940 | static (`shared`) method overloads ignore arity | GS0144 | resolved |
 | #941 | binary `??` operator unsupported (only `??=` existed) | GS0005 | resolved (ADR-0116) |

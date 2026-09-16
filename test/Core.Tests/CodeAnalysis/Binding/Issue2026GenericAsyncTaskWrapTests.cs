@@ -70,29 +70,46 @@ var t = Outer(""hi"")
     }
 
     [Fact]
-    public void AsyncLocalFunctionLiteral_ReferencingEnclosingTypeParameter_ReportsGS0468NotGS0133()
+    public void AsyncLocalFunctionLiteral_ReferencingEnclosingTypeParameter_ObservedAsTaskOfSubstitutedType()
     {
         // Issue #2026's repro predates issue #2016's GS0468 gate (landed on
-        // this branch's parent commit), which now diagnoses ANY local
-        // function-literal (named via `let`/`var`/`const`) that directly
-        // references an enclosing generic function's type parameter in its
-        // own signature/body — exactly the shape #2026 originally described
-        // as call-shape (b). That shape is therefore no longer reachable:
-        // GS0468 fires first, and this is intentional/by-design (referencing
-        // the enclosing type parameter would otherwise emit invalid IL). This
-        // regression test pins that GS0468 — not the unrelated GS0133 this
-        // issue is about — is what callers see for that shape.
+        // this branch's parent commit): a local function-literal (named via
+        // `let`/`var`/`const`) that directly references an enclosing generic
+        // function's type parameter in its own signature/body — call-shape
+        // (b) from #2026's original description. #2016 (and, later, its own
+        // GS0468 restriction) treated this as an invalid-IL shape and
+        // rejected it outright. Issue #4223 makes the RETURN-TYPE/body shape
+        // of this correct — UserTokenResolver.TryPromoteNonCapturingGenericLambda
+        // reifies the referenced enclosing `U` via
+        // ReflectionMetadataEmitter.RegisterStateMachineEnclosingGenerics — so
+        // GS0468 no longer fires for it, and this regression test pins the
+        // ORIGINAL #2026 concern directly: the call through the local
+        // function-literal's delegate value is observed as `Task[U]` (the
+        // substituted return type Task-wrapped), and `await r` reports
+        // neither GS0133 nor GS0468.
+        //
+        // `U` is referenced only via `foo`'s RETURN type here, never its own
+        // parameter list: an async zero-capture local function whose own
+        // parameter type references an enclosing type parameter still keeps
+        // GS0468 (see LambdaBinder.CheckAsyncNonGenericLocalFunctionEnclosingTypeParameterInParameter
+        // and Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests.NonGenericAsyncLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_StillReportsGS0468) —
+        // that shape routes through a pre-existing, unrelated defect in the
+        // async "erased delegate" adapter's parameter-unboxing conversion,
+        // confirmed to crash at run time for a value-typed instantiation.
         const string source = @"
 package p
 async func Outer[U](seed U) U {
-    let foo = async func(x U) U { return x }
-    var r = foo(seed)
+    let foo = async func() U { return default }
+    var r = foo()
     return await r
 }
 ";
         var compilation = Compile(source);
-        Assert.Contains(compilation.BoundProgram.Diagnostics, d => d.Id == "GS0468");
-        Assert.DoesNotContain(compilation.BoundProgram.Diagnostics, d => d.Id == "GS0133");
+        Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+
+        var call = FindIndirectCall(compilation, "Outer");
+        Assert.NotNull(call);
+        AssertIsTaskOf(call.Type, expectedTypeArgumentName: "U");
     }
 
     [Fact]

@@ -32,9 +32,14 @@ GSharp adopts **Form A — Go-style "receiver in parens before name"** — for b
 - If the receiver type is **declared in the same package** as the function, the declaration is a **method-with-receiver** (Phase 6.4) and emits as an instance method on the receiver's CLR type definition.
 - If the receiver type is **declared elsewhere** (another GSharp package, the BCL, any imported assembly) or is a **CLR primitive**, the declaration is an **extension function** and emits as a `[Extension]`-tagged static method on a synthesized `<Extensions>` static class in the declaring package's CLR namespace, with the receiver as the first parameter.
 
-ADR-0165 adds `func extension (r T) Name(...)` for the cases where ownership
+ADR-0165 added `func extension (r T) Name(...)` for the cases where ownership
 must not select instance-method semantics (notably enum and owned C#
-extensions). The original inferred form remains unchanged.
+extensions); [ADR-0182](0182-receiver-clause-is-always-extension.md)
+(2026-09-15) supersedes that marker by making ownership never select
+instance-method semantics for a receiver clause — every receiver clause is
+now an extension function as described in this ADR, regardless of the
+receiver type's owning package. Same-package methods are declared in the
+type body only (see ADR-0024, as amended by ADR-0182).
 
 Worked example:
 

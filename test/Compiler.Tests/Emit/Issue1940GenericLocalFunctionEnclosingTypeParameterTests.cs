@@ -12,58 +12,68 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #1940: a generic local function (<c>let Inner[T] = func (...) ... { ... }</c>, issue #1886) is
-/// hoisted to its own top-level static method carrying only ITS OWN type-parameter list as CLR MVAR
-/// slots. Referencing a type parameter owned by an enclosing generic method or class — in the local
-/// function's parameter types, return type, or body — has no corresponding slot on that hoisted method.
-/// Before this fix that silently emitted invalid IL that crashed at run time with
-/// <see cref="InvalidProgramException"/> and no compile-time diagnostic. These tests assert the new
-/// GS0468 diagnostic fires for every such reference shape and does NOT false-positive on a generic local
-/// function that only uses its own type parameters.
+/// Issue #1940 / issue #4223: a generic local function (<c>let Inner[T] = func (...) ... { ... }</c>,
+/// issue #1886) is hoisted to its own top-level static method. Before issue #2118 / #4223, a direct
+/// reference to a type parameter owned by an enclosing generic method or class — in the local
+/// function's parameter types, return type, body, or an own type parameter's constraint — had no
+/// corresponding slot on that hoisted method and silently emitted invalid IL that crashed at run time
+/// with <see cref="InvalidProgramException"/>; GS0468 (issue #1940) turned that into a compile-time
+/// diagnostic instead of fixing the capability. Issue #4223 finishes the job for the ZERO-CAPTURE
+/// shape: <c>UserTokenResolver.TryPromoteNonCapturingGenericLambda</c> (issue #2118) now clones every
+/// referenced enclosing type parameter as an ADDITIONAL method type parameter alongside the local
+/// function's own declared list, so these shapes compile AND run correctly — GS0468 no longer fires
+/// for them. A CAPTURING generic local function (issue #4221/#4252) is a separate emission path
+/// (a synthesized closure class's Invoke method, not a direct top-level MethodDef) that has not been
+/// extended the same way; GS0468 is retained for that shape (tested separately below) since composing
+/// enclosing-type-parameter reification with capture support is left for a follow-up.
 /// </summary>
 public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
 {
     [Fact]
-    public void GenericLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
 
-            func Outer[U]() {
+            func Outer[U](sample U) {
                 let Inner[T] = func (x T, y U) T {
+                    Console.WriteLine(y)
                     return x
                 }
-                Console.WriteLine(Inner(1, "hi"))
+                Console.WriteLine(Inner(1, sample))
             }
-            Outer[string]()
+            Outer("hi")
+            Outer(99)
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal(
+            $"hi{Environment.NewLine}1{Environment.NewLine}99{Environment.NewLine}1{Environment.NewLine}",
+            output);
     }
 
     [Fact]
-    public void GenericLocalFunction_ReturnTypeReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_ReturnTypeReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
 
-            func Outer[U]() {
+            func Outer[U]() U {
                 let Inner[T] = func (x T) U {
                     return default
                 }
+                return Inner(1)
             }
-            Outer[string]()
+            Console.WriteLine(Outer[string]())
+            Console.WriteLine(Outer[int32]())
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void GenericLocalFunction_BodyReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_BodyReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
@@ -71,35 +81,43 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             func Outer[U]() {
                 let Inner[T] = func (x T) T {
                     let z U = default
+                    Console.WriteLine(z)
                     return x
                 }
+                Console.WriteLine(Inner(5))
             }
             Outer[string]()
+            Outer[int32]()
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal(
+            $"{Environment.NewLine}5{Environment.NewLine}0{Environment.NewLine}5{Environment.NewLine}",
+            output);
     }
 
     [Fact]
-    public void GenericLocalFunction_ReferencesEnclosingClassTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_ReferencesEnclosingClassTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
 
             class Box[U] {
-                func Run() {
+                func Run(seed U) {
                     let Inner[T] = func (x T, y U) T {
                         return x
                     }
+                    Console.WriteLine(Inner(1, seed))
                 }
             }
+            let b1 = Box[string]{}
+            b1.Run("hi")
+            let b2 = Box[int32]{}
+            b2.Run(42)
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"1{Environment.NewLine}1{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -145,66 +163,73 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
     }
 
     [Fact]
-    public void GenericLocalFunction_IsExpressionTargetsEnclosingTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_IsExpressionTargetsEnclosingTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
 
-            func Outer[U]() {
+            func Outer[U]() bool {
                 let Inner[T] = func (x object) bool {
                     return x is U
                 }
+                return Inner[int32]("hi")
             }
-            Outer[string]()
+            Console.WriteLine(Outer[string]())
+            Console.WriteLine(Outer[int32]())
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void GenericLocalFunction_TypeOfTargetsEnclosingTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_TypeOfTargetsEnclosingTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
             import System
 
-            func Outer[U]() {
+            func Outer[U]() Type {
                 let Inner[T] = func () Type {
                     return typeof(U)
                 }
+                return Inner[int32]()
             }
-            Outer[string]()
+            Console.WriteLine(Outer[string]())
+            Console.WriteLine(Outer[int32]())
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"System.String{Environment.NewLine}System.Int32{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void GenericLocalFunction_SizeOfTargetsEnclosingTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_SizeOfTargetsEnclosingTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
 
-            func Outer[U unmanaged](seed U) {
+            func Outer[U unmanaged](seed U) int32 {
                 let Inner[T] = func () int32 {
                     return sizeof(U)
                 }
+                return Inner[int32]()
             }
-            Outer(42)
+            Console.WriteLine(Outer(42))
+            Console.WriteLine(Outer(42L))
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"4{Environment.NewLine}8{Environment.NewLine}", output);
     }
 
     [Fact]
     public void GenericLocalFunction_UserInstanceGenericCallTargetsEnclosingTypeParameter_ReportsGS0468()
     {
+        // Unlike the other cases in this file, `Inner` here CAPTURES `b` (a
+        // local variable read from its body) — this is the CAPTURING generic
+        // local shape (issue #4221/#4252) that issue #4223 does not extend.
+        // See the class remarks: GS0468 is retained for this shape.
         var source = """
             package P
 
@@ -229,27 +254,28 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
     }
 
     [Fact]
-    public void GenericLocalFunction_ImportedStaticGenericCallTargetsEnclosingTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_ImportedStaticGenericCallTargetsEnclosingTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
             import System.Runtime.CompilerServices
 
-            func Outer[U]() {
+            func Outer[U]() bool {
                 let Inner[T] = func () bool {
                     return RuntimeHelpers.IsReferenceOrContainsReferences[U]()
                 }
+                return Inner[int32]()
             }
-            Outer[string]()
+            Console.WriteLine(Outer[string]())
+            Console.WriteLine(Outer[int32]())
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"True{Environment.NewLine}False{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void NestedGenericLocalFunctions_InnermostReferencesOutermostTypeParameter_ReportsGS0468()
+    public void NestedGenericLocalFunctions_InnermostReferencesOutermostTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         // Two levels of local-function nesting: Innermost[V] must see the outermost
         // Outer[T]'s T as an enclosing type parameter, skipping over Middle[U]'s scope.
@@ -257,18 +283,20 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             package P
 
             func Outer[T]() {
-                let Middle[U] = func () {
+                let Middle[U] = func (u U) {
                     let Innermost[V] = func (x V) T {
                         return default
                     }
+                    Console.WriteLine(Innermost[bool](true))
                 }
+                Middle(1)
             }
             Outer[string]()
+            Outer[int32]()
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
@@ -320,12 +348,14 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
     }
 
     [Fact]
-    public void GenericLocalFunction_ConstrainedStaticVoidCallTargetsEnclosingTypeParameter_ReportsGS0468()
+    public void GenericLocalFunction_ConstrainedStaticVoidCallTargetsEnclosingTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         // NB1 (review #2013): a static-virtual interface call `U.M(...)` with a
         // VOID return has node.Type == void, so the enclosing type parameter `U`
         // in the constrained receiver is only reachable via the call node's own
-        // TypeParameter field — otherwise silent invalid IL.
+        // TypeParameter field — otherwise silent invalid IL. Two DIFFERENT
+        // ISink implementations prove the static-virtual dispatch is genuinely
+        // per-instantiation, not hardcoded to whichever was seen first.
         var source = """
             package P
 
@@ -340,6 +370,15 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
             class Printer : ISink {
                 shared {
                     func Consume(x int32) {
+                        Console.WriteLine("Printer:" + x.ToString())
+                    }
+                }
+            }
+
+            class Silent : ISink {
+                shared {
+                    func Consume(x int32) {
+                        Console.WriteLine("Silent:" + x.ToString())
                     }
                 }
             }
@@ -348,13 +387,14 @@ public class Issue1940GenericLocalFunctionEnclosingTypeParameterTests
                 let Inner[V] = func () {
                     U.Consume(1)
                 }
+                Inner[bool]()
             }
             Outer(Printer{})
+            Outer(Silent{})
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"Printer:1{Environment.NewLine}Silent:1{Environment.NewLine}", output);
     }
 
     private static string CompileAndRun(string source)

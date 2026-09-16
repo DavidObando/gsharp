@@ -139,20 +139,77 @@ public class Issue4219GenericLocalRecursionTests
     }
 
     [Fact]
-    public void EnclosingTypeParameters_StillRejected()
+    public void GenericLocalCallingNonGenericSibling_NoLongerRejected()
     {
+        // Issue #4221 follow-up: before #4252, a generic local function
+        // calling ANY sibling local function — even a non-capturing,
+        // non-generic one — reported GS0463, because the binder rejected
+        // every capture of a generic local function wholesale. This shape
+        // (`first[T]` merely calls `second`, which captures nothing) was one
+        // of the removed GS0463 rows; restored here as the positive case
+        // #4252 should have added: it now compiles and runs correctly.
         var result = EmittedOracle.Evaluate("""
-            func Run[Outer](x Outer) {
-                let first[T] = func(x T) int32 { return second(x) }
-                let second[U] = func(x U) int32 {
-                    let value Outer = default(Outer)
-                    return 0
-                }
+            func Run() int32 {
+                let second = func(x int32) int32 { return x }
+                let first[T] = func(x T) int32 { return second(0) }
+                return first(1) + first("z")
             }
-            Run(0)
+            Run()
             """);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0468");
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0463");
+        Assert.Equal(0, result.Value);
+    }
+
+    [Fact]
+    public void GenericLocalCallingSiblingThatCapturesOuterState_SharesCaptureTransitively()
+    {
+        // Issue #4221 follow-up: the other removed GS0463 row — `first[T]`
+        // calls `second[U]`, a sibling generic local function that captures
+        // `outer` — `first` itself never reads `outer` directly. Before this
+        // fix, removing the blanket GS0463 rejection (#4252) left this shape
+        // crashing the emitter with GS9998 ("Variable 'outer' has no local
+        // slot"), because nothing propagated `second`'s capture into
+        // `first`'s own environment. It must now both compile AND observe
+        // the shared cell: each call to `first` still resolves to the same
+        // `outer`.
+        var result = EmittedOracle.Evaluate("""
+            func Run() int32 {
+                var outer = 1
+                let first[T] = func(x T) int32 { return second(x) }
+                let second[U] = func(x U) int32 { return outer }
+                return first(9) + first("z")
+            }
+            Run()
+            """);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0463");
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+        Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void EnclosingTypeParameters_CompilesAndRunsWithoutGS0468()
+    {
+        // Issue #4223: `second` referencing the enclosing method's own type
+        // parameter `Outer` — via a local variable's declared type and a
+        // `default(Outer)` expression, entirely body-only positions — used to
+        // report GS0468. `second` (and, transitively, `first`, purely to
+        // forward `Outer` to its own call site) is now correctly promoted,
+        // for two DIFFERENT `Outer` instantiations in the same run.
+        var result = EmittedOracle.Evaluate("""
+            func Run[Outer]() string {
+                let first[T] = func(a T) string { return second(a) }
+                let second[U] = func(a U) string {
+                    let value Outer = default(Outer)
+                    return typeof(Outer).Name
+                }
+                return first(1)
+            }
+            Run[string]() + "|" + Run[int32]()
+            """);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal("String|Int32", result.Value);
     }
 
     [Fact]
@@ -254,7 +311,6 @@ public class Issue4219GenericLocalRecursionTests
     }
 
     [Theory]
-    [InlineData("return Public()", "GS0468")]
     [InlineData("return Secret()", "GS0472")]
     [InlineData("return secret", "GS0472")]
     [InlineData("return Holder[int32].Secret()", "GS0472")]
@@ -307,6 +363,52 @@ public class Issue4219GenericLocalRecursionTests
             """);
         Assert.Empty(result.Diagnostics.Where(d => d.IsError));
         Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void GenericOwnerImplicitReceiverCall_CompilesAndRunsWithoutGS0468()
+    {
+        // Issue #4223: `second`'s implicit-receiver call to `Public()` — a
+        // `shared` member of the ENCLOSING generic type `Holder[Outer]` —
+        // used to report GS0468 (moved out of GenericOwnerDependencies_FailBeforeEmission
+        // above), because the resolved call site is `Holder[Outer].Public()`
+        // and `Outer` is referenced only through the call's implicit STATIC
+        // OWNER TYPE — a shape `TryPromoteNonCapturingGenericLambda`'s
+        // enclosing-type-parameter scan did not check at all. `second` (and,
+        // transitively, `first`, which must forward `Outer` purely to supply
+        // it at its own call to `second`) is now correctly promoted for two
+        // DIFFERENT `Outer` instantiations.
+        var resultString = EmittedOracle.Evaluate("""
+            class Holder[Outer] {
+                shared {
+                    func Public() int32 { return 42 }
+                    func Run() int32 {
+                        let first[T] = func(x T) int32 { return second(x) }
+                        let second[U] = func(x U) int32 { return Public() }
+                        return first(1)
+                    }
+                }
+            }
+            Holder[string].Run()
+            """);
+        Assert.Empty(resultString.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(42, resultString.Value);
+
+        var resultInt = EmittedOracle.Evaluate("""
+            class Holder[Outer] {
+                shared {
+                    func Public() int32 { return 42 }
+                    func Run() int32 {
+                        let first[T] = func(x T) int32 { return second(x) }
+                        let second[U] = func(x U) int32 { return Public() }
+                        return first(1)
+                    }
+                }
+            }
+            Holder[int32].Run()
+            """);
+        Assert.Empty(resultInt.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(42, resultInt.Value);
     }
 
     [Theory]

@@ -215,23 +215,13 @@ internal sealed partial class DeclarationBinder
 
         if (methodReceiverStruct != null)
         {
+            // ADR-0182: BindFunctionReceiver only ever populates
+            // methodReceiverStruct for an owned-type operator now — an
+            // ordinary receiver-clause method is always an extension (see
+            // below, `syntax.IsExtension` branch) and has no in-body
+            // counterpart to collide with, so there is nothing left to
+            // steer here the way ADR-0079's retired GS0314 warning did.
             var methodName = syntax.Identifier.ValueText;
-
-            // ADR-0079 / issue #719: warn when a receiver-clause method
-            // targets a same-package ("owned") struct or class. The
-            // canonical form for owned-type instance methods is the
-            // in-body declaration; the receiver-clause form is reserved
-            // for non-owned types (imported CLR or referenced-package
-            // types). Operators are exempt because they have no in-body
-            // counterpart — the parser synthesises an `op_*`-prefixed
-            // identifier for `func (a T) operator …`.
-            if (!methodName.StartsWith("op_", StringComparison.Ordinal))
-            {
-                Diagnostics.ReportReceiverClauseOnOwnedType(
-                    syntax.Receiver?.Type?.Location ?? syntax.Identifier.Location,
-                    methodReceiverStruct.Name,
-                    methodName);
-            }
 
             if (methodReceiverStruct.IsInline && IsInlineSynthesizedMemberName(methodName))
             {
@@ -749,9 +739,13 @@ internal sealed partial class DeclarationBinder
         ImmutableArray<ParameterSymbol>.Builder parameters,
         HashSet<string> seenParameterNames)
     {
-        // Phase 3.B.6 / ADR-0019 and Phase 6.4 / ADR-0024: receiver
-        // clauses become parameters[0]. Same-package struct/class receivers
-        // are methods; all other valid receivers remain extension functions.
+        // ADR-0182 / issue #4240: a receiver clause is unconditionally an
+        // extension now, regardless of the receiver type's owning package
+        // or aggregate kind. The one carve-out is operators (ADR-0035):
+        // they have no in-body declaration form, so an operator on an owned
+        // struct/class still attaches to that type — exactly the routing
+        // ADR-0024 established, just no longer shared with ordinary
+        // methods, which are in-body only.
         TypeSymbol? receiverType = null;
         ParameterSymbol? explicitReceiverParameter = null;
         StructSymbol? methodReceiverStruct = null;
@@ -776,19 +770,12 @@ internal sealed partial class DeclarationBinder
             seenParameterNames.Add(recvName);
             parameters.Add(explicitReceiverParameter);
 
-            if (!syntax.IsExplicitExtension &&
+            var isOperator = syntax.Identifier.ValueText.StartsWith("op_", StringComparison.Ordinal);
+            if (isOperator &&
                 receiverType is StructSymbol receiverStruct &&
                 string.Equals(receiverStruct.PackageName, package.Name, StringComparison.Ordinal))
             {
                 methodReceiverStruct = receiverStruct.Definition ?? receiverStruct;
-            }
-            else if (!syntax.IsExplicitExtension &&
-                IsSamePackageNonAggregateReceiver(receiverSyntax.Type, receiverType, package))
-            {
-                Diagnostics.ReportMethodReceiverMustBeStructOrClass(
-                    receiverSyntax.Type?.Location ?? receiverSyntax.Identifier.Location,
-                    receiverType.Name);
-                return new FunctionReceiverBindingResult(receiverType, explicitReceiverParameter, methodReceiverStruct, false);
             }
         }
 
@@ -1257,26 +1244,6 @@ internal sealed partial class DeclarationBinder
             && !isUnsafe
             && methodTypeParameters.IsDefaultOrEmpty
             && accessibility == Accessibility.Public;
-    }
-
-    private bool IsSamePackageNonAggregateReceiver(TypeClauseSyntax? receiverSyntax, TypeSymbol receiverType, PackageSymbol package)
-    {
-        if (receiverType is InterfaceSymbol iface)
-        {
-            return string.Equals(iface.PackageName, package.Name, StringComparison.Ordinal);
-        }
-
-        if (receiverType is EnumSymbol enumSymbol)
-        {
-            return string.Equals(enumSymbol.PackageName, package.Name, StringComparison.Ordinal);
-        }
-
-        var receiverName = receiverSyntax?.Identifier?.Text;
-        return receiverName != null
-            && !isPrimitiveTypeName(receiverName)
-            && scope.TryLookupTypeAlias(receiverName, out var aliased)
-            && ReferenceEquals(aliased, receiverType)
-            && receiverType is not StructSymbol;
     }
 
     /// <summary>

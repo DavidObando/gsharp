@@ -6,7 +6,7 @@ description: "Explore the reasoning behind G# language and runtime choices throu
 
 # Design decisions (ADRs)
 
-This is a curated reference index of the Architecture Decision Records in the repository. ADRs explain design intent and tradeoffs; they are not the normative language specification. Each link points to the source ADR on GitHub. The repository currently has accepted/proposed ADRs through **ADR-0174** (plus the `0000` template).
+This is a curated reference index of the Architecture Decision Records in the repository. ADRs explain design intent and tradeoffs; they are not the normative language specification. Each link points to the source ADR on GitHub. The repository currently has accepted/proposed ADRs through **ADR-0182** (plus the `0000` template); this index is curated and may lag behind the newest ADRs.
 
 ## Null model, values, and primitives
 
@@ -46,7 +46,7 @@ This is a curated reference index of the Architecture Decision Records in the re
 | [0017](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0017-method-virtuality.md) | Method virtuality — sealed by default, opt-in with `open` | Requires explicit `open` for inheritable classes and overridable methods. |
 | [0018](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0018-interface-defaults.md) | Interface default methods — not in Phase 3 | Defers default interface methods from the early interface surface. |
 | [0024](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0024-methods-vs-extensions-canonical-style.md) | Methods with receivers vs. extension functions canonical style | Establishes receiver functions as the canonical extension/method style. |
-| [0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md) | Restrict receiver-clause methods to non-owned receiver types (warning) | Reserves `func (r T) M()` for types the package does not own; same-package owned receivers emit the soft `GS0314` warning. Operators are exempt. |
+| [0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md) | Restrict receiver-clause methods to non-owned receiver types (warning) | Reserved `func (r T) M()` for types the package does not own with a soft `GS0314` warning on owned receivers; escalated to a hard rule (no owned-instance-method meaning at all) by ADR-0182. Operators remain exempt. |
 | [0025](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0025-record-keyword-alias.md) | `record` keyword alias for `data struct` | Makes `record` syntactic sugar for `data struct`. |
 | [0029](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0029-data-struct-synthesized-members.md) | `data struct` synthesized members | Defines synthesized equality, copy, and ergonomic members for data structs. |
 | [0032](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0032-data-struct-ergonomics.md) | Data-struct ergonomics polish | Refines copying, deconstruction, and update syntax for data structs. |
@@ -101,7 +101,8 @@ This is a curated reference index of the Architecture Decision Records in the re
 | ADR | Title | Summary |
 | --- | --- | --- |
 | [0019](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0019-extension-functions.md) | Extension function declaration syntax — `func (Receiver) Name(...) ...` | Defines receiver-based extension function syntax. |
-| [0165](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0165-explicit-extension-receiver-clauses.md) | Explicit extension receiver clauses | Adds `func extension (r T) M()` for enum and owned extension receivers. |
+| [0165](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0165-explicit-extension-receiver-clauses.md) | Explicit extension receiver clauses | Added `func extension (r T) M()` for enum and owned extension receivers; superseded by ADR-0182, which makes the marker unconditional and retires the keyword. |
+| [0182](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0182-receiver-clause-is-always-extension.md) | A receiver clause always declares an extension | Removes the ownership branch entirely: `func (r T) M()` is always an extension, for any `T`. Owned instance methods are in-body only. Retires the `extension` contextual keyword (GS0587 flags the old spelling) and the `GS0103`/`GS0314` diagnostics. |
 | [0026](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0026-operator-by-name-deferral.md) | Operator-by-name on user types — deferred | Defers user operator naming until a later design is chosen. |
 | [0034](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0034-imported-clr-interop.md) | Imported CLR interop — static members, writes, operators, conversions, overload resolution | Extends imported CLR support across static members, writes, operators, conversions, and overloads. |
 | [0035](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0035-user-operator-overloads.md) | User-defined `operator` keyword on GSharp types | Adds receiver-style operator declarations for G# types. |

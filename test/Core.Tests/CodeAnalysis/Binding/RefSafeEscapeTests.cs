@@ -430,9 +430,10 @@ func bad(scoped s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
 package P
 ref struct MySpan {
     var Value int32
-}
-func (s MySpan) getSelf() MySpan {
-    return s
+
+    func getSelf() MySpan {
+        return this
+    }
 }
 ";
         var diagnostics = Bind(source);

@@ -90,8 +90,15 @@ internal static class SynthesizedClosureReifier
     /// generic arguments recursively rather than hand-rolling a partial clone.
     /// </summary>
     /// <param name="origTPs">The ordered enclosing type parameters to clone.</param>
+    /// <param name="ordinalOffset">
+    /// Issue #4223: the first clone's ordinal. Non-zero when the clones are
+    /// appended AFTER a function's own declared type parameters (a generic
+    /// local function that ALSO references an enclosing type parameter) —
+    /// the clones must occupy CLR generic-parameter slots past the function's
+    /// own, not restart at 0 and collide with them.
+    /// </param>
     /// <returns>The cloned type parameters with remapped constraints.</returns>
-    public static ImmutableArray<TypeParameterSymbol> CloneWithRemappedConstraints(ImmutableArray<TypeParameterSymbol> origTPs)
+    public static ImmutableArray<TypeParameterSymbol> CloneWithRemappedConstraints(ImmutableArray<TypeParameterSymbol> origTPs, int ordinalOffset = 0)
     {
         if (origTPs.IsDefaultOrEmpty)
         {
@@ -109,7 +116,7 @@ internal static class SynthesizedClosureReifier
             // constraints can see every clone before being rebuilt.
             clones[i] = new TypeParameterSymbol(
                 src.Name,
-                i,
+                ordinalOffset + i,
                 src.Constraint,
                 src.Variance)
             {

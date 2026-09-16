@@ -17,7 +17,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | `using System;` | `import System` | Imports bring CLR namespaces and G# packages into scope. |
 | `static void Main()` | top-level statements or `func Main()` | SDK projects synthesize an entry point; an explicit entry point is named `Main`. |
 | `void M()` | `func M()` | Functions can be package-level or members. |
-| method declaration in a class | class-body `func M()` (canonical) or `func (r Receiver) M()` for unowned types | Receiver clauses on owned types emit the `GS0314` warning — declare the method inside the class body instead. |
+| method declaration in a class | class-body `func M()` (canonical) or `func (r Receiver) M()` for unowned types | A receiver clause on an owned type is always an extension, never an instance method — declare a real instance method inside the class body instead; there is no receiver-clause spelling for one. |
 | `int` | `int32` (canonical) or `int` (alias) | The friendly `int` / `long` / `byte` / `float` aliases resolve to the canonical width-bearing names at the binder; canonical spellings are preferred in public APIs. |
 | `long` | `int64` (canonical) or `long` (alias) | CLR signatures stay obvious in source. |
 | `var x = ...;` | `let x = ...` or `var x = ...` | `let` is immutable; `var` is mutable. |
@@ -46,7 +46,7 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | `unsafe`, pointers, `stackalloc`, `fixed` | `unsafe`, `*T`, `stackalloc [n]T`, `fixed p *T = source { ... }` | `*void` maps C# `void*`; raw-pointer operations require an unsafe context. |
 | `/// <summary>…</summary>` XML doc | `/// summary text` Markdown doc | Markdown documentation comments round-trip to CLR XML. |
 | lambda `x => x + 1` | `x -> x + 1` | Arrow lambdas with inferred parameter/return types are the canonical lambda form. |
-| extension method | `func (r Receiver) M()`; `func extension (r Receiver) M()` for enum/owned receivers | A receiver clause declares a CLR-visible extension method. The explicit marker prevents ownership from turning the declaration into an instance method. |
+| extension method | `func (r Receiver) M()` | A receiver clause always declares a CLR-visible extension method, for any receiver type — including one this package owns, or an enum. No marker is needed. |
 | explicit interface implementation `void IFoo.M()` | `func (IFoo) M()` | The qualifier clause supports methods, properties, indexers, events, and static interface members. |
 | collection spread `[..items]` | `[]T{ ...items }` / `List[T]{ ...items }` | Spread sources are evaluated once and enumerated in lexical order. |
 

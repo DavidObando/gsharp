@@ -12,13 +12,16 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #409 regression tests. A receiver clause
-/// <c>func (p Point) Distance() int32</c> on a same-package user-defined
-/// struct binds as an instance method on a value type (Phase 6.4). The
-/// emitter must pass a managed pointer as <c>this</c> for every receiver
-/// shape the call site can take; pushing the struct value directly
-/// reinterprets the bits as the <c>this</c> pointer and corrupts the stack
-/// (SIGSEGV, or <see cref="InvalidProgramException"/> at JIT time).
+/// Issue #409 regression tests. An in-body method
+/// <c>struct Point { func Distance() int32 { ... } }</c> on a user-defined
+/// struct binds as an instance method on a value type (Phase 6.4). ADR-0182
+/// retired the receiver-clause spelling of an owned instance method (a
+/// receiver clause is unconditionally an extension now), so the in-body form
+/// is the only way to exercise this path. The emitter must pass a managed
+/// pointer as <c>this</c> for every receiver shape the call site can take;
+/// pushing the struct value directly reinterprets the bits as the
+/// <c>this</c> pointer and corrupts the stack (SIGSEGV, or
+/// <see cref="InvalidProgramException"/> at JIT time).
 ///
 /// Each test compiles a small program that writes the call's result into a
 /// top-level global, invokes <c>&lt;Main&gt;$</c>, and reads the global back
@@ -35,10 +38,10 @@ public class UserStructMethodEmitTests
 
             struct Point {
                 var X int32
-            }
 
-            func (p Point) Foo() int32 {
-                return p.X
+                func Foo() int32 {
+                    return X
+                }
             }
             """;
 
@@ -89,10 +92,10 @@ public class UserStructMethodEmitTests
             struct Point {
                 var X int32
                 var Y int32
-            }
 
-            func (p Point) Distance() int32 {
-                return p.X * p.X + p.Y * p.Y
+                func Distance() int32 {
+                    return X * X + Y * Y
+                }
             }
 
             let p = Point{X: 3, Y: 4}
@@ -124,10 +127,10 @@ public class UserStructMethodEmitTests
             struct Point {
                 var X int32
                 var Y int32
-            }
 
-            func (p Point) Sum() int32 {
-                return p.X + p.Y
+                func Sum() int32 {
+                    return X + Y
+                }
             }
 
             public var result = 0
@@ -158,10 +161,10 @@ public class UserStructMethodEmitTests
 
             ref struct Wrap {
                 var V int32
-            }
 
-            func (w Wrap) Show() int32 {
-                return w.V
+                func Show() int32 {
+                    return V
+                }
             }
 
             func make() Wrap {
@@ -224,10 +227,10 @@ public class UserStructMethodEmitTests
             struct Point {
                 var X int32
                 var Y int32
-            }
 
-            func (p Point) Sum() int32 {
-                return p.X + p.Y
+                func Sum() int32 {
+                    return X + Y
+                }
             }
 
             func makePoint(x int32, y int32) Point {
@@ -259,14 +262,14 @@ public class UserStructMethodEmitTests
 
             struct Inner {
                 var V int32
+
+                func Triple() int32 {
+                    return V * 3
+                }
             }
 
             struct Outer {
                 var I Inner
-            }
-
-            func (i Inner) Triple() int32 {
-                return i.V * 3
             }
 
             let o = Outer{I: Inner{V: 7}}
@@ -296,14 +299,14 @@ public class UserStructMethodEmitTests
 
             struct Inner {
                 var V int32
+
+                func Triple() int32 {
+                    return V * 3
+                }
             }
 
             struct Outer {
                 var I Inner
-            }
-
-            func (i Inner) Triple() int32 {
-                return i.V * 3
             }
 
             func makeOuter() Outer {
@@ -337,14 +340,14 @@ public class UserStructMethodEmitTests
             struct Point {
                 var X int32
                 var Y int32
-            }
 
-            func (p Point) Sum() int32 {
-                return p.X + p.Y
-            }
+                func Sum() int32 {
+                    return X + Y
+                }
 
-            func (p Point) Twice() int32 {
-                return p.Sum() + p.Sum()
+                func Twice() int32 {
+                    return Sum() + Sum()
+                }
             }
 
             let p = Point{X: 3, Y: 4}
@@ -376,10 +379,10 @@ public class UserStructMethodEmitTests
             struct Point {
                 var X int32
                 var Y int32
-            }
 
-            func (p Point) Sum() int32 {
-                return p.X + p.Y
+                func Sum() int32 {
+                    return X + Y
+                }
             }
 
             let arr = []Point{Point{X: 1, Y: 2}, Point{X: 3, Y: 4}}
