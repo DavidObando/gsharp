@@ -280,16 +280,21 @@ internal sealed class ClosureEmitter
                 // `<Program>` static placement.
                 //
                 // Issue #1886: a GENERIC local function (`let Name[T] = func
-                // (...) ... {...}`) is declared as a real (non-capturing, by
-                // binder rule GS0463) FunctionSymbol resolved through direct
-                // `BoundCallExpression` calls, not through the delegate-value
-                // indirect-call path that consults ClosureInfos to redirect to
-                // `closure.InvokeMethod`. Nesting it here would also require
-                // this display class's fieldless Invoke method to itself be
-                // generic, which SynthesizeDisplayClass does not model. Since
-                // generic local functions cannot capture, use a direct static
-                // host above rather than an instance Invoke method. Enclosing
-                // type-parameter reification remains outside this milestone.
+                // (...) ... {...}`) is declared as a real FunctionSymbol
+                // resolved through direct `BoundCallExpression` calls, not
+                // through the delegate-value indirect-call path that consults
+                // ClosureInfos to redirect to `closure.InvokeMethod`. Nesting
+                // it here would also require this display class's fieldless
+                // Invoke method to itself be generic, which
+                // SynthesizeDisplayClass does not model. A generic local
+                // function MAY capture outer state (#4221), but a capturing
+                // one is handled by its own dedicated branch below (a closure
+                // class whose Invoke method carries the local function's own
+                // generic parameters); this zero-field-host path always
+                // excludes every generic local function, capturing or not,
+                // and uses a direct static host above rather than an instance
+                // Invoke method. Enclosing type-parameter reification remains
+                // outside this milestone.
                 if (literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not { } zeroCaptureEnclosing
                     || zeroCaptureEnclosing is not (StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }))

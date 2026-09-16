@@ -39,7 +39,16 @@ public sealed class BoundFunctionLiteralExpression : BoundExpression
 
     public BoundBlockStatement Body { get; }
 
-    public ImmutableArray<VariableSymbol> CapturedVariables { get; }
+    /// <summary>
+    /// Gets the set of outer variables this literal reads or writes. The
+    /// setter is internal: issue #4221's transitive-capture reconciliation
+    /// (<see cref="LambdaBinder.ReconcileGenericLocalFunctionGroupCaptures"/>)
+    /// widens this set after initial binding when a generic local function
+    /// calls a sibling that itself captures outer state, so the caller's
+    /// synthesized environment ends up with a field for every variable any
+    /// callee it directly invokes will need at the call site.
+    /// </summary>
+    public ImmutableArray<VariableSymbol> CapturedVariables { get; internal set; }
 
     public override TypeSymbol Type => FunctionType;
 

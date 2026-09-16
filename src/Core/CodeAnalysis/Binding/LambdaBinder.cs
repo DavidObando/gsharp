@@ -84,6 +84,27 @@ internal sealed class LambdaBinder
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
 
     /// <summary>
+    /// Issue #4221: every function literal's captured-variable set, keyed by
+    /// its own <see cref="FunctionSymbol"/>, as of the most recent time it was
+    /// (re)computed. A generic local function is called directly through its
+    /// <see cref="FunctionSymbol"/> rather than through a delegate value, so a
+    /// sibling calling it (<c>BoundCallExpression</c>) carries no reference to
+    /// its <see cref="BoundFunctionLiteralExpression"/> the way a physically
+    /// nested literal does. <see cref="CapturedVariableCollector"/> consults
+    /// this map to fold a callee's already-known captures into its caller's
+    /// own set — the same transitive folding
+    /// <see cref="CapturedVariableCollector.RewriteFunctionLiteralExpression"/>
+    /// already does for a literal nested directly in the body being walked.
+    /// Consecutive generic local-function declarations bind their bodies in
+    /// source order (see <see cref="StatementBinder.BindBlockStatements"/>),
+    /// so a callee declared earlier in the same group is already present here
+    /// when its caller's body binds; <see cref="ReconcileGenericLocalFunctionGroupCaptures"/>
+    /// re-converges the whole group afterward to cover a callee declared
+    /// later (forward reference) or a call cycle.
+    /// </summary>
+    private readonly Dictionary<FunctionSymbol, ImmutableArray<VariableSymbol>> localFunctionCapturedVariables = new();
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="LambdaBinder"/>
     /// class.
     /// </summary>
@@ -463,7 +484,7 @@ internal sealed class LambdaBinder
         body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, synthetic.Type);
         CheckAllPathsReturn((BoundBlockStatement)body, synthetic.Type, syntax.Body.Location);
 
-        var captured = CollectCapturedVariables(body, synthetic.Parameters);
+        var captured = CollectCapturedVariables(body, synthetic);
 
         // Issue #367: a by-ref-like (`ref struct`) local cannot be captured by a
         // closure; the capture would hoist it into a heap-allocated display
@@ -644,6 +665,61 @@ internal sealed class LambdaBinder
         finally
         {
             binderCtx.CurrentTypeParameters = previousTypeParameters;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4221: re-converges a group of consecutive generic local-function
+    /// declarations' captured-variable sets after every member's body has
+    /// been bound once in source order.
+    /// <see cref="CollectCapturedVariables(BoundStatement, FunctionSymbol)"/>
+    /// (via <see cref="CapturedVariableCollector"/>) already folds a callee's
+    /// captures into its caller when the callee was declared — and therefore
+    /// bound — earlier in the group. That leaves two shapes unhandled by a
+    /// single in-order pass: a call to a sibling declared LATER in the group
+    /// (forward reference) and a call cycle between two members. Both are
+    /// legal now that generic local functions may capture at all (#4252
+    /// removed the blanket GS0463 rejection); this widens each member's
+    /// <see cref="BoundFunctionLiteralExpression.CapturedVariables"/> to a
+    /// fixed point by recomputing every member's captures, in a loop, against
+    /// the whole group's current best-known sets, until nothing grows.
+    /// Termination is guaranteed because a set only ever grows and is bounded
+    /// by the (finite) set of variables in scope; <paramref name="group"/> is
+    /// typically 1-2 members, so the pass count is bounded to be defensive
+    /// against a bug in the fixed-point logic itself, not because the
+    /// algorithm needs it.
+    /// </summary>
+    /// <param name="group">Every member of one consecutive run of
+    /// <c>let Name[T, ...] = func (...) ... { ... }</c> declarations, in
+    /// source order, after each one's body has been bound.</param>
+    public void ReconcileGenericLocalFunctionGroupCaptures(IReadOnlyList<BoundFunctionLiteralExpression> group)
+    {
+        if (group.Count < 2)
+        {
+            // A single generic local function has no sibling to call, so the
+            // in-order pass inside CollectCapturedVariables already saw
+            // everything it ever will.
+            return;
+        }
+
+        var maxPasses = Math.Max(8, group.Count * group.Count);
+        for (var pass = 0; pass < maxPasses; pass++)
+        {
+            var changed = false;
+            foreach (var literal in group)
+            {
+                var recomputed = CollectCapturedVariables(literal.Body, literal.Function);
+                if (!new HashSet<VariableSymbol>(literal.CapturedVariables).SetEquals(recomputed))
+                {
+                    literal.CapturedVariables = recomputed;
+                    changed = true;
+                }
+            }
+
+            if (!changed)
+            {
+                break;
+            }
         }
     }
 
@@ -1032,7 +1108,7 @@ internal sealed class LambdaBinder
         var bodyBlock = new BoundBlockStatement(syntax.Body, bodyStatements.ToImmutable());
         CheckAllPathsReturn(bodyBlock, returnType, syntax.Body.Location);
         var fnType = FunctionTypeSymbol.Get(parameterTypes.MoveToImmutable(), BuildVariadicFlagsIfAny(parameterSymbols), observableReturnType);
-        var captured = CollectCapturedVariables(bodyBlock, synthetic.Parameters);
+        var captured = CollectCapturedVariables(bodyBlock, synthetic);
 
         // Issue #367 / ADR-0058: by-ref-like or managed-pointer locals cannot
         // be captured by a closure; mirror the function-literal checks.
@@ -1381,7 +1457,7 @@ internal sealed class LambdaBinder
         {
             LexicalEnclosingType = getCurrentFunction()?.LexicalEnclosingType,
         };
-        var captured = CollectCapturedVariables(body, function.Parameters);
+        var captured = CollectCapturedVariables(body, function);
         BoundExpression adapter = new BoundFunctionLiteralExpression(group.Syntax, function, targetFunctionType, body, captured);
         return receiverTemp == null
             ? adapter
@@ -1461,7 +1537,7 @@ internal sealed class LambdaBinder
         {
             LexicalEnclosingType = getCurrentFunction()?.LexicalEnclosingType,
         };
-        var captured = CollectCapturedVariables(body, adapterFunction.Parameters);
+        var captured = CollectCapturedVariables(body, adapterFunction);
         var adapter = new BoundFunctionLiteralExpression(
             group.Syntax,
             adapterFunction,
@@ -2333,9 +2409,9 @@ internal sealed class LambdaBinder
         return walker.Found;
     }
 
-    private static ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, ImmutableArray<ParameterSymbol> parameters)
+    private ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, FunctionSymbol function)
     {
-        var paramSet = new HashSet<VariableSymbol>(parameters);
+        var paramSet = new HashSet<VariableSymbol>(function.Parameters);
         var seen = new HashSet<VariableSymbol>();
         var captured = ImmutableArray.CreateBuilder<VariableSymbol>();
 
@@ -2350,9 +2426,13 @@ internal sealed class LambdaBinder
         var outVarCollector = new InlineOutVarDeclarationCollector();
         outVarCollector.RewriteStatement(body);
 
-        var collector = new CapturedVariableCollector(paramSet, seen, captured, outVarCollector.Declared);
+        // Issue #4221: fold in the already-known captures of any local
+        // function this body calls directly (see localFunctionCapturedVariables).
+        var collector = new CapturedVariableCollector(paramSet, seen, captured, outVarCollector.Declared, localFunctionCapturedVariables);
         collector.RewriteStatement(body);
-        return captured.ToImmutable();
+        var result = captured.ToImmutable();
+        localFunctionCapturedVariables[function] = result;
+        return result;
     }
 
     /// <summary>
@@ -2773,17 +2853,57 @@ internal sealed class LambdaBinder
         private readonly HashSet<VariableSymbol> seen;
         private readonly HashSet<VariableSymbol> declared;
         private readonly ImmutableArray<VariableSymbol>.Builder captured;
+        private readonly IReadOnlyDictionary<FunctionSymbol, ImmutableArray<VariableSymbol>>? calleeCapturedVariables;
 
         public CapturedVariableCollector(
             HashSet<VariableSymbol> parameters,
             HashSet<VariableSymbol> seen,
             ImmutableArray<VariableSymbol>.Builder captured,
-            IEnumerable<VariableSymbol>? preDeclared = null)
+            IEnumerable<VariableSymbol>? preDeclared = null,
+            IReadOnlyDictionary<FunctionSymbol, ImmutableArray<VariableSymbol>>? calleeCapturedVariables = null)
         {
             this.parameters = parameters;
             this.seen = seen;
             this.declared = preDeclared != null ? [.. preDeclared] : [];
             this.captured = captured;
+            this.calleeCapturedVariables = calleeCapturedVariables;
+        }
+
+        /// <summary>
+        /// Issue #4221: a call to a local function is a
+        /// <see cref="BoundCallExpression"/> against its
+        /// <see cref="FunctionSymbol"/> directly — not a reference to its
+        /// <see cref="BoundFunctionLiteralExpression"/>, which is what
+        /// <see cref="RewriteFunctionLiteralExpression"/> relies on for a
+        /// physically nested literal. Fold in whatever the callee is already
+        /// known to capture (see <see cref="localFunctionCapturedVariables"/>)
+        /// exactly as that method does for a nested literal, so the caller's
+        /// own environment carries every variable a direct call inside its
+        /// body will need to rebuild the callee's closure instance at the
+        /// call site (<c>MethodBodyEmitter.EmitGenericLocalClosureInstance</c>).
+        /// </summary>
+        protected override BoundExpression RewriteCallExpression(BoundCallExpression node)
+        {
+            if (this.calleeCapturedVariables != null
+                && this.calleeCapturedVariables.TryGetValue(node.Function, out var calleeCaptured))
+            {
+                foreach (var calleeVariable in calleeCaptured)
+                {
+                    if (calleeVariable is GlobalVariableSymbol)
+                    {
+                        continue;
+                    }
+
+                    if (!this.parameters.Contains(calleeVariable)
+                        && !this.declared.Contains(calleeVariable)
+                        && this.seen.Add(calleeVariable))
+                    {
+                        this.captured.Add(calleeVariable);
+                    }
+                }
+            }
+
+            return base.RewriteCallExpression(node);
         }
 
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)

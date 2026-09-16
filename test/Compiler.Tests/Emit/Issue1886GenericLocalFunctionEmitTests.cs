@@ -136,6 +136,258 @@ public class Issue1886GenericLocalFunctionEmitTests
     }
 
     [Fact]
+    public void GenericLocalFunction_CapturingParameter_SeesCallerArgument()
+    {
+        // Definition-of-done: a captured *parameter* of the enclosing
+        // function, not just a `var`-declared local. G# parameters are
+        // read-only bindings (GS0127 on reassignment), so this reads the
+        // captured parameter from each differently-typed call and
+        // accumulates into a separate outer `var`.
+        var source = """
+            package P
+
+            func Foo(seed int32) int32 {
+                var total = 0
+                let Bump[T] = func (v T) T {
+                    total = total + seed
+                    return v
+                }
+                Bump(1)
+                Bump("a")
+                return total
+            }
+            Console.WriteLine(Foo(10))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"20{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CapturingThis_MutatesInstanceField()
+    {
+        // Definition-of-done: captured `this` composes with a generic local
+        // function's own environment — both the field read and the field
+        // write must reach the same instance across differently-typed calls.
+        var source = """
+            package P
+
+            class Counter {
+                var count int32
+                func Bump() int32 {
+                    let Add[T] = func (value T) T {
+                        this.count = this.count + 1
+                        return value
+                    }
+                    Add(1)
+                    Add("a")
+                    return this.count
+                }
+            }
+            var c = Counter{}
+            Console.WriteLine(c.Bump())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CapturingMutableReferenceType_SharesIdentity()
+    {
+        // Definition-of-done: a captured mutable reference-type value (not
+        // just a value-type `var`) shares identity across instantiations —
+        // both the generic local and the enclosing function observe the
+        // same object's mutated field.
+        var source = """
+            package P
+
+            class Box {
+                var value int32
+            }
+            func Foo() int32 {
+                var b = Box{}
+                b.value = 10
+                let Bump[T] = func (v T) T {
+                    b.value = b.value + 1
+                    return v
+                }
+                Bump(1)
+                Bump("x")
+                return b.value
+            }
+            Console.WriteLine(Foo())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"12{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_NestedLocalFunctionCapture_ReachesOuterVariable()
+    {
+        // Definition-of-done: a plain local function declared INSIDE a
+        // generic local function's body still reaches the outer variable
+        // captured by the enclosing generic local.
+        var source = """
+            package P
+
+            func Foo() int32 {
+                var count = 0
+                let Outer[T] = func (v T) T {
+                    let Inner = func (x int32) int32 {
+                        count = count + x
+                        return x
+                    }
+                    Inner(1)
+                    return v
+                }
+                Outer(1)
+                Outer("a")
+                return count
+            }
+            Console.WriteLine(Foo())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CallsEarlierSiblingThatCaptures_PropagatesTransitively()
+    {
+        // Issue #4221 follow-up: `first[T]` never reads `outer` itself — it
+        // only calls `second`, a sibling generic local function declared
+        // EARLIER that captures `outer` directly. Before the fix, building
+        // `second`'s closure instance at the `second(x)` call site inside
+        // `first`'s body crashed with GS9998 ("Variable 'outer' has no local
+        // slot"), because `first`'s own environment had no field for `outer`
+        // — nothing had ever propagated that transitive need into `first`'s
+        // own captured-variable set.
+        var source = """
+            package P
+
+            func Foo() int32 {
+                var outer = 0
+                let Second[U] = func (x U) int32 {
+                    outer = outer + 1
+                    return outer
+                }
+                let First[T] = func (x T) int32 {
+                    return Second(0)
+                }
+                First(9)
+                First("z")
+                return outer
+            }
+            Console.WriteLine(Foo())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_CallsLaterSiblingThatCaptures_PropagatesTransitively()
+    {
+        // Same as above, but `Second` (the capturing callee) is declared
+        // AFTER `First` (the caller) — a forward reference. Consecutive
+        // generic local-function declarations register every sibling's
+        // signature before any body binds (#4219), so the call itself
+        // resolves either way; only capture-set propagation was
+        // order-sensitive before this fix.
+        var source = """
+            package P
+
+            func Foo() int32 {
+                var outer = 0
+                let First[T] = func (x T) int32 {
+                    return Second(0)
+                }
+                let Second[U] = func (x U) int32 {
+                    outer = outer + 1
+                    return outer
+                }
+                First(9)
+                First("z")
+                return outer
+            }
+            Console.WriteLine(Foo())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_MutuallyRecursiveCapturingSiblings_ShareState()
+    {
+        // A call CYCLE between two capturing generic local functions. The
+        // fixed-point reconciliation must converge (and terminate) even when
+        // the two members call each other, not just when the call graph is
+        // acyclic.
+        var source = """
+            package P
+
+            func Foo() int32 {
+                var n = 0
+                let First[T] = func (x T) int32 {
+                    n = n + 1
+                    if n < 3 {
+                        return Second(x)
+                    }
+                    return n
+                }
+                let Second[U] = func (x U) int32 {
+                    n = n + 1
+                    if n < 3 {
+                        return First(x)
+                    }
+                    return n
+                }
+                return First(1)
+            }
+            Console.WriteLine(Foo())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"3{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void GenericLocalFunction_InsideGenericClassMethod_ComposesWithEnclosingTypeParameter()
+    {
+        // Definition-of-done: a generic local function that captures ordinary
+        // outer state still works when it is lexically nested inside a
+        // method of a generic class (an enclosing type parameter in scope),
+        // as long as the local function's own body never references that
+        // enclosing type parameter (the separate enclosing-type-parameter
+        // workstream, #4223, covers actually referencing it).
+        var source = """
+            package P
+
+            class Box[T] {
+                var seed T
+                func Run() int32 {
+                    var n = 0
+                    let Add[U] = func (v U) U {
+                        n = n + 1
+                        return v
+                    }
+                    Add(1)
+                    Add("x")
+                    return n
+                }
+            }
+            var b = Box[int32]{seed: 0}
+            Console.WriteLine(b.Run())
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"2{Environment.NewLine}", output);
+    }
+
+    [Fact]
     public void GenericLocalFunction_CapturingByRefLikeVariable_ReportsGS0219()
     {
         // A `ref struct` (Span[T]) capture is still rejected for a generic

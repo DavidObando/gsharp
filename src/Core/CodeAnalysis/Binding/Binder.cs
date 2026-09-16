@@ -369,6 +369,10 @@ public sealed class Binder
             bindFunctionLiteralWithSelfDeclaration: (literalSyntax, onSignatureBound) =>
             {
                 return Lambdas.BindFunctionLiteralExpression(literalSyntax, explicitName: null, onSignatureBound: onSignatureBound);
+            },
+            reconcileGenericLocalFunctionGroupCaptures: group =>
+            {
+                Lambdas.ReconcileGenericLocalFunctionGroupCaptures(group);
             });
         BoundExpression BindTypeOfExpressionForDeclarations(TypeOfExpressionSyntax syntax) =>
             Expressions.BindTypeOfExpression(syntax);
