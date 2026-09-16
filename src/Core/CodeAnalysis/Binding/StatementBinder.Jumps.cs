@@ -669,8 +669,34 @@ internal sealed partial class StatementBinder
             // reference type or a byref-like BCL type such as Span<T> —
             // kept for symmetry/defense-in-depth) still inherits its own
             // storage scope via the ordinary recursive walk.
+            //
+            // SOUNDNESS GUARD (found in review of #4265, before merge): the
+            // "encapsulated referent" premise holds for Span<T>-shaped
+            // indexers, which never expose a ref into their OWN receiver's
+            // storage — but nothing in the CLR type system enforces that.
+            // An externally-compiled ref struct can legally declare a
+            // getter marked [UnscopedRef] (System.Diagnostics.CodeAnalysis)
+            // that returns `ref` to one of ITS OWN fields — the exact
+            // Acc.Total shape this file's other #4265 guard exists to
+            // reject, just authored in a referenced assembly instead of
+            // natively. Real C# tracks this precisely: forwarding such a
+            // member through a by-value parameter is rejected (CS8166),
+            // because [UnscopedRef] inverts the receiver's contribution
+            // from safe-to-escape (caller scope) to ref-safe-context
+            // (function-local). Confirmed by direct repro: without this
+            // guard, `func M(buf RingBuffer) ref int32 { return ref buf[0] }`
+            // over such a type compiled clean and the returned reference
+            // pointed at dead stack memory (an intervening call's locals
+            // silently overwrote the "aliased" value on read-back).
+            // RefCapabilities.IsUnscopedRefIndexerGetter inspects the
+            // resolved indexer (both the property and its getter — C#
+            // allows the attribute on either) for that attribute so this
+            // path falls back to the strict HasFunctionLocalRefScope
+            // treatment exactly when the CLR author has declared the same
+            // intent @UnscopedRef signals for a native G# member.
             case BoundClrIndexExpression clrIndex:
                 return TypeSymbol.IsByRefLike(clrIndex.Target.Type)
+                    && !RefCapabilities.IsUnscopedRefIndexerGetter(clrIndex.Indexer)
                     ? HasFunctionLocalReferentScope(clrIndex.Target)
                     : !Binder.IsReferenceTypeForConstraint(clrIndex.Target.Type)
                         && HasFunctionLocalRefScope(clrIndex.Target);

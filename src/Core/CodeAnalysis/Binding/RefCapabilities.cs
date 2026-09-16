@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
@@ -120,6 +121,33 @@ internal static class RefCapabilities
                 attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute")
             || method.DeclaringType?.GetCustomAttributesData().Any(
                 attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute") == true;
+
+    /// <summary>
+    /// Issue #4265 soundness guard: true when <paramref name="indexer"/> (or
+    /// its getter) carries <c>[UnscopedRef]</c> (<c>System.Diagnostics.CodeAnalysis.UnscopedRefAttribute</c>).
+    /// C# accepts the attribute on EITHER the accessor or the property itself
+    /// — an expression-bodied indexer (<c>[UnscopedRef] public ref int this[int i] => ref _value;</c>)
+    /// emits it on the property's own metadata row, not <c>get_Item</c>, so
+    /// both must be checked (confirmed via <c>CustomAttributeData</c> against
+    /// a real compiled indexer of each shape — checking only the getter
+    /// missed the expression-bodied spelling entirely). <see cref="StatementBinder"/>'s
+    /// <c>BoundClrIndexExpression</c> case treats a byref-like CLR indexer's
+    /// target as encapsulating a caller-supplied REFERENT (like <c>Span[T]</c>'s
+    /// backing pointer) — safe to forward through a by-value parameter. That
+    /// premise fails for an indexer explicitly marked <c>[UnscopedRef]</c>:
+    /// the CLR author has declared it returns a reference into the
+    /// RECEIVER'S OWN storage instead (exactly mirroring what <c>@UnscopedRef</c>
+    /// signals for a native G# member — see <c>Binder.cs</c>'s
+    /// <c>ThisParameter.IsScoped</c> handling), which a by-value receiver
+    /// cannot safely yield. Real C# enforces the same distinction (CS8166:
+    /// an <c>[UnscopedRef]</c> member invoked through a by-value parameter
+    /// is rejected).
+    /// </summary>
+    /// <param name="indexer">The resolved CLR indexer property.</param>
+    /// <returns><see langword="true"/> when the indexer or its getter carries <c>[UnscopedRef]</c>.</returns>
+    internal static bool IsUnscopedRefIndexerGetter(PropertyInfo indexer)
+        => HasUnscopedRefAttribute(indexer.GetCustomAttributesData())
+            || HasUnscopedRefAttribute(indexer.GetGetMethod(nonPublic: true)?.GetCustomAttributesData());
 
     internal static TypeSymbol GetInferenceType(ParameterSymbol parameter, TypeSymbol argumentType)
         => parameter.RefKind != RefKind.None && argumentType is ByRefTypeSymbol byRef
@@ -251,4 +279,8 @@ internal static class RefCapabilities
         byRefArguments = refBuilder.ToImmutable();
         byValueByRefLikeArguments = byValueBuilder.ToImmutable();
     }
+
+    private static bool HasUnscopedRefAttribute(IEnumerable<CustomAttributeData>? attributes)
+        => attributes?.Any(
+            attribute => attribute.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute") == true;
 }

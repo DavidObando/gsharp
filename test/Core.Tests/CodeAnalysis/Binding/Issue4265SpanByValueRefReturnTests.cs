@@ -6,6 +6,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
@@ -203,6 +204,73 @@ public class Issue4265SpanByValueRefReturnTests
             }
             """);
         Assert.Contains(diagnostics, d => d.Id == "GS0254");
+    }
+
+    // Soundness guard found reviewing this PR before merge: a byref-like
+    // CLR (externally-compiled) type can legally declare its indexer ref
+    // return [UnscopedRef] (System.Diagnostics.CodeAnalysis) — a legitimate
+    // C# 11+ pattern (no unsafe, no IL authoring) that returns a ref into
+    // the RECEIVER'S OWN storage, not an encapsulated referent the receiver
+    // merely wraps (unlike Span[T]/ReadOnlySpan[T]'s indexers, which never
+    // do this). C# accepts [UnscopedRef] on either the `get` accessor or
+    // the property itself (an expression-bodied indexer emits it on the
+    // property) — both fixtures below cover one placement each. Real C#
+    // rejects forwarding such a member through a by-value parameter
+    // (CS8166); RefCapabilities.IsUnscopedRefIndexerGetter makes gsc match
+    // that by falling back to the strict HasFunctionLocalRefScope check
+    // whenever the resolved indexer (or its getter) carries [UnscopedRef],
+    // instead of unconditionally trusting any byref-like CLR indexer target
+    // as safe-to-forward. Without the guard this compiled clean and
+    // returned a dangling reference into the callee's own dead stack frame
+    // (confirmed reproducible outside this test: an intervening call's
+    // locals silently corrupted the "aliased" value on read-back).
+    [Theory]
+    [InlineData("UnscopedRefIndexerFixture")]
+    [InlineData("UnscopedRefIndexerPropertyLevelFixture")]
+    public void UnscopedRefClrIndexer_ByValueParameter_RefReturn_StillReportsGS0254(string typeName)
+    {
+        var diagnostics = BindWithFixtures($$"""
+            package P
+            import GSharp.Core.Tests.Fixtures
+
+            func M(buf {{typeName}}) ref int32 {
+                return ref buf[0]
+            }
+            """);
+        Assert.Contains(diagnostics, d => d.Id == "GS0254");
+    }
+
+    [Fact]
+    public void UnscopedRefClrIndexer_RefParameter_RefReturn_Compiles()
+    {
+        // Positive counterpart proving the guard above is the STRICT scope
+        // check, not a blanket rejection of the type: forwarding through a
+        // genuine `ref` parameter is safe (the referent IS the caller's own
+        // storage in that case) and real C# accepts the analogous code
+        // (confirmed against csc directly) — only the BY-VALUE forwarding
+        // case is unsound and must be rejected.
+        var diagnostics = BindWithFixtures("""
+            package P
+            import GSharp.Core.Tests.Fixtures
+
+            func M(ref buf UnscopedRefIndexerFixture) ref int32 {
+                return ref buf[0]
+            }
+            """);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0254");
+    }
+
+    private static ImmutableArray<Diagnostic> BindWithFixtures(string source)
+    {
+        var fixturePath = typeof(GSharp.Core.Tests.Fixtures.UnscopedRefIndexerFixture).Assembly.Location;
+        var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var globalScope = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
+            previous: null,
+            System.Collections.Immutable.ImmutableArray.Create(tree),
+            resolver);
+        var program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(globalScope, resolver);
+        return globalScope.Diagnostics.AddRange(program.Diagnostics);
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)
