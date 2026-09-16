@@ -177,10 +177,16 @@ Positive:
   identifier.
 - Owned enums and owned classes/structs get the same extension capability
   non-owned types always had, with no special syntax.
-- cs2gs's enum/owned-extension special case (`RequiresExplicitExtensionReceiver`,
-  added for ADR-0165) is deleted outright: every C# extension method now
-  translates to the same plain receiver-clause `func`, regardless of
-  receiver ownership or kind.
+- cs2gs's ADR-0165-specific special case (`RequiresExplicitExtensionReceiver`,
+  which decided when to print the now-retired `extension` marker) is deleted
+  outright: whenever cs2gs prints a receiver-clause `func` for a C# extension
+  method, it is now the same plain form regardless of receiver ownership or
+  kind. This is separate from cs2gs's independent, pre-existing choice
+  (issue #2821, `CanLowerOwnedExtension`) to translate certain eligible
+  owned-type C# extension methods into genuine in-body G# instance members
+  instead of a receiver-clause extension at all — that lowering is a
+  translation-style decision unrelated to the retired marker, and this ADR
+  does not change it.
 - Two diagnostics (`GS0103`, `GS0314`) and the two-spelling ambiguity they
   policed are gone rather than merely suppressed.
 

@@ -779,8 +779,8 @@ Cause/fix:
 
 ## Owned-receiver method warning, retired (GS0314)
 
-See [ADR-0182](adr/0182-receiver-clause-is-always-extension.md), which
-supersedes [ADR-0079](adr/0079-restrict-receiver-clauses-to-non-owned-types.md).
+See [ADR-0182](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0182-receiver-clause-is-always-extension.md), which
+supersedes [ADR-0079](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0079-restrict-receiver-clauses-to-non-owned-types.md).
 Go-style receiver-clause methods (`func (r T) M() { ... }`) are
 unconditionally extensions now, whether or not the current package owns
 `T`. There is no more owned-instance-method meaning to warn about: a
@@ -804,7 +804,7 @@ Cause/fix:
   receiver-clause spelling for that anymore. If the declaration was
   intentionally an extension of an owned type or enum, no change is
   needed — the old `func extension (p Point) Distance() ...` marker is
-  itself retired ([GS0587](#gs0587)); drop the `extension` word and the
+  itself retired (`GS0587`); drop the `extension` word and the
   plain receiver clause does the same thing unconditionally.
 
   Migrating off the pre-ADR-0182 warned spelling changes behavior, not just

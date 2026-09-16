@@ -105,4 +105,47 @@ p.X2()
         Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
         Assert.Equal(42, result.Value);
     }
+
+    [Fact]
+    public void ExtensionKeyword_BeforeOrdinaryParameterListWithGenericReturnType_DoesNotReportGS0587()
+    {
+        // Regression: `extension` immediately followed by `(` looks like the
+        // start of a receiver clause, but `List[int32]` right after the
+        // closing paren is this ordinary function's generic RETURN type, not
+        // a generic extension method name — the lookahead must not consume
+        // `extension` here.
+        var source = @"
+import System.Collections.Generic
+
+func extension(x int32) List[int32] { return List[int32]{x} }
+extension(41)[0]
+";
+        var result = EmittedOracle.Evaluate(source);
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0587");
+        Assert.DoesNotContain(result.Diagnostics, d => d.IsError);
+        Assert.Equal(41, result.Value);
+    }
+
+    [Fact]
+    public void RetiredExplicitExtensionMarker_OnGenericExtensionMethod_ReportsGS0587WithRecovery()
+    {
+        // The generic-extension-method-name shape (`Name[T](...)`) must
+        // still be recognized as a receiver clause when it really is one,
+        // distinguishing it from the generic-return-type shape above by
+        // requiring an actual parameter list after the closing `]`.
+        var source = @"
+class Box {
+    var Value int32
+}
+
+func extension (box Box) Echo[T](value T) T {
+    return value
+}
+0
+";
+        var result = EmittedOracle.Evaluate(source);
+        var errors = result.Diagnostics.Where(d => d.IsError).ToList();
+        var single = Assert.Single(errors);
+        Assert.Equal("GS0587", single.Id);
+    }
 }

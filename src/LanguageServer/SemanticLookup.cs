@@ -647,10 +647,22 @@ public static class SemanticLookup
                 declarations[function.Declaration.Identifier] = function;
                 MapParameters(function.Declaration, function.Parameters, declarations, localDeclarations);
                 MapTypeClauseReference(function.Declaration.Type, function.Type, declarations);
-                if (function.ExplicitReceiverParameter != null && function.Declaration.Receiver != null)
+
+                // ADR-0182: an extension function's receiver clause is
+                // source-visible too, but ExplicitReceiverParameter is only
+                // populated for a true instance method (it also drives the
+                // emitter's by-ref `this` handling, which does not apply to
+                // an extension's by-value parameter zero) — fall back to the
+                // always-present Parameters[0] so `r` in `func (r T) M()`
+                // resolves for an extension exactly as it does for a method.
+                var receiverParameter = function.ExplicitReceiverParameter
+                    ?? (function.Declaration.Receiver != null && function.Parameters.Length > 0
+                        ? function.Parameters[0]
+                        : null);
+                if (receiverParameter != null && function.Declaration.Receiver != null)
                 {
-                    declarations[function.Declaration.Receiver.Identifier] = function.ExplicitReceiverParameter;
-                    GetLocals(localDeclarations, function.Declaration)[function.ExplicitReceiverParameter.Name] = function.ExplicitReceiverParameter;
+                    declarations[function.Declaration.Receiver.Identifier] = receiverParameter;
+                    GetLocals(localDeclarations, function.Declaration)[receiverParameter.Name] = receiverParameter;
                 }
             }
         }

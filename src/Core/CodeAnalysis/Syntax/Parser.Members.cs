@@ -2067,8 +2067,23 @@ public partial class Parser
             return false;
         }
 
-        var afterName = Peek(ahead + 2).Kind;
-        return afterName is SyntaxKind.OpenParenthesisToken or SyntaxKind.OpenSquareBracketToken;
+        var afterNameAhead = ahead + 2;
+        if (Peek(afterNameAhead).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            return true;
+        }
+
+        // A generic extension method name (`Name[T](...)`) is also valid
+        // here, but a bare `[` is ambiguous with an ordinary function's
+        // return-type clause (`func extension(x T) List[int32] { ... }`,
+        // where `List` is the return type's name, not the receiver-clause
+        // method's — `extension` here is a plain function name). Scan the
+        // bracketed region and require an actual parameter list to follow
+        // before accepting it as a type-parameter list.
+        var typeParameterListAhead = afterNameAhead;
+        return TryScanOptionalTypeArgumentList(ref typeParameterListAhead, out var hasTypeParameterList)
+            && hasTypeParameterList
+            && Peek(typeParameterListAhead).Kind == SyntaxKind.OpenParenthesisToken;
     }
 
     private bool LooksLikeReceiverClause()
