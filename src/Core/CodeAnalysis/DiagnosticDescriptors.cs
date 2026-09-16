@@ -525,6 +525,16 @@ internal static class DiagnosticDescriptors
     // unconditionally an extension now, so the marker is redundant.
     internal static readonly DiagnosticDescriptor RetiredExplicitExtensionReceiverModifier = new("GS0587", DiagnosticSeverity.Error, "The 'extension' keyword before a receiver clause is retired; every receiver clause now declares an extension. Remove 'extension' (ADR-0182).");
 
+    // Issue #4219 (umbrella remainder): a `ref`-returning function literal
+    // (`func (...) ref T { ... }`) is only supported as the direct
+    // callable identity of a `let name = func (...) ref T { ... }` local
+    // function declaration, reusing the named-function ref-return machinery
+    // (issue #4224). Converting it to a delegate/function-type VALUE would
+    // need a return-ref-aware synthesized delegate (SynthesizedRefDelegateCache,
+    // TypeDefEmitter's Invoke encoding, etc.) — explicitly deferred, not
+    // attempted here; see the #4219 PR notes for the full remaining surface.
+    internal static readonly DiagnosticDescriptor RefReturningFunctionLiteralRequiresDirectLocalFunction = new("GS0588", DiagnosticSeverity.Error, "A 'ref'-returning function cannot be converted to a delegate or function-type value; call it directly instead. A ref-returning function-LITERAL is only supported as 'let name = func (...) ref T {{ ... }}', a directly-callable local function.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

@@ -211,6 +211,23 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>Gets the source declaration of a directly callable generic local function.</summary>
     public VariableDeclarationSyntax? LocalDeclaration { get; internal set; }
 
+    /// <summary>
+    /// Gets a value indicating whether this direct-call local function
+    /// (<see cref="LocalDeclaration"/> non-null; issue #4219 umbrella
+    /// remainder) captures outer state. Stamped from
+    /// <see cref="BoundFunctionLiteralExpression.CapturedVariables"/> once
+    /// the literal's body (and, for a group, the #4221 fixed-point capture
+    /// reconciliation) has finished binding — see
+    /// <c>StatementBinder.BindLocalFunctionLiteralGroup</c>. Consulted by
+    /// method-group/delegate conversion (<c>ExpressionBinder.IsMethodGroupCandidateUsable</c>):
+    /// a NON-capturing direct-call local converts like an ordinary function,
+    /// but a CAPTURING one has no single stable closure instance to bind a
+    /// delegate to (each direct call to it materializes its own), so bare-
+    /// name conversion is not offered — same limitation an existing
+    /// capturing GENERIC local function already has.
+    /// </summary>
+    public bool HasCaptures { get; internal set; }
+
     /// <inheritdoc/>
     public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes =>
         ((SyntaxNode?)Declaration ?? LocalDeclaration) is { } declaration

@@ -26,9 +26,22 @@ public partial class Parser
         var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
         var parameters = ParseParameterList();
         var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+
+        // Issue #4219 (umbrella remainder): optional `ref`/`ref readonly`
+        // return modifier on a function LITERAL, mirroring the named-function
+        // form (`func Name(...) ref T { ... }`, Parser.Members.cs). Consumed
+        // only when a type clause can start at the next token, so a literal
+        // whose declared return type is literally named `ref` is unaffected.
+        SyntaxToken? returnRefModifier = null;
+        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "ref" && CanStartTypeClause(Peek(1)))
+        {
+            returnRefModifier = NextToken();
+        }
+
+        var returnReadOnlyModifier = ParseOptionalReadOnlyRefModifier(returnRefModifier);
         var returnType = ParseOptionalTypeClause();
         var body = ParseBlockStatement();
-        return new FunctionLiteralExpressionSyntax(syntaxTree, asyncModifier, funcKeyword, openParen, parameters, closeParen, returnType, body);
+        return new FunctionLiteralExpressionSyntax(syntaxTree, asyncModifier, funcKeyword, openParen, parameters, closeParen, returnType, body, returnRefModifier, returnReadOnlyModifier);
     }
 
     // ADR-0074 / issue #714: bounded look-ahead for a lambda expression

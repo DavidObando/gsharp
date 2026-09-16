@@ -2109,11 +2109,23 @@ internal sealed partial class ExpressionBinder
 
     private static bool IsMethodGroupCandidateUsable(FunctionSymbol function)
     {
+        // Issue #4219 (umbrella remainder): a non-generic, non-capturing
+        // direct-call local function (a member of a 2+ non-generic local-
+        // function-literal group, see StatementBinder's
+        // IsNonGenericLocalFunctionLiteralDeclaration) has no Package —
+        // it is a local, not a package-level function — but converts to a
+        // delegate exactly like one: a plain static-shaped MethodDef, no
+        // capture instance to bind. A GENERIC or CAPTURING local function
+        // keeps falling through to "not a variable" below, matching the
+        // pre-existing behavior for a capturing generic local function
+        // (no single stable closure instance to bind a bare-name delegate
+        // conversion to — each direct call it makes materializes its own).
+        var isConvertibleLocalFunction = function.LocalDeclaration != null && !function.IsGeneric && !function.HasCaptures;
         if (function.IsInstanceMethod
             || function.IsExtension
             || function.IsStatic
             || function.StaticOwnerType != null
-            || function.Package == null)
+            || (function.Package == null && !isConvertibleLocalFunction))
         {
             return false;
         }
@@ -2135,6 +2147,22 @@ internal sealed partial class ExpressionBinder
 
         if (!IsMethodGroupCandidateUsable(function))
         {
+            return false;
+        }
+
+        // Issue #4219 (umbrella remainder), workstream B: neither
+        // DelegateTypeSymbol nor FunctionTypeSymbol carries a return
+        // ref-kind, and the by-value delegate/method-group machinery this
+        // method builds would silently narrow a ref-returning function to a
+        // plain by-value one instead of rejecting the conversion — a
+        // ref-returning synthesized delegate shape is deferred (see
+        // GS0588's descriptor). Applies to any ref-returning function
+        // (named or a #4219 direct-call local), not just the local-function
+        // case: this is a pre-existing gap in the delegate-conversion path
+        // this method owns, not something local-function support widened.
+        if (function.ReturnRefKind != RefKind.None)
+        {
+            Diagnostics.ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(syntax.IdentifierToken.Location);
             return false;
         }
 
