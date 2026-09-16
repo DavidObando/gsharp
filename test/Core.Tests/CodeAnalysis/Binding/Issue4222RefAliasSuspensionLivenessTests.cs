@@ -425,6 +425,85 @@ let ref m = n
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
     }
 
+    // Regression: `ApplyExpression`/the BoundVariableDeclaration case used to
+    // fold an expression's own interesting-variable reads into `live` AFTER
+    // checking for an unsafe crossing, so a read positioned in evaluation
+    // order strictly *after* a nested `await` in the SAME expression (as
+    // opposed to being the `await`'s own assignment target, already handled)
+    // was invisible to that check unless something *later* also needed the
+    // value. Concretely, `total = await X() + alias` reads `alias` only once
+    // the `await` has resumed — the alias itself, not just its pointee value,
+    // must survive that suspension — but the old ordering let this compile
+    // and, at runtime, deref a never-hoisted, reset-to-default alias slot
+    // (verified against this exact shape: a NullReferenceException with a
+    // genuinely suspending `await`, and a silently wrong `s.Length` read of 0
+    // for the equivalent by-ref-like-local shape from issue #2350). The
+    // analogous `var` case (an initializer combining the two) had the same
+    // gap.
+    [Fact]
+    public void LetRef_ReadAfterAwaitInSameBinaryExpression_ReportsGS0258()
+    {
+        var source = @"
+import System.Threading.Tasks
+
+async func run() int32 {
+    var values = []int32{5}
+    var ref alias = values[0]
+    var total = 0
+    total = await Task.FromResult(100) + alias
+    return total
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
+    }
+
+    [Fact]
+    public void LetRef_ReadAfterAwaitInVariableInitializer_ReportsGS0258()
+    {
+        var source = @"
+import System.Threading.Tasks
+
+async func run() int32 {
+    var values = []int32{5}
+    var ref alias = values[0]
+    var total = await Task.FromResult(100) + alias
+    return total
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
+    }
+
+    [Fact]
+    public void LetRef_ReadBeforeAwaitInSameBinaryExpression_IsConservativelyRejected()
+    {
+        // Mirror of the two tests above with the operands swapped: `alias` is
+        // read strictly before the `await` in evaluation order (only its
+        // already-dereferenced pointee value, an ordinary int, needs to
+        // survive the suspension, so this shape is actually safe to run).
+        // This analyzer has no cheap way to distinguish this from the unsafe
+        // "after" shape above within one expression, though, so — mirroring
+        // the self-referential-redefinition case's own documented stance
+        // ("evaluation order does not change which value is live entering
+        // the statement") — it conservatively rejects both alike rather than
+        // risk missing the unsafe one. Split the `await` onto its own
+        // statement first if this legitimately needs to compile.
+        var source = @"
+import System.Threading.Tasks
+
+async func run() int32 {
+    var values = []int32{5}
+    var ref alias = values[0]
+    var total = 0
+    total = alias + await Task.FromResult(100)
+    return total
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
+    }
+
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);

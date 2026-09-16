@@ -283,6 +283,12 @@ internal static class RefStructAsyncLivenessAnalyzer
                 var selfRead = isInteresting && collector.Reads.Contains(vd.Variable);
                 var killTarget = isInteresting && !selfRead ? vd.Variable : null;
 
+                // Issue #4222: same fold-before-check ordering as ApplyExpression
+                // (see its comment) — an initializer combining an interesting
+                // read with an `await` (e.g. `var total = await X() + alias`)
+                // must not silently miss a read positioned after the suspension.
+                live.UnionWith(collector.Reads);
+
                 if (collector.ContainsAwait)
                 {
                     ReportIfUnsafe(live, killTarget, diagnostics, statement, "await");
@@ -293,7 +299,6 @@ internal static class RefStructAsyncLivenessAnalyzer
                     live.Remove(killTarget);
                 }
 
-                live.UnionWith(collector.Reads);
                 break;
             }
 
@@ -527,6 +532,25 @@ internal static class RefStructAsyncLivenessAnalyzer
             }
         }
 
+        // Issue #4222: fold this expression's own reads into `live` BEFORE
+        // checking for an unsafe crossing, not after. This analysis is
+        // statement/expression-granular — it has no notion of a read's
+        // position relative to a nested `await` within the SAME expression
+        // (e.g. `total = await X() + alias` reads `alias` in evaluation
+        // order strictly *after* the suspension resumes, needing the alias
+        // itself, not just its pointee value, to survive the `await`; the
+        // bound tree alone doesn't let this analyzer cheaply tell that apart
+        // from `total = alias + await X()`, which never needs the alias to
+        // survive). Checking against the union (rather than only what later
+        // code already needs) is the same conservative call already made for
+        // self-referential redefinition above — sound (a same-expression read
+        // that always precedes the `await` is occasionally over-rejected),
+        // never silently wrong, matching this analyzer's "conservative, never
+        // unsound" rule used everywhere else in this file. `killTarget` is
+        // never itself in `collector.Reads` (see above), so unioning first
+        // does not defeat its exclusion below.
+        live.UnionWith(collector.Reads);
+
         if (collector.ContainsAwait)
         {
             ReportIfUnsafe(live, killTarget, diagnostics, owningStatement, "await");
@@ -536,8 +560,6 @@ internal static class RefStructAsyncLivenessAnalyzer
         {
             live.Remove(killTarget);
         }
-
-        live.UnionWith(collector.Reads);
     }
 
     /// <summary>Issue #4222: true for a native <c>let ref</c>/<c>var ref</c> alias local
