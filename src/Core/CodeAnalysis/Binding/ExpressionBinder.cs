@@ -1536,6 +1536,15 @@ internal sealed partial class ExpressionBinder
                 !field.IsLiteral && IsAddressableFieldReceiver(access.Receiver),
             BoundIndexExpression index => index.IsArrayBackedElementAccess,
             BoundVariableExpression or BoundDereferenceExpression => true,
+
+            // Issue #4224: a call to a native ref-returning function/method, or
+            // a read of a native ref-returning property, leaves a managed
+            // pointer that the emitter can keep instead of dereferencing (see
+            // EmitAddressOf's BoundCallExpression/BoundUserInstanceCallExpression/
+            // BoundPropertyAccessExpression cases). An imported/CLR ref-returning
+            // member is already an lvalue via the BoundDereferenceExpression
+            // case above (ConversionClassifier.AutoDereferenceRefReturn).
+            _ when RefCapabilities.IsNativeRefReturningCall(expression) => true,
             _ => false,
         };
     }

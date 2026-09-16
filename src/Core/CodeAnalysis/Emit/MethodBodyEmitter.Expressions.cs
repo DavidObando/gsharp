@@ -116,139 +116,7 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitBinary(b);
                 break;
             case BoundCallExpression call:
-                // ADR-0047 §6 / issue #176: a [Conditional("SYMBOL")] call
-                // whose symbol is undefined is elided at the call site —
-                // emit no IL for arguments or the call itself. The call
-                // is a no-op of type void; the enclosing
-                // BoundExpressionStatement already skips the Pop because
-                // call.Type == Void.
-                if (call.IsConditionalElided)
-                {
-                    break;
-                }
-
-                // Issue #3226: an unconstrained `T?` slot (e.g. the receiver of
-                // `func (self T?) MyOrElse[T](fb T) T`) erases to the bare MVAR
-                // `!!T`, so a value-type instantiation must be lifted to
-                // `Nullable<X>` — see TryPlanUnconstrainedNullableLift.
-                var nullableLift = this.TryPlanUnconstrainedNullableLift(call);
-
-                if (this.outer.closures.GenericLocalClosures.TryGetValue(call.Function, out var genericLocal))
-                {
-                    this.EmitGenericLocalClosureInstance(genericLocal.Literal, genericLocal.Info);
-                    for (int i = 0; i < call.Arguments.Length; i++)
-                    {
-                        this.EmitExpression(call.Arguments[i]);
-                        if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
-                        {
-                            this.EmitUnconstrainedNullableLiftWrap(liftWrap);
-                        }
-                    }
-
-                    if (!this.outer.cache.MethodHandles.TryGetValue(genericLocal.Info.InvokeMethod, out var invokeHandle))
-                    {
-                        throw new InvalidOperationException(
-                            $"Closure invoke method '{genericLocal.Info.InvokeMethod.Name}' has no emitted MethodDef.");
-                    }
-
-                    EntityHandle invokeToken = invokeHandle;
-                    if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
-                    {
-                        invokeToken = nullableLift != null
-                            ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(invokeToken, nullableLift.TypeArguments)
-                            : this.outer.userTokens.BuildMethodSpecForGenericCall(invokeToken, call);
-                    }
-
-                    this.il.OpCode(ILOpCode.Call);
-                    this.il.Token(invokeToken);
-                    this.EmitRefReturnDereferenceIfNeeded(call.Function.ReturnRefKind, call.Type);
-                    break;
-                }
-
-                for (int i = 0; i < call.Arguments.Length; i++)
-                {
-                    var arg = call.Arguments[i];
-                    this.EmitExpression(arg);
-                    if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
-                    {
-                        this.EmitUnconstrainedNullableLiftWrap(liftWrap);
-                    }
-                }
-
-                // The OWNER token: which entity the call names. Three shapes —
-                // a `shared` method on a constructed generic INTERFACE
-                // (`IBox[int32].Make()`, issue #1433) or on a constructed
-                // generic user TYPE (`Box[int32].Make()`, issue #1209) must be
-                // referenced through a MemberRef parented at the construction's
-                // TypeSpec; everything else is the bare MethodDef.
-                EntityHandle callTokenToEmit;
-                if (call.StaticGenericInterfaceOwnerType != null
-                    && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(call.StaticGenericInterfaceOwnerType))
-                {
-                    // The substituted method is not in the handle cache, so this
-                    // resolves without the generic-struct/cache lookups below.
-                    callTokenToEmit = this.outer.userTokens.ResolveUserInterfaceStaticMethodToken(
-                        call.StaticGenericInterfaceOwnerType,
-                        call.Function);
-                }
-                else
-                {
-                    if (!this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle)
-                        && !this.outer.cache.MethodHandles.TryGetValue(call.Function, out fnHandle))
-                    {
-                        throw new InvalidOperationException(
-                            $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
-                    }
-
-                    callTokenToEmit = call.StaticGenericOwnerType != null
-                        && ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StaticGenericOwnerType)
-                        ? this.outer.userTokens.ResolveUserStaticMethodToken(call.StaticGenericOwnerType, call.Function)
-                        : fnHandle;
-                }
-
-                // ADR-0087 §3 R3+R4: when the target is a generic function,
-                // every call must reference it via a MethodSpec carrying
-                // the substituted type arguments — bare MethodDef tokens
-                // would carry MVAR slots and fail ilverify against the
-                // concrete argument types.
-                //
-                // Issue #3939: this MUST be applied on TOP of whatever owner
-                // token was selected above, not INSTEAD of it. The two are
-                // independent axes — the owner token says which type the method
-                // belongs to, the MethodSpec says how the METHOD is
-                // instantiated — and a `shared func Make[U]()` on a generic
-                // `Box[T]` / `IBox[T]` needs both. Selecting one or the other
-                // (which is what an `else if` did here through #1209 and #1433)
-                // emitted `call Box`1<int32>::Make(!!0)` naming the OPEN generic
-                // method: `[found ref 'string'][expected ref '!!0']` from
-                // ILVerify and `InvalidOperationException: Could not execute the
-                // method because either the method itself or the containing type
-                // is not fully instantiated` at the first call. The INSTANCE
-                // sibling (`EmitUserInstanceCall` in MethodBodyEmitter.Calls.cs)
-                // has always done both, sequentially: it resolves a
-                // TypeSpec-parented MemberRef for a generic receiver and THEN
-                // wraps it in a MethodSpec whenever `call.Method.IsGeneric`.
-                // This is the static path catching up.
-                if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
-                {
-                    // Issue #3226: a lifted call instantiates the MethodSpec at
-                    // Nullable<X> so the erased `!!T` slots really carry the
-                    // nullable representation the T? contract promises.
-                    callTokenToEmit = nullableLift != null
-                        ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(callTokenToEmit, nullableLift.TypeArguments)
-                        : this.outer.userTokens.BuildMethodSpecForGenericCall(callTokenToEmit, call);
-                }
-
-                this.il.OpCode(ILOpCode.Call);
-                this.il.Token(callTokenToEmit);
-
-                // Issue #3226: a lifted call whose declared return is the bare
-                // lifted T leaves Nullable<X> on the stack; unwrap it back to
-                // the X the bound tree types the call as.
-                if (nullableLift?.ReturnUnwrap is { } liftUnwrap)
-                {
-                    this.EmitUnconstrainedNullableLiftUnwrap(liftUnwrap);
-                }
+                this.EmitCallExpressionCore(call);
 
                 // ADR-0087 §3 R3+R4: after R2/R3, every G# call (MethodSpec'd
                 // or plain MethodDef) returns the method's reified signature.
@@ -2040,6 +1908,151 @@ internal sealed partial class MethodBodyEmitter
         this.il.Token(this.outer.memberRefs.GetCtorReference(ctor));
     }
 
+    /// <summary>
+    /// Issue #4224: emits a call to a native (same-compilation) function,
+    /// leaving whatever the callee's signature returns on the stack — a
+    /// managed pointer <c>T&amp;</c> for a <c>ref</c>-returning function,
+    /// otherwise <c>T</c>. Extracted from the <see cref="BoundCallExpression"/>
+    /// case of <see cref="EmitExpression"/> so <see cref="EmitAddressOf"/> can
+    /// reuse it without the trailing <see cref="EmitRefReturnDereferenceIfNeeded"/>
+    /// dereference — taking the address of a ref-returning call/property
+    /// keeps the raw <c>T&amp;</c> instead of loading through it.
+    /// </summary>
+    private void EmitCallExpressionCore(BoundCallExpression call)
+    {
+        // ADR-0047 §6 / issue #176: a [Conditional("SYMBOL")] call whose
+        // symbol is undefined is elided at the call site — emit no IL for
+        // arguments or the call itself. The call is a no-op of type void; the
+        // enclosing BoundExpressionStatement already skips the Pop because
+        // call.Type == Void.
+        if (call.IsConditionalElided)
+        {
+            return;
+        }
+
+        // Issue #3226: an unconstrained `T?` slot (e.g. the receiver of
+        // `func (self T?) MyOrElse[T](fb T) T`) erases to the bare MVAR
+        // `!!T`, so a value-type instantiation must be lifted to
+        // `Nullable<X>` — see TryPlanUnconstrainedNullableLift.
+        var nullableLift = this.TryPlanUnconstrainedNullableLift(call);
+
+        if (this.outer.closures.GenericLocalClosures.TryGetValue(call.Function, out var genericLocal))
+        {
+            this.EmitGenericLocalClosureInstance(genericLocal.Literal, genericLocal.Info);
+            for (int i = 0; i < call.Arguments.Length; i++)
+            {
+                this.EmitExpression(call.Arguments[i]);
+                if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
+                {
+                    this.EmitUnconstrainedNullableLiftWrap(liftWrap);
+                }
+            }
+
+            if (!this.outer.cache.MethodHandles.TryGetValue(genericLocal.Info.InvokeMethod, out var invokeHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Closure invoke method '{genericLocal.Info.InvokeMethod.Name}' has no emitted MethodDef.");
+            }
+
+            EntityHandle invokeToken = invokeHandle;
+            if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
+            {
+                invokeToken = nullableLift != null
+                    ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(invokeToken, nullableLift.TypeArguments)
+                    : this.outer.userTokens.BuildMethodSpecForGenericCall(invokeToken, call);
+            }
+
+            this.il.OpCode(ILOpCode.Call);
+            this.il.Token(invokeToken);
+            return;
+        }
+
+        for (int i = 0; i < call.Arguments.Length; i++)
+        {
+            var arg = call.Arguments[i];
+            this.EmitExpression(arg);
+            if (nullableLift?.ArgumentWraps[i] is { } liftWrap)
+            {
+                this.EmitUnconstrainedNullableLiftWrap(liftWrap);
+            }
+        }
+
+        // The OWNER token: which entity the call names. Three shapes —
+        // a `shared` method on a constructed generic INTERFACE
+        // (`IBox[int32].Make()`, issue #1433) or on a constructed
+        // generic user TYPE (`Box[int32].Make()`, issue #1209) must be
+        // referenced through a MemberRef parented at the construction's
+        // TypeSpec; everything else is the bare MethodDef.
+        EntityHandle callTokenToEmit;
+        if (call.StaticGenericInterfaceOwnerType != null
+            && ReflectionMetadataEmitter.IsUserGenericInterfaceReference(call.StaticGenericInterfaceOwnerType))
+        {
+            // The substituted method is not in the handle cache, so this
+            // resolves without the generic-struct/cache lookups below.
+            callTokenToEmit = this.outer.userTokens.ResolveUserInterfaceStaticMethodToken(
+                call.StaticGenericInterfaceOwnerType,
+                call.Function);
+        }
+        else
+        {
+            if (!this.outer.cache.FunctionHandles.TryGetValue(call.Function, out var fnHandle)
+                && !this.outer.cache.MethodHandles.TryGetValue(call.Function, out fnHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Call to function '{call.Function.Name}' has no emitted MethodDef.");
+            }
+
+            callTokenToEmit = call.StaticGenericOwnerType != null
+                && ReflectionMetadataEmitter.IsUserGenericTypeReference(call.StaticGenericOwnerType)
+                ? this.outer.userTokens.ResolveUserStaticMethodToken(call.StaticGenericOwnerType, call.Function)
+                : fnHandle;
+        }
+
+        // ADR-0087 §3 R3+R4: when the target is a generic function,
+        // every call must reference it via a MethodSpec carrying
+        // the substituted type arguments — bare MethodDef tokens
+        // would carry MVAR slots and fail ilverify against the
+        // concrete argument types.
+        //
+        // Issue #3939: this MUST be applied on TOP of whatever owner
+        // token was selected above, not INSTEAD of it. The two are
+        // independent axes — the owner token says which type the method
+        // belongs to, the MethodSpec says how the METHOD is
+        // instantiated — and a `shared func Make[U]()` on a generic
+        // `Box[T]` / `IBox[T]` needs both. Selecting one or the other
+        // (which is what an `else if` did here through #1209 and #1433)
+        // emitted `call Box`1<int32>::Make(!!0)` naming the OPEN generic
+        // method: `[found ref 'string'][expected ref '!!0']` from
+        // ILVerify and `InvalidOperationException: Could not execute the
+        // method because either the method itself or the containing type
+        // is not fully instantiated` at the first call. The INSTANCE
+        // sibling (`EmitUserInstanceCall` in MethodBodyEmitter.Calls.cs)
+        // has always done both, sequentially: it resolves a
+        // TypeSpec-parented MemberRef for a generic receiver and THEN
+        // wraps it in a MethodSpec whenever `call.Method.IsGeneric`.
+        // This is the static path catching up.
+        if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
+        {
+            // Issue #3226: a lifted call instantiates the MethodSpec at
+            // Nullable<X> so the erased `!!T` slots really carry the
+            // nullable representation the T? contract promises.
+            callTokenToEmit = nullableLift != null
+                ? this.outer.userTokens.BuildMethodSpecForLiftedGenericCall(callTokenToEmit, nullableLift.TypeArguments)
+                : this.outer.userTokens.BuildMethodSpecForGenericCall(callTokenToEmit, call);
+        }
+
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(callTokenToEmit);
+
+        // Issue #3226: a lifted call whose declared return is the bare
+        // lifted T leaves Nullable<X> on the stack; unwrap it back to
+        // the X the bound tree types the call as.
+        if (nullableLift?.ReturnUnwrap is { } liftUnwrap)
+        {
+            this.EmitUnconstrainedNullableLiftUnwrap(liftUnwrap);
+        }
+    }
+
     /// <summary>ADR-0039: Emits address-of by dispatching on the operand shape.</summary>
     private void EmitAddressOf(BoundAddressOfExpression node)
     {
@@ -2114,6 +2127,27 @@ internal sealed partial class MethodBodyEmitter
             case BoundDereferenceExpression deref:
                 // &(*p) = p — just emit the pointer value.
                 this.EmitExpression(deref.Operand);
+                break;
+
+            // Issue #4224: a call to a native ref-returning function/method,
+            // or a read of a native ref-returning property, already leaves
+            // the managed pointer T& on the stack (see EmitCallExpressionCore
+            // / EmitUserInstanceCall / EmitPropertyAccess) — the ordinary
+            // EmitExpression path just dereferences it right after
+            // (EmitRefReturnDereferenceIfNeeded) because a G# read normally
+            // wants the pointee value. Taking its address instead keeps the
+            // raw pointer by calling straight into the same emission with the
+            // final dereference/narrowing-cast tail skipped.
+            case BoundCallExpression call:
+                this.EmitCallExpressionCore(call);
+                break;
+
+            case BoundUserInstanceCallExpression uic:
+                this.EmitUserInstanceCall(uic);
+                break;
+
+            case BoundPropertyAccessExpression propAcc:
+                this.EmitPropertyAccess(propAcc, addressOnly: true);
                 break;
 
             default:

@@ -477,19 +477,20 @@ public sealed partial class CSharpToGSharpTranslator
         /// issue #490); both alias the RHS lvalue directly with no explicit
         /// address-of syntax, so the operand is translated as-is.
         ///
-        /// gsc's own lvalue check for both features (<c>IsLvalue</c> /
-        /// <c>IsLvalueForRefReturn</c> in StatementBinder.cs) accepts only a
-        /// variable, field access, array-element access, or dereference — never a
-        /// call result, even one returned by ref. So `ref Pick(xs, 2)` (aliasing a
-        /// ref-returning call's result at ANOTHER call/return site) has no gsc
-        /// construct to bind to; that shape gaps loudly rather than emitting G#
-        /// that fails to compile or, worse, silently drops the aliasing.
+        /// Issue #4224: gsc's lvalue checks (<c>ExpressionBinder.IsLvalue</c> /
+        /// <c>StatementBinder.IsLvalueForRefReturn</c>) now also accept a call to
+        /// a ref-returning function/method or a read of a ref-returning
+        /// property, so `ref Pick(xs, 2)` (aliasing a ref-returning call's
+        /// result at another call/return site) has a native G# construct to
+        /// bind to — translate the call operand as-is like every other lvalue
+        /// shape and let gsc's own binder validate (and reject with its
+        /// precise diagnostic) a callee that does not actually return by ref.
         /// </summary>
         private GExpression TranslateRefExpression(RefExpressionSyntax refExpression)
         {
             ExpressionSyntax operand = refExpression.Expression;
 
-            if (operand is IdentifierNameSyntax or ElementAccessExpressionSyntax or MemberAccessExpressionSyntax)
+            if (operand is IdentifierNameSyntax or ElementAccessExpressionSyntax or MemberAccessExpressionSyntax or InvocationExpressionSyntax)
             {
                 return this.TranslateExpression(operand);
             }

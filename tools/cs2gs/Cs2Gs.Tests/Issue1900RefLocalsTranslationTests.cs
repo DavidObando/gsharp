@@ -28,17 +28,22 @@ namespace Cs2Gs.Tests;
 /// observably hit the original storage, matching C#'s aliasing semantics
 /// exactly (no value-copy divergence).
 ///
-/// Two shapes remain unsupported and must gap loudly rather than emit
-/// non-compiling or semantically-wrong G#:
-/// <list type="bullet">
-/// <item>a ref-returning LOCAL function — it lowers to a G# `func` literal,
-/// and G#'s `ref` return modifier only exists on a genuine top-level/method
-/// function declaration.</item>
-/// <item>re-aliasing a ref-returning CALL's result (<c>ref int q = ref
-/// F(x)</c>) — gsc's ref-alias/ref-return lvalue check
-/// (<c>IsLvalue</c>/<c>IsLvalueForRefReturn</c>) only accepts a variable,
-/// field, or array-element access, never a call result.</item>
-/// </list>
+/// One shape remains unsupported and must gap loudly rather than emit
+/// non-compiling or semantically-wrong G#: a ref-returning LOCAL function —
+/// it lowers to a G# `func` literal, and G#'s `ref` return modifier only
+/// exists on a genuine top-level/method function declaration.
+///
+/// Re-aliasing a ref-returning CALL's result (<c>ref int q = ref F(x)</c>)
+/// used to gap the same way — gsc's ref-alias/ref-return lvalue check
+/// (<c>IsLvalue</c>/<c>IsLvalueForRefReturn</c>) accepted only a variable,
+/// field, or array-element access, never a call result. Issue #4224 taught
+/// both classifiers to also accept a call to a native ref-returning
+/// function/method or a read of a native ref-returning property/indexer, so
+/// <c>TranslateRefExpression</c> now translates an <c>InvocationExpressionSyntax</c>
+/// operand like any other lvalue shape and lets gsc's own binder validate it
+/// (and reject, with its own precise diagnostic, a callee that does not
+/// actually return by ref) — see <see cref="RefAliasingCallResult_NoLongerGaps"/>
+/// and <see cref="ReturnRefOverCallResult_NoLongerGaps"/>.
 /// </summary>
 public class Issue1900RefLocalsTranslationTests
 {
@@ -183,13 +188,13 @@ namespace Corpus.Issue1900
     }
 
     [Fact]
-    public void ReturnRefOverCallResult_StaysLoudGap()
+    public void ReturnRefOverCallResult_NoLongerGaps()
     {
-        // Issue #1987: `return ref F(x)` where the ref-return operand is
-        // itself a call result hits the same TranslateRefExpression fallback
-        // as RefAliasingCallResult_StaysLoudGap above, just at a `return ref`
-        // site instead of a `ref` local's initializer — this shape was
-        // previously untested.
+        // Issue #1987 filed this shape; issue #4224 is what actually closes
+        // it — `return ref F(x)` where the ref-return operand is itself a
+        // call result now translates (and gsc now binds it, since `Middle`
+        // genuinely returns by ref and does not escape function-local
+        // storage) instead of hitting the TranslateRefExpression fallback.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 namespace Corpus.Issue1987
@@ -212,10 +217,11 @@ namespace Corpus.Issue1987
         Assert.True(project.BoundWithoutErrors);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
+        var unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Message.Contains("not a call result", StringComparison.Ordinal));
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("return ref Middle(data)", GSharpPrinter.Print(unit), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -296,8 +302,12 @@ namespace Corpus.Issue1987
     }
 
     [Fact]
-    public void RefAliasingCallResult_StaysLoudGap()
+    public void RefAliasingCallResult_NoLongerGaps()
     {
+        // Issue #4224: aliasing a ref-returning CALL's result now has a
+        // native G# construct to bind to (`var ref middle = Middle(data)`),
+        // so the translator no longer needs to gap it, and gsc genuinely
+        // aliases the original array element through the call.
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 namespace Corpus.Issue1900
@@ -322,10 +332,11 @@ namespace Corpus.Issue1900
         Assert.True(project.BoundWithoutErrors);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Contains(
+        var unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.DoesNotContain(
             context.Diagnostics,
-            d => d.Message.Contains("not a call result", StringComparison.Ordinal));
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("var ref middle int32 = Middle(data)", GSharpPrinter.Print(unit), StringComparison.Ordinal);
     }
 
     private static void AssertRoundTripParses(string rendered)
