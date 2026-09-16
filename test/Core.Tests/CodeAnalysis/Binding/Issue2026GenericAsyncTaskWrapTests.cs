@@ -78,18 +78,29 @@ var t = Outer(""hi"")
         // function's type parameter in its own signature/body — call-shape
         // (b) from #2026's original description. #2016 (and, later, its own
         // GS0468 restriction) treated this as an invalid-IL shape and
-        // rejected it outright. Issue #4223 makes the shape itself correct —
-        // UserTokenResolver.TryPromoteNonCapturingGenericLambda reifies the
-        // referenced enclosing `U` — so GS0468 no longer fires, and this
-        // regression test now pins the ORIGINAL #2026 concern directly: the
-        // call through the local function-literal's delegate value is
-        // observed as `Task[U]` (the substituted return type Task-wrapped),
-        // and `await r` reports neither GS0133 nor GS0468.
+        // rejected it outright. Issue #4223 makes the RETURN-TYPE/body shape
+        // of this correct — UserTokenResolver.TryPromoteNonCapturingGenericLambda
+        // reifies the referenced enclosing `U` via
+        // ReflectionMetadataEmitter.RegisterStateMachineEnclosingGenerics — so
+        // GS0468 no longer fires for it, and this regression test pins the
+        // ORIGINAL #2026 concern directly: the call through the local
+        // function-literal's delegate value is observed as `Task[U]` (the
+        // substituted return type Task-wrapped), and `await r` reports
+        // neither GS0133 nor GS0468.
+        //
+        // `U` is referenced only via `foo`'s RETURN type here, never its own
+        // parameter list: an async zero-capture local function whose own
+        // parameter type references an enclosing type parameter still keeps
+        // GS0468 (see LambdaBinder.CheckAsyncNonGenericLocalFunctionEnclosingTypeParameterInParameter
+        // and Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests.NonGenericAsyncLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_StillReportsGS0468) —
+        // that shape routes through a pre-existing, unrelated defect in the
+        // async "erased delegate" adapter's parameter-unboxing conversion,
+        // confirmed to crash at run time for a value-typed instantiation.
         const string source = @"
 package p
 async func Outer[U](seed U) U {
-    let foo = async func(x U) U { return x }
-    var r = foo(seed)
+    let foo = async func() U { return default }
+    var r = foo()
     return await r
 }
 ";

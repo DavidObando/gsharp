@@ -106,7 +106,7 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
     }
 
     [Fact]
-    public void NonGenericAsyncLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
+    public void NonGenericAsyncLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_StillReportsGS0468()
     {
         // Follow-up review of #2024: an earlier revision short-circuited this
         // check for `literal.Function.IsAsync`, assuming an async local
@@ -114,13 +114,31 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
         // parameter safely. Verified false AT THE TIME: the zero-capture async
         // local function's kickoff method was the un-parameterized top-level
         // static method, and its synthesized state-machine struct never
-        // re-declared the enclosing type parameter either. Issue #4223 fixes
-        // this for real: ReflectionMetadataEmitter.RegisterStateMachineEnclosingGenerics
+        // re-declared the enclosing type parameter either.
+        //
+        // Issue #4223 fixes the BODY/RETURN-TYPE shape of this for real (see
+        // NonGenericAsyncLocalFunction_BodyOrReturnTypeReferencesEnclosingMethodTypeParameter_RunsCorrectlyForMultipleTypes
+        // below): ReflectionMetadataEmitter.RegisterStateMachineEnclosingGenerics
         // now aliases each ORIGINAL enclosing type parameter promoted by
         // TryPromoteNonCapturingGenericLambda onto the state machine's own
         // class slot (mirroring the analogous ITERATOR fix already applied by
-        // RegisterGeneratedGenericRemaps), so the reference is a valid VAR
-        // slot instead of a dangling MVAR.
+        // RegisterGeneratedGenericRemaps).
+        //
+        // This exact PARAMETER-referencing shape is a different, still-unsafe
+        // route: it goes through the async "erased delegate" adapter (predates
+        // #2118, used whenever a function-literal's declared type mentions an
+        // open type parameter), not through RegisterStateMachineEnclosingGenerics.
+        // That adapter's parameter-unboxing conversion has a confirmed defect
+        // for a value-typed instantiation — confirmed by direct repro: this
+        // exact source, if allowed to compile, runs `Outer("hi")` successfully
+        // but throws `NullReferenceException` for `Outer(42)` (identical to an
+        // already-legal CAPTURING async lambda of the same shape, so the
+        // adapter defect itself is pre-existing and unrelated to #4223 — but
+        // relaxing GS0468 here would trade this shape's previous compile-time
+        // rejection for a runtime crash on a per-instantiation basis, which the
+        // issue's own guidance rules out: "Relax GS0468 only for routes with
+        // proven valid emission"). GS0468 is retained for exactly this
+        // combination (see LambdaBinder.CheckAsyncNonGenericLocalFunctionEnclosingTypeParameterInParameter).
         var source = """
             package P
 
@@ -130,11 +148,40 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
                 }
                 return Local(seed).Result
             }
+            Outer("hi")
+            """;
+
+        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains("GS0468", stdout + stderr);
+    }
+
+    [Fact]
+    public void NonGenericAsyncLocalFunction_BodyOrReturnTypeReferencesEnclosingMethodTypeParameter_RunsCorrectlyForMultipleTypes()
+    {
+        // The safe sibling of the still-rejected parameter-referencing shape
+        // above: the enclosing type parameter appears only in the RETURN type
+        // and the BODY (a local variable declaration), never in Local's own
+        // parameter list, so this does not touch the async erased-delegate
+        // adapter at all. Verified for both a reference type and a VALUE type
+        // instantiation to rule out the exact defect the parameter-referencing
+        // shape hits.
+        var source = """
+            package P
+
+            func Outer[U](seed U) U {
+                let Local = async func () U {
+                    let z U = seed
+                    return z
+                }
+                return Local().Result
+            }
             Console.WriteLine(Outer("hi"))
+            Console.WriteLine(Outer(42))
             """;
 
         var output = CompileAndRun(source);
-        Assert.Equal($"hi{Environment.NewLine}", output);
+        Assert.Equal($"hi{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]

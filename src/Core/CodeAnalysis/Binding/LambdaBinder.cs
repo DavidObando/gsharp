@@ -494,6 +494,79 @@ internal sealed class LambdaBinder
     }
 
     /// <summary>
+    /// Issue #4223 follow-up: a NON-generic, zero-capture, ASYNC local function
+    /// (<c>let</c>/<c>var</c>/<c>const Name = async func (...) ... {...}</c>, no
+    /// <c>[T, ...]</c> of its own) whose OWN PARAMETER TYPE references an
+    /// enclosing method/class type parameter still reports GS0468. Every other
+    /// enclosing-type-parameter shape #4223 enables — the same local's return
+    /// type or body, the GENERIC-own-type-parameter local/async case, and the
+    /// sync route entirely — is unaffected and NOT gated here.
+    ///
+    /// Root cause this narrow gate avoids: this specific shape is emitted
+    /// through the async "erased delegate" adapter (predates issue #2118, used
+    /// whenever a function-literal's declared type mentions an open type
+    /// parameter) rather than through
+    /// <c>ReflectionMetadataEmitter.RegisterStateMachineEnclosingGenerics</c>'s
+    /// reification, which only ever sees the promoted method's OWN (cloned)
+    /// type parameters and the state-machine class's remap — neither of which
+    /// the adapter consults. The adapter's parameter-unboxing conversion has a
+    /// confirmed defect for a value-typed instantiation: confirmed by direct
+    /// repro, `func Outer[U](seed U) U { let Local = async func (x U) U {
+    /// return x }; return Local(seed).Result }` compiles clean and
+    /// `Outer("hi")` succeeds, but `Outer(42)` throws
+    /// <see cref="System.NullReferenceException"/> at the first call. The
+    /// identical crash reproduces on an already-legal CAPTURING async lambda of
+    /// the same shape (confirmed on this repository's `main`, predating #4223
+    /// entirely), so the adapter defect itself is pre-existing and unrelated to
+    /// this issue — but relaxing GS0468 for the ZERO-CAPTURE sibling without
+    /// this gate would newly route a previously-rejected program (this exact
+    /// shape was unconditionally GS0468 before #4223) through the same broken
+    /// adapter, trading a compile-time diagnostic for a runtime crash. The
+    /// issue's own guidance is explicit: "Relax GS0468 only for routes with
+    /// proven valid emission." This is not such a route yet; fixing the
+    /// erased-delegate adapter itself is tracked as a separate, pre-existing
+    /// defect.
+    ///
+    /// Footprint note: this gate must not reject anything that was legal
+    /// BEFORE #4223. A zero-capture local nested inside a NON-generic user
+    /// type (<c>class</c>/<c>struct</c> with no type parameters of its own)
+    /// routes through <c>ClosureEmitter.SynthesizeClosures</c>'s display-class
+    /// path rather than the top-level hoist the erased-delegate adapter
+    /// belongs to, and the pre-#4223 gate excluded it for exactly that reason
+    /// — this deliberately mirrors that exclusion rather than widening it.
+    /// (That display-class path has its own, separately pre-existing instance
+    /// of the identical adapter defect — confirmed by direct repro on this
+    /// repository's `main`, predating #4223 entirely — but it was never
+    /// covered by GS0468 either before or after this issue, so gating it here
+    /// would be a new, out-of-scope rejection of previously-legal code.)
+    /// </summary>
+    /// <param name="location">The text location of the declaring <c>let</c>/<c>var</c>/<c>const</c> identifier.</param>
+    /// <param name="name">The local function's declared name.</param>
+    /// <param name="literal">The already-bound function-literal expression.</param>
+    public void CheckAsyncNonGenericLocalFunctionEnclosingTypeParameterInParameter(TextLocation location, string name, BoundFunctionLiteralExpression literal)
+    {
+        if (literal?.Function is not { IsAsync: true, IsGeneric: false } function
+            || literal.CapturedVariables.Length > 0
+            || binderCtx.CurrentTypeParameters is not { Count: > 0 } enclosingTypeParametersInScope
+            || (function.LexicalEnclosingType is StructSymbol enclosingStruct
+                && enclosingStruct.TypeParameters.IsDefaultOrEmpty))
+        {
+            return;
+        }
+
+        var walker = new EnclosingTypeParameterReferenceWalker(enclosingTypeParametersInScope.Values.ToImmutableArray(), checkOwners: false);
+        foreach (var parameter in function.Parameters)
+        {
+            walker.CheckType(parameter.Type);
+        }
+
+        if (walker.Found is { } offender)
+        {
+            Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(location, name, offender.Name);
+        }
+    }
+
+    /// <summary>
     /// Prepares a generic local-function declaration
     /// <c>let Name[T, U, ...] = func (a T, b U) ... { ... }</c>. A CLR
     /// delegate cannot close over an unbound generic method, so this registers

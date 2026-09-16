@@ -1634,17 +1634,41 @@ internal sealed partial class StatementBinder
                 // Issue #4223: a NON-generic named local function (`let`/`var`/`const
                 // Name = func (...) ... {...}`, no `[T, ...]` of its own) that
                 // references an enclosing type parameter used to be rejected here
-                // (GS0468, issue #2016) on the assumption that the zero-capture
-                // hoisting path could never give the enclosing type parameter a
-                // valid emitted slot. That assumption was wrong for the general
-                // case: UserTokenResolver.TryPromoteNonCapturingGenericLambda
-                // (issue #2118) already promotes such a literal to a genuine
-                // generic method, cloning every referenced enclosing type
-                // parameter as the hoisted method's own — the same reification
+                // unconditionally (GS0468, issue #2016) on the assumption that the
+                // zero-capture hoisting path could never give the enclosing type
+                // parameter a valid emitted slot. That assumption was wrong for the
+                // general case: UserTokenResolver.TryPromoteNonCapturingGenericLambda
+                // (issue #2118) now promotes such a literal to a genuine generic
+                // method, cloning every referenced enclosing type parameter as the
+                // hoisted method's own — the same reification
                 // ClosureEmitter.SynthesizeClosures's display-class path applies
                 // when the literal is nested inside a user type for accessibility.
-                // No bind-time check is needed; removed rather than left as a
-                // permanently-inert no-op.
+                //
+                // One narrow combination is NOT proven safe yet and keeps the
+                // diagnostic: an ASYNC zero-capture local function whose OWN
+                // PARAMETER type references the enclosing type parameter. That
+                // shape routes through the async "erased delegate" adapter (predates
+                // #2118, used whenever a function-literal's declared type mentions an
+                // open type parameter) rather than through
+                // RegisterStateMachineEnclosingGenerics's reification, and the
+                // adapter's parameter-unboxing conversion has a confirmed defect for
+                // a value-typed instantiation (confirmed by direct repro:
+                // `func Outer[U](seed U) U { let Local = async func (x U) U { return
+                // x }; return Local(seed).Result }` compiles clean and then throws
+                // `NullReferenceException` for `Outer(42)`, though `Outer("hi")`
+                // succeeds — reproduced identically on an already-legal CAPTURING
+                // async lambda of the same shape, so the adapter defect itself is
+                // pre-existing and unrelated to #4223, but relaxing GS0468 here
+                // would newly route a previously-rejected program through it). An
+                // enclosing-type-parameter reference confined to the return type or
+                // body (proven safe; see Issue4223EnclosingTypeParameterReificationTests)
+                // and the GENERIC-own-type-parameter async case (which is hosted as a
+                // real generic method, not the erased-delegate adapter) are unaffected.
+                if (initializer is BoundFunctionLiteralExpression functionLiteral
+                    && checkNonGenericLocalFunctionEnclosingTypeParameterReference != null)
+                {
+                    checkNonGenericLocalFunctionEnclosingTypeParameterReference(syntax.Identifier.Location, syntax.Identifier.ValueText, functionLiteral);
+                }
             }
         }
 
