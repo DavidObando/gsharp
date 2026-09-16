@@ -100,7 +100,6 @@ internal sealed partial class StatementBinder
     /// </summary>
     private readonly Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration;
     private readonly Func<VariableDeclarationSyntax, Func<BoundStatement>>? prepareGenericLocalFunctionDeclaration;
-    private readonly Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
         new(StringComparer.Ordinal);
@@ -127,7 +126,6 @@ internal sealed partial class StatementBinder
         Func<FunctionSymbol?> getCurrentFunction,
         Func<LambdaExpressionSyntax, FunctionTypeSymbol, BoundExpression>? bindLambdaWithTargetType = null,
         Func<VariableDeclarationSyntax, Func<BoundStatement>>? prepareGenericLocalFunctionDeclaration = null,
-        Action<TextLocation, string, BoundFunctionLiteralExpression>? checkNonGenericLocalFunctionEnclosingTypeParameterReference = null,
         Func<FunctionLiteralExpressionSyntax, Action<FunctionSymbol, FunctionTypeSymbol>, BoundExpression>? bindFunctionLiteralWithSelfDeclaration = null)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
@@ -148,7 +146,6 @@ internal sealed partial class StatementBinder
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindLambdaWithTargetType = bindLambdaWithTargetType;
         this.prepareGenericLocalFunctionDeclaration = prepareGenericLocalFunctionDeclaration;
-        this.checkNonGenericLocalFunctionEnclosingTypeParameterReference = checkNonGenericLocalFunctionEnclosingTypeParameterReference;
         this.bindFunctionLiteralWithSelfDeclaration = bindFunctionLiteralWithSelfDeclaration;
     }
 

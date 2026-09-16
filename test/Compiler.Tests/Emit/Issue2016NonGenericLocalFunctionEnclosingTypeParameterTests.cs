@@ -12,23 +12,26 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// Issue #2016: the non-generic sibling of #1940. A NON-generic local function (`let Name = func
-/// (...) ... {...}`, no `[T, ...]` of its own) that captures no outer variables is hoisted to a
-/// top-level static method (issue #1469's zero-capture fast path) UNLESS it is nested inside a
-/// non-generic user type purely for accessibility (<c>ClosureEmitter.SynthesizeClosures</c>). When
-/// there is no such non-generic-struct nesting available — because the local function is declared
-/// at top level or because its enclosing user type is itself generic — a direct reference to an
-/// enclosing type parameter in the local function's OWN parameter type, return type, or body has no
-/// corresponding CLR slot on that hoisted method. Before this fix that silently emitted invalid IL
-/// that crashed at run time with <see cref="BadImageFormatException"/> and no compile-time
-/// diagnostic. These tests assert the (reused) GS0468 diagnostic fires for this non-generic shape,
-/// and that legitimate zero-capture / capturing shapes that were never actually broken keep
-/// compiling and running correctly (no false positives).
+/// Issue #2016 / issue #4223: the non-generic sibling of #1940. A NON-generic local function
+/// (<c>let Name = func (...) ... {...}</c>, no <c>[T, ...]</c> of its own) that captures no outer
+/// variables is hoisted to a top-level static method (issue #1469's zero-capture fast path) UNLESS
+/// it is nested inside a user type purely for accessibility
+/// (<c>ClosureEmitter.SynthesizeClosures</c>). Before issue #2118 / #4223, a direct reference to an
+/// enclosing type parameter in the local function's OWN parameter type, return type, or body had no
+/// corresponding CLR slot on that hoisted method and silently emitted invalid IL that crashed at run
+/// time with <see cref="BadImageFormatException"/> — GS0468 (issue #2016) turned that into a
+/// compile-time diagnostic instead of fixing the capability. Issue #4223 finishes the job:
+/// <c>UserTokenResolver.TryPromoteNonCapturingGenericLambda</c> (issue #2118) now reifies every
+/// referenced enclosing type parameter as an additional method type parameter of the hoisted method,
+/// so these shapes compile AND run correctly — GS0468 no longer fires for them. These tests assert
+/// the positive capability (correct compilation and runtime behavior, verified across multiple type
+/// arguments where the shape allows it) and retain the diagnostic only for genuinely unsupported
+/// shapes (a CAPTURING local function, tested separately).
 /// </summary>
 public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
 {
     [Fact]
-    public void NonGenericLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void NonGenericLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
@@ -41,22 +44,24 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
                 return seed
             }
             Outer("hi")
+            Outer(42)
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"hi{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void NonGenericLocalFunction_VarDeclared_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void NonGenericLocalFunction_VarDeclared_ParameterReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
-        // Follow-up review of #2024: the original fix's gate only fired for
-        // `let`-bound locals (`syntax.Keyword?.Kind == SyntaxKind.LetKeyword`).
+        // Follow-up review of #2024: the original #2016 fix's gate only fired
+        // for `let`-bound locals (`syntax.Keyword?.Kind == SyntaxKind.LetKeyword`).
         // A `var`-declared local function of the exact same zero-capture shape
         // bypassed the diagnostic entirely and reproduced the ORIGINAL #2016
         // crash (compiles clean, then BadImageFormatException at run time) —
         // the emitter's zero-capture hoisting path doesn't distinguish let/var.
+        // Issue #4223 makes the shape itself correct, so `var` and `let` both
+        // compile and run the same way.
         var source = """
             package P
 
@@ -68,15 +73,15 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
                 return seed
             }
             Outer("hi")
+            Outer(42)
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"hi{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void NonGenericLocalFunction_ConstDeclared_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void NonGenericLocalFunction_ConstDeclared_ParameterReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         // Same zero-capture shape via `const` — the third variable-declaration
         // keyword. The check keys off the bound initializer being a
@@ -93,27 +98,29 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
                 return seed
             }
             Outer("hi")
+            Outer(42)
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"hi{Environment.NewLine}42{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void NonGenericAsyncLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void NonGenericAsyncLocalFunction_ParameterReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         // Follow-up review of #2024: an earlier revision short-circuited this
         // check for `literal.Function.IsAsync`, assuming an async local
         // function's state-machine hoisting reifies the enclosing type
-        // parameter safely. Verified false: the zero-capture async local
-        // function's kickoff method is still the un-parameterized top-level
+        // parameter safely. Verified false AT THE TIME: the zero-capture async
+        // local function's kickoff method was the un-parameterized top-level
         // static method, and its synthesized state-machine struct never
-        // re-declares the enclosing type parameter either — so it hits the
-        // identical dangling-MVAR shape. Before removing the short-circuit,
-        // this exact source compiled clean (exit 0) and then crashed at run
-        // time with BadImageFormatException the moment `Outer` executed, even
-        // though `Local` is never called.
+        // re-declared the enclosing type parameter either. Issue #4223 fixes
+        // this for real: ReflectionMetadataEmitter.RegisterStateMachineEnclosingGenerics
+        // now aliases each ORIGINAL enclosing type parameter promoted by
+        // TryPromoteNonCapturingGenericLambda onto the state machine's own
+        // class slot (mirroring the analogous ITERATOR fix already applied by
+        // RegisterGeneratedGenericRemaps), so the reference is a valid VAR
+        // slot instead of a dangling MVAR.
         var source = """
             package P
 
@@ -121,37 +128,37 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
                 let Local = async func (x U) U {
                     return x
                 }
-                return seed
+                return Local(seed).Result
             }
-            Outer("hi")
+            Console.WriteLine(Outer("hi"))
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"hi{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void NonGenericLocalFunction_ReturnTypeReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void NonGenericLocalFunction_ReturnTypeReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
 
-            func Outer[U]() {
+            func Outer[U]() U {
                 let Local = func () U {
                     return default
                 }
+                return Local()
             }
-            Outer[string]()
+            Console.WriteLine(Outer[string]())
+            Console.WriteLine(Outer[int32]())
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void NonGenericLocalFunction_BodyReferencesEnclosingMethodTypeParameter_ReportsGS0468()
+    public void NonGenericLocalFunction_BodyReferencesEnclosingMethodTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
@@ -164,15 +171,15 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
                 Local()
             }
             Outer[string]()
+            Outer[int32]()
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"{Environment.NewLine}0{Environment.NewLine}", output);
     }
 
     [Fact]
-    public void NonGenericLocalFunction_ReferencesEnclosingGenericClassTypeParameter_ReportsGS0468()
+    public void NonGenericLocalFunction_ReferencesEnclosingGenericClassTypeParameter_CompilesAndRunsWithoutGS0468()
     {
         var source = """
             package P
@@ -185,13 +192,44 @@ public class Issue2016NonGenericLocalFunctionEnclosingTypeParameterTests
                     Console.WriteLine(Local(seed))
                 }
             }
-            let b = Box[string]{}
-            b.Run("hi")
+            let b1 = Box[string]{}
+            b1.Run("hi")
+            let b2 = Box[int32]{}
+            b2.Run(7)
             """;
 
-        var (exitCode, stdout, stderr) = CompileAndRunRaw(source, expectSuccess: false);
-        Assert.NotEqual(0, exitCode);
-        Assert.Contains("GS0468", stdout + stderr);
+        var output = CompileAndRun(source);
+        Assert.Equal($"hi{Environment.NewLine}7{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void NonGenericLocalFunction_CapturesOuterVariableAndReferencesEnclosingTypeParameterInOwnParameter_CompilesAndRunsWithoutGS0468()
+    {
+        // A NON-generic local function that BOTH captures an outer variable
+        // AND directly references an enclosing type parameter in its OWN
+        // parameter type routes through ClosureEmitter's ordinary (pre-#4221)
+        // capturing closure path — SynthesizeDisplayClass already reifies any
+        // enclosing type parameter referenced by the literal's parameters,
+        // return type, or body, regardless of capture status. Must not
+        // false-positive.
+        var source = """
+            package P
+
+            func Outer[U](seed U) U {
+                var count = 0
+                let Local = func (x U) U {
+                    count = count + 1
+                    return x
+                }
+                Console.WriteLine(Local(seed))
+                return seed
+            }
+            Console.WriteLine(Outer("hi"))
+            Console.WriteLine(Outer(7))
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"hi{Environment.NewLine}hi{Environment.NewLine}7{Environment.NewLine}7{Environment.NewLine}", output);
     }
 
     [Fact]

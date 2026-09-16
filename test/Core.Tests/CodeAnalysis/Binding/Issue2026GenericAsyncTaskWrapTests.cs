@@ -70,18 +70,21 @@ var t = Outer(""hi"")
     }
 
     [Fact]
-    public void AsyncLocalFunctionLiteral_ReferencingEnclosingTypeParameter_ReportsGS0468NotGS0133()
+    public void AsyncLocalFunctionLiteral_ReferencingEnclosingTypeParameter_ObservedAsTaskOfSubstitutedType()
     {
         // Issue #2026's repro predates issue #2016's GS0468 gate (landed on
-        // this branch's parent commit), which now diagnoses ANY local
-        // function-literal (named via `let`/`var`/`const`) that directly
-        // references an enclosing generic function's type parameter in its
-        // own signature/body — exactly the shape #2026 originally described
-        // as call-shape (b). That shape is therefore no longer reachable:
-        // GS0468 fires first, and this is intentional/by-design (referencing
-        // the enclosing type parameter would otherwise emit invalid IL). This
-        // regression test pins that GS0468 — not the unrelated GS0133 this
-        // issue is about — is what callers see for that shape.
+        // this branch's parent commit): a local function-literal (named via
+        // `let`/`var`/`const`) that directly references an enclosing generic
+        // function's type parameter in its own signature/body — call-shape
+        // (b) from #2026's original description. #2016 (and, later, its own
+        // GS0468 restriction) treated this as an invalid-IL shape and
+        // rejected it outright. Issue #4223 makes the shape itself correct —
+        // UserTokenResolver.TryPromoteNonCapturingGenericLambda reifies the
+        // referenced enclosing `U` — so GS0468 no longer fires, and this
+        // regression test now pins the ORIGINAL #2026 concern directly: the
+        // call through the local function-literal's delegate value is
+        // observed as `Task[U]` (the substituted return type Task-wrapped),
+        // and `await r` reports neither GS0133 nor GS0468.
         const string source = @"
 package p
 async func Outer[U](seed U) U {
@@ -91,8 +94,11 @@ async func Outer[U](seed U) U {
 }
 ";
         var compilation = Compile(source);
-        Assert.Contains(compilation.BoundProgram.Diagnostics, d => d.Id == "GS0468");
-        Assert.DoesNotContain(compilation.BoundProgram.Diagnostics, d => d.Id == "GS0133");
+        Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+
+        var call = FindIndirectCall(compilation, "Outer");
+        Assert.NotNull(call);
+        AssertIsTaskOf(call.Type, expectedTypeArgumentName: "U");
     }
 
     [Fact]

@@ -365,7 +365,6 @@ public sealed class Binder
             {
                 return Lambdas.PrepareGenericLocalFunctionDeclaration(syntax);
             },
-            checkNonGenericLocalFunctionEnclosingTypeParameterReference: (location, name, literal) => Lambdas.CheckNonGenericLocalFunctionEnclosingTypeParameterReference(location, name, literal),
             bindFunctionLiteralWithSelfDeclaration: (literalSyntax, onSignatureBound) =>
             {
                 return Lambdas.BindFunctionLiteralExpression(literalSyntax, explicitName: null, onSignatureBound: onSignatureBound);

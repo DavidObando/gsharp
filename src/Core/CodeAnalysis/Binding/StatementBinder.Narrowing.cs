@@ -1631,26 +1631,20 @@ internal sealed partial class StatementBinder
                     convertedInitializer = conversions.BindConversion(syntax.Initializer.Location, initializer, variableType);
                 }
 
-                // Issue #2016: a NON-generic named local function (`let`/`var`/`const
-                // Name = func (...) ... {...}`, no `[T, ...]` of its own — the sibling
-                // case of #1940's generic local function) that directly references an
-                // enclosing type parameter in its own parameter/return type or body
-                // can silently emit invalid IL. Check the just-bound literal now,
-                // while it's still available with its identifier's name/location.
-                //
-                // Follow-up review of #2024: the original gate here required
-                // `syntax.Keyword?.Kind == SyntaxKind.LetKeyword`, which let a `var`-
-                // declared local function of the exact same zero-capture shape sail
-                // through uncaught (the emitter's hoisting path doesn't distinguish
-                // let/var/const — only "is this a function-literal initializer").
-                // The check now keys off the bound initializer's kind
-                // (BoundFunctionLiteralExpression) rather than the declaring keyword,
-                // so it fires uniformly for `let`, `var`, and `const` forms.
-                if (initializer is BoundFunctionLiteralExpression functionLiteral
-                    && checkNonGenericLocalFunctionEnclosingTypeParameterReference != null)
-                {
-                    checkNonGenericLocalFunctionEnclosingTypeParameterReference(syntax.Identifier.Location, syntax.Identifier.ValueText, functionLiteral);
-                }
+                // Issue #4223: a NON-generic named local function (`let`/`var`/`const
+                // Name = func (...) ... {...}`, no `[T, ...]` of its own) that
+                // references an enclosing type parameter used to be rejected here
+                // (GS0468, issue #2016) on the assumption that the zero-capture
+                // hoisting path could never give the enclosing type parameter a
+                // valid emitted slot. That assumption was wrong for the general
+                // case: UserTokenResolver.TryPromoteNonCapturingGenericLambda
+                // (issue #2118) already promotes such a literal to a genuine
+                // generic method, cloning every referenced enclosing type
+                // parameter as the hoisted method's own — the same reification
+                // ClosureEmitter.SynthesizeClosures's display-class path applies
+                // when the literal is nested inside a user type for accessibility.
+                // No bind-time check is needed; removed rather than left as a
+                // permanently-inert no-op.
             }
         }
 

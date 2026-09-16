@@ -494,66 +494,6 @@ internal sealed class LambdaBinder
     }
 
     /// <summary>
-    /// Issue #2016: checks a NON-generic named local function (<c>let Name = func (...)
-    /// ... {...}</c>, no <c>[T, ...]</c> of its own — the sibling case of #1940's generic
-    /// local function) for a direct reference to a type parameter owned by an enclosing
-    /// generic method or class in its own parameter type, return type, or body, and reports
-    /// GS0468 if found. Such a local function that captures no outer variables is hoisted to
-    /// a top-level static method (issue #1469's zero-capture fast path) UNLESS it is nested
-    /// inside a non-generic user type purely for accessibility (see
-    /// <c>ClosureEmitter.SynthesizeClosures</c>). When there is no such non-generic-struct
-    /// nesting available — because the local function is declared at top level (inside a
-    /// plain/generic top-level function) or because its enclosing user type is itself
-    /// generic — that hoisted method carries none of the enclosing type parameters, so the
-    /// reference has no corresponding CLR slot: invalid IL that silently crashes at run time
-    /// with <see cref="System.BadImageFormatException"/> instead of failing to compile —
-    /// the same invalid-IL family as the generic-local-function case, but without that fix's
-    /// own-type-parameter list to hide behind.
-    ///
-    /// Follow-up review of #2024: an earlier revision of this method
-    /// short-circuited on <c>literal.Function.IsAsync</c>, on the assumption
-    /// that async local functions are owned by the async state-machine
-    /// synthesis (<c>StateMachineEmitter.SynthesizeAsyncLambdaStateMachines</c>)
-    /// rather than the plain zero-capture static-method hoisting path, and
-    /// might therefore reify the enclosing type parameter safely. That
-    /// assumption was verified FALSE: a zero-capture async local function's
-    /// kickoff method is still <c>literal.Function</c> itself — the exact
-    /// same un-parameterized top-level static method used by the sync path
-    /// — and the synthesized state-machine struct
-    /// (<see cref="GSharp.Core.CodeAnalysis.Lowering.Async.SynthesizedStateMachineType.MaterializeAsStructSymbol"/>)
-    /// never re-declares the kickoff's enclosing type parameters either. A
-    /// hoisted field of the enclosing type parameter's type therefore has the
-    /// identical dangling-MVAR shape as the sync case, confirmed by direct
-    /// repro: an UNCALLED `let Local = async func (x U) U { return x }` inside
-    /// `func Outer[U](seed U) U` compiled clean before this fix and crashed at
-    /// run time with <see cref="System.BadImageFormatException"/> the moment
-    /// `Outer` executed (the state machine's field layout is invalid
-    /// regardless of whether the local function is ever called). The
-    /// short-circuit is removed so this check also covers async local
-    /// functions.
-    /// </summary>
-    /// <param name="location">The text location of the declaring <c>let</c> identifier.</param>
-    /// <param name="name">The local function's declared name (the <c>let</c> variable name).</param>
-    /// <param name="literal">The already-bound function-literal expression.</param>
-    public void CheckNonGenericLocalFunctionEnclosingTypeParameterReference(TextLocation location, string name, BoundFunctionLiteralExpression literal)
-    {
-        if (literal?.Function == null
-            || literal.CapturedVariables.Length > 0
-            || binderCtx.CurrentTypeParameters is not { Count: > 0 } enclosingTypeParametersInScope
-            || (literal.Function.LexicalEnclosingType is StructSymbol enclosingStruct
-                && enclosingStruct.TypeParameters.IsDefaultOrEmpty))
-        {
-            return;
-        }
-
-        var offender = FindEnclosingTypeParameterReference(literal.Function, literal.Body, enclosingTypeParametersInScope.Values.ToImmutableArray(), out _);
-        if (offender != null)
-        {
-            Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(location, name, offender.Name);
-        }
-    }
-
-    /// <summary>
     /// Prepares a generic local-function declaration
     /// <c>let Name[T, U, ...] = func (a T, b U) ... { ... }</c>. A CLR
     /// delegate cannot close over an unbound generic method, so this registers
@@ -573,7 +513,18 @@ internal sealed class LambdaBinder
         }
 
         var previousTypeParameters = binderCtx.CurrentTypeParameters;
-        binderCtx.CurrentTypeParameters = new Dictionary<string, TypeParameterSymbol>();
+
+        // Issue #4223: seed the scope bindTypeParameterList resolves
+        // constraint types against with the ENCLOSING type parameters (not an
+        // empty dictionary) so a constraint like `[T IComparable[U]]` — U
+        // owned by an enclosing generic method or class — resolves instead of
+        // reporting GS0113 ("Type 'U' doesn't exist"). Own names still shadow
+        // same-named enclosing ones: bindTypeParameterList overwrites each
+        // entry as it declares the local's own list, identically to the
+        // re-establishment below for the parameter/return/body clauses.
+        binderCtx.CurrentTypeParameters = previousTypeParameters == null
+            ? new Dictionary<string, TypeParameterSymbol>()
+            : new Dictionary<string, TypeParameterSymbol>(previousTypeParameters);
         ImmutableArray<TypeParameterSymbol> typeParameters;
         try
         {
@@ -621,9 +572,43 @@ internal sealed class LambdaBinder
                 {
                     var literal = BindFunctionLiteralBody(literalSyntax, function, functionType);
 
-                    // The emitted method owns only its own generic slots (#1940).
+                    // Issue #4223: a reference to an enclosing method/class type
+                    // parameter here used to be rejected outright (GS0468, issue
+                    // #1940), on the theory that the emitted method owns only its
+                    // own generic slots. UserTokenResolver.TryPromoteNonCapturingGenericLambda
+                    // now extends the enclosing-type-parameter reification it
+                    // already performs for non-generic zero-capture literals
+                    // (issue #2118) to a local function that ALSO declares its own
+                    // `[T, ...]` list: every referenced enclosing type parameter is
+                    // cloned as an additional method type parameter alongside the
+                    // local's own, so no bind-time rejection is needed. The lexical-
+                    // owner accessibility restriction below (GS0586) is unrelated
+                    // and unaffected — it still requires the offending owner to be
+                    // (transitively) non-generic before a direct generic local may
+                    // nest inside it.
                     var offender = FindEnclosingTypeParameterReference(function, literal.Body, enclosingTypeParameters, out var requiresLexicalOwner);
-                    if (offender != null)
+
+                    // Issue #4223: a ZERO-CAPTURE generic local function is
+                    // hosted directly as a top-level generic MethodDef/
+                    // MethodSpec, and UserTokenResolver.TryPromoteNonCapturingGenericLambda
+                    // now reifies any enclosing type parameter it references
+                    // (in its own parameter/return types, body, OR an own
+                    // type parameter's constraint) as an additional method
+                    // type parameter alongside its own — no bind-time
+                    // rejection is needed for that shape.
+                    //
+                    // A CAPTURING generic local function (issue #4221/#4252)
+                    // is hosted differently — its own type parameters live on
+                    // a synthesized closure class's Invoke method — and that
+                    // path has NOT been extended the same way: composing
+                    // enclosing-type-parameter reification with capture
+                    // support is left for a follow-up (the #4223 issue itself
+                    // calls out composing with captures as a later concern).
+                    // Confirmed by direct repro: `let Keep[T] = func (x T, y
+                    // U) ... { <captures something> }` compiled clean but
+                    // crashed (TypeLoadException / invalid IL) the moment
+                    // `Outer` executed. Keep reporting GS0468 for that shape.
+                    if (offender != null && literal.CapturedVariables.Length > 0)
                     {
                         Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
                     }

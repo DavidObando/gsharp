@@ -287,9 +287,15 @@ internal sealed class ClosureEmitter
                 // `closure.InvokeMethod`. Nesting it here would also require
                 // this display class's fieldless Invoke method to itself be
                 // generic, which SynthesizeDisplayClass does not model. Since
-                // generic local functions cannot capture, use a direct static
-                // host above rather than an instance Invoke method. Enclosing
-                // type-parameter reification remains outside this milestone.
+                // generic local functions cannot capture, it stays on the
+                // top-level `<Program>` host (issue #4223:
+                // UserTokenResolver.TryPromoteNonCapturingGenericLambda reifies
+                // any ENCLOSING type parameter it references as an additional
+                // method type parameter of its own MethodDef — no display-
+                // class nesting is needed for that). A generic local function
+                // that ALSO needs its lexical owner's accessibility domain
+                // (private/protected member access) remains unsupported
+                // (GS0586) when that owner is itself generic.
                 if (literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not { } zeroCaptureEnclosing
                     || zeroCaptureEnclosing is not (StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }))
