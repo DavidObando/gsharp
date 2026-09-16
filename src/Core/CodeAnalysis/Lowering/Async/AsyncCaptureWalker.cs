@@ -69,6 +69,22 @@ public static class AsyncCaptureWalker
                 continue;
             }
 
+            // Issue #4222: skip native `let ref`/`var ref` alias locals too.
+            // Unlike a ByRefTypeSymbol pointer local, an alias keeps its
+            // pointee type on `Type` and carries the byref-ness out of band
+            // via RefKind — but the underlying CLR local slot is still a
+            // managed pointer (see SlotPlanner), which the CLR forbids as a
+            // state-machine field just the same. RefStructAsyncLivenessAnalyzer
+            // already proved (at bind time) that this local is never live
+            // across a suspension point, so leaving it un-hoisted is safe: it
+            // simply stays a plain MoveNext-body local, and the existing
+            // RefKind-driven ldind/stind emission handles it exactly as it
+            // would in an ordinary function.
+            if (local.RefKind != RefKind.None)
+            {
+                continue;
+            }
+
             // Skip ref-struct (ByRef-like) locals — e.g. the synthesized
             // DefaultInterpolatedStringHandler emitted for interpolated strings
             // (ADR-0055 / issue #368). A ByRef-like type cannot be an instance

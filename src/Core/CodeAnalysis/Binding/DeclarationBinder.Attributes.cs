@@ -1327,7 +1327,35 @@ internal sealed partial class DeclarationBinder
 
         if (syntax.Elements is not { } elements)
         {
-            return false;
+            // Issue #4247: `[N]T` with NO initializer at all (not even empty
+            // braces `{}`) parses as the runtime/zero-initialised allocation
+            // form (issue #1272) — its length lives in
+            // `ArrayCreationExpressionSyntax.LengthExpression`, not
+            // `LengthToken`/`Elements` — so binding it produces a
+            // `BoundArrayCreationExpression` with a length expression and NO
+            // element list. This binder unconditionally rejected that shape
+            // (GS0202) even for the constant, zero-length spelling `[0]Kind`,
+            // although the explicit-empty-initializer spellings `[]Kind{}`
+            // and `[0]Kind{}` (which DO populate `Elements`, just with zero
+            // items) already worked. A `[0]T` allocation is exactly as
+            // constant and serialisable as those — a zero-length SZARRAY —
+            // so accept it once its length is confirmed to be the literal
+            // constant `0`. Any other runtime length (a variable, or a
+            // nonzero constant with no initializer to supply its elements)
+            // still has no constant element list to serialize and correctly
+            // falls through to GS0202 below.
+            var lengthExpr = bound.LengthExpression;
+            while (lengthExpr is BoundConversionExpression lengthConversion)
+            {
+                lengthExpr = lengthConversion.Expression;
+            }
+
+            if (lengthExpr is not BoundLiteralExpression { Value: 0 })
+            {
+                return false;
+            }
+
+            elements = new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty);
         }
 
         // Array.CreateInstance / Convert.ChangeType demand RUNTIME types, but

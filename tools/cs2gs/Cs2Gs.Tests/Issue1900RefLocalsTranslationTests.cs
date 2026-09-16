@@ -94,6 +94,41 @@ namespace Corpus.Issue1900
     }
 
     [Fact]
+    public void RefLocal_ConfinedBeforeAwaitInAsyncMethod_LowersToNativeRefAliasingLocal()
+    {
+        // Issue #4222: this translation was always straightforward (no
+        // async-specific special-casing exists in TranslateRefLocalDeclaration
+        // above — a `ref` local translates to G#'s native alias unconditionally,
+        // regardless of the enclosing method's async-ness), but gsc's binder
+        // used to reject EVERY ref-aliasing local in an async function with a
+        // blanket GS0258, so translating this exact C# shape produced G# that
+        // failed to compile — a latent self-hosting risk for any hot-core C#
+        // source using a confined `ref` local inside an `async` method.
+        // #4222's liveness-based fix (this alias never crosses the `await`)
+        // means AssertRoundTripParses below now actually BINDS clean; no
+        // change to the translator itself was needed.
+        string rendered = Render(@"
+using System.Threading.Tasks;
+namespace Corpus.Issue4222
+{
+    public class Holder
+    {
+        public async Task<int> Bump(int[] xs)
+        {
+            ref int r = ref xs[1];
+            r = 20;
+            await Task.Delay(1);
+            return xs[1];
+        }
+    }
+}
+");
+
+        Assert.Contains("var ref r int32 = xs[1]", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void RefReturningMethod_ReturnRefStatement_LowersToNativeRefReturn()
     {
         string rendered = Render(@"

@@ -230,7 +230,15 @@ public static class IteratorRewriter
 
         private void Add(VariableSymbol variable)
         {
-            if (!TypeSymbol.IsByRefLike(variable.Type) && !Locals.Contains(variable))
+            // Issue #4222: a native `let ref`/`var ref` alias local
+            // (RefKind != None) is excluded from hoisting for the same
+            // reason a by-ref-like local is — its CLR local slot is a
+            // managed pointer (see SlotPlanner), which the CLR forbids as a
+            // state-machine field. RefStructAsyncLivenessAnalyzer proves at
+            // bind time that it is never live across a `yield`, so leaving
+            // it un-hoisted (a plain MoveNext-body local) is safe.
+            var isNativeRefAlias = variable is LocalVariableSymbol local && local.RefKind != RefKind.None;
+            if (!TypeSymbol.IsByRefLike(variable.Type) && !isNativeRefAlias && !Locals.Contains(variable))
             {
                 Locals.Add(variable);
             }

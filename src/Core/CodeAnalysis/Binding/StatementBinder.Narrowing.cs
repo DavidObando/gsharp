@@ -1906,17 +1906,17 @@ internal sealed partial class StatementBinder
         var slotType = declaredType ?? pointeeType;
 
         // Context restrictions: the CLR cannot encode a managed pointer as a static
-        // field (top-level / `customize` partial) or as a hoisted state-machine
-        // field (`async`/iterator functions).
+        // field (top-level / `customize` partial). A hoisted state-machine field is
+        // also forbidden, but async/iterator functions no longer get a blanket
+        // rejection here — issue #4222 replaces that coarse rule with the same
+        // per-local liveness treatment issue #2350 gave by-ref-like locals: an
+        // alias declared in an async/iterator function is fine as long as it is
+        // never live across an `await`/`yield` suspension point, which
+        // RefStructAsyncLivenessAnalyzer (running after lowering) now proves,
+        // reporting this same GS0258 only for a local actually caught crossing one.
         if (function == null || function.IsTopLevelEntryPoint)
         {
             Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, "a top-level variable (it would be emitted as a heap-rooted static field)");
-            rhsValid = false;
-        }
-        else if (function.IsAsyncOrSuspending || isIteratorReturnType(function.Type))
-        {
-            var context = function.IsAsyncOrSuspending ? "a local in an async function" : "a local in an iterator";
-            Diagnostics.ReportRefLocalCannotBeDeclaredHere(refModifierLoc, syntax.Identifier.ValueText, context + " (it would be hoisted into the state machine)");
             rhsValid = false;
         }
 
