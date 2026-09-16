@@ -705,11 +705,32 @@ internal sealed class LambdaBinder
                     if (offender != null && literal.CapturedVariables.Length > 0)
                     {
                         Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(syntax.Identifier.Location, name, offender.Name);
+                        literal.EnclosingTypeParameterDiagnosticReported = true;
                     }
                     else if (function.LexicalEnclosingType is { } owner
                         && requiresLexicalOwner && !function.HasNonGenericLexicalOwner)
                     {
                         Diagnostics.ReportGenericLocalFunctionUnsupportedOwner(syntax.Identifier.Location, name, owner);
+                    }
+
+                    // Issue #4221/#4223 merge follow-up: this literal's
+                    // CapturedVariables may still be empty here purely
+                    // because a sibling it calls (a forward reference, or a
+                    // call cycle) hasn't been bound yet — CollectCapturedVariables
+                    // only folds a callee's captures into a caller declared
+                    // AFTER it. ReconcileGenericLocalFunctionGroupCaptures
+                    // widens this set to a fixed point once every group
+                    // member has bound, which can turn an apparently
+                    // capture-free literal into a capturing one AFTER this
+                    // check already ran. Cache the offender (regardless of
+                    // whether it tripped the check above) so that widening
+                    // can re-evaluate the exclusion instead of silently
+                    // reaching the emitter with an enclosing type parameter
+                    // its capturing-closure host has no slot for.
+                    if (offender != null)
+                    {
+                        literal.EnclosingTypeParameterOffender = offender;
+                        literal.EnclosingTypeParameterOffenderLocation = syntax.Identifier.Location;
                     }
 
                     return new BoundLocalFunctionDeclaration(syntax, literal);
@@ -793,6 +814,30 @@ internal sealed class LambdaBinder
             if (!changed)
             {
                 break;
+            }
+        }
+
+        // Issue #4221/#4223 merge follow-up: a literal that referenced an
+        // enclosing type parameter looked capture-free when its own gate
+        // check ran (see PrepareGenericLocalFunctionDeclaration) — the
+        // in-order pass hadn't yet seen a forward-referenced or cyclic
+        // sibling's capture — and so was silently accepted as eligible for
+        // the zero-capture enclosing-type-parameter reification path. The
+        // fixed point above can have since widened its CapturedVariables,
+        // which routes it to the capturing closure-class path instead (a
+        // combination that path does not support). Re-evaluate the
+        // exclusion now that every member's final capture set is known.
+        foreach (var literal in literals)
+        {
+            if (literal.EnclosingTypeParameterOffender is { } offender
+                && !literal.EnclosingTypeParameterDiagnosticReported
+                && literal.CapturedVariables.Length > 0)
+            {
+                Diagnostics.ReportLocalFunctionCannotReferenceEnclosingTypeParameter(
+                    literal.EnclosingTypeParameterOffenderLocation,
+                    literal.Function.Name,
+                    offender.Name);
+                literal.EnclosingTypeParameterDiagnosticReported = true;
             }
         }
     }
