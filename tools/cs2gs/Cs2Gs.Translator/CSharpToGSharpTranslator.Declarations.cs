@@ -352,6 +352,23 @@ public sealed partial class CSharpToGSharpTranslator
 
             var funcs = new List<GNode>();
             var statements = new List<GNode>();
+
+            // Issue #4239: every other body owner (method, constructor, lambda,
+            // local function — see `TranslateBody`) sets `CurrentBodyScope` to
+            // itself before translating its contents, so `IsLocalReassigned`'s
+            // scope walk (`IsSymbolReassigned`) sees writes anywhere in that
+            // body, including inside a nested local function. The top-level-
+            // statements entry point has no single enclosing body syntax node to
+            // reuse for that, but it has an equivalent: the compilation unit
+            // root, which contains every global statement (and everything
+            // nested inside them) as descendants. Left unset (null), a plain
+            // top-level `int value = 0;` mutated only by a sibling local
+            // function was never seen as reassigned — `IsSymbolReassigned`
+            // short-circuits to `false` on a null scope — so it was always
+            // emitted as an immutable `let`, later rejected by gsc as GS0127
+            // once the local function's assignment compiled against it.
+            SyntaxNode previousBodyScope = this.state.CurrentBodyScope;
+            this.state.CurrentBodyScope = globalStatements[0].SyntaxTree.GetRoot();
             try
             {
                 foreach (StatementSyntax statement in ordered)
@@ -373,6 +390,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
+                this.state.CurrentBodyScope = previousBodyScope;
                 if (renamedArgs)
                 {
                     this.state.PatternBindings.Remove(argsParameter);
