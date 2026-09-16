@@ -303,16 +303,20 @@ internal sealed class LambdaBinder
                 ? bindTypeClause(type) ?? TypeSymbol.Error
                 : TypeSymbol.Error;
 
-            // ADR-0101 follow-up / issue #812: variadic parameters are now
-            // accepted on function-literal lambdas. The body sees the
-            // parameter as a `[]T` slice; when the lambda is invoked through
-            // a typed delegate (the common case), pack/pass-through happens
-            // on the indirect-call path inside OverloadResolver.
+            // ADR-0101 follow-up / issue #812, generalized by ADR-0173 / issue
+            // #3627: variadic parameters are accepted on function-literal
+            // lambdas. The body sees the resolved carrier type — the array
+            // wrap for a plain element type, or the written type itself when
+            // it is already a supported carrier (`List[T]`, `Span[T]`, …) —
+            // matching named-function/delegate declarations so a lambda's
+            // carrier lines up with the delegate it is assigned to
+            // (issue #4235). Pack/pass-through for a bare-array call still
+            // happens on the indirect-call path inside OverloadResolver.
             var isVariadic = p.IsVariadic;
             var parameterType = ptype;
             if (isVariadic && parameterType != TypeSymbol.Error)
             {
-                parameterType = SliceTypeSymbol.Get(parameterType);
+                parameterType = VariadicCarriers.ResolveDeclaredParameterType(parameterType);
             }
 
             // Issue #1262: the discard identifier `_` is not a real binding —
@@ -858,22 +862,23 @@ internal sealed class LambdaBinder
                 ptype = TypeSymbol.Error;
             }
 
-            // ADR-0101 follow-up / issue #812: variadic parameters are now
-            // accepted on arrow lambdas. The body sees the parameter as a
-            // `[]T` slice; when the lambda is invoked through its inferred
-            // delegate type, the indirect-call path packs / passes through
-            // trailing arguments.
+            // ADR-0101 follow-up / issue #812, generalized by ADR-0173 / issue
+            // #3627: variadic parameters are accepted on arrow lambdas. An
+            // explicitly typed `...T` parameter resolves to the same carrier
+            // a named function or delegate would declare — the array wrap
+            // around a plain element type, or the written type itself when it
+            // is already a supported carrier — so an explicitly typed lambda
+            // parameter carries the same declared type as the delegate it is
+            // assigned to (issue #4235: `xs ...List[int32]` must bind as
+            // `List[int32]`, not `[]List[int32]`).
             //
-            // Target-typed inference: when the slot type already comes from
-            // a `(T1, ..., Tn) -> R` target whose Nth slot is itself a
-            // slice, treat the `...T` form as element-type `T` and wrap to
-            // `[]T` here. If the inferred slot is already a slice and the
-            // user wrote `xs ...T`, the wrap below is a no-op only when the
-            // user spelled `xs ...[]T`; the binder doesn't second-guess.
+            // Target-typed inference (p.Type == null) is untouched: the slot
+            // type already comes straight from the target's Nth parameter,
+            // which is itself already a resolved carrier.
             var isVariadic = p.IsVariadic;
             if (isVariadic && ptype != null && ptype != TypeSymbol.Error && p.Type != null)
             {
-                ptype = SliceTypeSymbol.Get(ptype);
+                ptype = VariadicCarriers.ResolveDeclaredParameterType(ptype);
             }
 
             var parameterType = Invariant.Required(ptype, "lambda parameter binding produces a type");
