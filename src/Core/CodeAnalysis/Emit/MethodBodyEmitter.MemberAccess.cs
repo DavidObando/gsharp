@@ -921,7 +921,15 @@ internal sealed partial class MethodBodyEmitter
     // ADR-0051 Phase 6: emit IL for BoundPropertyAccessExpression (computed properties).
     // Auto-properties are lowered to BoundFieldAccessExpression by the Lowerer,
     // so this only fires for computed properties that still reference the accessor.
-    private void EmitPropertyAccess(BoundPropertyAccessExpression access)
+
+    /// <param name="access">The property read to emit.</param>
+    /// <param name="addressOnly">
+    /// Issue #4224: when <see langword="true"/>, leaves the getter's raw
+    /// result on the stack without the read tail's dereference/narrowing-cast
+    /// — used by <c>EmitAddressOf</c> to take the address of a ref-returning
+    /// property instead of loading through it.
+    /// </param>
+    private void EmitPropertyAccess(BoundPropertyAccessExpression access, bool addressOnly = false)
     {
         // Issue #989: when the receiver is a constructed generic user type the
         // accessor must be reached through a MemberRef parented at the
@@ -969,7 +977,7 @@ internal sealed partial class MethodBodyEmitter
         {
             this.il.OpCode(ILOpCode.Call);
             this.il.Token(getterHandle);
-            this.EmitPropertyReadTail(access);
+            this.EmitPropertyReadTail(access, addressOnly);
             return;
         }
 
@@ -982,7 +990,7 @@ internal sealed partial class MethodBodyEmitter
             this.il.Token(this.outer.memberRefs.GetElementTypeToken(tpReceiver));
             this.il.OpCode(ILOpCode.Callvirt);
             this.il.Token(getterHandle);
-            this.EmitPropertyReadTail(access);
+            this.EmitPropertyReadTail(access, addressOnly);
             return;
         }
 
@@ -1001,15 +1009,22 @@ internal sealed partial class MethodBodyEmitter
 
         this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOpCode.Call);
         this.il.Token(getterHandle);
-        this.EmitPropertyReadTail(access);
+        this.EmitPropertyReadTail(access, addressOnly);
     }
 
     // Issue #3879 / ADR-0069: the tail of every property READ, in the one order
     // the two adjustments can happen in — dereference the getter's managed
     // pointer FIRST (a `ref`-returning property leaves `T&` on the stack), then
     // apply any smart-cast narrowing to the resulting value.
-    private void EmitPropertyReadTail(BoundPropertyAccessExpression access)
+    private void EmitPropertyReadTail(BoundPropertyAccessExpression access, bool addressOnly = false)
     {
+        if (addressOnly)
+        {
+            // Issue #4224: EmitAddressOf wants the raw managed pointer the
+            // getter left on the stack, not the dereferenced/narrowed value.
+            return;
+        }
+
         var effectiveType = GetEffectivePropertyType(access);
         this.EmitRefReturnDereferenceIfNeeded(access.Property.ReturnRefKind, effectiveType);
         this.EmitNarrowingCastIfNeeded(effectiveType, access.NarrowedType);
@@ -1640,6 +1655,20 @@ internal sealed partial class MethodBodyEmitter
                 && elementReceiver.IsArrayBackedElementAccess)
             {
                 this.EmitElementAddress(elementReceiver);
+                return;
+            }
+
+            // Issue #4224: a call to a native ref-returning function/method,
+            // or a read of a native ref-returning property/indexer getter, is
+            // real addressable storage — the callee already computed a
+            // managed pointer, so take it directly via EmitAddressOf (which
+            // knows these node kinds) instead of falling through to the
+            // spill-to-temp path below. This receiver shape was unreachable
+            // here before this issue made such calls/properties lvalues, so
+            // ReceiverSpillCollector never needed to plan a slot for it.
+            if (RefCapabilities.IsNativeRefReturningCall(receiver))
+            {
+                this.EmitAddressOf(new BoundAddressOfExpression(null, receiver, unmanaged: false));
                 return;
             }
 

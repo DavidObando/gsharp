@@ -280,15 +280,21 @@ internal sealed class ClosureEmitter
                 // `<Program>` static placement.
                 //
                 // Issue #1886: a GENERIC local function (`let Name[T] = func
-                // (...) ... {...}`) is declared as a real (non-capturing, by
-                // binder rule GS0463) FunctionSymbol resolved through direct
-                // `BoundCallExpression` calls, not through the delegate-value
-                // indirect-call path that consults ClosureInfos to redirect to
-                // `closure.InvokeMethod`. Nesting it here would also require
-                // this display class's fieldless Invoke method to itself be
-                // generic, which SynthesizeDisplayClass does not model. Since
-                // generic local functions cannot capture, it stays on the
-                // top-level `<Program>` host (issue #4223:
+                // (...) ... {...}`) is declared as a real FunctionSymbol
+                // resolved through direct `BoundCallExpression` calls, not
+                // through the delegate-value indirect-call path that consults
+                // ClosureInfos to redirect to `closure.InvokeMethod`. Nesting
+                // it here would also require this display class's fieldless
+                // Invoke method to itself be generic, which
+                // SynthesizeDisplayClass does not model. A generic local
+                // function MAY capture outer state (#4221), but a capturing
+                // one is handled by its own dedicated branch below (a closure
+                // class whose Invoke method carries the local function's own
+                // generic parameters); this zero-field-host path always
+                // excludes every generic local function, capturing or not,
+                // and uses a direct static host above rather than an instance
+                // Invoke method. A capture-free generic local function stays
+                // on the top-level `<Program>` host instead (issue #4223:
                 // UserTokenResolver.TryPromoteNonCapturingGenericLambda reifies
                 // any ENCLOSING type parameter it references as an additional
                 // method type parameter of its own MethodDef — no display-

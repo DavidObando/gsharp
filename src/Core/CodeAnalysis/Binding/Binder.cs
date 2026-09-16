@@ -369,6 +369,10 @@ public sealed class Binder
             bindFunctionLiteralWithSelfDeclaration: (literalSyntax, onSignatureBound) =>
             {
                 return Lambdas.BindFunctionLiteralExpression(literalSyntax, explicitName: null, onSignatureBound: onSignatureBound);
+            },
+            reconcileGenericLocalFunctionGroupCaptures: group =>
+            {
+                Lambdas.ReconcileGenericLocalFunctionGroupCaptures(group);
             });
         BoundExpression BindTypeOfExpressionForDeclarations(TypeOfExpressionSyntax syntax) =>
             Expressions.BindTypeOfExpression(syntax);
@@ -6424,7 +6428,10 @@ public sealed class Binder
         return bound;
     }
 
-    private static bool IsIteratorReturnType(TypeSymbol type)
+    // Issue #4222: internal (not private) so RefStructAsyncLivenessAnalyzer can
+    // gate its per-suspension-point liveness analysis on iterator functions too
+    // (native ref-alias locals), without duplicating this return-type check.
+    internal static bool IsIteratorReturnType(TypeSymbol type)
     {
         if (type == null)
         {

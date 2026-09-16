@@ -158,8 +158,25 @@ internal sealed partial class ExpressionBinder
         // to `this.<property> = value` (analogous to implicit field assignment).
         if (variable is ImplicitPropertyVariableSymbol implicitProp)
         {
+            // Issue #4224: a writable-ref-returning getter (no setter, but
+            // `ReturnRefKind == Ref`) stores through the getter instead of
+            // failing outright, mirroring the explicit-receiver forms below.
             if (!implicitProp.Property.HasSetter)
             {
+                var implicitRefConverted = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitProp.Property.Type);
+                if (TryBindRefGetterWriteThrough(
+                    implicitProp.Property,
+                    new BoundVariableExpression(null, implicitProp.Receiver),
+                    implicitProp.StructType,
+                    implicitProp.StructType,
+                    syntax.IdentifierToken.Location,
+                    syntax.EqualsToken.Location,
+                    implicitRefConverted,
+                    out var implicitRefWriteThrough))
+                {
+                    return implicitRefWriteThrough;
+                }
+
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, name);
             }
 
@@ -421,6 +438,64 @@ internal sealed partial class ExpressionBinder
 
         /// <summary>The chain crosses a computed (property) link — an in-place write is impossible.</summary>
         NotAddressable,
+    }
+
+    /// <summary>
+    /// Issue #4224 (root cause #5): when an instance property has no setter
+    /// but its getter returns by <c>ref</c> (a native writable-ref-returning
+    /// property, e.g. <c>prop Value ref int32 { get { return ref slot } }</c>),
+    /// assignment does not need an invented setter — it stores through the
+    /// getter's managed pointer instead, mirroring the existing imported
+    /// span/ref-indexer write-through path (<c>MakeClrIndexAssignment</c>).
+    /// A <c>ref readonly</c> getter (<see cref="RefKind.RefReadOnly"/>) is
+    /// excluded: its storage stays protected exactly like a missing setter.
+    /// Reuses <see cref="IsWritableStructFieldReceiver"/> — the same
+    /// struct-temporary/read-only-binding guard a plain field write through an
+    /// arbitrary receiver chain already applies — so writing through a
+    /// value-type receiver that is itself a temporary (e.g. a by-value
+    /// struct-returning call) or a read-only (<c>let</c>) binding is rejected
+    /// exactly as it would be for a field.
+    /// </summary>
+    /// <param name="prop">The property being assigned.</param>
+    /// <param name="receiver">The bound instance receiver (evaluated once; reused verbatim, not re-bound).</param>
+    /// <param name="receiverStructType">The receiver's resolved struct/class type.</param>
+    /// <param name="declaringType">The type that declares <paramref name="prop"/>, for the getter accessibility check.</param>
+    /// <param name="memberLocation">The location to report a getter-inaccessible diagnostic against.</param>
+    /// <param name="equalsLocation">The location to report a struct-temporary diagnostic against.</param>
+    /// <param name="convertedValue">The already-converted right-hand-side value.</param>
+    /// <param name="result">The bound write-through expression, or an error expression when rejected.</param>
+    /// <returns><see langword="false"/> when <paramref name="prop"/>'s getter is not <c>ref</c>-returning — the caller should report its own "not assignable" diagnostic instead.</returns>
+    private bool TryBindRefGetterWriteThrough(
+        PropertySymbol prop,
+        BoundExpression receiver,
+        StructSymbol receiverStructType,
+        StructSymbol declaringType,
+        TextLocation memberLocation,
+        TextLocation equalsLocation,
+        BoundExpression convertedValue,
+        out BoundExpression result)
+    {
+        if (prop.ReturnRefKind != RefKind.Ref)
+        {
+            result = new BoundErrorExpression(null);
+            return false;
+        }
+
+        if (!receiverStructType.IsClass && !IsWritableStructFieldReceiver(receiver))
+        {
+            Diagnostics.ReportFieldAssignmentThroughStructTemporary(equalsLocation, prop.Name, receiverStructType);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (!AccessibilityChecker.IsAccessible(prop.GetterAccessibility, declaringType, this.function))
+        {
+            Diagnostics.ReportMemberInaccessible(memberLocation, prop.Name, declaringType.Name, prop.GetterAccessibility);
+        }
+
+        var access = new BoundPropertyAccessExpression(null, receiver, receiverStructType, prop);
+        result = new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, access, unmanaged: false), convertedValue);
+        return true;
     }
 
     private bool IsWritableStructFieldReceiver(BoundExpression receiver)
@@ -1137,6 +1212,23 @@ internal sealed partial class ExpressionBinder
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
+                    // Issue #4224: a writable-ref-returning getter (no setter,
+                    // but `ReturnRefKind == Ref`) stores through the getter
+                    // instead of failing outright.
+                    var refConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
+                    if (TryBindRefGetterWriteThrough(
+                        prop,
+                        assignmentReceiver,
+                        structSymbol,
+                        propDeclaringType,
+                        syntax.FieldIdentifier.Location,
+                        syntax.EqualsToken.Location,
+                        refConverted,
+                        out var refWriteThrough))
+                    {
+                        return refWriteThrough;
+                    }
+
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                     return new BoundErrorExpression(null);
                 }
@@ -2936,6 +3028,25 @@ internal sealed partial class ExpressionBinder
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
                 if (!prop.HasSetter)
                 {
+                    // Issue #4224: a writable-ref-returning getter (no setter,
+                    // but `ReturnRefKind == Ref`) stores through the getter
+                    // instead of failing outright. Covers the side-effecting
+                    // receiver case (`GetHolder().Value = v`) — `receiver` is
+                    // reused verbatim below, so it is evaluated exactly once.
+                    var refConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
+                    if (TryBindRefGetterWriteThrough(
+                        prop,
+                        receiver,
+                        structSym,
+                        propDeclaringType,
+                        syntax.FieldIdentifier.Location,
+                        syntax.EqualsToken.Location,
+                        refConverted,
+                        out var refWriteThrough))
+                    {
+                        return refWriteThrough;
+                    }
+
                     Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, fieldName);
                     return new BoundErrorExpression(null);
                 }

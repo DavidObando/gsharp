@@ -17,7 +17,9 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// <summary>
 /// Issue #491 (ADR-0060 follow-up): binder-level tests for ref-aliasing locals
 /// declared with <c>let ref</c> / <c>var ref</c>. Validates lvalue RHS, escape-scope
-/// classification (top-level / async / iterator rejection), <c>const ref</c> rejection,
+/// classification (top-level rejection; async/iterator rejection is now the
+/// per-suspension-point liveness check added by issue #4222 — see
+/// Issue4222RefAliasSuspensionLivenessTests), <c>const ref</c> rejection,
 /// type-clause mismatch reporting, and clean binding of the canonical shapes from
 /// the issue (array element alias, field alias).
 /// </summary>
@@ -188,19 +190,26 @@ let ref m = n
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
     }
 
+    // Issue #4222: the coarse "no ref alias anywhere in an async function"
+    // rule is replaced by per-local liveness (mirroring issue #2350's
+    // treatment of by-ref-like locals) — an alias that never crosses a
+    // suspension point is fine even though its enclosing function is async.
+    // See Issue4222AsyncIteratorRefAliasLivenessTests for the cross-suspension
+    // negative controls that still report GS0258.
     [Fact]
-    public void LetRef_InAsyncFunction_ReportsGS0258()
+    public void LetRef_InAsyncFunction_NotLiveAcrossAwait_BindsCleanly()
     {
         var source = @"
 async func tweak() {
     var n int32 = 7
     let ref m = n
+    m = 9
 }
 tweak()
 0
 ";
         var result = Evaluate(source);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
+        Assert.Empty(result.Diagnostics);
     }
 
     [Fact]

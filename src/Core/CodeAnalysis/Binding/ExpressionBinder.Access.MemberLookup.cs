@@ -2368,6 +2368,32 @@ internal sealed partial class ExpressionBinder
         {
             if (writeIndexer.SetterSymbol == null)
             {
+                // Issue #4224: a writable-ref-returning indexer getter (no
+                // setter, but `ReturnRefKind == Ref`) stores through the
+                // getter instead of failing outright, mirroring the
+                // named-property write-through path (TryBindRefGetterWriteThrough)
+                // and the existing imported/CLR ref-indexer write-through
+                // below. A `ref readonly` getter stays protected.
+                if (writeIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } refIndexerGetter)
+                {
+                    if (isReadOnlyReceiver)
+                    {
+                        Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                        return new BoundErrorExpression(indexSyntax);
+                    }
+
+                    var refParamType = writeSubstitution != null
+                        ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution, scope.References.MapClrTypeToReferences)
+                        : writeIndexer.Parameters[0].Type;
+                    var refElementType = writeSubstitution != null
+                        ? Binder.SubstituteType(refIndexerGetter.Type, writeSubstitution, scope.References.MapClrTypeToReferences)
+                        : refIndexerGetter.Type;
+                    var refIndexArg = ConvertIndexValue(refParamType);
+                    var refValue = BindValue(refElementType);
+                    var refGetCall = new BoundUserInstanceCallExpression(null, target, refIndexerGetter, ImmutableArray.Create(refIndexArg), refElementType);
+                    return new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, refGetCall, unmanaged: false), refValue);
+                }
+
                 Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                 return new BoundErrorExpression(null);
             }
