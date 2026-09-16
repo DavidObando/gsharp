@@ -3400,6 +3400,20 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
+        // Issue #4234: the same [ExtensionAttribute] marker, but for a
+        // user-declared class hosting an `@ExtensionOwner`-routed extension
+        // function (TypeDefEmitter.ResolveStructTypeShape already forced its
+        // TypeDef Abstract+Sealed for exactly this case). Every such class
+        // TypeDef row was already emitted by this point — TypeDefs precede
+        // the per-package <Program> rows just stamped above.
+        foreach (var kvp in this.cache.StructTypeDefs)
+        {
+            if (TypeDefEmitter.HostsExtensionMethod(kvp.Key))
+            {
+                this.EmitExtensionAttribute(kvp.Value);
+            }
+        }
+
         // SM class TypeDefs (sync iterators + async iterators).
         foreach (var c in smClasses)
         {
