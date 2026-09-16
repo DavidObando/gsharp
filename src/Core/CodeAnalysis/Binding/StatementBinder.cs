@@ -440,6 +440,15 @@ internal sealed partial class StatementBinder
         {
             var decl = (VariableDeclarationSyntax)statementSyntaxes[idx];
             var selfName = decl.Identifier.Text;
+
+            // `[start, end)` is only ever the `[i, runEnd)` range built by
+            // BindBlockStatements's `runEnd` loop, which advances only while
+            // `IsNonGenericLocalFunctionLiteralDeclaration` holds for the
+            // member at that index -- and that predicate pattern-matches
+            // `Initializer: FunctionLiteralExpressionSyntax { IsRefReturn:
+            // false }`. So every declaration in this range already has a
+            // non-null `FunctionLiteralExpressionSyntax` initializer by
+            // construction; the `!` merely restates what the caller verified.
             var literal = (FunctionLiteralExpressionSyntax)decl.Initializer!;
             foreach (var node in literal.Body.DescendantNodesAndSelf())
             {
