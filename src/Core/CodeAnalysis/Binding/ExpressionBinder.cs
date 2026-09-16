@@ -2150,17 +2150,19 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        // Issue #4219 (umbrella remainder), workstream B: neither
-        // DelegateTypeSymbol nor FunctionTypeSymbol carries a return
-        // ref-kind, and the by-value delegate/method-group machinery this
-        // method builds would silently narrow a ref-returning function to a
-        // plain by-value one instead of rejecting the conversion — a
-        // ref-returning synthesized delegate shape is deferred (see
-        // GS0588's descriptor). Applies to any ref-returning function
-        // (named or a #4219 direct-call local), not just the local-function
-        // case: this is a pre-existing gap in the delegate-conversion path
-        // this method owns, not something local-function support widened.
-        if (function.ReturnRefKind != RefKind.None)
+        // Issue #4219 (umbrella remainder), workstream B: a ref-returning
+        // #4219 direct-call LOCAL function (LocalDeclaration != null) has no
+        // tested/verified delegate-conversion support at all — unlike a
+        // NAMED (package-level or member) ref-returning function, which
+        // issue #4220/#4224 already exercise converting to an explicit,
+        // genuinely ref-aware delegate type (e.g. an imported
+        // `delegate ref readonly int Reader(ref int)` — confirmed by
+        // Issue4220ReadOnlyRefInteropTests, which this guard must not
+        // break). Scoped to the local-literal case only; a mismatched or
+        // untyped conversion for a NAMED ref-returning function is left to
+        // whatever existing diagnostic that pre-existing machinery already
+        // produces.
+        if (function.ReturnRefKind != RefKind.None && function.LocalDeclaration != null)
         {
             Diagnostics.ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(syntax.IdentifierToken.Location);
             return false;
