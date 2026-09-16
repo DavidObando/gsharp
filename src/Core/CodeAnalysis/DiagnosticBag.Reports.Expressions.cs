@@ -665,14 +665,28 @@ public sealed partial class DiagnosticBag
     /// by-ref parameter into a heap-allocated closure is unsound — the referent's
     /// lifetime is not guaranteed to outlive the closure — so the capture is rejected
     /// rather than silently compiled into a by-value snapshot. Distinct from a
-    /// <c>ref</c>/<c>var ref</c> LOCAL alias capture, which is a separate, legal-in-some-
-    /// contexts case handled elsewhere.
+    /// <c>ref</c>/<c>var ref</c> LOCAL alias capture, which is a separate
+    /// ParameterSymbol-free capture kind rejected by its own GS9011 (issue #4271).
     /// </summary>
     /// <param name="location">The text location of the closure whose body captures the parameter.</param>
     /// <param name="parameterName">The captured parameter's name.</param>
     /// <param name="refKindKeyword">"ref", "out", or "in".</param>
     public void ReportRefParameterCannotBeCaptured(TextLocation location, string parameterName, string refKindKeyword)
     => Report(location, DiagnosticDescriptors.RefParameterCannotBeCaptured, parameterName, refKindKeyword);
+
+    /// <summary>
+    /// GS9011 / issue #4271: a <c>ref</c>/<c>var ref</c> LOCAL alias of the enclosing
+    /// function was captured by a closure (lambda or local function). Like the
+    /// GS9010 ref-parameter capture, this is unsound — the alias's slot holds a
+    /// managed pointer, and the CLR gives no way to keep it alive in a heap-allocated
+    /// closure; unlike an ordinary captured local, it cannot be made safe by boxing
+    /// it into a shared cell either (that would corrupt the aliasing itself). Rejected
+    /// rather than silently compiled into a by-value snapshot that loses write-through.
+    /// </summary>
+    /// <param name="location">The text location of the closure whose body captures the alias.</param>
+    /// <param name="localName">The captured alias local's name.</param>
+    public void ReportRefLocalAliasCannotBeCaptured(TextLocation location, string localName)
+    => Report(location, DiagnosticDescriptors.RefLocalAliasCannotBeCaptured, localName);
 
     /// <summary>
     /// GS0410: a from-end index marker <c>^</c> appeared where it is not

@@ -499,6 +499,9 @@ internal sealed class LambdaBinder
         // `fixed` statement is likewise rejected — see ReportFixedPointerCannotEscape.
         // Issue #4259: a `ref`/`out`/`in` PARAMETER of the enclosing function is
         // likewise rejected — see ReportRefParameterCannotBeCaptured.
+        // Issue #4271: a `ref`/`var ref` LOCAL alias of the enclosing function is
+        // the sibling gap #4259 deliberately left open — see
+        // ReportRefLocalAliasCannotBeCaptured.
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
@@ -518,6 +521,10 @@ internal sealed class LambdaBinder
             else if (capturedVariable is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out or RefKind.In } refParameter)
             {
                 Diagnostics.ReportRefParameterCannotBeCaptured(syntax.Location, refParameter.Name, RefKindKeyword(refParameter.RefKind));
+            }
+            else if (capturedVariable is LocalVariableSymbol { RefKind: not RefKind.None } refLocal)
+            {
+                Diagnostics.ReportRefLocalAliasCannotBeCaptured(syntax.Location, refLocal.Name);
             }
         }
 
@@ -1258,9 +1265,13 @@ internal sealed class LambdaBinder
         // be captured by a closure; mirror the function-literal checks.
         // Issue #2330: same for an unmanaged `fixed` pointer.
         // Issue #4259: same for a `ref`/`out`/`in` PARAMETER of the enclosing
-        // function — as opposed to a `ref`/`var ref` LOCAL alias, which is a
-        // distinct, separately-handled capture kind (see RefKind.RefReadOnly
-        // and CaptureBoxingRewriter.IsBoxable).
+        // function.
+        // Issue #4271: a `ref`/`var ref` LOCAL alias is a distinct capture kind
+        // (a plain LocalVariableSymbol, not a ParameterSymbol) that #4259 left
+        // unhandled — it is now rejected too, for the same reason (its slot
+        // holds a managed pointer that CaptureBoxingRewriter.IsBoxable refuses
+        // to hoist into a shared box, so the capture would otherwise silently
+        // fall back to a by-value snapshot and lose write-through).
         foreach (var capturedVariable in captured)
         {
             if (TypeSymbol.IsByRefLike(capturedVariable.Type))
@@ -1280,6 +1291,10 @@ internal sealed class LambdaBinder
             else if (capturedVariable is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out or RefKind.In } refParameter)
             {
                 Diagnostics.ReportRefParameterCannotBeCaptured(syntax.Location, refParameter.Name, RefKindKeyword(refParameter.RefKind));
+            }
+            else if (capturedVariable is LocalVariableSymbol { RefKind: not RefKind.None } refLocal)
+            {
+                Diagnostics.ReportRefLocalAliasCannotBeCaptured(syntax.Location, refLocal.Name);
             }
         }
 

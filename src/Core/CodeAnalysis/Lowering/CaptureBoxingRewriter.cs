@@ -333,7 +333,10 @@ internal static class CaptureBoxingRewriter
         }
 
         // ADR-0060 / issue #491: ref-aliasing locals carry a managed pointer
-        // in their slot; boxing would break the aliasing semantics.
+        // in their slot; boxing would break the aliasing semantics. Issue
+        // #4271: the binder now rejects this capture outright (GS9011)
+        // before it ever reaches this pass; this guard is dead for the
+        // closure-capture path but stays as a defense against future paths.
         if (local.RefKind != RefKind.None)
         {
             return false;
