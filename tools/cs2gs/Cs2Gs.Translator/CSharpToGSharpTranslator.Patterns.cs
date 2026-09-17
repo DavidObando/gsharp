@@ -29,6 +29,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return hoistedValue;
             }
 
+            // Issue #4262 follow-up (item 2): this exact read was rewritten by
+            // EmitGuardedFieldLocalCaptures to reference the synthesized local
+            // that already captured the field/property non-null (see
+            // DocumentTranslationState.GuardCapturedFieldReads).
+            if (this.state.GuardCapturedFieldReads.TryGetValue(expression, out string guardCapturedName))
+            {
+                return new IdentifierExpression(guardCapturedName);
+            }
+
             // ADR-0169 M5 / issue #3778: in an analyzer TEST project, the
             // constant string that reaches the harness's source parameter is
             // not data — it is C# source the migrated verifier will compile as

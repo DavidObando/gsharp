@@ -155,6 +155,10 @@ namespace Demo
     }
 }");
 
+        // Issue #4262 follow-up (item 2): `handler` is a NON-readonly field,
+        // so it is not a stable access path — the local-capture rewrite
+        // deliberately excludes it, leaving the original per-use `!!` in
+        // place at this call-sugar site.
         Assert.Contains("handler!!(1)", printed);
     }
 

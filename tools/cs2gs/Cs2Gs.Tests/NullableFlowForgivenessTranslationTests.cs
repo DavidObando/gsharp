@@ -69,6 +69,10 @@ namespace Demo
     }
 }");
 
+        // Issue #4262 follow-up (item 2): `arr` is a NON-readonly field, so
+        // it is not a stable access path (an intervening call could
+        // reassign it) — the local-capture rewrite deliberately excludes it,
+        // leaving the original per-use `!!` in place.
         Assert.Contains("arr!![0]", printed);
     }
 
