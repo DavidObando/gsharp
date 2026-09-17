@@ -149,7 +149,7 @@ public static class CSharpProjectLoader
         EnsureMSBuildRegistered();
 
         var loadDiagnostics = new List<Diagnostic>();
-        using var workspace = MSBuildWorkspace.Create();
+        using var workspace = CreateWorkspace();
         workspace.LoadMetadataForReferencedProjects = true;
 
         Project project = await workspace.OpenProjectAsync(fullPath, cancellationToken: cancellationToken)
@@ -214,7 +214,7 @@ public static class CSharpProjectLoader
         EnsureMSBuildRegistered();
 
         var workspaceFailures = new List<Diagnostic>();
-        using var workspace = MSBuildWorkspace.Create();
+        using var workspace = CreateWorkspace();
 
         // Issue #2412: unlike LoadProjectAsync, this loader's entire purpose is
         // to load referenced projects as their own bound source Projects so their
@@ -694,6 +694,28 @@ public static class CSharpProjectLoader
             .Where(d => d.Severity == DiagnosticSeverity.Warning
                 || d.Severity == DiagnosticSeverity.Error)
             .ToImmutableArray();
+
+    /// <summary>
+    /// Creates the <see cref="MSBuildWorkspace"/> every design-time project
+    /// load in this class uses. Issue #4278: under CI (<c>ContinuousIntegrationBuild</c>
+    /// true, e.g. the self-migration nightly, which sets <c>GITHUB_ACTIONS</c>)
+    /// the SDK's default targets turn on <c>DeterministicSourcePaths</c>, which
+    /// requires <c>@(SourceRoot)</c> to resolve to a git repository. A throwaway
+    /// fixture <c>.csproj</c> written under a scratch/test-output directory (or,
+    /// worse, one loaded from inside the self-migration mirror, which has no
+    /// <c>.git</c> by design — see <c>RepositoryFileInventory</c>) inherits this
+    /// repo's root <c>Directory.Build.props</c> (SourceLink + git-versioning
+    /// package references) via MSBuild's normal upward search, but has no git
+    /// root to resolve against, and the design-time build fails outright with
+    /// <c>CS2GS0001: SourceRoot items must include at least one top-level (not
+    /// nested) item when DeterministicSourcePaths is true</c> instead of loading.
+    /// This loader only ever READS a project's syntax/semantics for translation
+    /// — it never persists a deterministic PathMap-mapped build output — so
+    /// forcing the CI flag off for the load is safe and has no effect on any
+    /// real build.
+    /// </summary>
+    private static MSBuildWorkspace CreateWorkspace() =>
+        MSBuildWorkspace.Create(new Dictionary<string, string> { ["ContinuousIntegrationBuild"] = "false" });
 
     private static void EnsureMSBuildRegistered()
     {
