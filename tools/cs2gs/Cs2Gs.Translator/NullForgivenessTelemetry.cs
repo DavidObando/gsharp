@@ -9,15 +9,27 @@ using System.Linq;
 namespace Cs2Gs.Translator;
 
 /// <summary>
-/// Per-rule counters for every site where the translator decided a `!!`
-/// non-null assertion (or the value-position/index-argument/foreach
-/// equivalents of the same decision) was required. Findings from the cs2gs
-/// nullability investigation (issue #4262 follow-up) showed the `!!` count
-/// reported by <c>build/cs2gs-counters.sh</c> is a single aggregate over a
-/// decision with ~15 distinct rules — useful for tracking totals, useless for
-/// knowing which rule to fix next. This class answers that question directly
-/// from the translator itself, rather than from pattern-matching translated
-/// text after the fact.
+/// Per-rule counters for every rule inside <c>ReceiverNeedsNullForgiveness</c>
+/// (and, transitively, every call site that reaches it) that decided a `!!`
+/// non-null assertion was required. Findings from the cs2gs nullability
+/// investigation (issue #4262 follow-up) showed the `!!` count reported by
+/// <c>build/cs2gs-counters.sh</c> is a single aggregate over a decision with
+/// ~15 distinct rules — useful for tracking totals, useless for knowing which
+/// rule to fix next. This class answers that question directly from the
+/// translator itself, rather than from pattern-matching translated text after
+/// the fact.
+/// <para>
+/// PR #4277 review note: <c>ReceiverNeedsNullForgiveness</c>'s own rules are
+/// fully instrumented, but several SIBLING predicates that independently
+/// cause a `!!` to be emitted at various call sites — combined with it via
+/// `||`, e.g. <c>ReceiverIsNullableReferenceFieldOrProperty</c>,
+/// <c>NullableReferenceValueMayBeNull</c>, the iterator-foreach and
+/// imported-tuple-element checks in <c>TranslateReceiverWithNullForgiveness</c>
+/// — are NOT recorded here. This is therefore a partial, not exhaustive, view
+/// of every `!!` emission site; treat <see cref="Snapshot"/> as a lower bound
+/// and a rule-attribution tool for the rules it does cover, not a total count
+/// (use <c>build/cs2gs-counters.sh</c> for the true total).
+/// </para>
 /// <para>
 /// Deliberately NOT wired into the translated `.gs` output (a reason string
 /// in generated code would be either wrong noise for end users or a

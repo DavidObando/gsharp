@@ -150,11 +150,20 @@ namespace Demo
         // directly against the compiler. cs2gs asserted `!!` here regardless,
         // even though the C# source itself carries no `!`; verbatim shape of
         // Oahu.Core/Profile.cs (issue #4262's own corpus).
+        //
+        // PR #4277 review fix: gsc's own stability rule (see
+        // src/Core/CodeAnalysis/Binding/SmartCastStability.cs,
+        // IsStableProperty) only narrows a get-only/init-only, non-virtual
+        // auto-property — a settable `{ get; set; }` property is never
+        // narrowed by gsc even in the same-condition case, so this fixture
+        // was changed from `{ get; set; }` to `{ get; }` to actually match
+        // what gsc narrows (see GuardedSettableProperty_SameConditionAnd_StillAsserts
+        // below for the settable case this predicate must NOT suppress).
         string printed = TranslateUnit(@"
 #nullable enable
 namespace Demo
 {
-    public class Token { public string? AccessToken { get; set; } }
+    public class Token { public string? AccessToken { get; } }
     public class C
     {
         public bool F(Token t) =>
@@ -169,11 +178,13 @@ namespace Demo
     [Fact]
     public void GuardedNullableProperty_SameConditionOr_DoesNotAssert()
     {
+        // PR #4277 review fix: get-only, matching the same reasoning as
+        // GuardedNullableProperty_SameConditionAnd_DoesNotAssert above.
         string printed = TranslateUnit(@"
 #nullable enable
 namespace Demo
 {
-    public class Token { public string? AccessToken { get; set; } }
+    public class Token { public string? AccessToken { get; } }
     public class C
     {
         public bool F(Token t) =>
@@ -192,10 +203,12 @@ namespace Demo
         // oblivious compilation, so this same-condition guard is detected
         // purely syntactically, exactly like the real Oahu.Core (which has
         // no `<Nullable>` element at all) — verified against the compiler.
+        // PR #4277 review fix: get-only, matching the same reasoning as
+        // GuardedNullableProperty_SameConditionAnd_DoesNotAssert above.
         string printed = TranslateUnit(@"
 namespace Demo
 {
-    public class Token { public string AccessToken { get; set; } }
+    public class Token { public string AccessToken { get; } }
     public class C
     {
         public bool F(Token t) =>
@@ -205,6 +218,108 @@ namespace Demo
 
         Assert.Contains("t.AccessToken.StartsWith(\"stub\")", printed);
         Assert.DoesNotContain("!!", printed);
+    }
+
+    [Fact]
+    public void GuardedSettableProperty_SameConditionAnd_StillAsserts()
+    {
+        // PR #4277 review fix (Copilot finding, High): gsc's stability rule
+        // (SmartCastStability.IsStableProperty) never narrows a settable
+        // (non-init) auto-property, even guarded in the SAME `&&` condition —
+        // narrowing it here would be unsound (another thread, or a later
+        // change to this method, could observe two different values across
+        // the two reads) and would not match what gsc itself does, so
+        // suppressing `!!` would risk GS0158 in the translated output.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token { public string? AccessToken { get; set; } }
+    public class C
+    {
+        public bool F(Token t) =>
+            t.AccessToken is not null && t.AccessToken.StartsWith(""stub"");
+    }
+}");
+
+        Assert.Contains("t.AccessToken!!.StartsWith(\"stub\")", printed);
+    }
+
+    [Fact]
+    public void GuardedVirtualProperty_SameConditionAnd_StillAsserts()
+    {
+        // PR #4277 review fix: an overridable (virtual) property could
+        // return a different value on a second dispatch even with an
+        // unchanged backing field — gsc's stability rule excludes it, and so
+        // must this predicate.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token
+    {
+        public virtual string? AccessToken { get; }
+    }
+    public class C
+    {
+        public bool F(Token t) =>
+            t.AccessToken is not null && t.AccessToken.StartsWith(""stub"");
+    }
+}");
+
+        Assert.Contains("t.AccessToken!!.StartsWith(\"stub\")", printed);
+    }
+
+    [Fact]
+    public void GuardedComputedProperty_SameConditionAnd_StillAsserts()
+    {
+        // PR #4277 review fix: a computed (expression-bodied) getter is not
+        // idempotent storage — it may return a fresh value (or null) on its
+        // second evaluation even though the first proved non-null. gsc's
+        // stability rule requires a plain auto-property; this predicate must
+        // match.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token
+    {
+        private string? backing;
+        public string? AccessToken => backing;
+    }
+    public class C
+    {
+        public bool F(Token t) =>
+            t.AccessToken is not null && t.AccessToken.StartsWith(""stub"");
+    }
+}");
+
+        Assert.Contains("t.AccessToken!!.StartsWith(\"stub\")", printed);
+    }
+
+    [Fact]
+    public void DifferentInstances_SamePropertySymbol_SameConditionAnd_StillAsserts()
+    {
+        // PR #4277 review fix (Copilot finding, High): `a.AccessToken` and
+        // `b.AccessToken` bind to the SAME property symbol but denote
+        // DIFFERENT receiver instances — matching by symbol alone (the
+        // pre-fix behaviour) wrongly treated `b`'s use as guarded by `a`'s
+        // null check. The property is deliberately get-only here so the
+        // stability restriction alone would not already reject this case —
+        // this test pins the receiver-PATH comparison specifically.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Token { public string? AccessToken { get; } }
+    public class C
+    {
+        public bool F(Token a, Token b) =>
+            a.AccessToken is not null && b.AccessToken.StartsWith(""stub"");
+    }
+}");
+
+        Assert.Contains("b.AccessToken!!.StartsWith(\"stub\")", printed);
     }
 
     [Fact]
@@ -278,6 +393,47 @@ namespace Demo
         // flow-forgiveness rule must not stack a second assertion onto it.
         Assert.Contains("o.Child!!.Value", printed);
         Assert.DoesNotContain("!!!", printed);
+    }
+
+    [Fact]
+    public void GuardedProperty_SameConditionOr_RootItselfNullForgiven_StillAssertsOnMember()
+    {
+        // PR #4277 review fix (live-CI-confirmed): reproduces the hot-core
+        // guard regression this predicate caused in
+        // src/Core/CodeAnalysis/Binding/StatementBinder.Loops.cs's
+        // IsLockableReferenceType — `type.ClrType == null || !type.ClrType.IsValueType`.
+        // `type` is a defensively-checked, non-nullable-DECLARED parameter in
+        // an oblivious (no `#nullable`) file, so cs2gs itself asserts `type!!`
+        // at every dereference (the pre-existing, unrelated "promoted
+        // nullable receiver" rule). `ClrType` is otherwise a perfectly
+        // stable get-only, non-virtual property, and both operands denote
+        // the SAME `type.ClrType` path — so without this fix this predicate
+        // would ALSO suppress `!!` on `.ClrType`, leaving
+        // `type!!.ClrType.IsValueType`. gsc's own SmartCastStability only
+        // recognises a bare variable as a stable-path ROOT: once `type` is
+        // itself emitted as `type!!` (a BoundUnaryExpression, not a bare
+        // variable), the chain hanging off it is no longer a stable path at
+        // all, and gsc genuinely cannot narrow `.ClrType` — dropping its `!!`
+        // there produced the real GS0158 ('Cannot find member IsValueType')
+        // this test pins against regressing.
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public class TypeSymbol
+    {
+        public System.Type ClrType { get; }
+    }
+    public class C
+    {
+        private static bool IsLockable(TypeSymbol type)
+        {
+            if (type == null) return true;
+            return type.ClrType == null || !type.ClrType.IsValueType;
+        }
+    }
+}");
+
+        Assert.Contains("type!!.ClrType!!.IsValueType", printed);
     }
 
     private static string TranslateUnit(string source)

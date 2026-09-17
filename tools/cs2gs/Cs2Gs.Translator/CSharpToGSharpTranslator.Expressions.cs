@@ -2060,6 +2060,24 @@ public sealed partial class CSharpToGSharpTranslator
         /// and <see cref="IsLazyInitGuardedFieldUse"/> are already syntactic
         /// for the same reason.
         /// </para>
+        /// <para>
+        /// PR #4277 review fix: gsc narrows a member path (see
+        /// <c>AccessPath</c>/<c>SmartCastStability</c> in
+        /// <c>src/Core/CodeAnalysis/Binding</c>) only when it is a STABLE
+        /// path — the same root (a local/parameter or <c>this</c>) followed
+        /// only by immutable links (a readonly field, or a get-only/init-only,
+        /// non-virtual, non-override, non-static auto-property with no custom
+        /// getter body) — and only when the guarded operand and the narrowed
+        /// use denote the exact SAME path, not merely the same member symbol.
+        /// Matching by symbol alone let <c>a.Foo != null &amp;&amp;
+        /// b.Foo.Bar()</c> be (wrongly) treated as guarded because both
+        /// accesses bind to the same property symbol, and let mutable
+        /// fields/settable, computed, or overridable properties be (wrongly)
+        /// treated as narrowable even though gsc excludes them — either case
+        /// could drop a needed `!!` and miscompile with GS0158. The walk below
+        /// now derives and compares the FULL stable access path via
+        /// <see cref="IsSameStableAccessPath"/>.
+        /// </para>
         /// </summary>
         private bool IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(ExpressionSyntax expression)
         {
@@ -2090,17 +2108,15 @@ public sealed partial class CSharpToGSharpTranslator
                     case BinaryExpressionSyntax binary
                         when binary.IsKind(SyntaxKind.LogicalAndExpression) && binary.Right == node:
                     {
-                        ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
-                        return symbol is (IFieldSymbol or IPropertySymbol)
-                            && this.IsNonNullCheckOf(binary.Left, symbol);
+                        return this.TryGetNullCheckedOperand(binary.Left, nonNull: true, out ExpressionSyntax checkedOperand)
+                            && this.IsSameStableAccessPath(expression, checkedOperand);
                     }
 
                     case BinaryExpressionSyntax binary
                         when binary.IsKind(SyntaxKind.LogicalOrExpression) && binary.Right == node:
                     {
-                        ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
-                        return symbol is (IFieldSymbol or IPropertySymbol)
-                            && this.IsNullCheckOf(binary.Left, symbol);
+                        return this.TryGetNullCheckedOperand(binary.Left, nonNull: false, out ExpressionSyntax checkedOperand)
+                            && this.IsSameStableAccessPath(expression, checkedOperand);
                     }
 
                     default:
@@ -2109,6 +2125,269 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return false;
+        }
+
+        // The syntactic counterpart of IsNullCheckOf/IsNonNullCheckOf, but
+        // returning the checked EXPRESSION rather than testing it against a
+        // known symbol — used by IsGSharpFlowNarrowedFieldOrPropertyInSameCondition,
+        // which needs to compare the full receiver PATH (not just the leaf
+        // symbol) of the guard's operand against a second expression.
+        // `nonNull: true` matches `F != null` / `null != F` / `F is not null`;
+        // `nonNull: false` matches `F == null` / `null == F` / `F is null`.
+        private bool TryGetNullCheckedOperand(ExpressionSyntax condition, bool nonNull, out ExpressionSyntax operand)
+        {
+            condition = StripParentheses(condition);
+            operand = null;
+
+            switch (condition)
+            {
+                case BinaryExpressionSyntax binary
+                    when binary.IsKind(nonNull ? SyntaxKind.NotEqualsExpression : SyntaxKind.EqualsExpression):
+                    if (IsNullLiteral(binary.Right))
+                    {
+                        operand = binary.Left;
+                        return true;
+                    }
+
+                    if (IsNullLiteral(binary.Left))
+                    {
+                        operand = binary.Right;
+                        return true;
+                    }
+
+                    return false;
+
+                case IsPatternExpressionSyntax isPattern
+                    when IsNullConstantPattern(isPattern.Pattern)
+                        && (isPattern.Pattern is UnaryPatternSyntax) == nonNull:
+                    operand = isPattern.Expression;
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        // PR #4277 review fix: true when `left` and `right` denote the exact
+        // same STABLE access path — same root (a local/parameter, or `this`
+        // whether explicit or implicit), followed by an identical sequence of
+        // immutable member links (see IsStableMemberSymbol). Both operands
+        // being compared always come from the SAME enclosing `&&`/`||`
+        // condition (see the caller), so an implicit/explicit `this` root
+        // trivially denotes the same instance on both sides without needing
+        // its own symbol comparison — no nested lambda/local-function can
+        // intervene between two operands of one binary expression.
+        // Requires at least one member link on `left` — the CALLER's use
+        // expression, i.e. the receiver actually being considered for
+        // suppression — so a bare local/parameter (already covered, and
+        // flow-gated, by IsGSharpFlowNarrowedLocal) never reaches this
+        // syntax-only path, preserving this predicate's original field/
+        // property-only scope.
+        // <para>
+        // Live-CI-confirmed fix (hot-core guard, src/Core/CodeAnalysis/Binding/
+        // StatementBinder.Loops.cs's <c>IsLockableReferenceType</c>): a
+        // syntactically-stable path is not enough — gsc's own
+        // <c>SmartCastStability.TryGetStablePath</c> only recognises a bare
+        // <c>BoundVariableExpression</c> as a path ROOT, and only ever
+        // descends into a <c>BoundFieldAccessExpression</c>/
+        // <c>BoundPropertyAccessExpression</c> RECEIVER (its own switch's
+        // recursive call). If the root local/parameter, OR any intermediate
+        // receiver along the chain, ITSELF also needs its own `!!` (a
+        // separate, "promoted-nullable"/oblivious-receiver decision — e.g.
+        // <c>type!!.ClrType</c>), the emitted node there is a
+        // <c>BoundUnaryExpression</c>, not a bare variable/field/property
+        // access, so gsc does not treat the chain as a stable path at all
+        // past that point and never narrows the member hanging off it —
+        // even though the member link itself (<c>ClrType</c>, a get/init-only
+        // non-virtual auto-property) is perfectly stable in isolation. So
+        // this predicate must also check that every receiver checkpoint in
+        // the chain will NOT be emitted with its own `!!`.
+        // </para>
+        private bool IsSameStableAccessPath(ExpressionSyntax left, ExpressionSyntax right)
+        {
+            if (!this.TryDecomposeStableAccessPath(left, out bool leftIsThisRoot, out ISymbol leftRoot, out List<ISymbol> leftMembers, out List<ExpressionSyntax> leftReceiverCheckpoints)
+                || leftMembers.Count == 0
+                || !this.TryDecomposeStableAccessPath(right, out bool rightIsThisRoot, out ISymbol rightRoot, out List<ISymbol> rightMembers, out List<ExpressionSyntax> _))
+            {
+                return false;
+            }
+
+            if (leftIsThisRoot != rightIsThisRoot)
+            {
+                return false;
+            }
+
+            if (!leftIsThisRoot && !SymbolEqualityComparer.Default.Equals(leftRoot, rightRoot))
+            {
+                return false;
+            }
+
+            if (leftMembers.Count != rightMembers.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < leftMembers.Count; i++)
+            {
+                if (!SymbolEqualityComparer.Default.Equals(leftMembers[i], rightMembers[i]))
+                {
+                    return false;
+                }
+            }
+
+            // Every receiver checkpoint along `left`'s chain (the root, and
+            // every intermediate member access used as a receiver for the
+            // next member) must NOT itself be emitted with a `!!` — see the
+            // remark above. `this` checkpoints are never asserted and are
+            // not added to this list by the decomposer.
+            foreach (ExpressionSyntax checkpoint in leftReceiverCheckpoints)
+            {
+                if (this.ReceiverNeedsNullForgiveness(checkpoint, isDereferenceReceiver: true)
+                    || this.ReceiverIsNullableReferenceFieldOrProperty(checkpoint)
+                    || this.NullableReferenceValueMayBeNull(checkpoint))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // PR #4277 review fix: decomposes `expression` into a stable access
+        // path — mirroring gsc's own SmartCastStability.TryGetStablePath
+        // (src/Core/CodeAnalysis/Binding/SmartCastStability.cs) — or returns
+        // false when any link is not a member gsc itself would accept as a
+        // stable narrowing link, or the root is not a local/parameter/`this`.
+        // `members` is ordered outermost-last (root-to-leaf), matching
+        // AccessPath.Members. `receiverCheckpoints` collects every receiver
+        // sub-expression along the chain (the root local/parameter, and each
+        // intermediate member-access used as the receiver for the next
+        // member) EXCEPT a `this` root, explicit or implicit, which is never
+        // itself null-forgiven — so the caller can check whether any of them
+        // will be emitted with its own `!!`.
+        private bool TryDecomposeStableAccessPath(
+            ExpressionSyntax expression,
+            out bool isThisRoot,
+            out ISymbol rootSymbol,
+            out List<ISymbol> members,
+            out List<ExpressionSyntax> receiverCheckpoints)
+        {
+            isThisRoot = false;
+            rootSymbol = null;
+            members = new List<ISymbol>();
+            receiverCheckpoints = new List<ExpressionSyntax>();
+
+            ExpressionSyntax current = StripParentheses(expression);
+            while (true)
+            {
+                switch (current)
+                {
+                    case ThisExpressionSyntax:
+                        isThisRoot = true;
+                        return true;
+
+                    case MemberAccessExpressionSyntax memberAccess
+                        when memberAccess.IsKind(SyntaxKind.SimpleMemberAccessExpression):
+                    {
+                        ISymbol memberSymbol = this.context.GetSymbolInfo(memberAccess).Symbol;
+                        if (!IsStableMemberSymbol(memberSymbol))
+                        {
+                            return false;
+                        }
+
+                        members.Insert(0, memberSymbol);
+                        current = StripParentheses(memberAccess.Expression);
+                        if (current is not ThisExpressionSyntax)
+                        {
+                            receiverCheckpoints.Add(current);
+                        }
+
+                        continue;
+                    }
+
+                    case IdentifierNameSyntax identifier:
+                    {
+                        ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                        switch (symbol)
+                        {
+                            case ILocalSymbol or IParameterSymbol:
+                                rootSymbol = symbol;
+                                receiverCheckpoints.Add(identifier);
+                                return true;
+
+                            case IFieldSymbol or IPropertySymbol when IsStableMemberSymbol(symbol):
+                                // A bare `Foo` reads an instance member through
+                                // an implicit `this.` receiver.
+                                members.Insert(0, symbol);
+                                isThisRoot = true;
+                                return true;
+
+                            default:
+                                return false;
+                        }
+                    }
+
+                    default:
+                        return false;
+                }
+            }
+        }
+
+        private static bool IsStableMemberSymbol(ISymbol symbol) =>
+            symbol switch
+            {
+                IFieldSymbol field => field.IsReadOnly && !field.IsStatic,
+                IPropertySymbol property => IsStableAutoProperty(property),
+                _ => false,
+            };
+
+        // Mirrors src/Core/CodeAnalysis/Binding/SmartCastStability.IsStableProperty:
+        // an auto-implemented (no custom getter/setter body, no expression
+        // body) instance property, non-virtual/non-override/non-abstract, with
+        // no setter or an init-only setter.
+        private static bool IsStableAutoProperty(IPropertySymbol property)
+        {
+            if (property == null
+                || property.IsStatic
+                || property.IsVirtual
+                || property.IsOverride
+                || property.IsAbstract
+                || property.GetMethod == null)
+            {
+                return false;
+            }
+
+            if (property.SetMethod != null && !property.SetMethod.IsInitOnly)
+            {
+                return false;
+            }
+
+            if (property.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                // No source declaration to inspect (e.g. imported from
+                // metadata) — conservatively treat as unstable.
+                return false;
+            }
+
+            foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is not PropertyDeclarationSyntax propertyDeclaration
+                    || propertyDeclaration.ExpressionBody != null
+                    || propertyDeclaration.AccessorList == null)
+                {
+                    return false;
+                }
+
+                foreach (AccessorDeclarationSyntax accessor in propertyDeclaration.AccessorList.Accessors)
+                {
+                    if (accessor.Body != null || accessor.ExpressionBody != null)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
         }
 
         private bool AssignmentResultHasNonNullStaticType(
