@@ -294,7 +294,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 |----|----------|-------------|-----------------|
 | GS0226 | Error | Cannot assign through a read-only span element (`ReadOnlySpan[T]` is read-only). | `var s ReadOnlySpan[int32] = arr` then `s[0] = 1` — a `ReadOnlySpan[T]` indexer is `ref readonly T`; use `Span[T]` to write. |
 
-### Pointer / by-ref diagnostics (GS9001–GS9010)
+### Pointer / by-ref diagnostics (GS9001–GS9011)
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
@@ -309,6 +309,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS9006 | Error | Pointer type cannot be a field type. | A struct or class field (including static `shared` fields and top-level globals) declared with a `*T` (managed-pointer) type **outside an `unsafe` context**. Inside an `unsafe` context `*T` is an unmanaged pointer and IS legal as a field type. |
 | GS9009 | Error | Readonly storage cannot be passed to a writable `ref` or `out` parameter. | An imported `ref`/`out` parameter receives the readonly address `in view`. |
 | GS9010 | Error | A `ref`/`out`/`in` parameter of the enclosing function cannot be captured by a closure because the closure may outlive the caller's argument. | `func Foo(ref x int32) { let Bad = func(a int32) int32 { x = x + 1; return a } }` — `Bad` captures the `ref` parameter `x`. |
+| GS9011 | Error | A `ref`/`var ref` LOCAL alias of the enclosing function cannot be captured by a closure because the closure may outlive the storage it aliases. | `func Foo() { var arr = []int32{1}; var ref alias = arr[0]; var f = func() { alias = alias + 1 } }` — `f` captures the ref-alias local `alias`. |
 | GS0398 | Error | Unmanaged pointer to a non-blittable pointee. | An `unsafe`-context `*T` whose pointee `T` is a managed reference type or otherwise non-blittable (e.g. `*string`, or a struct with a managed field); only blittable primitives, pointers-to-pointers, and blittable user/value structs are legal pointees. |
 | GS0399 | Error | `stackalloc` element type must be a blittable (unmanaged) type. | A `stackalloc [n]T` whose element type `T` is a managed reference type or otherwise non-blittable (e.g. `stackalloc [4]string`); only blittable primitives and pointers are legal `stackalloc` element types. |
 | GS0400 | Error | A `fixed` statement requires an `unsafe` context. | A `fixed <name> *T = <source> {... }` statement used outside an `unsafe` context (function, `unsafe {... }` block, or unsafe type). Because it binds a raw unmanaged pointer, `fixed` is legal only inside `unsafe`, consistent with `*T` pointer gating. |

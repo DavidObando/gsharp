@@ -313,7 +313,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | GS0423 | Error | Type does not implement a usable `GetEnumerator()` method and cannot be iterated with `for ... in`. | `for x in 42 { }` where `42`'s type has no usable `GetEnumerator()`. Previously misfiled under GS0268. |
 | GS0424 | Error | A ref-kind modifier (`ref`/`out`/`in`) is not legal on a primary-constructor parameter. | `class Vec(ref x int32) { }` — primary-constructor parameters materialize fields, and the CLR cannot store a managed pointer in a field. Previously misfiled under GS0241. |
 
-### Pointer / by-ref diagnostics (GS9001–GS9010)
+### Pointer / by-ref diagnostics (GS9001–GS9011)
 
 | ID | Severity | Description | Example trigger |
 |----|----------|-------------|-----------------|
@@ -330,6 +330,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | GS9008 | Error | A pointer bound by `fixed` cannot be captured by a closure because the closure may outlive the pin. | A lambda inside `fixed p *int32 = xs` captures `p`. |
 | GS9009 | Error | Readonly storage cannot be passed to a writable `ref` or `out` parameter. | An imported `ref`/`out` parameter receives the readonly address `in view`. |
 | GS9010 | Error | A `ref`/`out`/`in` parameter of the enclosing function cannot be captured by a closure because the closure may outlive the caller's argument. | `func Foo(ref x int32) { let Bad = func(a int32) int32 { x = x + 1; return a } }` — `Bad` captures the `ref` parameter `x`. |
+| GS9011 | Error | A `ref`/`var ref` LOCAL alias of the enclosing function cannot be captured by a closure because the closure may outlive the storage it aliases. | `func Foo() { var arr = []int32{1}; var ref alias = arr[0]; var f = func() { alias = alias + 1 } }` — `f` captures the ref-alias local `alias`. |
 
 ### Reference closure diagnostics (GS9100)
 

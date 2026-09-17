@@ -14,8 +14,10 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// repro happened to use a channel, and #3316's witness matrix deliberately
 /// routed around the inline spelling using <c>go f(c)</c> argument-passing
 /// instead, but the actual defect lives one level below the binder: the
-/// go-statement's own emit-time capture walk
-/// (<c>SlotPlanner.GoCapturedVariableCollector</c>) treats a nested
+/// go-statement's own capture walk
+/// (<c>GoCapturedVariableCollector</c> — moved from <c>Emit.SlotPlanner</c>
+/// to <c>Binding</c> by PR #4273's follow-up fix so it also runs at bind
+/// time) treats a nested
 /// <see cref="GSharp.Core.CodeAnalysis.Binding.BoundFunctionLiteralExpression"/>
 /// as an opaque leaf (matching <c>BoundTreeWalker</c>'s general contract that
 /// a literal's body is a separate lexical scope) WITHOUT folding the

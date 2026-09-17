@@ -584,27 +584,13 @@ internal sealed class LambdaBinder
         // `fixed` statement is likewise rejected — see ReportFixedPointerCannotEscape.
         // Issue #4259: a `ref`/`out`/`in` PARAMETER of the enclosing function is
         // likewise rejected — see ReportRefParameterCannotBeCaptured.
-        foreach (var capturedVariable in captured)
-        {
-            if (TypeSymbol.IsByRefLike(capturedVariable.Type))
-            {
-                Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
-            }
-            else if (capturedVariable.Type is ByRefTypeSymbol)
-            {
-                Diagnostics.ReportByRefCannotEscape(
-                    syntax.Location,
-                    $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
-            }
-            else if (capturedVariable.Type is PointerTypeSymbol)
-            {
-                Diagnostics.ReportFixedPointerCannotEscape(syntax.Location, capturedVariable.Name);
-            }
-            else if (capturedVariable is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out or RefKind.In } refParameter)
-            {
-                Diagnostics.ReportRefParameterCannotBeCaptured(syntax.Location, refParameter.Name, RefKindKeyword(refParameter.RefKind));
-            }
-        }
+        // Issue #4271: a `ref`/`var ref` LOCAL alias of the enclosing function is
+        // the sibling gap #4259 deliberately left open — see
+        // ReportRefLocalAliasCannotBeCaptured.
+        // Copilot review of PR #4273: the full check is factored into
+        // ClosureCaptureLegalityChecker so the `go`-statement closure path
+        // (StatementBinder.BindGoStatement) applies the exact same rules.
+        ClosureCaptureLegalityChecker.CheckCapturedVariables(captured, Diagnostics, syntax.Location);
 
         return new BoundFunctionLiteralExpression(null, synthetic, fnType, (BoundBlockStatement)body, captured);
     }
@@ -1353,30 +1339,17 @@ internal sealed class LambdaBinder
         // be captured by a closure; mirror the function-literal checks.
         // Issue #2330: same for an unmanaged `fixed` pointer.
         // Issue #4259: same for a `ref`/`out`/`in` PARAMETER of the enclosing
-        // function — as opposed to a `ref`/`var ref` LOCAL alias, which is a
-        // distinct, separately-handled capture kind (see RefKind.RefReadOnly
-        // and CaptureBoxingRewriter.IsBoxable).
-        foreach (var capturedVariable in captured)
-        {
-            if (TypeSymbol.IsByRefLike(capturedVariable.Type))
-            {
-                Diagnostics.ReportByRefLikeEscape(syntax.Location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
-            }
-            else if (capturedVariable.Type is ByRefTypeSymbol)
-            {
-                Diagnostics.ReportByRefCannotEscape(
-                    syntax.Location,
-                    $"managed pointer '{capturedVariable.Name}' cannot be captured by a closure; the closure may outlive the pointed-to variable");
-            }
-            else if (capturedVariable.Type is PointerTypeSymbol)
-            {
-                Diagnostics.ReportFixedPointerCannotEscape(syntax.Location, capturedVariable.Name);
-            }
-            else if (capturedVariable is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out or RefKind.In } refParameter)
-            {
-                Diagnostics.ReportRefParameterCannotBeCaptured(syntax.Location, refParameter.Name, RefKindKeyword(refParameter.RefKind));
-            }
-        }
+        // function.
+        // Issue #4271: a `ref`/`var ref` LOCAL alias is a distinct capture kind
+        // (a plain LocalVariableSymbol, not a ParameterSymbol) that #4259 left
+        // unhandled — it is now rejected too, for the same reason (its slot
+        // holds a managed pointer that CaptureBoxingRewriter.IsBoxable refuses
+        // to hoist into a shared box, so the capture would otherwise silently
+        // fall back to a by-value snapshot and lose write-through).
+        // Copilot review of PR #4273: the full check is factored into
+        // ClosureCaptureLegalityChecker so the `go`-statement closure path
+        // (StatementBinder.BindGoStatement) applies the exact same rules.
+        ClosureCaptureLegalityChecker.CheckCapturedVariables(captured, Diagnostics, syntax.Location);
 
         var literal = new BoundFunctionLiteralExpression(syntax, synthetic, fnType, bodyBlock, captured);
         if (!needsExplicitParameterAdapter)
@@ -2655,15 +2628,6 @@ internal sealed class LambdaBinder
         requiresLexicalOwner = walker.RequiresLexicalOwner;
         return walker.Found;
     }
-
-    /// <summary>Issue #4259: human-readable keyword for a captured-parameter diagnostic.</summary>
-    private static string RefKindKeyword(RefKind kind) => kind switch
-    {
-        RefKind.Ref => "ref",
-        RefKind.Out => "out",
-        RefKind.In => "in",
-        _ => "ref",
-    };
 
     private ImmutableArray<VariableSymbol> CollectCapturedVariables(BoundStatement body, FunctionSymbol function)
     {

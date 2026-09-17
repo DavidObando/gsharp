@@ -548,9 +548,18 @@ internal static class DiagnosticDescriptors
     // Issue #4259: a `ref`/`out`/`in` parameter of the enclosing function cannot be
     // captured by a closure — the closure may outlive the caller's argument, and
     // there is no CLR mechanism to keep a managed pointer alive in a heap-allocated
-    // display class. Distinct from a `ref`/`var ref` LOCAL alias capture, which is a
-    // separately handled, legal-in-some-contexts case (see RefKind.RefReadOnly).
+    // display class. Distinct from a `ref`/`var ref` LOCAL alias capture — a separate
+    // ParameterSymbol-free capture kind rejected by its own GS9011 (issue #4271).
     internal static readonly DiagnosticDescriptor RefParameterCannotBeCaptured = new("GS9010", DiagnosticSeverity.Error, "'{1}' parameter '{0}' cannot be captured by a closure; the closure may outlive the caller's argument.");
+
+    // Issue #4271: a `ref`/`var ref` LOCAL alias captured by a closure — the sibling
+    // gap #4259/GS9010 deliberately left open (that check matches only ParameterSymbol).
+    // A ref-alias local's slot holds a managed pointer; boxing it into a shared heap
+    // cell (the mechanism that gives ordinary captured locals write-through semantics)
+    // would corrupt the aliasing, so CaptureBoxingRewriter.IsBoxable refuses it and the
+    // capture silently falls back to a by-value snapshot instead. Rejected outright,
+    // mirroring C#'s CS8175 for the same shape.
+    internal static readonly DiagnosticDescriptor RefLocalAliasCannotBeCaptured = new("GS9011", DiagnosticSeverity.Error, "Ref-aliasing local '{0}' cannot be captured by a closure; the closure may outlive the storage it aliases.");
     internal static readonly DiagnosticDescriptor AnalyzerThrewException = new("GS9300", DiagnosticSeverity.Warning, "Analyzer '{0}' threw an exception of type '{1}' and was disabled for the remainder of the compilation: {2}");
     internal static readonly DiagnosticDescriptor AnalyzerAssemblyLoadFailure = new("GS9301", DiagnosticSeverity.Error, "Analyzer assembly '{0}' could not be used: {1}");
     internal static readonly DiagnosticDescriptor AnalyzerExceededTimeBudget = new("GS9302", DiagnosticSeverity.Info, "Analyzer '{0}' exceeded its time budget ({1} ms) and was disabled for subsequent runs in this host.");
