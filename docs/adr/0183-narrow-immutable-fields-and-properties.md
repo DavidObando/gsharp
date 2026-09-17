@@ -118,7 +118,8 @@ longer *itself* an invalidation event when nothing invalidating happened.
 It does, however, inherit — and enlarge — an existing **reachability**
 defect, which this ADR must not gloss over.
 
-> **Prerequisite: `goto` label reachability (pre-existing gsc defect).**
+> **Prerequisite: `goto` label reachability (pre-existing gsc defect,
+> tracked as issue #4285).**
 > gsc's early-exit narrowing lift does not account for a `goto` that jumps
 > *past* the guard into the narrowed region. Compiled and run with the
 > in-tree `gsc`:
@@ -460,8 +461,9 @@ rare.
   working code into a build error.
 - File the duplicate-`MethodDef` defect noted in the Migration impact aside
   as its own issue; it is independent of this ADR.
-- File the **`goto`-bypasses-narrowing defect** demonstrated under
-  *Window-widening* as its own issue. It is a live, silent
+- ~~File the **`goto`-bypasses-narrowing defect** demonstrated under
+  *Window-widening* as its own issue.~~ Filed as **issue #4285**
+  (independently reproduced against in-tree `gsc`). It is a live, silent
   `NullReferenceException` in shipped gsc, independent of this ADR, and it
   is a prerequisite for the window-widening half rather than a consequence
   of it.
