@@ -331,6 +331,74 @@ Run(Box{Pet: nil})
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("may be nil", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void RichAnonymousObjectMethodGotoLabel_DoesNotSuppressOuterFunctionOwnNarrowing()
+    {
+        // ADR-0146 "rich" anonymous object literal methods
+        // (FunctionDeclarationSyntax members) are bound as their own,
+        // independent functions via a synthesized backing struct
+        // (Binder.IsRichAnonymousObject / BindRichAnonymousClassExpression) —
+        // but the ORIGINAL, un-desugared FunctionDeclarationSyntax is still
+        // present inline in the enclosing expression's syntax tree, so
+        // ContainsUserGotoOrLabel's recursive GetChildren() walk would see a
+        // goto/label inside such a method unless explicitly excluded, just
+        // like a lambda. Without that exclusion, the outer function here
+        // would be incorrectly marked goto-bearing by the UNRELATED nested
+        // method's goto, suppressing its own valid `!is Dog` narrowing and
+        // making `a.Bark()` fail to resolve (`Bark` exists only on `Dog`,
+        // not `Animal`) even though the outer function itself has no
+        // goto/label of its own.
+        var result = Evaluate(Hierarchy + @"
+func Run(a Animal) string {
+    var helper = object {
+        func Helper() int32 {
+            if false {
+                goto Never
+            }
+            Never:
+            return 1
+        }
+    }
+    if a !is Dog { return """" }
+    return a.Bark() + helper.Helper().ToString()
+}
+Run(Dog{Name: ""Rex""})
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void RichAnonymousObjectEventAccessorGotoLabel_DoesNotSuppressOuterFunctionOwnNarrowing()
+    {
+        // Same isolation requirement as the method case above, but for an
+        // ADR-0146 rich anonymous object EVENT member
+        // (EventDeclarationSyntax, whose accessor bodies are
+        // EventAccessorSyntax) — excluding at the EventDeclarationSyntax
+        // boundary stops the walk before it ever reaches an accessor body.
+        var result = Evaluate(Hierarchy + @"
+func Run(a Animal) string {
+    var helper = object {
+        event Changed () -> void {
+            add {
+                if false {
+                    goto Never
+                }
+                Never:
+                return
+            }
+            remove { }
+        }
+    }
+    if a !is Dog { return """" }
+    return a.Bark()
+}
+Run(Dog{Name: ""Rex""})
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);

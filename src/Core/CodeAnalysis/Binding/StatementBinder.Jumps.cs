@@ -135,6 +135,21 @@ internal sealed partial class StatementBinder
     /// function" rule.
     /// </para>
     /// <para>
+    /// Likewise does not descend into a <see cref="FunctionDeclarationSyntax"/>
+    /// or <see cref="EventDeclarationSyntax"/> (ADR-0146 "rich" anonymous
+    /// object literal method/event members, still present as raw syntax
+    /// inline in the enclosing expression even though
+    /// <c>Binder.IsRichAnonymousObject</c> binds them via a synthesized
+    /// struct declaration): those members are bound as their own,
+    /// independent functions through the ordinary struct-method bind path
+    /// (one of the <c>Binder.cs</c> call sites that already computes its own
+    /// <see cref="BinderContext.FunctionContainsUserGotoOrLabel"/>), so a
+    /// <c>goto</c>/label inside one must not mark the syntactically
+    /// enclosing OUTER function as goto-bearing too — that would
+    /// incorrectly over-suppress the outer function's own, otherwise-valid
+    /// narrowing lifts.
+    /// </para>
+    /// <para>
     /// Used to populate <see cref="BinderContext.FunctionContainsUserGotoOrLabel"/>
     /// once per function-equivalent binding session, which
     /// <see cref="ApplyEarlyExitNarrowings"/> consults to conservatively
@@ -162,6 +177,8 @@ internal sealed partial class StatementBinder
 
             case FunctionLiteralExpressionSyntax:
             case LambdaExpressionSyntax:
+            case FunctionDeclarationSyntax:
+            case EventDeclarationSyntax:
                 return false;
         }
 
