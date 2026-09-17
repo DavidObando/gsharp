@@ -2087,9 +2087,20 @@ public sealed partial class CSharpToGSharpTranslator
             // `__local_` instance/static helpers.
             this.RegisterCapturingRecursiveLocalFunctions(ordered);
             this.RegisterRecursiveLocalFunctionLifts(ordered);
+
+            // Issue #4262 follow-up (item 2): symbols already captured by an
+            // earlier early-return guard IN THIS BLOCK, so a redundant later
+            // guard on the same (still-unwritten) field skips re-capturing
+            // (see EmitGuardedFieldLocalCaptures).
+            var activeGuardCaptures = new Dictionary<ISymbol, IfStatementSyntax>(SymbolEqualityComparer.Default);
             foreach (StatementSyntax statement in ordered)
             {
                 statements.AddRange(this.TranslateStatement(statement));
+
+                if (statement is IfStatementSyntax ifStatement)
+                {
+                    this.EmitGuardedFieldLocalCaptures(ifStatement, activeGuardCaptures, statements);
+                }
             }
 
             this.AppendDanglingComments(statements, block.CloseBraceToken);

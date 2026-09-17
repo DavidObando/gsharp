@@ -1656,7 +1656,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (this.IsActivePatternBinding(expression)
-                || this.IsGSharpFlowNarrowedLocal(expression))
+                || this.IsGSharpFlowNarrowedLocal(expression)
+                || this.IsGuardCapturedFieldRead(expression))
             {
                 return true;
             }

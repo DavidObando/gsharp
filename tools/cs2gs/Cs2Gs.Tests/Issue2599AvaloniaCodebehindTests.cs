@@ -79,7 +79,12 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
         Assert.Contains("open partial class LibraryView : UserControl", codebehind, StringComparison.Ordinal);
         // ADR-0166 / issue #3409: the negated guard keeps its C# shape and name.
         Assert.Contains("if DataContext is not State vm || booksGrid == nil", codebehind, StringComparison.Ordinal);
-        Assert.Contains("vm.Count = booksGrid", codebehind, StringComparison.Ordinal);
+        // Issue #4262 follow-up (item 2): the `booksGrid == nil` OR-disjunct is
+        // an early-return guard on the field, so it now captures `booksGrid`
+        // into a local right after the guard instead of asserting `!!` at
+        // this receiver use.
+        Assert.Contains("let __guard0 = booksGrid!!", codebehind, StringComparison.Ordinal);
+        Assert.Contains("vm.Count = __guard0.Columns", codebehind, StringComparison.Ordinal);
         Assert.Contains("override async func OnLoaded", codebehind, StringComparison.Ordinal);
         Assert.Contains("RoutedEventArgs) void", codebehind, StringComparison.Ordinal);
         Assert.DoesNotContain("__asyncVoid_", codebehind, StringComparison.Ordinal);

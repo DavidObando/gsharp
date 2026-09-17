@@ -69,7 +69,14 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("arr!![0]", printed);
+        // Issue #4262 follow-up (item 2): the statement-level early-return
+        // guard now captures `arr` into a local right after the guard, so
+        // gsc's own smart-cast narrows the later element access — no per-use
+        // `!!` is needed at `arr[0]` any more, only the single one at the
+        // capture.
+        Assert.Contains("let __guard0 = arr!!", printed);
+        Assert.Contains("__guard0[0]", printed);
+        Assert.DoesNotContain("arr!![0]", printed);
     }
 
     [Fact]

@@ -155,7 +155,12 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("handler!!(1)", printed);
+        // Issue #4262 follow-up (item 2): the statement-level early-return
+        // guard now captures `handler` into a local right after the guard
+        // instead of asserting `!!` at this call-sugar site.
+        Assert.Contains("let __guard0 = handler!!", printed);
+        Assert.Contains("__guard0(1)", printed);
+        Assert.DoesNotContain("handler!!(1)", printed);
     }
 
     [Fact]

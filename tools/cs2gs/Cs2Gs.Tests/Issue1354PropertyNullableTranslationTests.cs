@@ -67,8 +67,13 @@ namespace Demo
     }
 }");
 
+        // Issue #4262 follow-up (item 2): the statement-level early-return
+        // guard now captures `Bits` into a local right after the guard
+        // instead of asserting `!!` at this receiver use.
         Assert.Contains("prop Bits Flags?", printed);
-        Assert.Contains("Bits!!.Size", printed);
+        Assert.Contains("let __guard0 = Bits!!", printed);
+        Assert.Contains("__guard0.Size", printed);
+        Assert.DoesNotContain("Bits!!.Size", printed);
     }
 
     [Fact]
@@ -117,8 +122,17 @@ namespace Demo
     }
 }");
 
+        // Issue #4262 follow-up (item 2): `Work` is a COMPUTED (expression-
+        // bodied) property, not an auto-property — its getter is not a pure
+        // storage read, so the local-capture rewrite deliberately excludes it
+        // (capturing would collapse two getter evaluations into one, an
+        // observable behavior change for a getter that could have side
+        // effects or return a fresh value per call). The original per-use
+        // `!!` assertion is therefore still the correct, unchanged output
+        // here.
         Assert.Contains("prop Work Task?", printed);
         Assert.Contains("return Work!!", printed);
+        Assert.DoesNotContain("__guard", printed);
     }
 
     [Fact]
