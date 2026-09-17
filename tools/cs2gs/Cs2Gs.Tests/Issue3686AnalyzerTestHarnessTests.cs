@@ -362,22 +362,31 @@ public static class Tool
 </Project>",
             isAnalyzerTestProject: true);
 
+        // GSharp.Core is still resolved by directory adjacency to gsc and
+        // copied into the test project's own output (#3686).
         List<XElement> references = transformed.Descendants()
             .Where(e => e.Name.LocalName == "Reference")
             .ToList();
         Assert.Contains(references, r => r.Attribute("Include")?.Value == "GSharp.Core");
-        Assert.Contains(
-            references,
-            r => r.Attribute("Include")?.Value == "GSharp.CodeAnalysis.Analyzers.Testing");
         Assert.All(
             references,
             r => Assert.Equal(
                 "true",
                 r.Elements().Single(e => e.Name.LocalName == "Private").Value));
 
+        // Issue #3780: the verifier is a real NuGet PackageReference now,
+        // not a directory-adjacency HintPath Reference.
+        List<XElement> packageReferences = transformed.Descendants()
+            .Where(e => e.Name.LocalName == "PackageReference")
+            .ToList();
+        XElement verifierPackageReference = Assert.Single(
+            packageReferences,
+            p => p.Attribute("Include")?.Value == "GSharp.CodeAnalysis.Analyzers.Testing");
+        Assert.Equal("1.0.0", verifierPackageReference.Attribute("Version")?.Value);
+
         // The Roslyn package the harness no longer needs is dropped.
         Assert.DoesNotContain(
-            transformed.Descendants().Where(e => e.Name.LocalName == "PackageReference"),
+            packageReferences,
             p => p.Attribute("Include")?.Value?.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal) == true);
     }
 
@@ -443,8 +452,8 @@ public static class Tool
 
         Assert.True(testsVerdict);
         Assert.Contains(
-            testProject.Descendants().Where(e => e.Name.LocalName == "Reference"),
-            r => r.Attribute("Include")?.Value == "GSharp.CodeAnalysis.Analyzers.Testing");
+            testProject.Descendants().Where(e => e.Name.LocalName == "PackageReference"),
+            p => p.Attribute("Include")?.Value == "GSharp.CodeAnalysis.Analyzers.Testing");
         Assert.DoesNotContain(
             testProject.Descendants().Where(e => e.Name.LocalName == "PackageReference"),
             p => p.Attribute("Include")?.Value?.StartsWith("Microsoft.CodeAnalysis", StringComparison.Ordinal) == true);
@@ -558,7 +567,8 @@ public sealed class SampleAnalyzerTests
                 testDirectory,
                 "Gsharp.NET.Sdk/1.0.0",
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
-                isAnalyzerTestProject);
+                isAnalyzerTestProject,
+                analyzerVerifierPackageVersion: isAnalyzerTestProject ? "1.0.0" : null);
         }
         finally
         {

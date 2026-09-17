@@ -4,10 +4,54 @@
     <TargetFramework>$(NetCoreAppTargetFramework)</TargetFramework>
     <RootNamespace>GSharp.CodeAnalysis.Analyzers.Testing</RootNamespace>
     <AssemblyName>GSharp.CodeAnalysis.Analyzers.Testing</AssemblyName>
+    <!-- build/gsharp.build.props computes the default DocumentationFile from
+         AssemblyName BEFORE this override runs (it defaults AssemblyName to
+         GSharp.$(MSBuildProjectName), which here is already GSharp-prefixed),
+         so without this the packed XML doc would be misnamed
+         GSharp.GSharp.CodeAnalysis.Analyzers.Testing.xml — one prefix too
+         many to be found beside the packed .dll (same fix as issue #845 in
+         Gsharp.Extensions.csproj). -->
+    <DocumentationFile>$(OutputPath)/$(AssemblyName).xml</DocumentationFile>
+  </PropertyGroup>
+
+  <!-- ADR-0169 / issue #3780: publish the analyzer-testing surface as its own
+       NuGet package instead of shipping beside gsc (the interim measure from
+       issue #3686 / PR #3777, removed from Compiler.csproj as part of this
+       change). Hand-written G# analyzer tests and migrated Roslyn analyzer
+       test projects alike take an ordinary PackageReference to this package;
+       for migrated projects that reference is injected by
+       GSharpProjectTransformer.RewriteAnalyzerProject. -->
+  <PropertyGroup>
+    <PackageId>GSharp.CodeAnalysis.Analyzers.Testing</PackageId>
+    <IsPackable>true</IsPackable>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <Title>GSharp analyzer testing library</Title>
+    <Description>Testing surface (GSharpAnalyzerVerifier) for GSharp diagnostic analyzers (ADR-0169).</Description>
+    <PackageTags>gsharp;analyzer;testing;roslyn;verifier</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/DavidObando/gsharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <NoPackageAnalysis>true</NoPackageAnalysis>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Core\Core.csproj" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\PACKAGE_README.md" Pack="true" PackagePath="README.md" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\..\assets\gsharp-icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- GSharp.Core is compiler/host-supplied, not bundled: gsc always keeps
+         a copy beside itself, and a consuming test project already carries
+         its own copy via the HintPath Reference GSharpProjectTransformer
+         injects. Private="false" keeps this a compile-time-only edge so the
+         package doesn't also embed a second, potentially divergent copy, and
+         PrivateAssets="all" stops `dotnet pack` from doing what it does by
+         default for ANY ProjectReference — emitting a nuspec <dependency> on
+         "GSharp.Core" pinned to this package's own version — which is a
+         non-existent NuGet package (Core.csproj is not itself packable) and
+         breaks restore for every consumer with NU1101. -->
+    <ProjectReference Include="..\..\Core\Core.csproj" Private="false" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>

@@ -15,6 +15,12 @@ namespace Cs2Gs.Pipeline;
 /// <summary>Transforms a C# project document for use by the G# SDK.</summary>
 internal static class GSharpProjectTransformer
 {
+    // ADR-0169 M5 / issue #3686 (packaged per issue #3780): the assembly
+    // holding GSharpAnalyzerVerifier, which a migrated Roslyn analyzer test
+    // harness delegates to. Also the package's PackageId (internal so
+    // SdkCompileRunner can resolve a locally-built version of it).
+    internal const string AnalyzerVerifierAssemblyName = "GSharp.CodeAnalysis.Analyzers.Testing";
+
     // ADR-0169: the MSBuild expression that anchors a compiler-hosted
     // reference (an assembly supplied at runtime by the gsc host, never copied
     // to the app's own output) at the compiler's directory. Kept as the single
@@ -22,10 +28,6 @@ internal static class GSharpProjectTransformer
     // stage-3 resolution (ResolveCompilerHostedReferences, issue #3608).
     private const string CompilerDirectoryExpression =
         "$([System.IO.Path]::GetDirectoryName('$(GsharpCompilerFullPath)'))";
-
-    // ADR-0169 M5 / issue #3686: the assembly holding GSharpAnalyzerVerifier,
-    // which a migrated Roslyn analyzer test harness delegates to.
-    private const string AnalyzerVerifierAssemblyName = "GSharp.CodeAnalysis.Analyzers.Testing";
 
     private static readonly Regex CSharpSpecSuffix = new Regex(
         "\\.cs(?=\\s*(?:;|$))",
@@ -44,13 +46,20 @@ internal static class GSharpProjectTransformer
     /// <param name="isAnalyzerTestProject">
     /// The translate-stage detector's analyzer-test-project verdict.
     /// </param>
+    /// <param name="analyzerVerifierPackageVersion">
+    /// The version of the locally-built <see cref="AnalyzerVerifierAssemblyName"/>
+    /// package to reference (issue #3780). Required when
+    /// <paramref name="isAnalyzerTestProject"/> is <see langword="true"/>;
+    /// ignored otherwise.
+    /// </param>
     /// <returns>The transformed project document.</returns>
     internal static XDocument Transform(
         string sourceProjectPath,
         string destinationProjectDirectory,
         string gsharpSdk,
         IReadOnlyDictionary<string, string> generatedProjectPaths,
-        bool isAnalyzerTestProject = false)
+        bool isAnalyzerTestProject = false,
+        string analyzerVerifierPackageVersion = null)
     {
         if (sourceProjectPath is null)
         {
@@ -95,7 +104,7 @@ internal static class GSharpProjectTransformer
         RewriteOutputType(document);
         RewriteCompileItems(document);
         RewriteCSharpMetadata(document);
-        RewriteAnalyzerProject(document, isAnalyzerTestProject);
+        RewriteAnalyzerProject(document, isAnalyzerTestProject, analyzerVerifierPackageVersion);
         RewriteAnalyzerConsumerReferences(document);
 
         return document;
@@ -596,7 +605,10 @@ internal static class GSharpProjectTransformer
     // netstandard2.0 does not exist for G#), drops the Roslyn compiler
     // packages and Roslyn-analyzer-authoring properties, and references the
     // G# analyzer API assembly loaded by the compiler host.
-    private static void RewriteAnalyzerProject(XDocument document, bool isAnalyzerTestProject)
+    private static void RewriteAnalyzerProject(
+        XDocument document,
+        bool isAnalyzerTestProject,
+        string analyzerVerifierPackageVersion)
     {
         bool isAnalyzerProject = IsAnalyzerProjectXml(document);
 
@@ -650,8 +662,8 @@ internal static class GSharpProjectTransformer
         // An analyzer assembly is LOADED BY gsc, which already has GSharp.Core
         // in its own directory — copying it would risk a second, divergent
         // copy. A test assembly is loaded by the test host instead, with no
-        // gsc in the picture, so it must carry both assemblies into its output
-        // or the analyzer's own types fail to load at run time (#3686).
+        // gsc in the picture, so it must carry GSharp.Core into its output or
+        // the analyzer's own types fail to load at run time (#3686).
         var itemGroup = new XElement(
             "ItemGroup",
             new XElement(
@@ -661,18 +673,32 @@ internal static class GSharpProjectTransformer
                     "HintPath",
                     CompilerDirectoryExpression + "/GSharp.Core.dll"),
                 new XElement("Private", isAnalyzerTestProject ? "true" : "false")));
+        document.Root.Add(itemGroup);
+
+        // Issue #3780: the verifier itself is no longer resolved by directory
+        // adjacency to gsc — it is a real NuGet package
+        // (GSharp.CodeAnalysis.Analyzers.Testing) that a migrated test project
+        // takes an ordinary PackageReference to, same as any other dependency.
         if (isAnalyzerTestProject)
         {
-            itemGroup.Add(new XElement(
-                "Reference",
-                new XAttribute("Include", AnalyzerVerifierAssemblyName),
-                new XElement(
-                    "HintPath",
-                    CompilerDirectoryExpression + "/" + AnalyzerVerifierAssemblyName + ".dll"),
-                new XElement("Private", "true")));
-        }
+            if (string.IsNullOrEmpty(analyzerVerifierPackageVersion))
+            {
+                throw new InvalidOperationException(
+                    "An analyzer test project requires a version of the " +
+                    AnalyzerVerifierAssemblyName +
+                    " package (issue #3780), but none was resolved. Build and " +
+                    "pack src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing " +
+                    "(dotnet pack -c Release) so a local nupkg exists under " +
+                    "out/bin/<Config>/nupkgs/ or .nugs/.");
+            }
 
-        document.Root.Add(itemGroup);
+            document.Root.Add(new XElement(
+                "ItemGroup",
+                new XElement(
+                    "PackageReference",
+                    new XAttribute("Include", AnalyzerVerifierAssemblyName),
+                    new XAttribute("Version", analyzerVerifierPackageVersion))));
+        }
     }
 
     // Issue #3501: a plain Microsoft.CodeAnalysis dependency is not enough

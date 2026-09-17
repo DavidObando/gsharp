@@ -101,6 +101,10 @@ public sealed class SdkCompileRunner
 
     private const string SdkPackageId = "Gsharp.NET.Sdk";
 
+    // Issue #3780: the analyzer-testing package id, kept in sync with the
+    // package's own PackageId via GSharpProjectTransformer's constant.
+    private const string AnalyzerTestingPackageId = GSharpProjectTransformer.AnalyzerVerifierAssemblyName;
+
     /// <summary>
     /// Issue #3501: the size-independent part of a mirrored test budget — SDK
     /// host start, VSTest discovery over an assembly with thousands of types,
@@ -185,6 +189,20 @@ public sealed class SdkCompileRunner
                 "No locally-built Gsharp.NET.Sdk nupkg was found under out/bin/<Config>/nupkgs/ or .nugs/.");
         }
 
+        // Issue #3780: an analyzer test project's PackageReference to the
+        // verifier needs a concrete, locally-resolvable version.
+        string analyzerVerifierPackageVersion = null;
+        if (isAnalyzerTestProject)
+        {
+            analyzerVerifierPackageVersion = ResolveAnalyzerVerifierPackageVersion(config);
+            if (analyzerVerifierPackageVersion is null)
+            {
+                return SdkCompileResult.Unavailable(
+                    "No locally-built " + AnalyzerTestingPackageId +
+                    " nupkg was found under out/bin/<Config>/nupkgs/ or .nugs/.");
+            }
+        }
+
         string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(generatedProjectPath));
         Directory.CreateDirectory(projectDirectory);
         Directory.CreateDirectory(artifactDirectory);
@@ -196,7 +214,8 @@ public sealed class SdkCompileRunner
             projectDirectory,
             sdkMoniker,
             generatedProjectPaths,
-            isAnalyzerTestProject);
+            isAnalyzerTestProject,
+            analyzerVerifierPackageVersion);
         project.Save(generatedProjectPath, System.Xml.Linq.SaveOptions.DisableFormatting);
 
         string projectNugetConfig = Directory.EnumerateFiles(projectDirectory)
@@ -885,6 +904,32 @@ public sealed class SdkCompileRunner
     }
 
     /// <summary>
+    /// Resolves the version of a locally-built
+    /// <c>GSharp.CodeAnalysis.Analyzers.Testing</c> nupkg (issue #3780), for
+    /// use as the <c>Version</c> of the <c>PackageReference</c>
+    /// <see cref="GSharpProjectTransformer"/> injects into a migrated analyzer
+    /// test project. Mirrors <see cref="ResolveSdkMoniker"/>: it also stages
+    /// the resolved nupkg into the repo's <c>.nugs</c> local feed so restore
+    /// can find it without a real NuGet publish.
+    /// </summary>
+    /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
+    /// <returns>The resolved package version, or <see langword="null"/> when no local nupkg exists.</returns>
+    internal static string ResolveAnalyzerVerifierPackageVersion(string config)
+    {
+        string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
+        (string NupkgPath, string Version)? package =
+            GsharpTestProjectRunner.ResolveLocalPackage(repoRoot, AnalyzerTestingPackageId, config) ??
+            ResolveFallbackPackageFromLocalFeed(repoRoot, AnalyzerTestingPackageId);
+        if (package is null || package.Value.NupkgPath is null)
+        {
+            return null;
+        }
+
+        GsharpTestProjectRunner.EnsureInLocalFeed(repoRoot, package.Value.NupkgPath);
+        return package.Value.Version;
+    }
+
+    /// <summary>
     /// Issue #3501: returns the bounded stage-4 budget for one mirrored test
     /// project, scaled to the amount of work that project actually has to do.
     /// <para>
@@ -1557,9 +1602,12 @@ public sealed class SdkCompileRunner
     }
 
     private static (string NupkgPath, string Version)? ResolveFallbackSdkPackageFromLocalFeed(string repoRoot)
+        => ResolveFallbackPackageFromLocalFeed(repoRoot, SdkPackageId);
+
+    private static (string NupkgPath, string Version)? ResolveFallbackPackageFromLocalFeed(string repoRoot, string packageId)
     {
         string feed = Path.Combine(repoRoot, ".nugs");
-        return GsharpTestProjectRunner.ResolveNewestSdkPackage(feed);
+        return GsharpTestProjectRunner.ResolveNewestPackage(feed, packageId);
     }
 
     private static GscDiagnostic SynthesizeFallbackDiagnostic(ProcessRunResult result, IReadOnlyList<string> gsFilePaths)
