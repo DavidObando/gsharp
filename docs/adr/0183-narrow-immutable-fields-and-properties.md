@@ -78,42 +78,92 @@ has two independent sources:
    reads of such a member are not the same fact, so narrowing across them is
    unsound independent of thread-safety.
 
-A **`let`-declared instance field** (emitted `initonly`/`readonly`) and a
-**get-only, non-virtual, non-overridable auto-property** are immune to
-*both* sources by construction, not by convention:
+A **`let`-declared instance field** (emitted `initonly`) and a **genuinely
+get-only, non-virtual, non-overridable auto-property (no setter at all)**
+are immune to *both* sources by construction, not by convention:
 
 - Source 1 does not apply: `let` fields cannot be reassigned after the
   constructor that initializes them runs — the CLR enforces this at the IL
   level (`initonly`), and ADR-0067 already makes this the only spelling for
-  an immutable field. A get-only auto-property with no setter (or an
-  `init`-only setter) has the identical guarantee, transitively, because it
-  is backed by exactly such a field.
+  an immutable field. A get-only auto-property with **no setter at all**
+  has the identical guarantee, transitively, because it is backed by
+  exactly such a field: `DeclarationBinder.Structs.cs`'s auto-property
+  backing-field construction emits `isReadOnly: !hasSetter`, so when there
+  is no setter the backing field is `initonly` and the CLR itself rejects a
+  write outside the declaring constructor, exactly like a spelled-out `let`
+  field.
 - Source 2 does not apply: an auto-property has no custom getter body — the
-  read is a plain field load, which is trivially idempotent. (This is
-  exactly the `IsStableProperty` predicate `SmartCastStability` already
-  uses for #1180's single-branch member narrowing — this ADR does not
-  invent a new stability test, it widens the *scope* over which an
-  already-accepted stability test may be trusted.)
+  read is a plain field load, which is trivially idempotent.
+
+**An `init`-only auto-property (`{ get; init; }`) does *not* have this same
+guarantee, and stating otherwise would be a real soundness gap in this
+ADR.** `hasSetter` is `true` for an `init` accessor — it is an ordinary
+setter method at the CLR level, distinguished from a normal setter only by
+an `IsExternalInit` `modreq` (`MemberDefEmitter.cs`) that a *conformant
+compiler* checks at the call site, not something the CLR itself enforces on
+the write. Consequently the same `isReadOnly: !hasSetter` line gives an
+`init`-only property's backing field `isReadOnly: false` — an ordinary,
+CLR-mutable field. Nothing in IL verification stops a second, later call to
+the `init` accessor method: a non-conformant or hand-rolled IL emitter, a
+different managed language, or a codegen tool that does not honor
+`modreq(IsExternalInit)` can call `set_Foo(value)` after construction with
+no CLR-level objection — unlike a genuinely `initonly` field, which even
+*verifiable* IL cannot write outside the declaring constructor. This is a
+narrower, more mundane threat than the reflection-based `FieldInfo.SetValue`
+bypass this document already treats as out of scope for `readonly` fields
+(that one requires deliberately calling into the reflection API against the
+field's own protection); calling an ordinary public method needs no special
+API at all.
+
+`SmartCastStability.IsStableProperty` already accepts `init`-only equally
+with get-only, and #1180 already trusts that predicate — this ADR does not
+revisit that existing, narrowly-scoped (single-branch) trust. But #1180's
+trust window is short: test and use inside one guarded block, compiled by
+gsc itself, with no possibility of an intervening call to the `init`
+accessor because G#'s own binder only accepts an `init` accessor call
+inside the declaring object's initializer syntax. This ADR's contribution —
+widening that window to an entire method (Tier 1) or across the object's
+whole remaining lifetime (Tier 2) — is exactly where the compiler-only
+enforcement stops being a guarantee, because the window is now long enough,
+and Tier 2 explicitly long-lived enough, to plausibly include a call from
+code gsc did not compile. The two tiers below therefore treat get-only and
+`init`-only differently, rather than folding both into one "stable
+property" bucket the way #1180 could safely afford to.
 
 So the concern ADR-0069 raised is real, but it is a concern about `var`
-fields and computed/virtual properties, not about `let` fields and get-only
-auto-properties. This ADR proposes to keep declining the former
-unconditionally (no change from ADR-0069) and to widen the scope for the
-latter from "single guarded branch" to a scope precise enough to close the
-`viewModel`-shaped gap, argued case by case below.
+fields, computed/virtual properties, and — as just established — `init`-only
+properties once the narrowing window outgrows a single guarded block. This
+ADR proposes to keep declining `var` fields and computed/virtual properties
+unconditionally (no change from ADR-0069), to widen the scope for `let`
+fields and genuinely get-only properties from "single guarded branch" all
+the way to Tier 2, and to widen the scope for `init`-only properties only as
+far as Tier 1 — argued case by case below.
 
 ## Decision (proposed)
 
 **Narrow a `let`-declared instance field, or a non-virtual/non-overridable
-get-only (or `init`-only) auto-property — a *stable member*, exactly
+get-only-or-`init`-only auto-property — a *stable member*, exactly
 `SmartCastStability.IsStableField` / `IsStableProperty` today — across
-statement boundaries within the enclosing method, and lift the narrowing
-across method boundaries only through the object's constructor-established
-invariants, never through a same-object guard performed by another,
-unrelated method call.**
+statement boundaries within the enclosing method (Tier 1), and lift the
+narrowing across method boundaries (Tier 2) only through the object's
+constructor-established invariants, never through a same-object guard
+performed by another, unrelated method call, and only for members whose
+immutability the CLR itself enforces — `let` fields and genuinely get-only
+(no-setter) auto-properties, *not* `init`-only ones (see the CLR-vs-compiler
+distinction above).**
 
 Concretely, this ADR proposes two scope tiers, argued separately because
-their soundness arguments are different:
+their soundness arguments are different — and because, as established
+above, they trust a different set of members:
+
+- **Tier 1** applies to every `SmartCastStability`-stable member: `let`
+  fields, get-only auto-properties, and `init`-only auto-properties alike.
+  This matches what #1180 already trusts for a single guarded block; Tier 1
+  only widens the *window*, not the *member set*.
+- **Tier 2** applies only to `let` fields and genuinely get-only
+  auto-properties. `init`-only auto-properties are excluded — see the
+  dedicated callout in the Tier 2 section below for why the CLR-vs-compiler
+  distinction becomes load-bearing at that scope.
 
 ### Tier 1 — same-method, cross-statement (uncontroversial extension)
 
@@ -136,15 +186,23 @@ a method could mutate reachable state."
 That blanket call-invalidation rule is exactly right for a `var` field or a
 settable/virtual property, where a callee genuinely could reassign the
 storage or override the getter. It is unnecessarily conservative for a
-`let` field or get-only auto-property: no callee, however arbitrary, can
-reassign `initonly` storage or intervene in a getter that has no custom
-body. This ADR therefore proposes relaxing call-invalidation specifically
-for stable member paths (every link `IsReadOnly`/`IsStableProperty`) — such
-a path survives an intervening call unless the call assigns to the path
-itself (which cannot happen for `initonly` storage) — while leaving the
-existing blanket invalidation exactly as-is for any path with a mutable
-link. Combined with dropping the "single guarded block only" restriction
-for stable paths, this is what lets Tier 1 actually reach the 220 same-method
+`let` field, a genuinely get-only auto-property, or an `init`-only
+auto-property: within the bounded window Tier 1 operates in — one method
+body gsc itself is compiling — no *G#-compiled* callee can invoke the
+`init` accessor at all (the binder only accepts that call inside the
+declaring object's own initializer syntax), so the compiler-vs-CLR
+distinction drawn above does not yet bite; it only starts to matter once the
+trust window outlives a single method's compiled flow, which is exactly
+where Tier 2 draws its narrower line below. This ADR therefore proposes
+relaxing call-invalidation for every `SmartCastStability`-stable member path
+(every link `IsReadOnly`/`IsStableProperty`, get-only or `init`-only alike)
+— such a path survives an intervening call unless the call assigns to the
+path itself (which cannot happen for a `let` field's `initonly` storage,
+and cannot happen through ordinary G#-compiled code for an auto-property's
+backing field either, `init`-only included) — while leaving the existing
+blanket invalidation exactly as-is for any path with a mutable link.
+Combined with dropping the "single guarded block only" restriction for
+stable paths, this is what lets Tier 1 actually reach the 220 same-method
 sites item 2 measured, most of which have ordinary work between the guard
 and the use.
 
@@ -200,7 +258,35 @@ way ADR-0069's existing back-edge rules already narrow a `let` local
 "initialized from a proven-non-null value" across a loop. This is
 equivalent to the user having declared the field non-nullable in the first
 place; the narrowing is a compiler-proved fact about the *type's shape*, not
-a flow fact borrowed from one method's guard.
+a flow fact borrowed from one method's guard. The same argument applies
+verbatim to a genuinely get-only auto-property (its backing field is a
+plain `let` field under the surface syntax).
+
+**Tier 2 does not extend to an `init`-only auto-property, even though Tier 1
+does.** Tier 2's claim is not "non-null right now" but "non-null for every
+read for the rest of the object's observable lifetime, including reads in
+code gsc never compiled" — a public type's `init`-only property can be
+written by any assembly that references it, through an ordinary,
+non-reflection method call to the compiler-synthesized `set_Foo` accessor,
+skipping the `modreq(IsExternalInit)` check that only a conformant G#/C#
+compiler performs at the *call site*. Nothing about that call requires
+reflection, an unsafe context, or malicious intent — it only requires a
+compiler, hand-written IL, or a codegen tool that does not model
+`IsExternalInit`, which is a meaningfully weaker bar than the
+reflection-based `FieldInfo.SetValue` threat this document already excludes
+elsewhere. Because Tier 2's proof is meant to outlive the compilation gsc is
+currently performing, and gsc cannot see or constrain what a *different*,
+not-yet-written compilation does with a public `init`-only property, this
+ADR excludes `init`-only members from Tier 2 outright rather than trying to
+qualify the exclusion away with a narrower condition (e.g. "only for a
+sealed type in the same assembly"): even a same-assembly, non-public type
+could still be handed to a reflection-emitted or dynamically-loaded
+component within that same assembly without crossing an assembly boundary
+at all, so an assembly-scoped carve-out would not actually close the gap it
+sounds like it closes. The simple, defensible line is member-kind, not
+visibility: `let` fields and get-only auto-properties are Tier-2-eligible;
+`init`-only auto-properties are not, regardless of accessibility or
+sealing.
 
 **Tier 2 is scoped to `class` only — it does not apply to `struct`,
 `data struct`, or `inline struct`, even though ADR-0067 permits `let`
@@ -309,7 +395,9 @@ base-chain walk gsc already performs for other purposes.
   same-method guard on the underlying field/property. Tier 1 would let gsc
   itself accept these programs directly — no `!!` needed at any of those
   sites — which lets #4280's local-capture rewrite be **simplified or
-  retired for the `let`/get-only-property subset** of what it currently
+  retired for the whole `SmartCastStability`-stable subset** (`let` fields,
+  get-only properties, and `init`-only properties alike — Tier 1 does not
+  distinguish among them) of what it currently
   handles: cs2gs would simply stop inserting `!!` there in the first place,
   the same way it already stops for a plain narrowed local. #4280's
   mutable-member fallback path (settable/virtual members, name collisions,
@@ -318,15 +406,19 @@ base-chain walk gsc already performs for other purposes.
   the subset #4280 restricts its own capture rewrite to.
 - Item 3's `viewModel` example (84 forced `!!` sites, cross-method) is the
   case no cs2gs-level fix could reach. Whether Tier 2 closes it depends on
-  three separate facts about that codebase, none of which this ADR can
-  settle in the abstract: whether the declaring type is a `class` (Tier 2
-  does not apply to a `struct`/`data struct`/`inline struct` at all — see
-  the scoping above), whether that type or any base class declares `deinit`
+  four separate facts about that codebase, none of which this ADR can
+  settle in the abstract: whether `viewModel` is a `let` field or a
+  genuinely get-only auto-property rather than an `init`-only one (Tier 2
+  excludes `init`-only members outright — see the CLR-vs-compiler
+  distinction above), whether the declaring type is a `class` (Tier 2 does
+  not apply to a `struct`/`data struct`/`inline struct` at all — see the
+  scoping above), whether that type or any base class declares `deinit`
   (which would also disqualify it), and whether the constructor actually
   proves the field non-null on every path (the original caveat). If all
-  three hold, Tier 2 closes the entire cluster; if the field is genuinely
-  lazily-initialized post-construction, is declared on a struct, or sits on
-  a `deinit`-bearing type, none of the tiers proposed here help it, and that
+  four hold, Tier 2 closes the entire cluster; if the member is genuinely
+  lazily-initialized post-construction, is `init`-only, is declared on a
+  struct, or sits on a `deinit`-bearing type, none of the tiers proposed
+  here help it, and that
   would be worth stating plainly in the PR that evaluates this ADR against
   the real corpus, rather than assumed going in.
 - Neither tier touches `var` fields or settable/virtual/computed properties.
@@ -431,13 +523,17 @@ No new diagnostic ID is required by this proposal. No syntax changes.
 
 ## Open questions for the implementer / reviewer
 
-- Should Tier 2's constructor-invariant proof also cover a field assigned
-  unconditionally in *every* `init`/factory-constructor overload (mirroring
-  how #1180's stable-property rule already treats "no setter, or `init`-only
-  setter" as one case), or only a type with a single constructor? Multiple
-  constructors complicate the "proved on every path" analysis but are not
-  fundamentally different from the single-constructor case if each is
-  checked independently.
+- Should Tier 2's constructor-invariant proof also cover a `let` field or
+  get-only property assigned unconditionally in *every* constructor overload
+  of a type with more than one `init(...)` declaration, or only a type with
+  a single constructor? Multiple constructors complicate the "proved on
+  every path" analysis but are not fundamentally different from the
+  single-constructor case if each is checked independently. (This is
+  unrelated to the get-only/`init`-only *accessor* distinction established
+  above — Tier 2 never reaches an `init`-only property regardless of how
+  many constructors the declaring type has; this question is only about how
+  many `init(...)` constructor overloads a Tier-2-eligible `let`
+  field/get-only property's own declaring type may have.)
 - Whether Tier 1's relaxed call-invalidation should extend to a *mixed*
   path that has a mutable link *above* a stable one reached through a
   different, unrelated receiver expression in the same call's reachable
