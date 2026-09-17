@@ -349,12 +349,25 @@ public sealed class TranslateStage : IMigrationStage
                         Path.GetFullPath(context.App.ProjectPath),
                         out string generatedProjectPath) == true)
                 {
+                    // Issue #3780: only an analyzer test project needs the
+                    // verifier package version; a repository migration with
+                    // none never has to have the package built locally.
+                    if (isAnalyzerTestProject
+                        && string.IsNullOrEmpty(context.Options.RepositoryAnalyzerVerifierPackageVersion))
+                    {
+                        throw new InvalidOperationException(
+                            "Could not resolve a local GSharp.CodeAnalysis.Analyzers.Testing " +
+                            "package for the mirrored analyzer test project '" +
+                            context.App.ProjectPath + "'.");
+                    }
+
                     GSharpProjectTransformer.Transform(
                         context.App.ProjectPath,
                         Path.GetDirectoryName(generatedProjectPath),
                         context.Options.RepositorySdkMoniker,
                         context.Options.GeneratedProjectPaths,
-                        isAnalyzerTestProject).Save(
+                        isAnalyzerTestProject,
+                        context.Options.RepositoryAnalyzerVerifierPackageVersion).Save(
                             generatedProjectPath,
                             System.Xml.Linq.SaveOptions.DisableFormatting);
                 }

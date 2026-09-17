@@ -73,33 +73,7 @@ public class GsharpTestProjectRunner
     /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
     /// <returns>The nupkg path and parsed version, or <see langword="null"/> when none exists.</returns>
     public static (string NupkgPath, string Version)? ResolveLocalSdkPackage(string repoRoot, string config = "Release")
-    {
-        if (string.IsNullOrEmpty(repoRoot))
-        {
-            return null;
-        }
-
-        var configs = string.IsNullOrEmpty(config)
-            ? new[] { "Release", "Debug" }
-            : new[] { config, "Release", "Debug" };
-
-        foreach (string cfg in configs.Distinct(StringComparer.Ordinal))
-        {
-            string nupkgDir = Path.Combine(repoRoot, "out", "bin", cfg, "nupkgs");
-            if (!Directory.Exists(nupkgDir))
-            {
-                continue;
-            }
-
-            (string NupkgPath, string Version)? best = ResolveNewestSdkPackage(nupkgDir);
-            if (best is not null)
-            {
-                return best;
-            }
-        }
-
-        return null;
-    }
+        => ResolveLocalPackage(repoRoot, SdkPackageId, config);
 
     /// <summary>
     /// Runs a translated G# library + xUnit test project and returns the parsed
@@ -216,17 +190,70 @@ public class GsharpTestProjectRunner
         return GsharpTestRunResult.Ran(exit, output, trxPath, results);
     }
 
+    /// <summary>
+    /// Resolves the most recently built local nupkg for <paramref name="packageId"/>
+    /// under <c>out/bin/&lt;Config&gt;/nupkgs/</c>. Generalizes
+    /// <see cref="ResolveLocalSdkPackage"/> (issue #3780) so any locally-packed
+    /// GSharp package — not only <c>Gsharp.NET.Sdk</c> — can be resolved the
+    /// same way.
+    /// </summary>
+    /// <param name="repoRoot">The repository root.</param>
+    /// <param name="packageId">The NuGet package id to resolve.</param>
+    /// <param name="config">The build config to probe (e.g. <c>Release</c>).</param>
+    /// <returns>The nupkg path and parsed version, or <see langword="null"/> when none exists.</returns>
+    internal static (string NupkgPath, string Version)? ResolveLocalPackage(
+        string repoRoot, string packageId, string config = "Release")
+    {
+        if (string.IsNullOrEmpty(repoRoot))
+        {
+            return null;
+        }
+
+        var configs = string.IsNullOrEmpty(config)
+            ? new[] { "Release", "Debug" }
+            : new[] { config, "Release", "Debug" };
+
+        foreach (string cfg in configs.Distinct(StringComparer.Ordinal))
+        {
+            string nupkgDir = Path.Combine(repoRoot, "out", "bin", cfg, "nupkgs");
+            if (!Directory.Exists(nupkgDir))
+            {
+                continue;
+            }
+
+            (string NupkgPath, string Version)? best = ResolveNewestPackage(nupkgDir, packageId);
+            if (best is not null)
+            {
+                return best;
+            }
+        }
+
+        return null;
+    }
+
     internal static (string NupkgPath, string Version)? ResolveNewestSdkPackage(string directory)
+        => ResolveNewestPackage(directory, SdkPackageId);
+
+    /// <summary>
+    /// Same selection policy as <see cref="ResolveNewestSdkPackage"/> — newest
+    /// write time, then highest SemVer, then ordinal name — generalized to any
+    /// package id (issue #3780).
+    /// </summary>
+    /// <param name="directory">The nupkg directory to scan.</param>
+    /// <param name="packageId">The NuGet package id to match.</param>
+    /// <returns>The nupkg path and parsed version, or <see langword="null"/> when none exists.</returns>
+    internal static (string NupkgPath, string Version)? ResolveNewestPackage(string directory, string packageId)
     {
         if (!Directory.Exists(directory))
         {
             return null;
         }
 
+        string packagePrefix = packageId + ".";
         (string Path, string Version, DateTime WrittenUtc)? best = null;
-        foreach (string file in Directory.EnumerateFiles(directory, SdkPackagePrefix + "*.nupkg"))
+        foreach (string file in Directory.EnumerateFiles(directory, packagePrefix + "*.nupkg"))
         {
-            string version = ParseVersion(Path.GetFileName(file));
+            string version = ParseVersion(Path.GetFileName(file), packagePrefix);
             if (version is null)
             {
                 continue;
@@ -326,16 +353,19 @@ public class GsharpTestProjectRunner
     }
 
     internal static string ParseVersion(string fileName)
+        => ParseVersion(fileName, SdkPackagePrefix);
+
+    internal static string ParseVersion(string fileName, string packagePrefix)
     {
-        if (!fileName.StartsWith(SdkPackagePrefix, StringComparison.Ordinal) ||
+        if (!fileName.StartsWith(packagePrefix, StringComparison.Ordinal) ||
             !fileName.EndsWith(".nupkg", StringComparison.Ordinal))
         {
             return null;
         }
 
         return fileName.Substring(
-            SdkPackagePrefix.Length,
-            fileName.Length - SdkPackagePrefix.Length - ".nupkg".Length);
+            packagePrefix.Length,
+            fileName.Length - packagePrefix.Length - ".nupkg".Length);
     }
 
     internal static void WriteIsolationBoundary(string workDir)

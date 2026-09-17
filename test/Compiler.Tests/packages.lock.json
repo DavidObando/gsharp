@@ -162,7 +162,6 @@
       "gsc": {
         "type": "Project",
         "dependencies": {
-          "GSharp.CodeAnalysis.Analyzers.Testing": "[1.0.0, )",
           "GSharp.Core": "[1.0.0, )",
           "Gsharp.Runtime.Channels": "[1.0.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
@@ -172,13 +171,6 @@
         "type": "Project",
         "dependencies": {
           "GSharp.GSharp.GeneratorHost": "[1.0.0, )",
-          "Microsoft.VisualStudio.Validation": "[17.8.8, )"
-        }
-      },
-      "gsharp.codeanalysis.analyzers.testing": {
-        "type": "Project",
-        "dependencies": {
-          "GSharp.Core": "[1.0.0, )",
           "Microsoft.VisualStudio.Validation": "[17.8.8, )"
         }
       },

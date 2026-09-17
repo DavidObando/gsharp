@@ -218,6 +218,14 @@ public sealed class MigrationPipeline
 
             this.options.RepositorySdkMoniker = sdkMoniker;
 
+            // Issue #3780: resolved once, up front, like sdkMoniker above.
+            // Not every repository migration includes an analyzer test
+            // project, so a missing local nupkg is not fatal here — it is
+            // only an error if TranslateStage later needs it for a specific
+            // project and finds this null.
+            this.options.RepositoryAnalyzerVerifierPackageVersion =
+                SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion(this.options.Config);
+
             foreach (CorpusApp app in apps)
             {
                 string generatedProjectPath =

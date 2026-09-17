@@ -140,6 +140,16 @@ public sealed class PipelineOptions
     /// <summary>Gets or sets the pinned SDK moniker used by repository project transforms.</summary>
     internal string? RepositorySdkMoniker { get; set; }
 
+    /// <summary>
+    /// Gets or sets the resolved version of the locally-built
+    /// <c>GSharp.CodeAnalysis.Analyzers.Testing</c> package (issue #3780),
+    /// used as the <c>PackageReference</c> version for any repository project
+    /// that turns out to be an analyzer test project. <see langword="null"/>
+    /// when no local nupkg was found; that is only an error if a project
+    /// actually needs it (checked at the point of use).
+    /// </summary>
+    internal string? RepositoryAnalyzerVerifierPackageVersion { get; set; }
+
     /// <summary>Gets or sets extra G# files required when one C# file declares multiple namespaces.</summary>
     internal ISet<string>? RepositoryAdditionalFiles { get; set; }
 
