@@ -27,12 +27,18 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// (<c>System.String.ToUpper</c>) through a nullable receiver is never
 /// null-checked by this binder at all, narrowed or not — a separate,
 /// pre-existing gap, out of scope here (ADR-0183 PR A touches only the
-/// narrowing-lift soundness bug). These tests instead use a call to a
-/// USER-DEFINED function through a nullable field/type-tested field, which
-/// IS validated (<c>DiagnosticBag.ReportUnableToFindFunction</c> /
-/// GS0159, "receiver may be nil" or "Cannot find function") — the same
-/// diagnostic style <c>Issue1180SmartCastMembersBinderTests</c> uses for its
-/// negative (non-narrowing) cases.
+/// narrowing-lift soundness bug), tracked as issue #4287. Verified directly:
+/// the literal repro still compiles with zero diagnostics and still throws
+/// at runtime after this fix, and reproduces identically with NO `goto` and
+/// NO narrowing involved at all (a plain, unconditional
+/// `this.name.ToUpper()` with no guard anywhere in the function already
+/// throws) — confirming it is wholly unrelated to this issue's mechanism.
+/// These tests instead use a call to a USER-DEFINED function through a
+/// nullable field/type-tested field, which IS validated
+/// (<c>DiagnosticBag.ReportUnableToFindFunction</c> / GS0159, "receiver may
+/// be nil" or "Cannot find function") — the same diagnostic style
+/// <c>Issue1180SmartCastMembersBinderTests</c> uses for its negative
+/// (non-narrowing) cases.
 /// </para>
 /// </summary>
 public class Issue4285GotoNarrowingReachabilityTests
