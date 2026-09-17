@@ -32,12 +32,27 @@ namespace Cs2Gs.Tests;
 /// AccessorExpressionSyntax { IsNullConditional: true } x</c>.</item>
 /// <item><c>RegisterSyntaxNodeAction(handler, SyntaxKind.ConditionalAccessExpression)</c>
 /// → a guarded wrapper lambda registered for <c>SyntaxKind.AccessorExpression</c>.</item>
-/// <item><c>x.WhenNotNull is MemberBindingExpressionSyntax</c> (proving a
-/// single-hop access) → dropped, with a later <c>x.Expression</c> read
-/// becoming <c>x.LeftPart</c>.</item>
 /// </list>
 /// <c>MemberBindingExpressionSyntax</c>/<c>ElementBindingExpressionSyntax</c>
+/// (including <c>x.WhenNotNull is MemberBindingExpressionSyntax</c>, a
+/// companion test some analyzers use to try to prove a single-hop access)
 /// deliberately stay unmapped — a direct reference is a loud gap, not a bug.
+/// A per-node type/kind test cannot actually distinguish "this is the last
+/// hop of its chain" in Roslyn's tree shape from "this is not": a REAL Roslyn
+/// tree for <c>a?.b?.c</c> contains an INNER <c>ConditionalAccessExpressionSyntax</c>
+/// node (<c>Expression: MemberBindingExpressionSyntax(.b)</c>,
+/// <c>WhenNotNull: MemberBindingExpressionSyntax(.c)</c>) whose own
+/// <c>WhenNotNull</c> IS a bare <c>MemberBindingExpressionSyntax</c> — so the
+/// conjunction is provably true on a genuine two-level chain, not only on a
+/// true single-hop <c>a?.b</c>. A translator-side rewrite of that conjunction
+/// to a per-G#-node <c>IsNullConditional</c> check therefore cannot preserve
+/// Roslyn's semantics: it was empirically confirmed to over-fire (2 reports
+/// instead of Roslyn's 1 for a chain, 1 instead of 0 for <c>a?.b.c</c>), the
+/// same silent-over-match failure class the issue's own investigation warned
+/// a naive map-row extension would cause. So the safe behavior — matching the
+/// already-unmapped <c>AssignmentExpressionSyntax.Left</c> — is a loud
+/// <c>CS2GS-GAP</c> on any surviving <c>.WhenNotNull</c>/<c>.Expression</c>
+/// read, single-hop-proving conjunction or not.
 /// <para>
 /// Every assertion that can execute a real analyzer does: the analyzer source
 /// is translated by the real <see cref="CSharpToGSharpTranslator"/>, compiled
@@ -231,8 +246,15 @@ public sealed class NullConditionalAccessAnalyzer : DiagnosticAnalyzer
     }
 
     // A single-hop analyzer idiom: `x.WhenNotNull is MemberBindingExpressionSyntax`
-    // proves (from the analyzer's own source) that `x.Expression` is safe to
-    // read as G#'s `.LeftPart`.
+    // LOOKS like it proves single-hop, but does NOT: Roslyn's own tree for a
+    // two-level chain (`a?.b?.c`) contains an inner ConditionalAccessExpressionSyntax
+    // node whose WhenNotNull is ALSO a bare MemberBindingExpressionSyntax, so this
+    // conjunction is true on that inner chain node too, not just on a genuine
+    // single-hop `a?.b`. Any rewrite collapsing this to a per-G#-node
+    // `IsNullConditional` check would silently over-fire — confirmed empirically
+    // (2 reports instead of Roslyn's 1 on a chain, 1 instead of 0 on `a?.b.c`).
+    // So `.WhenNotNull`/`.Expression` must stay unmapped here, same as the
+    // already-loud chain case below.
     private const string SingleHopExpressionAnalyzerSource = @"
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
@@ -265,30 +287,42 @@ public sealed class SingleHopExpressionAnalyzer : DiagnosticAnalyzer
 ";
 
     /// <summary>
-    /// The single-hop conjunction idiom: <c>.WhenNotNull is
-    /// MemberBindingExpressionSyntax</c> proves single-hop and disappears
-    /// (G#'s left-hand <c>IsNullConditional</c> test already establishes the
-    /// same fact), and the companion <c>.Expression</c> read becomes
-    /// <c>.LeftPart</c> — never left as an unmapped, unbindable member name.
+    /// The "single-hop conjunction" idiom (<c>.WhenNotNull is
+    /// MemberBindingExpressionSyntax</c>) does NOT actually prove single-hop
+    /// (see the field comment above) and must NOT be rewritten to a bare
+    /// <c>true</c> — an earlier version of this fix did exactly that and was
+    /// confirmed, empirically, to make the translated analyzer silently
+    /// over-fire relative to Roslyn (2 reports instead of 1 on a genuine
+    /// `a?.b?.c` chain; 1 instead of 0 on `a?.b.c`), because Roslyn's own tree
+    /// for a chain contains an INNER <c>ConditionalAccessExpressionSyntax</c>
+    /// node whose <c>WhenNotNull</c> is ALSO a bare
+    /// <c>MemberBindingExpressionSyntax</c> — the conjunction is true there
+    /// too, not only on a genuine single-hop <c>a?.b</c>. The companion
+    /// <c>.Expression</c> read must therefore stay an unmapped identity
+    /// member name — a loud gap at bind time, the same safe fallback the
+    /// already-unmapped <c>AssignmentExpressionSyntax.Left</c> uses.
     /// </summary>
     [Fact]
-    public void SingleHopConjunction_WhenNotNullDropsAndExpressionBecomesLeftPart()
+    public void SingleHopConjunction_IsALoudGapRatherThanASilentOverfire()
     {
         (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
             TranslateAnalyzerSource(SingleHopExpressionAnalyzerSource);
 
-        Assert.Contains(".LeftPart", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain(".WhenNotNull", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain(".Expression", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("MemberBindingExpressionSyntax", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
-        AssertBinds(printed);
+        // The falsifier: the type-test idiom (idiom #1) still fired on its
+        // own, so this loud failure is a real one, not a vacuous pass.
+        Assert.Contains("AccessorExpressionSyntax", printed, StringComparison.Ordinal);
+        Assert.Contains(".Expression", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Message.Contains("translated to 'true'", StringComparison.Ordinal));
+
+        IReadOnlyList<string> errors = TryGetBindErrors(printed);
+        Assert.NotEmpty(errors);
+        Assert.Contains(errors, e => e.Contains("Expression", StringComparison.Ordinal));
     }
 
-    // The chain-shaped companion test: `x.WhenNotNull is ConditionalAccessExpressionSyntax`
-    // does NOT prove single-hop (a chain's WhenNotNull is itself nested), so
-    // the conjunction idiom must not fire, and `.Expression` must not be
-    // silently renamed to `.LeftPart` (wrong for a chain — see issue history).
+    // A companion test shaped like `x.WhenNotNull is ConditionalAccessExpressionSyntax`:
+    // `.WhenNotNull`/`.Expression` have no G# counterpart (see field comment
+    // above) and must always stay a loud gap — never silently renamed to
+    // `.LeftPart`, chain-shaped companion test or not.
     private const string ChainedWhenNotNullAnalyzerSource = @"
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
@@ -335,9 +369,9 @@ public sealed class ChainedWhenNotNullAnalyzer : DiagnosticAnalyzer
         (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
             TranslateAnalyzerSource(ChainedWhenNotNullAnalyzerSource);
 
-        // The falsifier: the single-hop idiom really did NOT fire here (it
-        // would have dropped both the WhenNotNull test and the member name),
-        // so this loud failure is a real one, not a vacuous pass.
+        // The falsifier: `.Expression` really did survive untranslated (it
+        // was not silently dropped or renamed), so this loud failure is a
+        // real one, not a vacuous pass.
         Assert.Contains(".Expression", printed, StringComparison.Ordinal);
 
         IReadOnlyList<string> errors = TryGetBindErrors(printed);

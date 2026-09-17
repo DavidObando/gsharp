@@ -90,27 +90,6 @@ public sealed partial class CSharpToGSharpTranslator
         {
             result = null;
 
-            // Issue #4173: `x.Expression` reads the receiver before a PROVEN
-            // single-hop null-conditional access (TryLowerConditionalAccessSingleHopConjunction
-            // recorded `x`'s local in ProvenSingleHopConditionalAccessLocals).
-            // G#'s AccessorExpressionSyntax.LeftPart is the exact faithful
-            // counterpart ONLY at that single hop — a chain's Roslyn
-            // `.Expression` is the chain's ultimate root, not the immediate
-            // LeftPart subtree, so this never fires for an unproven access.
-            if (member.Name.Identifier.Text == "Expression"
-                && member.Expression is IdentifierNameSyntax conditionalAccessReceiver
-                && this.context.GetSymbolInfo(conditionalAccessReceiver).Symbol is ILocalSymbol conditionalAccessLocal
-                && this.state.ProvenSingleHopConditionalAccessLocals.Contains(conditionalAccessLocal)
-                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "Expression" } conditionalAccessExpressionProperty
-                && RoslynTypeMetadataName(conditionalAccessExpressionProperty.ContainingType) == "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax")
-            {
-                result = new MemberAccessExpression(
-                    this.TranslateExpression(member.Expression),
-                    "LeftPart",
-                    isArrow: false);
-                return true;
-            }
-
             if (member.Name.Identifier.Text == "Value"
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol
                     {
@@ -1317,92 +1296,6 @@ public sealed partial class CSharpToGSharpTranslator
                     Test("CompoundIndexAssignmentExpression")),
                 "||",
                 Test("MemberFieldAssignmentExpression"));
-            return true;
-        }
-
-        /// <summary>
-        /// Rewrites the C# single-hop null-conditional proof idiom
-        /// (<c>expr is ConditionalAccessExpressionSyntax x &amp;&amp;
-        /// x.WhenNotNull is MemberBindingExpressionSyntax</c>) to G#'s faithful
-        /// shape (issue #4173). <c>WhenNotNull</c> has no G# counterpart member
-        /// (<c>MemberBindingExpressionSyntax</c> is deliberately unmapped — same
-        /// category as <c>AssignmentExpressionSyntax.Left</c>), but testing it
-        /// against <c>MemberBindingExpressionSyntax</c> is exactly what PROVES,
-        /// from the analyzer's own source at translate time, that THIS
-        /// particular access is single-hop (<c>a?.b</c>, not <c>a?.b?.c</c>): a
-        /// chained access's <c>WhenNotNull</c> is a NESTED
-        /// <c>ConditionalAccessExpressionSyntax</c> instead, so the type test
-        /// would not have matched it. Once proven, the right-hand test has
-        /// nothing left to check on the G# side (the left-hand
-        /// <c>IsNullConditional: true</c> rewrite already establishes the same
-        /// fact one node at a time — see
-        /// <see cref="TryTranslateAnalyzerConditionalAccessTypeTest"/>), and the
-        /// designator becomes safe to read <c>.Expression</c> on as G#'s
-        /// <c>.LeftPart</c> (<see cref="TryTranslateAnalyzerMemberAccess"/>).
-        /// </summary>
-        private bool TryLowerConditionalAccessSingleHopConjunction(BinaryExpressionSyntax binary, out GExpression result)
-        {
-            result = null;
-            if (!binary.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.LogicalAndExpression)
-                || binary.Left is not IsPatternExpressionSyntax leftIsPattern
-                || leftIsPattern.Pattern is not DeclarationPatternSyntax { Designation: SingleVariableDesignationSyntax designation } leftDeclaration
-                || this.context.GetTypeInfo(leftDeclaration.Type).Type is not INamedTypeSymbol leftType
-                || RoslynTypeMetadataName(leftType) != "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax")
-            {
-                return false;
-            }
-
-            // `x.WhenNotNull is MemberBindingExpressionSyntax` with no
-            // designator/pattern features is the CLASSIC `is` operator
-            // (a plain BinaryExpressionSyntax of kind IsExpression), not
-            // IsPatternExpressionSyntax — Roslyn only emits the pattern node
-            // when something pattern-shaped (a designator, a combinator, a
-            // recursive/property clause) follows `is`.
-            if (binary.Right is not BinaryExpressionSyntax whenNotNullTest
-                || !whenNotNullTest.IsKind(Microsoft.CodeAnalysis.CSharp.SyntaxKind.IsExpression)
-                || whenNotNullTest.Left is not MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax whenNotNullReceiver, Name.Identifier.Text: "WhenNotNull" } whenNotNullAccess
-                || whenNotNullReceiver.Identifier.Text != designation.Identifier.Text
-                || this.context.GetSymbolInfo(whenNotNullAccess).Symbol is not IPropertySymbol { Name: "WhenNotNull" } whenNotNullProperty
-                || RoslynTypeMetadataName(whenNotNullProperty.ContainingType) != "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax"
-                || this.context.GetTypeInfo(whenNotNullTest.Right).Type is not INamedTypeSymbol whenNotNullType
-                || RoslynTypeMetadataName(whenNotNullType) != "Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax")
-            {
-                // NOT provably single-hop (no companion WhenNotNull test, or one
-                // that itself recurses into another ConditionalAccessExpressionSyntax
-                // for a chain) — left untouched. The left-hand `is
-                // ConditionalAccessExpressionSyntax x` still translates on its
-                // own via TryTranslateAnalyzerConditionalAccessTypeTest, but a
-                // later `.WhenNotNull`/`.Expression` read has no G# counterpart
-                // and stays a loud gap (round-trip binder), by design.
-                return false;
-            }
-
-            if (this.context.GetDeclaredSymbol(designation) is ILocalSymbol provenLocal)
-            {
-                this.state.ProvenSingleHopConditionalAccessLocals.Add(provenLocal);
-            }
-
-            const string ShapeNote =
-                "'x.WhenNotNull is MemberBindingExpressionSyntax' translated to 'true': the left-hand "
-                + "'is AccessorExpressionSyntax { IsNullConditional: true } x' rewrite already establishes, node by "
-                + "node, that this is a null-conditional access, so the companion test Roslyn needs to rule out a "
-                + "chained WhenNotNull has nothing left to check in G#. A later 'x.Expression' read on this same "
-                + "designator translates to 'x.LeftPart'.";
-            this.context.Report(new TranslationDiagnostic(
-                "analyzer-api",
-                ShapeNote,
-                binary.GetLocation(),
-                TranslationSeverity.Warning)
-            {
-                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
-            });
-
-            if (!this.TryTranslateAnalyzerConditionalAccessTypeTest(leftIsPattern, out GExpression leftResult))
-            {
-                return false;
-            }
-
-            result = leftResult;
             return true;
         }
 

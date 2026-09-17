@@ -399,15 +399,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return loweredConjunction;
             }
 
-            // Issue #4173: `expr is ConditionalAccessExpressionSyntax x &&
-            // x.WhenNotNull is MemberBindingExpressionSyntax` proves (from the
-            // analyzer's own source) that this specific access is single-hop.
-            if (this.InAnalyzerApiMode
-                && this.TryLowerConditionalAccessSingleHopConjunction(binary, out GExpression loweredSingleHop))
-            {
-                return loweredSingleHop;
-            }
-
             if (this.InAnalyzerApiMode && this.TryLowerAnalyzerComparison(binary, out GExpression loweredComparison))
             {
                 return loweredComparison;
