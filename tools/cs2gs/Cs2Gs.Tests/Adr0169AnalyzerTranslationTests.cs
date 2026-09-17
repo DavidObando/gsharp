@@ -934,7 +934,15 @@ public static class DiagnosticDescriptors
             Assert.Contains("pattern.BindingIdentifier != nil", printed, StringComparison.Ordinal);
             Assert.Contains("type.NameIdentifier", printed, StringComparison.Ordinal);
             Assert.Contains("creation.Identifier.Text == nodeTypeName", printed, StringComparison.Ordinal);
-            Assert.Contains("Parent: AccessorExpressionSyntax access", printed, StringComparison.Ordinal);
+            // Issue #4173 round 3: this analyzer has TWO real sites that used to
+            // silently over-match a null-conditional hop (the tier-1 shared-node
+            // bug) — a nested subpattern designator (here) and a switch-case
+            // label (below) — both now carry the IsNullConditional: false
+            // discriminator that makes the rewrite sound.
+            Assert.Contains(
+                "Parent: AccessorExpressionSyntax { IsNullConditional: false } access", printed, StringComparison.Ordinal);
+            Assert.Contains(
+                "case access is AccessorExpressionSyntax { IsNullConditional: false } when", printed, StringComparison.Ordinal);
         }
     }
 

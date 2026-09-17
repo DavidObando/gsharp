@@ -110,6 +110,24 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case BinaryExpressionSyntax binary
                     when binary.IsKind(SyntaxKind.AsExpression) || binary.IsKind(SyntaxKind.IsExpression):
+                    // Issue #4173: a BARE `expr is Type` with no designator,
+                    // pattern combinator, or subpattern parses as this OLDER
+                    // BinaryExpressionSyntax/IsExpression node, not a pattern —
+                    // it never reaches TranslateIsPattern at all. Every I1/
+                    // I1b/I4/I5 null-conditional-access idiom needs to see
+                    // this form too (it is the COMMONEST real-world spelling
+                    // for a plain type probe), or I7's deliberately
+                    // non-discriminating ConditionalAccessExpressionSyntax ->
+                    // ExpressionSyntax map row (and the pre-existing, equally
+                    // unconditional MemberAccessExpressionSyntax row) would
+                    // make it silently vacuous/over-matching here.
+                    if (binary.IsKind(SyntaxKind.IsExpression)
+                        && this.InAnalyzerApiMode
+                        && this.TryTranslateAnalyzerNullConditionalTypeTest(binary.Left, binary.Right, designation: null, binary, out GExpression analyzerBareTypeTest))
+                    {
+                        return analyzerBareTypeTest;
+                    }
+
                     // `e as T` / `e is T`: the right operand is a type. Render it as
                     // a type expression so array/qualified types map to canonical G#
                     // (e.g. `o as []object`, `o is []object`).
@@ -806,6 +824,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return analyzerBaseCall;
             }
 
+            // Issue #4173, I1/I1b/I4/I5: every null-conditional-access idiom
+            // that hinges on `<scrutinee> is <Type>` — G# folds a?.b onto the
+            // same node as a.b (and a?[i] onto a[i]), distinguished only by a
+            // flag, and `<x>.WhenNotNull`/`<x>.Expression is <Type>` (a
+            // CAE-typed x) have no direct G# counterpart at all.
+            if (this.InAnalyzerApiMode
+                && this.TryTranslateAnalyzerNullConditionalTypeTest(
+                    isPattern.Expression,
+                    IsPatternTypeSyntax(isPattern.Pattern),
+                    isPattern.Pattern is DeclarationPatternSyntax withPatternDesignation ? withPatternDesignation.Designation : null,
+                    isPattern,
+                    out GExpression analyzerNullConditionalTypeTest))
+            {
+                return analyzerNullConditionalTypeTest;
+            }
+
             // Issue #1967: `x is Index i` (or any nested designation inside a
             // recursive/positional pattern) declares `i` via a pattern designation,
             // not a declarator — check the whole pattern tree here, the entry point
@@ -836,7 +870,14 @@ public sealed partial class CSharpToGSharpTranslator
             // local, never member CHAINS, so the lowered
             // `x.Prop is T && x.Prop.M == …` fails GS0158 on the unnarrowed
             // second read. Such shapes must take the native pattern form.
+            // Issue #4173 round 3: a CAE-mentioning pattern has no sound native
+            // G# pattern form (its faithful rewrite is a PREDICATE, not a type
+            // test) — TranslatePattern below builds a native GPattern, so a
+            // CAE-mentioning pattern must be refused here too and fall through
+            // to the final legacy boolean lowering (TranslatePatternTest),
+            // where BuildTypeTestExpression's leaf hook handles it soundly.
             if (!PatternIntroducesBinding(isPattern.Pattern)
+                && !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _)
                 && ((!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
                         && !this.IsSmartCastableScrutinee(isPattern.Expression))
                     || PatternRequiresNestedTypeNarrowing(isPattern.Pattern)))
@@ -1146,10 +1187,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // combinator (e.g. `is Frame child and not EmptyFrame`) as a
                     // ConstantPattern over an identifier — but the identifier binds
                     // to a TYPE, so it is a type test, not an equality. `x is T`.
-                    return new BinaryExpression(
-                        receiver,
-                        "is",
-                        new TypeExpression(this.MapTypeReferenceExpression(constant.Expression)));
+                    return this.BuildTypeTestExpression(receiver, constant.Expression, constant);
 
                 case ConstantPatternSyntax constant
                     when receiverType?.SpecialType == SpecialType.System_Object:
@@ -1193,21 +1231,39 @@ public sealed partial class CSharpToGSharpTranslator
                     if (declaration.Designation is SingleVariableDesignationSyntax single &&
                         this.context.GetDeclaredSymbol(single) is { } boundSymbol)
                     {
-                        this.state.PatternBindings[boundSymbol] =
-                            this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, declaration.Type);
+                        if (this.IsConditionalAccessAnalyzerType(declaration.Type))
+                        {
+                            // Issue #4173 round 3, §4.2(d): a CAE designator can
+                            // only reach here at top level, under top-level `not`,
+                            // or under `and` (GS0390 / CS8780 forbid it elsewhere)
+                            // — bind by SUBSTITUTION (re-evaluating the receiver at
+                            // each use), the same convention I4/I5 already use.
+                            this.state.PatternBindings[boundSymbol] = new NonNullAssertionExpression(
+                                this.InvokeNullConditionalChain("AsNullConditionalHop", receiver));
+                        }
+                        else if (this.IsPlainAccessAnalyzerType(declaration.Type, out string sharedGsNodeName))
+                        {
+                            // A shared-node analyzer type (e.g.
+                            // MemberAccessExpressionSyntax -> AccessorExpressionSyntax)
+                            // must narrow to the mapped G# node explicitly — the
+                            // smart-castable branch of BuildPatternNarrowingReplacement
+                            // would otherwise bind `t` to the bare, un-narrowed
+                            // receiver, relying on gsc's own flow-narrowing of the
+                            // now-SUFFIXED type test to have proven `t`'s type.
+                            this.state.PatternBindings[boundSymbol] = NarrowToType(receiver, sharedGsNodeName);
+                        }
+                        else
+                        {
+                            this.state.PatternBindings[boundSymbol] =
+                                this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, declaration.Type);
+                        }
                     }
 
-                    return new BinaryExpression(
-                        receiver,
-                        "is",
-                        new TypeExpression(this.MapTypeSyntax(declaration.Type)));
+                    return this.BuildTypeTestExpression(receiver, declaration.Type, declaration);
 
                 case TypePatternSyntax typePattern:
                     // `x is T` (no binder) → boolean test `x is T`.
-                    return new BinaryExpression(
-                        receiver,
-                        "is",
-                        new TypeExpression(this.MapTypeSyntax(typePattern.Type)));
+                    return this.BuildTypeTestExpression(receiver, typePattern.Type, typePattern);
 
                 case RecursivePatternSyntax recursive:
                     return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax, receiverType, isNestedPatternMember);
@@ -1420,10 +1476,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // identifier that binds to a TYPE → `!(x is T)`.
                     return new UnaryExpression(
                         "!",
-                        new ParenthesizedExpression(new BinaryExpression(
-                            receiver,
-                            "is",
-                            new TypeExpression(this.MapTypeReferenceExpression(constant.Expression)))));
+                        new ParenthesizedExpression(
+                            this.BuildTypeTestExpression(receiver, constant.Expression, constant)));
 
                 case ConstantPatternSyntax constant:
                     // `x is not 6` → `x != 6` (with numeric retyping to the receiver).
@@ -1446,21 +1500,34 @@ public sealed partial class CSharpToGSharpTranslator
                     // `x is not T` → `!(x is T)`.
                     return new UnaryExpression(
                         "!",
-                        new ParenthesizedExpression(new BinaryExpression(
-                            receiver,
-                            "is",
-                            new TypeExpression(this.MapTypeSyntax(typePattern.Type)))));
+                        new ParenthesizedExpression(
+                            this.BuildTypeTestExpression(receiver, typePattern.Type, typePattern)));
 
                 case DeclarationPatternSyntax declaration:
                     // `x is not T t` → `!(x is T)`; `t` is the non-null `T` view,
                     // bound to `x` for use on the matched side.
-                    BindPatternDesignation(declaration.Designation, receiver);
+                    if (this.IsConditionalAccessAnalyzerType(declaration.Type))
+                    {
+                        // Issue #4173 round 3, §4.2(d): bind by SUBSTITUTION, same
+                        // as TranslatePatternTest's DeclarationPatternSyntax case.
+                        BindPatternDesignation(
+                            declaration.Designation,
+                            new NonNullAssertionExpression(
+                                this.InvokeNullConditionalChain("AsNullConditionalHop", receiver)));
+                    }
+                    else if (this.IsPlainAccessAnalyzerType(declaration.Type, out string sharedGsNodeName))
+                    {
+                        BindPatternDesignation(declaration.Designation, NarrowToType(receiver, sharedGsNodeName));
+                    }
+                    else
+                    {
+                        BindPatternDesignation(declaration.Designation, receiver);
+                    }
+
                     return new UnaryExpression(
                         "!",
-                        new ParenthesizedExpression(new BinaryExpression(
-                            receiver,
-                            "is",
-                            new TypeExpression(this.MapTypeSyntax(declaration.Type)))));
+                        new ParenthesizedExpression(
+                            this.BuildTypeTestExpression(receiver, declaration.Type, declaration)));
 
                 default:
                     // General negation: `!( <inner test> )`.
@@ -1515,8 +1582,33 @@ public sealed partial class CSharpToGSharpTranslator
             if (recursive.Designation is SingleVariableDesignationSyntax recVar &&
                 this.context.GetDeclaredSymbol(recVar) is { } recBound)
             {
-                this.state.PatternBindings[recBound] =
-                    this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type);
+                // Issue #4173 round 3 (adversarial-review follow-up): a
+                // designated `T { }`/`T { ... }` recursive pattern over one of
+                // the three shared-node analyzer types reaches this SAME
+                // binding hazard as DeclarationPatternSyntax's designator
+                // above — BuildPatternNarrowingReplacement's smart-castable
+                // branch returns the bare, un-narrowed receiver (relying on
+                // flow-narrowing from a TEST expression this type never
+                // narrows, since the CAE/plain-access test is a predicate/
+                // suffixed-pattern test over a DIFFERENT expression than the
+                // designator's own declared type), and its fallback branch
+                // calls MapTypeSyntax directly — bypassing the discriminator
+                // entirely, mirrored from the same call site this round
+                // already fixed for DeclarationPatternSyntax.
+                if (this.IsConditionalAccessAnalyzerType(recursive.Type))
+                {
+                    this.state.PatternBindings[recBound] = new NonNullAssertionExpression(
+                        this.InvokeNullConditionalChain("AsNullConditionalHop", receiver));
+                }
+                else if (this.IsPlainAccessAnalyzerType(recursive.Type, out string sharedGsNodeName))
+                {
+                    this.state.PatternBindings[recBound] = NarrowToType(receiver, sharedGsNodeName);
+                }
+                else
+                {
+                    this.state.PatternBindings[recBound] =
+                        this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type);
+                }
             }
 
             // A bare recursive pattern with no type prefix (`{ A: 0 }`, `(0, 0)`)
@@ -1603,7 +1695,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GExpression test = recursive.Type != null
-                ? new BinaryExpression(receiver, "is", new TypeExpression(this.MapTypeSyntax(recursive.Type)))
+                ? this.BuildTypeTestExpression(receiver, recursive.Type, recursive)
                 : ((receiverIsValueType && !receiverIsNullableValueType) || receiverIsNonNullableReference) ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
 
             // Issue #1943/#1545: gsc's `&&`/`||` short-circuit narrowing

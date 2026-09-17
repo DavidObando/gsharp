@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 
 namespace Cs2Gs.Translator.Analyzers;
@@ -75,12 +76,17 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.SyntaxTree"] = new("GSharp.Core.CodeAnalysis.Syntax", "SyntaxTree"),
         ["Microsoft.CodeAnalysis.CSharp.SyntaxKind"] = new("GSharp.Core.CodeAnalysis.Syntax", "SyntaxKind"),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "ExpressionSyntax"),
-        ["Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "IndexExpressionSyntax"),
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "IndexExpressionSyntax",
+            "G# folds a?[i] onto the SAME node as a[i], distinguished only by an IsNullConditional flag; a bare type test in a pattern position routes through the dedicated discriminator instead of this row directly (issue #4173 round 3).",
+            SharedGsNode: true),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "NameExpressionSyntax"),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
             "AccessorExpressionSyntax",
-            "G# member access is LeftPart/RightPart expressions, not Expression/Name; name extraction becomes RightPart.GetLastToken().Text."),
+            "G# member access is LeftPart/RightPart expressions, not Expression/Name; name extraction becomes RightPart.GetLastToken().Text.",
+            SharedGsNode: true),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.ParenthesizedExpressionSyntax"] = new("GSharp.Core.CodeAnalysis.Syntax", "ParenthesizedExpressionSyntax"),
         ["Microsoft.CodeAnalysis.CSharp.Syntax.AssignmentExpressionSyntax"] = new(
             "GSharp.Core.CodeAnalysis.Syntax",
@@ -170,6 +176,23 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Syntax",
             "UnaryExpressionSyntax",
             "G# has one unary-expression node for prefix and postfix operators alike; distinguish by OperatorToken.Kind, not node type."),
+
+        // Issue #4173, I7: deliberately the non-discriminating supertype. G#
+        // folds a?.b onto the SAME node as a.b (AccessorExpressionSyntax) and
+        // a?[i] onto the SAME node as a[i] (IndexExpressionSyntax), so there
+        // is no single G# type a ConditionalAccessExpressionSyntax always maps
+        // to soundly. Safe here because every DISCRIMINATING use — is/as,
+        // OfType<>(), FirstAncestorOrSelf<>(), a cast — is intercepted first
+        // by the dedicated null-conditional idioms (I1/I4/I5/I8); a bare cast
+        // or variable-typed read gets this supertype plus a shape warning and
+        // relies on the I2 registration guard for soundness (issue #4173's
+        // own removed idiom is the cautionary tale for trying to prove that
+        // statically instead).
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "ExpressionSyntax",
+            "G# folds a?.b onto the SAME node as a.b and a?[i] onto the SAME node as a[i]; a bare cast/variable-typed read gets this non-discriminating supertype, trusting the I2 registration guard for soundness.",
+            SharedGsNode: true),
 
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),
@@ -386,6 +409,23 @@ internal static class RoslynAnalyzerApiMap
             null,
             "BindingIdentifier",
             "G# stores the designation token on PatternSyntax.BindingIdentifier rather than a child designation node."),
+
+        // Issue #4173, I6: MemberBindingExpressionSyntax/ElementBindingExpressionSyntax
+        // have no G# type of their own (I4/I5 intercept every REACHABLE use), but a
+        // designator bound to one (via I4's TailIsMemberBinding/TailIsElementBinding
+        // branches) resolves member reads on it through the SYMBOL these rows key on.
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax", "Name")] = new(
+            null,
+            "RightPart",
+            "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetLastToken()."),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax", "OperatorToken")] = new(
+            null,
+            "DotToken",
+            "G# token is '?.'; Roslyn's is '.' — wider extent."),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.ElementBindingExpressionSyntax", "ArgumentList")] = new(
+            null,
+            "Indices",
+            "G# has no BracketedArgumentListSyntax wrapper; ElementBindingExpressionSyntax.ArgumentList.Arguments drops straight to Indices."),
     };
 
     /// <summary>
@@ -476,9 +516,28 @@ internal static class RoslynAnalyzerApiMap
         }
     }
 
+    /// <summary>
+    /// Enumerates the metadata names of every <see cref="TypeMap"/> row flagged
+    /// <see cref="Entry.SharedGsNode"/> (issue #4173 round 3, §4.5 drift test —
+    /// a Cs2Gs.Tests test asserts this set agrees with the translator's own
+    /// shared-node registry, so a future shared-node row cannot be added to
+    /// one without the other).
+    /// </summary>
+    /// <returns>The flagged rows' metadata names.</returns>
+    internal static IEnumerable<string> EnumerateSharedGsNodeTypeNames() =>
+        TypeMap.Where(kv => kv.Value.SharedGsNode).Select(kv => kv.Key);
+
     /// <summary>A single mapping row.</summary>
     /// <param name="GsNamespace">The G# namespace (types only; null for members).</param>
     /// <param name="GsName">The G# spelling, or null when the member has no counterpart.</param>
     /// <param name="AdaptationNote">Non-null marks Adapted fidelity: emit a CS2GS-ANALYZER-SHAPE warning carrying this note.</param>
-    internal readonly record struct Entry(string GsNamespace, string GsName, string AdaptationNote = null);
+    /// <param name="SharedGsNode">
+    /// True when <see cref="GsName"/> is a G# node shared with the null-conditional
+    /// spelling of the same access (issue #4173 round 3) — a bare type-name
+    /// substitution over the row would silently over-match, so the translator's
+    /// pattern-position leaves route through a dedicated discriminator instead of
+    /// this map row directly. See <see cref="EnumerateSharedGsNodeTypeNames"/>.
+    /// </param>
+    internal readonly record struct Entry(
+        string GsNamespace, string GsName, string AdaptationNote = null, bool SharedGsNode = false);
 }

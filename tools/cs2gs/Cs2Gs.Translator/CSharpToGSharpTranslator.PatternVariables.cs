@@ -501,6 +501,16 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private bool IsNativelyExpressiblePattern(PatternSyntax pattern, bool topLevel)
         {
+            // Issue #4173 round 3: CAE's faithful G# form is a PREDICATE, not a
+            // node type, so no native G# pattern can express it. Refusing here
+            // funnels the whole is-pattern to the boolean lowering, where
+            // TranslatePatternTest's leaf hook can emit the predicate and
+            // not/and/or compose for free.
+            if (this.PatternMentionsConditionalAccessType(pattern, out _))
+            {
+                return false;
+            }
+
             switch (pattern)
             {
                 case ConstantPatternSyntax:
@@ -635,7 +645,7 @@ public sealed partial class CSharpToGSharpTranslator
             switch (pattern)
             {
                 case ConstantPatternSyntax constant when this.IsTypeReferencePattern(constant.Expression):
-                    return new TypePattern("_", this.MapTypeReferenceExpression(constant.Expression), designationAfterType: true);
+                    return this.BuildPatternTypeTest("_", constant.Expression, constant, designationAfterType: true);
 
                 case ConstantPatternSyntax constant:
                     return new ConstantPattern(this.TranslateExpression(constant.Expression));
@@ -647,12 +657,13 @@ public sealed partial class CSharpToGSharpTranslator
                     return new DiscardPattern();
 
                 case TypePatternSyntax typePattern:
-                    return new TypePattern("_", this.MapTypeSyntax(typePattern.Type), designationAfterType: true);
+                    return this.BuildPatternTypeTest("_", typePattern.Type, typePattern, designationAfterType: true);
 
                 case DeclarationPatternSyntax declaration:
-                    return new TypePattern(
+                    return this.BuildPatternTypeTest(
                         this.NativeDesignator(declaration.Designation, binders),
-                        this.MapTypeSyntax(declaration.Type),
+                        declaration.Type,
+                        declaration,
                         designationAfterType: true);
 
                 case VarPatternSyntax varPattern:
@@ -668,10 +679,11 @@ public sealed partial class CSharpToGSharpTranslator
                             // `T { }` carries the type test's own non-nil check, and
                             // an empty suffix would read as the statement body in a
                             // G# `if` header, so it is dropped.
-                            return new TypePattern(
+                            return this.BuildPatternTypeTest(
                                 designator,
-                                this.MapTypeSyntax(recursive.Type),
-                                fields.Count == 0 ? null : new PropertyPattern(fields),
+                                recursive.Type,
+                                recursive,
+                                suffix: fields.Count == 0 ? null : new PropertyPattern(fields),
                                 designationAfterType: true);
                         }
 
