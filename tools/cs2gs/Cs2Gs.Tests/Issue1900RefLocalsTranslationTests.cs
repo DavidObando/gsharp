@@ -28,10 +28,12 @@ namespace Cs2Gs.Tests;
 /// observably hit the original storage, matching C#'s aliasing semantics
 /// exactly (no value-copy divergence).
 ///
-/// One shape remains unsupported and must gap loudly rather than emit
+/// One shape remains unsupported HERE and must gap loudly rather than emit
 /// non-compiling or semantically-wrong G#: a ref-returning LOCAL function —
-/// it lowers to a G# `func` literal, and G#'s `ref` return modifier only
-/// exists on a genuine top-level/method function declaration.
+/// it lowers to a G# `func` literal. Issue #4219 later gave gsc a genuine
+/// non-generic ref-returning function-literal form (`let f = func (...) ref
+/// T { ... }`), but this translator has not been updated to emit it, so the
+/// gap below stands.
 ///
 /// Re-aliasing a ref-returning CALL's result (<c>ref int q = ref F(x)</c>)
 /// used to gap the same way — gsc's ref-alias/ref-return lvalue check

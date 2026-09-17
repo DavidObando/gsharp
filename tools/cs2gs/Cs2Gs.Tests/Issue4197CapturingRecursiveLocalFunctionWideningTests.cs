@@ -186,8 +186,10 @@ namespace Demo
     [Fact]
     public void RefReturningMemberOfMutualRecursionCycle_StillLiftsToSyntheticHelper()
     {
-        // Carve-out regression guard (#4197 scope, #1900/#4198 follow-up): a
-        // ref-returning local function has no G# function-literal form, so a
+        // Carve-out regression guard (#4197 scope, #1900/#4198 follow-up):
+        // this translator has no lowering to a G# ref-returning function
+        // literal for a ref-returning local function (gsc gained that
+        // literal form in #4219; this translator does not emit it), so a
         // mutual-recursion cycle that passes through one must still lift to
         // `__local_` — #4197's widened gate must not touch it. The recursive
         // step is a plain (non-ref) call rather than `return ref Other(...)`

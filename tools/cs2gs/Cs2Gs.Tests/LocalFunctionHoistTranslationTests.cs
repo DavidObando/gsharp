@@ -17,12 +17,21 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Translator-fidelity tests for C# local functions. C# local functions are
 /// hoisted (callable before their lexical declaration), but G# renders them as
-/// <c>let name = func(...)</c> bindings, which are not hoisted and cannot be
-/// forward-referenced (GS0130/GS0125, issue #2231). When a local function is
-/// referenced before its declaration, the translator moves its <c>let</c>
-/// binding to just before that first use — but no earlier than the last
+/// <c>let name = func(...)</c> bindings, which are not hoisted and generally
+/// cannot be forward-referenced (GS0130/GS0125, issue #2231) — a lone
+/// function-literal <c>let</c>, or one referenced before its own declaration,
+/// still fails exactly as before. Issue #4219 carved out one exception: a
+/// consecutive run of TWO OR MORE non-generic function-literal <c>let</c>
+/// declarations (no intervening non-function <c>let</c>, no explicit outer
+/// type clause) may now forward-reference and call each other, mutually
+/// recursively — see
+/// <see cref="Issue2231MutualRecursionNowSupportedByGscLetBindings"/>. That
+/// gsc-level capability is unrelated to this file's own subject: this
+/// translator still moves a referenced-before-declared local's <c>let</c>
+/// binding to just before its first use — but no earlier than the last
 /// sibling local it captures by closure (G# closures require captured locals
-/// to already be in scope at the binding point).
+/// to already be in scope at the binding point) — rather than emitting the
+/// new consecutive-group form itself.
 /// </summary>
 public class LocalFunctionHoistTranslationTests
 {
@@ -470,37 +479,37 @@ namespace Demo
     }
 
     [Fact]
-    public void Issue2231MutualRecursionRemainsUnsupportedByGscLetBindings()
+    public void Issue2231MutualRecursionNowSupportedByGscLetBindings()
     {
-        // Raw G# `let` bindings remain non-recursive. cs2gs avoids this form for
-        // recursive C# local functions by lifting them to helper methods.
+        // Issue #4219 gave gsc mutual-recursion groups for a consecutive run
+        // of two-or-more non-generic function-literal `let` declarations, so
+        // this exact shape (a forward-referencing `let a` / `let b` pair,
+        // #2231's original repro) now compiles and runs correctly instead of
+        // reporting GS0130. This is a genuine runtime check — a mutual,
+        // decrementing ping-pong with a base case, so it actually terminates
+        // and the printed result proves both directions of the cycle ran —
+        // not just "compiles" or "exits zero".
+        //
+        // This is a gsc-level capability pin, not a translator one: cs2gs
+        // itself does not emit this consecutive-group form for a recursive
+        // C# local function — it still lifts to a synthesized helper (or the
+        // #3399 nullable-var scheme); see the class doc above.
         const string Source = @"
 package p
 class C {
-    func M() {
-        let a = func (n int32) { b(n) }
-        let b = func (n int32) { a(n) }
+    func M(n int32) int32 {
+        let a = func (n int32) int32 {
+            if n == 0 { return 0 }
+            return 1 + b(n - 1)
+        }
+        let b = func (n int32) int32 {
+            if n == 0 { return 0 }
+            return 1 + a(n - 1)
+        }
+        return a(n)
     }
 }";
-        string compiler = FindCompiler();
-        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
-
-        string workDir = Path.Combine(AppContext.BaseDirectory, "issue-2231-mutrec", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(workDir);
-        string gsPath = Path.Combine(workDir, "Snippet.gs");
-        string dllPath = Path.Combine(workDir, "Snippet.dll");
-        File.WriteAllText(gsPath, Source);
-
-        ProcessRunResult compile = ProcessRunner.Run(
-            "dotnet",
-            new[] { compiler, "/target:exe", $"/out:{dllPath}", gsPath },
-            timeout: TimeSpan.FromSeconds(30));
-        Assert.False(compile.TimedOut, compile.Output);
-        Assert.True(
-            compile.ExitCode != 0,
-            "Forward-referencing `let` recursion is expected to still fail today:\n" +
-                compile.Output);
-        Assert.Contains("GS0130", compile.Output, StringComparison.Ordinal);
+        CompileAndRun(Source, "Console.WriteLine(C().M(9))", "9");
     }
 
     internal static string TranslateUnit(string source, string roundTripOnlyReason = null)

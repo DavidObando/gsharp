@@ -147,9 +147,12 @@ namespace Cs2Gs.Tests
             // (non-generic, non-ref-returning) mutual-recursion cycle by real
             // name, so a plain mutual pair no longer lifts. This fixture
             // needs one of the two carve-outs that still force `__local_`
-            // (#4197/#4198 scope): a ref-returning local function has no G#
-            // function-literal form (#1900), so the whole cycle stays lifted
-            // — which is what exercises the collision suffix below.
+            // (#4197/#4198 scope): this translator has no lowering to a G#
+            // ref-returning function literal for a ref-returning local
+            // function (#1900; gsc itself gained that literal form in
+            // #4219, but this translator does not emit it), so the whole
+            // cycle stays lifted — which is what exercises the collision
+            // suffix below.
             string printed = Translate("""
                 public class C
                 {
