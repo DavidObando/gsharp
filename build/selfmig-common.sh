@@ -62,9 +62,27 @@ selfmig_excludes=(
 # Compiler/Extensions/Interpreter test projects, ...). Build both Debug
 # prerequisites up front; the Compiler must come first because the SDK build
 # compiles Gsharp.Extensions' .gs sources with the bootstrap gsc.
+#
+# Issue #3780 / PR #4281: a migrated ANALYZER TEST project (today only
+# test/InternalAnalyzers.Tests) now gets its verifier through a real
+# `<PackageReference Include="GSharp.CodeAnalysis.Analyzers.Testing" />`
+# instead of the old `Reference`/`HintPath` pointed at the compiler's output
+# directory. `SdkCompileRunner.ResolveAnalyzerVerifierPackageVersion` resolves
+# that version from a LOCALLY BUILT nupkg under out/bin/<Config>/nupkgs (then
+# the .nugs folder feed), and `TranslateStage` throws
+# "Could not resolve a local GSharp.CodeAnalysis.Analyzers.Testing package …"
+# when there is none. The same PR dropped Compiler.csproj's ProjectReference to
+# that project, so nothing in this script's build closure produces the nupkg any
+# more: on a clean runner the translate stage crashed outright (nightly run
+# 35227489660). The project is packable (GeneratePackageOnBuild), so an ordinary
+# build is all it takes — in Release, which is the config the migration runs
+# under and the first one the resolver probes.
 selfmig_build_prerequisites() {
   dotnet build "$repo_root/src/Compiler/Compiler.csproj" -c Debug -graph
   dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+  dotnet build \
+    "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
+    -c Release -graph
 }
 
 # Most metrics count CODE, not fixtures: migrated test sources embed
