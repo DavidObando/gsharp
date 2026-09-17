@@ -1406,6 +1406,15 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
+        // Copilot review of PR #4273 / issue #4271: `async let` (ADR-0174 D15)
+        // synthesizes its own BoundGoStatement directly, bypassing
+        // BindGoStatement entirely — a fourth closure-synthesis path with the
+        // identical capture-legality gap (see BindGoStatement's own comment
+        // for the full explanation). Same fix: check the SAME expression
+        // SynthesizeGoClosures will capture from.
+        var asyncLetCaptured = GoCapturedVariableCollector.CollectCapturedVariables(expression);
+        ClosureCaptureLegalityChecker.CheckCapturedVariables(asyncLetCaptured, Diagnostics, syntax.Initializer.Location);
+
         var runtime = binderCtx.ChannelRuntime;
         var frame = binderCtx.ScopeFrames.Peek();
         var id = System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter);

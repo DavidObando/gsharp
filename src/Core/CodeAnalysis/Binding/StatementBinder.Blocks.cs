@@ -1008,8 +1008,29 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));
         }
 
+        // Copilot review of PR #4273 / issue #4271: a `go` statement's operand
+        // is wrapped into a display-class closure by SynthesizeGoClosures at
+        // EMIT time, entirely bypassing LambdaBinder's capture-legality
+        // checks — so a goroutine capturing a ref/out/in PARAMETER (GS9010,
+        // issue #4259) or a ref/var ref LOCAL alias (GS9011, issue #4271) was
+        // neither rejected nor correctly implemented; the display class field
+        // stores a by-value snapshot of the captured storage (see
+        // GoCapturedVariableCollector's field-per-capture shape) and the
+        // mutation through the ref/alias inside the goroutine body is
+        // silently lost. Unlike issue #4222's per-suspension-point liveness
+        // case, a goroutine body always runs concurrently with (and may
+        // outlive) the launching statement — even wrapped in a `scope`, which
+        // only joins the goroutine later, it never runs synchronously inline
+        // — so this capture is always an escape; no confinement carve-out is
+        // possible or needed. Compute the capture set on the SAME (shaped)
+        // expression SynthesizeGoClosures will later capture from, so the
+        // checked set and the actually-captured set can never drift apart.
+        var shapedExpression = binderCtx.ChannelRuntime.ShapeGoOperand(expression);
+        var goCaptured = GoCapturedVariableCollector.CollectCapturedVariables(shapedExpression);
+        ClosureCaptureLegalityChecker.CheckCapturedVariables(goCaptured, Diagnostics, syntax.Expression.Location);
+
         var sink = binderCtx.ScopeFrames.Count > 0 ? new BoundVariableExpression(null, binderCtx.ScopeFrames.Peek()) : null;
-        return new BoundGoStatement(syntax, binderCtx.ChannelRuntime.ShapeGoOperand(expression), sink);
+        return new BoundGoStatement(syntax, shapedExpression, sink);
     }
 
     private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)
