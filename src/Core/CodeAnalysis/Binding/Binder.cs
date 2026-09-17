@@ -1517,7 +1517,7 @@ public sealed class Binder
                 // narrowing-lift guard must see whether ANY of them contains
                 // a goto/label, not just the one currently being bound.
                 tlsBinder.binderCtx.FunctionContainsUserGotoOrLabel =
-                    topLevelStatementsBuilt.Any(StatementBinder.ContainsUserGotoOrLabel);
+                    topLevelStatementsBuilt.Any(statement => StatementBinder.ContainsUserGotoOrLabel(statement));
 
                 statements.AddRange(tlsBinder.statements.BindStatementList(
                     topLevelStatementsBuilt,
