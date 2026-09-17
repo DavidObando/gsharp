@@ -79,7 +79,11 @@ public sealed class Issue2599AvaloniaCodebehindTests : IDisposable
         Assert.Contains("open partial class LibraryView : UserControl", codebehind, StringComparison.Ordinal);
         // ADR-0166 / issue #3409: the negated guard keeps its C# shape and name.
         Assert.Contains("if DataContext is not State vm || booksGrid == nil", codebehind, StringComparison.Ordinal);
-        Assert.Contains("vm.Count = booksGrid", codebehind, StringComparison.Ordinal);
+        // Issue #4262 follow-up (item 2): `booksGrid` is a NON-readonly,
+        // XAML-generated field, so it is not a stable access path — the
+        // local-capture rewrite deliberately excludes it, leaving the
+        // original per-use `!!` in place at this receiver use.
+        Assert.Contains("vm.Count = booksGrid!!.Columns", codebehind, StringComparison.Ordinal);
         Assert.Contains("override async func OnLoaded", codebehind, StringComparison.Ordinal);
         Assert.Contains("RoutedEventArgs) void", codebehind, StringComparison.Ordinal);
         Assert.DoesNotContain("__asyncVoid_", codebehind, StringComparison.Ordinal);

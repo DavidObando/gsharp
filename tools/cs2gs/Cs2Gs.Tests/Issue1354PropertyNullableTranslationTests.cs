@@ -67,6 +67,11 @@ namespace Demo
     }
 }");
 
+        // Issue #4262 follow-up (item 2): `Bits` is a SETTABLE property, so
+        // it is not a stable access path (any call could reassign it via its
+        // public setter) — the local-capture rewrite deliberately excludes
+        // it, leaving the original per-use `!!` in place at this receiver
+        // use.
         Assert.Contains("prop Bits Flags?", printed);
         Assert.Contains("Bits!!.Size", printed);
     }
@@ -117,8 +122,17 @@ namespace Demo
     }
 }");
 
+        // Issue #4262 follow-up (item 2): `Work` is a COMPUTED (expression-
+        // bodied) property, not an auto-property — its getter is not a pure
+        // storage read, so the local-capture rewrite deliberately excludes it
+        // (capturing would collapse two getter evaluations into one, an
+        // observable behavior change for a getter that could have side
+        // effects or return a fresh value per call). The original per-use
+        // `!!` assertion is therefore still the correct, unchanged output
+        // here.
         Assert.Contains("prop Work Task?", printed);
         Assert.Contains("return Work!!", printed);
+        Assert.DoesNotContain("__guard", printed);
     }
 
     [Fact]
