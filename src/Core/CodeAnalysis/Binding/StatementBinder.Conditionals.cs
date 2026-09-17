@@ -392,7 +392,20 @@ internal sealed partial class StatementBinder
             // ApplyEarlyExitNarrowings because that helper consumes
             // entries from PendingEarlyExitFrames keyed by the if node;
             // we have the data inline here, so just promote directly.
-            persistentFrame[variable] = underlying;
+            //
+            // Issue #4285: this is the exact same early-exit-lift hazard
+            // ApplyEarlyExitNarrowings guards against — `guard let p = b.Pet
+            // else { goto Skip }` structurally "exits" via the goto, but a
+            // goto elsewhere in the function could land at `Skip:` (or
+            // anywhere past this guard-let) without that exit ever having
+            // been taken. Since this call site never goes through
+            // ApplyEarlyExitNarrowings, it needs its own copy of the same
+            // whole-function suppression.
+            if (!binderCtx.FunctionContainsUserGotoOrLabel)
+            {
+                persistentFrame[variable] = underlying;
+            }
+
             statements.Add(ifStmt);
         }
 
@@ -474,6 +487,20 @@ internal sealed partial class StatementBinder
         }
 
         binderCtx.PendingPatternVariableLeaks.Remove(ifStatement);
+
+        // Issue #4285: same hazard as ApplyEarlyExitNarrowings — a goto
+        // elsewhere in the function can jump directly to a point after this
+        // if-statement without ever taking the exiting arm, so the "leaked"
+        // pattern variable would be declared-in-scope but never actually
+        // assigned on that path (reading it is worse than a narrowing bug:
+        // an uninitialized/default-valued read, not merely a wrongly-
+        // narrowed nilable one). Suppress the leak under the same
+        // whole-function conservative rule.
+        if (binderCtx.FunctionContainsUserGotoOrLabel)
+        {
+            return;
+        }
+
         foreach (var variable in leaked)
         {
             if (!scope.TryDeclareVariable(variable) && variable.DeclaringSyntax is SyntaxNode declaring)

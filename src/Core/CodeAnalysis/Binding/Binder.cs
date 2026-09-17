@@ -1510,8 +1510,17 @@ public sealed class Binder
                     topLevelStatements.Add(globalStatement.Statement);
                 }
 
+                var topLevelStatementsBuilt = topLevelStatements.MoveToImmutable();
+
+                // Issue #4285: all TLS global statements share one goto/label
+                // namespace (see the FinalizeUserLabels call below), so the
+                // narrowing-lift guard must see whether ANY of them contains
+                // a goto/label, not just the one currently being bound.
+                tlsBinder.binderCtx.FunctionContainsUserGotoOrLabel =
+                    topLevelStatementsBuilt.Any(StatementBinder.ContainsUserGotoOrLabel);
+
                 statements.AddRange(tlsBinder.statements.BindStatementList(
-                    topLevelStatements.MoveToImmutable(),
+                    topLevelStatementsBuilt,
                     statement =>
                     {
                         var tree = statement.SyntaxTree;
@@ -2057,6 +2066,7 @@ public sealed class Binder
                         return BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
                         {
                             var binder = new Binder(parentScope, function);
+                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(functionBody);
                             var body = binder.statements.BindBlockStatement(functionBody);
                             binder.statements.FinalizeUserLabels();
                             var lowered = Lowerer.Lower(body);
@@ -2113,6 +2123,7 @@ public sealed class Binder
                         return BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
                         {
                             var binder = new Binder(parentScope, method);
+                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(methodBody);
                             var body = binder.statements.BindBlockStatement(methodBody);
                             binder.statements.FinalizeUserLabels();
                             var lowered = Lowerer.Lower(body, structSym);
@@ -2273,6 +2284,7 @@ public sealed class Binder
                         return BindBodyWithCache(cache, dirtyTrees, ctor.Function, ctorDeclaration.Body, diagnostics, () =>
                         {
                             var ctorBinder = new Binder(parentScope, ctor.Function);
+                            ctorBinder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(ctorDeclaration.Body);
                             var ctorBody = ctorBinder.statements.BindBlockStatement(ctorDeclaration.Body);
                             ctorBinder.statements.FinalizeUserLabels();
 
@@ -2735,6 +2747,7 @@ public sealed class Binder
                 return BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, method);
+                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(interfaceMethodBody);
                     var body = binder.statements.BindBlockStatement(interfaceMethodBody);
                     binder.statements.FinalizeUserLabels();
                     var lowered = Lowerer.Lower(body);
@@ -2788,6 +2801,7 @@ public sealed class Binder
                 return BindBodyWithCache(cache, dirtyTrees, accessor, bodySyntax, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, accessor);
+                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax);
                     var body = binder.statements.BindBlockStatement(bodySyntax);
                     binder.statements.FinalizeUserLabels();
                     var lowered = Lowerer.Lower(body);
@@ -2844,6 +2858,7 @@ public sealed class Binder
                 return BindBodyWithCache(cache, dirtyTrees, member, bodySyntax, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, member);
+                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax);
 
                     // BindStatement returns null only for a SyntaxKind.CommentToken
                     // node; a member body is never a bare comment.
@@ -2900,6 +2915,7 @@ public sealed class Binder
                 return BindBodyWithCache(cache, dirtyTrees, method, structMethodBody, diagnostics, () =>
                 {
                     var binder = new Binder(parentScope, method);
+                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(structMethodBody);
                     var body = binder.statements.BindBlockStatement(structMethodBody);
                     binder.statements.FinalizeUserLabels();
                     var lowered = Lowerer.Lower(body, structSym);
@@ -2973,6 +2989,14 @@ public sealed class Binder
         try
         {
             var binder = new Binder(parentScope, context);
+
+            // Issue #4285: merged partial static-initializer blocks share
+            // one goto/label namespace (see the FinalizeUserLabels call
+            // below), so the narrowing-lift guard must see whether ANY
+            // block contains a goto/label, not just the one currently being
+            // bound.
+            binder.binderCtx.FunctionContainsUserGotoOrLabel =
+                initBlocks.Any(b => StatementBinder.ContainsUserGotoOrLabel(b.Body));
             var boundBlocks = ImmutableArray.CreateBuilder<BoundStatement>();
             foreach (var initBlock in initBlocks)
             {

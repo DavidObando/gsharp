@@ -286,6 +286,24 @@ internal sealed class BinderContext
         = new Dictionary<string, TextLocation>();
 
     /// <summary>
+    /// Gets or sets a value indicating whether the CURRENT function/lambda/
+    /// local-function body contains any user-written <c>goto</c> statement or non-loop
+    /// <c>label:</c> declaration (issue #4285), computed syntactically,
+    /// once, before that body is bound — see
+    /// <see cref="StatementBinder.ContainsUserGotoOrLabel"/>. Consulted by
+    /// <see cref="StatementBinder.ApplyEarlyExitNarrowings"/> to
+    /// conservatively suppress the early-exit / post-switch narrowing lift
+    /// for the whole body whenever it holds: a <c>goto</c> anywhere in the
+    /// function can jump directly into a region a nil-guard's implicit exit
+    /// was assumed to dominate, bypassing the guard and invalidating the
+    /// narrowing's soundness proof. Fresh per function/lambda/local-function,
+    /// matching <see cref="UserLabels"/>'s scoping — reset and recomputed by
+    /// <c>LambdaBinder.EnterNestedFrame</c> for a nested function-literal or
+    /// arrow-lambda body, and restored by <c>LambdaBinder.RestoreNestedFrame</c>.
+    /// </summary>
+    public bool FunctionContainsUserGotoOrLabel { get; set; }
+
+    /// <summary>
     /// Gets the stack of per-scope variable-narrowing tables used by pattern
     /// matching and flow analysis. Each entry maps a variable to its narrowed
     /// type within the corresponding scope.

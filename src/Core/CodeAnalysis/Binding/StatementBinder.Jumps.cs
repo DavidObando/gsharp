@@ -110,6 +110,72 @@ internal sealed partial class StatementBinder
         userLabelHandlerRegions.Clear();
     }
 
+    /// <summary>
+    /// Issue #4285: syntactic (pre-binding) check for whether
+    /// <paramref name="node"/> — a function/lambda/local-function BODY, or
+    /// any subtree of one — contains any user-written <c>goto</c> statement
+    /// or non-loop <c>label:</c> declaration, i.e. any construct that
+    /// participates in this function's own goto/label namespace (see
+    /// <see cref="DefineUserLabel"/> / <see cref="GetOrCreateUserLabelForGoto"/>).
+    /// A <c>label:</c> on a loop (ADR-0070, <see cref="IsLabelableLoop"/>) is
+    /// excluded: it only names the loop for <c>break</c>/<c>continue</c> and
+    /// is never a valid <c>goto</c> target — only <see cref="DefineUserLabel"/>
+    /// populates <see cref="BinderContext.UserLabels"/>, and
+    /// <c>BindLabeledStatement</c> never calls it for a loop label — so a
+    /// loop label alone cannot create the reachability hazard this check
+    /// guards against.
+    /// <para>
+    /// Does not descend into a nested function-literal or arrow-lambda body
+    /// (<see cref="FunctionLiteralExpressionSyntax"/>,
+    /// <see cref="LambdaExpressionSyntax"/>): those get their own fresh
+    /// goto/label namespace and their own fresh
+    /// <see cref="BinderContext.FunctionContainsUserGotoOrLabel"/>, computed
+    /// separately by <c>LambdaBinder.EnterNestedFrame</c> when THEIR body is
+    /// bound, matching ADR-0070's "label namespace is local to the enclosing
+    /// function" rule.
+    /// </para>
+    /// <para>
+    /// Used to populate <see cref="BinderContext.FunctionContainsUserGotoOrLabel"/>
+    /// once per function-equivalent binding session, which
+    /// <see cref="ApplyEarlyExitNarrowings"/> consults to conservatively
+    /// suppress the early-exit / post-switch narrowing lift for the WHOLE
+    /// body whenever the function contains any goto/label at all, rather
+    /// than pinpointing which SPECIFIC lift site a given <c>goto</c> can
+    /// actually reach. See the comment on
+    /// <see cref="ApplyEarlyExitNarrowings"/> for why a more precise
+    /// CFG-based reachability check is a valid future refinement, not
+    /// required for this fix.
+    /// </para>
+    /// </summary>
+    internal static bool ContainsUserGotoOrLabel(SyntaxNode? node)
+    {
+        switch (node)
+        {
+            case null:
+                return false;
+
+            case GotoStatementSyntax:
+                return true;
+
+            case LabeledStatementSyntax labeled when !IsLabelableLoop(labeled.Statement):
+                return true;
+
+            case FunctionLiteralExpressionSyntax:
+            case LambdaExpressionSyntax:
+                return false;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            if (ContainsUserGotoOrLabel(child))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsHandlerRegionPrefix(
         ImmutableArray<SyntaxNode> targetRegions,
         ImmutableArray<SyntaxNode> sourceRegions)
