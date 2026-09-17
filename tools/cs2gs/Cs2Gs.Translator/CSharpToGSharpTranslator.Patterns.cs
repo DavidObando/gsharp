@@ -797,6 +797,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return analyzerBaseCall;
             }
 
+            // Issue #4173: `expr is ConditionalAccessExpressionSyntax [x]` has no
+            // direct G# counterpart type — G# folds a?.b onto the same node as
+            // a.b, distinguished only by a flag.
+            if (this.InAnalyzerApiMode
+                && this.TryTranslateAnalyzerConditionalAccessTypeTest(isPattern, out GExpression analyzerConditionalAccess))
+            {
+                return analyzerConditionalAccess;
+            }
+
             // Issue #1967: `x is Index i` (or any nested designation inside a
             // recursive/positional pattern) declares `i` via a pattern designation,
             // not a declarator — check the whole pattern tree here, the entry point

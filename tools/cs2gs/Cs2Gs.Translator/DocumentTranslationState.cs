@@ -79,6 +79,17 @@ internal sealed class DocumentTranslationState
     public HashSet<SyntaxNode> ReportedIndexRangeDesignations { get; } =
         new HashSet<SyntaxNode>();
 
+    // Issue #4173: locals bound by `expr is ConditionalAccessExpressionSyntax x`
+    // whose analyzer source ALSO co-tested `x.WhenNotNull is
+    // MemberBindingExpressionSyntax` in the same `&&` conjunction
+    // (TryLowerConditionalAccessSingleHopConjunction) — the only way that
+    // co-test can be true is a single-level access (`a?.b`), since a chained
+    // access's WhenNotNull is a nested ConditionalAccessExpressionSyntax
+    // instead. Only for a local in this set is `x.Expression` safe to read as
+    // G#'s `x.LeftPart`.
+    public HashSet<ISymbol> ProvenSingleHopConditionalAccessLocals { get; } =
+        new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
     // surrounding statement seam has hoisted into trailing `i++` statements
     // (G# models inc/dec as statements, not expressions; spec §Statements).
