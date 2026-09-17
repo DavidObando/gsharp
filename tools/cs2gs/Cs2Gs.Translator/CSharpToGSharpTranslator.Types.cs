@@ -1238,9 +1238,22 @@ public sealed partial class CSharpToGSharpTranslator
         private BlockStatement TranslateSwitchSectionBody(SwitchSectionSyntax section, string injectLabel = null)
         {
             var statements = new List<GStatement>();
+
+            // Issue #4262 follow-up (item 2): mirrors TranslateBlock's own
+            // per-statement guarded-field-local-capture loop — a direct
+            // early-return guard in a switch-section body leaks to the
+            // section's own following statements exactly like a block's does
+            // (AddFollowingStatements explicitly supports SwitchSectionSyntax).
+            var activeGuardCaptures = new Dictionary<ISymbol, IfStatementSyntax>(SymbolEqualityComparer.Default);
+            var capturedNamesInScope = new HashSet<string>();
             foreach (StatementSyntax statement in section.Statements)
             {
                 statements.AddRange(this.TranslateStatement(statement));
+
+                if (statement is IfStatementSyntax ifStatement)
+                {
+                    this.EmitGuardedFieldLocalCaptures(ifStatement, activeGuardCaptures, capturedNamesInScope, statements);
+                }
             }
 
             if (injectLabel != null)

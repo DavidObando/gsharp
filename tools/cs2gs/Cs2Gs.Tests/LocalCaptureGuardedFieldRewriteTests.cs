@@ -19,14 +19,22 @@ namespace Cs2Gs.Tests;
 /// (<c>if (F == null) { return; }</c>, including a compound-condition
 /// disjunct such as <c>if (flag || F == null) { return; }</c>) proves
 /// <c>F</c> non-null for every statement that follows the guard in the SAME
-/// block. Rather than asserting <c>F!!</c> at every one of those later
-/// dereferences (the pre-existing <see cref="Issue2202NullGuardNarrowedFieldForgivenessTranslationTests"/>
-/// / <see cref="Issue2164LazySingletonNullForgivenessTranslationTests"/>
+/// block (or switch section). Rather than asserting <c>F!!</c> at every one
+/// of those later dereferences (the pre-existing
+/// <see cref="Issue2202NullGuardNarrowedFieldForgivenessTranslationTests"/> /
+/// <see cref="Issue2164LazySingletonNullForgivenessTranslationTests"/>
 /// per-use behavior, still the FALLBACK here), the translator now captures
-/// <c>F</c> into a synthesized local right after the guard
-/// (<c>let __guardN = F!!</c>) and rewrites the guard-dominated later reads
-/// to use that local instead — a plain non-null <c>T</c> local needs no
-/// further assertion at its own use sites.
+/// <c>F</c> into a local — NAMED BY LOWERCASING THE FIELD/PROPERTY'S OWN
+/// FIRST LETTER, never a synthetic <c>__identifier</c> (issue #3501's
+/// synthetic-identifier reduction target) — right after the guard, and
+/// rewrites the guard-dominated later reads to use that local instead. A
+/// name collision falls back to the per-use <c>!!</c> rather than inventing
+/// a suffixed alternative, and the rewrite is further restricted to
+/// genuinely STABLE members (a <c>readonly</c> field, or a non-virtual
+/// get-only/init-only auto-property) — the same stability concept item 1
+/// (#4277) introduced for its own analogous narrowing decision — since only
+/// those cannot be reassigned by an intervening call or dispatch to an
+/// override between the guard and a later use.
 /// </summary>
 public class LocalCaptureGuardedFieldRewriteTests
 {
@@ -38,7 +46,7 @@ namespace Demo
 {
     public class Holder
     {
-        public string F { get; set; }
+        public string F { get; }
 
         public void Use()
         {
@@ -52,8 +60,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __guard0 = F!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
+        Assert.Contains("let f = F!!", printed);
+        Assert.Contains("f.ToUpper()", printed);
 
         // The rewritten use must not ALSO carry its own assertion.
         string useBody = printed.Substring(printed.IndexOf("func Use()", StringComparison.Ordinal));
@@ -68,7 +76,7 @@ namespace Demo
 {
     public class Holder
     {
-        public string F { get; set; }
+        public string F { get; }
 
         public void Use()
         {
@@ -84,13 +92,14 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __guard0 = F!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
-        Assert.Contains("__guard0.ToLower()", printed);
-        Assert.Contains("__guard0.Trim()", printed);
+        Assert.Contains("let f = F!!", printed);
+        Assert.Contains("f.ToUpper()", printed);
+        Assert.Contains("f.ToLower()", printed);
+        Assert.Contains("f.Trim()", printed);
 
-        // Only ONE capture is synthesized for the three uses.
-        Assert.DoesNotContain("__guard1", printed);
+        // Only ONE `let f = …` capture is synthesized for the three uses.
+        int firstLet = printed.IndexOf("let f", StringComparison.Ordinal);
+        Assert.DoesNotContain("let f", printed.Substring(firstLet + 1));
     }
 
     [Fact]
@@ -105,8 +114,8 @@ namespace Demo
 {
     public class Holder
     {
-        private bool flag;
-        public string F { get; set; }
+        private readonly bool flag;
+        public string F { get; }
 
         public void Use()
         {
@@ -120,127 +129,95 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __guard0 = F!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
+        Assert.Contains("let f = F!!", printed);
+        Assert.Contains("f.ToUpper()", printed);
     }
 
     [Fact]
-    public void FieldReassignedBetweenGuardAndUse_LaterUseKeepsPerUseAssertion()
+    public void AlreadyLowercaseFieldName_CapturesToSameSpelling()
     {
-        // The first use (before the reassignment) is captured; the second
-        // use (after `F = null;`) must still fall back to a per-use `!!` —
-        // rewriting it to the STALE captured local would be a correctness
-        // bug (it would see the pre-reassignment value).
+        // The repo owner's own example: a field ALREADY spelled lowercase
+        // (`viewModel`) derives a captured local of the IDENTICAL spelling —
+        // the field's own name IS the derived name, and shadowing it with a
+        // local of the same spelling is the intended, idiomatic result (gsc
+        // narrows the LOCAL from that point on; the field itself is never
+        // read bare again in this method).
         string printed = TranslateOblivious(@"
 namespace Demo
 {
+    public class ViewModel { public void DoSomething() { } }
+
     public class Holder
     {
-        public string F { get; set; }
+        private readonly ViewModel viewModel;
 
         public void Use()
         {
-            if (F == null)
+            if (viewModel == null)
             {
                 return;
             }
 
-            F.ToUpper();
-            F = null;
-            F.ToLower();
+            viewModel.DoSomething();
         }
     }
 }");
 
-        Assert.Contains("let __guard0 = F!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
-        Assert.Contains("F = nil", printed);
-        Assert.Contains("F!!.ToLower()", printed);
-
-        // The written-between use is never redirected to the stale capture.
-        Assert.DoesNotContain("__guard0.ToLower()", printed);
+        Assert.Contains("let viewModel = viewModel!!", printed);
+        Assert.Contains("viewModel.DoSomething()", printed);
     }
 
     [Fact]
-    public void LoopCarriedWriteAfterGuard_FallsBackToPerUseAssertion()
+    public void NonReadonlyField_CallBetweenGuardAndUse_FallsBackToPerUseAssertion()
     {
-        // A write inside the loop body invalidates the outer guard's proof
-        // for later iterations (HasLoopCarriedWrite) — no capture at all,
-        // exactly like the existing #2202 rule already refuses to trust a
-        // loop-carried guard.
+        // Copilot review fix (PR #4280): a NON-readonly field's stability
+        // cannot be assumed even with no DIRECT syntactic write between the
+        // guard and a later use — an intervening call (`Reset()`) could
+        // reassign it internally, which `SymbolIsWrittenBetween` (a purely
+        // syntactic check) cannot see. Restricting capture eligibility to
+        // stable members (readonly fields / non-virtual get-or-init-only
+        // auto-properties) excludes this field categorically, so no capture
+        // is attempted at all and every use keeps the existing, always-safe
+        // per-use `!!` fallback.
         string printed = TranslateOblivious(@"
 namespace Demo
 {
     public class Holder
     {
-        public string F { get; set; }
+        private string f;
+
+        private void Reset()
+        {
+            f = null;
+        }
 
         public void Use()
         {
-            if (F == null)
+            if (f == null)
             {
                 return;
             }
 
-            for (int i = 0; i < 3; i++)
-            {
-                F.ToUpper();
-                if (i == 1)
-                {
-                    F = null;
-                }
-            }
+            f.ToUpper();
+            Reset();
+            f.ToLower();
         }
     }
 }");
 
-        Assert.DoesNotContain("__guard", printed);
-        Assert.Contains("F!!.ToUpper()", printed);
+        Assert.DoesNotContain("let f", printed);
+        Assert.Contains("f!!.ToUpper()", printed);
+        Assert.Contains("f!!.ToLower()", printed);
     }
 
     [Fact]
-    public void GotoGuard_DoesNotCapture_LabelCanSkipTheCapture()
+    public void SettableAutoProperty_SameEarlyReturnShape_FallsBackToPerUseAssertion()
     {
-        // `goto` (unlike `return`/`throw`) does not exit the enclosing
-        // method body — it can jump FORWARD to a label that lies among the
-        // very "later statements" a capture would be inserted before. If
-        // this guard were (wrongly) treated as an early-return guard, the
-        // `goto` path would reach `SkipF:` — and the use after it — having
-        // skipped `let __guardN = F!!` entirely, reading an unassigned
-        // local. No capture must be synthesized for this guard at all; every
-        // later use keeps its own per-use `!!` fallback (still correct,
-        // because gsc never actually reaches that use with `F` proven null
-        // by a captured local that was never assigned).
-        string printed = TranslateOblivious(@"
-namespace Demo
-{
-    public class Holder
-    {
-        public string F { get; set; }
-
-        public void Use()
-        {
-            if (F == null)
-            {
-                goto SkipF;
-            }
-
-            F.ToUpper();
-
-            SkipF:
-            F.ToLower();
-        }
-    }
-}");
-
-        Assert.DoesNotContain("__guard", printed);
-        Assert.Contains("F!!.ToUpper()", printed);
-        Assert.Contains("F!!.ToLower()", printed);
-    }
-
-    [Fact]
-    public void PropertyGuard_SameEarlyReturnShape_RewritesToLocalCapture()
-    {
+        // Copilot review fix (PR #4280): a settable property is not stable —
+        // any call could reassign it via its public setter between the guard
+        // and a later use — so it is excluded the same way a non-readonly
+        // field is, even though it IS a pure auto-property (no computed
+        // getter concern).
         string printed = TranslateOblivious(@"
 namespace Demo
 {
@@ -260,8 +237,41 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __guard0 = Name!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
+        Assert.DoesNotContain("let name", printed);
+        Assert.Contains("Name!!.ToUpper()", printed);
+    }
+
+    [Fact]
+    public void VirtualGetOnlyAutoProperty_SameEarlyReturnShape_FallsBackToPerUseAssertion()
+    {
+        // Copilot review fix (PR #4280): a `virtual` (or `override`/
+        // `abstract`) get-only property is not stable even though its OWN
+        // declaration is a plain auto-property — an override elsewhere could
+        // dispatch to a computed getter that returns a different value (or
+        // null) on a later call, exactly the "body-less virtual property can
+        // dispatch to an override with a computed getter" hazard the review
+        // flagged.
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Holder
+    {
+        public virtual string Name { get; }
+
+        public void Use()
+        {
+            if (Name == null)
+            {
+                return;
+            }
+
+            Name.ToUpper();
+        }
+    }
+}");
+
+        Assert.DoesNotContain("let name", printed);
+        Assert.Contains("Name!!.ToUpper()", printed);
     }
 
     [Fact]
@@ -295,9 +305,111 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("__guard", printed);
+        Assert.DoesNotContain("let name", printed);
         Assert.Contains("Name!!.ToUpper()", printed);
         Assert.Contains("Name!!.ToLower()", printed);
+    }
+
+    [Fact]
+    public void NameCollidesWithExistingLocal_FallsBackToPerUseAssertion_NoAlternateNameSynthesized()
+    {
+        // Requirement from the repo owner (issue #3501): a name collision
+        // must skip the rewrite entirely — never invent a suffixed
+        // alternative like `f2`. Here a local `f` already exists in scope at
+        // the point the capture would be inserted, colliding with the
+        // derived name for property `F`.
+        string printed = TranslateOblivious(@"
+using System;
+namespace Demo
+{
+    public class Holder
+    {
+        public string F { get; }
+
+        public void Use()
+        {
+            string f = ""already here"";
+            if (F == null)
+            {
+                return;
+            }
+
+            F.ToUpper();
+            Console.WriteLine(f);
+        }
+    }
+}");
+
+        // The hand-written `let f = "already here"` is expected and untouched
+        // — only a SECOND `let f = F!!` capture (which would shadow it) must
+        // never appear, and no suffixed alternative is invented either.
+        Assert.Contains("let f = \"already here\"", printed);
+        Assert.DoesNotContain("let f = F!!", printed);
+        Assert.DoesNotContain("f2", printed);
+        Assert.Contains("F!!.ToUpper()", printed);
+    }
+
+    [Fact]
+    public void NameCollidesWithParameter_FallsBackToPerUseAssertion()
+    {
+        string printed = TranslateOblivious(@"
+using System;
+namespace Demo
+{
+    public class Holder
+    {
+        public string F { get; }
+
+        public void Use(string f)
+        {
+            if (F == null)
+            {
+                return;
+            }
+
+            F.ToUpper();
+            Console.WriteLine(f);
+        }
+    }
+}");
+
+        Assert.DoesNotContain("let f =", printed);
+        Assert.DoesNotContain("f2", printed);
+        Assert.Contains("F!!.ToUpper()", printed);
+    }
+
+    [Fact]
+    public void NameCollidesWithSiblingMember_FallsBackToPerUseAssertion()
+    {
+        // The derived name `name` collides with an unrelated sibling member
+        // `Name()` reachable unqualified from inside `Use()` — a bare `name`
+        // introduced as a local would be confusing shadowing, so the rewrite
+        // skips it rather than introduce that ambiguity.
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Holder
+    {
+        public string AccessToken { get; }
+
+        private string name;
+
+        public void Use()
+        {
+            if (AccessToken == null)
+            {
+                return;
+            }
+
+            AccessToken.ToUpper();
+        }
+    }
+}");
+
+        // `AccessToken` derives `accessToken`, which does NOT collide with
+        // the unrelated `name` field — this positive control confirms the
+        // fixture's OTHER member does not spuriously block capture.
+        Assert.Contains("let accessToken = AccessToken!!", printed);
     }
 
     [Fact]
@@ -308,7 +420,7 @@ namespace Demo
 {
     public class Holder
     {
-        private string f;
+        private readonly string f;
 
         public void Use()
         {
@@ -322,8 +434,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __guard0 = f!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
+        Assert.Contains("let f = f!!", printed);
+        Assert.Contains("f.ToUpper()", printed);
     }
 
     [Fact]
@@ -338,7 +450,7 @@ namespace Demo
 {
     public class Holder
     {
-        public string F { get; set; }
+        public string F { get; }
 
         public void Use(bool flag)
         {
@@ -355,7 +467,7 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("__guard", printed);
+        Assert.DoesNotContain("let f", printed);
         Assert.Contains("F!!.ToUpper()", printed);
     }
 
@@ -371,7 +483,7 @@ namespace Demo
 {
     public class Holder
     {
-        public string F { get; set; }
+        public string F { get; }
 
         public void Use(Holder other)
         {
@@ -385,7 +497,7 @@ namespace Demo
     }
 }");
 
-        Assert.DoesNotContain("__guard", printed);
+        Assert.DoesNotContain("let f", printed);
         Assert.Contains("other.F!!.ToUpper()", printed);
     }
 
@@ -403,7 +515,7 @@ namespace Demo
 {
     public class Holder
     {
-        public string F { get; set; }
+        public string F { get; }
 
         public void Use()
         {
@@ -424,11 +536,91 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __guard0 = F!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
-        Assert.Contains("if __guard0 == nil", printed);
-        Assert.Contains("__guard0.ToLower()", printed);
-        Assert.DoesNotContain("__guard1", printed);
+        Assert.Contains("let f = F!!", printed);
+        Assert.Contains("f.ToUpper()", printed);
+        Assert.Contains("if f == nil", printed);
+        Assert.Contains("f.ToLower()", printed);
+
+        // Only ONE `let f = …` capture is synthesized.
+        int firstLet = printed.IndexOf("let f", StringComparison.Ordinal);
+        Assert.DoesNotContain("let f", printed.Substring(firstLet + 1));
+    }
+
+    [Fact]
+    public void GotoGuard_DoesNotCapture_LabelCanSkipTheCapture()
+    {
+        // `goto` (unlike `return`/`throw`) does not exit the enclosing
+        // method body — it can jump FORWARD to a label that lies among the
+        // very "later statements" a capture would be inserted before. If
+        // this guard were (wrongly) treated as an early-return guard, the
+        // `goto` path would reach `SkipF:` — and the use after it — having
+        // skipped `let f = F!!` entirely, reading an unassigned local. No
+        // capture must be synthesized for this guard at all; every later use
+        // keeps its own per-use `!!` fallback (still correct, because gsc
+        // never actually reaches that use with `F` proven null).
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Holder
+    {
+        public string F { get; }
+
+        public void Use()
+        {
+            if (F == null)
+            {
+                goto SkipF;
+            }
+
+            F.ToUpper();
+
+            SkipF:
+            F.ToLower();
+        }
+    }
+}");
+
+        Assert.DoesNotContain("let f", printed);
+        Assert.Contains("F!!.ToUpper()", printed);
+        Assert.Contains("F!!.ToLower()", printed);
+    }
+
+    [Fact]
+    public void SwitchSection_EarlyReturnGuard_RewritesToLocalCapture()
+    {
+        // A direct guard inside a `case` body leaks to that SAME section's
+        // own following statements exactly like a block's does
+        // (AddFollowingStatements explicitly supports SwitchSectionSyntax) —
+        // TranslateSwitchSectionBody now runs the same per-statement capture
+        // loop TranslateBlock does.
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Holder
+    {
+        public string F { get; }
+
+        public void Use(int mode)
+        {
+            switch (mode)
+            {
+                case 1:
+                    if (F == null)
+                    {
+                        return;
+                    }
+
+                    F.ToUpper();
+                    F.ToLower();
+                    break;
+            }
+        }
+    }
+}");
+
+        Assert.Contains("let f = F!!", printed);
+        Assert.Contains("f.ToUpper()", printed);
+        Assert.Contains("f.ToLower()", printed);
     }
 
     [Fact]
@@ -443,7 +635,7 @@ namespace Demo
 {
     public class Holder
     {
-        public string? F { get; set; }
+        public string? F { get; }
 
         public void Use()
         {
@@ -457,8 +649,8 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let __guard0 = F!!", printed);
-        Assert.Contains("__guard0.ToUpper()", printed);
+        Assert.Contains("let f = F!!", printed);
+        Assert.Contains("f.ToUpper()", printed);
     }
 
     private static string TranslateOblivious(string source)

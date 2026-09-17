@@ -67,13 +67,13 @@ namespace Demo
     }
 }");
 
-        // Issue #4262 follow-up (item 2): the statement-level early-return
-        // guard now captures `Bits` into a local right after the guard
-        // instead of asserting `!!` at this receiver use.
+        // Issue #4262 follow-up (item 2): `Bits` is a SETTABLE property, so
+        // it is not a stable access path (any call could reassign it via its
+        // public setter) — the local-capture rewrite deliberately excludes
+        // it, leaving the original per-use `!!` in place at this receiver
+        // use.
         Assert.Contains("prop Bits Flags?", printed);
-        Assert.Contains("let __guard0 = Bits!!", printed);
-        Assert.Contains("__guard0.Size", printed);
-        Assert.DoesNotContain("Bits!!.Size", printed);
+        Assert.Contains("Bits!!.Size", printed);
     }
 
     [Fact]

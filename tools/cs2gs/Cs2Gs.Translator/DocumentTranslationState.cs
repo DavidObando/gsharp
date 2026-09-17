@@ -116,21 +116,21 @@ internal sealed class DocumentTranslationState
 
     // Issue #4262 follow-up (item 2): C# reads of a field/property that an
     // early-return null guard earlier in the SAME block proves non-null,
-    // rewritten to reference the synthesized `let __guardN = field!!` local
-    // TranslateBlock inserts right after the guard (see
+    // rewritten to reference the local TranslateBlock/TranslateSwitchSectionBody
+    // insert right after the guard (see
     // CSharpToGSharpTranslator.GuardedFieldLocalCapture.cs) instead of the
     // field itself — gsc narrows/needs nothing further for a plain local
-    // read, so no per-use `!!` is required. Keyed by the exact C# syntax
+    // read, so no per-use `!!` is required. The local's name is DERIVED from
+    // the field/property's own name (lowercasing only its first letter),
+    // never a synthetic `__identifier` (issue #3501's synthetic-identifier
+    // reduction target) — a name collision skips the rewrite entirely rather
+    // than inventing a suffixed alternative. Keyed by the exact C# syntax
     // node (mirroring HoistedExpressionValues); consulted by
     // TranslateExpression (substitutes the read) and by
     // GSharpExpressionIsStaticallyNonNull (silences the `!!` predicates that
     // would otherwise fire on the pre-rewrite field read).
     public Dictionary<ExpressionSyntax, string> GuardCapturedFieldReads { get; } =
         new Dictionary<ExpressionSyntax, string>();
-
-    // Monotonic counter for the synthesized guard-capture locals above
-    // (`__guard0`, `__guard1`, …), mirroring SpillCounter's `__spillN` scheme.
-    public int GuardCaptureCounter { get; set; }
 
     // Static-field initializers lifted out of a `static` constructor body
     // (`static T() { Field = value; }`). G# has no static constructor, so a

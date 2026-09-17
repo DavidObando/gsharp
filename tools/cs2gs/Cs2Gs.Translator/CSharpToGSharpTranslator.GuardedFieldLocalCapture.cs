@@ -23,28 +23,41 @@ public sealed partial class CSharpToGSharpTranslator
         /// <see cref="IsNullGuardNarrowedFieldUse"/> and
         /// <see cref="IsLazyInitGuardedFieldUse"/> already recognize the
         /// simple atoms of) proves <c>F</c> non-null for every statement that
-        /// follows it in the SAME block. Today every later dereference of
-        /// <c>F</c> in that region gets its OWN <c>!!</c> (gsc, by design,
-        /// never smart-casts a field/property — see those methods' doc
-        /// comments). This is faithful but noisy: a real-corpus measurement
-        /// found 220 (28%) of 787 <c>!!</c> sites are exactly this shape.
+        /// follows it in the SAME block (or switch section — see
+        /// <see cref="AddFollowingStatements"/>). Today every later
+        /// dereference of <c>F</c> in that region gets its OWN <c>!!</c> (gsc,
+        /// by design, never smart-casts a field/property — see those
+        /// methods' doc comments). This is faithful but noisy: a real-corpus
+        /// measurement found 220 (28%) of 787 <c>!!</c> sites are exactly
+        /// this shape.
         /// <para>
-        /// Instead, capture the field into a synthesized local right after
-        /// the guard (<c>let __guardN = F!!</c>) and rewrite the
-        /// guard-dominated later reads to use that local — a genuinely
-        /// non-null <c>T</c> local needs no further narrowing or assertion
-        /// at its own use sites, collapsing N `!!` sites into the single one
-        /// at the capture. <see cref="IsNullGuardNarrowedFieldUse"/>'s
+        /// Instead, capture the field into a local — named by lowercasing
+        /// the field/property's OWN first letter (<c>AccessToken</c> →
+        /// <c>accessToken</c>; an already-lowercase field like
+        /// <c>viewModel</c> is used as-is) — right after the guard, and
+        /// rewrite the guard-dominated later reads to use that local. gsc
+        /// DOES smart-cast a bare local, so no further narrowing/assertion is
+        /// needed at its own use sites, collapsing N `!!` sites into the
+        /// single one at the capture. This repo deliberately treats
+        /// synthetic <c>__identifier</c>s as a cost to avoid (issue #3501's
+        /// readability counters target zero of them), so this rewrite never
+        /// invents one: if the derived name collides with anything else
+        /// visible unqualified at the capture point (see
+        /// <see cref="TryDeriveCaptureLocalName"/>), it skips the rewrite for
+        /// that guard/field pair entirely — no suffixed fallback name is
+        /// ever synthesized. <see cref="IsNullGuardNarrowedFieldUse"/>'s
         /// per-use <c>!!</c> insertion remains the FALLBACK for any read this
-        /// rewrite does not safely reach (written-between, loop-carried, a
-        /// different receiver instance, or outside this block) — this pass
-        /// only ever REMOVES `!!` sites it can prove safe to remove, never
-        /// regressing the existing coverage.
+        /// rewrite does not safely reach (a name collision, written-between,
+        /// loop-carried, a different receiver instance, a goto that can skip
+        /// the capture declaration, an unstable/mutable/computed member, or
+        /// outside this block) — this pass only ever REMOVES `!!` sites it
+        /// can prove safe to remove, never regressing the existing coverage.
         /// </para>
         /// </summary>
         private void EmitGuardedFieldLocalCaptures(
             IfStatementSyntax ifStatement,
             Dictionary<ISymbol, IfStatementSyntax> activeCaptures,
+            HashSet<string> capturedNamesInScope,
             List<GStatement> statements)
         {
             List<ISymbol> provenNonNull = this.GetFieldsOrPropertiesProvenNonNullByEarlyReturnGuard(ifStatement);
@@ -83,6 +96,11 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                if (!this.TryDeriveCaptureLocalName(symbol, ifStatement, capturedNamesInScope, out string capturedName))
+                {
+                    continue;
+                }
+
                 var eligibleUses = new List<ExpressionSyntax>();
                 foreach (SyntaxNode region in regions)
                 {
@@ -99,7 +117,6 @@ public sealed partial class CSharpToGSharpTranslator
                 // circuit to the (not-yet-declared) capture and translate the
                 // field read as itself.
                 GExpression fieldRead = this.TranslateExpression(eligibleUses[0]);
-                string capturedName = $"__guard{this.state.GuardCaptureCounter++}";
                 statements.Add(new LocalDeclarationStatement(
                     BindingKind.Let,
                     capturedName,
@@ -112,8 +129,77 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 activeCaptures[symbol] = ifStatement;
+                capturedNamesInScope.Add(capturedName);
             }
         }
+
+        // Requirement from the repo owner (issue #3501's synthetic-identifier
+        // reduction target): this rewrite must NEVER introduce a synthetic
+        // `__guardN`-style name. The captured local's name is instead DERIVED
+        // from the field/property's own name by lowercasing only its first
+        // letter (C#'s conventional PascalCase-field → camelCase-local
+        // rule): `AccessToken` → `accessToken`; a field already spelled
+        // lowercase, like `viewModel`, is used as-is (its own name IS the
+        // derived name, so it is explicitly exempted from colliding with
+        // itself below). If that derived name collides with ANYTHING else
+        // visible unqualified at the exact point the capture would be
+        // inserted — another local already in scope, a parameter, a sibling
+        // type member, or a G# reserved word — this method does NOT invent a
+        // suffixed alternative (`accessToken2`): it returns <see
+        // langword="false"/> and the caller skips the rewrite for this
+        // guard/field pair entirely, leaving the existing per-use `!!`
+        // fallback in place exactly as if the guard had not been recognized.
+        // <paramref name="capturedNamesInScope"/> also guards against two
+        // DIFFERENT captures within the same enclosing block deriving the
+        // identical name (e.g. sibling guards on fields `Token` and `token`)
+        // — a case Roslyn's own symbol table cannot see, since neither
+        // capture exists in the original C# source.
+        private bool TryDeriveCaptureLocalName(
+            ISymbol symbol,
+            IfStatementSyntax insertionPoint,
+            HashSet<string> capturedNamesInScope,
+            out string name)
+        {
+            name = null;
+            string candidate = LowercaseFirstLetter(symbol.Name);
+            if (string.IsNullOrEmpty(candidate))
+            {
+                return false;
+            }
+
+            if (GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
+                    candidate,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Local)
+                || capturedNamesInScope.Contains(candidate))
+            {
+                return false;
+            }
+
+            // Every symbol visible UNQUALIFIED under this exact spelling at
+            // the point the `let` would be inserted — parameters, locals
+            // already declared earlier in an enclosing block, and unqualified
+            // type members (including inherited ones) — must be either
+            // nonexistent or be `symbol` itself (the very field/property
+            // being captured always resolves under its own name; that is
+            // not a real collision, it is the intended shadow).
+            foreach (ISymbol visible in this.context.SemanticModel.LookupSymbols(
+                insertionPoint.Span.End,
+                name: candidate))
+            {
+                if (!SymbolEqualityComparer.Default.Equals(visible, symbol))
+                {
+                    return false;
+                }
+            }
+
+            name = candidate;
+            return true;
+        }
+
+        private static string LowercaseFirstLetter(string name) =>
+            string.IsNullOrEmpty(name) || char.IsLower(name[0])
+                ? name
+                : char.ToLowerInvariant(name[0]) + name.Substring(1);
 
         // True when `expression` is the exact C# node a guard capture already
         // rewrote (see EmitGuardedFieldLocalCaptures / GuardCapturedFieldReads).
@@ -132,7 +218,7 @@ public sealed partial class CSharpToGSharpTranslator
         // statement that follows it in the same block — one entry per
         // top-level `||`-disjunct null-check atom in `<cond>` whose operand is
         // a safely-attributable (bare or `this.`-qualified) read of a field/
-        // property G# emits `T?` (see TryGetEmittedNullableFieldOrProperty).
+        // property G# emits `T?` (see TryGetEmittedNullableFieldOrPropertySymbol).
         private List<ISymbol> GetFieldsOrPropertiesProvenNonNullByEarlyReturnGuard(
             IfStatementSyntax ifStatement)
         {
@@ -153,28 +239,28 @@ public sealed partial class CSharpToGSharpTranslator
             return results;
         }
 
-        // Rubber-duck review fix (item 2 follow-up): a narrower, LOCAL variant
-        // of <see cref="StatementAlwaysExits"/> that excludes
-        // `GotoStatementSyntax`. `StatementAlwaysExits` treats `goto` as
-        // "always exits" because that is correct for that helper's own
-        // callers (a `goto` never falls through the guard STATEMENT itself).
-        // But THIS rewrite's "always exits" question is different: it asks
-        // whether the guard body can ever reach the "later statements"
-        // region the capture is inserted into via a path that skipped the
-        // capture. A `goto` inside the guard body can jump FORWARD to an
-        // arbitrary LABEL that happens to lie among those very later
-        // statements (`AddFollowingStatements`) — landing there without ever
-        // executing `let __guardN = F!!`, reading an unassigned local.
-        // `return`/`throw` never resume the enclosing method body at all, so
-        // they stay safe; `break`/`continue` are ALSO safe here — unlike an
-        // arbitrary `goto` label, their target (the loop's next-iteration
-        // test, or the statement right after the whole loop/switch) can
-        // never coincide with a statement `AddFollowingStatements` returns,
-        // because that helper only walks the SAME immediately-enclosing
-        // block/switch-section as the `if`, and a `break`/`continue` target
-        // always lies strictly outside it. Scoped to this file's own use
-        // only — `StatementAlwaysExits` and its other callers (control-flow
-        // lowering, native pattern-variable regions) are unchanged.
+        // A narrower, LOCAL variant of <see cref="StatementAlwaysExits"/>
+        // that excludes `GotoStatementSyntax`. `StatementAlwaysExits` treats
+        // `goto` as "always exits" because that is correct for that helper's
+        // own callers (a `goto` never falls through the guard STATEMENT
+        // itself). But THIS rewrite's "always exits" question is different:
+        // it asks whether the guard body can ever reach the "later
+        // statements" region the capture is inserted into via a path that
+        // skipped the capture. A `goto` inside the guard body can jump
+        // FORWARD to an arbitrary LABEL that happens to lie among those very
+        // later statements (`AddFollowingStatements`) — landing there
+        // without ever executing the capture's `let`, reading an unassigned
+        // local. `return`/`throw` never resume the enclosing method body at
+        // all, so they stay safe; `break`/`continue` are ALSO safe here —
+        // unlike an arbitrary `goto` label, their target (the loop's
+        // next-iteration test, or the statement right after the whole
+        // loop/switch) can never coincide with a statement
+        // `AddFollowingStatements` returns, because that helper only walks
+        // the SAME immediately-enclosing block/switch-section as the `if`,
+        // and a `break`/`continue` target always lies strictly outside it.
+        // Scoped to this file's own use only — `StatementAlwaysExits` and
+        // its other callers (control-flow lowering, native pattern-variable
+        // regions) are unchanged.
         private static bool AlwaysExitsViaReturnOrThrow(StatementSyntax statement) =>
             statement switch
             {
@@ -213,26 +299,34 @@ public sealed partial class CSharpToGSharpTranslator
         // (issue #2202), used here where only the DECLARING symbol — not a
         // specific read syntax node — is available yet.
         //
-        // Rubber-duck review fix (item 2 follow-up, Finding 2): a PROPERTY
-        // candidate is additionally required to be auto-implemented
-        // (<see cref="IsAutoImplementedProperty"/>). The `!!`-per-use
-        // fallback re-evaluates a computed property's getter at every read —
-        // faithful to C#'s own call count. This rewrite instead evaluates the
-        // guarded value ONCE, at the capture, and every later read reuses
-        // that one result. For a plain auto-property (or a field) that is a
-        // pure storage read with no observable difference. For a computed
-        // property whose getter runs arbitrary code (`=> Lookup();`), it is
-        // a real behavior change — fewer calls, and any side effect or
-        // freshly-computed value in the getter body would only be observed
-        // once instead of once per read. Fields have no such getter and are
-        // unaffected by this restriction.
+        // Copilot review fix (PR #4280): a candidate must be a genuinely
+        // STABLE access path member — reusing <see cref="IsStableMemberSymbol"/>,
+        // the exact same predicate item 1's fix (#4277) introduced to decide
+        // when gsc itself narrows a member path (mirroring gsc's own
+        // `SmartCastStability` in `src/Core/CodeAnalysis/Binding`): a
+        // `readonly` instance field, or a non-virtual/non-override/
+        // non-abstract auto-implemented property with no setter or an
+        // init-only one. `SymbolIsWrittenBetween` only ever sees DIRECT
+        // syntactic writes in the same method body — it cannot see that an
+        // intervening call (`ResetF(); F.ToUpper();`) might reassign the
+        // member internally, or that a virtual/overridable getter could
+        // dispatch to an override with a computed body. A genuinely stable
+        // member structurally CANNOT be reassigned by any call after
+        // construction (no setter, no override dispatch) and CANNOT be a
+        // computed getter (auto-implemented only), which closes both holes
+        // at once — not just the "evaluate once" noise-reduction concern the
+        // auto-property check alone addressed.
         private bool TryGetEmittedNullableFieldOrPropertySymbol(ISymbol symbol)
         {
+            if (!IsStableMemberSymbol(symbol))
+            {
+                return false;
+            }
+
             ITypeSymbol declared = symbol switch
             {
                 IFieldSymbol field => field.Type,
-                IPropertySymbol property when IsAutoImplementedProperty(property) => property.Type,
-                IPropertySymbol => null,
+                IPropertySymbol property => property.Type,
                 _ => null,
             };
 
@@ -243,42 +337,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             return declared.NullableAnnotation == NullableAnnotation.Annotated
                 || this.ShouldPromoteToNullableReference(symbol);
-        }
-
-        // True when `property` is auto-implemented: every accessor it
-        // declares is body-less (`{ get; }`, `{ get; set; }`, `{ get; init; }`)
-        // and the property itself has no expression body (`=> expr`) — a pure
-        // compiler-backed storage read/write with no observable getter side
-        // effects or per-call recomputation. A property with no source
-        // declaration at all (e.g. imported from metadata) is conservatively
-        // treated as NOT auto-implemented, since its accessor body cannot be
-        // inspected here.
-        private static bool IsAutoImplementedProperty(IPropertySymbol property)
-        {
-            foreach (SyntaxReference reference in property.DeclaringSyntaxReferences)
-            {
-                if (reference.GetSyntax() is not PropertyDeclarationSyntax propertySyntax)
-                {
-                    return false;
-                }
-
-                if (propertySyntax.ExpressionBody != null || propertySyntax.AccessorList == null)
-                {
-                    return false;
-                }
-
-                foreach (AccessorDeclarationSyntax accessor in propertySyntax.AccessorList.Accessors)
-                {
-                    if (accessor.Body != null || accessor.ExpressionBody != null)
-                    {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-
-            return false;
         }
 
         // True when `condition == true` proves `symbol` is null via a
@@ -353,10 +411,13 @@ public sealed partial class CSharpToGSharpTranslator
         // occurrence (never a different instance's same-named field/
         // property — see IsSafeNullCheckOf's remarks) that is not itself a
         // write, a `nameof` argument, written between the guard and this use
-        // (SymbolIsWrittenBetween), or reached through a loop-carried write
-        // (HasLoopCarriedWrite) — reusing both exactly as
-        // <see cref="IsGSharpFlowNarrowedLocal"/> already does for a bare
-        // local/parameter.
+        // (SymbolIsWrittenBetween — a belt-and-suspenders check; the real
+        // protection against indirect/aliased mutation is that
+        // TryGetEmittedNullableFieldOrPropertySymbol already restricts every
+        // candidate to a genuinely stable member no call can reassign), or
+        // reached through a loop-carried write (HasLoopCarriedWrite) —
+        // reusing both exactly as <see cref="IsGSharpFlowNarrowedLocal"/>
+        // already does for a bare local/parameter.
         private void CollectEligibleGuardCaptureUses(
             SyntaxNode region,
             ISymbol symbol,
