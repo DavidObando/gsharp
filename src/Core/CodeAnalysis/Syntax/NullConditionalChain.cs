@@ -83,6 +83,11 @@ public static class NullConditionalChain
     /// <param name="node">The candidate node.</param>
     /// <returns>The node as an <see cref="ExpressionSyntax"/> hop, or null.</returns>
     public static ExpressionSyntax? AsNullConditionalHop(SyntaxNode? node)
+
+        // IsNullConditionalHop's true branches match only a non-null
+        // AccessorExpressionSyntax or IndexExpressionSyntax (its `_` arm covers
+        // null and everything else), and both hop kinds are ExpressionSyntax
+        // subtypes; the compiler cannot see that invariant across the call.
         => IsNullConditionalHop(node) ? (ExpressionSyntax)node! : null;
 
     /// <summary>
@@ -134,6 +139,10 @@ public static class NullConditionalChain
         SyntaxNode current = node;
         while (TryGetChainExtendingParent(current, out SyntaxNode? parent))
         {
+            // Every branch of TryGetChainExtendingParent that returns true also
+            // assigns a non-null node to `parent` first; only the false-returning
+            // default branch leaves it null. The method just isn't annotated
+            // [NotNullWhen(true)], so the compiler can't see that across the call.
             current = parent!;
         }
 
