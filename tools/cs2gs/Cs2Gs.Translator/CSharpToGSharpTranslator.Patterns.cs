@@ -110,6 +110,24 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case BinaryExpressionSyntax binary
                     when binary.IsKind(SyntaxKind.AsExpression) || binary.IsKind(SyntaxKind.IsExpression):
+                    // Issue #4173: a BARE `expr is Type` with no designator,
+                    // pattern combinator, or subpattern parses as this OLDER
+                    // BinaryExpressionSyntax/IsExpression node, not a pattern —
+                    // it never reaches TranslateIsPattern at all. Every I1/
+                    // I1b/I4/I5 null-conditional-access idiom needs to see
+                    // this form too (it is the COMMONEST real-world spelling
+                    // for a plain type probe), or I7's deliberately
+                    // non-discriminating ConditionalAccessExpressionSyntax ->
+                    // ExpressionSyntax map row (and the pre-existing, equally
+                    // unconditional MemberAccessExpressionSyntax row) would
+                    // make it silently vacuous/over-matching here.
+                    if (binary.IsKind(SyntaxKind.IsExpression)
+                        && this.InAnalyzerApiMode
+                        && this.TryTranslateAnalyzerNullConditionalTypeTest(binary.Left, binary.Right, designation: null, binary, out GExpression analyzerBareTypeTest))
+                    {
+                        return analyzerBareTypeTest;
+                    }
+
                     // `e as T` / `e is T`: the right operand is a type. Render it as
                     // a type expression so array/qualified types map to canonical G#
                     // (e.g. `o as []object`, `o is []object`).
@@ -806,13 +824,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return analyzerBaseCall;
             }
 
-            // Issue #4173: `expr is ConditionalAccessExpressionSyntax [x]` has no
-            // direct G# counterpart type — G# folds a?.b onto the same node as
-            // a.b, distinguished only by a flag.
+            // Issue #4173, I1/I1b/I4/I5: every null-conditional-access idiom
+            // that hinges on `<scrutinee> is <Type>` — G# folds a?.b onto the
+            // same node as a.b (and a?[i] onto a[i]), distinguished only by a
+            // flag, and `<x>.WhenNotNull`/`<x>.Expression is <Type>` (a
+            // CAE-typed x) have no direct G# counterpart at all.
             if (this.InAnalyzerApiMode
-                && this.TryTranslateAnalyzerConditionalAccessTypeTest(isPattern, out GExpression analyzerConditionalAccess))
+                && this.TryTranslateAnalyzerNullConditionalTypeTest(
+                    isPattern.Expression,
+                    IsPatternTypeSyntax(isPattern.Pattern),
+                    isPattern.Pattern is DeclarationPatternSyntax withPatternDesignation ? withPatternDesignation.Designation : null,
+                    isPattern,
+                    out GExpression analyzerNullConditionalTypeTest))
             {
-                return analyzerConditionalAccess;
+                return analyzerNullConditionalTypeTest;
             }
 
             // Issue #1967: `x is Index i` (or any nested designation inside a

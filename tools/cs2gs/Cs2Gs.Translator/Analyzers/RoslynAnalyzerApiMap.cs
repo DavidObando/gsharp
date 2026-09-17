@@ -171,6 +171,22 @@ internal static class RoslynAnalyzerApiMap
             "UnaryExpressionSyntax",
             "G# has one unary-expression node for prefix and postfix operators alike; distinguish by OperatorToken.Kind, not node type."),
 
+        // Issue #4173, I7: deliberately the non-discriminating supertype. G#
+        // folds a?.b onto the SAME node as a.b (AccessorExpressionSyntax) and
+        // a?[i] onto the SAME node as a[i] (IndexExpressionSyntax), so there
+        // is no single G# type a ConditionalAccessExpressionSyntax always maps
+        // to soundly. Safe here because every DISCRIMINATING use — is/as,
+        // OfType<>(), FirstAncestorOrSelf<>(), a cast — is intercepted first
+        // by the dedicated null-conditional idioms (I1/I4/I5/I8); a bare cast
+        // or variable-typed read gets this supertype plus a shape warning and
+        // relies on the I2 registration guard for soundness (issue #4173's
+        // own removed idiom is the cautionary tale for trying to prove that
+        // statically instead).
+        ["Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax"] = new(
+            "GSharp.Core.CodeAnalysis.Syntax",
+            "ExpressionSyntax",
+            "G# folds a?.b onto the SAME node as a.b and a?[i] onto the SAME node as a[i]; a bare cast/variable-typed read gets this non-discriminating supertype, trusting the I2 registration guard for soundness."),
+
         // Symbols (Exact by design where names align).
         ["Microsoft.CodeAnalysis.ISymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "Symbol"),
         ["Microsoft.CodeAnalysis.IFieldSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "FieldSymbol"),
@@ -386,6 +402,23 @@ internal static class RoslynAnalyzerApiMap
             null,
             "BindingIdentifier",
             "G# stores the designation token on PatternSyntax.BindingIdentifier rather than a child designation node."),
+
+        // Issue #4173, I6: MemberBindingExpressionSyntax/ElementBindingExpressionSyntax
+        // have no G# type of their own (I4/I5 intercept every REACHABLE use), but a
+        // designator bound to one (via I4's TailIsMemberBinding/TailIsElementBinding
+        // branches) resolves member reads on it through the SYMBOL these rows key on.
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax", "Name")] = new(
+            null,
+            "RightPart",
+            "AccessorExpressionSyntax.RightPart is an expression; identifier extraction becomes GetLastToken()."),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.MemberBindingExpressionSyntax", "OperatorToken")] = new(
+            null,
+            "DotToken",
+            "G# token is '?.'; Roslyn's is '.' — wider extent."),
+        [("Microsoft.CodeAnalysis.CSharp.Syntax.ElementBindingExpressionSyntax", "ArgumentList")] = new(
+            null,
+            "Indices",
+            "G# has no BracketedArgumentListSyntax wrapper; ElementBindingExpressionSyntax.ArgumentList.Arguments drops straight to Indices."),
     };
 
     /// <summary>

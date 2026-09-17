@@ -7,13 +7,16 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.CodeAnalysis.Analyzers.Testing;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Analyzers;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Xunit;
+using RoslynDiagnosticAnalyzer = Microsoft.CodeAnalysis.Diagnostics.DiagnosticAnalyzer;
 
 namespace Cs2Gs.Tests;
 
@@ -173,6 +176,38 @@ public sealed class NullConditionalAccessAnalyzer : DiagnosticAnalyzer
             """,
             Array.Empty<string>(),
         };
+
+        // Row 9: `a?[i]` — a null-conditional ELEMENT access. Before this PR,
+        // I2's registration guard was accessor-only (SyntaxKind.AccessorExpression
+        // alone), so an IndexExpressionSyntax hop never reached the handler at
+        // all: a genuine under-fire (0 instead of 1), not merely a disclosed
+        // gap. Now registers SyntaxKind.IndexExpression too.
+        yield return new object[]
+        {
+            """
+            package sample
+
+            func Get(nums []int32?) int32?
+            {
+                return [|nums?[0]|]
+            }
+            """,
+            new[] { "TEST4173" },
+        };
+
+        // Negative companion: an ORDINARY element access must NOT fire either.
+        yield return new object[]
+        {
+            """
+            package sample
+
+            func Get(nums []int32) int32
+            {
+                return nums[0]
+            }
+            """,
+            Array.Empty<string>(),
+        };
     }
 
     /// <summary>
@@ -238,24 +273,23 @@ public sealed class NullConditionalAccessAnalyzer : DiagnosticAnalyzer
         (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
             TranslateAnalyzerSource(NullConditionalAnalyzerSource);
 
-        Assert.Contains("IsNullConditional", printed, StringComparison.Ordinal);
-        Assert.Contains("AccessorExpressionSyntax", printed, StringComparison.Ordinal);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        Assert.Contains("ExpressionSyntax", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ConditionalAccessExpressionSyntax", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBinds(printed);
     }
 
-    // A single-hop analyzer idiom: `x.WhenNotNull is MemberBindingExpressionSyntax`
-    // LOOKS like it proves single-hop, but does NOT: Roslyn's own tree for a
-    // two-level chain (`a?.b?.c`) contains an inner ConditionalAccessExpressionSyntax
-    // node whose WhenNotNull is ALSO a bare MemberBindingExpressionSyntax, so this
-    // conjunction is true on that inner chain node too, not just on a genuine
-    // single-hop `a?.b`. Any rewrite collapsing this to a per-G#-node
-    // `IsNullConditional` check would silently over-fire — confirmed empirically
-    // (2 reports instead of Roslyn's 1 on a chain, 1 instead of 0 on `a?.b.c`).
-    // So `.WhenNotNull`/`.Expression` must stay unmapped here, same as the
-    // already-loud chain case below.
-    private const string SingleHopExpressionAnalyzerSource = @"
+    // Analyzer B (tail test, I4): `x.WhenNotNull is MemberBindingExpressionSyntax`.
+    // Fires exactly on the LAST operator of a chain when it ends in a bare
+    // member name — not on every hop, and not on a hop whose WhenNotNull is
+    // an ordinary (non-conditional) continuation. An earlier, unsound draft
+    // of this idiom collapsed this to a per-node IsNullConditional check and
+    // was confirmed, empirically, to over-fire (2 instead of Roslyn's 1 on a
+    // genuine `a?.b?.c` chain; 1 instead of 0 on `a?.b.c`) — this analyzer
+    // and its parity test below are the regression guard for that failure
+    // mode (issue #4173's own removed idiom).
+    private const string TailMemberBindingAnalyzerSource = @"
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -265,7 +299,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace Sample;
 
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
-public sealed class SingleHopExpressionAnalyzer : DiagnosticAnalyzer
+public sealed class TailMemberBindingAnalyzer : DiagnosticAnalyzer
 {
     private static readonly DiagnosticDescriptor Rule = new(
         ""TEST4173B"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
@@ -280,50 +314,88 @@ public sealed class SingleHopExpressionAnalyzer : DiagnosticAnalyzer
         if (context.Node is ConditionalAccessExpressionSyntax conditional
             && conditional.WhenNotNull is MemberBindingExpressionSyntax)
         {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.Expression.GetLocation()));
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
         }
     }
 }
 ";
 
+    // C# corpus for TailMemberBindingAnalyzer: Chain is a genuine two-level
+    // `a?.b?.c`; Mixed is `a?.b.c` (one ?. then an ORDINARY continuation) —
+    // the second counterexample the removed idiom also over-fired on.
+    private const string TailMemberBindingChainCorpus = @"
+public class Leaf { public string Value; }
+public class Box { public Box Next; public Leaf Leaf; }
+public class Corpus { public static Leaf Chain(Box box) => box?.Next?.Leaf; }
+";
+
+    private const string TailMemberBindingMixedCorpus = @"
+public class Leaf { public string Value; }
+public class Box { public Box Next; public Leaf Leaf; }
+public class Corpus { public static Leaf Mixed(Box box) => box?.Next.Leaf; }
+";
+
     /// <summary>
-    /// The "single-hop conjunction" idiom (<c>.WhenNotNull is
-    /// MemberBindingExpressionSyntax</c>) does NOT actually prove single-hop
-    /// (see the field comment above) and must NOT be rewritten to a bare
-    /// <c>true</c> — an earlier version of this fix did exactly that and was
-    /// confirmed, empirically, to make the translated analyzer silently
-    /// over-fire relative to Roslyn (2 reports instead of 1 on a genuine
-    /// `a?.b?.c` chain; 1 instead of 0 on `a?.b.c`), because Roslyn's own tree
-    /// for a chain contains an INNER <c>ConditionalAccessExpressionSyntax</c>
-    /// node whose <c>WhenNotNull</c> is ALSO a bare
-    /// <c>MemberBindingExpressionSyntax</c> — the conjunction is true there
-    /// too, not only on a genuine single-hop <c>a?.b</c>. The companion
-    /// <c>.Expression</c> read must therefore stay an unmapped identity
-    /// member name — a loud gap at bind time, the same safe fallback the
-    /// already-unmapped <c>AssignmentExpressionSyntax.Left</c> uses.
+    /// Row 3 / row 5 (issue #4173's critical parity checks): the tail-test
+    /// idiom fires exactly once on a genuine <c>a?.b?.c</c> chain (row 3 —
+    /// the removed idiom's over-fire repro, which reported 2) and exactly
+    /// zero times on <c>a?.b.c</c> (row 5 — the removed idiom's second
+    /// counterexample, which reported 1), matching Roslyn exactly on both.
     /// </summary>
     [Fact]
-    public void SingleHopConjunction_IsALoudGapRatherThanASilentOverfire()
+    public void TailMemberBindingTest_MatchesRoslyn_OnChainAndMixedInputs()
     {
-        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
-            TranslateAnalyzerSource(SingleHopExpressionAnalyzerSource);
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(TailMemberBindingAnalyzerSource, "TailMemberBindingAnalyzer");
+        IReadOnlyList<string> roslynChainIds = RunRoslynAnalyzer(roslynAnalyzer, TailMemberBindingChainCorpus, "TEST4173B");
+        IReadOnlyList<string> roslynMixedIds = RunRoslynAnalyzer(roslynAnalyzer, TailMemberBindingMixedCorpus, "TEST4173B");
+        Assert.Equal(new[] { "TEST4173B" }, roslynChainIds); // Row 3: Roslyn fires exactly once.
+        Assert.Empty(roslynMixedIds); // Row 5: Roslyn fires zero times.
 
-        // The falsifier: the type-test idiom (idiom #1) still fired on its
-        // own, so this loud failure is a real one, not a vacuous pass.
-        Assert.Contains("AccessorExpressionSyntax", printed, StringComparison.Ordinal);
-        Assert.Contains(".Expression", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain(diagnostics, d => d.Message.Contains("translated to 'true'", StringComparison.Ordinal));
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, TailMemberBindingAnalyzerSource, "TranslatedTailMemberBinding");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
 
-        IReadOnlyList<string> errors = TryGetBindErrors(printed);
-        Assert.NotEmpty(errors);
-        Assert.Contains(errors, e => e.Contains("Expression", StringComparison.Ordinal));
+        const string ChainGsSource = """
+            package sample
+
+            class Leaf(Value string) { }
+            class Box(Next Box?, Leaf Leaf?) { }
+
+            func Chain(box Box?) Leaf?
+            {
+                return box?.Next?.Leaf
+            }
+            """;
+        const string MixedGsSource = """
+            package sample
+
+            class Leaf(Value string) { }
+            class Mid(Leaf Leaf, Next Mid) { }
+            class Root(Mid Mid) { }
+
+            func Mixed(root Root?) Leaf?
+            {
+                return root?.Mid.Leaf
+            }
+            """;
+
+        ImmutableArray<Diagnostic> chainDiagnostics = RunGsAnalyzer(analyzerDll, ChainGsSource);
+        ImmutableArray<Diagnostic> mixedDiagnostics = RunGsAnalyzer(analyzerDll, MixedGsSource);
+
+        Assert.Equal(roslynChainIds.Count, chainDiagnostics.Length); // Row 3: G# also fires exactly once, not twice.
+        Assert.Equal(roslynMixedIds.Count, mixedDiagnostics.Length); // Row 5: G# also fires zero times, not once.
     }
 
-    // A companion test shaped like `x.WhenNotNull is ConditionalAccessExpressionSyntax`:
-    // `.WhenNotNull`/`.Expression` have no G# counterpart (see field comment
-    // above) and must always stay a loud gap — never silently renamed to
-    // `.LeftPart`, chain-shaped companion test or not.
-    private const string ChainedWhenNotNullAnalyzerSource = @"
+    // Analyzer D (recursive chain walk, I4's ConditionalAccessExpressionSyntax
+    // case): `x.WhenNotNull is ConditionalAccessExpressionSyntax nested` —
+    // walks to the FURTHER null-conditional operator in the same chain.
+    // Reports once per chain by only firing on the node whose WhenNotNull IS
+    // a nested CAE (i.e. every node except the last).
+    private const string RecursiveChainWalkAnalyzerSource = @"
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -333,66 +405,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace Sample;
 
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
-public sealed class ChainedWhenNotNullAnalyzer : DiagnosticAnalyzer
-{
-    private static readonly DiagnosticDescriptor Rule = new(
-        ""TEST4173C"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
-
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
-
-    public override void Initialize(AnalysisContext context)
-        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ConditionalAccessExpression);
-
-    private static void Analyze(SyntaxNodeAnalysisContext context)
-    {
-        if (context.Node is ConditionalAccessExpressionSyntax conditional
-            && conditional.WhenNotNull is ConditionalAccessExpressionSyntax)
-        {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.Expression.GetLocation()));
-        }
-    }
-}
-";
-
-    /// <summary>
-    /// The chain case must fail LOUDLY, never silently: with no companion
-    /// proof of single-hop-ness, <c>.Expression</c> has no safe G#
-    /// counterpart (a chain's Roslyn <c>.Expression</c> is the chain's
-    /// ultimate root, not the immediate <c>.LeftPart</c> subtree) and is left
-    /// as an unmapped identity member name, which the round-trip binder then
-    /// rejects — this is the file's documented backstop (never a silent
-    /// wrong answer).
-    /// </summary>
-    [Fact]
-    public void ChainedWhenNotNullAccess_IsALoudGapRatherThanASilentMismap()
-    {
-        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
-            TranslateAnalyzerSource(ChainedWhenNotNullAnalyzerSource);
-
-        // The falsifier: `.Expression` really did survive untranslated (it
-        // was not silently dropped or renamed), so this loud failure is a
-        // real one, not a vacuous pass.
-        Assert.Contains(".Expression", printed, StringComparison.Ordinal);
-
-        IReadOnlyList<string> errors = TryGetBindErrors(printed);
-        Assert.NotEmpty(errors);
-        Assert.Contains(errors, e => e.Contains("Expression", StringComparison.Ordinal));
-    }
-
-    // A direct reference to MemberBindingExpressionSyntax OUTSIDE the two
-    // idiom patterns above — this must stay a loud CS2GS-GAP forever, never
-    // get "fixed" into a fake mapping by a future well-meaning contributor.
-    private const string DirectMemberBindingReferenceAnalyzerSource = @"
-using System.Collections.Immutable;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.Diagnostics;
-
-namespace Sample;
-
-[DiagnosticAnalyzer(LanguageNames.CSharp)]
-public sealed class DirectMemberBindingReferenceAnalyzer : DiagnosticAnalyzer
+public sealed class RecursiveChainWalkAnalyzer : DiagnosticAnalyzer
 {
     private static readonly DiagnosticDescriptor Rule = new(
         ""TEST4173D"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
@@ -405,31 +418,116 @@ public sealed class DirectMemberBindingReferenceAnalyzer : DiagnosticAnalyzer
     private static void Analyze(SyntaxNodeAnalysisContext context)
     {
         if (context.Node is ConditionalAccessExpressionSyntax conditional
-            && conditional.WhenNotNull is MemberBindingExpressionSyntax binding)
+            && conditional.WhenNotNull is ConditionalAccessExpressionSyntax)
         {
-            context.ReportDiagnostic(Diagnostic.Create(Rule, binding.GetLocation()));
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
+        }
+    }
+}
+";
+
+    private const string RecursiveChainWalkCorpus = @"
+public class Leaf { public string Value; }
+public class Box { public Box Next; public Leaf Leaf; }
+public class Corpus { public static Leaf Chain(Box box) => box?.Next?.Next?.Leaf; }
+";
+
+    /// <summary>
+    /// A three-level chain <c>a?.b?.c?.d</c> has two operators whose
+    /// <c>WhenNotNull</c> is itself another <c>ConditionalAccessExpressionSyntax</c>
+    /// (every operator except the last) — Roslyn fires twice, and the
+    /// translated analyzer (via <c>NullConditionalChain.NextNullConditionalHop</c>)
+    /// must match exactly, proving the recursive-chain-walk idiom (I4's third
+    /// case) is chain-safe rather than merely single-hop-safe.
+    /// </summary>
+    [Fact]
+    public void RecursiveChainWalkTest_MatchesRoslyn_OnThreeLevelChain()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(RecursiveChainWalkAnalyzerSource, "RecursiveChainWalkAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, RecursiveChainWalkCorpus, "TEST4173D");
+        Assert.Equal(new[] { "TEST4173D", "TEST4173D" }, roslynIds);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, RecursiveChainWalkAnalyzerSource, "TranslatedRecursiveChainWalk");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        const string GsSource = """
+            package sample
+
+            class Leaf(Value string) { }
+            class Box(Next Box?, Leaf Leaf?) { }
+
+            func Chain(box Box?) Leaf?
+            {
+                return box?.Next?.Next?.Leaf
+            }
+            """;
+
+        ImmutableArray<Diagnostic> diagnostics = RunGsAnalyzer(analyzerDll, GsSource);
+        Assert.Equal(roslynIds.Count, diagnostics.Length);
+        Assert.Equal(2, diagnostics.Select(d => d.Location.Span).Distinct().Count());
+    }
+
+    // `.WhenNotNull` read as a bare VALUE (not consumed by another is-pattern
+    // scrutinee I4 intercepts) has no G# counterpart and must stay a loud
+    // CS2GS-GAP — I4 only intercepts `.WhenNotNull` in SCRUTINEE position.
+    private const string BareWhenNotNullValueAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BareWhenNotNullValueAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173BARE"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ConditionalAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is ConditionalAccessExpressionSyntax conditional)
+        {
+            ExpressionSyntax tail = conditional.WhenNotNull;
+            context.ReportDiagnostic(Diagnostic.Create(Rule, tail.GetLocation()));
         }
     }
 }
 ";
 
     /// <summary>
-    /// <c>MemberBindingExpressionSyntax</c> has no G# counterpart and
-    /// correctly has none — same category as the already-unmapped
-    /// <c>AssignmentExpressionSyntax.Left</c>. A direct type reference to it
-    /// (here, a designation binding it to a local) must surface a loud
-    /// CS2GS-GAP at translate time.
+    /// <c>.WhenNotNull</c> read into a LOCAL (not tested by an <c>is</c>
+    /// pattern I4 can intercept) has no G# counterpart and correctly has
+    /// none — same category as the already-unmapped
+    /// <c>AssignmentExpressionSyntax.Left</c>. Must surface a loud
+    /// CS2GS-GAP at translate time, never a silent wrong answer.
     /// </summary>
     [Fact]
-    public void DirectMemberBindingExpressionSyntaxReference_IsALoudGap()
+    public void BareWhenNotNullValueRead_IsALoudGap()
     {
-        (_, IReadOnlyList<TranslationDiagnostic> diagnostics) =
-            TranslateAnalyzerSource(DirectMemberBindingReferenceAnalyzerSource);
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(BareWhenNotNullValueAnalyzerSource);
 
-        TranslationDiagnostic gap = Assert.Single(
-            diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("MemberBindingExpressionSyntax", gap.Message, StringComparison.Ordinal);
+        // The falsifier: `.WhenNotNull` really did survive untranslated (it
+        // was not silently dropped or renamed), so the bind failure below is
+        // a real one, not a vacuous pass.
+        Assert.Contains(".WhenNotNull", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+
+        IReadOnlyList<string> errors = TryGetBindErrors(printed);
+        Assert.NotEmpty(errors);
+        Assert.Contains(errors, e => e.Contains("WhenNotNull", StringComparison.Ordinal));
     }
 
     // A registration combining ConditionalAccessExpression with another kind
@@ -474,6 +572,609 @@ public sealed class MultiKindRegistrationAnalyzer : DiagnosticAnalyzer
             diagnostics,
             d => d.Severity == TranslationSeverity.Unsupported);
         Assert.Contains("RegisterSyntaxNodeAction", gap.Message, StringComparison.Ordinal);
+    }
+
+    // Analyzer H (cast handler, I7): a BARE `context.Node is ConditionalAccessExpressionSyntax`
+    // with NO designator — the commonest real-world spelling of a type probe.
+    // This parses as the classic BinaryExpressionSyntax/IsExpression node,
+    // not a pattern, so it exercises a SEPARATE cs2gs entry point than every
+    // designated `is Type x` form the rest of this file uses. Without I1
+    // reaching this shape too, I7's deliberately non-discriminating
+    // ConditionalAccessExpressionSyntax -> ExpressionSyntax map row would let
+    // this test vacuously (over-)match every ordinary access as well.
+    private const string BareCastHandlerAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BareCastHandlerAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173H"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ConditionalAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is ConditionalAccessExpressionSyntax)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// The bare (undesignated) type-test form — parsed as
+    /// <c>BinaryExpressionSyntax</c>/<c>SyntaxKind.IsExpression</c>, not a
+    /// pattern — must translate through the SAME <c>AsNullConditionalHop</c>
+    /// rewrite as the designated form, never falling back to I7's bare
+    /// non-discriminating <c>ExpressionSyntax</c> supertype (which would make
+    /// this fire on every access, not just null-conditional ones).
+    /// </summary>
+    [Fact]
+    public void BareCastHandlerTypeTest_TranslatesToAsNullConditionalHop_NotVacuousExpressionSyntax()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(BareCastHandlerAnalyzerSource);
+
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, BareCastHandlerAnalyzerSource, "TranslatedBareCastHandler");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        GSharpAnalyzerVerifier.VerifyAnalyzer(
+            analyzer,
+            """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return [|box?.Name|]
+            }
+            """,
+            new[] { "TEST4173H" });
+
+        // The falsifier: an ORDINARY access must NOT fire (the I7-vacuous-truth repro).
+        GSharpAnalyzerVerifier.VerifyAnalyzer(
+            analyzer,
+            """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return box.Name
+            }
+            """,
+            Array.Empty<string>());
+    }
+
+    // Bare `x.Expression is ConditionalAccessExpressionSyntax` (I5's declined
+    // case, undesignated form) must ALSO stay a loud gap, not fall through to
+    // I7's vacuous supertype.
+    private const string BareReceiverConditionalAccessAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BareReceiverConditionalAccessAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173GAP"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ConditionalAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is ConditionalAccessExpressionSyntax conditional
+            && conditional.Expression is ConditionalAccessExpressionSyntax)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// I5's declined <c>.Expression is ConditionalAccessExpressionSyntax</c>
+    /// case, undesignated: must surface the SAME <c>CS2GS-GAP</c> as the
+    /// designated form, never a silently vacuous <c>NullConditionalReceiver(x)
+    /// is ExpressionSyntax</c> (always true).
+    /// </summary>
+    [Fact]
+    public void BareReceiverConditionalAccessTest_IsALoudGap()
+    {
+        (_, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(BareReceiverConditionalAccessAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("ConditionalAccessExpressionSyntax", gap.Message, StringComparison.Ordinal);
+    }
+
+    // Analyzer J (sibling bug #6, ordinary-access type test): a BARE
+    // `node is MemberAccessExpressionSyntax` — the commonest real-world
+    // spelling — registered for SimpleMemberAccessExpression.
+    private const string OrdinaryMemberAccessAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class OrdinaryMemberAccessAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173J"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.SimpleMemberAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is MemberAccessExpressionSyntax)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
+        }
+    }
+}
+";
+
+    // Row 15 (issue #4173 §6's critical parity check): `a?.b.c` has exactly
+    // ONE genuine ordinary MemberAccessExpressionSyntax (the ".c" access —
+    // ".b" is Roslyn's receiverless MemberBindingExpressionSyntax, a
+    // DIFFERENT type). Before the sibling fix, G#'s unconditional
+    // MemberAccessExpressionSyntax -> AccessorExpressionSyntax map row made
+    // this over-fire: BOTH the ?.b hop (IsNullConditional:true) and the
+    // ordinary .c hop are AccessorExpressionSyntax, so an unguarded rewrite
+    // matched both.
+    private const string OrdinaryMemberAccessCorpus = @"
+public class Leaf { public string Value; }
+public class Box { public Box Next; public Leaf Leaf; }
+public class Corpus { public static Leaf Mixed(Box box) => box?.Next.Leaf; }
+";
+
+    /// <summary>
+    /// The sibling bug's fix, verified against real Roslyn: <c>a?.b.c</c>
+    /// fires exactly once (the ordinary <c>.c</c> access), matching Roslyn's
+    /// own <c>MemberAccessExpressionSyntax</c> count exactly — not twice, the
+    /// pre-fix over-fire (both the <c>?.b</c> hop and the ordinary <c>.c</c>
+    /// access, since the unconditional map row could not tell them apart).
+    /// </summary>
+    [Fact]
+    public void OrdinaryMemberAccessTest_MatchesRoslyn_OnMixedChain()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(OrdinaryMemberAccessAnalyzerSource, "OrdinaryMemberAccessAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, OrdinaryMemberAccessCorpus, "TEST4173J");
+        Assert.Equal(new[] { "TEST4173J" }, roslynIds); // Row 15: Roslyn fires exactly once, not twice.
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, OrdinaryMemberAccessAnalyzerSource, "TranslatedOrdinaryMemberAccess");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        const string GsSource = """
+            package sample
+
+            class Leaf(Value string) { }
+            class Mid(Leaf Leaf, Next Mid) { }
+            class Root(Mid Mid) { }
+
+            func Mixed(root Root?) Leaf?
+            {
+                return root?.Mid.Leaf
+            }
+            """;
+
+        ImmutableArray<Diagnostic> diagnostics = RunGsAnalyzer(analyzerDll, GsSource);
+        Assert.Equal(roslynIds.Count, diagnostics.Length);
+    }
+
+    // Analyzer K (sibling bug #6, registration guard in isolation): NO inner
+    // type test at all — isolates whether the REGISTRATION itself correctly
+    // excludes null-conditional hops, independent of I1b's handler-level fix.
+    private const string BareOrdinaryRegistrationAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BareOrdinaryRegistrationAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173K"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.SimpleMemberAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+        => context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
+}
+";
+
+    /// <summary>
+    /// With NO inner type test, only the REGISTRATION'S own guard can keep a
+    /// <c>?.</c> hop out of the handler — proving I2's <c>SimpleMemberAccessExpression</c>
+    /// guard is load-bearing on its own, not merely redundant with I1b's
+    /// handler-level fix.
+    /// </summary>
+    [Fact]
+    public void BareOrdinaryRegistration_FiresOnlyOnOrdinaryAccess()
+    {
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, BareOrdinaryRegistrationAnalyzerSource, "TranslatedBareOrdinaryRegistration");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        GSharpAnalyzerVerifier.VerifyAnalyzer(
+            analyzer,
+            """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return [|box.Name|]
+            }
+            """,
+            new[] { "TEST4173K" });
+
+        // The falsifier: a null-conditional access must NOT reach the handler.
+        GSharpAnalyzerVerifier.VerifyAnalyzer(
+            analyzer,
+            """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return box?.Name
+            }
+            """,
+            Array.Empty<string>());
+    }
+
+    // Analyzer C/I3a (receiver read + Roslyn-exact span): reports at
+    // `conditional.Expression.GetLocation()` — I3's NullConditionalReceiver
+    // rewrite composed with I3a's ReceiverSpan location rewrite.
+    private const string ReceiverLocationAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReceiverLocationAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173C"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ConditionalAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is ConditionalAccessExpressionSyntax conditional)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.Expression.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// I3/I3a composed: for the FIRST (only) hop of a single-level chain, the
+    /// Roslyn-exact receiver span is the receiver's own natural span (no
+    /// truncation needed — nothing precedes it), so the reported location
+    /// lands exactly on <c>box</c>, matching Roslyn's own
+    /// <c>ConditionalAccessExpressionSyntax.Expression.GetLocation()</c>.
+    /// </summary>
+    [Fact]
+    public void ReceiverLocationTest_TranslatesAndBindsAndFiresAtReceiver()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(ReceiverLocationAnalyzerSource);
+        Assert.Contains("NullConditionalChain.ReceiverSpan", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, ReceiverLocationAnalyzerSource, "TranslatedReceiverLocation");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        GSharpAnalyzerVerifier.VerifyAnalyzer(
+            analyzer,
+            """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return [|box|]?.Name
+            }
+            """,
+            new[] { "TEST4173C" });
+    }
+
+    // Analyzer F (inner-hop receiver test, I5): `conditional.Expression is
+    // MemberBindingExpressionSyntax` on a TWO-level chain must fire on the
+    // INNER hop only (the outer hop's receiver is the plain root 'a', an
+    // IdentifierNameSyntax, matching none of I5's three positive cases).
+    private const string InnerHopReceiverTestAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class InnerHopReceiverTestAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173F"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ConditionalAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is ConditionalAccessExpressionSyntax conditional
+            && conditional.Expression is MemberBindingExpressionSyntax)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
+        }
+    }
+}
+";
+
+    private const string InnerHopReceiverTestCorpus = @"
+public class Leaf { public string Value; }
+public class Box { public Box Next; public Leaf Leaf; }
+public class Corpus { public static Leaf Chain(Box box) => box?.Next?.Leaf; }
+";
+
+    /// <summary>
+    /// I5's <c>ReceiverIsMemberBinding</c> case, verified against real
+    /// Roslyn: fires exactly once on <c>a?.b?.c</c> (the inner <c>?.c</c>
+    /// hop, whose receiver continues directly off the outer <c>?.b</c> with
+    /// no ordinary step in between), not on the outer hop.
+    /// </summary>
+    [Fact]
+    public void InnerHopReceiverTest_MatchesRoslyn_OnChain()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(InnerHopReceiverTestAnalyzerSource, "InnerHopReceiverTestAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, InnerHopReceiverTestCorpus, "TEST4173F");
+        Assert.Equal(new[] { "TEST4173F" }, roslynIds);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, InnerHopReceiverTestAnalyzerSource, "TranslatedInnerHopReceiverTest");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        const string GsSource = """
+            package sample
+
+            class Leaf(Value string) { }
+            class Box(Next Box?, Leaf Leaf?) { }
+
+            func Chain(box Box?) Leaf?
+            {
+                return box?.Next?.Leaf
+            }
+            """;
+
+        ImmutableArray<Diagnostic> diagnostics = RunGsAnalyzer(analyzerDll, GsSource);
+        Assert.Equal(roslynIds.Count, diagnostics.Length);
+    }
+
+    // Analyzer G (name extraction, I6): binds a MemberBindingExpressionSyntax
+    // designator via I4, then reads its `.Name` (I6's declarative MemberMap
+    // row: MemberBindingExpressionSyntax.Name -> RightPart).
+    private const string NameExtractionAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class NameExtractionAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173G"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ConditionalAccessExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is ConditionalAccessExpressionSyntax conditional
+            && conditional.WhenNotNull is MemberBindingExpressionSyntax binding)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, binding.Name.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// I6's declarative <c>MemberBindingExpressionSyntax.Name -&gt; RightPart</c>
+    /// row, composed with I4's designator binding: translates and binds
+    /// cleanly, and fires once on a single-hop <c>a?.b</c>.
+    /// </summary>
+    [Fact]
+    public void NameExtractionTest_TranslatesAndBindsAndFires()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(NameExtractionAnalyzerSource);
+        Assert.Contains("RightPart", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, NameExtractionAnalyzerSource, "TranslatedNameExtraction");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        GSharpAnalyzerVerifier.VerifyAnalyzer(
+            analyzer,
+            """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return box?.[|Name|]
+            }
+            """,
+            new[] { "TEST4173G" });
+    }
+
+    // Analyzer I (descendant walk, I8): `.OfType<ConditionalAccessExpressionSyntax>()`
+    // over `DescendantNodesAndSelf()` — must match every hop in a chain, not
+    // silently over-match every ordinary access (I7's supertype risk).
+    private const string DescendantWalkAnalyzerSource = @"
+using System.Collections.Immutable;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class DescendantWalkAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173I"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.MethodDeclaration);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        foreach (ConditionalAccessExpressionSyntax conditional in
+            context.Node.DescendantNodesAndSelf().OfType<ConditionalAccessExpressionSyntax>())
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, conditional.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// I8's <c>OfType&lt;ConditionalAccessExpressionSyntax&gt;()</c> rewrite:
+    /// a two-level chain has exactly two hops, and the walk must find
+    /// exactly those two — not zero (an unmapped <c>OfType</c> would be a
+    /// loud gap instead) and not every ordinary access (I7's supertype risk
+    /// if I8 did not re-narrow explicitly).
+    /// </summary>
+    [Fact]
+    public void DescendantWalkTest_FindsExactlyTheChainHops()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(DescendantWalkAnalyzerSource);
+        Assert.Contains("NullConditionalChain.IsNullConditionalHop", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, DescendantWalkAnalyzerSource, "TranslatedDescendantWalk");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        const string GsSource = """
+            package sample
+
+            class Leaf(Value string) { }
+            class Box(Next Box?, Leaf Leaf?) { }
+
+            func Chain(box Box?) Leaf?
+            {
+                return box?.Next?.Leaf
+            }
+
+            func Plain(box Box) Box
+            {
+                return box.Next!!
+            }
+            """;
+
+        ImmutableArray<Diagnostic> gsDiagnostics = RunGsAnalyzer(analyzerDll, GsSource);
+        Assert.Equal(2, gsDiagnostics.Length);
+        Assert.Equal(2, gsDiagnostics.Select(d => d.Location.Span).Distinct().Count());
     }
 
     /// <summary>Translates one analyzer source in ADR-0169 analyzer mode.</summary>
@@ -558,5 +1259,85 @@ public sealed class MultiKindRegistrationAnalyzer : DiagnosticAnalyzer
         }
 
         return dllPath;
+    }
+
+    /// <summary>
+    /// Runs a translated-and-compiled analyzer over a G# source and returns
+    /// the diagnostics it produces, in source order — the G# side of every
+    /// Roslyn-parity assertion below (mirrors
+    /// <c>Adr0169AnalyzerParityTests.TranslatedGsa0001_MatchesRoslynGsa0001_OverTranslatedCorpus</c>'s
+    /// step 4, generalized to arbitrary G# source instead of a translated
+    /// C# corpus).
+    /// </summary>
+    /// <param name="analyzerDllPath">The translated analyzer assembly.</param>
+    /// <param name="gsSource">The G# source under analysis.</param>
+    /// <returns>The produced diagnostics, ordered by span start.</returns>
+    private static ImmutableArray<Diagnostic> RunGsAnalyzer(string analyzerDllPath, string gsSource)
+    {
+        var tree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(
+            GSharp.Core.CodeAnalysis.Text.SourceText.From(gsSource, "corpus.gs"));
+        Assert.True(tree.Diagnostics.IsEmpty, string.Join("\n", tree.Diagnostics.Select(d => d.Message)) + "\n" + gsSource);
+
+        using var resolver = GSharp.Core.CodeAnalysis.Symbols.ReferenceResolver.WithRuntimeReferences(Array.Empty<string>());
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(resolver, tree) { IsLibrary = true };
+        var errors = compilation.GlobalScope.Diagnostics
+            .Concat(compilation.BoundProgram.Diagnostics)
+            .Where(d => d.IsError)
+            .ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(d => d.Message)) + "\n---\n" + gsSource);
+
+        return GSharp.Core.CodeAnalysis.Analyzers.GSharpAnalyzerHost.Run(compilation, new[] { analyzerDllPath })
+            .OrderBy(d => d.Location.Span.Start)
+            .ToImmutableArray();
+    }
+
+    /// <summary>
+    /// Compiles an analyzer's OWN C# source with Roslyn and instantiates it — the
+    /// Roslyn-control half of every parity assertion below, generalized from
+    /// <c>Adr0169TranslatedAnalyzerHarness.CompileRoslynAnalyzer</c> (which reads a real
+    /// file from <c>src/Analyzers/InternalAnalyzers</c>) to this file's synthetic,
+    /// self-contained analyzer sources (issue #4173 has no real repo consumer to read from).
+    /// </summary>
+    /// <param name="analyzerSource">The C# analyzer source, declaring a type in namespace <c>Sample</c>.</param>
+    /// <param name="analyzerTypeName">The analyzer type's simple name.</param>
+    /// <returns>A live Roslyn analyzer instance.</returns>
+    private static RoslynDiagnosticAnalyzer CompileRoslynAnalyzerFromSource(string analyzerSource, string analyzerTypeName)
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Analyzer.cs", analyzerSource) });
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+
+        using var peStream = new MemoryStream();
+        Microsoft.CodeAnalysis.Emit.EmitResult emitResult = project.Compilation.Emit(peStream);
+        Assert.True(
+            emitResult.Success,
+            $"Roslyn control analyzer {analyzerTypeName} should compile:\n"
+                + string.Join("\n", emitResult.Diagnostics.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)));
+
+        Assembly assembly = Assembly.Load(peStream.ToArray());
+        Type analyzerType = assembly.GetType("Sample." + analyzerTypeName, throwOnError: true);
+        return (RoslynDiagnosticAnalyzer)Activator.CreateInstance(analyzerType);
+    }
+
+    /// <summary>
+    /// Runs a live Roslyn analyzer over a C# corpus and returns the diagnostics
+    /// it produces with <paramref name="diagnosticId"/>, in source order — the
+    /// Roslyn-control side of every parity assertion below (mirrors
+    /// <c>Adr0169AnalyzerParityTests.RunRoslynAnalyzer</c>).
+    /// </summary>
+    /// <param name="analyzer">The Roslyn analyzer.</param>
+    /// <param name="corpusSource">The C# corpus source.</param>
+    /// <param name="diagnosticId">The diagnostic id to keep.</param>
+    /// <returns>The matching diagnostic ids, in source order.</returns>
+    private static IReadOnlyList<string> RunRoslynAnalyzer(RoslynDiagnosticAnalyzer analyzer, string corpusSource, string diagnosticId)
+    {
+        LoadedCSharpProject corpus = CSharpProjectLoader.LoadInMemory(new[] { ("Corpus.cs", corpusSource) });
+        Assert.True(corpus.BoundWithoutErrors, string.Join("\n", corpus.ErrorDiagnostics));
+
+        var withAnalyzers = corpus.Compilation.WithAnalyzers(ImmutableArray.Create(analyzer));
+        return withAnalyzers.GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult()
+            .Where(d => d.Id == diagnosticId)
+            .OrderBy(d => d.Location.SourceSpan.Start)
+            .Select(d => d.Id)
+            .ToList();
     }
 }
