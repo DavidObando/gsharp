@@ -245,6 +245,14 @@ work_root=$(cd "$work_root" && pwd -P)
 dotnet build "$repo_root/tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj" -c Release -graph
 dotnet build "$repo_root/src/Compiler/Compiler.csproj" -c Debug -graph
 dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Debug -graph
+# Issue #3780 / PR #4281: a migrated analyzer test project resolves its verifier
+# through a PackageReference whose version comes from a locally built
+# GSharp.CodeAnalysis.Analyzers.Testing nupkg; nothing else here builds it since
+# Compiler.csproj's ProjectReference to it was removed. See the matching comment
+# on selfmig_build_prerequisites in build/selfmig-common.sh.
+dotnet build \
+  "$repo_root/src/Analyzers/GSharp.CodeAnalysis.Analyzers.Testing/GSharp.CodeAnalysis.Analyzers.Testing.csproj" \
+  -c Release -graph
 echo "PR guard: repacking the Release Gsharp.NET.Sdk nupkg (the compile stage consumes it)."
 dotnet build "$repo_root/src/Sdk/Gsharp.NET.Sdk/Gsharp.NET.Sdk.csproj" -c Release -graph
 
