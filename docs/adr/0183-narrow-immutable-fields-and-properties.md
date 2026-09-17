@@ -117,27 +117,55 @@ API at all.
 
 `SmartCastStability.IsStableProperty` already accepts `init`-only equally
 with get-only, and #1180 already trusts that predicate — this ADR does not
-revisit that existing, narrowly-scoped (single-branch) trust. But #1180's
-trust window is short: test and use inside one guarded block, compiled by
-gsc itself, with no possibility of an intervening call to the `init`
-accessor because G#'s own binder only accepts an `init` accessor call
-inside the declaring object's initializer syntax. This ADR's contribution —
-widening that window to an entire method (Tier 1) or across the object's
-whole remaining lifetime (Tier 2) — is exactly where the compiler-only
-enforcement stops being a guarantee, because the window is now long enough,
-and Tier 2 explicitly long-lived enough, to plausibly include a call from
-code gsc did not compile. The two tiers below therefore treat get-only and
-`init`-only differently, rather than folding both into one "stable
-property" bucket the way #1180 could safely afford to.
+revisit that existing, narrowly-scoped (single-branch) trust. #1180's trust
+window is short enough that it never needs to reason about an intervening
+call at all: test and use sit inside one guarded block, and #1180 already
+invalidates the narrowing on *any* intervening call regardless of member
+kind, so the get-only/`init`-only distinction is simply never exercised
+there. This ADR's contribution is exactly the place that distinction starts
+to matter: widening the window means the narrowing must now survive across
+statements that *do* contain calls, and once a call is in scope, two
+different questions arise that this document must not conflate —
+
+1. Can a **caller gsc itself compiled** invoke the `init` accessor again
+   during that window? No — G#'s own binder only accepts an `init` accessor
+   call inside the declaring object's initializer syntax, so no G#-compiled
+   code anywhere can be the culprit.
+2. Can the **callee being invoked** — an imported method from another
+   assembly, or anything *that* method transitively calls — invoke the
+   `init` accessor's ordinary `set_Foo` method via its own, non-conformant
+   IL, bypassing the `modreq(IsExternalInit)` check a conformant compiler
+   would have enforced at *its* call site? Yes, in principle, and gsc has no
+   way to see inside a callee it did not compile to rule this out. The
+   bounded duration of Tier 1's window does not help here — only the
+   *callee's provenance* would, and Tier 1's call-invalidation relaxation
+   (below) does not currently condition on that.
+
+Question 1 is what the earlier draft of this ADR answered, and it is true
+but insufficient — it rules out the wrong threat. Question 2 is the actual
+cross-compiler scenario this document already uses, correctly, to exclude
+`init`-only members from Tier 2 (see below); the same threat applies the
+moment Tier 1 lets a narrowing survive an intervening call, not only at
+Tier 2's whole-object-lifetime scope. The fix carried through the rest of
+this document: **Tier 1's *window-widening* (dropping the "single guarded
+block only" restriction) is safe for `let` fields, get-only properties, and
+`init`-only properties alike, because on its own it never needs to survive
+a call. Tier 1's separate *call-invalidation relaxation* (surviving an
+intervening call without losing the narrowing) is safe only for members
+whose immutability the CLR itself enforces — `let` fields and genuinely
+get-only properties — and does not extend to `init`-only properties, which
+keep the pre-existing "any call invalidates" rule in Tier 1 exactly as they
+already do outside this ADR.**
 
 So the concern ADR-0069 raised is real, but it is a concern about `var`
 fields, computed/virtual properties, and — as just established — `init`-only
-properties once the narrowing window outgrows a single guarded block. This
+properties whenever a call intervenes between the guard and the use. This
 ADR proposes to keep declining `var` fields and computed/virtual properties
-unconditionally (no change from ADR-0069), to widen the scope for `let`
+unconditionally (no change from ADR-0069); to widen the scope for `let`
 fields and genuinely get-only properties from "single guarded branch" all
-the way to Tier 2, and to widen the scope for `init`-only properties only as
-far as Tier 1 — argued case by case below.
+the way to Tier 2, including surviving intervening calls; and to widen the
+*window* (but not the call-survival) for `init`-only properties as far as
+Tier 1 — argued case by case below.
 
 ## Decision (proposed)
 
@@ -156,14 +184,22 @@ Concretely, this ADR proposes two scope tiers, argued separately because
 their soundness arguments are different — and because, as established
 above, they trust a different set of members:
 
-- **Tier 1** applies to every `SmartCastStability`-stable member: `let`
-  fields, get-only auto-properties, and `init`-only auto-properties alike.
-  This matches what #1180 already trusts for a single guarded block; Tier 1
-  only widens the *window*, not the *member set*.
+- **Tier 1's window-widening** (narrowing survives past the single guarded
+  block, for the rest of the method's reachable flow) applies to every
+  `SmartCastStability`-stable member: `let` fields, get-only
+  auto-properties, and `init`-only auto-properties alike — this part never
+  needs to reason about a call, so the get-only/`init`-only distinction
+  does not apply to it.
+- **Tier 1's call-invalidation relaxation** (narrowing survives an
+  intervening call rather than being dropped) applies only to members whose
+  immutability the CLR itself enforces: `let` fields and genuinely get-only
+  auto-properties. An `init`-only auto-property's narrowing is still
+  dropped by an intervening call in Tier 1, exactly as it already would be
+  today — only the window widens for it, not the call tolerance.
 - **Tier 2** applies only to `let` fields and genuinely get-only
-  auto-properties. `init`-only auto-properties are excluded — see the
-  dedicated callout in the Tier 2 section below for why the CLR-vs-compiler
-  distinction becomes load-bearing at that scope.
+  auto-properties. `init`-only auto-properties are excluded entirely — see
+  the dedicated callout in the Tier 2 section below for why the
+  CLR-vs-compiler distinction becomes load-bearing at that scope.
 
 ### Tier 1 — same-method, cross-statement (uncontroversial extension)
 
@@ -183,37 +219,57 @@ invalidating happened), and — as a blanket, member-kind-agnostic rule — it
 also invalidates every member-bearing path on *any* intervening call, "because
 a method could mutate reachable state."
 
-That blanket call-invalidation rule is exactly right for a `var` field or a
-settable/virtual property, where a callee genuinely could reassign the
-storage or override the getter. It is unnecessarily conservative for a
-`let` field, a genuinely get-only auto-property, or an `init`-only
-auto-property: within the bounded window Tier 1 operates in — one method
-body gsc itself is compiling — no *G#-compiled* callee can invoke the
-`init` accessor at all (the binder only accepts that call inside the
-declaring object's own initializer syntax), so the compiler-vs-CLR
-distinction drawn above does not yet bite; it only starts to matter once the
-trust window outlives a single method's compiled flow, which is exactly
-where Tier 2 draws its narrower line below. This ADR therefore proposes
-relaxing call-invalidation for every `SmartCastStability`-stable member path
-(every link `IsReadOnly`/`IsStableProperty`, get-only or `init`-only alike)
-— such a path survives an intervening call unless the call assigns to the
-path itself (which cannot happen for a `let` field's `initonly` storage,
-and cannot happen through ordinary G#-compiled code for an auto-property's
-backing field either, `init`-only included) — while leaving the existing
-blanket invalidation exactly as-is for any path with a mutable link.
-Combined with dropping the "single guarded block only" restriction for
-stable paths, this is what lets Tier 1 actually reach the 220 same-method
-sites item 2 measured, most of which have ordinary work between the guard
-and the use.
+That blanket call-invalidation rule is exactly right for a `var` field, a
+settable/virtual property, **and an `init`-only property**: for the first
+two, a callee genuinely could reassign the storage or override the getter;
+for `init`-only, a callee gsc did not compile — or anything *that* callee
+transitively calls — could invoke the ordinary `set_Foo` accessor method
+directly, bypassing the `modreq(IsExternalInit)` check a conformant
+compiler would have enforced at its own call site, exactly the
+cross-compiler threat this document already uses to exclude `init`-only
+members from Tier 2. Tier 1's bounded duration does not defend against this
+— only the callee's provenance would, and gsc cannot see inside a callee it
+did not compile to establish that. **So the call-invalidation relaxation
+below applies only to `let` fields and genuinely get-only (no-setter)
+auto-properties — the members whose backing storage is CLR-`initonly` — not
+to `init`-only properties.**
+
+For that CLR-enforced subset, no callee, however arbitrary or foreign, can
+reassign `initonly` storage; the CLR itself rejects the write, not merely a
+cooperating compiler. This ADR therefore proposes relaxing
+call-invalidation specifically for stable member paths where every link is
+CLR-`initonly` (`IsReadOnly` fields and no-setter auto-properties — see
+`SmartCastStability.IsStableField` and the get-only half of
+`IsStableProperty`) — such a path survives an intervening call unless the
+call assigns to the path itself, which cannot happen for `initonly`
+storage regardless of who wrote the calling code — while leaving the
+existing blanket invalidation exactly as-is for any path with a mutable
+link *or* an `init`-only link. Combined with dropping the "single guarded
+block only" restriction for all stable paths (get-only, `init`-only, and
+`let` fields alike — see *Decision* above), this is what lets Tier 1 reach
+the 220 same-method sites item 2 measured for the CLR-enforced subset
+outright, and reach the `init`-only subset wherever the guard and the use
+have no intervening call between them (still an improvement over today's
+single-block restriction, just not the full call-surviving benefit).
 
 ```gs
 class Session {
     let viewModel ViewModel?
+    prop config Config? { get; init; }   // init-only — narrower Tier 1 support
 
     func Setup() {
         if self.viewModel == nil { return }
-        DoSomeUnrelatedWork()          // ordinary call — does not invalidate
+        DoSomeUnrelatedWork()          // ordinary call —
+                                        // `viewModel` (let field): does NOT invalidate
         self.viewModel.Refresh()       // accepted — viewModel still narrowed
+
+        if self.config == nil { return }
+        DoSomeUnrelatedWork()          // `config` (init-only): DOES invalidate —
+                                        // DoSomeUnrelatedWork is a callee gsc did not
+                                        // compile; it (or something it calls) could
+                                        // reach config's set_Config via foreign IL
+        self.config.Apply()            // rejected — narrowing was dropped by the call;
+                                        // `!!` (or a same-block guard) is still required
     }
 }
 ```
@@ -262,8 +318,9 @@ a flow fact borrowed from one method's guard. The same argument applies
 verbatim to a genuinely get-only auto-property (its backing field is a
 plain `let` field under the surface syntax).
 
-**Tier 2 does not extend to an `init`-only auto-property, even though Tier 1
-does.** Tier 2's claim is not "non-null right now" but "non-null for every
+**Tier 2 does not extend to an `init`-only auto-property, even though Tier
+1's window-widening does (call-survival aside — see Tier 1 above).** Tier
+2's claim is not "non-null right now" but "non-null for every
 read for the rest of the object's observable lifetime, including reads in
 code gsc never compiled" — a public type's `init`-only property can be
 written by any assembly that references it, through an ordinary,
@@ -308,9 +365,10 @@ tell the user is unnecessary. No mechanism in G# tracks or forbids
 bypassed-constructor value-type instances (unlike, say, a `required`-member
 enforcement that could reject uninitialized reads), so there is no
 available soundness argument to extend Tier 2 to structs; `class` is the
-honest boundary. Tier 1 is unaffected by this restriction — its
-call-invalidation relaxation is a per-read flow fact, not a claim about
-every possible instance of the type, and structs are not excluded from it.
+honest boundary. Tier 1 is unaffected by this restriction — both its
+window-widening and its (CLR-`initonly`-only) call-invalidation relaxation
+are per-read flow facts, not a claim about every possible instance of the
+type, and structs are not excluded from either.
 
 ```gs
 class Session {
@@ -392,18 +450,22 @@ base-chain walk gsc already performs for other purposes.
 ## Impact, sized against this session's measurements
 
 - PR #4280 (item 2) reports 220 of 787 in-method `!!` sites (28%) have a
-  same-method guard on the underlying field/property. Tier 1 would let gsc
-  itself accept these programs directly — no `!!` needed at any of those
-  sites — which lets #4280's local-capture rewrite be **simplified or
-  retired for the whole `SmartCastStability`-stable subset** (`let` fields,
-  get-only properties, and `init`-only properties alike — Tier 1 does not
-  distinguish among them) of what it currently
-  handles: cs2gs would simply stop inserting `!!` there in the first place,
-  the same way it already stops for a plain narrowed local. #4280's
-  mutable-member fallback path (settable/virtual members, name collisions,
-  loop-carried writes, closures, `goto`) is unaffected — Tier 1 only ever
-  helps the already-`IsStableMemberSymbol`-eligible subset, which is exactly
-  the subset #4280 restricts its own capture rewrite to.
+  same-method guard on the underlying field/property. For the CLR-enforced
+  subset (`let` fields and genuinely get-only properties), Tier 1's
+  call-invalidation relaxation lets gsc accept these programs directly
+  regardless of intervening calls — no `!!` needed at any of those sites —
+  which lets #4280's local-capture rewrite be **simplified or retired
+  outright** for that subset: cs2gs would simply stop inserting `!!` there
+  in the first place, the same way it already stops for a plain narrowed
+  local. For `init`-only properties, Tier 1's window-widening still helps
+  wherever the guard and the use have no intervening call between them, but
+  any guard/use pair separated by a call still needs #4280's capture
+  rewrite (or a per-use `!!`) exactly as before — Tier 1 does not close
+  that portion of the 220 for `init`-only members. #4280's mutable-member
+  fallback path (settable/virtual members, name collisions, loop-carried
+  writes, closures, `goto`) is unaffected either way — Tier 1 only ever
+  helps the already-`IsStableMemberSymbol`-eligible subset, which is
+  exactly the subset #4280 restricts its own capture rewrite to.
 - Item 3's `viewModel` example (84 forced `!!` sites, cross-method) is the
   case no cs2gs-level fix could reach. Whether Tier 2 closes it depends on
   four separate facts about that codebase, none of which this ADR can
@@ -478,12 +540,48 @@ base-chain walk gsc already performs for other purposes.
 
 ## Migration impact
 
-Additive for the type-acceptance surface under gsc's own default settings:
-every program that binds today continues to bind identically, and this
-proposal can only accept programs the binder previously rejected (a `!!`
-becomes optional, never required). But this has one real, already-
-encountered exception, described below — "no program that compiled before
-would fail to compile after" is not unconditionally true.
+Additive for the type-**acceptance** surface under gsc's own default
+settings: this proposal can only accept programs the binder previously
+rejected (a `!!` becomes optional, never required), never reject a program
+that compiled before. That narrower claim is the one this ADR can actually
+stand behind — it is not, and must not be read as, a claim that a program's
+**binding or emitted behavior** is unchanged. Below are the two exceptions:
+one where a currently-compiling program can newly fail to compile (build
+configuration), and one where a currently-compiling program keeps compiling
+but can silently resolve to different code (overload resolution).
+
+**Overload resolution and implicit conversions can change for code that
+still compiles.** Narrowing a member read changes its effective static
+`Type` — that is the entire point of smart-cast narrowing, and ADR-0069
+already says so directly ("Member lookup, overload resolution, conversion,
+and emit all see `T`"). The binder consumes exactly that narrowed type when
+ranking a narrowed read as a call argument: `ExpressionBinder.Calls.Arguments.cs`
+computes `effectiveMemberType` from `BoundFieldAccessExpression.NarrowedType`
+/ `BoundPropertyAccessExpression.NarrowedType` when present, and that
+narrowed type — not the member's declared type — is what argument-ranking
+and implicit-conversion classification see downstream. Consequently, a call
+site passing a now-narrowed member as an argument to an overloaded method
+can select a **different overload or a different implicit conversion** than
+it did before this ADR, even though the program still compiles and even
+though the newly-selected overload is itself accepted by the same
+argument. For example, given
+`func Handle(x ViewModel) { }` and `func Handle(x ViewModel?) { }` as two
+overloads of the same name, a call `self.Handle(self.viewModel)` written
+before adopting this ADR resolves to the `ViewModel?` overload (the field's
+declared type); after adopting Tier 2 for a constructor-proven `viewModel`
+field, the same call resolves to the `ViewModel` overload instead, because
+the read's effective type at that call site is now non-nullable. If the two
+overloads have different bodies — which is the entire reason a caller would
+write two overloads instead of one — the program's **observable behavior
+changes silently**, with no diagnostic, for source that is not modified at
+all. This is not a new category of risk this ADR invents: ADR-0069 already
+accepted the identical risk for local-variable and single-branch member
+narrowing, and it has not been a reported problem there. But it is real,
+and the migration-impact framing must say so rather than imply narrowing is
+inert outside the accept/reject boundary. Authors relying on overload
+resolution to distinguish nullable-vs-non-nullable call sites — an unusual
+but not unheard-of pattern — are the ones who should audit call sites
+touched by this ADR's newly-narrowed reads before adopting it broadly.
 
 `GS0536` ("Redundant `!!`: the value is already non-null here.",
 `DiagnosticDescriptors.RedundantNullAssertion`) already fires whenever a
@@ -535,13 +633,15 @@ No new diagnostic ID is required by this proposal. No syntax changes.
   many `init(...)` constructor overloads a Tier-2-eligible `let`
   field/get-only property's own declaring type may have.)
 - Whether Tier 1's relaxed call-invalidation should extend to a *mixed*
-  path that has a mutable link *above* a stable one reached through a
-  different, unrelated receiver expression in the same call's reachable
-  state — i.e. confirming the implementation keys invalidation on the
-  member kind at each link, not on the call site alone, so a stable path
-  through one receiver is unaffected by a call that could only reach a
-  different, mutable-rooted path. This should fall out of applying the
-  existing per-link `SmartCastStability` predicates rather than needing new
+  path that has a mutable link *above* a CLR-enforced-stable one (a `let`
+  field or no-setter property) reached through a different, unrelated
+  receiver expression in the same call's reachable state — i.e. confirming
+  the implementation keys invalidation on the member kind at each link, not
+  on the call site alone, so a CLR-enforced-stable path through one
+  receiver is unaffected by a call that could only reach a different,
+  mutable-rooted (or `init`-only-rooted) path. This should fall out of
+  applying the existing per-link `SmartCastStability` predicates, refined
+  by this ADR's get-only/`init`-only split, rather than needing new
   machinery, but is worth confirming during implementation.
 - Confirming, against the actual Oahu corpus, whether the `viewModel` field
   is a Tier-2-eligible constructor invariant or a genuinely lazy field is
@@ -551,10 +651,13 @@ No new diagnostic ID is required by this proposal. No syntax changes.
 ## Recommendation
 
 This is a proposal, not a decision. The author's recommendation, offered for
-the repo owner to accept, reject, or modify: **accept Tier 1 outright** (it
-is a mechanical generalization of already-accepted, already-implemented
-machinery with no new soundness argument beyond what #1180 already
-established), and **accept Tier 2 pending confirmation against the real
+the repo owner to accept, reject, or modify: **accept Tier 1 outright** —
+its window-widening is a mechanical generalization of already-accepted,
+already-implemented machinery with no new soundness argument beyond what
+#1180 already established, and its call-invalidation relaxation rests on
+one new, narrow, and — after this revision — precisely CLR-scoped argument
+(only members the CLR itself makes immutable survive a call) — and
+**accept Tier 2 pending confirmation against the real
 corpus** that the constructor-invariant shape it targets actually matches
 enough of the cross-method `!!` sites item 3 found to be worth the
 `this`-escape analysis it requires — if the corpus's worst offenders turn
