@@ -1582,8 +1582,33 @@ public sealed partial class CSharpToGSharpTranslator
             if (recursive.Designation is SingleVariableDesignationSyntax recVar &&
                 this.context.GetDeclaredSymbol(recVar) is { } recBound)
             {
-                this.state.PatternBindings[recBound] =
-                    this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type);
+                // Issue #4173 round 3 (adversarial-review follow-up): a
+                // designated `T { }`/`T { ... }` recursive pattern over one of
+                // the three shared-node analyzer types reaches this SAME
+                // binding hazard as DeclarationPatternSyntax's designator
+                // above — BuildPatternNarrowingReplacement's smart-castable
+                // branch returns the bare, un-narrowed receiver (relying on
+                // flow-narrowing from a TEST expression this type never
+                // narrows, since the CAE/plain-access test is a predicate/
+                // suffixed-pattern test over a DIFFERENT expression than the
+                // designator's own declared type), and its fallback branch
+                // calls MapTypeSyntax directly — bypassing the discriminator
+                // entirely, mirrored from the same call site this round
+                // already fixed for DeclarationPatternSyntax.
+                if (this.IsConditionalAccessAnalyzerType(recursive.Type))
+                {
+                    this.state.PatternBindings[recBound] = new NonNullAssertionExpression(
+                        this.InvokeNullConditionalChain("AsNullConditionalHop", receiver));
+                }
+                else if (this.IsPlainAccessAnalyzerType(recursive.Type, out string sharedGsNodeName))
+                {
+                    this.state.PatternBindings[recBound] = NarrowToType(receiver, sharedGsNodeName);
+                }
+                else
+                {
+                    this.state.PatternBindings[recBound] =
+                        this.BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type);
+                }
             }
 
             // A bare recursive pattern with no type prefix (`{ A: 0 }`, `(0, 0)`)

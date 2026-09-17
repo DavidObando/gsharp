@@ -1884,6 +1884,608 @@ public sealed class BaseCallCheckAnalyzer : DiagnosticAnalyzer
         Assert.Equal(expected, mapRegistry);
     }
 
+    // =======================================================================
+    // ADVERSARIAL REVIEW (round 3, not part of the implementer's own test
+    // suite) — independent guard-hoist stress tests. Scratch, temporary.
+    // =======================================================================
+
+    // Positive guard-hoist (no early exit; TryBuildPositiveGuardHoist /
+    // TryBuildIfLetGuard) over a PLAIN-ACCESS shared-node type
+    // (MemberAccessExpressionSyntax), exercising the newly-added
+    // `!t.IsNullConditional` guard conjunct rather than CAE's predicate swap.
+    private const string ReviewPositivePlainAccessSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReviewPositivePlainAccessAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTREV1"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node.Parent is MemberAccessExpressionSyntax m)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, m.GetLocation()));
+        }
+    }
+}
+";
+
+    [Fact]
+    public void Review_PositiveGuardHoist_PlainAccessType_MatchesRoslyn()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(ReviewPositivePlainAccessSource, "ReviewPositivePlainAccessAnalyzer");
+        IReadOnlyList<string> roslynPlainIds = RunRoslynAnalyzer(roslynAnalyzer, Round3PlainAccessCorpus, "TESTREV1");
+        IReadOnlyList<string> roslynConditionalIds = RunRoslynAnalyzer(
+            roslynAnalyzer, Round3PlainAccessCorpus.Replace("box.Name", "box?.Name"), "TESTREV1");
+        Assert.NotEmpty(roslynPlainIds); // Roslyn: plain access fires (both the receiver and name identifiers' Parent is the MemberAccessExpressionSyntax).
+        Assert.Empty(roslynConditionalIds); // Roslyn: null-conditional tail is MemberBindingExpressionSyntax, not MemberAccessExpressionSyntax -- zero.
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateAnalyzerSource(ReviewPositivePlainAccessSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("IsNullConditional", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, ReviewPositivePlainAccessSource, "ReviewPositivePlainAccess");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+
+        ImmutableArray<Diagnostic> plainDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return box.Name
+            }
+            """);
+        ImmutableArray<Diagnostic> conditionalDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return box?.Name
+            }
+            """);
+
+        Assert.NotEmpty(plainDiagnostics); // G#: fires on plain access, matching Roslyn.
+        Assert.Empty(conditionalDiagnostics); // G#: MUST stay silent on null-conditional access, matching Roslyn.
+    }
+
+    // Negated guard-clause form (early return) over the SAME plain-access
+    // type -- TryBuildNegatedGuardHoist's De Morgan `|| t.IsNullConditional`
+    // addition is the part under test here.
+    private const string ReviewNegatedPlainAccessSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReviewNegatedPlainAccessAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTREV2"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node.Parent is not MemberAccessExpressionSyntax m)
+        {
+            return;
+        }
+
+        context.ReportDiagnostic(Diagnostic.Create(Rule, m.GetLocation()));
+    }
+}
+";
+
+    [Fact]
+    public void Review_NegatedGuardHoist_PlainAccessType_MatchesRoslyn()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(ReviewNegatedPlainAccessSource, "ReviewNegatedPlainAccessAnalyzer");
+        IReadOnlyList<string> roslynPlainIds = RunRoslynAnalyzer(roslynAnalyzer, Round3PlainAccessCorpus, "TESTREV2");
+        IReadOnlyList<string> roslynConditionalIds = RunRoslynAnalyzer(
+            roslynAnalyzer, Round3PlainAccessCorpus.Replace("box.Name", "box?.Name"), "TESTREV2");
+        Assert.NotEmpty(roslynPlainIds);
+        Assert.Empty(roslynConditionalIds);
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateAnalyzerSource(ReviewNegatedPlainAccessSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, ReviewNegatedPlainAccessSource, "ReviewNegatedPlainAccess");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+
+        ImmutableArray<Diagnostic> plainDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return box.Name
+            }
+            """);
+        ImmutableArray<Diagnostic> conditionalDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return box?.Name
+            }
+            """);
+
+        Assert.NotEmpty(plainDiagnostics);
+        Assert.Empty(conditionalDiagnostics); // Must NOT fire on the null-conditional tail.
+    }
+
+    // Multi-condition negated guard hoist (TryBuildMultipleNegatedGuardHoists):
+    // TWO negated designated patterns over TWO DIFFERENT shared-node types
+    // (one CAE, one plain-access), joined by `||` in one early-return guard
+    // clause, over two INDEPENDENT invocation arguments (so the two
+    // conditions are independently controllable without any parenthesized-
+    // chain-break trickery). This is the specific multi-condition path the
+    // function name (TryBuildMultipleNegatedGuardHoists) calls out.
+    private const string ReviewMultiNegatedGuardHoistSource = @"
+using System.Collections.Immutable;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReviewMultiNegatedGuardHoistAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTREV3"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.InvocationExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        System.Collections.Generic.List<ExpressionSyntax> args =
+            invocation.ArgumentList.Arguments.Select(a => a.Expression).ToList();
+        if (args.Count != 2)
+        {
+            return;
+        }
+
+        if (args[0] is not ConditionalAccessExpressionSyntax cae
+            || args[1] is not MemberAccessExpressionSyntax m)
+        {
+            return;
+        }
+
+        context.ReportDiagnostic(Diagnostic.Create(Rule, invocation.GetLocation()));
+    }
+}
+";
+
+    private const string ReviewMultiNegatedCorpus = @"
+public class Box { public Box Next; public string Name; }
+public class Corpus
+{
+    static void Frobnicate(object x, object y) { }
+
+    // Both terms false (arg0 IS CAE, arg1 IS plain access): should fire.
+    public static void Fires(Box a, Box b) => Frobnicate(a?.Next, b.Next);
+
+    // arg0 negation true (plain, not CAE): must NOT fire.
+    public static void NoFireArg0Plain(Box a, Box b) => Frobnicate(a.Next, b.Next);
+
+    // arg1 negation true (CAE, not plain access): must NOT fire.
+    public static void NoFireArg1Conditional(Box a, Box b) => Frobnicate(a?.Next, b?.Next);
+}
+";
+
+    [Fact]
+    public void Review_MultipleNegatedGuardHoist_MixedSharedNodeTypes_MatchesRoslyn()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer = CompileRoslynAnalyzerFromSource(
+            ReviewMultiNegatedGuardHoistSource, "ReviewMultiNegatedGuardHoistAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, ReviewMultiNegatedCorpus, "TESTREV3");
+        Assert.Single(roslynIds); // Roslyn: fires exactly once, on Fires().
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(ReviewMultiNegatedGuardHoistSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        Assert.Contains("IsNullConditional", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, ReviewMultiNegatedGuardHoistSource, "ReviewMultiNegatedGuardHoist");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+
+        ImmutableArray<Diagnostic> firesDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            func frobnicate(x Box?, y Box?) { }
+
+            class Box(Next Box?, Name string) { }
+
+            func fires(a Box?, b Box)
+            {
+                frobnicate(a?.Next, b.Next)
+            }
+            """);
+        ImmutableArray<Diagnostic> noFireArg0PlainDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            func frobnicate(x Box?, y Box?) { }
+
+            class Box(Next Box?, Name string) { }
+
+            func noFireArg0Plain(a Box, b Box)
+            {
+                frobnicate(a.Next, b.Next)
+            }
+            """);
+        ImmutableArray<Diagnostic> noFireArg1ConditionalDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            func frobnicate(x Box?, y Box?) { }
+
+            class Box(Next Box?, Name string) { }
+
+            func noFireArg1Conditional(a Box?, b Box?)
+            {
+                frobnicate(a?.Next, b?.Next)
+            }
+            """);
+
+        Assert.NotEmpty(firesDiagnostics); // G#: must fire when BOTH conditions are satisfied.
+        Assert.Empty(noFireArg0PlainDiagnostics); // G#: must NOT fire when arg0 is plain (not CAE).
+        Assert.Empty(noFireArg1ConditionalDiagnostics); // G#: must NOT fire when arg1 is null-conditional (not plain access).
+    }
+
+    // Independent `or`-combinator execution-parity check (item 3b): tests the
+    // SOLE invocation argument directly (not via a `.Parent` traversal, which
+    // is where the PR's own OrCombinator test disclaims execution parity due
+    // to an orthogonal G# NAME-token dispatch difference) so an exact
+    // Roslyn-vs-G# diagnostic COUNT comparison is meaningful here.
+    private const string ReviewOrCombinatorArgumentSource = @"
+using System.Collections.Immutable;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReviewOrCombinatorArgumentAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTREV5"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.InvocationExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        ExpressionSyntax arg = invocation.ArgumentList.Arguments.Single().Expression;
+        if (arg is ConditionalAccessExpressionSyntax or MemberAccessExpressionSyntax)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, invocation.GetLocation()));
+        }
+    }
+}
+";
+
+    private const string ReviewOrCombinatorCorpus = @"
+public class Box { public Box Next; public string Name; }
+public class Corpus
+{
+    static void Frobnicate(object x) { }
+    public static void ViaConditional(Box a) => Frobnicate(a?.Next);
+    public static void ViaPlain(Box a) => Frobnicate(a.Next);
+    public static void ViaNeither(Box a) => Frobnicate(a);
+}
+";
+
+    [Fact]
+    public void Review_OrCombinator_ArgumentPosition_ExactCountMatchesRoslyn()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(ReviewOrCombinatorArgumentSource, "ReviewOrCombinatorArgumentAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, ReviewOrCombinatorCorpus, "TESTREV5");
+        Assert.Equal(2, roslynIds.Count); // Roslyn: fires on ViaConditional and ViaPlain, not ViaNeither.
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(ReviewOrCombinatorArgumentSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        Assert.Contains("AccessorExpressionSyntax { IsNullConditional: false }", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, ReviewOrCombinatorArgumentSource, "ReviewOrCombinatorArgument");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+
+        ImmutableArray<Diagnostic> viaConditional = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            func frobnicate(x Box?) { }
+
+            class Box(Next Box?, Name string) { }
+
+            func viaConditional(a Box?)
+            {
+                frobnicate(a?.Next)
+            }
+            """);
+        ImmutableArray<Diagnostic> viaPlain = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            func frobnicate(x Box?) { }
+
+            class Box(Next Box?, Name string) { }
+
+            func viaPlain(a Box)
+            {
+                frobnicate(a.Next)
+            }
+            """);
+        ImmutableArray<Diagnostic> viaNeither = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            func frobnicate(x Box?) { }
+
+            class Box(Next Box?, Name string) { }
+
+            func viaNeither(a Box?)
+            {
+                frobnicate(a)
+            }
+            """);
+
+        Assert.NotEmpty(viaConditional); // G#: must fire, matching Roslyn.
+        Assert.NotEmpty(viaPlain); // G#: must fire, matching Roslyn.
+        Assert.Empty(viaNeither); // G#: must NOT fire, matching Roslyn.
+    }
+
+    // Item 8 audit finding: `TranslateRecursivePatternTest`'s OWN designator
+    // binding (CSharpToGSharpTranslator.Patterns.cs line ~1586) calls
+    // `BuildPatternNarrowingReplacement(receiver, receiverSyntax, recursive.Type)`
+    // directly -- NOT through MapPatternTypeSyntax/BuildPatternTypeTest --
+    // whenever the pattern is a DESIGNATED RecursivePatternSyntax (`is T { } x`,
+    // forced by the empty/non-empty braces, as opposed to a bare
+    // DeclarationPatternSyntax `is T x`). This is REACHABLE for a CAE type at
+    // a top-level `is` position: PatternMentionsConditionalAccessType routes
+    // the whole is-pattern to boolean lowering, and TranslatePatternTest's
+    // RecursivePatternSyntax case delegates straight into
+    // TranslateRecursivePatternTest, which is exactly where the unguarded
+    // BuildPatternNarrowingReplacement call lives. The TEST itself is fixed
+    // (BuildTypeTestExpression elsewhere in the same function), so this can
+    // only affect what the designator BINDS to, not whether the branch fires
+    // -- checking empirically whether the bound value is still usable/correct.
+    private const string ReviewRecursivePatternDesignatorSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReviewRecursivePatternDesignatorAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTREV6"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        // The `{ }` (empty property-pattern clause) forces RecursivePatternSyntax
+        // instead of DeclarationPatternSyntax -- TranslateRecursivePatternTest,
+        // not TranslatePatternTest's own DeclarationPatternSyntax case.
+        if (context.Node.Parent is ConditionalAccessExpressionSyntax { } cae)
+        {
+            // Reads the designator's bound value via a member access, so a
+            // wrong/garbage binding would surface as a bind-time or runtime
+            // failure, not just an unused variable.
+            context.ReportDiagnostic(Diagnostic.Create(Rule, cae.GetLocation()));
+        }
+    }
+}
+";
+
+    [Fact]
+    public void Review_RecursivePatternDesignator_ConditionalAccessType_BindsAndMatchesRoslyn()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer = CompileRoslynAnalyzerFromSource(
+            ReviewRecursivePatternDesignatorSource, "ReviewRecursivePatternDesignatorAnalyzer");
+        IReadOnlyList<string> roslynPlainIds = RunRoslynAnalyzer(roslynAnalyzer, Round3PlainAccessCorpus, "TESTREV6");
+        IReadOnlyList<string> roslynConditionalIds = RunRoslynAnalyzer(
+            roslynAnalyzer, Round3PlainAccessCorpus.Replace("box.Name", "box?.Name"), "TESTREV6");
+        Assert.Empty(roslynPlainIds);
+        Assert.Single(roslynConditionalIds);
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(ReviewRecursivePatternDesignatorSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, ReviewRecursivePatternDesignatorSource, "ReviewRecursivePatternDesignator");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+
+        ImmutableArray<Diagnostic> plainDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return box.Name
+            }
+            """);
+        ImmutableArray<Diagnostic> conditionalDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return box?.Name
+            }
+            """);
+
+        Assert.Empty(plainDiagnostics); // Must not fire on plain access.
+        Assert.NotEmpty(conditionalDiagnostics); // Must fire on null-conditional access, AND the designator binding used by GetLocation() must not crash/misbehave.
+    }
+
+    // Sharper repro of the item-8 audit finding: forces TranslateRecursivePatternTest's
+    // OWN designator-binding call down BuildPatternNarrowingReplacement's
+    // "smart-castable bare receiver" branch (IsSmartCastableScrutinee=true
+    // requires a bare local/parameter receiver AND the pattern NOT combined
+    // via &&/||/when, which is exactly what a TERNARY condition gives — an
+    // if-statement condition is instead intercepted by the guard-hoist
+    // machinery before ever reaching TranslatePatternTest, masking the bug,
+    // as the block-body-if repro above demonstrates by passing either way).
+    // Before the fix this shape failed to bind at all (GS0158 "Cannot find
+    // member SyntaxTree" / GS0130 "Function 'TextLocation' doesn't exist"):
+    // the designator was bound to the bare, un-narrowed receiver instead of
+    // NullConditionalChain.AsNullConditionalHop(receiver).
+    private const string ReviewRecursivePatternTernaryDesignatorSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Text;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ReviewRecursivePatternTernaryDesignatorAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TESTREV7"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        SyntaxNode node = context.Node.Parent;
+        Location loc = node is ConditionalAccessExpressionSyntax { } cae
+            ? cae.GetLocation()
+            : null;
+        if (loc != null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, loc));
+        }
+    }
+}
+";
+
+    [Fact]
+    public void Review_RecursivePatternDesignator_TernaryPosition_BindsAndMatchesRoslyn()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer = CompileRoslynAnalyzerFromSource(
+            ReviewRecursivePatternTernaryDesignatorSource, "ReviewRecursivePatternTernaryDesignatorAnalyzer");
+        IReadOnlyList<string> roslynPlainIds = RunRoslynAnalyzer(roslynAnalyzer, Round3PlainAccessCorpus, "TESTREV7");
+        IReadOnlyList<string> roslynConditionalIds = RunRoslynAnalyzer(
+            roslynAnalyzer, Round3PlainAccessCorpus.Replace("box.Name", "box?.Name"), "TESTREV7");
+        Assert.Empty(roslynPlainIds);
+        Assert.Single(roslynConditionalIds);
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(ReviewRecursivePatternTernaryDesignatorSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, ReviewRecursivePatternTernaryDesignatorSource, "ReviewRecursivePatternTernaryDesignator");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+
+        ImmutableArray<Diagnostic> plainDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return box.Name
+            }
+            """);
+        ImmutableArray<Diagnostic> conditionalDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return box?.Name
+            }
+            """);
+
+        Assert.Empty(plainDiagnostics);
+        Assert.NotEmpty(conditionalDiagnostics);
+    }
+
     /// <summary>Translates one analyzer source in ADR-0169 analyzer mode.</summary>
     /// <param name="source">The C# analyzer source.</param>
     /// <returns>The printed G# and the translation diagnostics.</returns>
