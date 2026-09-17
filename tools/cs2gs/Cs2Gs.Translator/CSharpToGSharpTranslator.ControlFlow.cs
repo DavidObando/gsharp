@@ -429,8 +429,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // A secondary type-binder: emit the type test as a break guard;
                     // references to the binder print as the hoist local (registered by
                     // HoistLoopConditionClause).
-                    into.Add(BreakIf(Negate(new BinaryExpression(
-                        idExpr, "is", new TypeExpression(this.MapTypeSyntax(declaration.Type))))));
+                    into.Add(BreakIf(Negate(this.BuildTypeTestExpression(idExpr, declaration.Type, declaration))));
                     return;
 
                 default:
@@ -574,6 +573,95 @@ public sealed partial class CSharpToGSharpTranslator
         /// rely on flow narrowing through an enclosing try/block. Reference targets
         /// retain the nullable-local lowering used for G# nil narrowing.
         /// </summary>
+        /// <summary>
+        /// Issue #4173 round 3: adapts a guard-hoist's plain <c>let t T? =
+        /// receiver as T; if t != nil</c> scheme for one of the three shared-
+        /// node analyzer types (<see cref="IsPlainAccessAnalyzerType"/> /
+        /// <see cref="IsConditionalAccessAnalyzerType"/>), which every
+        /// guard-hoist site (<see cref="TryBuildPositiveGuardHoist"/>,
+        /// <see cref="TryBuildNegatedGuardHoist"/>,
+        /// <see cref="TryBuildMultipleNegatedGuardHoists"/>) otherwise reaches
+        /// via a direct, unguarded <c>this.MapTypeSyntax(typeSyntax)</c> call
+        /// that bypasses the discriminator/predicate entirely — the exact
+        /// bug class this round fixes, reintroduced at the hoist level if left
+        /// unhandled. CAE has no castable G# type at all (its faithful
+        /// rewrite is the ALREADY-NULLABLE <c>AsNullConditionalHop</c>
+        /// predicate, which drops straight into the existing hoist shape
+        /// unchanged); a plain-access type keeps the ordinary <c>as</c>-cast
+        /// but needs an extra <c>IsNullConditional</c> guard conjunct, which
+        /// <paramref name="requiresNotNullConditional"/> tells the caller to add
+        /// (with the polarity appropriate to a POSITIVE guard — a negated
+        /// caller inverts it).
+        /// </summary>
+        /// <param name="typeSyntax">The pattern's tested type.</param>
+        /// <param name="receiver">The translated scrutinee.</param>
+        /// <param name="targetType">The hoisted local's non-nullable G# type.</param>
+        /// <param name="initializer">The hoisted local's initializer expression.</param>
+        /// <param name="requiresNotNullConditional">
+        /// True when the caller must additionally guard on the hoisted
+        /// local's <c>IsNullConditional</c> flag.
+        /// </param>
+        /// <returns>True when <paramref name="typeSyntax"/> is one of the three shared-node types.</returns>
+        private bool TryBuildSharedNodeGuardHoistPieces(
+            TypeSyntax typeSyntax,
+            GExpression receiver,
+            out GTypeReference targetType,
+            out GExpression initializer,
+            out bool requiresNotNullConditional)
+        {
+            initializer = null;
+            if (!this.TryResolveSharedNodeGuardHoistType(typeSyntax, out targetType, out bool isConditionalAccess, out requiresNotNullConditional))
+            {
+                return false;
+            }
+
+            initializer = isConditionalAccess
+                ? this.InvokeNullConditionalChain("AsNullConditionalHop", receiver)
+                : new BinaryExpression(receiver, "as", new TypeExpression(targetType));
+            return true;
+        }
+
+        /// <summary>
+        /// The receiver-independent half of <see cref="TryBuildSharedNodeGuardHoistPieces"/> —
+        /// used by the <c>if let</c> family (<c>CSharpToGSharpTranslator.IfLet.cs</c>),
+        /// whose eligibility checks resolve the target type before the
+        /// receiver is translated.
+        /// </summary>
+        /// <param name="typeSyntax">The pattern's tested type.</param>
+        /// <param name="targetType">The hoisted local's non-nullable G# type.</param>
+        /// <param name="isConditionalAccess">True when <paramref name="typeSyntax"/> is the CAE type.</param>
+        /// <param name="requiresNotNullConditional">
+        /// True when the caller must additionally guard on the hoisted
+        /// local's <c>IsNullConditional</c> flag.
+        /// </param>
+        /// <returns>True when <paramref name="typeSyntax"/> is one of the three shared-node types.</returns>
+        private bool TryResolveSharedNodeGuardHoistType(
+            TypeSyntax typeSyntax,
+            out GTypeReference targetType,
+            out bool isConditionalAccess,
+            out bool requiresNotNullConditional)
+        {
+            targetType = null;
+            isConditionalAccess = false;
+            requiresNotNullConditional = false;
+
+            if (this.IsConditionalAccessAnalyzerType(typeSyntax))
+            {
+                targetType = new NamedTypeReference("ExpressionSyntax");
+                isConditionalAccess = true;
+                return true;
+            }
+
+            if (this.IsPlainAccessAnalyzerType(typeSyntax, out string gsNodeName))
+            {
+                targetType = new NamedTypeReference(gsNodeName);
+                requiresNotNullConditional = true;
+                return true;
+            }
+
+            return false;
+        }
+
         private bool TryBuildPositiveGuardHoist(
             IfStatementSyntax ifStatement, out IReadOnlyList<GStatement> result)
         {
@@ -606,11 +694,25 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            GTypeReference targetType = this.MapTypeSyntax(typeSyntax);
             string localName = this.EmittedName(single, single.Identifier);
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
 
-            if (targetSymbol.IsValueType)
+            // Issue #4173 round 3: a shared-node analyzer type has no room for
+            // its IsNullConditional discriminator (or, for CAE, is not even a
+            // castable G# type at all — its faithful rewrite is the
+            // AsNullConditionalHop PREDICATE) in the plain `receiver as T`
+            // this hoist otherwise emits. AsNullConditionalHop is already
+            // nullable (nil when receiver is not a hop, the hop itself when it
+            // is), so it drops straight into the existing `let t T? = <init>;
+            // if t != nil` shape unchanged; a plain-access type keeps the
+            // ordinary `as`-cast but needs an extra `!t.IsNullConditional`
+            // guard conjunct.
+            bool isSharedNode = this.TryBuildSharedNodeGuardHoistPieces(
+                typeSyntax, receiver, out GTypeReference sharedTargetType, out GExpression sharedInitializer, out bool requiresNotNullConditional);
+
+            GTypeReference targetType = isSharedNode ? sharedTargetType : this.MapTypeSyntax(typeSyntax);
+
+            if (!isSharedNode && targetSymbol.IsValueType)
             {
                 result = this.BuildPositiveValueGuardHoist(ifStatement, guards, localName, targetType, receiver);
                 return true;
@@ -628,9 +730,9 @@ public sealed partial class CSharpToGSharpTranslator
                 : BindingKind.Let;
 
             var local = new IdentifierExpression(localName);
-            GTypeReference localType = targetSymbol.IsValueType ? null : MakeNullable(targetType);
-            GExpression initializer = targetSymbol.IsValueType
-                ? receiver
+            GTypeReference localType = MakeNullable(targetType);
+            GExpression initializer = isSharedNode
+                ? sharedInitializer
                 : new BinaryExpression(receiver, "as", new TypeExpression(targetType));
             var hoist = new LocalDeclarationStatement(
                 binding,
@@ -638,9 +740,15 @@ public sealed partial class CSharpToGSharpTranslator
                 localType,
                 initializer);
 
-            GExpression guard = targetSymbol.IsValueType
-                ? new BinaryExpression(local, "is", new TypeExpression(targetType))
-                : new BinaryExpression(local, "!=", LiteralExpression.Null());
+            GExpression guard = new BinaryExpression(local, "!=", LiteralExpression.Null());
+            if (requiresNotNullConditional)
+            {
+                guard = new BinaryExpression(
+                    guard,
+                    "&&",
+                    new UnaryExpression("!", new MemberAccessExpression(local, "IsNullConditional", isArrow: false)));
+            }
+
             foreach (ExpressionSyntax conjunct in guards)
             {
                 guard = new BinaryExpression(guard, "&&", this.TranslateExpression(conjunct));
@@ -953,6 +1061,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression hoistInitializer;
             GTypeReference targetType;
+            bool negatedRequiresNullConditionalGuard = false;
 
             if (typeSyntax != null)
             {
@@ -965,8 +1074,19 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
                 }
 
-                targetType = this.MapTypeSyntax(typeSyntax);
-                if (targetSymbol.IsValueType)
+                // Issue #4173 round 3: see TryBuildSharedNodeGuardHoistPieces —
+                // a shared-node analyzer type needs its discriminator/predicate
+                // in this hoist's `as T` + nil-guard scheme, which a direct
+                // MapTypeSyntax call bypasses entirely.
+                bool isSharedNode = this.TryBuildSharedNodeGuardHoistPieces(
+                    typeSyntax, receiver, out GTypeReference sharedTargetType, out GExpression sharedInitializer, out negatedRequiresNullConditionalGuard);
+
+                targetType = isSharedNode ? sharedTargetType : this.MapTypeSyntax(typeSyntax);
+                if (isSharedNode)
+                {
+                    hoistInitializer = sharedInitializer;
+                }
+                else if (targetSymbol.IsValueType)
                 {
                     if (this.context.GetTypeInfo(isPattern.Expression).Type is INamedTypeSymbol receiverType
                         && receiverType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
@@ -1026,6 +1146,18 @@ public sealed partial class CSharpToGSharpTranslator
             // fails the local is nil, so the original then-block runs.
             GExpression guard = new BinaryExpression(
                 new IdentifierExpression(localName), "==", LiteralExpression.Null());
+            if (negatedRequiresNullConditionalGuard)
+            {
+                // Issue #4173 round 3: De Morgan of the POSITIVE guard's
+                // `!= nil && !IsNullConditional` — the then-block (typically an
+                // early return) must ALSO run when the cast succeeded but the
+                // hop turned out to be null-conditional.
+                guard = new BinaryExpression(
+                    guard,
+                    "||",
+                    new MemberAccessExpression(new IdentifierExpression(localName), "IsNullConditional", isArrow: false));
+            }
+
             if (residualPattern != null)
             {
                 if (!this.TryTranslateIfLetResidualPattern(
@@ -1312,6 +1444,7 @@ public sealed partial class CSharpToGSharpTranslator
                 GExpression receiver = this.TranslateExpression(isPattern.Expression);
                 GExpression initializer;
                 GTypeReference targetType;
+                bool requiresNullConditionalGuard = false;
                 if (typeSyntax != null)
                 {
                     ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
@@ -1320,8 +1453,16 @@ public sealed partial class CSharpToGSharpTranslator
                         return false;
                     }
 
-                    targetType = this.MapTypeSyntax(typeSyntax);
-                    if (targetSymbol.IsValueType)
+                    // Issue #4173 round 3: see TryBuildSharedNodeGuardHoistPieces.
+                    bool isSharedNode = this.TryBuildSharedNodeGuardHoistPieces(
+                        typeSyntax, receiver, out GTypeReference sharedTargetType, out GExpression sharedInitializer, out requiresNullConditionalGuard);
+
+                    targetType = isSharedNode ? sharedTargetType : this.MapTypeSyntax(typeSyntax);
+                    if (isSharedNode)
+                    {
+                        initializer = sharedInitializer;
+                    }
+                    else if (targetSymbol.IsValueType)
                     {
                         if (this.context.GetTypeInfo(isPattern.Expression).Type is not INamedTypeSymbol receiverType
                             || receiverType.OriginalDefinition.SpecialType != SpecialType.System_Nullable_T
@@ -1370,6 +1511,16 @@ public sealed partial class CSharpToGSharpTranslator
                     new IdentifierExpression(localName),
                     "==",
                     LiteralExpression.Null());
+                if (requiresNullConditionalGuard)
+                {
+                    // Issue #4173 round 3: De Morgan of the positive guard —
+                    // see TryBuildNegatedGuardHoist's identical addition.
+                    guard = new BinaryExpression(
+                        guard,
+                        "||",
+                        new MemberAccessExpression(new IdentifierExpression(localName), "IsNullConditional", isArrow: false));
+                }
+
                 if (residualPattern != null)
                 {
                     if (!this.TryTranslateIfLetResidualPattern(

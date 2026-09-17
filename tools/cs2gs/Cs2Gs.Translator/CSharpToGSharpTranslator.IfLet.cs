@@ -69,6 +69,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Issue #4173 round 3: a shared-node analyzer type has no room for
+            // its IsNullConditional discriminator (or, for CAE, is not even a
+            // castable G# type at all) in this rewrite's plain `receiver as T`
+            // — decline here (falling back to the general lowering, which
+            // routes through the fixed TranslatePatternTest/TranslateNotPatternTest
+            // leaves) rather than reach MapTypeSyntax directly and reintroduce
+            // the over-match bug this round fixes.
+            if (!bareNonNullPattern
+                && (this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax)))
+            {
+                return false;
+            }
+
             if (!bareNonNullPattern)
             {
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
@@ -272,6 +285,15 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference asTarget = null;
 
             bool bareNonNullPattern = typeSyntax == null;
+
+            // Issue #4173 round 3: see TryTranslateIfLetConditional's
+            // identical decline.
+            if (!bareNonNullPattern
+                && (this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax)))
+            {
+                return false;
+            }
+
             if (!bareNonNullPattern)
             {
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
@@ -556,6 +578,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else
             {
+                // Issue #4173 round 3: see TryTranslateIfLetConditional's
+                // identical decline.
+                if (this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax))
+                {
+                    return false;
+                }
+
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
                 if (targetSymbol == null ||
                     targetSymbol.TypeKind == TypeKind.Error ||
@@ -684,6 +713,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else
             {
+                // Issue #4173 round 3: see TryTranslateIfLetConditional's
+                // identical decline.
+                if (this.IsPlainAccessAnalyzerType(typeSyntax, out _) || this.IsConditionalAccessAnalyzerType(typeSyntax))
+                {
+                    return false;
+                }
+
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
                 if (targetSymbol == null ||
                     targetSymbol.TypeKind == TypeKind.Error ||

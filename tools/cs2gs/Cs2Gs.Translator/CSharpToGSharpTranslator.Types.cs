@@ -1578,7 +1578,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // type test before falling through to the literal-equality case
                 // below.
                 case ConstantPatternSyntax constant when this.IsTypeReferencePattern(constant.Expression):
-                    return new TypePattern("_", this.MapTypeReferenceExpression(constant.Expression));
+                    return this.BuildPatternTypeTest("_", constant.Expression, constant);
 
                 case ConstantPatternSyntax constant:
                     return new ConstantPattern(this.TranslateExpression(constant.Expression));
@@ -1594,13 +1594,12 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case DeclarationPatternSyntax declaration
                     when declaration.Designation is SingleVariableDesignationSyntax variable:
-                    return new TypePattern(
-                        this.EmittedName(variable, variable.Identifier),
-                        this.MapTypeSyntax(declaration.Type));
+                    return this.BuildPatternTypeTest(
+                        this.EmittedName(variable, variable.Identifier), declaration.Type, declaration);
 
                 case DeclarationPatternSyntax declaration
                     when declaration.Designation is DiscardDesignationSyntax:
-                    return new TypePattern("_", this.MapTypeSyntax(declaration.Type));
+                    return this.BuildPatternTypeTest("_", declaration.Type, declaration);
 
                 // Issue #1890: a bare-type arm (`int =>`, no binder) is Roslyn's
                 // `TypePatternSyntax` — same shape as `DeclarationPatternSyntax`
@@ -1609,7 +1608,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // real discard there (PatternBinder.BindTypePattern's `isDiscard`
                 // check), so no binding is introduced — this is the bare form.
                 case TypePatternSyntax typePattern:
-                    return new TypePattern("_", this.MapTypeSyntax(typePattern.Type));
+                    return this.BuildPatternTypeTest("_", typePattern.Type, typePattern);
 
                 // G# has the same total, static-type binding form as C#.
                 case VarPatternSyntax varPattern:
@@ -1642,7 +1641,7 @@ public sealed partial class CSharpToGSharpTranslator
                 case RecursivePatternSyntax { Type: { } type } recursive
                     when this.state.TranslatingBooleanPattern
                         && !PatternIntroducesBinding(recursive):
-                    GPattern nativeTypePattern = new TypePattern("_", this.MapTypeSyntax(type));
+                    GPattern nativeTypePattern = this.BuildPatternTypeTest("_", type, recursive);
                     if (recursive.PropertyPatternClause == null && recursive.PositionalPatternClause == null)
                     {
                         return nativeTypePattern;
@@ -2180,7 +2179,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return new TypePattern(designator, this.MapTypeSyntax(recursive.Type));
+            return this.BuildPatternTypeTest(designator, recursive.Type, recursive);
         }
 
         private void AddTypedSubpatternTest(

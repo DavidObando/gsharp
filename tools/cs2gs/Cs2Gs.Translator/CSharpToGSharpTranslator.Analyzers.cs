@@ -22,8 +22,49 @@ namespace Cs2Gs.Translator;
 /// </summary>
 public sealed partial class CSharpToGSharpTranslator
 {
+    /// <summary>
+    /// Issue #4173 round 3, §4.5: the Roslyn type metadata names this
+    /// translator treats as sharing a G# node with their null-conditional
+    /// sibling (<see cref="DeclarationVisitor.PlainAccessAnalyzerTypes"/> plus
+    /// <see cref="DeclarationVisitor.ConditionalAccessTypeName"/>) — exposed so
+    /// a Cs2Gs.Tests drift test can assert this set agrees with
+    /// <see cref="RoslynAnalyzerApiMap"/>'s own <c>SharedGsNode</c>-flagged
+    /// rows, so a future shared-node row added to one registry but not the
+    /// other fails loudly instead of silently shipping the over-match bug a
+    /// fourth time.
+    /// </summary>
+    /// <returns>The flagged rows' Roslyn metadata names.</returns>
+    internal static IEnumerable<string> EnumerateAnalyzerSharedGsNodeTypeNames() =>
+        DeclarationVisitor.PlainAccessAnalyzerTypes.Keys
+            .Append(DeclarationVisitor.ConditionalAccessTypeName);
+
     private sealed partial class DeclarationVisitor
     {
+        /// <summary>
+        /// The Roslyn syntax type whose G# counterpart is a PREDICATE
+        /// (<c>NullConditionalChain.AsNullConditionalHop(x) != nil</c>), not a node
+        /// type — so, unlike <see cref="PlainAccessAnalyzerTypes"/>, it has no pure
+        /// G# pattern form and can only be expressed where a boolean is accepted.
+        /// </summary>
+        internal const string ConditionalAccessTypeName =
+            "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax";
+
+        /// <summary>
+        /// The Roslyn syntax types whose G# counterpart node is SHARED with the
+        /// null-conditional spelling of the same access, so a bare type-name
+        /// substitution silently over-matches (issue #4173 §6 and its
+        /// ElementAccess sibling). Each entry names the G# node the ORDINARY
+        /// (non-null-conditional) access maps to; the faithful rewrite is that
+        /// node plus an <c>IsNullConditional: false</c> discriminator, which is
+        /// a PURE G# pattern and therefore composes in every pattern position.
+        /// </summary>
+        internal static readonly Dictionary<string, string> PlainAccessAnalyzerTypes =
+            new(System.StringComparer.Ordinal)
+            {
+                ["Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax"] = "AccessorExpressionSyntax",
+                ["Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax"] = "IndexExpressionSyntax",
+            };
+
         /// <summary>
         /// The G# namespace holding the ADR-0169 verifier package that a
         /// migrated Roslyn analyzer test harness delegates to.
@@ -68,6 +109,191 @@ public sealed partial class CSharpToGSharpTranslator
             => new NonNullAssertionExpression(
                 new ParenthesizedExpression(
                     new BinaryExpression(expression, "as", new TypeExpression(new NamedTypeReference(typeName)))));
+
+        /// <summary>Resolves a pattern's type-position expression to its Roslyn metadata name, or null.</summary>
+        private string AnalyzerPatternTypeName(ExpressionSyntax typeSyntax)
+            => typeSyntax is null || !this.InAnalyzerApiMode
+                ? null
+                : RoslynTypeMetadataName(
+                    (this.context.GetTypeInfo(typeSyntax).Type
+                     ?? this.context.GetSymbolInfo(typeSyntax).Symbol as ITypeSymbol) as INamedTypeSymbol);
+
+        private bool IsPlainAccessAnalyzerType(ExpressionSyntax typeSyntax, out string gsNodeName)
+        {
+            gsNodeName = null;
+            string name = this.AnalyzerPatternTypeName(typeSyntax);
+            return name != null && PlainAccessAnalyzerTypes.TryGetValue(name, out gsNodeName);
+        }
+
+        private bool IsConditionalAccessAnalyzerType(ExpressionSyntax typeSyntax)
+            => this.AnalyzerPatternTypeName(typeSyntax) == ConditionalAccessTypeName;
+
+        /// <summary>
+        /// True when ANY node anywhere inside <paramref name="pattern"/> names
+        /// <c>ConditionalAccessExpressionSyntax</c> (issue #4173, round 3).
+        /// <para>
+        /// Deliberately a flat <c>SyntaxNode.DescendantNodesAndSelf</c> scan
+        /// with NO switch over pattern kinds. Two earlier fixes for this exact
+        /// soundness bug discriminated by enumerating C# pattern shapes
+        /// (<c>IsPatternTypeSyntax</c>'s three cases), and BOTH failed open on the
+        /// shapes the enumeration omitted (<c>not</c>, <c>and</c>/<c>or</c>,
+        /// <c>case</c> labels, nested recursive subpatterns). A scan cannot be
+        /// defeated by a pattern shape nobody enumerated; do not "simplify" it
+        /// back into a shape walk.
+        /// </para>
+        /// </summary>
+        private bool PatternMentionsConditionalAccessType(PatternSyntax pattern, out ExpressionSyntax site)
+        {
+            site = null;
+            if (!this.InAnalyzerApiMode || pattern is null)
+            {
+                return false;
+            }
+
+            foreach (SyntaxNode node in pattern.DescendantNodesAndSelf())
+            {
+                if (node is ExpressionSyntax candidate && this.IsConditionalAccessAnalyzerType(candidate))
+                {
+                    site = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// The single pattern-position type mapping (issue #4173 round 3). Returns
+        /// the G# type the pattern should test, plus the extra property-pattern
+        /// field the faithful rewrite needs for a shared-node Roslyn type
+        /// (<see cref="PlainAccessAnalyzerTypes"/>), or null for an ordinary type.
+        /// </summary>
+        private GTypeReference MapPatternTypeSyntax(
+            ExpressionSyntax typeSyntax, SyntaxNode site, out PropertyPatternField discriminator)
+        {
+            discriminator = null;
+            if (this.IsPlainAccessAnalyzerType(typeSyntax, out string gsNodeName))
+            {
+                this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Syntax");
+                this.ReportPlainAccessShape(site, gsNodeName);
+                discriminator = new PropertyPatternField(
+                    "IsNullConditional", new ConstantPattern(LiteralExpression.Bool(false)));
+                return new NamedTypeReference(gsNodeName);
+            }
+
+            if (this.IsConditionalAccessAnalyzerType(typeSyntax))
+            {
+                // Reached only from a GPattern-only position (a switch label /
+                // switch-expression arm / a nested property subpattern that could
+                // not be boolean-lowered). CAE's faithful G# form is a PREDICATE,
+                // not a node type, so there is no sound pattern to emit here.
+                this.ReportConditionalAccessPatternGap(site);
+            }
+
+            return typeSyntax is TypeSyntax type
+                ? this.MapTypeSyntax(type)
+                : this.MapTypeReferenceExpression(typeSyntax);
+        }
+
+        /// <summary>Builds a pattern-position type test, merging any §6 discriminator into the suffix.</summary>
+        private GPattern BuildPatternTypeTest(
+            string designator,
+            ExpressionSyntax typeSyntax,
+            SyntaxNode site,
+            PropertyPattern suffix = null,
+            bool designationAfterType = false)
+        {
+            GTypeReference mapped = this.MapPatternTypeSyntax(typeSyntax, site, out PropertyPatternField discriminator);
+            if (discriminator != null)
+            {
+                var fields = new List<PropertyPatternField> { discriminator };
+                if (suffix != null)
+                {
+                    fields.AddRange(suffix.Fields);
+                }
+
+                suffix = new PropertyPattern(fields, suffix?.Designator);
+            }
+
+            return new TypePattern(designator, mapped, suffix, designationAfterType);
+        }
+
+        /// <summary>Builds a BOOLEAN-position type test (the `x is T` lowering).</summary>
+        private GExpression BuildTypeTestExpression(
+            GExpression receiver, ExpressionSyntax typeSyntax, SyntaxNode site)
+        {
+            if (this.IsConditionalAccessAnalyzerType(typeSyntax))
+            {
+                // Distinct from MapPatternTypeSyntax's gap path: this IS the
+                // sound rewrite, reachable because the caller is a BOOLEAN
+                // position, not a G#-pattern-only position.
+                this.ReportConditionalAccessBooleanShape(site);
+                return new BinaryExpression(
+                    this.InvokeNullConditionalChain("AsNullConditionalHop", receiver),
+                    "!=",
+                    LiteralExpression.Null());
+            }
+
+            GPattern test = this.BuildPatternTypeTest(
+                "_", typeSyntax, site, suffix: null, designationAfterType: true);
+            return test is TypePattern { Suffix: null } bare
+                ? new BinaryExpression(receiver, "is", new TypeExpression(bare.Type))
+                : new PatternTestExpression(receiver, test);
+        }
+
+        private void ReportPlainAccessShape(SyntaxNode site, string gsNodeName)
+        {
+            string roslynName = gsNodeName == "AccessorExpressionSyntax"
+                ? "MemberAccessExpressionSyntax"
+                : "ElementAccessExpressionSyntax";
+            string shapeNote =
+                $"'{roslynName}' in a pattern position translated to "
+                + $"'{gsNodeName} {{ IsNullConditional: false }}': G# folds the null-conditional spelling of "
+                + "this access onto the SAME node, distinguished only by that flag — a bare type-name "
+                + "substitution would silently over-match a null-conditional hop too (issue #4173 round 3).";
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                shapeNote,
+                site.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+        }
+
+        private void ReportConditionalAccessBooleanShape(SyntaxNode site)
+        {
+            const string ShapeNote =
+                "'ConditionalAccessExpressionSyntax' translated to 'NullConditionalChain.AsNullConditionalHop(expr) "
+                + "!= nil': G# folds a?.b onto the SAME node as a.b and a?[i] onto the SAME node as a[i], so the "
+                + "faithful test is a predicate, not a type test (issue #4173 round 3).";
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                ShapeNote,
+                site.GetLocation(),
+                TranslationSeverity.Warning)
+            {
+                DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+            });
+        }
+
+        private void ReportConditionalAccessPatternGap(SyntaxNode site)
+        {
+            const string GapNote =
+                "'ConditionalAccessExpressionSyntax' in a pattern position that G# can only express as a "
+                + "PATTERN (a switch label, a switch-expression arm, or a nested property subpattern) has no "
+                + "sound rewrite: G# folds a?.b onto the SAME node as a.b and a?[i] onto the SAME node as a[i], "
+                + "so the only faithful test is the PREDICATE NullConditionalChain.AsNullConditionalHop(x) != nil, "
+                + "which is not a pattern. Restructure as an 'is'-expression (issue #4173).";
+            this.context.Report(new TranslationDiagnostic(
+                "analyzer-api",
+                GapNote,
+                site.GetLocation(),
+                TranslationSeverity.Unsupported)
+            {
+                DiagnosticId = "CS2GS-GAP",
+            });
+        }
 
         /// <summary>
         /// True when <paramref name="expression"/> is <c>&lt;something&gt;.Expression</c> or

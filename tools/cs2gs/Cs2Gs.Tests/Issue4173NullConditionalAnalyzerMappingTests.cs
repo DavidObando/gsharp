@@ -10,6 +10,7 @@ using System.Linq;
 using System.Reflection;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
+using Cs2Gs.Translator.Analyzers;
 using Cs2Gs.Translator.Loading;
 using GSharp.CodeAnalysis.Analyzers.Testing;
 using GSharp.Core.CodeAnalysis;
@@ -1175,6 +1176,712 @@ public sealed class DescendantWalkAnalyzer : DiagnosticAnalyzer
         ImmutableArray<Diagnostic> gsDiagnostics = RunGsAnalyzer(analyzerDll, GsSource);
         Assert.Equal(2, gsDiagnostics.Length);
         Assert.Equal(2, gsDiagnostics.Select(d => d.Location.Span).Distinct().Count());
+    }
+
+    // ---------------------------------------------------------------------
+    // Round 3 (issue #4173, closing the round-2 review gap): §6's
+    // over-matching bug generalized to EVERY pattern position a type test
+    // can appear in — not just the 4 designated/bare top-level shapes I1/I1b/
+    // I4/I5 already own. See CSharpToGSharpTranslator.Analyzers.cs §4.0
+    // (PlainAccessAnalyzerTypes / ConditionalAccessTypeName / the
+    // BuildPatternTypeTest / BuildTypeTestExpression builders) and the
+    // PatternMentionsConditionalAccessType scan that routes any CAE-
+    // mentioning is-pattern off the native-G#-pattern paths.
+    // ---------------------------------------------------------------------
+
+    // The round-2 reviewer's exact repro: a DESIGNATED, NEGATED type test
+    // (`is not ConditionalAccessExpressionSyntax cae`) registered for
+    // SyntaxKind.IdentifierName — a shape none of I1/I1b/I4/I5's top-level
+    // entry point recognizes (it only matches a bare DeclarationPatternSyntax/
+    // ConstantPatternSyntax/TypePatternSyntax, not one wrapped in a `not`),
+    // so before round 3 it fell through to TranslatePattern's native-pattern
+    // path with no CAE awareness — silently over-matching every IdentifierName
+    // whose parent was ANY access, not just a null-conditional one.
+    private const string Round3NotDesignatedAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3NotDesignatedAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3A"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node.Parent is not ConditionalAccessExpressionSyntax cae)
+        {
+            return;
+        }
+
+        context.ReportDiagnostic(Diagnostic.Create(Rule, cae.GetLocation()));
+    }
+}
+";
+
+    private const string Round3PlainAccessCorpus = @"
+public class Box { public string Name; }
+public class Corpus { public static string Get(Box box) => box.Name; }
+";
+
+    /// <summary>
+    /// The round-2 reviewer's exact counterexample, verified against BOTH
+    /// real Roslyn and the translated analyzer: plain (non-null-conditional)
+    /// member access must yield ZERO diagnostics, not the pre-round-3 over-
+    /// match of 2. Also asserts the printed G# carries the sound
+    /// <c>AsNullConditionalHop</c> predicate rewrite, never a bare (and
+    /// therefore vacuously-true-on-anything) <c>is not ExpressionSyntax</c>.
+    /// </summary>
+    [Fact]
+    public void ReviewerCounterexample_NegatedDesignatedConditionalAccess_MatchesRoslyn_OnPlainAccess()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(Round3NotDesignatedAnalyzerSource, "Round3NotDesignatedAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, Round3PlainAccessCorpus, "TEST4173R3A");
+        Assert.Empty(roslynIds); // Real Roslyn: zero. The pre-round-3 bug reported 2 here.
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3NotDesignatedAnalyzerSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("is not ExpressionSyntax", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, Round3NotDesignatedAnalyzerSource, "TranslatedRound3NotDesignated");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        const string GsSource = """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return box.Name
+            }
+            """;
+
+        ImmutableArray<Diagnostic> gsDiagnostics = RunGsAnalyzer(analyzerDll, GsSource);
+        Assert.Empty(gsDiagnostics); // G#: zero, matching Roslyn.
+    }
+
+    // The POSITIVE, designated, early-return-adjacent sibling of the reviewer
+    // counterexample: `if (x is ConditionalAccessExpressionSyntax cae) { ... }`
+    // used as a statement-form guard with `cae` read INSIDE the guarded
+    // block. This shape is eligible for the statement-level `if let`/
+    // positive-guard-hoist machinery (CSharpToGSharpTranslator.IfLet.cs /
+    // ControlFlow.cs) BEFORE it ever reaches TranslateIsPattern's own
+    // analyzer-idiom entry point for some call orderings — those hoist
+    // builders used to reach MapTypeSyntax directly (bypassing the CAE
+    // predicate entirely); round 3 declines there and falls back to the
+    // general lowering instead.
+    private const string Round3PositiveDesignatedAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3PositiveDesignatedAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3I"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node.Parent is ConditionalAccessExpressionSyntax cae)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, cae.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// Positive counterpart of <see cref="ReviewerCounterexample_NegatedDesignatedConditionalAccess_MatchesRoslyn_OnPlainAccess"/>:
+    /// translates soundly and binds — the key risk this test targets is the
+    /// STATEMENT-form positive designated pattern being claimed by the
+    /// `if let`/positive-guard-hoist machinery (which used to reach
+    /// MapTypeSyntax directly) before TranslateIsPattern's own analyzer-idiom
+    /// entry point runs. Also verified against real Roslyn on the null-
+    /// conditional corpus (zero-vs-nonzero — not an exact execution-count
+    /// comparison: G# dispatches its folded member-access NAME token to the
+    /// same registration as its receiver, an orthogonal representational
+    /// difference unrelated to this fix, same as
+    /// <see cref="OrCombinatorConditionalAccess_TranslatesBothLeavesSoundly"/>'s note).
+    /// </summary>
+    [Fact]
+    public void PositiveDesignatedConditionalAccess_MatchesRoslyn_OnBothShapes()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer = CompileRoslynAnalyzerFromSource(
+            Round3PositiveDesignatedAnalyzerSource, "Round3PositiveDesignatedAnalyzer");
+        IReadOnlyList<string> roslynConditionalIds =
+            RunRoslynAnalyzer(roslynAnalyzer, Round3PlainAccessCorpus.Replace("box.Name", "box?.Name"), "TEST4173R3I");
+        IReadOnlyList<string> roslynPlainIds = RunRoslynAnalyzer(roslynAnalyzer, Round3PlainAccessCorpus, "TEST4173R3I");
+        Assert.Single(roslynConditionalIds);
+        Assert.Empty(roslynPlainIds);
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3PositiveDesignatedAnalyzerSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, Round3PositiveDesignatedAnalyzerSource, "TranslatedRound3PositiveDesignated");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        ImmutableArray<Diagnostic> conditionalDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box?) string?
+            {
+                return box?.Name
+            }
+            """);
+        ImmutableArray<Diagnostic> plainDiagnostics = RunGsAnalyzer(analyzerDll, """
+            package sample
+
+            class Box(Name string) { }
+
+            func Get(box Box) string
+            {
+                return box.Name
+            }
+            """);
+
+        Assert.NotEmpty(conditionalDiagnostics); // Fires on the null-conditional access (like Roslyn).
+        Assert.Empty(plainDiagnostics); // Stays silent on plain access (like Roslyn) — the over-match this round fixes.
+    }
+
+    // The `or` combinator (bare, no designator): `is ConditionalAccessExpressionSyntax
+    // or MemberAccessExpressionSyntax` — ONE combinator exercising BOTH of
+    // §4.1's shared-node leaf fixes at once. IsNativelyExpressiblePattern
+    // refuses the whole pattern (it mentions CAE), routing to the legacy
+    // boolean lowering, where the `or` combinator's own `||` composition
+    // (TranslatePatternTest's BinaryPatternSyntax case) is untouched — no
+    // bespoke `or`-handling needed for CAE at all, proving the leaf-level fix
+    // composes for free.
+    private const string Round3OrCombinatorAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3OrCombinatorAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3B"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node.Parent is ConditionalAccessExpressionSyntax or MemberAccessExpressionSyntax)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// A bare (undesignated) <c>or</c> combinator over two shared-node types
+    /// (CAE and MemberAccessExpressionSyntax) — proves
+    /// <c>PatternMentionsConditionalAccessType</c>'s refusal in
+    /// <c>IsNativelyExpressiblePattern</c> correctly diverts the WHOLE pattern
+    /// (not just the CAE leaf) to boolean lowering, and that lowering's
+    /// existing <c>||</c> composition needs no CAE-specific code at all — both
+    /// leaves get their own discriminator/predicate rewrite exactly as if
+    /// each stood alone. (A full Roslyn-vs-G# execution parity check is not
+    /// meaningful here: G# folds a member-access NAME token onto the SAME
+    /// right-nested node its receiver hop does, so <c>.Parent</c>-based
+    /// traversal counts do not correspond 1:1 with Roslyn's
+    /// <c>MemberBindingExpressionSyntax</c>-vs-<c>IdentifierNameSyntax</c>
+    /// split — an orthogonal representational difference, not a soundness
+    /// gap in this fix. Translation soundness is what §4.2 promises here.)
+    /// </summary>
+    [Fact]
+    public void OrCombinatorConditionalAccess_TranslatesBothLeavesSoundly()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3OrCombinatorAnalyzerSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        Assert.Contains("AccessorExpressionSyntax { IsNullConditional: false }", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, Round3OrCombinatorAnalyzerSource, "TranslatedRound3OrCombinator");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        Assert.Single(analyzers);
+    }
+
+    // The `and` combinator with a designator: `is ConditionalAccessExpressionSyntax
+    // cae and not null`. GS0390/CS8780 permit a designator under `and` — the
+    // CAE leaf binds by substitution (§4.2(d)), and the designator must be
+    // usable AFTER the whole `and` test (`cae.GetLocation()` below). The
+    // second conjunct (`not null`) is trivially true whenever the CAE
+    // predicate already matched (a CAE-typed value is never null once
+    // AsNullConditionalHop proves it IS the hop) — deliberately: it exercises
+    // the BinaryPatternSyntax "and" composition path itself, not any
+    // CAE-specific member (CAE has no G# member surface to test against).
+    private const string Round3AndCombinatorAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3AndCombinatorAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3C"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node.Parent is ConditionalAccessExpressionSyntax cae and not null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, cae.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// A designator under the <c>and</c> combinator — the one non-top-level
+    /// position C#/G# both allow one (GS0390) — must bind and the second
+    /// conjunct must still evaluate (here always true, so this behaves
+    /// identically to the bare designated form, but exercises the `and`
+    /// composition path instead of the top-level I1 shortcut).
+    /// </summary>
+    [Fact]
+    public void AndCombinatorConditionalAccess_MatchesRoslyn_OnMixedAccess()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(Round3AndCombinatorAnalyzerSource, "Round3AndCombinatorAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, OrdinaryMemberAccessCorpus, "TEST4173R3C");
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3AndCombinatorAnalyzerSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, Round3AndCombinatorAnalyzerSource, "TranslatedRound3AndCombinator");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        const string GsSource = """
+            package sample
+
+            class Leaf(Value string) { }
+            class Mid(Leaf Leaf, Next Mid) { }
+            class Root(Mid Mid) { }
+
+            func Mixed(root Root?) Leaf?
+            {
+                return root?.Mid.Leaf
+            }
+            """;
+
+        ImmutableArray<Diagnostic> gsDiagnostics = RunGsAnalyzer(analyzerDll, GsSource);
+        Assert.Equal(roslynIds.Count, gsDiagnostics.Length);
+    }
+
+    // A CAE-mentioning pattern used as a SWITCH-CASE label: no sound G#
+    // pattern exists for it (§4.3) — must be a loud CS2GS-GAP, not a silent
+    // fallback to the non-discriminating ExpressionSyntax supertype.
+    private const string Round3SwitchLabelAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3SwitchLabelAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3D"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        switch (context.Node.Parent)
+        {
+            case ConditionalAccessExpressionSyntax cae:
+                context.ReportDiagnostic(Diagnostic.Create(Rule, cae.GetLocation()));
+                break;
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// §4.3: a switch-case label is a GPattern-only position — CAE's faithful
+    /// G# form is a predicate, not a node type, so this MUST surface a loud
+    /// <c>CS2GS-GAP</c>, never a silent (and unsound) fallback.
+    /// </summary>
+    [Fact]
+    public void SwitchLabelConditionalAccess_IsALoudGap()
+    {
+        (_, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3SwitchLabelAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal("CS2GS-GAP", gap.DiagnosticId);
+        Assert.Contains("ConditionalAccessExpressionSyntax", gap.Message, StringComparison.Ordinal);
+    }
+
+    // A CAE-mentioning pattern used as a SWITCH-EXPRESSION arm: same gap as
+    // the switch-case-label form above, different C# syntax.
+    private const string Round3SwitchExpressionArmAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3SwitchExpressionArmAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3E"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        bool isConditional = context.Node.Parent switch
+        {
+            ConditionalAccessExpressionSyntax => true,
+            _ => false,
+        };
+
+        if (isConditional)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Node.Parent!.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// §4.3's switch-EXPRESSION-arm sibling of <see cref="SwitchLabelConditionalAccess_IsALoudGap"/>.
+    /// </summary>
+    [Fact]
+    public void SwitchExpressionArmConditionalAccess_IsALoudGap()
+    {
+        (_, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3SwitchExpressionArmAnalyzerSource);
+
+        TranslationDiagnostic gap = Assert.Single(
+            diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Equal("CS2GS-GAP", gap.DiagnosticId);
+        Assert.Contains("ConditionalAccessExpressionSyntax", gap.Message, StringComparison.Ordinal);
+    }
+
+    // The nested-property-subpattern shape (§4.2(c)) that reaches
+    // TranslatePatternTest with receiverSyntax == null (via AddTypedSubpatternTest,
+    // which never passes it): a real, valid Roslyn shape reachable only through
+    // a PARENTHESIZED chain break (`(a?.b)?.c`) — the ONE place Roslyn allows a
+    // bare CAE to sit inside another node's typed property (ParenthesizedExpressionSyntax.Expression).
+    private const string Round3NestedSubpatternAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3NestedSubpatternAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3F"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.ParenthesizedExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        if (context.Node is ParenthesizedExpressionSyntax { Expression: ConditionalAccessExpressionSyntax cae })
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, cae.GetLocation()));
+        }
+    }
+}
+";
+
+    /// <summary>
+    /// §4.2(c), the critical CAN'T-SKIP case: a nested property subpattern
+    /// (<c>ParenthesizedExpressionSyntax { Expression: ConditionalAccessExpressionSyntax
+    /// cae }</c>) reaches the leaf hook through <c>AddTypedSubpatternTest</c>,
+    /// which calls <c>TranslatePatternTest</c> WITHOUT a <c>receiverSyntax</c>
+    /// (it defaults to null). If the CAE hook were gated on
+    /// <c>receiverSyntax != null</c>, this shape would silently mishandle —
+    /// reintroducing the exact bug class round 3 fixes. This must translate
+    /// without throwing, bind, and match real Roslyn on a genuine
+    /// parenthesized chain-break corpus.
+    /// </summary>
+    [Fact]
+    public void NestedSubpatternConditionalAccess_MatchesRoslyn_WithNullReceiverSyntax()
+    {
+        const string Corpus = @"
+public class Box { public Box? Next; public string? Value; }
+public class Corpus { public static string? Get(Box? a) => (a?.Next)?.Value; }
+";
+        RoslynDiagnosticAnalyzer roslynAnalyzer =
+            CompileRoslynAnalyzerFromSource(Round3NestedSubpatternAnalyzerSource, "Round3NestedSubpatternAnalyzer");
+        IReadOnlyList<string> roslynIds = RunRoslynAnalyzer(roslynAnalyzer, Corpus, "TEST4173R3F");
+        Assert.Single(roslynIds); // The one parenthesized chain-break: (a?.Next).
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3NestedSubpatternAnalyzerSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("NullConditionalChain.AsNullConditionalHop", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+    }
+
+    // The previously-unreported ElementAccessExpressionSyntax sibling of the
+    // real-repo tier-1 switch-label bug (RewriterClonePreservationAnalyzer.cs:334),
+    // modeled directly on that real shape.
+    private const string Round3ElementAccessSwitchLabelAnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class Round3ElementAccessSwitchLabelAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3G"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.IdentifierName);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        switch (context.Node.Parent)
+        {
+            case ElementAccessExpressionSyntax access:
+                context.ReportDiagnostic(Diagnostic.Create(Rule, access.GetLocation()));
+                break;
+        }
+    }
+}
+";
+
+    private const string Round3ElementAccessSwitchLabelCorpus = @"
+public class Box { public string this[int i] => """"; }
+public class Corpus
+{
+    public static string Plain(Box box) => box[0];
+    public static string? Conditional(Box? box) => box?[0];
+}
+";
+
+    /// <summary>
+    /// The ElementAccessExpressionSyntax sibling of the tier-1 switch-label
+    /// bug (row 15's MemberAccessExpressionSyntax case, here as a genuine
+    /// switch-case label instead of an is-pattern). Roslyn NEVER sees
+    /// <c>box?[0]</c> as <c>ElementAccessExpressionSyntax</c> at all (it is
+    /// <c>ElementBindingExpressionSyntax</c>, a different kind), so real
+    /// Roslyn's own count is 1 (only <c>box[0]</c>) no matter how the
+    /// analyzer is written — but G# folds BOTH onto the SAME
+    /// <c>IndexExpressionSyntax</c> node, distinguished only by
+    /// <c>IsNullConditional</c>. Without the round-3 discriminator, the
+    /// translated switch-case label would over-match to 2; the fix keeps it
+    /// at 1, matching Roslyn.
+    /// </summary>
+    [Fact]
+    public void SwitchLabelElementAccess_MatchesRoslyn_OnMixedAccess()
+    {
+        RoslynDiagnosticAnalyzer roslynAnalyzer = CompileRoslynAnalyzerFromSource(
+            Round3ElementAccessSwitchLabelAnalyzerSource, "Round3ElementAccessSwitchLabelAnalyzer");
+        IReadOnlyList<string> roslynIds =
+            RunRoslynAnalyzer(roslynAnalyzer, Round3ElementAccessSwitchLabelCorpus, "TEST4173R3G");
+        Assert.Single(roslynIds); // Only box[0]; box?[0] is ElementBindingExpressionSyntax to Roslyn.
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) =
+            TranslateAnalyzerSource(Round3ElementAccessSwitchLabelAnalyzerSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("IndexExpressionSyntax { IsNullConditional: false }", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+
+        string analyzerDll = CompileTranslatedAnalyzerFromSource(
+            workDirectory.FullName, Round3ElementAccessSwitchLabelAnalyzerSource, "TranslatedRound3ElementAccessSwitchLabel");
+        ImmutableArray<GSharpDiagnosticAnalyzer> analyzers =
+            GSharpAnalyzerHost.Load(new[] { analyzerDll }, out ImmutableArray<Diagnostic> hostDiagnostics);
+        Assert.Empty(hostDiagnostics);
+        GSharpDiagnosticAnalyzer analyzer = Assert.Single(analyzers);
+
+        const string GsSource = """
+            package sample
+
+            class Box {
+                prop this[i int32] string -> ""
+            }
+
+            func Plain(box Box) string
+            {
+                return box[0]
+            }
+
+            func Conditional(box Box?) string?
+            {
+                return box?[0]
+            }
+            """;
+
+        ImmutableArray<Diagnostic> gsDiagnostics = RunGsAnalyzer(analyzerDll, GsSource);
+        Assert.Equal(roslynIds.Count, gsDiagnostics.Length); // G# also fires exactly once, not twice (the pre-fix over-match).
+    }
+
+    /// <summary>
+    /// Regression for the "preserved ordering" concern: none of the tier-1
+    /// leaf swaps disturb <c>TryTranslateAnalyzerBaseCallCheck</c>, which must
+    /// still run FIRST (it is called at the head of <c>TranslateIsPattern</c>,
+    /// before any generic pattern translation).
+    /// </summary>
+    [Fact]
+    public void BaseCallCheck_StillTranslatesToBaseClassCallExpressionSyntax()
+    {
+        const string AnalyzerSource = @"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BaseCallCheckAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4173R3H"", ""T"", ""M"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+        => context.RegisterSyntaxNodeAction(Analyze, SyntaxKind.InvocationExpression);
+
+    private static void Analyze(SyntaxNodeAnalysisContext context)
+    {
+        var invocation = (InvocationExpressionSyntax)context.Node;
+        if (invocation.Expression is MemberAccessExpressionSyntax { Expression: BaseExpressionSyntax })
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, invocation.GetLocation()));
+        }
+    }
+}
+";
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateAnalyzerSource(AnalyzerSource);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("invocation.Parent is BaseClassCallExpressionSyntax", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("AccessorExpressionSyntax", printed, StringComparison.Ordinal);
+        AssertBinds(printed);
+    }
+
+    /// <summary>
+    /// §4.5 drift test: the translator's own shared-node registry
+    /// (<c>PlainAccessAnalyzerTypes</c> + <c>ConditionalAccessTypeName</c>,
+    /// exposed via <see cref="CSharpToGSharpTranslator.EnumerateAnalyzerSharedGsNodeTypeNames"/>)
+    /// must agree EXACTLY with <see cref="RoslynAnalyzerApiMap"/>'s own
+    /// <c>SharedGsNode</c>-flagged rows — if a future contributor adds a
+    /// fourth shared-node map row and forgets to flag it (or vice versa),
+    /// this test fails instead of silently shipping the over-match bug a
+    /// fourth time.
+    /// </summary>
+    [Fact]
+    public void SharedGsNodeRegistry_AgreesWithRoslynAnalyzerApiMap()
+    {
+        var expected = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Microsoft.CodeAnalysis.CSharp.Syntax.MemberAccessExpressionSyntax",
+            "Microsoft.CodeAnalysis.CSharp.Syntax.ElementAccessExpressionSyntax",
+            "Microsoft.CodeAnalysis.CSharp.Syntax.ConditionalAccessExpressionSyntax",
+        };
+
+        var translatorRegistry = new HashSet<string>(
+            CSharpToGSharpTranslator.EnumerateAnalyzerSharedGsNodeTypeNames(), StringComparer.Ordinal);
+        var mapRegistry = new HashSet<string>(
+            RoslynAnalyzerApiMap.EnumerateSharedGsNodeTypeNames(), StringComparer.Ordinal);
+
+        Assert.Equal(expected, translatorRegistry);
+        Assert.Equal(expected, mapRegistry);
     }
 
     /// <summary>Translates one analyzer source in ADR-0169 analyzer mode.</summary>

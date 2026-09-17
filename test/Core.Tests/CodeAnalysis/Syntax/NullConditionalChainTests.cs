@@ -205,4 +205,20 @@ public sealed class NullConditionalChainTests
         Assert.False(NullConditionalChain.IsNullConditionalHop(top));
         Assert.Null(NullConditionalChain.AsNullConditionalHop(top));
     }
+
+    /// <summary>
+    /// Issue #4173 round 3, §4.6: <see cref="NullConditionalChain.HopSpan"/> and
+    /// <see cref="NullConditionalChain.ReceiverSpan"/> yield a plausible but
+    /// meaningless span for a non-hop node, so both now guard their precondition
+    /// explicitly rather than silently computing a bogus answer.
+    /// </summary>
+    [Fact]
+    public void HopSpanAndReceiverSpan_ThrowOnNonHopNode()
+    {
+        (_, ExpressionSyntax top) = ParseExpression("a.b.c");
+        Assert.False(NullConditionalChain.IsNullConditionalHop(top));
+
+        Assert.Throws<System.ArgumentException>(() => NullConditionalChain.HopSpan(top));
+        Assert.Throws<System.ArgumentException>(() => NullConditionalChain.ReceiverSpan(top));
+    }
 }

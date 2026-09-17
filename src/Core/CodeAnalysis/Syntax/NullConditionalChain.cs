@@ -240,6 +240,13 @@ public static class NullConditionalChain
     /// <returns>The hop's Roslyn-exact span.</returns>
     public static TextSpan HopSpan(SyntaxNode hop)
     {
+        if (!IsNullConditionalHop(hop))
+        {
+            throw new ArgumentException(
+                "HopSpan requires a null-conditional hop; a non-hop node yields a plausible but meaningless span.",
+                nameof(hop));
+        }
+
         ExpressionSyntax top = ChainTop(hop);
         (int start, _) = ReceiverBounds(hop, top);
         return TextSpan.FromBounds(start, top.Span.End);
@@ -257,6 +264,13 @@ public static class NullConditionalChain
     /// <returns>The hop's Roslyn-exact receiver span.</returns>
     public static TextSpan ReceiverSpan(SyntaxNode hop)
     {
+        if (!IsNullConditionalHop(hop))
+        {
+            throw new ArgumentException(
+                "ReceiverSpan requires a null-conditional hop; a non-hop node yields a plausible but meaningless span.",
+                nameof(hop));
+        }
+
         ExpressionSyntax top = ChainTop(hop);
         (int start, _) = ReceiverBounds(hop, top);
         return TextSpan.FromBounds(start, NullConditionalTokenStart(hop));
