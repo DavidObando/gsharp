@@ -41,6 +41,8 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
     /// <param name="closeParenToken">The closing <c>)</c>.</param>
     /// <param name="returnTypeClause">The optional return-type clause.</param>
     /// <param name="body">The function body.</param>
+    /// <param name="returnRefModifier">Issue #4219 (umbrella remainder): the optional <c>ref</c> return modifier preceding <paramref name="returnTypeClause"/>.</param>
+    /// <param name="returnReadOnlyModifier">The optional <c>readonly</c> token following <paramref name="returnRefModifier"/>.</param>
     public FunctionLiteralExpressionSyntax(
         SyntaxTree syntaxTree,
         SyntaxToken? asyncModifier,
@@ -49,7 +51,9 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
         SeparatedSyntaxList<ParameterSyntax> parameters,
         SyntaxToken closeParenToken,
         TypeClauseSyntax? returnTypeClause,
-        BlockStatementSyntax body)
+        BlockStatementSyntax body,
+        SyntaxToken? returnRefModifier = null,
+        SyntaxToken? returnReadOnlyModifier = null)
         : base(syntaxTree)
     {
         AsyncModifier = asyncModifier;
@@ -57,6 +61,8 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
         OpenParenToken = openParenToken;
         Parameters = parameters;
         CloseParenToken = closeParenToken;
+        ReturnRefModifier = returnRefModifier;
+        ReturnReadOnlyModifier = returnReadOnlyModifier;
         ReturnTypeClause = returnTypeClause;
         Body = body;
     }
@@ -81,6 +87,19 @@ public sealed class FunctionLiteralExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the closing parenthesis token.</summary>
     public SyntaxToken CloseParenToken { get; }
+
+    /// <summary>
+    /// Gets the optional <c>ref</c> return modifier (issue #4219 umbrella
+    /// remainder), mirroring <see cref="FunctionDeclarationSyntax.ReturnRefModifier"/>
+    /// for a function LITERAL: <c>func (...) ref T { ... }</c>.
+    /// </summary>
+    public SyntaxToken? ReturnRefModifier { get; }
+
+    /// <summary>Gets a value indicating whether this literal declares a by-ref return.</summary>
+    public bool IsRefReturn => ReturnRefModifier != null;
+
+    /// <summary>Gets the optional <c>readonly</c> token following <see cref="ReturnRefModifier"/> (<c>ref readonly</c>).</summary>
+    public SyntaxToken? ReturnReadOnlyModifier { get; }
 
     /// <summary>Gets the optional return-type clause.</summary>
     public TypeClauseSyntax? ReturnTypeClause { get; }

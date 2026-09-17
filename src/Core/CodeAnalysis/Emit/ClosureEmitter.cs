@@ -157,6 +157,17 @@ internal sealed class ClosureEmitter
     /// </summary>
     public Dictionary<BoundFunctionLiteralExpression, ClosureInfo> ClosureInfos { get; } = [];
 
+    /// <summary>
+    /// Gets, for every CAPTURING direct-call local function
+    /// (<see cref="FunctionSymbol.LocalDeclaration"/> non-null — a member of
+    /// a generic OR (issue #4219 umbrella remainder) non-generic local-
+    /// function-literal group — whose <see cref="BoundFunctionLiteralExpression.CapturedVariables"/>
+    /// is non-empty), its closure metadata. A direct <c>BoundCallExpression</c>
+    /// naming such a function must dispatch through <c>Info.InvokeMethod</c>
+    /// (see <c>MethodBodyEmitter.EmitCallExpression</c>) rather than a
+    /// top-level MethodDef, because the literal itself was hosted as that
+    /// closure's instance method, not as a standalone function.
+    /// </summary>
     public Dictionary<FunctionSymbol, (BoundFunctionLiteralExpression Literal, ClosureInfo Info)> GenericLocalClosures { get; } = [];
 
     /// <summary>
@@ -333,9 +344,19 @@ internal sealed class ClosureEmitter
                 continue;
             }
 
-            // Issue #4221: handle generic locals with captures by routing through a
-            // closure class with a generic Invoke method, preserving type parameters.
-            if (literal.Function.IsGeneric && literal.CapturedVariables.Length > 0)
+            // Issue #4221, widened by #4219's umbrella remainder: handle
+            // CAPTURING direct-call local functions — generic (#4221) or,
+            // now, non-generic (a member of a 2+ non-generic local-function-
+            // literal group, see StatementBinder.IsNonGenericLocalFunctionLiteralDeclaration) —
+            // by routing through a closure class with an Invoke method,
+            // preserving any own type parameters (empty for non-generic).
+            // `Function.LocalDeclaration != null` is exactly the direct-call
+            // signal set by LambdaBinder.PrepareGenericLocalFunctionDeclaration
+            // for both shapes; a plain non-generic closure-valued lambda
+            // (the ordinary `let f = func ...` delegate-cell path) never
+            // sets it and keeps using the default closure branch below,
+            // dispatched through its delegate value instead of a direct call.
+            if (literal.Function.LocalDeclaration != null && literal.CapturedVariables.Length > 0)
             {
                 var genericClosureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
                 var genericInfo = this.SynthesizeDisplayClass(

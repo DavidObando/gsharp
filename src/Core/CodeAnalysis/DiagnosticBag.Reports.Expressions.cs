@@ -1215,4 +1215,14 @@ public sealed partial class DiagnosticBag
         TextLocation location,
         string typeParameterName)
     => Report(location, DiagnosticDescriptors.ConstructedTypeParameterRequiresNewConstraint, typeParameterName, typeParameterName, typeParameterName);
+
+    /// <summary>
+    /// Reports GS0588 — issue #4219 (umbrella remainder): a `ref`-returning
+    /// function literal was written somewhere other than the initializer of
+    /// a `let name = func (...) ref T { ... }` local function declaration
+    /// (e.g. passed as an argument, or assigned to a `var`).
+    /// </summary>
+    /// <param name="location">The source location of the literal's `ref` return modifier.</param>
+    public void ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(TextLocation location)
+    => Report(location, DiagnosticDescriptors.RefReturningFunctionLiteralRequiresDirectLocalFunction);
 }

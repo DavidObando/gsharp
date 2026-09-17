@@ -270,7 +270,14 @@ internal sealed class LambdaBinder
         string? explicitName = null,
         Action<FunctionSymbol, FunctionTypeSymbol>? onSignatureBound = null)
     {
-        var signature = PrepareFunctionLiteralSignature(syntax, explicitName);
+        // Issue #4219 (umbrella remainder): this general entry point is used
+        // for a plain lambda argument, a `var`-declared literal, and the
+        // ordinary (non-group) `let f = func ...` self-recursion path — none
+        // of which have a stable callable identity a `ref` return could be
+        // attached to (that requires the direct-call local-function path,
+        // see PrepareGenericLocalFunctionDeclaration). allowRefReturn: false
+        // reports GS0588 instead of silently accepting it.
+        var signature = PrepareFunctionLiteralSignature(syntax, explicitName, allowRefReturn: false);
         if (signature == null)
         {
             return new BoundErrorExpression(syntax);
@@ -283,7 +290,8 @@ internal sealed class LambdaBinder
 
     private (FunctionSymbol Function, FunctionTypeSymbol Type)? PrepareFunctionLiteralSignature(
         FunctionLiteralExpressionSyntax syntax,
-        string? explicitName)
+        string? explicitName,
+        bool allowRefReturn = false)
     {
         // The signature is independent of the body, so generic siblings can
         // register their callable symbols before any recursive call binds.
@@ -410,8 +418,70 @@ internal sealed class LambdaBinder
         synthetic.IsAsync = isAsync;
         synthetic.IsAsyncVoid = isAsyncVoid;
         synthetic.AsyncReturnsValueTask = asyncReturnsValueTask;
+        synthetic.ReturnRefKind = ValidateFunctionLiteralReturnRefKind(syntax, returnType, allowRefReturn);
 
         return (synthetic, fnType);
+    }
+
+    /// <summary>
+    /// Issue #4219 (umbrella remainder): validates a function LITERAL's
+    /// optional `ref` return modifier and yields the resulting
+    /// <see cref="RefKind"/>. Deliberately mirrors
+    /// <c>DeclarationBinder.ValidateReturnRefKind</c> (the named-function
+    /// counterpart) rule-for-rule — the two syntax types (<see cref="FunctionLiteralExpressionSyntax"/>
+    /// vs <c>FunctionDeclarationSyntax</c>) share no common interface for
+    /// their ref-modifier tokens, so this is a small parallel
+    /// implementation rather than a shared one.
+    /// </summary>
+    /// <param name="syntax">The function-literal syntax node.</param>
+    /// <param name="returnType">The literal's already-bound (pre-async-wrap) return type.</param>
+    /// <param name="allowRefReturn">Whether this literal's calling context supports a by-ref return at all (only a direct-call local-function declaration does today — GS0588 otherwise).</param>
+    private RefKind ValidateFunctionLiteralReturnRefKind(FunctionLiteralExpressionSyntax syntax, TypeSymbol returnType, bool allowRefReturn)
+    {
+        if (!syntax.IsRefReturn)
+        {
+            return RefKind.None;
+        }
+
+        var location = syntax.ReturnRefModifier?.Location ?? syntax.Location;
+
+        if (!allowRefReturn)
+        {
+            Diagnostics.ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(location);
+            return RefKind.None;
+        }
+
+        if (syntax.ReturnTypeClause == null)
+        {
+            Diagnostics.ReportRefReturnRequiresReturnType(location);
+            return RefKind.None;
+        }
+
+        if (syntax.IsAsync)
+        {
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(location, "async");
+            return RefKind.None;
+        }
+
+        if (returnType is SequenceTypeSymbol)
+        {
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(location, "sequence");
+            return RefKind.None;
+        }
+
+        if (returnType is AsyncSequenceTypeSymbol)
+        {
+            Diagnostics.ReportRefReturnOnAsyncOrIterator(location, "async sequence");
+            return RefKind.None;
+        }
+
+        if (returnType is ByRefTypeSymbol)
+        {
+            Diagnostics.ReportRefReturnOfByRefType(location);
+            return RefKind.None;
+        }
+
+        return syntax.ReturnReadOnlyModifier != null ? RefKind.RefReadOnly : RefKind.Ref;
     }
 
     private BoundFunctionLiteralExpression BindFunctionLiteralBody(
@@ -485,7 +555,22 @@ internal sealed class LambdaBinder
         // `return` so the literal actually returns its value. Void literals keep the
         // existing statement-body handling (no implicit return) so the #889
         // Action-style void-delegate path is preserved.
-        body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, synthetic.Type);
+        //
+        // Issue #4219 (umbrella remainder): a `ref`-returning literal is
+        // skipped here — the synthesized `BoundReturnStatement` is always a
+        // VALUE return, so rewriting a trailing expression into one for a
+        // by-ref-returning function produced a ref/value mismatch the
+        // emitter cannot reconcile (confirmed by direct repro: silent
+        // internal-error crash, not a diagnostic). A ref-returning literal
+        // must spell its return explicitly (`return ref expr`); leaving the
+        // trailing expression as a plain statement instead means
+        // CheckAllPathsReturn below reports the ordinary
+        // not-every-path-returns diagnostic for it.
+        if (synthetic.ReturnRefKind == RefKind.None)
+        {
+            body = SynthesizeFunctionLiteralTrailingReturn((BoundBlockStatement)body, syntax, synthetic.Type);
+        }
+
         CheckAllPathsReturn((BoundBlockStatement)body, synthetic.Type, syntax.Body.Location);
 
         var captured = CollectCapturedVariables(body, synthetic);
@@ -632,12 +717,17 @@ internal sealed class LambdaBinder
         ImmutableArray<TypeParameterSymbol> typeParameters;
         try
         {
-            typeParameters = Invariant.Required(
-                bindTypeParameterList,
-                "generic local-function binding has a type-parameter callback")(
-                Invariant.Required(
-                    syntax.TypeParameterList,
-                    "a generic local-function declaration has a type-parameter list"));
+            // Issue #4219 (umbrella remainder): this method also prepares a
+            // NON-generic local-function-literal group member (a run of two
+            // or more consecutive `let name = func ... {...}` declarations,
+            // see StatementBinder.IsNonGenericLocalFunctionLiteralDeclaration)
+            // — it has no `[T, ...]` list at all, so there is nothing to bind.
+            typeParameters = syntax.TypeParameterList != null
+                ? Invariant.Required(
+                    bindTypeParameterList,
+                    "generic local-function binding has a type-parameter callback")(
+                    syntax.TypeParameterList)
+                : ImmutableArray<TypeParameterSymbol>.Empty;
 
             // Re-establish the type-parameter scope merged with any enclosing
             // ones (mirrors DeclarationBinder.BindDelegateDeclaration) so the
@@ -650,7 +740,12 @@ internal sealed class LambdaBinder
                 binderCtx.CurrentTypeParameters[tp.Name] = tp;
             }
 
-            var signature = PrepareFunctionLiteralSignature(literalSyntax, name);
+            // Issue #4219 (umbrella remainder): a ref-returning literal is
+            // only accepted for the NON-generic direct-call shape here — a
+            // GENERIC ref-returning local function would additionally need
+            // ref-aware MethodSpec/signature-encoding paths that have not
+            // been verified and are left for a follow-up (GS0588).
+            var signature = PrepareFunctionLiteralSignature(literalSyntax, name, allowRefReturn: syntax.TypeParameterList == null);
             if (signature == null)
             {
                 return () => new BoundBlockStatement(syntax, ImmutableArray<BoundStatement>.Empty);

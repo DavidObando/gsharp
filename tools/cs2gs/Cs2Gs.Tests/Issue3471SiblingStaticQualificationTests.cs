@@ -145,9 +145,11 @@ namespace Cs2Gs.Tests
             // EVERY such mutual-recursion cycle by real name, so a plain
             // (non-generic, non-ref-returning) mutual pair no longer lifts —
             // this fixture must keep one of the two carve-outs
-            // (#4197/#4198 scope) that still forces the `__local_` path: a
-            // ref-returning local function has no G# function-literal form
-            // (#1900), so it (and its whole cycle) stays lifted.
+            // (#4197/#4198 scope) that still forces the `__local_` path: this
+            // translator has no lowering to a G# ref-returning function
+            // literal for a ref-returning local function (#1900; gsc itself
+            // gained that literal form in #4219, but this translator does not
+            // emit it), so it (and its whole cycle) stays lifted.
             string printed = Translate("""
                 public class Labels
                 {

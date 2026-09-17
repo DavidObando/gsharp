@@ -201,13 +201,16 @@ int Square(int n) => n * n;
     [Fact]
     public void MutuallyReferencingCaptureFreeLocalFunctions_HoistToIndependentlyOrderedFuncs()
     {
-        // Two `static` top-level local functions calling EACH OTHER — true
-        // mutual/forward reference that a `let` binding could never support
-        // (see Cs2Gs.Tests.LocalFunctionHoistTranslationTests.
-        // Issue2231MutualRecursionRemainsUnsupportedByGscLetBindings). Hoisting
-        // to genuine top-level `func`s (pre-declared in binding scope
-        // regardless of textual order, ADR-0066) fixes this for the
-        // capture-free case.
+        // Two `static` top-level local functions calling EACH OTHER — a
+        // mutual/forward reference. Issue #4219 later taught gsc to support
+        // exactly this shape for a consecutive run of non-generic
+        // function-literal `let`s too (see Cs2Gs.Tests.
+        // LocalFunctionHoistTranslationTests.
+        // Issue2231MutualRecursionNowSupportedByGscLetBindings) — but this
+        // translator still doesn't emit that form for a recursive C# local
+        // function. Hoisting to genuine top-level `func`s (pre-declared in
+        // binding scope regardless of textual order, ADR-0066) is this
+        // translator's own, independent fix for the capture-free case.
         string printed = Render(@"
 using System;
 

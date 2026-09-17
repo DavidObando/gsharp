@@ -2109,11 +2109,23 @@ internal sealed partial class ExpressionBinder
 
     private static bool IsMethodGroupCandidateUsable(FunctionSymbol function)
     {
+        // Issue #4219 (umbrella remainder): a non-generic, non-capturing
+        // direct-call local function (a member of a 2+ non-generic local-
+        // function-literal group, see StatementBinder's
+        // IsNonGenericLocalFunctionLiteralDeclaration) has no Package —
+        // it is a local, not a package-level function — but converts to a
+        // delegate exactly like one: a plain static-shaped MethodDef, no
+        // capture instance to bind. A GENERIC or CAPTURING local function
+        // keeps falling through to "not a variable" below, matching the
+        // pre-existing behavior for a capturing generic local function
+        // (no single stable closure instance to bind a bare-name delegate
+        // conversion to — each direct call it makes materializes its own).
+        var isConvertibleLocalFunction = function.LocalDeclaration != null && !function.IsGeneric && !function.HasCaptures;
         if (function.IsInstanceMethod
             || function.IsExtension
             || function.IsStatic
             || function.StaticOwnerType != null
-            || function.Package == null)
+            || (function.Package == null && !isConvertibleLocalFunction))
         {
             return false;
         }
@@ -2135,6 +2147,24 @@ internal sealed partial class ExpressionBinder
 
         if (!IsMethodGroupCandidateUsable(function))
         {
+            return false;
+        }
+
+        // Issue #4219 (umbrella remainder), workstream B: a ref-returning
+        // #4219 direct-call LOCAL function (LocalDeclaration != null) has no
+        // tested/verified delegate-conversion support at all — unlike a
+        // NAMED (package-level or member) ref-returning function, which
+        // issue #4220/#4224 already exercise converting to an explicit,
+        // genuinely ref-aware delegate type (e.g. an imported
+        // `delegate ref readonly int Reader(ref int)` — confirmed by
+        // Issue4220ReadOnlyRefInteropTests, which this guard must not
+        // break). Scoped to the local-literal case only; a mismatched or
+        // untyped conversion for a NAMED ref-returning function is left to
+        // whatever existing diagnostic that pre-existing machinery already
+        // produces.
+        if (function.ReturnRefKind != RefKind.None && function.LocalDeclaration != null)
+        {
+            Diagnostics.ReportRefReturningFunctionLiteralRequiresDirectLocalFunction(syntax.IdentifierToken.Location);
             return false;
         }
 

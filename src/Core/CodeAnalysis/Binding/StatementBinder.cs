@@ -348,6 +348,213 @@ internal sealed partial class StatementBinder
             IsAsyncLet: false,
         };
 
+    /// <summary>
+    /// Issue #4219 (umbrella remainder): the non-generic counterpart of
+    /// <see cref="IsGenericLocalFunctionDeclaration"/> — same shape, minus
+    /// the type-parameter list. A generic local function is ALWAYS routed
+    /// through the directly-callable-symbol path (a CLR delegate cannot
+    /// close over an unbound generic method, so it has no other option);
+    /// a non-generic one is not under any such constraint and, standing
+    /// alone, keeps its existing "delegate-valued variable" representation
+    /// (see <c>StatementBinder.Narrowing.cs</c>'s
+    /// <c>bindFunctionLiteralWithSelfDeclaration</c> self-recursion path) to
+    /// avoid silently changing every ordinary <c>let f = func ...</c> in the
+    /// language. Only a run of TWO OR MORE consecutive non-generic members
+    /// (see the minimum-run-length gate in <see cref="BindBlockStatements"/>)
+    /// opts into forward visibility — that plural shape is unambiguously a
+    /// deliberate group of named local functions, not an ordinary single
+    /// closure-valued local. An explicit outer type clause
+    /// (<c>let f (int32) -> int32 = func ...</c>) is also excluded: the
+    /// direct-call path's signature comes entirely from the LITERAL (its own
+    /// parameters/return type), so a declared outer type would be silently
+    /// ignored instead of type-checked/converted against — the old path
+    /// still validates it via <c>ConversionClassifier.BindConversion</c>.
+    /// </summary>
+    private static bool IsNonGenericLocalFunctionLiteralDeclaration(StatementSyntax syntax)
+        => syntax is VariableDeclarationSyntax
+        {
+            Keyword.Kind: SyntaxKind.LetKeyword,
+            TypeParameterList: null,
+            TypeClause: null,
+            Initializer: FunctionLiteralExpressionSyntax { IsRefReturn: false },
+            HasRefKindModifier: false,
+            IsAsyncLet: false,
+        };
+
+    /// <summary>
+    /// Issue #4219 (umbrella remainder), workstream B: a `ref`-returning
+    /// function literal (<c>let f = func (...) ref T { ... }</c>) has no
+    /// delegate-valued-variable representation available at all — a CLR
+    /// delegate's <c>Invoke</c> cannot be made to return by ref without a
+    /// dedicated synthesized delegate shape (out of scope here, see GS0588).
+    /// It ALWAYS routes through the direct-call path, standing alone or not
+    /// (unlike <see cref="IsNonGenericLocalFunctionLiteralDeclaration"/>'s
+    /// 2-or-more-member gate — one ref-returning literal has no other
+    /// representation to fall back to), reusing named-function ref-return
+    /// machinery (issue #4224) for calls, aliasing, and emission. It is kept
+    /// in its OWN run — not merged with an adjacent ordinary non-generic
+    /// group — mirroring the existing generic/non-generic mixed-group
+    /// exclusion; a ref-returning literal and a non-ref sibling cannot
+    /// forward-reference each other yet.
+    /// </summary>
+    private static bool IsRefReturningLocalFunctionDeclaration(StatementSyntax syntax)
+        => syntax is VariableDeclarationSyntax
+        {
+            Keyword.Kind: SyntaxKind.LetKeyword,
+            TypeParameterList: null,
+            TypeClause: null,
+            Initializer: FunctionLiteralExpressionSyntax { IsRefReturn: true },
+            HasRefKindModifier: false,
+            IsAsyncLet: false,
+        };
+
+    /// <summary>
+    /// Issue #4219 (umbrella remainder) correctness fix: a syntactic pre-check
+    /// gating whether a consecutive run of <see cref="IsNonGenericLocalFunctionLiteralDeclaration"/>
+    /// members actually needs the forward-visible/direct-call group
+    /// representation. Without this gate, mere source-adjacency of two
+    /// non-generic <c>let name = func ...</c> locals opted them in
+    /// regardless of whether either body ever names the other — so two
+    /// unrelated, ordinary capturing callbacks declared back-to-back (a
+    /// common shape: <c>let onClick = func() {...}; let onLog = func()
+    /// {...}; Register(onClick)</c>) lost the ability to convert a
+    /// capturing member's bare name to a delegate value, a previously-legal
+    /// pattern with nothing to do with recursion. Only a run where at least
+    /// one member's body actually references another member's name needs
+    /// forward visibility; an unrelated run keeps each member's original
+    /// delegate-valued-variable representation (self-recursion is
+    /// unaffected either way — it already works via the existing
+    /// single-declaration self-reference path, so a member naming only
+    /// itself does not count as a cross-reference here).
+    /// </summary>
+    private static bool NonGenericLocalFunctionLiteralGroupHasCrossReference(
+        ImmutableArray<StatementSyntax> statementSyntaxes, int start, int end)
+    {
+        var siblingNames = new HashSet<string>();
+        for (var idx = start; idx < end; idx++)
+        {
+            siblingNames.Add(((VariableDeclarationSyntax)statementSyntaxes[idx]).Identifier.Text);
+        }
+
+        for (var idx = start; idx < end; idx++)
+        {
+            var decl = (VariableDeclarationSyntax)statementSyntaxes[idx];
+            var selfName = decl.Identifier.Text;
+
+            // `[start, end)` is only ever the `[i, runEnd)` range built by
+            // BindBlockStatements's `runEnd` loop, which advances only while
+            // `IsNonGenericLocalFunctionLiteralDeclaration` holds for the
+            // member at that index -- and that predicate pattern-matches
+            // `Initializer: FunctionLiteralExpressionSyntax { IsRefReturn:
+            // false }`. So every declaration in this range already has a
+            // non-null `FunctionLiteralExpressionSyntax` initializer by
+            // construction; the `!` merely restates what the caller verified.
+            var literal = (FunctionLiteralExpressionSyntax)decl.Initializer!;
+            foreach (var node in literal.Body.DescendantNodesAndSelf())
+            {
+                // A direct call (`second(x)`) is its own syntax node with an
+                // `Identifier` token — it is NOT a NameExpressionSyntax
+                // wrapping a call, so both shapes must be checked to catch
+                // the common "sibling(...)" recursive-call reference.
+                var referencedName = node switch
+                {
+                    NameExpressionSyntax name => name.IdentifierToken.Text,
+                    CallExpressionSyntax call => call.Identifier.Text,
+                    _ => null,
+                };
+                if (referencedName != null
+                    && referencedName != selfName
+                    && siblingNames.Contains(referencedName))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Shared prepare-then-bind grouping for a consecutive run of local-
+    /// function-literal declarations that all match <paramref name="isMember"/>
+    /// (either <see cref="IsGenericLocalFunctionDeclaration"/> or
+    /// <see cref="IsNonGenericLocalFunctionLiteralDeclaration"/>): every
+    /// member's signature is registered (via <c>prepareGenericLocalFunctionDeclaration</c>,
+    /// which is generic-list-agnostic) before any member's body binds, so the
+    /// whole run can forward-reference and mutually recurse; then each body
+    /// binds in source order and, for a plural run, capture sets converge to
+    /// a fixed point (issue #4221's <c>ReconcileGenericLocalFunctionGroupCaptures</c>).
+    /// </summary>
+    /// <param name="statementSyntaxes">The enclosing statement list.</param>
+    /// <param name="start">The index of the run's first member.</param>
+    /// <param name="statements">The bound-statement builder to append to.</param>
+    /// <param name="beforeBind">Optional per-statement hook, invoked for each member.</param>
+    /// <param name="isMember">Which of the two local-function-literal shapes this run is made of.</param>
+    /// <returns>The index of the run's last member (the caller sets its loop variable to this and continues).</returns>
+    private int BindLocalFunctionLiteralGroup(
+        ImmutableArray<StatementSyntax> statementSyntaxes,
+        int start,
+        ImmutableArray<BoundStatement>.Builder statements,
+        Action<StatementSyntax>? beforeBind,
+        Func<StatementSyntax, bool> isMember)
+    {
+        var statementSyntax = statementSyntaxes[start];
+
+        // Only consecutive declarations of the same shape share forward
+        // visibility. Ordinary variables and statements remain sequential;
+        // file boundaries also end a region, preserving per-file import
+        // resolution.
+        var bodies = new List<Func<BoundStatement>>();
+        var end = start;
+        while (end < statementSyntaxes.Length
+            && statementSyntaxes[end].SyntaxTree == statementSyntax.SyntaxTree
+            && isMember(statementSyntaxes[end]))
+        {
+            beforeBind?.Invoke(statementSyntaxes[end]);
+            bodies.Add(prepareGenericLocalFunctionDeclaration!((VariableDeclarationSyntax)statementSyntaxes[end]));
+            end++;
+        }
+
+        List<BoundFunctionLiteralExpression>? groupLiterals = reconcileGenericLocalFunctionGroupCaptures != null
+            ? new List<BoundFunctionLiteralExpression>(bodies.Count)
+            : null;
+        for (var member = 0; member < bodies.Count; member++)
+        {
+            beforeBind?.Invoke(statementSyntaxes[start + member]);
+            var bindBody = bodies[member];
+            var bound = bindBody();
+            statements.Add(bound);
+            if (bound is BoundLocalFunctionDeclaration { Literal: { } literal })
+            {
+                literal.Function.HasCaptures = literal.CapturedVariables.Length > 0;
+                groupLiterals?.Add(literal);
+            }
+        }
+
+        // Issue #4221: a local function calling a sibling that captures
+        // outer state needs that capture folded into its own environment
+        // even when the sibling is declared later in the group (forward
+        // reference) or the two call each other. The in-order bind above
+        // already handles a callee declared earlier; this converges the
+        // rest. Applies equally to a non-generic group — the reconciler
+        // itself does not distinguish generic from non-generic literals.
+        if (groupLiterals is { Count: > 1 })
+        {
+            reconcileGenericLocalFunctionGroupCaptures!(groupLiterals);
+
+            // The reconcile pass above can widen a member's CapturedVariables
+            // after the initial per-member stamp above; re-stamp so a later
+            // bare-name reference (see FunctionSymbol.HasCaptures) sees the
+            // final, post-widening answer.
+            foreach (var literal in groupLiterals)
+            {
+                literal.Function.HasCaptures = literal.CapturedVariables.Length > 0;
+            }
+        }
+
+        return end - 1;
+    }
+
     private void BindBlockStatements(
         ImmutableArray<StatementSyntax> statementSyntaxes,
         int startIndex,
@@ -371,49 +578,63 @@ internal sealed partial class StatementBinder
                 if (IsGenericLocalFunctionDeclaration(statementSyntax)
                     && prepareGenericLocalFunctionDeclaration != null)
                 {
-                    // Only consecutive generic declarations share forward visibility.
-                    // Ordinary variables and statements remain sequential; file boundaries
-                    // also end a region, preserving per-file import resolution.
-                    var bodies = new List<Func<BoundStatement>>();
-                    var end = i;
-                    while (end < statementSyntaxes.Length
-                        && statementSyntaxes[end].SyntaxTree == statementSyntax.SyntaxTree
-                        && IsGenericLocalFunctionDeclaration(statementSyntaxes[end]))
-                    {
-                        beforeBind?.Invoke(statementSyntaxes[end]);
-                        bodies.Add(prepareGenericLocalFunctionDeclaration((VariableDeclarationSyntax)statementSyntaxes[end]));
-                        end++;
-                    }
-
-                    List<BoundFunctionLiteralExpression>? groupLiterals = reconcileGenericLocalFunctionGroupCaptures != null
-                        ? new List<BoundFunctionLiteralExpression>(bodies.Count)
-                        : null;
-                    for (var member = 0; member < bodies.Count; member++)
-                    {
-                        beforeBind?.Invoke(statementSyntaxes[i + member]);
-                        var bindBody = bodies[member];
-                        var bound = bindBody();
-                        statements.Add(bound);
-                        if (bound is BoundLocalFunctionDeclaration { Literal: { } literal })
-                        {
-                            groupLiterals?.Add(literal);
-                        }
-                    }
-
-                    // Issue #4221: a generic local function calling a sibling
-                    // that captures outer state needs that capture folded
-                    // into its own environment even when the sibling is
-                    // declared later in the group (forward reference) or the
-                    // two call each other. The in-order bind above already
-                    // handles a callee declared earlier; this converges the
-                    // rest.
-                    if (groupLiterals is { Count: > 1 })
-                    {
-                        reconcileGenericLocalFunctionGroupCaptures!(groupLiterals);
-                    }
-
-                    i = end - 1;
+                    i = BindLocalFunctionLiteralGroup(
+                        statementSyntaxes, i, statements, beforeBind, IsGenericLocalFunctionDeclaration);
                     continue;
+                }
+
+                // Issue #4219 (umbrella remainder), workstream B: a `ref`-
+                // returning function literal always routes through the
+                // direct-call path, standing alone or not — see
+                // IsRefReturningLocalFunctionDeclaration.
+                if (IsRefReturningLocalFunctionDeclaration(statementSyntax)
+                    && prepareGenericLocalFunctionDeclaration != null)
+                {
+                    i = BindLocalFunctionLiteralGroup(
+                        statementSyntaxes, i, statements, beforeBind, IsRefReturningLocalFunctionDeclaration);
+                    continue;
+                }
+
+                // Issue #4219 (umbrella remainder): a run of TWO OR MORE
+                // consecutive non-generic local-function-literal `let`
+                // declarations gets the same forward-visibility/mutual-
+                // recursion treatment as a generic group — see
+                // IsNonGenericLocalFunctionLiteralDeclaration for why a lone
+                // member does not qualify. A run mixing generic and
+                // non-generic members never reaches here (the branch above
+                // already claimed the generic member and stopped at the
+                // first non-generic one), so a generic member calling a
+                // non-generic sibling declared AFTER it remains GS0130 —
+                // that broader-parity combination is deliberately out of
+                // scope here (see #4219's "mixed groups" note).
+                //
+                // Issue #4219 (umbrella remainder) correctness fix: also require an
+                // actual cross-reference between
+                // members of the run (see
+                // NonGenericLocalFunctionLiteralGroupHasCrossReference) —
+                // mere adjacency of two unrelated non-generic locals must
+                // not opt them into the direct-call representation; see that
+                // method's doc comment for the regression this prevents.
+                if (IsNonGenericLocalFunctionLiteralDeclaration(statementSyntax)
+                    && prepareGenericLocalFunctionDeclaration != null
+                    && i + 1 < statementSyntaxes.Length
+                    && statementSyntaxes[i + 1].SyntaxTree == statementSyntax.SyntaxTree
+                    && IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[i + 1]))
+                {
+                    var runEnd = i;
+                    while (runEnd < statementSyntaxes.Length
+                        && statementSyntaxes[runEnd].SyntaxTree == statementSyntax.SyntaxTree
+                        && IsNonGenericLocalFunctionLiteralDeclaration(statementSyntaxes[runEnd]))
+                    {
+                        runEnd++;
+                    }
+
+                    if (NonGenericLocalFunctionLiteralGroupHasCrossReference(statementSyntaxes, i, runEnd))
+                    {
+                        i = BindLocalFunctionLiteralGroup(
+                            statementSyntaxes, i, statements, beforeBind, IsNonGenericLocalFunctionLiteralDeclaration);
+                        continue;
+                    }
                 }
 
                 if (statementSyntax is DeferStatementSyntax deferSyntax)

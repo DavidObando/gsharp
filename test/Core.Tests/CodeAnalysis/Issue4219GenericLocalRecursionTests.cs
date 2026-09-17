@@ -124,7 +124,12 @@ public class Issue4219GenericLocalRecursionTests
     [Theory]
     [InlineData("first(0)\nlet first[T] = func(x T) T { return x }", "GS0130")]
     [InlineData("let first[T] = func(x T) T { return second(x) }\nConsole.Write(0)\nlet second[U] = func(x U) U { return x }", "GS0130")]
-    [InlineData("let first = func(x int32) int32 { return second(x) }\nlet second = func(x int32) int32 { return first(x) }", "GS0130")]
+    // The all-non-generic forward-reference case this row used to pin
+    // ("let first = func...\nlet second = func...") is RESOLVED by #4219's
+    // umbrella remainder (non-generic local-function recursion groups) — see
+    // Issue4219NonGenericLocalRecursionTests instead. A MIXED generic/non-
+    // generic forward reference remains deliberately out of scope (broader
+    // parity, not this milestone) and still reports GS0130:
     [InlineData("let first[T] = func(x T) int32 { return second(0) }\nlet second = func(x int32) int32 { return first(x) }", "GS0130")]
     [InlineData("let first[T] = func(x T) T { return x }\nlet first[T] = func(x T) T { return x }", "GS0102")]
     [InlineData("let first = 1\nlet first[T] = func(x T) T { return x }", "GS0102")]
