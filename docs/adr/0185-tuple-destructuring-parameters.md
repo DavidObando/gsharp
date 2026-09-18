@@ -91,58 +91,133 @@ laziness, or which `System.Linq` operator gets called is needed either.
 
 ### C# query semantics this design must not disturb
 
-Standard Query Operators are sequence-level and (mostly) lazy: `Where`,
-`Select`, `SelectMany`, `OrderBy`/`ThenBy`, `Join`, `GroupJoin`, and
-`GroupBy` are all deferred-execution — the delegate arguments are invoked
-per source element only as the result is enumerated (per element for
-`Where`/`Select`/`SelectMany`/`Join`, once per full source enumeration for
-`OrderBy`/`GroupBy`/`GroupJoin`, which must buffer). Any design here must
-preserve exactly which operator is called, in exactly what order, with
-exactly the same argument count and laziness — this ADR does not touch any
-of that. It only changes how one already-existing tuple-typed **parameter**
-is spelled.
+**Correction to an earlier draft:** a reviewer's automated check (GitHub
+Copilot) caught that an earlier version of this section conflated two
+distinct properties of Standard Query Operators — fixed below.
+
+Two properties matter here and must be kept separate:
+
+- **Selector invocation frequency** is per-element for every operator's
+  delegate arguments, with no exceptions: `Where`'s predicate, `Select`'s
+  projection, `SelectMany`'s collection selector, `OrderBy`/`ThenBy`'s key
+  selector, and `GroupBy`'s key/element selectors each run once per SOURCE
+  element. `Join`'s outer/inner key selectors run once per outer/inner
+  element respectively, and its result selector runs once per MATCHED PAIR
+  (zero times for an outer element with no match, more than once for one
+  with several). `GroupJoin`'s outer key selector runs once per outer
+  element, and its result selector also runs once per outer element —
+  pairing each with its whole matched inner group in one call. None of
+  these invoke a selector "once total" or "once per enumeration."
+- **Buffering** is a separate, coarser property, about how much of a
+  SEQUENCE an operator must consume before it can produce any output, not
+  about selector call counts: `OrderBy`/`ThenBy` and `GroupBy` must consume
+  their entire SOURCE sequence up front (sorting/grouping needs to see
+  everything before yielding the first result); `Join`/`GroupJoin` buffer
+  only the INNER sequence into a lookup, while the OUTER sequence still
+  streams one element at a time; `Where`/`Select`/`SelectMany` buffer
+  nothing at all.
+
+Any design here must preserve exactly which operator is called, in exactly
+what order, with exactly the same argument count, the same per-element
+selector invocation frequency, and the same buffering behavior — this ADR
+does not touch any of that. It only changes how one already-existing
+tuple-typed **parameter** is spelled.
 
 ## Decision (proposed)
 
-**Add parameter-position tuple destructuring to G# function literals**,
-extending the existing statement-position mechanism (`let (a, b) = e` /
-`var (a, b) = e`, ADR-0032/ADR-0168) into the parameter list:
+**Add parameter-position tuple destructuring to G# lambda/arrow parameter
+lists**, extending the existing statement-position mechanism (`let (a, b)
+= e` / `var (a, b) = e`, ADR-0032/ADR-0168) into that parameter list:
+
+**Correction to an earlier draft:** the code example below originally
+showed the `func (params) RetType { ... }` function-literal form. That was
+wrong — verified against `BuildScopeLambda`/`BuildTransparentResultSelector`
+(`CSharpToGSharpTranslator.Types.cs:2699`,`:2738`), neither of which ever
+constructs a `LambdaExpression` with `isFunctionLiteral: true`, and against
+`GSharpPrinter.RenderLambda` (`~line 1092`), which renders a block body as
+`func (...) { ... }` only when that flag is set, and as arrow form
+`(...) -> { ... }` otherwise (the default). Query-scope lambdas render as
+arrow lambdas, always. Tracing `BuildScopeLambda`'s own branching (a
+`TupleDeconstructionStatement` prologue is added whenever `scope.Count > 1`,
+forcing the block-body branch) gives the REAL current output for `where
+g(x, y)` over scope `{x, y}`:
 
 ```gs
-// today, synthesized:
-func (__q0 (string, int)) bool {
+// today, synthesized (arrow-lambda form):
+(__q0 (string, int)) -> {
     let (x, y) = __q0
     return g(x, y)
 }
 
-// proposed:
-func ((x string, y int)) bool {
-    return g(x, y)
-}
+// proposed — and note the whole lambda collapses back to an
+// expression body, because BuildScopeParameter no longer needs to add
+// ANY prologue statement once the parameter destructures itself:
+((x string, y int)) -> g(x, y)
 ```
 
 Concretely:
 
-1. **Parser**: `ParseParameter` (`src/Core/CodeAnalysis/Syntax/Parser.Members.cs:2310`)
-   currently mandates `MatchToken(SyntaxKind.IdentifierToken)` for the
-   parameter name — there is no destructuring alternative. Extend the
-   parameter grammar to accept a parenthesized, comma-separated
-   binding-and-type list, `(name1 Type1, name2 Type2, …)`, in the position
-   where a plain identifier goes today, producing a new
-   `TupleParameterSyntax` (or similar) alongside the existing
-   `ParameterSyntax`.
-2. **Binder**: bind each destructured name as an ordinary parameter-scoped
+1. **Parser — the arrow-lambda parameter path, which is where this is
+   actually needed.** `LooksLikeLambdaStart` and `ParseLambdaParameter`
+   (both `src/Core/CodeAnalysis/Syntax/Parser.Expressions.Lambdas.cs:61`
+   and `:365`) are a fully independent parsing path from
+   `Parser.Members.cs`'s `ParseParameter` — confirmed by inspection,
+   `ParseLambdaParameter` never calls `ParseParameter`; it duplicates the
+   annotation/`scoped`/`ref`-`out`-`in`/identifier/ellipsis/type/default
+   logic itself, with its own `MatchToken(SyntaxKind.IdentifierToken)` for
+   the name. And since query-scope lambdas always render in arrow form
+   (never as a `func (...) { ... }` function literal, see above),
+   `Parser.Members.cs`'s `ParseParameter` is **not on the critical path**
+   for retiring `__q` at all — an earlier draft of this ADR targeted the
+   wrong function. Two changes are needed, both in
+   `Parser.Expressions.Lambdas.cs`:
+   - `LooksLikeLambdaStart`'s non-empty-parameter-list check (`~line 197`:
+     `if (Peek(j).Kind != SyntaxKind.IdentifierToken) { return false; }`)
+     is the LOOKAHEAD DISAMBIGUATOR deciding whether a `(...)` followed by
+     `->` is a lambda at all, before any parameter is actually parsed. Its
+     own comment says anything other than a leading identifier — including
+     another `(` — is today treated as a parenthesized expression instead.
+     A destructured parameter's first token is `(`, so a query lambda with
+     one would not even be recognized as a lambda start; it would misparse
+     as a parenthesized tuple expression. This check needs to also accept
+     `(` as a legal opener and then apply a bounded trial-parse of the
+     interior as a destructuring pattern before committing — matching this
+     same function's existing style for a case it already can't resolve by
+     a cheap token check alone (see the `unsafeDepth > 0` trial-parse block
+     later in the same function: speculatively parse, and roll back
+     position/diagnostics if it doesn't cleanly commit to the closing `)`
+     already located).
+   - `ParseLambdaParameter` itself then needs the same destructured-name
+     production described below, independently of `ParseParameter`, since
+     the two functions don't share that code today.
+2. **Scope: `Parser.Members.cs`'s `ParseParameter`/`ParseParameterList` are
+   explicitly OUT OF SCOPE for this fix.** That shared production feeds
+   ordinary named functions/methods, primary constructors, indexers,
+   receiver clauses (`~line 1264`), `init` declarations (`~line 83`), and
+   event payloads — none of whose binders expect anything but a single
+   `ParameterSyntax.Identifier` today (caught by the same reviewer pass:
+   an earlier draft's Decision section proposed changing this shared
+   function directly, which would have silently exposed the new syntax on
+   every one of those surfaces at once, with no binder ready for any of
+   them). `__q`'s own fix never needs this function touched at all, since
+   its emission is arrow-lambda-only (point 1). Extending destructured
+   parameters to ordinary named functions (and, by extension, to every
+   other surface `ParseParameter` feeds) may be worth doing later for
+   hand-written-G# ergonomics, but it is a separate decision that needs its
+   own audit of every one of those binders — deliberately not bundled into
+   this fix, whose only requirement is the arrow-lambda path in point 1.
+3. **Binder**: bind each destructured name as an ordinary parameter-scoped
    local of its element type, reusing the existing tuple-deconstruction
    binding machinery ADR-0032/0168 already built for `let (a, b) = e`
    (`TupleDeconstructionStatement`'s binder) rather than inventing a second
    one. The parameter LIST's overall type is still the tuple type — this is
    purely a binding-time convenience, not a change to the function's
    signature/metadata.
-3. **Emit**: at method entry, unpack the incoming tuple argument into the
+4. **Emit**: at method entry, unpack the incoming tuple argument into the
    destructured locals — mechanically the same unpacking the statement-form
    deconstruction already emits for a tuple RHS, just at parameter-bind time
    instead of after a `let`.
-4. **cs2gs**: change `BuildScopeParameter` to emit a destructured parameter
+5. **cs2gs**: change `BuildScopeParameter` to emit a destructured parameter
    (`(x Type1, y Type2, …)`) instead of a synthetic name plus a
    `TupleDeconstructionStatement` prologue, whenever `scope.Count > 1`. No
    other change to `TranslateQuery`/`LowerQueryBody`/`LowerLetClause`/
@@ -315,17 +390,21 @@ arity-bounded carrier that tuples already serve well.
   unreachable dead code, safe to remove in the same change).
 - No change to evaluation order, laziness, operator selection, or argument
   count for any query clause — this is a pure parameter-spelling change.
-- Adds one new syntax form to G#'s function-literal (and, if the parser
-  change is made at the shared `ParseParameter` level, ordinary named
-  function) parameter grammar, usable by hand-written G# as well as
-  translator output — a genuine language feature, not a translator-only
-  escape hatch, matching this repo's general preference for retiring
-  synthetic families via native spellings (Track A of #3501) rather than
-  smarter-but-still-synthetic translator tricks.
+- Adds one new syntax form to G#'s arrow-lambda parameter grammar
+  (`LooksLikeLambdaStart`/`ParseLambdaParameter`), usable by hand-written G#
+  arrow lambdas as well as translator output — a genuine language feature,
+  not a translator-only escape hatch, matching this repo's general
+  preference for retiring synthetic families via native spellings (Track A
+  of #3501) rather than smarter-but-still-synthetic translator tricks.
+  Deliberately does NOT touch `Parser.Members.cs`'s shared `ParseParameter`
+  (see Decision point 2), so ordinary named functions, primary
+  constructors, indexers, receiver clauses, `init` declarations, and event
+  payloads are unaffected — extending destructuring to any of those is a
+  separate future decision, not a consequence of this one.
 
 ## Open questions for the implementer / reviewer
 
-1. This proposal's binder/emit steps (2)/(3) above ASSUME the existing
+1. This proposal's binder/emit steps (3)/(4) above ASSUME the existing
    statement-position tuple-deconstruction machinery (ADR-0032/0168) is
    cleanly reusable at parameter-bind time. That reuse is not verified
    against the actual binder/emit code in this pass — someone implementing
@@ -350,14 +429,16 @@ arity-bounded carrier that tuples already serve well.
    catalogue entry (issue #4300) touches a structurally similar nested-
    pattern question and the two features may want to share a grammar
    rule.
-4. Whether ordinary (non-lambda) function declarations should ALSO accept
-   destructured parameters, or whether this should ship scoped to function
-   LITERALS only for now — `__q` itself only ever appears in lambda
-   position, so literal-only is sufficient to retire it, but if
-   `ParseParameter` is the single shared parsing function for both (per
-   the code cited above, it appears to be), scoping it to "literals only"
-   may require an explicit binder-side restriction rather than a natural
-   parser boundary.
+4. ~~Whether ordinary (non-lambda) function declarations should ALSO accept
+   destructured parameters~~ — resolved by Decision point 2, added in the
+   same pass that fixed this ADR's original `ParseParameter`-vs-arrow-lambda
+   mixup: `__q`'s fix only touches the arrow-lambda parameter path
+   (`ParseLambdaParameter`/`LooksLikeLambdaStart`), and `ParseParameter`
+   (the production ordinary functions and every other listed surface
+   shares) is explicitly left untouched. Extending destructuring there is
+   real future work, but it is now a separate decision with its own
+   blast-radius audit, not an open question this ADR needs to answer to
+   ship.
 5. `BuildScopeParameter`'s own comment (`CSharpToGSharpTranslator.Types.cs:2765`)
    and `DocumentTranslationState.cs:256` still cite issue #1902 for "G# has
    no anonymous types" — stale since ADR-0146 shipped (see Context's
