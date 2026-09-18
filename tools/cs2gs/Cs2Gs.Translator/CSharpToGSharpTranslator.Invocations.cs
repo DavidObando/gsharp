@@ -381,8 +381,22 @@ public sealed partial class CSharpToGSharpTranslator
             else if (invocation.Expression is MemberAccessExpressionSyntax member
                 && member.Name is GenericNameSyntax memberGeneric)
             {
+                // Issue #4287: a receiver here is a DEREFERENCED receiver, so it
+                // needs the same null forgiveness every other receiver position
+                // gets — this branch (a generic instance call carrying explicit
+                // type arguments, `x.M<T>(...)`) was the one that translated it
+                // with a bare `TranslateExpression`. A NON-generic call falls
+                // through to the general `TranslateExpression(invocation
+                // .Expression)` below, which routes through the member-access
+                // path and DOES apply forgiveness, so `x.Parent` and `x.M()`
+                // were both asserted while `x.M<T>()` was left bare. Harmless
+                // until gsc started null-checking instance calls on a nilable
+                // receiver (#4287); now `node.FirstAncestorOrSelf<T>()` on an
+                // oblivious-promoted `T?` parameter is a GS0159. Any assertion
+                // this adds that turns out to be unnecessary is removed by
+                // NullAssertionPolishPass's GS0536 strip pass.
                 target = new MemberAccessExpression(
-                    this.TranslateExpression(member.Expression),
+                    this.TranslateReceiverWithNullForgiveness(member.Expression),
                     this.EmittedName(
                         this.context.GetSymbolInfo(invocation).Symbol,
                         memberGeneric.Identifier.ValueText));
