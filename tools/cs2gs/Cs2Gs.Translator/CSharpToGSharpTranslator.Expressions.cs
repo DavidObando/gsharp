@@ -2082,6 +2082,27 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private bool IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(ExpressionSyntax expression)
         {
+            // Issue #4287 follow-up (found by the private Oahu corpus): gsc
+            // narrows a stable member path only through its QUALIFIED form.
+            // `this.Stable != nil && this.Stable.Contains(i)` compiles; the
+            // identical BARE `Stable != nil && Stable.Contains(i)` does not,
+            // for a readonly field and a get-only property alike, and for a
+            // read exactly as for a call — the smart-cast frame is keyed by an
+            // AccessPath that an implicit-`this` reference does not produce.
+            // cs2gs's own stability classification is right (it already asserts
+            // a mutable field and a settable property, which gsc will not
+            // narrow either), but claiming narrowing for a bare reference drops
+            // a `!!` the emitted code needs. Require the qualified form, which
+            // is exactly the shape gsc honours; anything else keeps its
+            // assertion, and NullAssertionPolishPass strips it if it proves
+            // unnecessary.
+            if (expression is IdentifierNameSyntax bareMember
+                && this.context.GetSymbolInfo(bareMember).Symbol is { IsStatic: false } bareSymbol
+                && bareSymbol.Kind is SymbolKind.Field or SymbolKind.Property)
+            {
+                return false;
+            }
+
             // Climb from the receiver expression up through the SAME "use"
             // subtree (its own enclosing member-access/invocation/element-
             // access/parenthesized/logical-not wrapping) until reaching a

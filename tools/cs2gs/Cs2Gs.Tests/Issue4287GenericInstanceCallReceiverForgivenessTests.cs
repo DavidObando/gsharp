@@ -138,6 +138,73 @@ public sealed class Issue4287GenericInstanceCallReceiverForgivenessTests
         Assert.DoesNotContain("this!!", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BareMemberGuardedInSameCondition_IsAsserted_WhileTheQualifiedFormIsNot()
+    {
+        // The private Oahu corpus failed on `X != null && X.Contains(i)` where
+        // `X` is a member. cs2gs's stability classification is RIGHT — it
+        // already asserts a mutable field and a settable property, which gsc
+        // will not narrow — but gsc narrows a stable member path only through
+        // its QUALIFIED form: `this.RoField != nil && this.RoField.Contains(i)`
+        // compiles while the identical BARE form does not, for a readonly field
+        // and a get-only property alike, and for a read exactly as for a call.
+        // So a bare reference is not a path gsc narrows, and claiming otherwise
+        // dropped a `!!` the emitted code needs.
+        string printed = Translate("""
+            using System.Collections.Generic;
+
+            namespace Demo;
+
+            public class Holder
+            {
+                public readonly List<int> RoField;
+                public List<int> MutField;
+                public List<int> GetOnlyProp { get; }
+                public List<int> GetSetProp { get; set; }
+
+                public Holder(List<int> v)
+                {
+                    RoField = v;
+                    MutField = v;
+                    GetOnlyProp = v;
+                    GetSetProp = v;
+                }
+
+                public bool ViaRoField(int i) => RoField != null && RoField.Contains(i);
+
+                public bool ViaMutField(int i) => MutField != null && MutField.Contains(i);
+
+                public bool ViaGetOnly(int i) => GetOnlyProp != null && GetOnlyProp.Contains(i);
+
+                public bool ViaGetSet(int i) => GetSetProp != null && GetSetProp.Contains(i);
+
+                public bool ViaQualified(int i) => this.RoField != null && this.RoField.Contains(i);
+
+                public static bool Drive()
+                {
+                    var h = new Holder(null);
+                    return h.ViaRoField(1) || h.ViaMutField(1)
+                        || h.ViaGetOnly(1) || h.ViaGetSet(1) || h.ViaQualified(1);
+                }
+            }
+            """);
+
+        // Every BARE guarded member is asserted, stable or not — gsc narrows
+        // none of them.
+        Assert.Contains("RoField!!.Contains(i)", printed, StringComparison.Ordinal);
+        Assert.Contains("MutField!!.Contains(i)", printed, StringComparison.Ordinal);
+        Assert.Contains("GetOnlyProp!!.Contains(i)", printed, StringComparison.Ordinal);
+        Assert.Contains("GetSetProp!!.Contains(i)", printed, StringComparison.Ordinal);
+
+        // The sentinel: the QUALIFIED form of the very same stable field is a
+        // path gsc does narrow, so it keeps its bare call. This is what pins
+        // that the rule declines BARE references rather than all stable
+        // members — without it the change would be indistinguishable from
+        // giving up on member narrowing altogether.
+        Assert.Contains("this.RoField.Contains(i)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("this.RoField!!", printed, StringComparison.Ordinal);
+    }
+
     private static string Translate(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
