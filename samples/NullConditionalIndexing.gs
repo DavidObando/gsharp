@@ -38,7 +38,10 @@ func main() {
     // 2. CLR Dictionary receiver — exercises the BoundClrIndexExpression
     // path that backs `?[]` over user-defined indexers.
     var d Dictionary[string, int32]? = Dictionary[string, int32]()
-    d.Add("k", 42)
+    // Issue #4287: an imported/CLR instance method call through a nullable
+    // receiver is now null-checked, matching the existing user-defined-type
+    // behavior; `!!` asserts what the initializer above already guarantees.
+    d!!.Add("k", 42)
     var hit = d?["k"]
     Console.WriteLine(hit)
 

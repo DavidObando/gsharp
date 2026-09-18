@@ -20,6 +20,18 @@ namespace GSharp.Compiler.Tests.Emit;
 /// arm in <c>Conversion.Classify</c>'s lifted-nullable-target branch) flows
 /// through <c>ConversionClassifier.BindTupleConversion</c>'s existing
 /// per-element lowering (issue #1256) to produce verifiable IL.
+/// <para>
+/// Issue #4287 follow-up: every <c>t.Item2.ToString()</c> below now asserts
+/// non-nil with <c>!!</c> before the call. <c>t.Item2</c> is <c>object?</c> —
+/// a nilable RECEIVER — and the tuple-element accessor is not a smart-cast
+/// narrowable path, so calling an instance method through it without a
+/// narrowing/assertion is exactly the unguarded-nullable-receiver shape
+/// #4287 fixed the binder to reject (GS0159 "may be nil"). These tests are
+/// about the boxing CONVERSION, not null-safety, and every scenario here
+/// already guarantees a real value at the call site (including the
+/// nil-producing case, which returns before ever reaching the call), so the
+/// assertion is safe and does not change what is being verified.
+/// </para>
 /// </summary>
 public class Issue2229TupleBoxingConversionEmitTests
 {
@@ -31,7 +43,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             import System
 
             func Take(t (string, object?)) string {
-                return t.Item1 + ":" + t.Item2.ToString()
+                return t.Item1 + ":" + t.Item2!!.ToString()
             }
 
             func F(n int32?) string { return Take(("count", n)) }
@@ -51,7 +63,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             import System
 
             func Take(t (string, object?)) string {
-                return t.Item1 + ":" + t.Item2.ToString()
+                return t.Item1 + ":" + t.Item2!!.ToString()
             }
 
             func F(b bool?) string { return Take(("ok", b)) }
@@ -74,7 +86,7 @@ public class Issue2229TupleBoxingConversionEmitTests
                 if t.Item2 == nil {
                     return t.Item1 + ":nil"
                 }
-                return t.Item1 + ":" + t.Item2.ToString()
+                return t.Item1 + ":" + t.Item2!!.ToString()
             }
 
             func F(n int32?) string { return Take(("count", n)) }
@@ -99,7 +111,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             func Args(pairs ...(string, object?)) string {
                 var result string = ""
                 for p in pairs {
-                    result = result + p.Item1 + "=" + p.Item2.ToString() + ";"
+                    result = result + p.Item1 + "=" + p.Item2!!.ToString() + ";"
                 }
                 return result
             }

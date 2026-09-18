@@ -266,23 +266,41 @@ public class Issue3034NullableNarrowingDiagnosticTests
     }
 
     [Fact]
-    public void ImportedAndArrayNullableReceivers_KeepExistingSuccessfulBinding()
+    public void ImportedAndArrayNullableReceivers_NowReportGs0159()
     {
-        Assert.Empty(GetDiagnostics("""
+        // Issue #4287: these two shapes — a nullable receiver of an
+        // imported/CLR type (StringBuilder?) and a nullable array/slice
+        // receiver ([]?int32) — used to bind an unguarded instance-method
+        // call straight through with zero diagnostics, because
+        // NullableTypeSymbol.ClrType equals the underlying type's own
+        // ClrType (never null for either shape), which skipped the "receiver
+        // may be nil" fallback entirely; at runtime a nil value crashed with
+        // an unattributed NullReferenceException. This test previously
+        // pinned that gap as "existing successful binding" to protect it
+        // from an unrelated diagnostic-wording change; #4287 closed the gap
+        // itself, so both shapes now correctly report GS0159, exactly like
+        // the pre-existing user-defined-type case below.
+        var stringBuilderDiagnostic = GetGs0159("""
             import System.Text
 
             func Run() {
                 var value StringBuilder? = nil
                 value.ToString()
             }
-            """));
+            """);
+        Assert.Equal(
+            "Cannot call function ToString because receiver 'value' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
+            stringBuilderDiagnostic.Message);
 
-        Assert.Empty(GetDiagnostics("""
+        var arrayDiagnostic = GetGs0159("""
             func Run() {
                 var values []?int32 = nil
                 values.ToString()
             }
-            """));
+            """);
+        Assert.Equal(
+            "Cannot call function ToString because receiver 'values' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
+            arrayDiagnostic.Message);
     }
 
     [Fact]

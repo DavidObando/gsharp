@@ -3703,11 +3703,103 @@ internal sealed partial class ExpressionBinder
         var clrType = effectiveReceiverType.ClrType;
         if (receiver.Type is NullableTypeSymbol nullableRecv)
         {
-            var nullableInnerVt = nullableRecv.UnderlyingType?.ClrType;
+            var nullableUnderlying = nullableRecv.UnderlyingType;
+            var nullableInnerVt = nullableUnderlying.ClrType;
             if (nullableInnerVt?.IsValueType == true
                 && this.memberLookup.TryGetNullableConstructedType(nullableInnerVt, out var nullableConstructed))
             {
                 clrType = nullableConstructed;
+            }
+            else if (nullableInnerVt is { IsValueType: false }
+                && (receiverSyntax ?? receiver.Syntax) is { } nilReceiverSyntax)
+            {
+                // Issue #4287: a reference-typed nullable receiver (e.g.
+                // `string?`) reaching this point is genuinely still nilable —
+                // smart-cast narrowing, `if let`, `!!`, and `?.` each rebind
+                // to the non-nullable underlying type before a call reaches
+                // this method, so `receiver.Type` would no longer be a
+                // `NullableTypeSymbol` here if any of them applied.
+                //
+                // An extension explicitly declared to accept a nilable
+                // receiver (`func (s string?) OrEmpty() string { return s ??
+                // "" }`) must stay callable without narrowing — it is not
+                // the bug this issue is about, and the general path further
+                // down this method (`TryBindExtensionFunctionOverload` /
+                // `TryBindImportedExtensionCall`) would resolve it exactly
+                // like this if this new check did not run first. Try that
+                // SAME resolution, against the untouched nilable receiver,
+                // before reporting anything, so this check only ever changes
+                // behavior for the call shape #4287 is about. Probed and
+                // discarded on failure (same idiom as
+                // `IsApplicableNullableUnderlyingCall`'s `Succeeded` below):
+                // a name match against an extension that does NOT truly fit
+                // this receiver (e.g. `Shout(s string)`, which needs the
+                // receiver narrowed first) must fall through to the nil
+                // check below instead of surfacing whatever diagnostic the
+                // failed probe produced (a plain type-mismatch, not the
+                // more useful "may be nil" guidance).
+                var nullableRecvExtMark = Diagnostics.Count;
+                if (TryBindExtensionFunctionOverload(receiver, methodName, arguments, ce, argumentNames, out var nullableRecvExtCall)
+                    && nullableRecvExtCall is not BoundErrorExpression
+                    && Diagnostics.Count == nullableRecvExtMark)
+                {
+                    return nullableRecvExtCall;
+                }
+
+                Diagnostics.TruncateTo(nullableRecvExtMark);
+
+                var nullableRecvImportedExtMark = Diagnostics.Count;
+                if (TryBindImportedExtensionCall(receiver, methodName, arguments, ce, out var nullableRecvImportedExtCall, explicitTypeArgs, typeArgSymbols, argumentNames)
+                    && nullableRecvImportedExtCall is not BoundErrorExpression
+                    && Diagnostics.Count == nullableRecvImportedExtMark)
+                {
+                    return nullableRecvImportedExtCall;
+                }
+
+                Diagnostics.TruncateTo(nullableRecvImportedExtMark);
+
+                // `clrType` above already equals the underlying type's own
+                // `ClrType` for a reference type (see the
+                // `NullableTypeSymbol` constructor: it is built from
+                // `underlyingType.ClrType` directly, never null for an
+                // imported/CLR type), so the general CLR-instance-member
+                // lookup a few lines down would otherwise bind straight
+                // through unguarded — reproducing #4287's crash
+                // (`this.name.ToUpper()` where `name string?` throws an
+                // uncaught NullReferenceException at run time instead of
+                // reporting a diagnostic). By contrast, a user-defined
+                // instance method correctly reports GS0159 through the
+                // fallback further up this method (~line 3623), because that
+                // fallback runs only when `effectiveReceiverType.ClrType` is
+                // null — true for a G#-declared type during binding, but
+                // never true here.
+                //
+                // Probe for a real, applicable member on the non-nullable
+                // underlying type (the same probe machinery the fallback
+                // above already uses — it also re-tries extension lookup
+                // against the NARROWED receiver, which is intentional here:
+                // an extension declared for the non-nullable `T`, e.g. `func
+                // (s string) Shout() string`, still requires the receiver to
+                // be proven non-nil first) and, if one exists, report the
+                // same "receiver may be nil" GS0159 diagnostic instead of
+                // letting the call through.
+                if (IsApplicableNullableUnderlyingCall(
+                    receiver,
+                    nullableUnderlying,
+                    methodName,
+                    arguments,
+                    ce,
+                    argumentNames,
+                    explicitTypeArgs,
+                    typeArgSymbols))
+                {
+                    var receiverName = nilReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
+                        receiverStart ?? nilReceiverSyntax.Span.Start,
+                        nilReceiverSyntax.Span.End));
+                    receiverName = string.Join(" ", receiverName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
+                    return new BoundErrorExpression(null);
+                }
             }
         }
 
@@ -4473,6 +4565,36 @@ internal sealed partial class ExpressionBinder
                     out var delegateCall))
             {
                 return Succeeded(delegateCall);
+            }
+
+            // Issue #4287: a plain CLR/imported instance method — the
+            // underlying type's OWN reflected surface (e.g. `string.ToUpper`,
+            // `List<T>.Add`) — was never probed here. Every branch above only
+            // covers source-declared (struct/interface/type-parameter)
+            // shapes, because this helper's only PRIOR call site (further up
+            // this file) ran exclusively when the receiver's `ClrType` was
+            // unavailable, which is never true for an imported type. The new
+            // call site added for #4287 reaches this helper precisely when
+            // `underlyingType.ClrType` IS available, so probe the underlying
+            // type's own CLR surface the same way an inherited CLR base type
+            // is already probed just below (issue #296) — same lookup
+            // machinery, just against the underlying type itself rather than
+            // a base class. Runs before the extension-method fallbacks,
+            // matching the priority the general (non-nullable) call path
+            // gives an own-surface instance member over an extension method.
+            if (underlyingType.ClrType is { } underlyingClrType
+                && TryBindInheritedClrInstanceCall(
+                    narrowedReceiver,
+                    underlyingClrType,
+                    methodName,
+                    arguments,
+                    ce,
+                    out var underlyingClrCall,
+                    explicitTypeArgs,
+                    typeArgSymbols,
+                    argumentNames))
+            {
+                return Succeeded(underlyingClrCall);
             }
 
             if (TryBindExtensionFunctionOverload(narrowedReceiver, methodName, arguments, ce, argumentNames, out var extensionCall))
