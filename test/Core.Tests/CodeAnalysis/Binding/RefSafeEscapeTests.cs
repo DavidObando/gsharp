@@ -832,6 +832,26 @@ class Box {
     }
 }
 ")]
+
+    // ADR-0184 D4: the PROPERTY spelling of an explicit interface
+    // implementation (ADR-0149's `prop (IFoo) P T` clause). Found in
+    // adversarial review of PR #4291: `PropertySymbol.IsOverride` is false for
+    // this shape, so it escaped GS0590 entirely, while the `func (IFoo) M()`
+    // spelling — which DescribeUnscopedRefRejection checks through
+    // HasExplicitInterfaceClause — was rejected. Both are deferred alike.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+interface IThing {
+    prop Total int32 { get; }
+}
+struct Acc : IThing {
+    var Backing int32
+
+    @UnscopedRef
+    private prop (IThing) Total int32 -> this.Backing
+}
+")]
     public void UnscopedRef_OnUnsupportedTarget_Reports_GS0590(string source)
     {
         var diagnostics = Bind(source);

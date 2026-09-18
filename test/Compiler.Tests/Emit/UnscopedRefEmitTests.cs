@@ -85,13 +85,17 @@ public class UnscopedRefEmitTests
         var property = acc.GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(property);
 
-        // The same two placements RefCapabilities.IsUnscopedRefIndexerGetter
-        // reads back out of imported metadata: the property row or its getter.
-        var getter = property!.GetGetMethod(nonPublic: true);
-        Assert.NotNull(getter);
+        // ADR-0184 §7 pins the PROPERTY row specifically for the `prop`/indexer
+        // spelling, so assert that row and nothing else. An earlier version
+        // accepted `property OR getter`, which would also have passed had the
+        // emitter regressed to writing the attribute only on `get_Item` — the
+        // getter-row placement is a CLR-INPUT shape gsc must READ (covered by
+        // Issue4265SpanByValueRefReturnTests over a C# fixture), not an output
+        // shape gsc may choose.
         Assert.True(
-            Carries(property.GetCustomAttributesData()) || Carries(getter!.GetCustomAttributesData()),
-            $"neither '{propertyName}' nor its getter carries {UnscopedRefAttributeFullName}");
+            Carries(property!.GetCustomAttributesData()),
+            $"'{propertyName}' does not carry {UnscopedRefAttributeFullName} on its property row; "
+                + $"getter row carries it: {Carries(property.GetGetMethod(nonPublic: true)!.GetCustomAttributesData())}");
     }
 
     /// <summary>

@@ -97,9 +97,16 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
+        // ADR-0184 D4: `PropertySymbol.IsOverride` does NOT imply an
+        // explicit-interface clause for a property (ADR-0149's
+        // `prop (IFoo) P T`) — found in adversarial review of PR #4291, where
+        // that spelling escaped GS0590 entirely while its `func (IFoo) M()`
+        // sibling was rejected by DescribeUnscopedRefRejection's own
+        // HasExplicitInterfaceClause arm. Both spellings are deferred alike, so
+        // both must say so.
         var reason =
             property.IsStatic ? "requires an instance member; a 'shared' (static) member has no receiver to un-scope"
-            : property.IsOverride ? "is not supported on an 'override' or an explicit interface implementation yet (ADR-0184 D4); the ref-safe-context contract would have to match across the whole override chain"
+            : property.IsOverride || property.HasExplicitInterfaceClause ? "is not supported on an 'override' or an explicit interface implementation yet (ADR-0184 D4); the ref-safe-context contract would have to match across the whole override chain"
             : owner is InterfaceSymbol ? "is not supported on an interface member yet (ADR-0184 D4)"
             : owner is not StructSymbol { IsClass: false } ? "requires a struct instance member; a class receiver is a reference that already outlives the call"
             : null;

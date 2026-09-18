@@ -138,6 +138,39 @@ namespace Demo
         Assert.DoesNotContain("@MethodImpl", printed);
     }
 
+    /// <summary>
+    /// Found in adversarial review of PR #4291: the hoist must read the
+    /// <c>get</c> accessor only. The member-level G# annotation is emitted on
+    /// the PropertyDef, which C# (and gsc's own
+    /// <c>RefCapabilities.IsUnscopedRefIndexerGetter</c>) reads as the
+    /// GETTER's contract — so lifting a <c>set</c>-level <c>[UnscopedRef]</c>
+    /// would silently un-scope a getter the C# source left scoped. Before the
+    /// <c>GetAccessorDeclaration</c> filter this printed <c>@UnscopedRef</c>.
+    /// </summary>
+    [Fact]
+    public void UnscopedRefOnTheSetAccessorOnly_IsNotHoisted()
+    {
+        string printed = TranslateUnit(@"
+using System.Diagnostics.CodeAnalysis;
+
+namespace Demo
+{
+    public struct Acc
+    {
+        private int total;
+
+        public int Slot
+        {
+            get { return this.total; }
+            [UnscopedRef]
+            set { this.total = value; }
+        }
+    }
+}");
+
+        Assert.DoesNotContain("@UnscopedRef", printed);
+    }
+
     private static string TranslateUnit(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });

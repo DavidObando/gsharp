@@ -1429,6 +1429,18 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (AccessorDeclarationSyntax accessor in node.AccessorList.Accessors)
             {
+                // Only a GET-level `[UnscopedRef]` is equivalent to the
+                // member-level placement: the member-level G# annotation is
+                // emitted on the PropertyDef, which a C# consumer (and gsc's
+                // own IsUnscopedRefIndexerGetter) reads as the GETTER's
+                // contract. Hoisting a `set`/`init`-level one would move a
+                // setter's contract onto the getter and say something the C#
+                // source never said.
+                if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
+                {
+                    continue;
+                }
+
                 foreach (AttributeListSyntax list in accessor.AttributeLists)
                 {
                     foreach (AttributeSyntax attribute in list.Attributes)
