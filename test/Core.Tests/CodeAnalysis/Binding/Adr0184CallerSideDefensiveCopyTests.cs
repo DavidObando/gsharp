@@ -420,22 +420,36 @@ public class Adr0184CallerSideDefensiveCopyTests
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// (16) This one looks like a false positive and is not. The returned
-    /// reference ultimately comes from <c>y</c>, a <c>ref</c> parameter — the
-    /// CALLER's storage, which plainly outlives the call. It is still
-    /// rejected, because C#'s ref-safe-context rule takes the NARROWEST of the
-    /// receiver's and the ref-arguments' contributions, and the defensively
-    /// copied receiver contributes function-local scope no matter where the
-    /// value it forwards originally came from. The compiler cannot see into
-    /// <c>Pick</c> to learn that its result never touches <c>this</c>; the
-    /// signature is all it has, and the signature permits returning into the
-    /// receiver. Real csc rejects the C# analogue with CS8156 for the same
-    /// reason.
+    /// (16) This one looks like a false positive and is not — but the reason
+    /// is NOT the one it is tempting to give, so it is written out in full.
     /// <para>
-    /// DO NOT "fix" this as an over-rejection. The remedy for a caller that
-    /// genuinely needs it is the one GS0591 names: take the receiver by
-    /// <c>ref</c> instead of <c>in</c>, which removes the copy and makes the
-    /// forward sound.
+    /// The returned reference ultimately comes from <c>y</c>, a <c>ref</c>
+    /// parameter — the CALLER's storage, which plainly outlives the call.
+    /// <b>Real csc ACCEPTS the C# analogue</b> (verified directly against csc,
+    /// alongside the same file's <c>FromIn</c>, which csc rejects with CS8156):
+    /// a non-<c>[UnscopedRef]</c> struct method's <c>this</c> is
+    /// <c>scoped ref</c>, so C# EXCLUDES the receiver from the result's
+    /// ref-safe-context entirely and the result's scope is <c>ref y</c>'s
+    /// alone. So this is not "the same reason" as case (1), where the receiver
+    /// really is <c>@UnscopedRef</c> and really does contribute.
+    /// </para>
+    /// <para>
+    /// G# rejects it because G#'s escape walk includes a call's receiver
+    /// UNCONDITIONALLY, whether or not the callee is <c>@UnscopedRef</c> —
+    /// <b>pre-existing behaviour, not introduced here</b>: the by-VALUE
+    /// receiver spelling of this exact shape already reported GS0254 before
+    /// this change (verified against the pre-fix compiler). The defensive copy
+    /// makes an <c>in</c> receiver function-local too, so the <c>in</c>
+    /// spelling now joins it, consistently. G# is therefore strictly MORE
+    /// conservative than C# here — it rejects some code csc accepts, and
+    /// accepts nothing csc rejects.
+    /// </para>
+    /// <para>
+    /// DO NOT "fix" this as an over-rejection in isolation. It is one face of
+    /// the unconditional-receiver rule that tests (11) and (12) also pin;
+    /// relaxing it is a separate, deliberate precision change to that rule,
+    /// not a repair to this one. The remedy GS0591 names still works: take the
+    /// receiver by <c>ref</c> instead of <c>in</c>.
     /// </para>
     /// </summary>
     [Fact]

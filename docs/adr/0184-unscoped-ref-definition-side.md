@@ -322,19 +322,32 @@ source, so GS0254's "function-local storage" would point the author at storage
 they never wrote. GS0591 names the copy and the remedy — take the receiver by
 `ref` rather than `in`, or return the value.
 
-One consequence is correct but non-obvious and is pinned by a test on purpose:
+One consequence is correct but non-obvious, and is pinned by a test on purpose —
+with the reason spelled out, because the obvious reason is the wrong one:
 
 ```gs
 struct Acc { func Pick(ref x int32) ref int32 { return ref x } }
 func k(in a Acc, ref y int32) ref readonly int32 { return ref a.Pick(ref y) }   // GS0591
 ```
 
-The reference ultimately comes from `y`, the caller's own storage. It is still
-rejected, because the ref-safe-context of a call result is the NARROWEST of the
-receiver's and the ref-arguments' contributions, and the copied receiver
-contributes function-local scope regardless of where the value came from. The
-signature permits returning into the receiver; the compiler has nothing else to
-go on. csc rejects the C# analogue for the same reason.
+The reference ultimately comes from `y`, the caller's own storage. **Real csc
+ACCEPTS the C# analogue** — verified directly against csc, in the same file
+where it rejects the `Slot()` shape above with CS8156. C# gives a
+non-`[UnscopedRef]` struct method's `this` a `scoped ref` ref-safe-context and
+therefore EXCLUDES the receiver from the result's scope entirely; the result's
+scope is `ref y`'s alone. So this is *not* the CS8156 case, and the amendment
+must not be read as claiming it is.
+
+G# rejects it because G#'s escape walk includes a call's receiver
+unconditionally, whether or not the callee is `@UnscopedRef`. That is
+pre-existing behaviour, not introduced by this amendment: the by-VALUE receiver
+spelling of the same shape already reported GS0254 before it (verified against
+the pre-fix compiler). The defensive copy makes an `in` receiver function-local
+too, so the `in` spelling now joins it, consistently. The result is strictly
+more conservative than C#, never less — see the matching bullet under "What it
+does NOT address". Making the receiver's contribution conditional on
+`@UnscopedRef`, the way C# does, is a separate and deliberate precision change
+to that rule, not a repair to this one.
 
 **The Span-shaped CLR-indexer branch is deliberately NOT extended, and this
 must not be "simplified away".** `IsDefensivelyCopiedReceiverForwarding` mirrors
@@ -395,6 +408,15 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
   scoping rules and adding an escape hatch in the same change would make neither
   reviewable.
 - No `unsafe` gate (D3), by decision, not by omission.
+- **A call's receiver contributes to the result's ref-safe-context
+  unconditionally**, whether or not the callee is `@UnscopedRef`. C# is more
+  precise: a non-`[UnscopedRef]` struct method's `this` is `scoped ref` and is
+  excluded from the result's scope, so csc accepts
+  `func k(in a Acc, ref y int32) ref readonly int32 { return ref a.Pick(ref y) }`
+  where G# reports GS0591. Pre-existing (the by-value spelling already reported
+  GS0254), strictly more conservative, and left alone here: narrowing it is its
+  own change with its own soundness argument, and doing it in the same commit
+  as a soundness fix would make neither reviewable.
 - **G# has no `readonly` MEMBER concept.** C# exempts a `readonly` struct member
   from the defensive copy on a read-only receiver; G# has no `readonly func`, so
   every native instance member forces the copy and therefore every forward of a
