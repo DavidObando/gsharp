@@ -3711,9 +3711,22 @@ internal sealed partial class ExpressionBinder
                 clrType = nullableConstructed;
             }
             else if (nullableInnerVt is { IsValueType: false }
-                && !CanBindClrInstanceMember(receiver)
-                && (receiverSyntax ?? receiver.Syntax) is { } nilReceiverSyntax)
+                && !CanBindClrInstanceMember(receiver))
             {
+                // The syntax needed to QUOTE the receiver in the message is
+                // deliberately NOT part of this condition. It was, and that
+                // silently disabled the whole check whenever neither syntax
+                // was available — which is precisely a CHAINED call, because
+                // the bound receiver nodes are built with a null `Syntax` and
+                // the walker does not thread `receiverSyntax` through an
+                // intermediate step. `s.ToUpper()` reported, while
+                // `s.ToUpper().Trim()`, `sb.Append("a").Append("b")` and
+                // `s.ToUpper().Length` all bound through unguarded and still
+                // threw the unattributed NullReferenceException #4287 was
+                // filed about. A message-formatting detail must never decide
+                // whether a safety check runs: the check is unconditional and
+                // the message degrades instead, exactly as the user-defined
+                // fallback earlier in this method already does.
                 // Issue #4287: `!CanBindClrInstanceMember` is the SAME
                 // carve-out the read path applies (see its definition in
                 // ExpressionBinder.Access.MemberLookup.cs). A receiver whose
@@ -3811,11 +3824,25 @@ internal sealed partial class ExpressionBinder
                     explicitTypeArgs,
                     typeArgSymbols))
                 {
-                    var receiverName = nilReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
-                        receiverStart ?? nilReceiverSyntax.Span.Start,
-                        nilReceiverSyntax.Span.End));
-                    receiverName = string.Join(" ", receiverName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-                    Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
+                    if ((receiverSyntax ?? receiver.Syntax) is { } nilReceiverSyntax)
+                    {
+                        var receiverName = nilReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
+                            receiverStart ?? nilReceiverSyntax.Span.Start,
+                            nilReceiverSyntax.Span.End));
+                        receiverName = string.Join(" ", receiverName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                        Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
+                    }
+                    else
+                    {
+                        // No syntax to quote the receiver from — keep the
+                        // nil-specific wording, which is the actionable part,
+                        // and drop only the name. Falling back to the bare
+                        // "Cannot find function" form would claim the member
+                        // does not exist, which is what made this shape so
+                        // confusing to read in a chained call.
+                        Diagnostics.ReportUnableToFindFunctionOnNilReceiver(ce.Location, methodName);
+                    }
+
                     return new BoundErrorExpression(null);
                 }
             }

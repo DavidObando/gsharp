@@ -530,6 +530,25 @@ public sealed partial class DiagnosticBag
         $"Cannot call function {functionName} because receiver '{receiverName}' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
 
     /// <summary>
+    /// The same report as the overload above, for a receiver there is no
+    /// syntax to quote — a CHAINED call (<c>s.ToUpper().Trim()</c>), whose
+    /// receiver is a bound node the walker built with no <c>Syntax</c>. The
+    /// nil-specific wording is what makes this diagnostic actionable, so it
+    /// must not degrade into the bare "Cannot find function" form, which
+    /// says the member does not exist when the real problem is that the
+    /// receiver may be nil.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="functionName">The called function.</param>
+    public void ReportUnableToFindFunctionOnNilReceiver(
+        TextLocation location,
+        string functionName)
+    => Report(
+        location,
+        DiagnosticDescriptors.UnableToFindFunction,
+        $"Cannot call function {functionName} because the receiver may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
+
+    /// <summary>
     /// Reports that an overloaded call (constructor, static method, or
     /// instance method) is ambiguous between two or more applicable
     /// candidates under the binder's "better function member" rules.

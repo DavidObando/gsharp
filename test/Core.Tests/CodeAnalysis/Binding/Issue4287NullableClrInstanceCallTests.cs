@@ -397,6 +397,58 @@ Use()
         Assert.Equal(false, result.Value);
     }
 
+    [Fact]
+    public void ChainedCall_NullableReceiver_StillReportsMayBeNil()
+    {
+        // The filed #4287 shape, CHAINED. Until the `cs2gs-oahu` corpus
+        // surfaced it, the nil check was gated on having syntax to quote the
+        // receiver from in the message — and a chained call has none, because
+        // the accessor walker does not thread `receiverSyntax` through an
+        // intermediate step and the bound receiver nodes carry a null
+        // `Syntax`. So `s.ToUpper()` reported while `s.ToUpper().Trim()` bound
+        // through and still threw the unattributed NullReferenceException the
+        // issue was filed about. A message-formatting detail must never decide
+        // whether a safety check runs.
+        var result = Evaluate(@"
+func Use(s string?) string? {
+    return s.ToUpper().Trim()
+}
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("may be nil", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("ToUpper", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ChainedIntoRead_NullableReceiver_StillReportsMayBeNil()
+    {
+        // Same gap, reached by chaining into a property READ rather than
+        // another call — it was equally silent.
+        var result = Evaluate(@"
+func Use(s string?) int32 {
+    return s.ToUpper().Length
+}
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("may be nil", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ChainedCall_ThroughObliviousClrResult_CompilesCleanly()
+    {
+        // The carve-out is unaffected by that repair: a NON-nullable receiver
+        // whose imported call result is oblivious still chains unguarded.
+        var result = Evaluate(@"
+func Use() string {
+    let sb = System.Text.StringBuilder()
+    return sb.Append(""a"").Append(""b"").ToString()
+}
+Use()
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
