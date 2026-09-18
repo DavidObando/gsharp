@@ -2096,9 +2096,16 @@ public sealed partial class CSharpToGSharpTranslator
             // is exactly the shape gsc honours; anything else keeps its
             // assertion, and NullAssertionPolishPass strips it if it proves
             // unnecessary.
+            // Issue #4167/#4155/#4153: a pattern match against a Roslyn enum
+            // constant silently mismatches under gsc self-hosting, so the two
+            // `Kind` tests below are written as `==` comparisons rather than as
+            // a combined type-pattern. Semantically identical C#, and it
+            // survives cs2gs translating its own source -- the #4167 guard
+            // scans that translated text, so this note avoids spelling the
+            // rejected form too.
             if (expression is IdentifierNameSyntax bareMember
                 && this.context.GetSymbolInfo(bareMember).Symbol is { IsStatic: false } bareSymbol
-                && bareSymbol.Kind is SymbolKind.Field or SymbolKind.Property)
+                && (bareSymbol.Kind == SymbolKind.Field || bareSymbol.Kind == SymbolKind.Property))
             {
                 return false;
             }
