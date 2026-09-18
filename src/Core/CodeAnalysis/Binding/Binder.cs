@@ -467,12 +467,37 @@ public sealed class Binder
             {
                 scope.TryDeclareVariable(function.ThisParameter);
 
-                // ADR-0058 / issue #376: for ref struct instance methods, the implicit
-                // `this` parameter has function-local safe-to-escape by default (scoped).
-                // Only [UnscopedRef] relaxes this, allowing `this` to be returned.
-                if (TypeSymbol.IsByRefLike(function.ReceiverType) && !DeclarationBinder.HasUnscopedRefAnnotation(function))
+                // ADR-0058 / ADR-0184 / issue #376: EVERY struct instance member's
+                // `this` is implicitly `scoped ref` in C#, not just a `ref struct`'s
+                // — its REF-safe-context is the method body, so a reference into the
+                // receiver's own storage may not be returned. `@UnscopedRef` is the
+                // opt-out, and it is now recognised by TYPE IDENTITY off the bound
+                // attribute list (ADR-0084 §L5) rather than by matching the
+                // annotation's spelling.
+                //
+                // The two facts are carried on SEPARATE flags on purpose:
+                //   * IsScoped restricts the receiver's VALUE-scope
+                //     (safe-to-escape) and is read by HasFunctionLocalReferentScope
+                //     and RefCapabilities.SelectEscapeArguments, both of which only
+                //     ever look at byref-like values — so widening the implicit
+                //     `scoped` from `ref struct` receivers to all struct receivers
+                //     is behaviour-neutral for an ordinary struct.
+                //   * IsUnscopedRefReceiver governs the receiver's REF-scope, which
+                //     is what `return ref this.<field>` actually depends on (see
+                //     StatementBinder.HasFunctionLocalRefScope). The pre-ADR-0184
+                //     code only ever cleared IsScoped, which is why `@UnscopedRef`
+                //     changed nothing for a ref return.
+                if (TypeSymbol.IsByRefLike(function.ReceiverType)
+                    || function.ReceiverType is StructSymbol { IsClass: false })
                 {
-                    function.ThisParameter.IsScoped = true;
+                    if (function.HasUnscopedRef)
+                    {
+                        function.ThisParameter.IsUnscopedRefReceiver = true;
+                    }
+                    else
+                    {
+                        function.ThisParameter.IsScoped = true;
+                    }
                 }
 
                 // Phase 3.B.3 sub-step 2b: expose each field on the receiver

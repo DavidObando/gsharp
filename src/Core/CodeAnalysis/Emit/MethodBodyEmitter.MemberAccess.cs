@@ -1587,7 +1587,11 @@ internal sealed partial class MethodBodyEmitter
         // these symbol-only value types alongside enums and built-ins.
         if (ReflectionMetadataEmitter.IsValueTypeSymbol(receiver.Type))
         {
-            if (!isReadOnlyCall && RefCapabilities.IsReadOnlyReference(receiver)
+            // ADR-0184 amendment: the defensive-copy rule now lives in ONE
+            // place, shared with the binder's ref-safe-scope walk, so the two
+            // cannot disagree about which receivers get copied (they did, and
+            // the disagreement returned dangling references — see GS0591).
+            if (RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver, isReadOnlyCall)
                 && this.TryEmitCachedReceiver(receiver, needAddress: true))
             {
                 return;
@@ -1777,7 +1781,13 @@ internal sealed partial class MethodBodyEmitter
     /// <param name="receiver">The constrained type-parameter receiver expression.</param>
     private void EmitConstrainedTypeParameterReceiver(BoundExpression receiver)
     {
-        if (RefCapabilities.IsReadOnlyReference(receiver)
+        // ADR-0184 amendment: shared with the binder — see
+        // RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy. The absent
+        // `isReadOnlyCall` opt-out is deliberate, not an oversight: a
+        // `constrained.`-prefixed receiver is addressed through a temp
+        // regardless of whether the target member is a `readonly` member, so
+        // this site always passes the default `false`.
+        if (RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver)
             && this.TryEmitCachedReceiver(receiver, needAddress: true))
         {
             return;

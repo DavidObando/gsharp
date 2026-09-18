@@ -4891,7 +4891,9 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
-        if (RefCapabilities.IsReadOnlyReference(receiver))
+        // ADR-0184 amendment: shared with the binder's ref-safe-scope walk —
+        // see RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy.
+        if (RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver))
         {
             return true;
         }

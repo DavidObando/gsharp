@@ -4,6 +4,7 @@
 - **Date**: 2026-06-03
 - **Phase**: Phase 8 — ref-safety follow-up (issue #376)
 - **Related**: #367 / #371 / #373 (GS0219, user `ref struct`), #376 (tracking issue), ADR-0039 (by-ref pointers `&`/`*`, `ByRefTypeSymbol`), ADR-0056 (Span consumption v1)
+- **Amended by**: [ADR-0184](0184-unscoped-ref-definition-side.md) — §4 (`[UnscopedRef]`) and the "Follow-ups (completed)" claim about its enforcement
 
 ## Context
 
@@ -93,13 +94,17 @@ Data-flow tracking of `safe-to-escape` and `ref-safe-to-escape` scopes is implem
 - User code can annotate parameters with `scoped` to document and enforce that a ref struct parameter will not escape.
 - User code can annotate local variable declarations with `scoped` (`let scoped x = ...`) for the same restriction.
 - Managed-pointer (`*T`) escape scenarios that previously compiled silently now produce clear diagnostics.
-- The `@UnscopedRef` annotation can be applied to ref struct methods to allow returning `this`.
+- The `@UnscopedRef` annotation can be applied to ref struct methods (superseded by [ADR-0184](0184-unscoped-ref-definition-side.md), which makes it apply to every struct instance member and to properties/indexers, and gives it real ref-return enforcement).
 - STE propagation catches indirect escapes: `let x = scopedParam; return x` is correctly rejected.
 
 **Breaking changes:**
 - Any code that returned a `*T` (ByRefTypeSymbol) value, captured one in a closure, or declared a `*T` field now fails with GS9004 / GS9006. Such code was memory-unsafe and was never supported; the diagnostics surface an existing correctness gap.
 - Returning a `scoped` ref struct parameter or local now fails with GS0219. This is a new restriction; previously the binder accepted such returns without checking.
-- Ref struct instance methods can no longer return `this` (or ref struct fields of `this`) without `@UnscopedRef`. This matches C#'s default behavior.
+- Ref struct instance methods can no longer return `this` (or ref struct fields of `this`) without `@UnscopedRef`.
+  **Corrected by [ADR-0184](0184-unscoped-ref-definition-side.md) D1**: this did NOT match C#'s
+  default behaviour. Only the REF-safe-context of `this` is function-local by default; its
+  safe-to-escape (value) scope is the caller's, so `return this;` BY VALUE out of a `ref struct`
+  instance method is legal in C# with or without the annotation. ADR-0184 separates the two.
 
 **Existing test impact:**
 - No existing tests exercise ByRef return, ByRef closure capture, or ByRef fields (the diagnostics were unreachable). All existing tests continue to pass.
@@ -109,6 +114,17 @@ Data-flow tracking of `safe-to-escape` and `ref-safe-to-escape` scopes is implem
 All items previously deferred have been implemented:
 
 - ✅ Full data-flow STE propagation through initializers, constructors, and member access.
-- ✅ Full RSTE for `ref` returns and `[UnscopedRef]` enforcement.
+- ✅ Full RSTE for `ref` returns.
+- ⚠️ `[UnscopedRef]` enforcement — **this entry was an overclaim; corrected by
+  [ADR-0184](0184-unscoped-ref-definition-side.md)**. What shipped here was a
+  single narrow sliver: `@UnscopedRef` was recognised by matching the
+  annotation's SPELLING (not its type identity) and, when present, only
+  skipped setting `IsScoped` on a `ref struct` receiver — which affects the
+  by-VALUE GS0219 check and nothing else. The ref-safe-context of `this`,
+  which is what `return ref this.<field>` actually depends on, was never
+  wired up: `HasFunctionLocalRefScope`'s parameter case returned `true` for
+  any `RefKind.None` parameter regardless of `IsScoped`, so the annotation
+  changed nothing for a ref return. The property/indexer spelling did not
+  exist at all. ADR-0184 implements the real thing.
 - ✅ `scoped ref` compound modifier (`scoped` on a `*T` parameter restricts RSTE).
 - ✅ `scoped` on local variable declarations (enforcement).

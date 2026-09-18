@@ -418,14 +418,22 @@ func bad(scoped s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
     }
 
     // -----------------------------------------------------------------------
-    // [UnscopedRef] and ref struct methods (Phase 3)
+    // [UnscopedRef] and ref struct methods (Phase 3; revised by ADR-0184)
     // -----------------------------------------------------------------------
 
+    /// <summary>
+    /// ADR-0184 D1 (conformance fix). This used to assert the opposite — that
+    /// <c>return this</c> BY VALUE out of a <c>ref struct</c> member reports
+    /// GS0219 — which conflated the receiver's two escape scopes. Only the
+    /// REF-safe-context of <c>this</c> is function-local by default; its
+    /// safe-to-escape (value) scope is the caller's, because the value the
+    /// receiver holds was produced by, and outlives, the call. Real C# accepts
+    /// exactly this shape with no annotation, and no annotation makes it
+    /// illegal either — <c>@UnscopedRef</c> is not what governs it.
+    /// </summary>
     [Fact]
-    public void RefStructMethod_ReturnsThis_Reports_GS0219()
+    public void RefStructMethod_ReturnsThis_ByValue_IsLegal()
     {
-        // In a ref struct method, `this` is implicitly scoped.
-        // Returning a field that is itself a ref struct should be caught.
         var source = @"
 package P
 ref struct MySpan {
@@ -433,6 +441,31 @@ ref struct MySpan {
 
     func getSelf() MySpan {
         return this
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+        Assert.Empty(diagnostics);
+    }
+
+    /// <summary>
+    /// ADR-0184 D1's other half: the value-scope relaxation above must not
+    /// leak into a genuinely scoped SOURCE. A <c>scoped</c> parameter's value
+    /// is still function-local, so returning it — or a local seeded from it —
+    /// is still GS0219, inside a struct member exactly as at top level.
+    /// </summary>
+    [Fact]
+    public void RefStructMethod_ReturnsScopedParameter_StillReports_GS0219()
+    {
+        var source = @"
+package P
+import System
+ref struct MySpan {
+    var Value int32
+
+    func pick(scoped s ReadOnlySpan[int32]) ReadOnlySpan[int32] {
+        return s
     }
 }
 ";
@@ -457,12 +490,249 @@ func (s MySpan) getValue() int32 {
         Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
     }
 
+    /// <summary>
+    /// ADR-0184. The pre-ADR-0184 version of this test wrote <c>@UnscopedRef</c>
+    /// on a RECEIVER-CLAUSE func and with no <c>import</c>, so it proved neither
+    /// thing it claimed: the annotation could not resolve (GS0198, which the
+    /// single <c>DoesNotContain(GS0219)</c> assertion never noticed), and GS0219
+    /// is not what <c>@UnscopedRef</c> governs in the first place. The in-struct
+    /// spelling below is the shape the annotation actually applies to; the
+    /// receiver-clause spelling is now a placement error in its own test.
+    /// </summary>
     [Fact]
-    public void RefStructMethod_WithUnscopedRef_ReturnsThis_IsLegal()
+    public void RefStructMethod_WithUnscopedRef_ReturnsRefToOwnState_IsLegal()
     {
-        // @UnscopedRef relaxes the implicit scoped on `this`.
         var source = @"
 package P
+import System.Diagnostics.CodeAnalysis
+ref struct MySpan {
+    var Value int32
+
+    @UnscopedRef
+    func slot() ref int32 {
+        return ref this.Value
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Empty(diagnostics);
+    }
+
+    /// <summary>ADR-0184: the same shape on an ordinary (non-<c>ref</c>) struct.</summary>
+    [Fact]
+    public void StructMethod_WithUnscopedRef_ReturnsRefToOwnState_IsLegal()
+    {
+        var source = @"
+package P
+import System.Diagnostics.CodeAnalysis
+struct Acc {
+    var Total int32
+
+    @UnscopedRef
+    func slot() ref int32 {
+        return ref this.Total
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Empty(diagnostics);
+    }
+
+    /// <summary>
+    /// ADR-0184: without the annotation the same member is rejected — with the
+    /// dedicated GS0589, not the generic GS0254 ("function-local storage",
+    /// which is wrong here: the storage is the CALLER's) and not GS0253
+    /// ("must be an lvalue", which is what the pre-ADR-0184 compiler reported
+    /// because it classified every <c>this</c> as read-only storage).
+    /// </summary>
+    [Fact]
+    public void StructMethod_WithoutUnscopedRef_ReturnsRefToOwnState_Reports_GS0589()
+    {
+        var source = @"
+package P
+struct Acc {
+    var Total int32
+
+    func slot() ref int32 {
+        return ref this.Total
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0589");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0253");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0254");
+    }
+
+    /// <summary>
+    /// ADR-0184: the bare-name spelling lowers to a <c>this</c> access, so it
+    /// reaches the same diagnostic, and a nested <c>this.a.b</c> chain does too.
+    /// </summary>
+    [Theory]
+    [InlineData("return ref Total")]
+    [InlineData("return ref this.Total")]
+    public void StructMethod_ReturnsRefToOwnState_BothSpellings_Report_GS0589(string returnStatement)
+    {
+        var source = @"
+package P
+struct Acc {
+    var Total int32
+
+    func slot() ref int32 {
+        " + returnStatement + @"
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0589");
+    }
+
+    /// <summary>ADR-0184: a reference rooted at a LOCAL still gets the generic GS0254.</summary>
+    [Fact]
+    public void RefReturn_RootedAtLocal_StillReports_GS0254_NotGS0589()
+    {
+        var source = @"
+package P
+struct Acc {
+    var Total int32
+}
+func f() ref int32 {
+    var a Acc = default(Acc)
+    return ref a.Total
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0254");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0589");
+    }
+
+    /// <summary>
+    /// ADR-0184: <c>@UnscopedRef</c> lifts the ESCAPE-scope restriction only.
+    /// A genuinely read-only field (<c>let</c>) is still not writable storage,
+    /// so it still fails the lvalue/readonly gate with GS0253.
+    /// </summary>
+    [Fact]
+    public void StructMethod_WithUnscopedRef_ReturnsRefToLetField_StillReports_GS0253()
+    {
+        var source = @"
+package P
+import System.Diagnostics.CodeAnalysis
+struct Acc {
+    let Total int32 = 0
+
+    @UnscopedRef
+    func slot() ref int32 {
+        return ref this.Total
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0253");
+    }
+
+    /// <summary>
+    /// ADR-0184 §8: the property/indexer spelling. The annotation is written
+    /// once on the member and pushed down onto the accessors, which have no
+    /// attribute list of their own.
+    /// </summary>
+    [Theory]
+    [InlineData("prop Slot ref int32")]
+    [InlineData("prop this[i int32] ref int32")]
+    public void StructProperty_WithUnscopedRef_ReturnsRefToOwnState_IsLegal(string header)
+    {
+        var source = @"
+package P
+import System.Diagnostics.CodeAnalysis
+ref struct Ring {
+    var Value int32
+
+    @UnscopedRef
+    " + header + @" {
+        get { return ref this.Value }
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Empty(diagnostics);
+    }
+
+    /// <summary>ADR-0184: the same accessor without the annotation is GS0589.</summary>
+    [Fact]
+    public void StructIndexer_WithoutUnscopedRef_ReturnsRefToOwnState_Reports_GS0589()
+    {
+        var source = @"
+package P
+ref struct Ring {
+    var Value int32
+
+    prop this[i int32] ref int32 {
+        get { return ref this.Value }
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0589");
+    }
+
+    /// <summary>
+    /// ADR-0184: <c>return ref this</c> — a reference to the whole receiver —
+    /// is the widest form the annotation permits, and is legal in C# too.
+    /// </summary>
+    [Fact]
+    public void StructMethod_WithUnscopedRef_ReturnsRefToThis_IsLegal()
+    {
+        var source = @"
+package P
+import System.Diagnostics.CodeAnalysis
+struct Acc {
+    var Total int32
+
+    @UnscopedRef
+    func self() ref Acc {
+        return ref this
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Empty(diagnostics);
+    }
+
+    /// <summary>
+    /// ADR-0184: type-identity recognition (ADR-0084 §L5). The annotation is a
+    /// real CLR attribute now, not a name match, so the <c>import</c> is load
+    /// bearing — without it the attribute does not resolve (GS0198) and the
+    /// member is not un-scoped.
+    /// </summary>
+    [Fact]
+    public void UnscopedRef_WithoutImport_Reports_GS0198_AndIsNotHonoured()
+    {
+        var source = @"
+package P
+struct Acc {
+    var Total int32
+
+    @UnscopedRef
+    func slot() ref int32 {
+        return ref this.Total
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0198");
+        Assert.Contains(diagnostics, d => d.Id == "GS0589");
+    }
+
+    // -----------------------------------------------------------------------
+    // ADR-0184: @UnscopedRef placement validation (GS0590)
+    // -----------------------------------------------------------------------
+
+    [Theory]
+
+    // A receiver clause is always an extension (ADR-0182), whose receiver is an
+    // ordinary by-value parameter — the exact shape the old test used.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
 ref struct MySpan {
     var Value int32
 }
@@ -470,9 +740,172 @@ ref struct MySpan {
 func (s MySpan) getSelf() MySpan {
     return s
 }
+")]
+
+    // A free function has no receiver at all.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+@UnscopedRef
+func free() int32 {
+    return 1
+}
+")]
+
+    // A class receiver is a reference that already outlives the call.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+class Box {
+    var Total int32
+
+    @UnscopedRef
+    func total() ref int32 {
+        return ref this.Total
+    }
+}
+")]
+
+    // A `shared` (static) member has no receiver to un-scope.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+struct Acc {
+    shared {
+        @UnscopedRef
+        func make() int32 {
+            return 1
+        }
+    }
+}
+")]
+
+    // ADR-0184 D4: an override is deferred.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+open class Base {
+    open func total() int32 {
+        return 0
+    }
+}
+class Derived : Base {
+    @UnscopedRef
+    override func total() int32 {
+        return 1
+    }
+}
+")]
+
+    // ADR-0184 D4: an interface member is deferred.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+interface IThing {
+    @UnscopedRef
+    func total() int32;
+}
+")]
+
+    // The property spellings of the static and class rejections.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+struct Acc {
+    shared {
+        @UnscopedRef
+        prop Total int32 {
+            get { return 1 }
+        }
+    }
+}
+")]
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+class Box {
+    var Backing int32
+
+    @UnscopedRef
+    prop Total ref int32 {
+        get { return ref this.Backing }
+    }
+}
+")]
+
+    // ADR-0184 D4: the PROPERTY spelling of an explicit interface
+    // implementation (ADR-0149's `prop (IFoo) P T` clause). Found in
+    // adversarial review of PR #4291: `PropertySymbol.IsOverride` is false for
+    // this shape, so it escaped GS0590 entirely, while the `func (IFoo) M()`
+    // spelling — which DescribeUnscopedRefRejection checks through
+    // HasExplicitInterfaceClause — was rejected. Both are deferred alike.
+    [InlineData(@"
+package P
+import System.Diagnostics.CodeAnalysis
+interface IThing {
+    prop Total int32 { get; }
+}
+struct Acc : IThing {
+    var Backing int32
+
+    @UnscopedRef
+    private prop (IThing) Total int32 -> this.Backing
+}
+")]
+    public void UnscopedRef_OnUnsupportedTarget_Reports_GS0590(string source)
+    {
+        var diagnostics = Bind(source);
+        Assert.Contains(diagnostics, d => d.Id == "GS0590");
+    }
+
+    /// <summary>
+    /// ADR-0184: GREEN counterpart to the GS0590 theory — the one supported
+    /// shape must not trip the placement check.
+    /// </summary>
+    [Fact]
+    public void UnscopedRef_OnStructInstanceMember_DoesNotReport_GS0590()
+    {
+        var source = @"
+package P
+import System.Diagnostics.CodeAnalysis
+struct Acc {
+    var Total int32
+
+    @UnscopedRef
+    func slot() ref int32 {
+        return ref this.Total
+    }
+}
 ";
         var diagnostics = Bind(source);
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0219");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0590");
+    }
+
+    /// <summary>
+    /// ADR-0184 D2: a struct member's <c>this</c> is writable storage in EVERY
+    /// instance member, annotated or not — the CLR passes it as <c>ref S</c>.
+    /// Taking its address, writing through it, and passing it to a writable
+    /// <c>ref</c> parameter must all stay legal without <c>@UnscopedRef</c>.
+    /// </summary>
+    [Fact]
+    public void StructMember_ThisIsWritableStorage_WithoutUnscopedRef()
+    {
+        var source = @"
+package P
+func take(ref x int32) { }
+struct Acc {
+    var Total int32
+
+    func bump() {
+        this.Total = this.Total + 1
+        this.Total++
+        take(ref this.Total)
+        var p *int32 = &this.Total
+    }
+}
+";
+        var diagnostics = Bind(source);
+        Assert.Empty(diagnostics);
     }
 
     [Fact]

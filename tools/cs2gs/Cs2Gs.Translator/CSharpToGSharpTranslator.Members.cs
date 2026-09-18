@@ -2727,7 +2727,7 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: explicitInterfacePropertyVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
-                attributes: this.MapAttributes(node.AttributeLists),
+                attributes: this.MapPropertyAttributes(node),
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfacePropertyType,
                 isRefReturn: isRefReturnProperty,

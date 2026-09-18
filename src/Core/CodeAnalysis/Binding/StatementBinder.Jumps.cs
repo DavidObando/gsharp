@@ -636,8 +636,33 @@ internal sealed partial class StatementBinder
             }
             else if (HasFunctionLocalRefScope(expression))
             {
-                Diagnostics.ReportRefReturnEscapesLocalScope(
-                    Invariant.Required(syntax.Expression, "a ref return expression is present").Location);
+                // ADR-0184 (the CS8170 analogue): when the reference is rooted at
+                // the enclosing struct member's own receiver, GS0254's
+                // "function-local storage" wording is actively misleading — the
+                // storage belongs to the CALLER, the member simply has not opted
+                // out of the implicit `scoped` on `this`. Name the remedy instead.
+                var location = Invariant.Required(syntax.Expression, "a ref return expression is present").Location;
+
+                // GS0589 stays first: the two conditions are provably disjoint
+                // (IsRootedAtReceiver requires a `this` root, and a struct
+                // `this` is never a read-only reference), but the existing
+                // ordering is what the current tests pin.
+                if (IsRootedAtReceiver(expression))
+                {
+                    Diagnostics.ReportUnscopedRefRequiredForInstanceState(location);
+                }
+                else if (IsDefensivelyCopiedReceiverForwarding(expression))
+                {
+                    // ADR-0184 amendment: the defensive copy is invisible in
+                    // the user's source, so GS0254's "function-local storage"
+                    // would point at storage the author never wrote. GS0591
+                    // names the copy and the remedy instead.
+                    Diagnostics.ReportRefReturnThroughDefensivelyCopiedReceiver(location);
+                }
+                else
+                {
+                    Diagnostics.ReportRefReturnEscapesLocalScope(location);
+                }
             }
 
             expression = expression is BoundBlockExpression block
@@ -684,6 +709,101 @@ internal sealed partial class StatementBinder
     }
 
     /// <summary>
+    /// ADR-0184: returns true when <paramref name="expr"/> ultimately reads the
+    /// enclosing member's own receiver — <c>this.&lt;field&gt;</c>, a nested
+    /// <c>this.a.b</c> chain, or the bare-name spelling that lowers to one — as
+    /// opposed to a local, a parameter, or heap storage. Distinguishes the
+    /// <c>@UnscopedRef</c>-shaped rejection (GS0589) from the generic
+    /// escaping-local rejection (GS0254); the walk mirrors
+    /// <see cref="HasFunctionLocalRefScope"/>'s own value-type receiver
+    /// recursion, so the two agree on which root a reference came from.
+    /// </summary>
+    /// <param name="expr">The bound <c>return ref</c> operand.</param>
+    /// <returns><see langword="true"/> when the reference is rooted at the receiver.</returns>
+    private static bool IsRootedAtReceiver(BoundExpression expr)
+        => expr switch
+        {
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } } => true,
+            BoundFieldAccessExpression { Receiver: { } fieldReceiver } =>
+                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiver(fieldReceiver),
+            BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo, Receiver: { } clrReceiver } =>
+                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiver(clrReceiver),
+            BoundBlockExpression block => IsRootedAtReceiver(block.Expression),
+            BoundConditionalAddressExpression conditional =>
+                IsRootedAtReceiver(conditional.WhenTrueOperand) || IsRootedAtReceiver(conditional.WhenFalseOperand),
+            _ => false,
+        };
+
+    /// <summary>
+    /// ADR-0184 amendment (caller side): true when <paramref name="expr"/>
+    /// forwards a reference out of a ref-returning member whose VALUE-TYPE
+    /// receiver the emitter replaces with a defensive COPY in a function-local
+    /// temp — see <see cref="RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy"/>,
+    /// the single rule this and the three emitter copy sites now share. The
+    /// member's own <c>return ref</c> was validated against ITS receiver, which
+    /// the caller then substitutes; any reference into the receiver's own
+    /// storage therefore points at a temp that dies at function exit. Real csc
+    /// rejects the C# analogue (CS8156).
+    /// <para>
+    /// Deliberately EXCLUDES the Span-shaped CLR indexer branch: that result
+    /// points into the ENCAPSULATED BUFFER the receiver merely wraps, not into
+    /// the receiver's own storage, so copying the receiver (its pointer and
+    /// length) does not disturb the referent at all — issue #4265's premise,
+    /// still correct. The exclusion lapses exactly when the CLR author marked
+    /// the indexer <c>[UnscopedRef]</c>, which declares the opposite.
+    /// </para>
+    /// <para>
+    /// The <c>BoundDereferenceExpression</c> arm is load bearing for DIAGNOSTIC
+    /// SELECTION only, never for soundness: <c>ConversionClassifier.AutoDereferenceRefReturn</c>
+    /// wraps every imported/CLR ref-returning member read in one, so without it
+    /// the CLR-indexer case below is still correctly REJECTED (hook A sees the
+    /// unwrapped node through <see cref="HasFunctionLocalRefScope"/>'s own
+    /// dereference recursion) but is reported as the generic GS0254 instead of
+    /// GS0591. Adding it cannot over-reject: this predicate is consulted only
+    /// after <see cref="HasFunctionLocalRefScope"/> has already said no.
+    /// </para>
+    /// </summary>
+    /// <param name="expr">The bound <c>return ref</c> operand.</param>
+    /// <returns><see langword="true"/> when the forward crosses a defensively copied receiver.</returns>
+    private static bool IsDefensivelyCopiedReceiverForwarding(BoundExpression expr)
+    {
+        switch (expr)
+        {
+            case BoundBlockExpression block:
+                return IsDefensivelyCopiedReceiverForwarding(block.Expression);
+
+            case BoundDereferenceExpression dereference:
+                return IsDefensivelyCopiedReceiverForwarding(dereference.Operand);
+
+            case BoundConditionalAddressExpression conditional:
+                return IsDefensivelyCopiedReceiverForwarding(conditional.WhenTrueOperand)
+                    || IsDefensivelyCopiedReceiverForwarding(conditional.WhenFalseOperand);
+
+            // Own-storage CLR indexer only — mirrors the ELSE arm of
+            // HasFunctionLocalRefScope's BoundClrIndexExpression case exactly,
+            // so the two agree on which indexers read the receiver's own
+            // storage and which read an encapsulated buffer.
+            case BoundClrIndexExpression clrIndex
+                when !TypeSymbol.IsByRefLike(clrIndex.Target.Type)
+                    || RefCapabilities.IsUnscopedRefIndexerGetter(clrIndex.Indexer):
+                return !Binder.IsReferenceTypeForConstraint(clrIndex.Target.Type)
+                    && RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(
+                        clrIndex.Target,
+                        clrIndex.Indexer.GetMethod is { } getter && RefCapabilities.IsReadOnlyMethod(getter));
+
+            default:
+                // isReadOnlyMember is omitted (defaults false): G# has no
+                // `readonly func`, so a NATIVE ref-returning member is never
+                // exempt from the copy. A future `readonly` member feature MUST
+                // thread it through here.
+                return RefCapabilities.TryGetRefReturnEscapeSources(expr, out var receiver, out _, out _)
+                    && receiver != null
+                    && !Binder.IsReferenceTypeForConstraint(receiver.Type)
+                    && RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver);
+        }
+    }
+
+    /// <summary>
     /// Issue #490: returns true when <paramref name="expr"/>'s ref-safe-to-escape scope is
     /// function-local — i.e. the underlying storage dies at function exit and cannot be
     /// returned as a managed pointer. ADR-0058 conservative single-pass propagation:
@@ -704,7 +824,12 @@ internal sealed partial class StatementBinder
                 // HasFunctionLocalReferentScope below (issue #4265) for that narrower case.
                 if (v.Variable is ParameterSymbol p)
                 {
-                    return p.IsScoped || p.RefKind == RefKind.None;
+                    // ADR-0184 / issue #376: an `@UnscopedRef` struct member's
+                    // receiver is the one RefKind.None parameter whose storage
+                    // is NOT a function-local by-value slot — the CLR passes a
+                    // struct's `this` as `ref S`, so its ref-safe-context is the
+                    // caller's once the member opts out of the implicit `scoped`.
+                    return p.IsScoped || (p.RefKind == RefKind.None && !p.IsUnscopedRefReceiver);
                 }
 
                 if (v.Variable is GlobalVariableSymbol)
@@ -778,6 +903,16 @@ internal sealed partial class StatementBinder
             // treatment exactly when the CLR author has declared the same
             // intent @UnscopedRef signals for a native G# member.
             case BoundClrIndexExpression clrIndex:
+                // ADR-0184 amendment (hook A): an [UnscopedRef] CLR indexer
+                // reached through a READ-ONLY reference is copied before the
+                // call exactly like a native member would be, so its result
+                // aliases the copy. The Span-shaped branch below is unaffected
+                // — IsDefensivelyCopiedReceiverForwarding excludes it.
+                if (IsDefensivelyCopiedReceiverForwarding(clrIndex))
+                {
+                    return true;
+                }
+
                 return TypeSymbol.IsByRefLike(clrIndex.Target.Type)
                     && !RefCapabilities.IsUnscopedRefIndexerGetter(clrIndex.Indexer)
                     ? HasFunctionLocalReferentScope(clrIndex.Target)
@@ -811,6 +946,17 @@ internal sealed partial class StatementBinder
                 if (RefCapabilities.TryGetRefReturnEscapeSources(
                     expr, out var callReceiver, out var byRefArguments, out var byValueByRefLikeArguments))
                 {
+                    // ADR-0184 amendment (hook B): checked BEFORE the receiver's
+                    // own storage scope, because a defensively copied receiver
+                    // is function-local even when the storage it was copied
+                    // FROM is the caller's — and, per C#'s narrowest-of rule,
+                    // even when the reference ultimately comes from one of the
+                    // ref arguments below rather than from the receiver.
+                    if (IsDefensivelyCopiedReceiverForwarding(expr))
+                    {
+                        return true;
+                    }
+
                     if (callReceiver != null
                         && !Binder.IsReferenceTypeForConstraint(callReceiver.Type)
                         && HasFunctionLocalRefScope(callReceiver))
@@ -885,8 +1031,18 @@ internal sealed partial class StatementBinder
         switch (expression)
         {
             // Direct reference to a scoped variable (parameter or local).
+            //
+            // ADR-0184 D1 (conformance fix): the enclosing member's RECEIVER is
+            // excluded. `this` carries an implicit `scoped` on its REF-safe-context
+            // only — its VALUE-scope (safe-to-escape) is the caller's context, since
+            // the receiver's value was produced by, and outlives, the call. Real C#
+            // draws exactly this split, so `return this;` BY VALUE out of a
+            // `ref struct` instance method is legal with or without `@UnscopedRef`;
+            // the pre-ADR-0184 code conflated the two and reported GS0219 for it.
             case BoundVariableExpression varExpr:
-                return varExpr.Variable is LocalVariableSymbol local && local.IsScoped;
+                return varExpr.Variable is LocalVariableSymbol local
+                    && local.IsScoped
+                    && local is not ParameterSymbol { IsReceiverParameter: true };
 
             // Conversion (implicit/explicit) preserves STE of the inner expression.
             case BoundConversionExpression conv:

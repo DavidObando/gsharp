@@ -274,7 +274,9 @@ Such a field is emitted with its real layout (`valuetype ReadOnlySpan<int32>`, n
 
 ### Limitations
 
-The following remain out of scope: the full two-level `ref-safe-to-escape` analysis (including `[UnscopedRef]`) — though the `scoped` parameter modifier is wired up; open generic value-type `ref struct` fields (`ref struct Buffer[T] { data ReadOnlySpan[T] }`); `stackalloc` and other span-*creation* primitives; and a lowercase `span[T]` alias (spans are imported CLR types `Span[T]` / `ReadOnlySpan[T]`, requiring `import System`).
+`@UnscopedRef` (`System.Diagnostics.CodeAnalysis.UnscopedRefAttribute`) is supported on a struct instance member — a `func`, a `prop`, or an indexer — and lets that member return a reference into its own instance state (ADR-0184). It requires `import System.Diagnostics.CodeAnalysis`, because it is a real attribute type and is emitted to CLR metadata, so a C# consumer of the assembly sees the same contract gsc enforced. Without it, `return ref this.<field>` reports `GS0589`. `@UnscopedRef` on anything else — a class member, a `shared` member, a receiver-clause (extension) function, an `override`, or an interface member — reports `GS0590`; `override` and interface members are deferred rather than ruled out.
+
+The following remain out of scope: the full two-level `ref-safe-to-escape` analysis — though the `scoped` parameter modifier and `@UnscopedRef` are wired up, and `out`/`ref`-to-`ref struct` parameters are not yet implicitly scoped the way C# scopes them; open generic value-type `ref struct` fields (`ref struct Buffer[T] { data ReadOnlySpan[T] }`); `stackalloc` and other span-*creation* primitives; and a lowercase `span[T]` alias (spans are imported CLR types `Span[T]` / `ReadOnlySpan[T]`, requiring `import System`).
 
 ## Generics interop
 
