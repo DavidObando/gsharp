@@ -187,8 +187,11 @@ still reports the accurate readonly error.
 `shared` (static) member or property; a receiver-clause function (ADR-0182 makes
 every receiver clause an extension, whose receiver is an ordinary by-value
 parameter — un-scoping it would hand out a reference into the extension's own
-stack copy); a free function; an `init` accessor; and — per D4 — an `override`,
-an explicit interface implementation, or an interface member. One descriptor
+stack copy); a free function; and — per D4 — an `override`, an explicit
+interface implementation, or an interface member. There is deliberately no
+constructor or `init` arm: a G# constructor binds no annotations at all, and an
+`init` accessor — like every property accessor — has no attribute list of its
+own, so neither shape can reach the check carrying the annotation. One descriptor
 with a free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
 (`@ExtensionOwner`) convention.
 
