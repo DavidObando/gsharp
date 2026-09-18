@@ -527,7 +527,7 @@ internal sealed class LambdaBinder
         // Issue #2027: a function literal (lambda OR local function — this
         // method binds both) is its own goto/label frame; isolate it from
         // the enclosing function's labels and loop stack.
-        var savedFrame = EnterNestedFrame();
+        var savedFrame = EnterNestedFrame(syntax.Body);
 
         BoundStatement body;
         try
@@ -1233,7 +1233,7 @@ internal sealed class LambdaBinder
         // can contain loops and labels of its own, so isolate it from the
         // enclosing function's labels and loop stack exactly like the
         // function-literal path above.
-        var savedFrame = EnterNestedFrame();
+        var savedFrame = EnterNestedFrame(syntax.Body);
 
         BoundExpression boundBody;
         try
@@ -1977,8 +1977,19 @@ internal sealed class LambdaBinder
     /// namespace and loop-label stack, matching ADR-0070's "label namespace
     /// is local to the enclosing function" rule and C#'s prohibition on
     /// cross-frame <c>goto</c> flow. Pair with <see cref="RestoreNestedFrame"/>.
+    /// <para>
+    /// Issue #4285: also recomputes
+    /// <see cref="BinderContext.FunctionContainsUserGotoOrLabel"/> for
+    /// <paramref name="bodySyntax"/> — the nested body has its own
+    /// goto/label namespace, so whether IT contains a goto/label is a
+    /// separate question from whether the ENCLOSING function does, and must
+    /// be answered fresh for the narrowing-lift guard in
+    /// <see cref="StatementBinder.ApplyEarlyExitNarrowings"/> to apply
+    /// correctly while the nested body is bound.
+    /// </para>
     /// </summary>
-    private NestedFrameState EnterNestedFrame()
+    /// <param name="bodySyntax">The nested function-literal or arrow-lambda body being entered.</param>
+    private NestedFrameState EnterNestedFrame(SyntaxNode bodySyntax)
     {
         var saved = new NestedFrameState(binderCtx);
         binderCtx.UserLabels.Clear();
@@ -1987,6 +1998,7 @@ internal sealed class LambdaBinder
         binderCtx.LoopStack.Clear();
         binderCtx.CurrentFallthroughTarget = null;
         binderCtx.CurrentFallthroughAnchor = null;
+        binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax);
         return saved;
     }
 
@@ -2047,6 +2059,11 @@ internal sealed class LambdaBinder
 
         binderCtx.CurrentFallthroughTarget = saved.FallthroughTarget;
         binderCtx.CurrentFallthroughAnchor = saved.FallthroughAnchor;
+
+        // Issue #4285: restore the ENCLOSING function's goto/label flag now
+        // that the nested body's own bind session (and its own guard checks
+        // in ApplyEarlyExitNarrowings) has finished.
+        binderCtx.FunctionContainsUserGotoOrLabel = saved.FunctionContainsUserGotoOrLabel;
     }
 
     private static TypeSymbol? ResolveLexicalEnclosingType(FunctionSymbol? outerFunction)
@@ -2671,6 +2688,7 @@ internal sealed class LambdaBinder
             LoopStack = ctx.LoopStack.ToArray();
             FallthroughTarget = ctx.CurrentFallthroughTarget;
             FallthroughAnchor = ctx.CurrentFallthroughAnchor;
+            FunctionContainsUserGotoOrLabel = ctx.FunctionContainsUserGotoOrLabel;
         }
 
         public Dictionary<string, BoundLabel> UserLabels { get; }
@@ -2686,6 +2704,9 @@ internal sealed class LambdaBinder
         public BoundLabel? FallthroughTarget { get; }
 
         public Syntax.StatementSyntax? FallthroughAnchor { get; }
+
+        // Issue #4285.
+        public bool FunctionContainsUserGotoOrLabel { get; }
     }
 
     // Issue #1451: collects the locals declared by inline `out var`/`out let`

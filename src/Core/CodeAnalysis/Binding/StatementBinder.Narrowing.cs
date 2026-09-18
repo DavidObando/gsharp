@@ -400,6 +400,38 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyEarlyExitNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        // Issue #4285: a user-written `goto` anywhere in this function can
+        // jump directly into the region an early-exit or post-switch
+        // narrowing lift assumes is dominated by the guard's implicit exit,
+        // bypassing the guard entirely and invalidating the narrowing's
+        // soundness proof. Minimal repro: `if this.name == nil { goto Skip }
+        // Skip: return this.name.ToUpper()` — the then-branch structurally
+        // "ends in an unconditional exit" (EndsInUnconditionalExit sees the
+        // goto), so the lift fired and let `this.name` read as non-nil after
+        // `Skip:`, even though the goto never actually left the guarded
+        // region — it landed immediately past it, guard untaken.
+        //
+        // EndsInUnconditionalExit is a purely structural, single-statement
+        // check; it cannot see whether some OTHER goto elsewhere in the
+        // function targets a label inside the narrowed region. Rather than
+        // build the CFG-based, goto-source-vs-label-position reachability
+        // analysis needed to pinpoint exactly which lift sites a given goto
+        // can reach — a much larger change, since the bound tree (and every
+        // NarrowedType baked into it) is already fully constructed by the
+        // time FinalizeUserLabels runs outside this type in Binder.cs — this
+        // conservatively suppresses BOTH lifts for the WHOLE function
+        // whenever it contains any goto/label at all. That is strictly
+        // sound: it only ever REDUCES narrowing power (some `!!` sites that
+        // could in principle be proven redundant stay required), so it can
+        // never introduce a new accept-when-it-should-reject bug, and it is
+        // no worse than if the narrowing lift had never been added for any
+        // function containing a label. A precise, narrower suppression is a
+        // valid future refinement, not required for this fix.
+        if (binderCtx.FunctionContainsUserGotoOrLabel)
+        {
+            return;
+        }
+
         if (statement is BoundIfStatement ifStmt)
         {
             if (!binderCtx.PendingEarlyExitFrames.TryGetValue(ifStmt, out var elseFrame))
