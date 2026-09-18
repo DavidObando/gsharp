@@ -550,6 +550,18 @@ internal static class DiagnosticDescriptors
     // attribute, many shape rejections".
     internal static readonly DiagnosticDescriptor UnscopedRefInvalidTarget = new("GS0590", DiagnosticSeverity.Error, "'@UnscopedRef' {0}.");
 
+    // ADR-0184 amendment (caller side) / the CS8156 analogue. The emitter
+    // defensively COPIES a value-type receiver into a function-local temp
+    // whenever the receiver is a read-only reference and the called member is
+    // not itself a `readonly` member — which, since G# has no `readonly func`,
+    // is every native G# member. A reference the member returns into its own
+    // receiver storage therefore aliases that temp, not the caller's storage.
+    // Reported instead of the generic GS0254 because the copy is invisible in
+    // the user's source: GS0254 would point at "function-local storage" the
+    // author never wrote, while GS0591 names the copy and the actual remedy —
+    // the same reasoning that gave GS0589 its own identity in this ADR.
+    internal static readonly DiagnosticDescriptor RefReturnThroughDefensivelyCopiedReceiver = new("GS0591", DiagnosticSeverity.Error, "Cannot return a reference obtained through a read-only receiver (an 'in' parameter, a 'ref readonly' alias, or a 'ref readonly' result): the receiver is defensively copied into function-local storage before the call, so the returned reference would point into that copy. Use a 'ref' parameter or alias, or return the value instead.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

@@ -261,12 +261,99 @@ assert the correct rule rather than preserve the old one. A genuinely `scoped`
 source is unaffected: returning a `scoped` parameter, or a local seeded from
 one, is still GS0219, inside a struct member exactly as at top level.
 
-### No caller-side changes
+### Caller-side: the defensively copied receiver (amendment)
 
-The caller-side treatment of an `[UnscopedRef]` member reached through a
-by-value receiver (issue #4265's `IsUnscopedRefIndexerGetter` guard, CS8166's
-analogue) is unchanged and still correct: it reads the attribute off metadata,
-which native G# members now actually carry.
+**This section originally read "No caller-side changes" and claimed the existing
+caller-side treatment was "unchanged and still correct". That claim was false
+and is retracted here.** It was true only of the case it named — issue #4265's
+`IsUnscopedRefIndexerGetter` guard for a BY-VALUE receiver, which does read the
+attribute off metadata that native G# members now carry. It was not true of the
+READ-ONLY-REFERENCE receiver, which this ADR's definition-side work made
+reachable for the first time and which nothing checked at all.
+
+**The witness.** On the definition-side tip, this compiled with zero
+diagnostics:
+
+```gs
+import System.Diagnostics.CodeAnalysis
+
+struct Acc {
+    var Total int32
+
+    @UnscopedRef
+    func Slot() ref int32 { return ref this.Total }
+}
+
+func Leak(in a Acc) ref readonly int32 { return ref a.Slot() }
+```
+
+Stored value 7; read back through the returned reference after one intervening
+call, across two builds of the same source: `-1048597222`, `-1083017767`,
+`-1040415262`. Three different values, so this was genuinely reused stack
+memory, not a stale-but-stable copy. Real csc rejects the C# analogue with
+CS8156.
+
+**Root cause: the emitter and the binder disagreed.** The emitter defensively
+COPIES a value-type receiver into a function-local temp whenever the receiver is
+a read-only reference — an `in` parameter, a `ref readonly` alias, a `ref
+readonly` call or property result — and the called member is not itself a
+`readonly` member. Three sites encode that rule:
+
+- `MethodBodyEmitter.EmitInstanceReceiver` (with an `isReadOnlyCall` opt-out),
+- `MethodBodyEmitter.EmitConstrainedTypeParameterReceiver` (no opt-out: a
+  `constrained.`-prefixed receiver is addressed through a temp regardless),
+- `ReflectionMetadataEmitter.NeedsRvalueReceiverSpill`.
+
+`StatementBinder.HasFunctionLocalRefScope` modelled none of them. It gave such a
+receiver caller scope — correct for the storage the author wrote, wrong for the
+temp the emitter substituted. The binder was unsound *relative to what the
+emitter actually does*, which is why nothing about the source looked wrong.
+
+The rule now lives in exactly one place,
+`RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy`, which all three emitter
+sites and the binder's new `IsDefensivelyCopiedReceiverForwarding` consult.
+Three independently drifting copies of a rule, plus a fourth consumer that had
+no copy at all, is how this got in; one shared predicate is what keeps it out.
+
+**GS0591** is reported in place of the generic GS0254 whenever a `return ref`
+forwards through such a receiver. It gets its own identity for the same reason
+GS0589 did earlier in this ADR: the defensive copy has no spelling in the
+source, so GS0254's "function-local storage" would point the author at storage
+they never wrote. GS0591 names the copy and the remedy — take the receiver by
+`ref` rather than `in`, or return the value.
+
+One consequence is correct but non-obvious and is pinned by a test on purpose:
+
+```gs
+struct Acc { func Pick(ref x int32) ref int32 { return ref x } }
+func k(in a Acc, ref y int32) ref readonly int32 { return ref a.Pick(ref y) }   // GS0591
+```
+
+The reference ultimately comes from `y`, the caller's own storage. It is still
+rejected, because the ref-safe-context of a call result is the NARROWEST of the
+receiver's and the ref-arguments' contributions, and the copied receiver
+contributes function-local scope regardless of where the value came from. The
+signature permits returning into the receiver; the compiler has nothing else to
+go on. csc rejects the C# analogue for the same reason.
+
+**The Span-shaped CLR-indexer branch is deliberately NOT extended, and this
+must not be "simplified away".** `IsDefensivelyCopiedReceiverForwarding` mirrors
+only the OWN-STORAGE arm of the `BoundClrIndexExpression` case. A
+`Span[T]`/`ReadOnlySpan[T]` indexer returns a reference into the ENCAPSULATED
+BUFFER the value merely wraps, not into the receiver's own storage: copying the
+receiver copies its pointer and length, and leaves the pointee untouched. So
+`func first(in s Span[int32]) ref readonly int32 { return ref s[0] }` is sound
+and stays legal. The exclusion lapses exactly when the CLR author marked the
+indexer `[UnscopedRef]`, which declares the opposite — and that variant, over an
+`in` parameter, was an independently pre-existing hole (issue #4265 closed only
+the by-value spelling) with the same root cause, closed here by the same hook.
+
+**The ref-local-alias launder** — `let ref readonly t = a.Slot(); return ref t`
+— is closed by the existing machinery rather than by a new check:
+`StatementBinder.Narrowing.cs` already seeds `localVar.IsScoped` from
+`HasFunctionLocalRefScope(initializer)`, so the new hooks reach it transitively.
+It reports GS0254 rather than GS0591, which is accurate: by the time the
+`return` is bound, the operand really is a scoped local.
 
 ## Consequences
 
@@ -308,6 +395,17 @@ which native G# members now actually carry.
   scoping rules and adding an escape hatch in the same change would make neither
   reviewable.
 - No `unsafe` gate (D3), by decision, not by omission.
+- **G# has no `readonly` MEMBER concept.** C# exempts a `readonly` struct member
+  from the defensive copy on a read-only receiver; G# has no `readonly func`, so
+  every native instance member forces the copy and therefore every forward of a
+  reference out of one through a read-only receiver is GS0591. That is strictly
+  more conservative than C#, never less — it rejects some code csc would accept,
+  and accepts nothing csc rejects. `RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy`
+  already takes an `isReadOnlyMember` flag for the CLR-metadata case; a future
+  `readonly func` feature MUST thread it through the binder's
+  `IsDefensivelyCopiedReceiverForwarding` too, or the annotation will be
+  honoured by the emitter and ignored by the escape check — which is precisely
+  the emitter/binder disagreement this amendment exists to fix.
 
 ## Alternatives considered
 

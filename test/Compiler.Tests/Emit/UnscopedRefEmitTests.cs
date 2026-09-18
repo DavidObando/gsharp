@@ -119,6 +119,55 @@ public class UnscopedRefEmitTests
         Assert.Contains(Ldflda, il);
     }
 
+    /// <summary>Opcode <c>ldobj</c>, the value-copy half of a defensive receiver spill.</summary>
+    private const byte Ldobj = 0x71;
+
+    /// <summary>Opcodes <c>stloc.0</c>–<c>stloc.3</c>, <c>stloc.s</c> and <c>stloc</c>'s prefix.</summary>
+    private static readonly byte[] StoreLocalOpcodes = { 0x0A, 0x0B, 0x0C, 0x0D, 0x13, 0xFE };
+
+    /// <summary>
+    /// ADR-0184 amendment, the emit-level half of the caller-side fix. The
+    /// binder now rejects a <c>ref</c> forwarded through a READ-ONLY receiver,
+    /// because the emitter defensively copies such a receiver into a
+    /// function-local temp. This asserts the complementary fact at the metadata
+    /// level rather than inferring it from a runtime value: the SAFE path — a
+    /// genuine <c>ref</c> parameter receiver — emits a direct
+    /// <c>ldarg</c>-style pass-through with NO spill sequence
+    /// (<c>ldobj</c>/<c>stloc</c>/<c>ldloca</c>) between the receiver load and
+    /// the <c>call</c>. If hook B ever started treating the <c>ref</c>-parameter
+    /// path as copied too, or the emitter started copying it, this body would
+    /// grow exactly that sequence.
+    /// </summary>
+    [Fact]
+    public void RefParameterReceiver_ForwardsWithoutADefensiveReceiverCopy()
+    {
+        var assembly = CompileToAssembly(Source + """
+
+
+            func Forward(ref a Acc) ref int32 {
+                return ref a.Slot()
+            }
+            """,
+            // `Forward` is a byref-returning forwarder, so it hits the same
+            // ilverify ReturnPtrToStack limitation ADR-0181 already records for
+            // `Acc.Slot` — csc's IL for the identical C# fails it too.
+            ignoredErrorScope: @"(Acc\.(Slot|get_Ref|get_Item)|Forward)$");
+        var forward = assembly.GetTypes()
+            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+            .Single(method => method.Name == "Forward");
+        var il = forward.GetMethodBody()?.GetILAsByteArray();
+        Assert.NotNull(il);
+        Assert.NotEmpty(il!);
+
+        // arg0 is already `ref Acc`; forwarding it is a straight load.
+        Assert.Equal(Ldarg0, il![0]);
+        Assert.DoesNotContain(LdargaS, il);
+
+        // No value copy and no spill slot — the whole point of the assertion.
+        Assert.DoesNotContain(Ldobj, il);
+        Assert.DoesNotContain(il, opcode => StoreLocalOpcodes.Contains(opcode));
+    }
+
     private static bool Carries(IList<CustomAttributeData> attributes)
         => attributes.Any(attribute => attribute.AttributeType.FullName == UnscopedRefAttributeFullName);
 
@@ -128,7 +177,7 @@ public class UnscopedRefEmitTests
         return assembly.GetTypes().Single(t => t.Name == "Acc");
     }
 
-    private static Assembly CompileToAssembly(string source)
+    private static Assembly CompileToAssembly(string source, string ignoredErrorScope = @"Acc\.(Slot|get_Ref|get_Item)$")
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_unscopedref_emit_").FullName;
         var srcPath = Path.Combine(tempDir, "test.gs");
@@ -173,7 +222,7 @@ public class UnscopedRefEmitTests
         IlVerifier.Verify(
             outPath,
             ignoredErrorCodes: IlVerifier.KnownIssues.RefStruct,
-            ignoredErrorScope: @"Acc\.(Slot|get_Ref|get_Item)$");
+            ignoredErrorScope: ignoredErrorScope);
 
         return EmittedFixture.Load(outPath);
     }

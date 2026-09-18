@@ -559,9 +559,22 @@ internal sealed partial class StatementBinder
                 // storage belongs to the CALLER, the member simply has not opted
                 // out of the implicit `scoped` on `this`. Name the remedy instead.
                 var location = Invariant.Required(syntax.Expression, "a ref return expression is present").Location;
+
+                // GS0589 stays first: the two conditions are provably disjoint
+                // (IsRootedAtReceiver requires a `this` root, and a struct
+                // `this` is never a read-only reference), but the existing
+                // ordering is what the current tests pin.
                 if (IsRootedAtReceiver(expression))
                 {
                     Diagnostics.ReportUnscopedRefRequiredForInstanceState(location);
+                }
+                else if (IsDefensivelyCopiedReceiverForwarding(expression))
+                {
+                    // ADR-0184 amendment: the defensive copy is invisible in
+                    // the user's source, so GS0254's "function-local storage"
+                    // would point at storage the author never wrote. GS0591
+                    // names the copy and the remedy instead.
+                    Diagnostics.ReportRefReturnThroughDefensivelyCopiedReceiver(location);
                 }
                 else
                 {
@@ -637,6 +650,75 @@ internal sealed partial class StatementBinder
                 IsRootedAtReceiver(conditional.WhenTrueOperand) || IsRootedAtReceiver(conditional.WhenFalseOperand),
             _ => false,
         };
+
+    /// <summary>
+    /// ADR-0184 amendment (caller side): true when <paramref name="expr"/>
+    /// forwards a reference out of a ref-returning member whose VALUE-TYPE
+    /// receiver the emitter replaces with a defensive COPY in a function-local
+    /// temp — see <see cref="RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy"/>,
+    /// the single rule this and the three emitter copy sites now share. The
+    /// member's own <c>return ref</c> was validated against ITS receiver, which
+    /// the caller then substitutes; any reference into the receiver's own
+    /// storage therefore points at a temp that dies at function exit. Real csc
+    /// rejects the C# analogue (CS8156).
+    /// <para>
+    /// Deliberately EXCLUDES the Span-shaped CLR indexer branch: that result
+    /// points into the ENCAPSULATED BUFFER the receiver merely wraps, not into
+    /// the receiver's own storage, so copying the receiver (its pointer and
+    /// length) does not disturb the referent at all — issue #4265's premise,
+    /// still correct. The exclusion lapses exactly when the CLR author marked
+    /// the indexer <c>[UnscopedRef]</c>, which declares the opposite.
+    /// </para>
+    /// <para>
+    /// The <c>BoundDereferenceExpression</c> arm is load bearing for DIAGNOSTIC
+    /// SELECTION only, never for soundness: <c>ConversionClassifier.AutoDereferenceRefReturn</c>
+    /// wraps every imported/CLR ref-returning member read in one, so without it
+    /// the CLR-indexer case below is still correctly REJECTED (hook A sees the
+    /// unwrapped node through <see cref="HasFunctionLocalRefScope"/>'s own
+    /// dereference recursion) but is reported as the generic GS0254 instead of
+    /// GS0591. Adding it cannot over-reject: this predicate is consulted only
+    /// after <see cref="HasFunctionLocalRefScope"/> has already said no.
+    /// </para>
+    /// </summary>
+    /// <param name="expr">The bound <c>return ref</c> operand.</param>
+    /// <returns><see langword="true"/> when the forward crosses a defensively copied receiver.</returns>
+    private static bool IsDefensivelyCopiedReceiverForwarding(BoundExpression expr)
+    {
+        switch (expr)
+        {
+            case BoundBlockExpression block:
+                return IsDefensivelyCopiedReceiverForwarding(block.Expression);
+
+            case BoundDereferenceExpression dereference:
+                return IsDefensivelyCopiedReceiverForwarding(dereference.Operand);
+
+            case BoundConditionalAddressExpression conditional:
+                return IsDefensivelyCopiedReceiverForwarding(conditional.WhenTrueOperand)
+                    || IsDefensivelyCopiedReceiverForwarding(conditional.WhenFalseOperand);
+
+            // Own-storage CLR indexer only — mirrors the ELSE arm of
+            // HasFunctionLocalRefScope's BoundClrIndexExpression case exactly,
+            // so the two agree on which indexers read the receiver's own
+            // storage and which read an encapsulated buffer.
+            case BoundClrIndexExpression clrIndex
+                when !TypeSymbol.IsByRefLike(clrIndex.Target.Type)
+                    || RefCapabilities.IsUnscopedRefIndexerGetter(clrIndex.Indexer):
+                return !Binder.IsReferenceTypeForConstraint(clrIndex.Target.Type)
+                    && RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(
+                        clrIndex.Target,
+                        clrIndex.Indexer.GetMethod is { } getter && RefCapabilities.IsReadOnlyMethod(getter));
+
+            default:
+                // isReadOnlyMember is omitted (defaults false): G# has no
+                // `readonly func`, so a NATIVE ref-returning member is never
+                // exempt from the copy. A future `readonly` member feature MUST
+                // thread it through here.
+                return RefCapabilities.TryGetRefReturnEscapeSources(expr, out var receiver, out _, out _)
+                    && receiver != null
+                    && !Binder.IsReferenceTypeForConstraint(receiver.Type)
+                    && RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver);
+        }
+    }
 
     /// <summary>
     /// Issue #490: returns true when <paramref name="expr"/>'s ref-safe-to-escape scope is
@@ -738,6 +820,16 @@ internal sealed partial class StatementBinder
             // treatment exactly when the CLR author has declared the same
             // intent @UnscopedRef signals for a native G# member.
             case BoundClrIndexExpression clrIndex:
+                // ADR-0184 amendment (hook A): an [UnscopedRef] CLR indexer
+                // reached through a READ-ONLY reference is copied before the
+                // call exactly like a native member would be, so its result
+                // aliases the copy. The Span-shaped branch below is unaffected
+                // — IsDefensivelyCopiedReceiverForwarding excludes it.
+                if (IsDefensivelyCopiedReceiverForwarding(clrIndex))
+                {
+                    return true;
+                }
+
                 return TypeSymbol.IsByRefLike(clrIndex.Target.Type)
                     && !RefCapabilities.IsUnscopedRefIndexerGetter(clrIndex.Indexer)
                     ? HasFunctionLocalReferentScope(clrIndex.Target)
@@ -771,6 +863,17 @@ internal sealed partial class StatementBinder
                 if (RefCapabilities.TryGetRefReturnEscapeSources(
                     expr, out var callReceiver, out var byRefArguments, out var byValueByRefLikeArguments))
                 {
+                    // ADR-0184 amendment (hook B): checked BEFORE the receiver's
+                    // own storage scope, because a defensively copied receiver
+                    // is function-local even when the storage it was copied
+                    // FROM is the caller's — and, per C#'s narrowest-of rule,
+                    // even when the reference ultimately comes from one of the
+                    // ref arguments below rather than from the receiver.
+                    if (IsDefensivelyCopiedReceiverForwarding(expr))
+                    {
+                        return true;
+                    }
+
                     if (callReceiver != null
                         && !Binder.IsReferenceTypeForConstraint(callReceiver.Type)
                         && HasFunctionLocalRefScope(callReceiver))

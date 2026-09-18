@@ -116,6 +116,39 @@ internal static class RefCapabilities
             _ => IsReadOnlyStorage(expression),
         };
 
+    /// <summary>
+    /// ADR-0184 amendment: the ONE condition under which the emitter replaces a
+    /// value-type receiver with a defensive COPY in a function-local temp
+    /// (<c>MethodBodyEmitter.EmitInstanceReceiver</c>,
+    /// <c>MethodBodyEmitter.EmitConstrainedTypeParameterReceiver</c>,
+    /// <c>ReflectionMetadataEmitter.NeedsRvalueReceiverSpill</c>). Any <c>ref</c>
+    /// a member returns into its OWN receiver storage then points at that temp,
+    /// which dies at function exit — so the binder's ref-safe-scope walk must
+    /// treat such a forward as function-local
+    /// (<c>StatementBinder.IsDefensivelyCopiedReceiverForwarding</c>). Before
+    /// this helper existed the rule lived as three independently drifting
+    /// copies in the emitter and nowhere at all in the binder, which is exactly
+    /// how the caller-side dangling-reference hole got in.
+    /// <para>
+    /// Every caller keeps its own value-type/reference-type guard; this helper
+    /// is deliberately ONLY the shared core, so extracting it left the
+    /// emitter's behaviour byte-for-byte unchanged.
+    /// </para>
+    /// <para>
+    /// <paramref name="isReadOnlyMember"/> is structurally <see langword="false"/>
+    /// for every native G# member — G# has no <c>readonly func</c> — so it
+    /// carries information only for CLR metadata members, whose
+    /// <c>IsReadOnlyAttribute</c> <see cref="IsReadOnlyMethod"/> reads.
+    /// </para>
+    /// </summary>
+    /// <param name="receiver">The instance receiver expression.</param>
+    /// <param name="isReadOnlyMember">Whether the called member is itself a <c>readonly</c> member.</param>
+    /// <returns><see langword="true"/> when the receiver is defensively copied before the call.</returns>
+    internal static bool RequiresReadOnlyReceiverDefensiveCopy(
+        BoundExpression receiver,
+        bool isReadOnlyMember = false)
+        => !isReadOnlyMember && IsReadOnlyReference(receiver);
+
     internal static bool IsReadOnlyMethod(MethodInfo method)
         => method.GetCustomAttributesData().Any(
                 attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute")
