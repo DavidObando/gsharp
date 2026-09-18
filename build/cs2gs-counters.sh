@@ -89,19 +89,40 @@ cs2gs_find_translated_sources() {
 # Emits the CODE lines of a migrated tree: every line of every .gs file minus
 # the ones that are not code for metric purposes.
 #
-# The exclusions are inherited verbatim from selfmig_code_grep, deliberately:
+# Two exclusions are inherited verbatim from selfmig_code_grep, deliberately:
 # migrated test sources embed expected-output strings and docs quote G#
 # constructs, so a line containing a string quote, or a line that is a comment,
 # is dropped before counting. That filter UNDERCOUNTS — #3937's one removed `!!`
 # was invisible because its line read `Arguments: []object{uri!!, ...}` — but
 # the self-migration ceilings in tools/cs2gs/selfmig-baseline.json were all
-# measured through it, so changing it would silently move every ceiling. The
-# filter therefore stays exactly as it was and the RAW count is reported
-# alongside, clearly labelled, so the gap is visible instead of merely absent.
+# measured through it, so changing THAT part would silently move every
+# ceiling, and this fix does not touch it: a line containing a `"` is still
+# dropped exactly as before, and so is a line whose stripped form starts `//`.
+#
+# The third exclusion is new: a line is also dropped when it STARTS inside a
+# backtick raw string. Before this, a multi-line `const Source = ...` fixture
+# (frozen G# source embedded as test input, e.g.
+# test/Compiler.Tests/Emit/Issue2703AsyncFilteredCatchEmitTests.gs) had its
+# interior lines sail through uncounted as "code" whenever they happened to
+# contain no `"` and not start with `//` — e.g. `} catch (__caught Exception) {`
+# — which is exactly how the nightly gate's #3501 synthetic-identifier
+# breakdown reported a `__caught` family that no longer exists in the live
+# translator (ADR-0176/ADR-0177 retired it; see the git history of this file
+# for the investigation). This exclusion reuses cs2gs_lexed_scan's
+# raw_string_flags lexer below rather than a second hand-rolled one, matching
+# issue #4082's "fidelity to Lexer.cs is the whole point" lesson: a per-line
+# backtick-parity toggle is exactly the bug #4082 already found and fixed once.
+#
+# This can only ever REMOVE lines from the "code" bucket that used to be
+# counted (a line dropped for being inside a raw string was never anything but
+# fixture data), so every counter derived from cs2gs_code_lines can only go
+# DOWN, never up. No ceiling in tools/cs2gs/selfmig-baseline.json can newly
+# fail from this change, which is why it is safe to land without touching that
+# file — re-baselining it to the new, more accurate counts is a deliberate,
+# separate follow-up for whoever owns that ratchet, not part of this fix.
 cs2gs_code_lines() {
   local tree=$1
-  cs2gs_find_translated_sources "$tree" -exec cat {} + 2>/dev/null \
-    | grep -v '"' | grep -vE '^[[:space:]]*//' || true
+  cs2gs_lexed_scan "$tree" code-lines
 }
 
 # Every line of every .gs file, unfiltered.
@@ -110,10 +131,22 @@ cs2gs_raw_lines() {
   cs2gs_find_translated_sources "$tree" -exec cat {} + 2>/dev/null || true
 }
 
-# Prints "<reducible> <single-atom-bounded> <total>" for lines wider than 300
-# characters. A line is single-atom-bounded when its indentation plus the
-# widest string/identifier atom already exceeds the budget; no formatter
-# can shorten that line without changing the token stream (ADR-0179).
+# Shared Python driver for cs2gs_code_lines (mode "code-lines") and
+# cs2gs_long_line_counts (mode "long-lines"). Both need the SAME per-line
+# lexical state — whether a line starts inside a backtick raw string — parsed
+# with fidelity to src/Core/CodeAnalysis/Syntax/Lexer.cs, so raw_string_flags
+# lives here ONCE and both modes call it, instead of each counter keeping its
+# own copy that can quietly drift out of sync with the real lexer (that drift
+# is exactly what issue #4082 was, and what left cs2gs_code_lines with an
+# equivalent blind spot until this fix).
+#
+# Prints, per mode:
+#   code-lines:  every CODE line of the tree (see cs2gs_code_lines above).
+#   long-lines:  "<reducible> <single-atom-bounded> <total>" for lines wider
+#                than 300 characters. A line is single-atom-bounded when its
+#                indentation plus the widest string/identifier atom already
+#                exceeds the budget; no formatter can shorten that line
+#                without changing the token stream (ADR-0179).
 #
 # Deciding which lines sit inside a backtick raw string used to be
 # `raw_line.count("`") % 2` -- toggle a flag on odd backtick parity, per line.
@@ -148,12 +181,21 @@ cs2gs_raw_lines() {
 # `${...}` holes (Lexer.cs:824-830). A scanner that mishandles a construct the
 # real lexer accepts is the same class of latent, input-dependent corruption
 # #4082 was, and the count being right today is luck rather than design.
-cs2gs_long_line_counts() {
-  local tree=$1
-  python3 - 3< <(cs2gs_find_translated_sources "$tree" -print0) <<'PY'
+cs2gs_lexed_scan() {
+  local tree=$1 mode=$2
+  python3 - "$mode" 3< <(cs2gs_find_translated_sources "$tree" -print0) <<'PY'
 import os
 import pathlib
 import re
+import sys
+
+mode = sys.argv[1]
+# code-lines mode prints decoded file content straight to stdout (unlike the
+# old `cat {} +` pipeline's byte-transparent passthrough), so pin stdout to
+# UTF-8 with lossy replacement -- matching read_text's own errors="replace"
+# below -- rather than let a non-UTF-8 stdout locale turn one odd byte into an
+# uncaught UnicodeEncodeError that kills the gate under `set -e`.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
 def raw_string_flags(lines):
@@ -250,14 +292,48 @@ def raw_string_flags(lines):
 
 string_atom = re.compile(r'"(?:\\.|[^"\\])*"')
 identifier_atom = re.compile(r'\b[A-Za-z_$][A-Za-z0-9_$]*\b')
+comment_line = re.compile(r'^\s*//')
 reducible = atomic = 0
 
 for raw_path in os.fdopen(3, "rb").read().split(b"\0"):
     if not raw_path:
         continue
     path = pathlib.Path(os.fsdecode(raw_path))
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        # Matches the `2>/dev/null` an unreadable file got under the old
+        # `cat {} +` pipeline: skip it rather than let one bad file's
+        # traceback kill the gate under `set -eo pipefail`.
+        continue
+    # `\n`-only split, deliberately NOT str.splitlines(): splitlines() also
+    # breaks on \v, \f, \x1c-\x1e and \x85, so a `//`-comment line carrying one
+    # of those (e.g. a stray form feed) would splinter into a comment
+    # fragment (correctly dropped) and a second fragment that does not start
+    # with `//` and survives into CODE -- a line the old `cat {} + | grep`
+    # pipeline (and cs2gs_raw_lines today) treated as one whole excluded line
+    # leaking part of itself into the count instead. That is a real INCREASE,
+    # which would break the "can only go down" safety argument this fix
+    # relies on to avoid touching tools/cs2gs/selfmig-baseline.json. `split`
+    # leaves a trailing "" when the file ends in a newline (splitlines()
+    # does not), so that one entry is trimmed to keep the same line count.
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
     in_raw_flags = raw_string_flags(lines)
+
+    if mode == "code-lines":
+        for line_index, line in enumerate(lines):
+            if in_raw_flags[line_index]:
+                continue
+            if '"' in line:
+                continue
+            if comment_line.match(line):
+                continue
+            print(line)
+        continue
+
+    # mode == "long-lines"
     for line_index, raw_line in enumerate(lines):
         if len(raw_line) <= 300:
             continue
@@ -278,8 +354,17 @@ for raw_path in os.fdopen(3, "rb").read().split(b"\0"):
         else:
             reducible += 1
 
-print(reducible, atomic, reducible + atomic)
+if mode == "long-lines":
+    print(reducible, atomic, reducible + atomic)
 PY
+}
+
+# Thin wrapper kept as the public entry point cs2gs_counter_report and
+# selfmig-common.sh already call; see cs2gs_lexed_scan above for the shared
+# implementation this and cs2gs_code_lines both dispatch into.
+cs2gs_long_line_counts() {
+  local tree=$1
+  cs2gs_lexed_scan "$tree" long-lines
 }
 
 # Counts occurrences of an extended regex in a stream on stdin.
@@ -330,7 +415,8 @@ cs2gs_tally_lookup() {
 #
 # Two tables under one heading: the corpus-wide counters, then the synthetic
 # `__identifier` breakdown per family with the catch-all row last. Both carry a
-# "code" column (quote/comment-filtered) and a "raw" column (unfiltered).
+# "code" column (quote/comment/raw-string-filtered, see cs2gs_code_lines) and a
+# "raw" column (unfiltered).
 # Long-line counts are raw-only because longLineCeiling deliberately gates the
 # formatter-reducible raw count; `n/a` keeps that denominator explicit.
 #
