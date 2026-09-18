@@ -92,12 +92,17 @@ selfmig_build_prerequisites() {
 # long string fixture is still a readability problem.
 #
 # The line filter now lives in build/cs2gs-counters.sh (cs2gs_code_lines) so the
-# three corpora measure identically; the counting semantics here are UNCHANGED,
-# and deliberately so. The quote exclusion undercounts (#3937: a removed `!!` on
-# a line reading `Arguments: []object{uri!!, ...}` was invisible to the metric),
-# but the non-long-line ceilings in tools/cs2gs/selfmig-baseline.json were
-# measured through it, so "fixing" it would silently move them. Raw counts are
-# reported alongside in the counter table.
+# three corpora measure identically. The quote exclusion still undercounts
+# (#3937: a removed `!!` on a line reading `Arguments: []object{uri!!, ...}` was
+# invisible to the metric), but the non-long-line ceilings in
+# tools/cs2gs/selfmig-baseline.json were measured through it, so "fixing" that
+# part would silently move them, and it is deliberately left as is. What DID
+# change is that cs2gs_code_lines now also drops lines that start inside a
+# backtick raw string (a multi-line embedded-source test fixture is not code
+# either), which can only lower these counts, never raise them — see
+# cs2gs_code_lines's own comment in cs2gs-counters.sh for why that direction is
+# safe to land without re-baselining. Raw counts are reported alongside in the
+# counter table either way.
 selfmig_code_grep() {
   local migrated_dir=$1 pattern=$2
   # A ZERO-match metric is success, not failure: without the || true, the

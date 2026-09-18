@@ -290,4 +290,83 @@ if output=$(TMPDIR="$scratch" selfmig_apply_baseline "$scratch/lift-baseline.jso
 fi
 grep -Fq 'GATE: __local_ count 4 exceeded ceiling 3.' <<< "$output"
 
+# Issue #3501 (raw-string blind spot): cs2gs_code_lines() must drop a line
+# that STARTS inside a backtick raw string, not just a line containing a
+# literal `"` or starting with `//`. Before this fix, a multi-line
+# `const Source = ...` fixture (frozen G# source embedded as test INPUT,
+# exactly like test/Compiler.Tests/Emit/Issue2703AsyncFilteredCatchEmitTests.gs)
+# had its interior lines counted as real code whenever they happened to
+# contain no `"` and not start with `//` -- which is how the nightly gate's
+# #3501 synthetic-identifier table reported a `__caught` family that the live
+# translator has not emitted since #3899/#3913 retired it.
+#
+# This tree's single file exercises three things at once:
+#   - line 1 and the final line are ordinary bare code, kept either way;
+#   - the two interior lines of the raw string (a synthetic `__caught` and a
+#     `__local_`+`!!` line, neither containing a `"` nor starting with `//`)
+#     must be dropped from CODE but still appear in RAW;
+#   - the quoted "backtick ` inside a string" line is an over-correction guard:
+#     it is dropped for containing a `"` (unchanged, pre-existing behavior),
+#     and the bare `!!` line right after it must NOT also be dropped -- if the
+#     scanner mistook that embedded backtick for a raw-string opener, this
+#     line would wrongly read as "starting inside raw" and disappear from
+#     CODE too.
+#
+# (Reproducing the pre-fix bug locally: `git checkout <parent-commit> --
+# build/cs2gs-counters.sh`, rerun this file -- the `__caught`/2/3 assertions
+# below fail because the two interior lines survive into the CODE column --
+# then `git checkout HEAD -- build/cs2gs-counters.sh` to restore the fix.)
+raw_string_blindspot_tree="$scratch/tree-raw-string-blindspot"
+mkdir -p "$raw_string_blindspot_tree"
+cat > "$raw_string_blindspot_tree/Fixture.gs" <<'GS'
+let __local_0 = value!!
+const Source = `
+} catch (__caught Exception) {
+let __local_1 = other!!
+`
+let quoted = "backtick ` inside a string, not a delimiter"
+let __local_2 = value!!
+GS
+
+selfmig_measure "$raw_string_blindspot_tree"
+assert_eq "$lifts" "2" "raw-string blind spot: __local_ CODE count excludes raw-string interior"
+assert_eq "$bangs" "2" "raw-string blind spot: bangs CODE count excludes raw-string interior"
+
+report=$(TMPDIR="$scratch" cs2gs_counter_report "$raw_string_blindspot_tree" "raw-string blind spot")
+grep -Fq '| `__local_` | 2 | 3 |' <<< "$report"
+grep -Fq '| `__caught` | 0 | 1 |' <<< "$report"
+grep -Fq '| `!!` null assertions | 2 | 3 |' <<< "$report"
+
+# Review of the raw-string-blind-spot fix: cs2gs_lexed_scan must split each
+# file on `\n` ONLY, not Python's str.splitlines(), which also breaks on
+# `\v`, `\f`, `\x1c`-`\x1e` and `\x85`. Splitting on those turned one `//`
+# comment LINE carrying a stray form feed into TWO fragments: the comment
+# prefix (correctly dropped) and a second fragment that does not start with
+# `//` and survived into CODE -- leaking part of an excluded line into the
+# count. That is a real INCREASE, which the old `cat {} + | grep` pipeline
+# (and cs2gs_raw_lines today, unchanged, still line-oriented via `cat`) never
+# produced: grep only ever splits on `\n`. An increase directly contradicts
+# the "can only go down, never up" safety argument this whole fix relies on
+# to justify not touching tools/cs2gs/selfmig-baseline.json, so this is not a
+# cosmetic miscount -- it is the one thing that must never happen here.
+formfeed_tree="$scratch/tree-formfeed-comment"
+mkdir -p "$formfeed_tree"
+python3 - "$formfeed_tree/Fixture.gs" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    "let __local_a = value!!\n"
+    "// leading comment text \x0cthen more text with __local_leak here\n"
+    "let __local_b = value!!\n",
+    encoding="utf-8",
+)
+PY
+
+selfmig_measure "$formfeed_tree"
+assert_eq "$lifts" "2" "form-feed comment line: __local_ CODE count excludes the whole physical line"
+
+report=$(TMPDIR="$scratch" cs2gs_counter_report "$formfeed_tree" "form-feed comment line")
+grep -Fq '| `__local_` | 2 | 3 |' <<< "$report"
+
 echo "cs2gs counter contract tests passed"
