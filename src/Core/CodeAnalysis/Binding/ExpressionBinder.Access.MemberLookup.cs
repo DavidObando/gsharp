@@ -935,14 +935,40 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Returns whether CLR instance lookup may continue through a receiver.
-    /// Imported fields and properties can carry oblivious reference metadata as
-    /// a nullable type, but remain valid intermediate receivers in a member chain.
+    /// Imported fields, properties and call results can carry oblivious
+    /// reference metadata as a nullable type, but remain valid intermediate
+    /// receivers in a member chain.
     /// </summary>
     private static bool CanBindClrInstanceMember(BoundExpression? receiver)
     {
         return receiver?.Type?.ClrType != null
             && (receiver.Type is not NullableTypeSymbol
-                || receiver is BoundClrPropertyAccessExpression);
+                || IsImportedClrChainReceiver(receiver));
+    }
+
+    /// <summary>
+    /// The single decision (issue #4287) for whether a receiver whose static
+    /// type is nullable owes that nullability to imported CLR metadata — where
+    /// unannotated/oblivious reference positions all surface as <c>T?</c>
+    /// (issue #1354) — rather than to an explicit G# <c>?</c> annotation. The
+    /// former stays a valid intermediate receiver in a member chain; the latter
+    /// must be narrowed first.
+    /// </summary>
+    /// <remarks>
+    /// Read (<see cref="CanBindClrInstanceMember"/>) and call
+    /// (<c>BindAccessorCall</c>) both route here, so <c>e.StackTrace.Length</c>
+    /// and <c>e.StackTrace.Contains(x)</c> cannot disagree. A CLR field read
+    /// binds to a <see cref="BoundClrPropertyAccessExpression"/> too (the node
+    /// carries a <c>FieldInfo</c> member), so fields need no separate case.
+    /// </remarks>
+    /// <param name="receiver">The bound receiver expression.</param>
+    /// <returns><see langword="true"/> for an imported CLR member access or call result.</returns>
+    private static bool IsImportedClrChainReceiver(BoundExpression receiver)
+    {
+        return receiver is BoundClrPropertyAccessExpression
+            or BoundImportedInstanceCallExpression
+            or BoundImportedCallExpression
+            or BoundClrStaticCallExpression;
     }
 
     private static bool TryGetUserInstanceMemberReceiverType(

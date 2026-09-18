@@ -3711,9 +3711,27 @@ internal sealed partial class ExpressionBinder
                 clrType = nullableConstructed;
             }
             else if (nullableInnerVt is { IsValueType: false }
+                && !CanBindClrInstanceMember(receiver)
                 && (receiverSyntax ?? receiver.Syntax) is { } nilReceiverSyntax)
             {
-                // Issue #4287: a reference-typed nullable receiver (e.g.
+                // Issue #4287: `!CanBindClrInstanceMember` is the SAME
+                // carve-out the read path applies (see its definition in
+                // ExpressionBinder.Access.MemberLookup.cs). A receiver whose
+                // nullability came from imported CLR metadata — an oblivious
+                // property/field read or call result, `Environment.Version`,
+                // `e.StackTrace`, `LoginAsync()` — is already a valid
+                // intermediate receiver for a chained READ, so it is equally
+                // valid for a chained CALL: `e.StackTrace.Length` and
+                // `e.StackTrace.Contains(x)` must not disagree. Skipping the
+                // block leaves such a receiver on the pre-#4287 path, where
+                // `clrType` already equals the underlying type's own ClrType.
+                //
+                // What is left is the shape #4287 is actually about: a
+                // DIRECT receiver whose `?` is an explicit G# annotation — a
+                // `string?` field, local or parameter, or a G# function's
+                // nullable return.
+                //
+                // A reference-typed nullable receiver (e.g.
                 // `string?`) reaching this point is genuinely still nilable —
                 // smart-cast narrowing, `if let`, `!!`, and `?.` each rebind
                 // to the non-nullable underlying type before a call reaches
@@ -4676,7 +4694,16 @@ internal sealed partial class ExpressionBinder
                 return Succeeded(objectCall);
             }
 
-            return underlyingType is InterfaceSymbol
+            // Issue #2304's rule, mirrored: an IMPORTED interface implicitly
+            // derives from System.Object for member-access purposes too, and
+            // `Type.GetMethods()` on an interface never reports Object's
+            // members, so `TryBindInheritedClrInstanceCall` above cannot see
+            // them. Without the `ClrType.IsInterface` arm an
+            // `IEnumerable[int32]?` receiver dead-ends here and
+            // `value.ToString()` binds unguarded — the ordinary call path
+            // handles the imported case separately for exactly this reason
+            // (`clrType is { IsInterface: true }`, earlier in this file).
+            return (underlyingType is InterfaceSymbol || underlyingType.ClrType is { IsInterface: true })
                 && TryBindInterfaceObjectMemberCall(
                     narrowedReceiver,
                     methodName,

@@ -95,8 +95,12 @@ public class Issue710NullConditionalIndexingEmitTests
 
             func main() {
                 var d Dictionary[string, int32]? = Dictionary[string, int32]()
-                d.Add("a", 100)
-                d.Add("b", 200)
+                // Issue #4287: `d` is an explicitly-nullable local, a DIRECT
+                // receiver, so the call is null-checked; the initializer one
+                // line above is what `!!` asserts. The `?[]` indexing below —
+                // what this test is actually about — is unchanged.
+                d!!.Add("a", 100)
+                d!!.Add("b", 200)
                 var v = d?["a"]
                 Console.WriteLine(v)
             }
@@ -120,7 +124,8 @@ public class Issue710NullConditionalIndexingEmitTests
 
             func main() {
                 var d Dictionary[string, string]? = Dictionary[string, string]()
-                d.Add("hi", "world")
+                // Issue #4287: see the note above; direct nullable receiver.
+                d!!.Add("hi", "world")
                 Console.WriteLine(d?["hi"])
 
                 var d2 Dictionary[string, string]? = nil

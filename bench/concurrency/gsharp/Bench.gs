@@ -418,7 +418,7 @@ let all = []string{
 }
 let requested = Environment.GetEnvironmentVariable("GSHARP_BENCH_SCENARIO")
 
-Console.WriteLine("runtime " + Environment.Version!!.ToString() + " cores " + Environment.ProcessorCount.ToString())
+Console.WriteLine("runtime " + Environment.Version.ToString() + " cores " + Environment.ProcessorCount.ToString())
 
 for round in 0 ... warmupRounds {
     for name in all {

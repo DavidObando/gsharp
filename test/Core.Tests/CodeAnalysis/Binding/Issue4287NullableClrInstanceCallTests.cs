@@ -280,6 +280,123 @@ Holder(nil).Use()
         Assert.Contains(result.Diagnostics, d => d.Message.Contains("Shout", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void ObliviousClrProperty_ChainedRead_CompilesCleanly()
+    {
+        // The pre-existing read-path carve-out (CanBindClrInstanceMember):
+        // `Environment.Version` is `Version?` through imported metadata, yet
+        // stays a valid intermediate receiver for a further member access.
+        var result = Evaluate(@"System.Environment.Version.Major");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ObliviousClrProperty_ChainedCall_CompilesCleanly()
+    {
+        // The paired CALL. Before the carve-out was shared with the call path
+        // this reported GS0159 while the `.Major` read above compiled — the
+        // asymmetry #4308's review found. RED without the
+        // `!CanBindClrInstanceMember(receiver)` guard in BindAccessorCall.
+        var result = Evaluate(@"System.Environment.Version.ToString()");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ClrCallResult_ChainedRead_CompilesCleanly()
+    {
+        // Same carve-out, imported CALL-RESULT receiver: `Type.GetMethod`
+        // returns `MethodInfo?`. The read path admits it because the
+        // nullability came from imported metadata, not from an explicit G#
+        // `?` — a deliberate, pre-existing ceiling (the predicate is a
+        // metadata-ORIGIN proxy, not a true oblivious test), shared verbatim
+        // by the call pair below. This is the shape behind the
+        // `GetRawConstantValue().ToString()` / `LoginAsync().ConfigureAwait`
+        // regressions #4308's first revision caused.
+        var result = Evaluate(@"
+func Use(t System.Type) string {
+    return t.GetMethod(""Foo"").Name
+}
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void ClrCallResult_ChainedCall_CompilesCleanly()
+    {
+        // `string?` return: `object.ToString()` is annotated `string?` in the
+        // BCL, so a `string` return would fail on the conversion rather than
+        // on the receiver — which is not what this pins.
+        var result = Evaluate(@"
+func Use(t System.Type) string? {
+    return t.GetMethod(""Foo"").ToString()
+}
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void GSharpFunctionReturningNullable_DirectCallOnResult_ReportsMayBeNil()
+    {
+        // The over-broadening guard for the carve-out: a call RESULT is only
+        // exempt when the callee is imported. A G# function's nullable return
+        // is an explicit `?` annotation, so it is the #4287 shape and must
+        // still be rejected.
+        var result = Evaluate(@"
+func Maybe() string? { return nil }
+func Use() string { return Maybe().ToUpper() }
+Use()
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("may be nil", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("ToUpper", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ImportedInterfaceReceiver_ObjectMember_ReportsMayBeNil()
+    {
+        // Copilot review of #4308: `Type.GetMethods()` on an interface never
+        // reports System.Object's members, so the underlying-type probe could
+        // not see `ToString` on an imported interface and the call bound
+        // unguarded. The probe now mirrors the ordinary path's imported-
+        // interface arm (issue #2304).
+        var result = Evaluate(@"
+func Use(xs System.Collections.Generic.IEnumerable[int32]?) string {
+    return xs.ToString()
+}
+Use(nil)
+");
+
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("may be nil", StringComparison.Ordinal));
+        Assert.Contains(result.Diagnostics, d => d.Message.Contains("ToString", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExtensionOnNullableType_ShadowingSameNamedClrMember_WinsForNullableReceiver()
+    {
+        // Pins the precedence a Copilot review of #4308 questioned. For a
+        // NON-nullable receiver an applicable CLR instance member still beats
+        // a same-named extension (Issue2193ExtensionOverloadShadowTests) — the
+        // nullable branch below never runs for one. For a receiver that is
+        // still nilable the CLR member is by design NOT selectable, so a
+        // `string?`-declared extension is the only viable candidate; the
+        // alternative is GS0159, which would break the `OrEmpty` shape above.
+        var result = Evaluate(@"
+func (s string?) StartsWith(p string) bool { return false }
+func Use() bool {
+    let t string? = ""hello""
+    return t.StartsWith(""h"")
+}
+Use()
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(false, result.Value);
+    }
+
     private static EmittedOracleResult Evaluate(string source)
     {
         return EmittedOracle.Evaluate(source);
