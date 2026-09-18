@@ -253,10 +253,10 @@ public class Issue4265SpanByValueRefReturnTests
     [InlineData("UnscopedRefIndexerPropertyLevelFixture")]
     public void UnscopedRefFixture_CarriesTheAttribute(string typeName)
     {
-        using var fixture = new CSharpFixture(UnscopedRefFixtureSource);
-        var type = fixture.Load().GetType(
-            "GSharp.Core.Tests.Fixtures." + typeName, throwOnError: true);
-        var indexer = type.GetProperty("Item");
+        var type = typeof(GSharp.Core.Tests.Fixtures.UnscopedRefIndexerFixture)
+            .Assembly.GetType("GSharp.Core.Tests.Fixtures." + typeName, throwOnError: true);
+        Assert.NotNull(type);
+        var indexer = type!.GetProperty("Item");
         Assert.NotNull(indexer);
         var getter = indexer.GetGetMethod(nonPublic: true);
         Assert.NotNull(getter);
@@ -291,91 +291,10 @@ public class Issue4265SpanByValueRefReturnTests
         Assert.DoesNotContain(diagnostics, d => d.Id == "GS0254");
     }
 
-    /// <summary>
-    /// Soundness-guard regression fixture (found reviewing issue #4265 / PR
-    /// #4274, before merge): a byref-like (<c>ref struct</c>) CLR type whose
-    /// indexer getter is marked <c>[UnscopedRef]</c> — a legitimate,
-    /// fully-supported C# 11+ pattern (no <c>unsafe</c>, no IL authoring) that
-    /// returns a <c>ref</c> into the RECEIVER'S OWN storage rather than an
-    /// encapsulated referent the receiver merely wraps (unlike
-    /// <c>Span[T]</c>/<c>ReadOnlySpan[T]</c>, whose indexers always return a
-    /// ref into caller-owned storage the span was constructed over). Real C#
-    /// rejects forwarding such a member through a BY-VALUE parameter (CS8166)
-    /// because <c>[UnscopedRef]</c> inverts the receiver's contribution to the
-    /// call's ref-safe-context from "safe-to-escape" (caller scope) to
-    /// "ref-safe-context" (function-local, exactly like the receiver's own
-    /// storage). Before the guard in
-    /// <c>RefCapabilities.IsUnscopedRefIndexerGetter</c> /
-    /// <c>StatementBinder.HasFunctionLocalRefScope</c>'s
-    /// <c>BoundClrIndexExpression</c> case, gsc did not consult this attribute
-    /// at all and treated ANY byref-like CLR indexer target as safe-to-forward
-    /// — confirmed exploitable: a G# function forwarding <c>buf[0]</c> from a
-    /// by-value parameter compiled clean and returned a reference into the
-    /// callee's own dead stack frame (an intervening call's locals silently
-    /// corrupted the "aliased" value on read-back).
-    /// <para>
-    /// <c>UnscopedRefIndexerPropertyLevelFixture</c> is the same unsafe shape
-    /// with <c>[UnscopedRef]</c> on the PROPERTY itself (the expression-bodied
-    /// indexer spelling) rather than on the <c>get</c> accessor. C# accepts
-    /// either placement; an initial version of
-    /// <c>RefCapabilities.IsUnscopedRefIndexerGetter</c> checked only
-    /// <c>PropertyInfo.GetGetMethod()</c>'s attributes and missed this spelling
-    /// entirely, leaving the same dangling-reference hole open for it.
-    /// </para>
-    /// <para>
-    /// This is compiled at test time by <see cref="CSharpFixture"/> into a
-    /// separate assembly rather than living as a <c>.cs</c> file inside this
-    /// test project, because that is what the tests below actually model: an
-    /// EXTERNALLY-COMPILED CLR type gsc reads through metadata. Returning a
-    /// <c>ref</c> to <c>this</c>'s own storage from a struct member is
-    /// C#-only-with-<c>[UnscopedRef]</c> (CS8170 otherwise) and has no G#
-    /// spelling at all, so a <c>.cs</c> file here is also untranslatable —
-    /// cs2gs emitted <c>return ref this.value</c>, which gsc rejects with
-    /// GS0253, and the self-migration gate's <c>test/Core.Tests</c> app went
-    /// red on it (nightly run 35227489660). Compiling the fixture through
-    /// Roslyn keeps the metadata premise exact AND keeps this project
-    /// migratable.
-    /// </para>
-    /// </summary>
-    private const string UnscopedRefFixtureSource = """
-        using System.Diagnostics.CodeAnalysis;
-
-        namespace GSharp.Core.Tests.Fixtures;
-
-        public ref struct UnscopedRefIndexerFixture
-        {
-            private int value;
-
-            public UnscopedRefIndexerFixture(int seed)
-            {
-                this.value = seed;
-            }
-
-            public ref int this[int i]
-            {
-                [UnscopedRef]
-                get { return ref this.value; }
-            }
-        }
-
-        public ref struct UnscopedRefIndexerPropertyLevelFixture
-        {
-            private int value;
-
-            public UnscopedRefIndexerPropertyLevelFixture(int seed)
-            {
-                this.value = seed;
-            }
-
-            [UnscopedRef]
-            public ref int this[int i] => ref this.value;
-        }
-        """;
-
     private static ImmutableArray<Diagnostic> BindWithFixtures(string source)
     {
-        using var fixture = new CSharpFixture(UnscopedRefFixtureSource);
-        using var resolver = ReferenceResolver.WithReferences(new[] { fixture.AssemblyPath });
+        var fixturePath = typeof(GSharp.Core.Tests.Fixtures.UnscopedRefIndexerFixture).Assembly.Location;
+        var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var globalScope = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
             previous: null,

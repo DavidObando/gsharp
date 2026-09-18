@@ -553,8 +553,20 @@ internal sealed partial class StatementBinder
             }
             else if (HasFunctionLocalRefScope(expression))
             {
-                Diagnostics.ReportRefReturnEscapesLocalScope(
-                    Invariant.Required(syntax.Expression, "a ref return expression is present").Location);
+                // ADR-0184 (the CS8170 analogue): when the reference is rooted at
+                // the enclosing struct member's own receiver, GS0254's
+                // "function-local storage" wording is actively misleading — the
+                // storage belongs to the CALLER, the member simply has not opted
+                // out of the implicit `scoped` on `this`. Name the remedy instead.
+                var location = Invariant.Required(syntax.Expression, "a ref return expression is present").Location;
+                if (IsRootedAtReceiver(expression))
+                {
+                    Diagnostics.ReportUnscopedRefRequiredForInstanceState(location);
+                }
+                else
+                {
+                    Diagnostics.ReportRefReturnEscapesLocalScope(location);
+                }
             }
 
             expression = expression is BoundBlockExpression block
@@ -601,6 +613,32 @@ internal sealed partial class StatementBinder
     }
 
     /// <summary>
+    /// ADR-0184: returns true when <paramref name="expr"/> ultimately reads the
+    /// enclosing member's own receiver — <c>this.&lt;field&gt;</c>, a nested
+    /// <c>this.a.b</c> chain, or the bare-name spelling that lowers to one — as
+    /// opposed to a local, a parameter, or heap storage. Distinguishes the
+    /// <c>@UnscopedRef</c>-shaped rejection (GS0589) from the generic
+    /// escaping-local rejection (GS0254); the walk mirrors
+    /// <see cref="HasFunctionLocalRefScope"/>'s own value-type receiver
+    /// recursion, so the two agree on which root a reference came from.
+    /// </summary>
+    /// <param name="expr">The bound <c>return ref</c> operand.</param>
+    /// <returns><see langword="true"/> when the reference is rooted at the receiver.</returns>
+    private static bool IsRootedAtReceiver(BoundExpression expr)
+        => expr switch
+        {
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } } => true,
+            BoundFieldAccessExpression { Receiver: { } fieldReceiver } =>
+                !Binder.IsReferenceTypeForConstraint(fieldReceiver.Type) && IsRootedAtReceiver(fieldReceiver),
+            BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo, Receiver: { } clrReceiver } =>
+                !Binder.IsReferenceTypeForConstraint(clrReceiver.Type) && IsRootedAtReceiver(clrReceiver),
+            BoundBlockExpression block => IsRootedAtReceiver(block.Expression),
+            BoundConditionalAddressExpression conditional =>
+                IsRootedAtReceiver(conditional.WhenTrueOperand) || IsRootedAtReceiver(conditional.WhenFalseOperand),
+            _ => false,
+        };
+
+    /// <summary>
     /// Issue #490: returns true when <paramref name="expr"/>'s ref-safe-to-escape scope is
     /// function-local — i.e. the underlying storage dies at function exit and cannot be
     /// returned as a managed pointer. ADR-0058 conservative single-pass propagation:
@@ -621,7 +659,12 @@ internal sealed partial class StatementBinder
                 // HasFunctionLocalReferentScope below (issue #4265) for that narrower case.
                 if (v.Variable is ParameterSymbol p)
                 {
-                    return p.IsScoped || p.RefKind == RefKind.None;
+                    // ADR-0184 / issue #376: an `@UnscopedRef` struct member's
+                    // receiver is the one RefKind.None parameter whose storage
+                    // is NOT a function-local by-value slot — the CLR passes a
+                    // struct's `this` as `ref S`, so its ref-safe-context is the
+                    // caller's once the member opts out of the implicit `scoped`.
+                    return p.IsScoped || (p.RefKind == RefKind.None && !p.IsUnscopedRefReceiver);
                 }
 
                 if (v.Variable is GlobalVariableSymbol)
@@ -802,8 +845,18 @@ internal sealed partial class StatementBinder
         switch (expression)
         {
             // Direct reference to a scoped variable (parameter or local).
+            //
+            // ADR-0184 D1 (conformance fix): the enclosing member's RECEIVER is
+            // excluded. `this` carries an implicit `scoped` on its REF-safe-context
+            // only — its VALUE-scope (safe-to-escape) is the caller's context, since
+            // the receiver's value was produced by, and outlives, the call. Real C#
+            // draws exactly this split, so `return this;` BY VALUE out of a
+            // `ref struct` instance method is legal with or without `@UnscopedRef`;
+            // the pre-ADR-0184 code conflated the two and reported GS0219 for it.
             case BoundVariableExpression varExpr:
-                return varExpr.Variable is LocalVariableSymbol local && local.IsScoped;
+                return varExpr.Variable is LocalVariableSymbol local
+                    && local.IsScoped
+                    && local is not ParameterSymbol { IsReceiverParameter: true };
 
             // Conversion (implicit/explicit) preserves STE of the inner expression.
             case BoundConversionExpression conv:

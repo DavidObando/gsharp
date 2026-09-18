@@ -62,6 +62,43 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     public override RefKind RefKind { get; set; }
 
     /// <summary>
+    /// Gets a value indicating whether this parameter is the enclosing
+    /// function's receiver (ADR-0184) — the implicit <c>this</c> of a member
+    /// declared in a struct/class body, or the source-visible receiver of a
+    /// receiver-clause function (<c>func (r R) M()</c>). Set once by
+    /// <see cref="FunctionSymbol"/>'s constructor for whichever parameter
+    /// becomes <see cref="FunctionSymbol.ThisParameter"/>.
+    /// </summary>
+    /// <remarks>
+    /// The CLR passes a struct's receiver as <c>ref S</c>, so the receiver's
+    /// storage is WRITABLE and its value-scope (safe-to-escape) is the caller's
+    /// — unlike an ordinary by-value parameter slot. <see cref="VariableSymbol.IsReadOnly"/>
+    /// alone cannot express that, because it is derived from <see cref="RefKind"/>
+    /// and the receiver's <see cref="RefKind"/> is <see cref="Binding.RefKind.None"/>.
+    /// <c>ExpressionBinder.ReceiverVariableIsThis</c> already carried this
+    /// exemption for member WRITES; this flag makes the same fact available to
+    /// the static ref-capability classifiers that have no enclosing-function
+    /// context.
+    /// </remarks>
+    public bool IsReceiverParameter { get; internal set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this receiver parameter's member
+    /// carries <c>@UnscopedRef</c> (ADR-0184 / issue #376)
+    /// (<see cref="System.Diagnostics.CodeAnalysis.UnscopedRefAttribute"/>),
+    /// lifting the implicit <c>scoped</c> on the receiver's REF-safe-context so
+    /// the member may return a reference into its own instance state.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately a dedicated flag rather than promoting the receiver's
+    /// <see cref="RefKind"/> to <see cref="Binding.RefKind.Ref"/>: the latter
+    /// would make every lambda inside a struct member trip GS9010 ("a
+    /// <c>ref</c> parameter cannot be captured by a closure"), which has
+    /// nothing to do with this feature.
+    /// </remarks>
+    public bool IsUnscopedRefReceiver { get; set; }
+
+    /// <summary>
     /// Gets a value indicating whether this parameter declares an explicit default value (ADR-0063).
     /// When <see langword="true"/>, callers may omit a corresponding argument and the binder
     /// substitutes <see cref="ExplicitDefaultValue"/> at the call site.

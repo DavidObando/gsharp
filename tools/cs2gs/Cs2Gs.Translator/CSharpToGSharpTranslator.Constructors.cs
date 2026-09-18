@@ -24,6 +24,10 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        // ADR-0184: the CLR identity of `[UnscopedRef]`, matched by full name
+        // so an alias or a `using static` spelling still resolves.
+        private const string UnscopedRefAttributeFullName = "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute";
+
         // Issue #3469: author comments (`//`, `/* */`, and `///` doc lines)
         // from the C# node's leading trivia are carried onto the first G#
         // node the construct translates to; the printer re-emits them above
@@ -321,7 +325,7 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: indexerVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
-                attributes: this.MapAttributes(node.AttributeLists),
+                attributes: this.MapPropertyAttributes(node),
                 indexerParameters: indexParameters,
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceIndexerType,
@@ -1392,6 +1396,71 @@ public sealed partial class CSharpToGSharpTranslator
 
             return attributes;
         }
+
+        /// <summary>
+        /// ADR-0184: maps a property/indexer's own attribute lists, then hoists
+        /// an accessor-level <c>[UnscopedRef]</c> up to the member level.
+        /// </summary>
+        /// <remarks>
+        /// <para>C# accepts <c>[UnscopedRef]</c> on either the property/indexer
+        /// or its <c>get</c> accessor and treats the two identically — an
+        /// expression-bodied indexer emits it on the property row, an
+        /// accessor-bodied one on <c>get_Item</c>, and
+        /// <c>RefCapabilities.IsUnscopedRefIndexerGetter</c> reads both
+        /// placements back out of metadata.</para>
+        /// <para>G# spells it only at the member level, and
+        /// <c>PropertyAccessor</c> has no attribute slot at all, so without
+        /// this an accessor-level <c>[UnscopedRef]</c> vanishes in translation
+        /// and the migrated member is rejected by GS0589. Only
+        /// <c>[UnscopedRef]</c> is hoisted: for any other accessor attribute
+        /// (say <c>[MethodImpl]</c>) moving it to the property would change what
+        /// it means, so those stay dropped.</para>
+        /// </remarks>
+        /// <param name="node">The property or indexer declaration.</param>
+        /// <returns>The member's attribute list, including any hoisted <c>@UnscopedRef</c>.</returns>
+        private List<AttributeUse> MapPropertyAttributes(BasePropertyDeclarationSyntax node)
+        {
+            List<AttributeUse> attributes = this.MapAttributes(node.AttributeLists);
+            if (node.AccessorList == null
+                || attributes.Any(attribute => IsUnscopedRefAttributeName(attribute.Name)))
+            {
+                return attributes;
+            }
+
+            foreach (AccessorDeclarationSyntax accessor in node.AccessorList.Accessors)
+            {
+                foreach (AttributeListSyntax list in accessor.AttributeLists)
+                {
+                    foreach (AttributeSyntax attribute in list.Attributes)
+                    {
+                        using IDisposable modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree);
+                        this.ResolveAttributeType(
+                            attribute,
+                            out INamedTypeSymbol attributeType,
+                            out IAliasSymbol sourceAlias);
+                        if (attributeType?.ToDisplayString() != UnscopedRefAttributeFullName)
+                        {
+                            continue;
+                        }
+
+                        this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
+                        attributes.Add(new AttributeUse(
+                            this.TranslateAttributeName(attribute, attributeType, sourceAlias)));
+                        return attributes;
+                    }
+                }
+            }
+
+            return attributes;
+        }
+
+        // ADR-0184: matches every spelling MapAttributes can produce for the
+        // attribute — bare, `Attribute`-suffixed, and namespace-qualified.
+        private static bool IsUnscopedRefAttributeName(string name) =>
+            name == "UnscopedRef"
+            || name == "UnscopedRefAttribute"
+            || name.EndsWith(".UnscopedRef", StringComparison.Ordinal)
+            || name.EndsWith(".UnscopedRefAttribute", StringComparison.Ordinal);
 
         // Issue #3445: resolve attributes semantically so their containing
         // namespaces and aliases participate in synthesized imports, while

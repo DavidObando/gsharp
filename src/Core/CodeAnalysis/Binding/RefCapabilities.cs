@@ -181,6 +181,20 @@ internal static class RefCapabilities
     internal static bool IsReadOnlyStorage(BoundExpression expression)
         => expression switch
         {
+            // ADR-0184 D2: a VALUE-type receiver is writable storage in every
+            // struct instance member, not just an `@UnscopedRef` one — the CLR
+            // passes a struct's `this` as `ref S`. ParameterSymbol derives
+            // IsReadOnly from RefKind, and a receiver's RefKind is None, so
+            // IsReadOnly alone wrongly classifies every `this` as read-only and
+            // masks the escape-scope question behind GS0253. The assignment
+            // binder already carried exactly this exemption for member WRITES
+            // (ExpressionBinder.ReceiverVariableIsThis, issue #947); this is the
+            // same fact made visible to the static classifiers. A REFERENCE-type
+            // receiver is deliberately not exempted: IsReadOnlyValueReceiver
+            // already short-circuits on it, so exempting it here would only
+            // widen `&receiver` / `var ref x = receiver` on the parameter slot.
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } } receiver =>
+                receiver.Variable.IsReadOnly && Binder.IsReferenceTypeForConstraint(receiver.Type),
             BoundVariableExpression variable => variable.Variable.IsReadOnly,
             BoundBlockExpression block => IsReadOnlyStorage(block.Expression),
             BoundConditionalExpression conditional => IsReadOnlyStorage(conditional.WhenTrue) || IsReadOnlyStorage(conditional.WhenFalse),

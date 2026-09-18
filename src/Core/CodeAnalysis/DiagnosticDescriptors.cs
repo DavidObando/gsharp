@@ -535,6 +535,21 @@ internal static class DiagnosticDescriptors
     // attempted here; see the #4219 PR notes for the full remaining surface.
     internal static readonly DiagnosticDescriptor RefReturningFunctionLiteralRequiresDirectLocalFunction = new("GS0588", DiagnosticSeverity.Error, "A 'ref'-returning function cannot be converted to a delegate or function-type value; call it directly instead. A ref-returning function-LITERAL is only supported as 'let name = func (...) ref T {{ ... }}', a directly-callable local function.");
 
+    // ADR-0184 / issue #376: the CS8170 analogue. A struct instance member's
+    // `this` is implicitly `scoped ref` (its REF-safe-context is the method
+    // body), so a reference into the receiver's own instance state would
+    // dangle once the caller's copy dies. `@UnscopedRef` is the opt-out.
+    // Reported instead of the generic GS0254 whenever the returned reference
+    // is rooted at the receiver, because the remedy is specific and GS0254's
+    // "function-local storage" wording actively misleads here.
+    internal static readonly DiagnosticDescriptor UnscopedRefRequiredForInstanceState = new("GS0589", DiagnosticSeverity.Error, "A struct member cannot return a reference to its own instance state; 'this' is implicitly 'scoped'. Mark the member '@UnscopedRef' (import System.Diagnostics.CodeAnalysis) to allow it.");
+
+    // ADR-0184 / issue #376: `@UnscopedRef` only means something on a struct
+    // instance member. One descriptor with a free-text reason, following the
+    // GS0360 (@MarshalAs) / GS9306 (@ExtensionOwner) convention for "one
+    // attribute, many shape rejections".
+    internal static readonly DiagnosticDescriptor UnscopedRefInvalidTarget = new("GS0590", DiagnosticSeverity.Error, "'@UnscopedRef' {0}.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

@@ -47,6 +47,18 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.ExtensionOwnerInvalid, reason);
 
     /// <summary>
+    /// ADR-0184 / issue #376: reports <c>@UnscopedRef</c> on a declaration
+    /// where it has no meaning — anything that is not a struct instance
+    /// member — or on an <c>override</c>/interface member, whose
+    /// ref-safe-context contract would have to be matched across the whole
+    /// override chain (ADR-0184 D4 defers that).
+    /// </summary>
+    /// <param name="location">The text location of the offending annotation.</param>
+    /// <param name="reason">A short phrase completing "'@UnscopedRef' &lt;reason&gt;.".</param>
+    public void ReportUnscopedRefInvalidTarget(TextLocation location, string reason)
+    => Report(location, DiagnosticDescriptors.UnscopedRefInvalidTarget, reason);
+
+    /// <summary>
     /// Reports that a <c>data class</c>/<c>data struct</c> was declared with
     /// no fields. Zero-field data types are supported as of issue #2363 (see
     /// ADR-0029); this diagnostic is retained for source/API stability in

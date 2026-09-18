@@ -296,6 +296,7 @@ internal sealed partial class DeclarationBinder
                 Binder.AttachDocumentation(function, syntax);
                 function.SetAttributes(functionAttributes);
                 ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
+                ValidateUnscopedRefPlacement(function);
 
                 // Duplicate-signature detection against existing static
                 // methods on the receiver (operators live in the static
@@ -350,6 +351,7 @@ internal sealed partial class DeclarationBinder
             Binder.AttachDocumentation(function, syntax);
             function.SetAttributes(functionAttributes);
             ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
+            ValidateUnscopedRefPlacement(function);
 
             var methodCandidates = ExpandNullableSequenceIteratorSpecializations(function);
 
@@ -391,6 +393,12 @@ internal sealed partial class DeclarationBinder
         Binder.AttachDocumentation(function, syntax);
         function.SetAttributes(functionAttributes);
         ValidateInlineDataNilArguments(functionAttributes, function.Parameters);
+
+        // ADR-0184: `function.IsExtension` is set further below (the
+        // `syntax.IsExtension` branch), so a receiver-clause function's
+        // rejection leans on ExplicitReceiverParameter / ReceiverType instead —
+        // both already final here.
+        ValidateUnscopedRefPlacement(function);
 
         // ADR-0086 / issue #727: when @DllImport is present and well-formed,
         // attach the resolved PInvokeMetadata so the emitter wires the
@@ -1135,6 +1143,7 @@ internal sealed partial class DeclarationBinder
         if (!functionAttributes.IsDefaultOrEmpty)
         {
             function.SetAttributes(functionAttributes);
+            ValidateUnscopedRefPlacement(function);
         }
 
         // Reject a duplicate conversion (same source/target pair), whether the

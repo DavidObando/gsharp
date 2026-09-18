@@ -60,50 +60,130 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0058 / issue #376: returns true if a function declaration carries the
-    /// <c>@UnscopedRef</c> annotation, which relaxes the implicit <c>scoped</c>
-    /// on a ref struct instance method's <c>this</c> parameter.
+    /// ADR-0184 / issue #376: validates that <c>@UnscopedRef</c> sits on a shape
+    /// where it means something — a non-<c>shared</c>, non-<c>override</c>
+    /// instance member declared in a struct body — and reports GS0590 otherwise.
+    /// Silent when the attribute is absent.
     /// </summary>
-    internal static bool HasUnscopedRefAnnotation(FunctionSymbol function)
+    /// <param name="function">The member to validate.</param>
+    private void ValidateUnscopedRefPlacement(FunctionSymbol function)
     {
-        var declaration = function.Declaration;
-        if (declaration == null)
+        var annotation = FindUnscopedRefAttribute(function.Attributes);
+        if (annotation == null)
         {
-            return false;
+            return;
         }
 
-        var annotations = declaration.Annotations;
-        if (annotations.IsDefaultOrEmpty)
+        var reason = DescribeUnscopedRefRejection(function);
+        if (reason != null)
         {
-            return false;
+            Diagnostics.ReportUnscopedRefInvalidTarget(annotation.Syntax.Location, reason);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0184 / issue #376: the property/indexer spelling of
+    /// <see cref="ValidateUnscopedRefPlacement(FunctionSymbol)"/>. G# spells
+    /// the annotation on the property, never on an individual accessor, so the
+    /// property's own shape is what gets validated.
+    /// </summary>
+    /// <param name="property">The property or indexer to validate.</param>
+    /// <param name="owner">The declaring type.</param>
+    private void ValidateUnscopedRefPlacement(PropertySymbol property, TypeSymbol? owner)
+    {
+        var annotation = FindUnscopedRefAttribute(property.Attributes);
+        if (annotation == null)
+        {
+            return;
         }
 
-        foreach (var annotation in annotations)
+        var reason =
+            property.IsStatic ? "requires an instance member; a 'shared' (static) member has no receiver to un-scope"
+            : property.IsOverride ? "is not supported on an 'override' or an explicit interface implementation yet (ADR-0184 D4); the ref-safe-context contract would have to match across the whole override chain"
+            : owner is InterfaceSymbol ? "is not supported on an interface member yet (ADR-0184 D4)"
+            : owner is not StructSymbol { IsClass: false } ? "requires a struct instance member; a class receiver is a reference that already outlives the call"
+            : null;
+
+        if (reason != null)
         {
-            if (annotation.Target != null)
-            {
-                continue;
-            }
-
-            if (annotation.NameSegments.Length == 1 && annotation.NameSegments[0].Text == "UnscopedRef")
-            {
-                return true;
-            }
-
-            // Also accept the fully qualified name.
-            if (annotation.NameSegments.Length >= 2)
-            {
-                var fullName = string.Concat(annotation.NameSegments.Select(s => s.ValueText));
-                if (fullName == "UnscopedRef" || fullName == "UnscopedRefAttribute"
-                    || fullName == "System.Diagnostics.CodeAnalysis.UnscopedRef"
-                    || fullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute")
-                {
-                    return true;
-                }
-            }
+            Diagnostics.ReportUnscopedRefInvalidTarget(annotation.Syntax.Location, reason);
+            return;
         }
 
-        return false;
+        // ADR-0184 §8: the annotation is spelled once, on the property, and
+        // pushed down to the accessors — which are built with `declaration:
+        // null` and never get an attribute list of their own, so they cannot
+        // answer for themselves. Matches C#, which accepts `[UnscopedRef]` on
+        // either the property or its `get` accessor and treats the two the same
+        // (RefCapabilities.IsUnscopedRefIndexerGetter already reads both
+        // placements out of imported metadata).
+        property.GetterSymbol?.MarkUnscopedRef();
+        property.SetterSymbol?.MarkUnscopedRef();
+    }
+
+    /// <summary>
+    /// ADR-0184: returns the <c>@UnscopedRef</c> entry of a bound attribute list,
+    /// or <see langword="null"/>. The bound node carries the annotation syntax, so
+    /// it doubles as the diagnostic location.
+    /// </summary>
+    /// <param name="attributes">The symbol's bound attribute list.</param>
+    /// <returns>The matching bound attribute, or <see langword="null"/>.</returns>
+    private static BoundAttribute? FindUnscopedRefAttribute(ImmutableArray<BoundAttribute> attributes)
+        => attributes.IsDefaultOrEmpty
+            ? null
+            : attributes.FirstOrDefault(attribute => KnownAttributes.IsUnscopedRef(attribute));
+
+    /// <summary>
+    /// ADR-0184 / issue #376: the shape rules behind GS0590, as a phrase
+    /// completing "'@UnscopedRef' &lt;reason&gt;.", or <see langword="null"/>
+    /// when the placement is legal.
+    /// </summary>
+    /// <param name="function">The member to classify.</param>
+    /// <returns>The rejection phrase, or <see langword="null"/>.</returns>
+    private static string? DescribeUnscopedRefRejection(FunctionSymbol function)
+    {
+        // NOTE: there is deliberately no constructor/`init` arm. A G#
+        // constructor binds no annotations at all (DeclarationBinder.Constructors
+        // never calls BindAttributes), and an `init` accessor — like every
+        // property accessor — has no attribute list of its own, so neither shape
+        // can reach this method carrying @UnscopedRef.
+        if (function.IsStatic)
+        {
+            return "requires an instance member; a 'shared' (static) member has no receiver to un-scope";
+        }
+
+        // ADR-0182: a receiver clause always declares an EXTENSION, whose
+        // receiver is an ordinary by-value parameter rather than a CLR `ref S`
+        // `this`. Un-scoping it would hand out a reference into the extension's
+        // own stack copy.
+        // `IsExtension` is only stamped later in the declaration pass, and the
+        // pure-extension shape is built with neither a ReceiverType nor an
+        // ExplicitReceiverParameter, so the syntax-level receiver clause is the
+        // marker that is already final here.
+        if (function.Declaration?.Receiver != null || function.ExplicitReceiverParameter != null || function.IsExtension)
+        {
+            return "cannot be applied to a receiver-clause function; ADR-0182 makes every receiver clause an extension, whose receiver is an ordinary by-value parameter";
+        }
+
+        // ADR-0184 D4: deferred. C# rejects the same shape (CS9102) unless the
+        // whole override/implementation chain agrees on the annotation, which
+        // needs contract matching this release does not do.
+        if (function.IsOverride || function.HasExplicitInterfaceClause || function.ExternalOverriddenMethod != null)
+        {
+            return "is not supported on an 'override' or an explicit interface implementation yet (ADR-0184 D4); the ref-safe-context contract would have to match across the whole override chain";
+        }
+
+        if (function.ContainingType is InterfaceSymbol)
+        {
+            return "is not supported on an interface member yet (ADR-0184 D4)";
+        }
+
+        if (function.ReceiverType is not StructSymbol { IsClass: false })
+        {
+            return "requires a struct instance member; a class receiver is a reference that already outlives the call, and a free function has no receiver at all";
+        }
+
+        return null;
     }
 
     /// <summary>

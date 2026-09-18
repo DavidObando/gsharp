@@ -154,6 +154,16 @@ public sealed class FunctionSymbol : Symbol
         ReceiverType = receiverType;
         ExplicitReceiverParameter = explicitReceiverParameter;
         ThisParameter = explicitReceiverParameter ?? (receiverType != null ? new ParameterSymbol("this", receiverType) : null);
+
+        // ADR-0184: mark whichever parameter is the receiver, so the static
+        // ref-capability classifiers (which have no enclosing-function context)
+        // can tell the CLR's writable, caller-scoped `ref S` receiver apart
+        // from an ordinary by-value parameter slot.
+        if (ThisParameter != null)
+        {
+            ThisParameter.IsReceiverParameter = true;
+        }
+
         IsOpen = isOpen;
         IsOverride = isOverride;
     }
@@ -309,6 +319,10 @@ public sealed class FunctionSymbol : Symbol
 #pragma warning disable SA1201
     private ImmutableArray<TypeParameterSymbol> typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
     private ImmutableArray<ParameterSymbol> emittedParameters;
+
+    // ADR-0184: set for a property/indexer accessor whose OWNING property
+    // carries @UnscopedRef. Accessors have no attribute list of their own.
+    private bool unscopedRefFromContainingMember;
 #pragma warning restore SA1201
 
     /// <summary>Gets or sets the generic type parameters declared on this function (Phase 4.1 / ADR-0020). Empty for non-generic functions.</summary>
@@ -366,6 +380,26 @@ public sealed class FunctionSymbol : Symbol
     /// (so it may assign other <c>init</c>-only properties on the same instance).
     /// </summary>
     public bool IsInitOnlySetter { get; set; }
+
+    /// <summary>
+    /// Gets a value indicating whether this function carries <c>@UnscopedRef</c>
+    /// (ADR-0184 / issue #376; <see cref="System.Diagnostics.CodeAnalysis.UnscopedRefAttribute"/>),
+    /// which lifts the implicit <c>scoped</c> on a struct instance member's
+    /// <c>this</c> so the member may return a reference into its own instance
+    /// state.
+    /// </summary>
+    /// <remarks>
+    /// Computed over <see cref="Symbol.Attributes"/> rather than stored, so it
+    /// is immune to the binder's construct-then-<c>SetAttributes</c> ordering
+    /// and propagates for free through every symbol-cloning site that copies
+    /// the attribute list. A property/indexer accessor is the one shape that
+    /// cannot answer from its own list — accessors are built with
+    /// <c>declaration: null</c> and never receive a <c>SetAttributes</c> call —
+    /// so <see cref="MarkUnscopedRef"/> pushes the owning property's answer
+    /// down onto it.
+    /// </remarks>
+    public bool HasUnscopedRef =>
+        this.unscopedRefFromContainingMember || Binding.KnownAttributes.HasUnscopedRef(Attributes);
 
     /// <summary>Gets or sets a value indicating whether this function is declared <c>async</c> (Phase 5.1 / ADR-0023). When true, callers observe the function's return as <c>Task[T]</c> (or <c>Task</c> when no return type was declared) and the body may use <c>await</c>.</summary>
     public bool IsAsync { get; set; }
@@ -655,6 +689,18 @@ public sealed class FunctionSymbol : Symbol
     internal void RepointDeclaration(FunctionDeclarationSyntax declaration)
     {
         Declaration = declaration;
+    }
+
+    /// <summary>
+    /// ADR-0184: records that this accessor's OWNING property/indexer carries
+    /// <c>@UnscopedRef</c>. Property accessors are constructed with
+    /// <c>declaration: null</c> and never receive their own attribute list —
+    /// only the <c>PropertySymbol</c> does — so the property-level answer has
+    /// to be pushed down here for <see cref="HasUnscopedRef"/> to see it.
+    /// </summary>
+    internal void MarkUnscopedRef()
+    {
+        this.unscopedRefFromContainingMember = true;
     }
 
     /// <summary>

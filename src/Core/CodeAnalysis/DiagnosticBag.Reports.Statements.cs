@@ -666,6 +666,18 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.RefReturnEscapesLocalScope);
 
     /// <summary>
+    /// ADR-0184 / issue #376 (the CS8170 analogue): the operand of
+    /// <c>return ref</c> is rooted at the enclosing struct member's own
+    /// receiver, whose ref-safe-context is the method body unless the member
+    /// is marked <c>@UnscopedRef</c>. Reported in place of the generic
+    /// <see cref="DiagnosticDescriptors.RefReturnEscapesLocalScope"/> so the
+    /// remedy is named rather than left as "function-local storage".
+    /// </summary>
+    /// <param name="location">The location of the offending expression.</param>
+    public void ReportUnscopedRefRequiredForInstanceState(TextLocation location)
+    => Report(location, DiagnosticDescriptors.UnscopedRefRequiredForInstanceState);
+
+    /// <summary>
     /// Issue #491 (ADR-0060 follow-up): reports a ref-aliasing local declaration whose
     /// initializer is not an lvalue. <c>let ref</c> / <c>var ref</c> binds the local as
     /// an alias for an existing storage slot — the RHS must therefore be a variable, a

@@ -1341,6 +1341,7 @@ internal sealed partial class DeclarationBinder
                             System.AttributeTargets.Method);
                         methodSymbol.SetAttributes(methodAttributes);
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
+                        ValidateUnscopedRefPlacement(methodSymbol);
                     }
 
                     var nullableSequenceSpecializations = ExpandNullableSequenceIteratorSpecializations(methodSymbol);
@@ -1898,6 +1899,10 @@ internal sealed partial class DeclarationBinder
                         Binder.PropertyDeclarationAllowedTargets,
                         "a property declaration",
                         System.AttributeTargets.Property));
+
+                    // ADR-0184: runs AFTER the accessor symbols are built above,
+                    // which is what lets it push @UnscopedRef down onto them.
+                    ValidateUnscopedRefPlacement(propertySymbol, structSymbol);
                 }
 
                 propertiesBuilder.Add(propertySymbol);
@@ -2559,6 +2564,7 @@ internal sealed partial class DeclarationBinder
                             System.AttributeTargets.Method);
                         methodSymbol.SetAttributes(methodAttributes);
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
+                        ValidateUnscopedRefPlacement(methodSymbol);
                     }
 
                     Binder.AttachDocumentation(methodSymbol, methodSyntax);
@@ -2879,6 +2885,7 @@ internal sealed partial class DeclarationBinder
                         Binder.PropertyDeclarationAllowedTargets,
                         "a property declaration",
                         System.AttributeTargets.Property));
+                    ValidateUnscopedRefPlacement(propertySymbol, structSymbol);
                 }
 
                 Binder.AttachDocumentation(propertySymbol, propSyntax);

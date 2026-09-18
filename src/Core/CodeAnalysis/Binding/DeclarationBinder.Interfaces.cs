@@ -369,6 +369,7 @@ internal sealed partial class DeclarationBinder
                     Binder.FunctionDeclarationAllowedTargets,
                     "a method declaration",
                     System.AttributeTargets.Method));
+                ValidateUnscopedRefPlacement(methodSymbol);
             }
 
             // ADR-0085: reject `open` / `override` modifiers on interface
@@ -697,6 +698,7 @@ internal sealed partial class DeclarationBinder
                         Binder.PropertyDeclarationAllowedTargets,
                         "a property declaration",
                         System.AttributeTargets.Property));
+                    ValidateUnscopedRefPlacement(propSymbol, interfaceSymbol);
                 }
 
                 propertiesBuilder.Add(propSymbol);

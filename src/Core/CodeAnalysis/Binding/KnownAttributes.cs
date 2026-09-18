@@ -403,6 +403,57 @@ internal static class KnownAttributes
     }
 
     /// <summary>
+    /// ADR-0184 / issue #376: returns <c>true</c> when <paramref name="clrType"/>
+    /// is <see cref="System.Diagnostics.CodeAnalysis.UnscopedRefAttribute"/>.
+    /// Recognition is type-identity based (ADR-0084 §L5) — the string-matching
+    /// recognition this replaces could be defeated by a same-named user
+    /// attribute and could not see the attribute through an alias.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[UnscopedRef]</c>.</returns>
+    public static bool IsUnscopedRef(Type? clrType)
+    {
+        return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.UnscopedRefAttribute));
+    }
+
+    /// <summary>
+    /// ADR-0184 / issue #376: returns <c>true</c> when <paramref name="attribute"/>
+    /// is <see cref="System.Diagnostics.CodeAnalysis.UnscopedRefAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[UnscopedRef]</c>.</returns>
+    public static bool IsUnscopedRef(BoundAttribute? attribute)
+    {
+        return IsUnscopedRef(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// ADR-0184 / issue #376: returns <c>true</c> when the bound attribute list
+    /// carries <c>@UnscopedRef</c>, which lifts the implicit <c>scoped</c> on a
+    /// struct instance member's <c>this</c> so the member may return a
+    /// reference into its own instance state.
+    /// </summary>
+    /// <param name="attributes">The attribute list on a function or property symbol.</param>
+    /// <returns><c>true</c> when at least one <c>[UnscopedRef]</c> is present.</returns>
+    public static bool HasUnscopedRef(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsUnscopedRef(attr))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Returns <c>true</c> when <paramref name="attributes"/> carries
     /// <see cref="System.Diagnostics.CodeAnalysis.AllowNullAttribute"/>
     /// (issue #3907).
