@@ -3824,25 +3824,19 @@ internal sealed partial class ExpressionBinder
                     explicitTypeArgs,
                     typeArgSymbols))
                 {
+                    // A chained call has no syntax to quote the receiver from;
+                    // the report drops only the NAME then, never the
+                    // nil-specific guidance.
+                    string? receiverName = null;
                     if ((receiverSyntax ?? receiver.Syntax) is { } nilReceiverSyntax)
                     {
-                        var receiverName = nilReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
+                        receiverName = nilReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
                             receiverStart ?? nilReceiverSyntax.Span.Start,
                             nilReceiverSyntax.Span.End));
                         receiverName = string.Join(" ", receiverName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-                        Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
-                    }
-                    else
-                    {
-                        // No syntax to quote the receiver from — keep the
-                        // nil-specific wording, which is the actionable part,
-                        // and drop only the name. Falling back to the bare
-                        // "Cannot find function" form would claim the member
-                        // does not exist, which is what made this shape so
-                        // confusing to read in a chained call.
-                        Diagnostics.ReportUnableToFindFunctionOnNilReceiver(ce.Location, methodName);
                     }
 
+                    Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
                     return new BoundErrorExpression(null);
                 }
             }

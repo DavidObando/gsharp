@@ -516,37 +516,31 @@ public sealed partial class DiagnosticBag
         memberName,
         interfaceName);
 
-    /// <summary>Reports a function call whose receiver lacks a valid non-null narrowing.</summary>
-    /// <param name="location">The text location where the error was found.</param>
-    /// <param name="functionName">The called function.</param>
-    /// <param name="receiverName">The nullable receiver spelling.</param>
-    public void ReportUnableToFindFunction(
-        TextLocation location,
-        string functionName,
-        string receiverName)
-    => Report(
-        location,
-        DiagnosticDescriptors.UnableToFindFunction,
-        $"Cannot call function {functionName} because receiver '{receiverName}' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
-
     /// <summary>
-    /// The same report as the overload above, for a receiver there is no
-    /// syntax to quote — a CHAINED call (<c>s.ToUpper().Trim()</c>), whose
-    /// receiver is a bound node the walker built with no <c>Syntax</c>. The
-    /// nil-specific wording is what makes this diagnostic actionable, so it
-    /// must not degrade into the bare "Cannot find function" form, which
-    /// says the member does not exist when the real problem is that the
-    /// receiver may be nil.
+    /// Reports a function call whose receiver lacks a valid non-null narrowing.
+    /// <paramref name="receiverName"/> is <see langword="null"/> when there is
+    /// no syntax to quote the receiver from — a CHAINED call
+    /// (<c>s.ToUpper().Trim()</c>), whose receiver is a bound node the accessor
+    /// walker built with no <c>Syntax</c>. Only the NAME is dropped then: the
+    /// nil-specific wording is what makes this diagnostic actionable, and
+    /// falling back to the bare "Cannot find function" form would claim the
+    /// member does not exist when the real problem is that the receiver may be
+    /// nil.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>
     /// <param name="functionName">The called function.</param>
-    public void ReportUnableToFindFunctionOnNilReceiver(
+    /// <param name="receiverName">The nullable receiver spelling, or <see langword="null"/> when it cannot be quoted.</param>
+    public void ReportUnableToFindFunction(
         TextLocation location,
-        string functionName)
-    => Report(
-        location,
-        DiagnosticDescriptors.UnableToFindFunction,
-        $"Cannot call function {functionName} because the receiver may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
+        string functionName,
+        string? receiverName)
+    {
+        var subject = receiverName is null ? "the receiver" : $"receiver '{receiverName}'";
+        Report(
+            location,
+            DiagnosticDescriptors.UnableToFindFunction,
+            $"Cannot call function {functionName} because {subject} may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
+    }
 
     /// <summary>
     /// Reports that an overloaded call (constructor, static method, or
