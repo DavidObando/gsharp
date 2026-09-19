@@ -200,12 +200,13 @@ var receiverIsInterface = access.Receiver.Type is InterfaceSymbol;
 
 A *wrapped* receiver type (`NullableTypeSymbol`, and so `PlatformTypeSymbol`)
 fails both, as do `string`, `Array`, and imported types that are not
-`StructSymbol{IsClass:true}`. Four families therefore emit `call` and perform no
-receiver nil check at all. An earlier draft of this ADR built a receiver
-*exemption* on the assumption that the CLR always checks; §4 records that claim,
-its falsification, and the honest rule that replaces it. The short version: the
-check goes in at every coercion including receivers, and the CLR's own check is a
-reason to **elide** where it provably fires, not to specify an exemption.
+`StructSymbol{IsClass:true}`. Several families therefore emit `call` — or `ldftn`,
+which is worse — and perform no receiver nil check at all. An earlier draft of
+this ADR built a receiver *exemption* on the assumption that the CLR always
+checks; §4 records that claim, its falsification, and the honest rule that
+replaces it. The short version: the check goes in at every coercion including
+receivers, and the CLR's own check is a reason to **elide** where it provably
+fires, not to specify an exemption.
 
 ## Decision
 
@@ -297,18 +298,32 @@ untouched.
 
 ### 3. Assignability and conversions
 
-Let `T` be a reference type. All six conversions below are **implicit and
-operator-free**. Only the first inserts anything.
+Let `T` be a reference type. Every conversion below is **implicit and
+operator-free**. The governing rule is one line, and the table is its expansion:
+
+> **A check is inserted exactly when a platform value flows into a destination
+> whose declared type is a non-null reference type** — whether that destination
+> is `T` itself or any supertype of it.
 
 | From | To | Conversion | Runtime effect |
 | --- | --- | --- | --- |
 | `T!` | `T` | implicit | **nil check inserted** (§4) |
+| `T!` | `object` / base class / interface (non-null) | implicit | **nil check inserted** — a non-null destination is a non-null destination |
+| `T!` | `object?` / base / interface, nilable | implicit, identity | none |
 | `T!` | `T?` | implicit, identity | none |
 | `T` | `T!` | implicit, identity | none |
 | `T?` | `T!` | implicit, identity | none |
 | `T!` | `U` (unrelated) | whatever `T → U` is | as for `T` |
-| `T!` | `object` / base / interface | as for `T` | none |
 | `nil` | `T!` | implicit | none — an ordinary null store |
+
+The upcast row is not a formality. An earlier draft had it as "as for `T`, no
+check", which contradicted this section's own rule and opened a real hole:
+`object o = obliviousCall()` would store a nil into a slot the program may read
+back as non-null indefinitely, with **no `T! → T` boundary ever having fired**.
+An upcast to `object`, a base class, or an interface *is* a conversion to a
+non-null reference destination, so it checks. Stating the rule in terms of *the
+destination's nullability* rather than the literal type `T` closes the family
+rather than this one instance.
 
 The last row is small and load-bearing. `nil` to a non-nullable `T` is a binder
 error today, and ADR-0155 A9 records that `!!` cannot bridge it — *"`!!` forgives
@@ -338,13 +353,67 @@ this is deliberately *not* symmetric absorption: `T?` wins, `T` does not.
 nullability does. This is what makes chains work with no special case (§5) and
 keeps the check count low.
 
-**Type arguments are platform-flexible.** `Box[string!]`, `Box[string]` and
-`Box[string?]` are mutually assignable, and `Box[string!]` satisfies a parameter
-of any of the three. This is variance-loose, it is inherent to the category (the
-whole point of `T!` is that it is simultaneously both), it is Kotlin's rule, and
-all three erase to one CLR type so nothing is observable at runtime. No check is
-inserted for a type-argument-position mismatch; a check would have nowhere to
-run.
+#### Type arguments: platform-ness does **not** make constructed types mutually assignable
+
+An earlier draft said `Box[string!]`, `Box[string]` and `Box[string?]` are
+*mutually assignable*, on the reasoning that all three erase to one CLR type so
+"nothing is observable at runtime." **That rule is unsound, and the erasure
+argument is precisely backwards** — erasure is what makes the two views aliases
+of the same object, which is what makes the hole reachable:
+
+```gs
+var b     Box[string]  = Box[string]{ Value: "x" }
+var alias Box[string?] = b      // permitted by mutual assignability, no check
+alias.Value = nil               // legal: Value is string? in this view
+b.Value                         // declared string — reads nil, no check anywhere
+```
+
+No `T! → T` conversion is ever crossed, so §4's boundary never fires. The carrier
+does not need to be exotic: any user generic with a settable property qualifies,
+as do G#'s magic collections (ADR-0159). This is array covariance's bug with
+nullability in place of element type, through a **mutable, invariant** container.
+Note the example does not even mention a platform type — the draft's rule was
+strong enough to license `Box[string] ↔ Box[string?]` on its own, which plain
+invariance has always and correctly rejected.
+
+**The rule, corrected.** Platform-ness at the top level is flexible; platform-ness
+*inside a type argument* is not a licence to convert the constructed type.
+
+1. `Box[string!]`, `Box[string]` and `Box[string?]` are **three distinct
+   constructed types**.
+2. **Exactly one implicit conversion exists**: `C[T!] → C[T?]` (recursively, for
+   nested arguments). No check. It is sound because every read through the
+   destination view has type `T?` and must be narrowed before non-null use, so no
+   view of the object can produce an unchecked non-null read.
+3. There is **no** `C[T!] → C[T]`, no `C[T] → C[T!]`, and no `C[T?] → C[T!]`.
+   The first is the unsound direction directly (non-null reads of a container
+   that may hold nil). The second and third are unsound in the write direction:
+   both would let `nil → T!` (§3's last row) deposit a nil into a container
+   another holder reads as non-null.
+4. `C[T] ↔ C[T?]` remains unconvertible by ordinary invariance, **unchanged by
+   this ADR**.
+5. **Member access through a `C[T!]` receiver yields `T!`-typed elements.**
+   `pb.Value` on a `Box[string!]` has type `string!` and is checked at its own
+   coercion point; `pb.Value = nil` is legal. This is §4's top-level rule applied
+   one level down, it needs no conversion at all, and it is where essentially all
+   of the ergonomic benefit actually comes from.
+
+Rule 5 is what makes rule 3 affordable. The apparent cost — you cannot pass a
+`List[string!]` to `func f(xs List[string])` — **is not a new cost**: ADR-0136
+already renders that oblivious container as `List[string?]`, and already rejects
+passing it to `List[string]` by the same invariance. The platform model matches
+the status quo for the container and strictly improves on it for the top-level
+value. Meanwhile §3's governing principle gives the same answer it gives
+everywhere else: the callee's explicit `List[string]` beats the caller's absence
+of information, so the caller does the work.
+
+**This is a place where G# is deliberately stricter than Kotlin.** Kotlin's
+flexible types are genuinely unsound here and accepted as the price of Java
+interop. G# should not copy that, for two reasons it does not share: `T?` is
+load-bearing across the whole language rather than an interop affordance, and
+ADR-0159's magic collections make "a mutable invariant container whose element
+nullability is a lie" a routine shape rather than an exotic one. Adopting the
+category does not oblige adopting its known holes.
 
 **Overload resolution.** A `T!` argument is applicable to a `T` parameter and to
 a `T?` parameter. When both are applicable the `T` parameter wins, by the same
@@ -354,13 +423,18 @@ behaving like the non-null value it usually is.
 
 ### 4. The runtime assertion: one rule, at coercion points only
 
-> **The rule.** A nil check is inserted at every `T! → T` conversion, and
+> **The rule.** A nil check is inserted wherever a platform value is converted
+> to a destination whose declared type is a **non-null reference type**, and
 > nowhere else.
 
 That is the complete specification. Everything below is consequence, not an
-additional list of sites.
+additional list of sites. Note the rule is stated over the *destination's
+nullability*, not over the literal type `T`: an upcast to `object`, a base class
+or an interface is such a destination and checks accordingly (§3). Writing it as
+"`T! → T`" — as an earlier draft did — reads as though only the exact type
+counted, and left upcasts as an unchecked hole.
 
-Concretely, a `T! → T` conversion occurs — and a check is therefore inserted —
+Concretely, such a conversion occurs — and a check is therefore inserted —
 when a platform value is:
 
 - assigned or bound into a slot whose **declared** type is a non-null reference
@@ -415,11 +489,21 @@ this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOp
 Both are literal symbol-kind tests. A `NullableTypeSymbol`- or
 `PlatformTypeSymbol`-**wrapped** receiver type fails both, and so do `string`,
 `Array`, and any imported type that is not a `StructSymbol{IsClass:true}`. The
-review found four families that emit `call` — and therefore perform **no** nil
-check — today: a wrapper-typed property receiver, non-virtual event accessors,
-`string`/`Array` receivers, and method-group capture. (The wrapper-typed property
-case is a real, reachable, pre-existing bug independent of this ADR — it also
-silently drops virtual dispatch — and is filed separately as #4312.)
+families that perform **no** receiver nil check today, each verified against the
+emitter:
+
+| Path | Site | Opcode | Consequence for a nil `T!` receiver |
+| --- | --- | --- | --- |
+| Wrapper-typed property receiver | `MethodBodyEmitter.MemberAccess.cs:1002–1010` | `call` | Nil reaches the accessor body. Also silently drops virtual dispatch — a real, reachable, pre-existing bug independent of this ADR, filed as **#4312**. |
+| `string` / `Array` receivers | same test, same site | `call` | Nil reaches the method. |
+| Non-virtual user **event** accessors | `MethodBodyEmitter.Closures.cs:677–709`, `isVirtual ? Callvirt : Call` | `call` | Nil reaches `add`/`remove`. |
+| Non-virtual / sealed **method-group capture** | `MethodBodyEmitter.Closures.cs:510–543` (the non-virtual arm of the `ldvirtftn`/`ldftn` choice) and `:1034–1063` | **`ldftn`** | **The worst case, and the one that decides the matter.** `ldftn` does not dereference the receiver at all: the nil is stored into the delegate's `Target` slot and travels arbitrarily far. There is no failure at the capture site, and the eventual failure — if any — happens at invoke time in an unrelated frame, or never, if the captured method never touches `this`. The attributable boundary this ADR exists to provide is not delayed here; it is destroyed. |
+
+Even a generous reading of the exemption — *"the CLR fails fast at the receiver
+anyway, so an inserted check only improves the message"* — is simply false for
+method-group capture. And §9 makes every row above reachable for **G#-declared**
+members, not merely imported ones: a member of an `@Oblivious` declaration is
+platform-typed and can be captured exactly like an imported one.
 
 So the honest rule is:
 
@@ -1041,6 +1125,15 @@ This ADR changes **nothing** about G#'s own nullability story:
   coercion to non-null — bounds this but does not eliminate it. Today's model
   bounds it more tightly *in principle* and, as the case studies show, not in
   fact.
+- **A platform-typed generic container is as awkward as a nilable one.** §3
+  permits only `C[T!] → C[T?]`, so a `List[string!]` cannot be passed to
+  `func f(xs List[string])`. That is a real ergonomic cost and it is deliberate:
+  the alternative is the aliasing unsoundness §3 documents. It is not a
+  *regression* — ADR-0136 renders the same container as `List[string?]` and
+  rejects the same call today — but it does mean the pivot's benefit is
+  concentrated at the top level and in element-level access (rule 5), not in
+  container conversion. It is also a place where G# is **stricter than Kotlin**,
+  which permits the conversion and accepts the hole.
 - **A third type category is more to hold in your head**, and it shows up in
   diagnostics, hover text, `DisplayFormat`, and the LSP. It is also 636
   `NullableTypeSymbol` sites' worth of audit.
@@ -1111,6 +1204,31 @@ as insufficient: it addresses the *ergonomics* of the proof obligation without
 addressing the correctness defect, and failure mode 5 was a correctness defect in
 the proof machinery, not in its ergonomics.
 
+**8. Other ways to close the generic-aliasing hole (§3).** Two were considered
+and rejected before settling on "one conversion, `C[T!] → C[T?]`, plus
+element-level platform typing":
+
+- *Restrict platform-flexibility to read-only / covariant-use positions.* This
+  keeps mutual assignability but forbids it where the container is mutated
+  through the converted view. Rejected on this ADR's own governing principle: G#
+  has no general read-only-generic notion, so the rule would have to be a
+  whole-type analysis over "does this type have a settable member of the relevant
+  argument" — a predicate over shapes, added to preserve a convenience, which is
+  exactly the machinery this ADR exists to delete. It would also have to answer
+  the question again for every new container shape, which is failure mode 1's
+  structure.
+- *Check on read through a `T`-typed view, regardless of how the value was
+  written.* This is sound, and it is the only option that preserves full mutual
+  assignability. Rejected as both expensive and wrong-shaped: it puts a check on
+  every field and property read of every generic instantiation, which abandons
+  the boundary discipline that makes §4 one rule instead of a list, and it pays
+  that cost on overwhelmingly non-platform code.
+
+The chosen rule is strictly smaller than either: it deletes a conversion rather
+than adding an analysis, and the ergonomics it appears to cost were already
+absent under ADR-0136 (which renders the same container as `List[string?]` and
+rejects the same assignment).
+
 ## Open questions for the implementer / reviewer
 
 Ordered by how much a wrong answer would cost.
@@ -1154,12 +1272,21 @@ Ordered by how much a wrong answer would cost.
    "provable from the emit shape, stated once, in one place" is worth exactly as
    much as the enumeration behind it, and mine had not been done.
 
-4. **Type-argument flexibility (§3).** `Box[string!]` assignable to and from
-   `Box[string]` and `Box[string?]` is Kotlin's rule and erases to one CLR type,
-   so nothing is observable — but it is a genuine soundness hole in the same
-   sense Kotlin's is, and G# has magic-collection zero values (ADR-0159) and
-   variance rules that Kotlin does not. Someone who knows ADR-0159's interaction
-   with generic arguments should check that `map[K, V!]` and `[]T!` behave.
+4. ~~**Type-argument flexibility (§3).**~~ **Settled against the earlier draft —
+   the rule was unsound and §3 is rewritten.** The draft made `Box[string!]`,
+   `Box[string]` and `Box[string?]` mutually assignable, reasoning that erasure
+   to one CLR type made the distinction unobservable. Erasure is what makes the
+   hole *reachable*: two views alias one object, so a `Box[string?]` alias can
+   write `nil` that a `Box[string]` view reads as non-null with no `T! → T`
+   boundary anywhere. §3 now permits exactly one conversion, `C[T!] → C[T?]`, and
+   relies on member access through a `C[T!]` receiver yielding `T!` elements for
+   the ergonomics. **G# is deliberately stricter than Kotlin here**, which has the
+   identical hole and accepts it as an interop price G# does not need to pay.
+
+   *Residual, genuinely open*: ADR-0159's magic collections need checking against
+   the corrected rule — specifically whether `map[K, V!]` and `[]T!` zero values
+   and their `== nil` behaviour (GS0523) compose with rule 5's element-level
+   platform typing. The unsoundness is closed; the interaction is unverified.
 
 5. **Whether GS0592 should exist at all, and whether it should be on by
    default.** I proposed it opt-in and off by default so the design never breaks
@@ -1265,10 +1392,6 @@ Ordered by how much a wrong answer would cost.
     that file is gutted regardless of behaviour. None of this appears in
     *Implementation impact*, which discusses production lines only. Size it before
     committing to a schedule.
-
-15. **The `Amended by` back-reference on ADR-0136** — *done*: ADR-0136 now carries
-    `**Amended by**: [ADR-0186] — §2's oblivious row … and §3's emit rule`,
-    following the ADR-0058/ADR-0184 precedent.
 
 ## Recommendation
 
