@@ -164,7 +164,7 @@ internal static class PlatformCoercion
     /// <returns>The rendered suffix, or the empty string.</returns>
     private static string DescribeLocation(TextLocation? location)
     {
-        if (location is not { Text: not null } present || present.Span.Start > present.Text!.Length)
+        if (location is not { } present || present.Text is not { } text || present.Span.Start > text.Length)
         {
             return string.Empty;
         }

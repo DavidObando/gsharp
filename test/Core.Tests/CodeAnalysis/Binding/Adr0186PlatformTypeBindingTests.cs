@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Text;
@@ -563,15 +564,14 @@ public sealed class Adr0186PlatformTypeBindingTests
             {
                 using var peStream = new MemoryStream(compiled.PeBytes);
                 var assembly = context.LoadFromStream(peStream);
-                var entry = assembly.EntryPoint;
-                Assert.NotNull(entry);
+                var entry = Invariant.Required(assembly.EntryPoint, "an emitted G# program has an entry point");
 
                 var stdout = Console.Out;
                 var captured = new StringWriter();
                 Console.SetOut(captured);
                 try
                 {
-                    entry!.Invoke(
+                    entry.Invoke(
                         null,
                         entry.GetParameters().Length == 0 ? null : new object[] { Array.Empty<string>() });
                 }

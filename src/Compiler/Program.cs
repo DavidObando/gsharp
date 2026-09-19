@@ -883,7 +883,7 @@ public class Program
           /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
           /nullability:<mode>           How oblivious imported reference positions are read: enabled (default) or platform-types (ADR-0186).
-          /platform-nil-checks:<on|off> Insert the ADR-0186 nil check at each T! -> T coercion (default: on; off is an escape hatch, not a supported mode).
+          /platform-nil-checks:<on|off> Insert the ADR-0186 nil check where a platform value is coerced to a non-null type (default: on; off is an escape hatch, not a supported mode).
           /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
           /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
           /optimize[+|-]                Enable/disable JIT optimization (default: enabled).
