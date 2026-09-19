@@ -204,8 +204,8 @@ There is no G# precedent for "compile it away, and delete its call sites too".
 That behaviour is a real semantic hole — a typo in the implementing part's
 signature silently turns a method call into a no-op — and C# only tolerates it
 because the idiom predates its own source-generator ecosystem. Introducing it
-as G#'s **fourth** convention for body-less declarations, when the other three
-agree, would be the inconsistent choice.
+as a **new** convention for body-less declarations, when every existing one
+agrees, would be the inconsistent choice.
 
 Consequences of requiring an implementation:
 
