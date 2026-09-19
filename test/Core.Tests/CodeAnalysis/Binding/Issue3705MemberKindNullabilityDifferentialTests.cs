@@ -970,8 +970,12 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
                     ClrNullability.ReadNullableFlags(concreteAbsent, absent)));
             }
 
-            // …and the mode is scoped, so the rest of the suite is unaffected.
-            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[2].Field));
+            // …and the mode is scoped, so the rest of the suite is
+            // unaffected. Shown the other way round since step 3: leaving
+            // the `platform-types` scope must restore the DEFAULT, which is
+            // now `platform-types` itself, not the enum's zero value. The
+            // `enabled` reading is asserted inside its own scope above.
+            Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[2].Field));
         }
         finally
         {
