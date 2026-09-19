@@ -560,6 +560,18 @@ internal sealed partial class StatementBinder
     private BoundStatement BindThrowStatement(ThrowStatementSyntax syntax)
     {
         var expression = bindExpression(syntax.Expression);
+
+        // ADR-0186 §4: a `throw` operand is one of the positions the ADR names
+        // explicitly — "used where the language requires a non-null
+        // reference". It does not pass through `BindConversion`, so it does
+        // not inherit the check from the value seam; without this it still
+        // fails fast (the CLR's own `throw` on a nil), but unattributed,
+        // which is the entire thing §4 buys over the CLR's check.
+        expression = PlatformCoercion.InsertCheck(
+            expression,
+            syntax.Expression.Location,
+            "a 'throw' operand");
+
         var exceptionType = ResolveExceptionType();
         if (exceptionType != null && expression.Type != TypeSymbol.Error)
         {

@@ -250,6 +250,22 @@ internal sealed partial class ExpressionBinder
                 }
 
                 ReportNullAssertionIfRedundant(unary.OperatorToken, assertedOperand);
+
+                // ADR-0186 §6: this is the SECOND path that binds a user
+                // `!!` — the accessor-chain one, for `a.b!!`. It must produce
+                // the same node the top-level path does, message included:
+                // the check fires either way, but without this the two
+                // spellings of one assertion give different exception text,
+                // which is failure mode 1's read/call drift in miniature.
+                if (assertedOperand.Type is PlatformTypeSymbol)
+                {
+                    return PlatformCoercion.InsertCheck(
+                        assertedOperand,
+                        unary.OperatorToken.Location,
+                        "an explicit '!!'",
+                        suppressible: false);
+                }
+
                 var assertionOperator = BoundUnaryOperator.Bind(
                     unary.OperatorToken.Kind,
                     assertedOperand.Type);

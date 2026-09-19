@@ -69,6 +69,21 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             public static Nested NilNest() => null;
 
+            public static Nested Nest2() => new Nested();
+
+            public static string[] ArrWithNil() => new string[] { null };
+
+            public static string[] ArrField = new string[] { null };
+
+            public static string[] NilArr() => null;
+
+            public static Dictionary<string, string> TableWithNil()
+                => new Dictionary<string, string> { { "k", null } };
+
+            public static Exception NilException() => null;
+
+            public static object NilLockTarget() => null;
+
             public static void TakesPlatform(string value)
                 => Console.WriteLine(value == null ? "took nil" : value);
 
@@ -265,6 +280,89 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
+    /// ADR-0186 §3 rule 3, for <b>magic collections</b> — the shape the first
+    /// version of the container arm missed entirely, and the one place this
+    /// step was measurably <em>worse</em> than the model it replaces.
+    /// <para>
+    /// An oblivious <c>string[]</c> arrives as <c>[]string!</c>: the wrapper
+    /// sits on the container and the element's obliviousness lives in the
+    /// reader's nullable-flags subtree, where rule 5 makes a read yield
+    /// <c>string!</c> (pinned below). Assigning it into a bare
+    /// <c>[]string</c> is therefore <c>C[T!] -&gt; C[T]</c> in substance, and
+    /// rule 3 gives that no conversion.
+    /// </para>
+    /// <para>
+    /// <b>Before the fix this compiled with no check at all.</b> The
+    /// container check fired and passed — the array is not nil — and the
+    /// conversion then erased the element's platform-ness, so
+    /// <c>b[0].Length</c> threw an unattributed <c>NullReferenceException</c>
+    /// on a program the pre-ADR-0186 model <em>rejects</em>. Incompleteness
+    /// in a new rule turning into a strictness regression is the worst
+    /// available outcome, and it is why this fixture exists separately from
+    /// the generic-container one.
+    /// </para>
+    /// <para>
+    /// Rejection, not a check, is the fix: rule 3 says the conversion does
+    /// not exist, and rejecting restores parity with the current model.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="site">What the row covers.</param>
+    [Theory]
+    [InlineData("    let a = Ob.ArrWithNil()\n    let b []string = a\n    Console.WriteLine(b[0].Length)", "through an inferred local")]
+    [InlineData("    let b []string = Ob.ArrWithNil()\n    Console.WriteLine(b[0].Length)", "directly at the declared slot")]
+    [InlineData("    let b []string = Ob.NilArr()\n    Console.WriteLine(b.Length)", "with a nil container too - rule 3 does not care")]
+    public void Section3_AMagicCollection_Is_Not_Exempt_From_The_Container_Rule(string body, string site)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+
+        Assert.False(compiled.Success, site + ": " + Describe(compiled));
+        Assert.Contains(
+            compiled.Diagnostics,
+            d => d.Message.Contains("[]string!", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The negative control for the fixture above, and the constraint that
+    /// makes it safe: a pair the container rule cannot compare is
+    /// <b>declined</b>, never rejected. Widening a platform slice to
+    /// <c>object</c> or to a covariant sequence is an ordinary upcast and has
+    /// nothing to do with rule 3 — an implementation that answered "illegal"
+    /// for every uncomparable pair would break both.
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    [Theory]
+    [InlineData("    let o object = Ob.ArrWithNil()\n    Console.WriteLine(o)")]
+    [InlineData("    let s sequence[string] = Ob.ArrWithNil()\n    Console.WriteLine(s)")]
+    public void Section3_AnUncomparablePair_Is_Declined_Not_Rejected(string body)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+
+        Assert.True(compiled.Success, Describe(compiled));
+    }
+
+    /// <summary>
+    /// Rule 5 for a magic collection, and the fact the rule-3 fixture above
+    /// rests on: an element read through a <c>[]string!</c> receiver is
+    /// <c>string!</c>, so it is checked at its own coercion point rather than
+    /// being silently non-null.
+    /// </summary>
+    [Fact]
+    public void Section3_AnElementReadThroughAPlatformCollection_Is_Itself_Platform()
+    {
+        using var world = new World();
+
+        var element = world.GlobalProbeType("let probe = Ob.ArrWithNil()[0]", NullabilityMode.PlatformTypes);
+
+        Assert.IsType<PlatformTypeSymbol>(element);
+        Assert.Equal("string!", element.Name);
+    }
+
+    /// <summary>
     /// ADR-0186 §4: the check actually fires, at runtime, with an attributable
     /// message — and it fires at the <b>upcast</b>, which is Copilot finding
     /// HIGH-1's shape (<c>object o = obliviousCall()</c>).
@@ -291,6 +389,8 @@ public sealed class Adr0186PlatformTypeBindingTests
     [InlineData("    for v in Ob.NilNumbers() {\n        Console.WriteLine(v)\n    }", "a foreach source")]
     [InlineData("    Ob.NilNest().Prop = \"x\"", "a property-write receiver")]
     [InlineData("    let alias List[string?] = Ob.NilStrings()", "a container whose OUTER type is platform-wrapped")]
+    [InlineData("    throw Ob.NilException()", "a 'throw' operand")]
+    [InlineData("    lock Ob.NilLockTarget() {\n        Console.WriteLine(1)\n    }", "a 'lock' subject")]
     public void Section4_TheCheck_Throws_An_Attributable_NullReferenceException(string body, string site)
     {
         using var world = new World();
@@ -372,6 +472,94 @@ public sealed class Adr0186PlatformTypeBindingTests
         var withoutChecks = Assert.Throws<NullReferenceException>(
             () => world.Run(body, NullabilityMode.PlatformTypes, extraDeclarations: NilHelpers, platformNilChecks: false));
         Assert.DoesNotContain("nullability-oblivious", withoutChecks.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The switch suppresses the <b>check</b>, and nothing else.
+    /// <para>
+    /// The two were coupled at first, and the coupling was invisible to the
+    /// fixture above because a declared-slot store is the one shape that does
+    /// not need the unwrap. The same helper that inserts §4's check is also
+    /// §5's mechanism — replacing a platform receiver with one typed at the
+    /// bare underlying is what makes member lookup run against <c>T</c> — so
+    /// returning the still-wrapped expression turned <em>working</em> indexer
+    /// and <c>for … in</c> code into GS0116 "not indexable" compile errors
+    /// under a switch whose entire purpose is to drop a runtime check for
+    /// measurement. A measurement switch that changes what compiles measures
+    /// nothing.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    [Theory]
+    [InlineData("    Console.WriteLine(Ob.Numbers()[0])")]
+    [InlineData("    for v in Ob.Numbers() {\n        Console.WriteLine(v)\n    }")]
+    [InlineData("    Console.WriteLine(Ob.Value().Length)")]
+    [InlineData("    Ob.Nest2().Prop = \"x\"")]
+    public void Section4_ThePlatformNilChecksSwitch_Suppresses_Only_The_Check(string body)
+    {
+        using var world = new World();
+
+        // Compiles either way: the switch must not move the binder.
+        Assert.True(
+            world.Compile(body, NullabilityMode.PlatformTypes, platformNilChecks: true).Success,
+            "checks on");
+        Assert.True(
+            world.Compile(body, NullabilityMode.PlatformTypes, platformNilChecks: false).Success,
+            "checks off");
+    }
+
+
+    /// <summary>
+    /// ADR-0186 §3's overload tie-break: a <c>T!</c> argument is applicable to
+    /// both a <c>T</c> and a <c>T?</c> parameter, and <c>T</c> wins.
+    /// <para>
+    /// Worth its own fixture because nothing else can catch it. Every
+    /// conversion kind the ranker compares is derived from CLR types, and
+    /// <c>string</c>, <c>string?</c> and <c>string!</c> are one CLR type, so
+    /// the two candidates tie and the rule has to be stated explicitly in
+    /// <c>ComparePlatformArgumentTargets</c>. Reverting that method leaves
+    /// every other test in this PR green.
+    /// </para>
+    /// <para>
+    /// ADR open question 10 records this as the one place the design
+    /// reproduces failure mode 5's <em>shape</em> — the same line selecting a
+    /// different method by typing — and accepts it deliberately, because the
+    /// <c>T</c> overload is the one a non-nilable argument would have picked
+    /// and CLR metadata cannot express such a pair. Accepted deliberately is
+    /// exactly the kind of decision that needs a witness.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_APlatformArgument_Prefers_The_NonNull_Overload()
+    {
+        const string overloads = """
+            func G(s string) string {
+                return "non-null"
+            }
+
+            func G(s string?) string {
+                return "nilable"
+            }
+            """;
+
+        using var world = new World();
+
+        // The control: a G#-declared `string?` argument picks the `T?`
+        // overload, so the pair really is discriminating.
+        Assert.Equal(
+            "nilable",
+            world.Run(
+                "    let n string? = \"x\"\n    Console.WriteLine(G(n))",
+                NullabilityMode.PlatformTypes,
+                extraDeclarations: overloads).Trim());
+
+        // The rule: a `string!` argument picks the non-null overload.
+        Assert.Equal(
+            "non-null",
+            world.Run(
+                "    Console.WriteLine(G(Ob.Value()))",
+                NullabilityMode.PlatformTypes,
+                extraDeclarations: overloads).Trim());
     }
 
     /// <summary>

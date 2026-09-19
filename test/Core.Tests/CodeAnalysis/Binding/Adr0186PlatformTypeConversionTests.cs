@@ -292,6 +292,104 @@ public sealed class Adr0186PlatformTypeConversionTests
     }
 
     /// <summary>
+    /// ADR-0186 §3 rule 3 for the <b>magic collection</b> kinds, pinned on
+    /// synthesized symbols so it holds independently of which shape the
+    /// metadata reader happens to produce.
+    /// <para>
+    /// This matters because the reader produces <em>two</em> shapes for one
+    /// oblivious <c>string[]</c> depending on the path — a slice of platform
+    /// elements at some sites, a platform-wrapped imported array at others
+    /// (see the PR's F1b note). The rule has to hold for both, and asserting
+    /// it here fixes the rule rather than the reader's current habits.
+    /// </para>
+    /// <para>
+    /// A slice, a fixed array, a rectangular array and a map are containers
+    /// with element positions exactly as a constructed generic is, but none
+    /// of them carries a generic argument list — which is why the first
+    /// version of this arm declined for all four and let them fall through to
+    /// an equivalence arm that answered <em>identity</em>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void MagicCollections_Follow_The_Same_ContainerRule_As_Generics()
+    {
+        var platformElement = PlatformTypeSymbol.Get(TypeSymbol.String);
+        var nilableElement = NullableTypeSymbol.Get(TypeSymbol.String);
+
+        foreach (var (platform, nonNull, nilable, kind) in new[]
+        {
+            (
+                (TypeSymbol)SliceTypeSymbol.Get(platformElement),
+                (TypeSymbol)SliceTypeSymbol.Get(TypeSymbol.String),
+                (TypeSymbol)SliceTypeSymbol.Get(nilableElement),
+                "slice"),
+            (
+                ArrayTypeSymbol.Get(platformElement, 3),
+                ArrayTypeSymbol.Get(TypeSymbol.String, 3),
+                ArrayTypeSymbol.Get(nilableElement, 3),
+                "fixed array"),
+            (
+                MapTypeSymbol.Get(TypeSymbol.String, platformElement),
+                MapTypeSymbol.Get(TypeSymbol.String, TypeSymbol.String),
+                MapTypeSymbol.Get(TypeSymbol.String, nilableElement),
+                "map"),
+        })
+        {
+            // The one legal direction.
+            var widening = Conversion.Classify(platform, nilable);
+            Assert.True(widening.Exists, kind);
+            Assert.True(widening.IsImplicit, kind);
+
+            // The three unsound ones.
+            Assert.False(Conversion.Classify(platform, nonNull).Exists, kind);
+            Assert.False(Conversion.Classify(nonNull, platform).Exists, kind);
+            Assert.False(Conversion.Classify(nilable, platform).Exists, kind);
+        }
+    }
+
+    /// <summary>
+    /// A container rule that <em>relates</em> two shapes it should not have
+    /// matched would be worse than one that misses them, so the arm requires
+    /// the same container KIND and the same non-element shape on both sides
+    /// — a fixed array's length and a rectangular array's rank (issue #3962:
+    /// <c>[3]T</c>, <c>[4]T</c> and <c>[]T</c> are all backed by <c>T[]</c>,
+    /// so a CLR comparison alone collapses three distinct G# types into one).
+    /// <para>
+    /// Asserted <b>differentially</b> rather than as a flat rejection,
+    /// because what matters is that this arm did not move the answer: for a
+    /// pair it declines, the result must be exactly what the ordinary rules
+    /// already gave the same pair without a platform element. (Those rules
+    /// are more permissive here than they look — see the inner-nullability
+    /// note below and issue #4321 — but that is theirs to answer, not this
+    /// arm's to change.)
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void MagicCollections_DeclineMismatchedShapes_Without_Changing_The_Answer()
+    {
+        var platformElement = PlatformTypeSymbol.Get(TypeSymbol.String);
+        var nilableElement = NullableTypeSymbol.Get(TypeSymbol.String);
+
+        // Different length.
+        Assert.Equal(
+            Conversion.Classify(
+                ArrayTypeSymbol.Get(TypeSymbol.String, 3),
+                ArrayTypeSymbol.Get(nilableElement, 4)).Exists,
+            Conversion.Classify(
+                ArrayTypeSymbol.Get(platformElement, 3),
+                ArrayTypeSymbol.Get(nilableElement, 4)).Exists);
+
+        // Different kind: a fixed array is not a slice.
+        Assert.Equal(
+            Conversion.Classify(
+                ArrayTypeSymbol.Get(TypeSymbol.String, 3),
+                SliceTypeSymbol.Get(nilableElement)).Exists,
+            Conversion.Classify(
+                ArrayTypeSymbol.Get(platformElement, 3),
+                SliceTypeSymbol.Get(nilableElement)).Exists);
+    }
+
+    /// <summary>
     /// ADR-0186 §3 rule 4: <c>C[T] ↔ C[T?]</c> is "unchanged by this ADR",
     /// and this test records what "unchanged" actually is on this compiler so
     /// the container arm cannot quietly acquire responsibility for it.

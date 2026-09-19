@@ -1025,6 +1025,16 @@ internal sealed partial class StatementBinder
             return BindErrorStatement();
         }
 
+        // ADR-0186 §4: a `lock`/`sync` subject is a position the ADR names
+        // explicitly, and like `throw` it has its own binding path rather
+        // than passing through `BindConversion`. It also needs the unwrap for
+        // §5's reason: `IsLockableReferenceType` below dispatches on the
+        // target's symbol KIND, which a platform wrapper is not.
+        target = PlatformCoercion.InsertCheck(
+            target,
+            syntax.Expression.Location,
+            "a 'lock' subject");
+
         if (!IsLockableReferenceType(target.Type))
         {
             Diagnostics.ReportLockTargetMustBeReferenceType(syntax.Expression.Location, target.Type ?? TypeSymbol.Error);

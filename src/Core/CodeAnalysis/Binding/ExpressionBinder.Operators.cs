@@ -94,21 +94,16 @@ internal sealed partial class ExpressionBinder
         // migrated corpus's existing `!!` does not silently produce a worse
         // diagnostic than the implicit coercion beside it would have.
         // `--platform-nil-checks=off` does NOT reach here: the switch governs
-        // checks the compiler *inserts*, never one the author wrote. When it
-        // is off `InsertCheck` returns the operand unchanged, and this falls
-        // through to the ordinary `!!` binding below — which still emits the
-        // check, just without the message.
+        // checks the compiler *inserts*, never one the author wrote — hence
+        // `suppressible: false`.
         if (syntax.OperatorToken.Kind == SyntaxKind.BangBangToken
             && boundOperand.Type is PlatformTypeSymbol)
         {
-            var explicitCheck = PlatformCoercion.InsertCheck(
+            return PlatformCoercion.InsertCheck(
                 boundOperand,
                 syntax.OperatorToken.Location,
-                "an explicit '!!'");
-            if (!ReferenceEquals(explicitCheck, boundOperand))
-            {
-                return explicitCheck;
-            }
+                "an explicit '!!'",
+                suppressible: false);
         }
 
         var boundOperator = BoundUnaryOperator.Bind(syntax.OperatorToken.Kind, boundOperand.Type);

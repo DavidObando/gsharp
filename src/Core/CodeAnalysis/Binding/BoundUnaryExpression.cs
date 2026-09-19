@@ -76,12 +76,18 @@ public sealed class BoundUnaryExpression : BoundExpression
     /// a user-written <c>!!</c>.
     /// <para>
     /// A non-null value marks this node as the check the compiler inserted at
-    /// a <c>T! -&gt; T</c> coercion. The distinction is observable in three
+    /// a <c>T! -&gt; T</c> coercion. The distinction is observable in two
     /// places and nowhere else: the emitter selects the
     /// <c>NullReferenceException(string)</c> constructor instead of the
-    /// parameterless one, the interpreter raises the same message, and
-    /// <c>--platform-nil-checks=off</c> suppresses insertion of these nodes
-    /// while leaving every user-written <c>!!</c> exactly as it is.
+    /// parameterless one, and <c>--platform-nil-checks=off</c> suppresses
+    /// insertion of these nodes while leaving every user-written <c>!!</c>
+    /// exactly as it is.
+    /// </para>
+    /// <para>
+    /// There is no third consumer, and an earlier draft of this comment
+    /// wrongly claimed one: G# has no separate expression interpreter —
+    /// <c>Interpreter.Tests</c> drives emitted IL — so the emitter is the
+    /// only thing that reads this.
     /// </para>
     /// </summary>
     public string? PlatformCheckMessage { get; }

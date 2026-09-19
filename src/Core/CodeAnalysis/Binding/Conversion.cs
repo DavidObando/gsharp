@@ -101,6 +101,31 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// The container kinds that have argument positions but no generic
+    /// argument list. Distinct from the CLR type on purpose: <c>[]T</c> and
+    /// <c>[N]T</c> are both backed by <c>T[]</c> (issue #3962), so a CLR
+    /// comparison alone would treat <c>[3]string!</c> and <c>[]string</c> as
+    /// one container.
+    /// </summary>
+    private enum CompositeContainerKind
+    {
+        /// <summary>Not a recognised container.</summary>
+        None,
+
+        /// <summary>A slice <c>[]T</c>, or a reflected SZ array, which is the same type (#3924).</summary>
+        Slice,
+
+        /// <summary>A fixed-length array <c>[N]T</c>.</summary>
+        FixedArray,
+
+        /// <summary>A rectangular array.</summary>
+        Rectangular,
+
+        /// <summary>A map <c>map[K, V]</c>.</summary>
+        Map,
+    }
+
+    /// <summary>
     /// The three ways a single pair of corresponding type arguments can relate
     /// under ADR-0186 §3 rule 3.
     /// </summary>
@@ -3302,6 +3327,39 @@ public sealed class Conversion
         var fromPlatform = (PlatformTypeSymbol)from;
         var underlying = fromPlatform.UnderlyingType;
 
+        // ADR-0186 §3 rule 3, for the shape the top-level arm would otherwise
+        // swallow: a platform-wrapped CONTAINER.
+        //
+        // `C[T!]` does not always arrive spelled that way. An oblivious
+        // `string[]` arrives as `[]string!` — the wrapper on the container,
+        // the element carried by the reader's nullable-flags subtree — and
+        // rule 5 says a read through it yields `T!`, which the reader agrees
+        // with: `obliviousArray()[0]` really is `string!`. Converting that to
+        // a bare `[]string` therefore IS `C[T!] -> C[T]` in substance, and
+        // rule 3 gives it no conversion.
+        //
+        // Getting this wrong was strictly worse than the status quo rather
+        // than merely incomplete: the container check fired, passed (the
+        // array is not nil), and the ELEMENT's obliviousness was erased by
+        // the conversion, so `b[0].Length` threw an unattributed NRE on a
+        // program the pre-ADR-0186 model rejects outright.
+        //
+        // A pair this cannot compare — `[]string! -> object`,
+        // `[]string! -> IEnumerable[string]`, anything that is not the same
+        // container shape — is DECLINED here, not rejected, and falls
+        // through to the ordinary rows below.
+        if (TryGetPlatformArgumentPairs(underlying, to, out var elementSource, out var elementTarget))
+        {
+            for (var i = 0; i < elementSource.Length; i++)
+            {
+                if (RelatePlatformArguments(elementSource[i], elementTarget[i])
+                    == PlatformArgumentRelation.Illegal)
+                {
+                    return Conversion.None;
+                }
+            }
+        }
+
         // `T! -> T?` (and `T! -> U?` for any nilable destination): implicit,
         // no check — no conversion to non-null occurs, so interop-to-interop
         // flow costs nothing.
@@ -3419,11 +3477,7 @@ public sealed class Conversion
             return false;
         }
 
-        if (!TryGetPlatformComparableArguments(from, out var fromArguments, out var fromClr)
-            || !TryGetPlatformComparableArguments(to, out var toArguments, out var toClr)
-            || fromArguments.Length == 0
-            || fromArguments.Length != toArguments.Length
-            || !ClrTypeUtilities.AreSame(fromClr, toClr))
+        if (!TryGetPlatformArgumentPairs(from, to, out var fromArguments, out var toArguments))
         {
             return false;
         }
@@ -3520,13 +3574,16 @@ public sealed class Conversion
             return PlatformArgumentRelation.Same;
         }
 
-        if (!TryGetPlatformComparableArguments(a, out var nestedFrom, out var nestedFromClr)
-            || !TryGetPlatformComparableArguments(b, out var nestedTo, out var nestedToClr)
-            || nestedFrom.Length != nestedTo.Length
-            || !ClrTypeUtilities.AreSame(nestedFromClr, nestedToClr))
+        if (!TryGetPlatformArgumentPairs(a, b, out var nestedFrom, out var nestedTo))
         {
-            // One side carries platform-ness the other cannot even be compared
-            // against. Refuse rather than guess.
+            // One side carries platform-ness at a position the other cannot be
+            // compared against at all. Refuse rather than guess — but note
+            // this is the NESTED walk, reached only after the two types were
+            // already established as the same constructed shape, so it cannot
+            // reject an ordinary upcast. The top-level entry point declines
+            // (returns false, leaving the pair to the arms below) instead,
+            // which is what keeps `[]string! -> object` and
+            // `[]string! -> IEnumerable[string]` legal.
             return PlatformArgumentRelation.Illegal;
         }
 
@@ -3549,6 +3606,211 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// The corresponding <b>argument positions</b> of two types, when the two
+    /// are the same constructed shape, with their reference nullability
+    /// intact.
+    /// <para>
+    /// Both sides are taken together on purpose. The question ADR-0186 §3
+    /// rule 3 asks is not "what are this type's arguments" but "are these two
+    /// the same container, and if so which positions correspond" — and
+    /// answering it one type at a time is what made the first version of this
+    /// arm miss every <b>magic collection</b>. A slice, a fixed array, a
+    /// rectangular array and a map are containers with element positions
+    /// exactly as a constructed generic is, but none of them carries
+    /// <see cref="TypeSymbol.ConstructedTypeArguments"/> or
+    /// <see cref="ImportedTypeSymbol.TypeArguments"/>, so the per-type helper
+    /// declined for all four and the pair fell through to an equivalence arm
+    /// that answered <em>identity</em>. The measured consequence: an oblivious
+    /// <c>string[]</c> holding a null assigned into a bare <c>[]string</c>
+    /// compiled with no check at all — strictly worse than the status quo,
+    /// where the same program is rejected outright.
+    /// </para>
+    /// <para>
+    /// Requiring the same <em>kind</em> on both sides, not merely the same
+    /// CLR type, is load-bearing: <c>[]T</c> and <c>[N]T</c> are both backed
+    /// by <c>T[]</c> (issue #3962), so a CLR comparison alone would treat
+    /// <c>[3]string!</c> and <c>[]string</c> as one container.
+    /// </para>
+    /// <para>
+    /// A pair this cannot compare is <b>declined</b>, never rejected. That is
+    /// the difference between the caller that decides a whole conversion —
+    /// which must leave <c>[]string! -&gt; object</c> and
+    /// <c>[]string! -&gt; IEnumerable[string]</c> to the ordinary upcast arms
+    /// — and the nested walk, which has already established that the two
+    /// types are the same shape before it recurses.
+    /// </para>
+    /// <para>
+    /// Scope is deliberately the four <em>invariant, mutable</em> container
+    /// kinds plus constructed generics. <c>sequence[T]</c>,
+    /// <c>asyncSequence[T]</c> and <c>chan[T]</c> are omitted: their element
+    /// positions are read-only or direction-typed, so §3's write-direction
+    /// soundness argument does not apply to them and applying it anyway would
+    /// reject legitimate covariant conversions.
+    /// </para>
+    /// </summary>
+    /// <param name="from">The source type.</param>
+    /// <param name="to">The target type.</param>
+    /// <param name="fromArguments">The source's argument positions.</param>
+    /// <param name="toArguments">The target's corresponding positions.</param>
+    /// <returns><see langword="true"/> when the two are the same constructed shape.</returns>
+    private static bool TryGetPlatformArgumentPairs(
+        TypeSymbol? from,
+        TypeSymbol? to,
+        out ImmutableArray<TypeSymbol> fromArguments,
+        out ImmutableArray<TypeSymbol> toArguments)
+    {
+        fromArguments = ImmutableArray<TypeSymbol>.Empty;
+        toArguments = ImmutableArray<TypeSymbol>.Empty;
+
+        from = UnwrapPlatformAndNullable(from);
+        to = UnwrapPlatformAndNullable(to);
+        if (from is null || to is null)
+        {
+            return false;
+        }
+
+        var fromKind = TryGetCompositeContainerElements(from, out var fromElements);
+        var toKind = TryGetCompositeContainerElements(to, out var toElements);
+        if (fromKind != CompositeContainerKind.None && toKind != CompositeContainerKind.None)
+        {
+            if (fromKind != toKind
+                || fromElements.Length != toElements.Length
+                || !HaveSameCompositeContainerShape(from, to))
+            {
+                return false;
+            }
+
+            fromArguments = fromElements;
+            toArguments = toElements;
+            return true;
+        }
+
+        if (!TryGetConstructedGenericArguments(from, out var fromGeneric, out var fromClr)
+            || !TryGetConstructedGenericArguments(to, out var toGeneric, out var toClr)
+            || fromGeneric.Length == 0
+            || fromGeneric.Length != toGeneric.Length
+            || !ClrTypeUtilities.AreSame(fromClr, toClr))
+        {
+            return false;
+        }
+
+        fromArguments = fromGeneric;
+        toArguments = toGeneric;
+        return true;
+    }
+
+    /// <summary>
+    /// Strips the two top-level reference-nullability wrappers.
+    /// <para>
+    /// Both come off because this walk answers a question about ARGUMENT
+    /// positions only; the outer wrapper is decided by the surrounding arms,
+    /// which have already run or are about to. Leaving a <c>T?</c> on would
+    /// make <c>C[T!] -&gt; C[T?]?</c> look like a pair with no comparable
+    /// arguments and so reject the one conversion §3 permits.
+    /// </para>
+    /// </summary>
+    /// <param name="type">The type to strip.</param>
+    /// <returns>The type beneath any platform/nullable wrappers.</returns>
+    private static TypeSymbol? UnwrapPlatformAndNullable(TypeSymbol? type)
+    {
+        while (type is PlatformTypeSymbol or NullableTypeSymbol)
+        {
+            type = type is PlatformTypeSymbol platform
+                ? platform.UnderlyingType
+                : ((NullableTypeSymbol)type).UnderlyingType;
+        }
+
+        return type;
+    }
+
+    /// <summary>
+    /// The element positions of a magic collection, <b>with the nullability
+    /// the reader gives them</b>.
+    /// <para>
+    /// The array arms deliberately go through
+    /// <see cref="NullabilityAnnotatedTypeSymbol.GetTypeArgumentSymbolForClrType"/>
+    /// rather than reconstructing the element from the CLR type, because that
+    /// accessor is <em>the same one an element READ uses</em>. It is what
+    /// makes <c>obliviousArray()[0]</c> come back as <c>string!</c>, and this
+    /// comparison has to agree with it: the whole question rule 3 asks is
+    /// whether a read through the destination view would produce an unchecked
+    /// non-null element, so the two must not derive the element type by
+    /// different routes. (<c>GetTypeArgumentSymbol</c> is the GENERIC
+    /// accessor and answers <c>TypeSymbol.Error</c> for an array — using it
+    /// here is how the first attempt at this arm silently compared nothing.)
+    /// </para>
+    /// </summary>
+    /// <param name="type">The candidate container.</param>
+    /// <param name="elements">Its element positions, in order.</param>
+    /// <returns>The container kind, or <see cref="CompositeContainerKind.None"/>.</returns>
+    private static CompositeContainerKind TryGetCompositeContainerElements(
+        TypeSymbol type,
+        out ImmutableArray<TypeSymbol> elements)
+    {
+        switch (type)
+        {
+            case SliceTypeSymbol slice:
+                elements = ImmutableArray.Create(slice.ElementType);
+                return CompositeContainerKind.Slice;
+            case ArrayTypeSymbol array:
+                elements = ImmutableArray.Create(array.ElementType);
+                return CompositeContainerKind.FixedArray;
+            case RectangularArrayTypeSymbol rectangular:
+                elements = ImmutableArray.Create(rectangular.ElementType);
+                return CompositeContainerKind.Rectangular;
+            case MapTypeSymbol map:
+                elements = ImmutableArray.Create(map.KeyType, map.ValueType);
+                return CompositeContainerKind.Map;
+            case NullabilityAnnotatedTypeSymbol annotated
+                when IsSingleDimensionArray(annotated.ClrType, out var annotatedElement):
+                elements = ImmutableArray.Create(
+                    annotated.GetTypeArgumentSymbolForClrType(annotatedElement));
+                return CompositeContainerKind.Slice;
+            case ImportedTypeSymbol imported
+                when IsSingleDimensionArray(imported.ClrType, out var importedElement):
+                elements = ImmutableArray.Create(TypeSymbol.FromClrType(importedElement));
+                return CompositeContainerKind.Slice;
+            default:
+                elements = ImmutableArray<TypeSymbol>.Empty;
+                return CompositeContainerKind.None;
+        }
+    }
+
+    /// <summary>Whether a CLR type is a rank-1 (SZ) array, and its element type.</summary>
+    /// <param name="clrType">The candidate CLR type.</param>
+    /// <param name="elementType">The element type when it is.</param>
+    /// <returns><see langword="true"/> for a rank-1 array.</returns>
+    private static bool IsSingleDimensionArray(Type? clrType, [NotNullWhen(true)] out Type? elementType)
+    {
+        if (clrType is { IsArray: true } array
+            && array.GetArrayRank() == 1
+            && array.GetElementType() is { } element)
+        {
+            elementType = element;
+            return true;
+        }
+
+        elementType = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether two same-kind containers agree on the part of their shape that
+    /// is not an element type — a fixed array's length and a rectangular
+    /// array's rank.
+    /// </summary>
+    /// <param name="from">The source container.</param>
+    /// <param name="to">The target container.</param>
+    /// <returns><see langword="true"/> when the non-element shape matches.</returns>
+    private static bool HaveSameCompositeContainerShape(TypeSymbol from, TypeSymbol to)
+        => (from, to) switch
+        {
+            (ArrayTypeSymbol a, ArrayTypeSymbol b) => a.Length == b.Length,
+            (RectangularArrayTypeSymbol a, RectangularArrayTypeSymbol b) => a.Rank == b.Rank,
+            _ => true,
+        };
+
+    /// <summary>
     /// The constructed type arguments of <paramref name="type"/> <b>with their
     /// reference nullability intact</b>, which is the one thing
     /// <see cref="TypeSymbol.ConstructedTypeArguments"/> cannot supply (it
@@ -3558,32 +3820,12 @@ public sealed class Conversion
     /// <param name="arguments">The per-argument symbols.</param>
     /// <param name="definition">The outer CLR type, for the same-definition check.</param>
     /// <returns><see langword="true"/> when the arguments could be read.</returns>
-    private static bool TryGetPlatformComparableArguments(
-        TypeSymbol? type,
+    private static bool TryGetConstructedGenericArguments(
+        TypeSymbol type,
         out ImmutableArray<TypeSymbol> arguments,
         out Type? definition)
     {
         arguments = ImmutableArray<TypeSymbol>.Empty;
-        definition = null;
-
-        // Both top-level wrappers come off. This helper answers a question
-        // about TYPE ARGUMENTS only — whether `C[X]` and `C[Y]` relate — and
-        // the outer wrapper is decided by the surrounding arms, which have
-        // already run or are about to. Leaving a `T?` on would make
-        // `C[T!] -> C[T?]?` look like a pair with no comparable arguments and
-        // so reject the one conversion §3 permits.
-        while (type is PlatformTypeSymbol or NullableTypeSymbol)
-        {
-            type = type is PlatformTypeSymbol platform
-                ? platform.UnderlyingType
-                : ((NullableTypeSymbol)type).UnderlyingType;
-        }
-
-        if (type is null)
-        {
-            return false;
-        }
-
         definition = type.ClrType;
 
         if (type is NullabilityAnnotatedTypeSymbol annotated)

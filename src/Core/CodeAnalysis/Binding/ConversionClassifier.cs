@@ -3125,8 +3125,10 @@ internal sealed class ConversionClassifier
 
         if (ReferenceEquals(checkedExpression, expression))
         {
-            // `--platform-nil-checks=off`: the value keeps its `T!` type and
-            // flows on unconverted, exactly as it did before §4 existed.
+            // Defensive: `InsertCheck` declines only when it cannot bind the
+            // operator at all. Under `--platform-nil-checks=off` it still
+            // unwraps (to a conversion node), so that switch does not reach
+            // here.
             return expression;
         }
 
