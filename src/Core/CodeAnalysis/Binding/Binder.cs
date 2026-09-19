@@ -3926,7 +3926,8 @@ public sealed class Binder
         }
 
         if (!syntax.HasQualifier && syntax.HasTypeArguments
-            && syntax.Identifier?.ValueText is "slice" or "array")
+            && syntax.Identifier is { } nativeName
+            && binderCtx.CanUseNativeBufferAlias(scope, nativeName, function))
         {
             var arguments = syntax.TypeArguments!;
             if (arguments.Count != 1)
@@ -4103,9 +4104,15 @@ public sealed class Binder
             : 0;
         if (!syntax.HasQualifier &&
             syntax.HasTypeArguments &&
-            scope.TryLookupImportedGenericClass(identifierToken.ValueText, topLevelTypeArgumentCount, out var clrOpenType) &&
+            scope.TryLookupImportedGenericClass(identifierToken.ValueText, topLevelTypeArgumentCount, out var clrOpenType, out var genericAmbiguity) &&
             ImportedGenericTypeHasPrecedence(identifierToken.ValueText, topLevelTypeArgumentCount, clrOpenType))
         {
+            if (genericAmbiguity != null)
+            {
+                Diagnostics.ReportAmbiguousImportedTypeReference(identifierToken.Location, identifierToken.ValueText, genericAmbiguity);
+                return null;
+            }
+
             var topLevelTypeArguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments");
             var clrArgs = new System.Type[topLevelTypeArguments.Count];
             var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(topLevelTypeArguments.Count);
@@ -4457,6 +4464,30 @@ public sealed class Binder
             if (bound == null)
             {
                 return null;
+            }
+
+            if (syntax.ReadOnlySliceModifier != null)
+            {
+                if (!NativeSliceTypes.TryGetElement(bound, out var nativeElement, out var alreadyReadOnly))
+                {
+                    Diagnostics.ReportNativeSliceType(syntax.ReadOnlySliceModifier.Location, "readonly requires the native slice category; use Gsharp.Values.ReadOnlySlice[T] explicitly when slice is shadowed");
+                    return null;
+                }
+
+                if (!alreadyReadOnly)
+                {
+                    if (!NativeSliceTypes.TryResolveDefinition(scope.References, true, out var readOnlyDefinition))
+                    {
+                        Diagnostics.ReportNativeSliceRuntime(syntax.Location);
+                        return null;
+                    }
+
+                    var symbolic = false;
+                    bound = ImportedTypeSymbol.GetConstructed(
+                        readOnlyDefinition.MakeGenericType(ProjectGenericArgument(nativeElement, typeof(object), ref symbolic)),
+                        readOnlyDefinition,
+                        ImmutableArray.Create(nativeElement));
+                }
             }
 
             // Issue #1212: for an array/slice clause the trailing `?` is consumed

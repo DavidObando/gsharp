@@ -23,6 +23,52 @@ public sealed class NativeSliceLanguageTests
         yield return new object[]
         {
             """
+            package NativeNamePrecedence
+            import System
+            class slice[T] { var Value T }
+            class array[T] { var Value T }
+            func Main() {
+                let first = slice[int32]{Value: 1}
+                let second = $slice[int32]{Value: 2}
+                let third = array[int32]{Value: 3}
+                let fourth = array[int32]()
+                fourth.Value = 4
+                Console.WriteLine(first.Value)
+                Console.WriteLine(second.Value)
+                Console.WriteLine(third.Value)
+                Console.WriteLine(fourth.Value)
+                let native = Gsharp.Values.Slice[int32].Create(1, 2)
+                native[0] = 5
+                Console.WriteLine(native[0])
+                let ro = Gsharp.Values.ReadOnlySlice[int32].FromArray([]int32{6})
+                Console.WriteLine(ro[0])
+            }
+            """,
+            "1\n2\n3\n4\n5\n6\n",
+        };
+        yield return new object[]
+        {
+            """
+            package NativeFunctionPrecedence
+            import System
+            func slice[T](value T) T { return value }
+            func array[T](value T) T { return value }
+            func Main() {
+                Console.WriteLine(slice[int32](1))
+                Console.WriteLine(array[int32](2))
+                let slice = []int32{3, 4}
+                let array = []int32{5, 6}
+                Console.WriteLine(slice[1])
+                Console.WriteLine(array[1])
+                let $readonly = 7
+                Console.WriteLine($readonly)
+            }
+            """,
+            "1\n2\n4\n6\n7\n",
+        };
+        yield return new object[]
+        {
+            """
             package NativeBuffers
             import System
             import Gsharp.Values
@@ -297,6 +343,8 @@ public sealed class NativeSliceLanguageTests
     [InlineData("let source = slice[string?]{nil}\nlet ok = slice[string].TryFromMemory(source.AsMemory(), out var result)", "GS0601", 5)]
     [InlineData("let source = slice[string?]{nil}\nfor value in source {\nlet nonnull string = value\n}", "GS0155", 6)]
     [InlineData("let s slice[int32]? = nil\nlet r readonly slice[int32]? = nil\nlet same = s == r", "GS0129", 6)]
+    [InlineData("var s $slice[int32]", "GS0113", 4)]
+    [InlineData("var s $array[int32]", "GS0113", 4)]
     public void RejectedRepresentationsReportDiagnostics(string statement, string diagnostic, int line)
     {
         using var fixture = new Fixture();
@@ -304,6 +352,53 @@ public sealed class NativeSliceLanguageTests
         Assert.NotEqual(0, code);
         Assert.True(output.Contains(diagnostic, StringComparison.Ordinal), output);
         Assert.Contains($".gs({line},", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OrdinaryImportedAliasesArityAmbiguityAndReadonlyNeverFallBack()
+    {
+        using var fixture = new Fixture();
+        var library = fixture.CompileCSharp(
+            """
+            namespace ShadowOne {
+                public class slice<T> { public T Value = default!; }
+                public class array<T> { public T Value = default!; }
+            }
+            namespace ShadowTwo { public class slice<T> { } }
+            namespace WrongArity { public class slice<T, U> { } }
+            namespace Constrained { public class slice<T> where T : class { } }
+            """, "OrdinaryNames");
+        var dll = fixture.Compile(
+            """
+            package ImportedNames
+            import System
+            import ShadowOne
+            import buffer = ShadowOne.slice
+            func Main() {
+                let a = slice[int32]{Value: 3}
+                let b = array[int32]{Value: 5}
+                let c = buffer[int32]{Value: 7}
+                Console.WriteLine(a.Value + b.Value + c.Value)
+            }
+            """, "ImportedNames", true, "/r:" + library);
+        IlVerifier.Verify(dll, new[] { library });
+        Assert.Equal("15\n", fixture.Run(dll));
+
+        foreach (var source in new[]
+        {
+            "import WrongArity\nfunc Main() { var value slice[int32] }",
+            "import Constrained\nfunc Main() { var value slice[int32] }",
+            "import ShadowOne\nimport ShadowTwo\nfunc Main() { var value slice[int32] }",
+            "import ShadowOne\nimport ShadowTwo\nfunc Main() { let value = slice[int32]{} }",
+            "class slice[T, U] { }\nfunc Main() { var value slice[int32] }",
+            "import slice = ShadowOne.slice\nfunc Main() { var value readonly slice[int32] }",
+            "class slice[T] { }\nfunc Main() { var value readonly slice[int32] }",
+        })
+        {
+            var (code, output) = fixture.TryCompile("package ShadowFailures\n" + source, "ShadowFailures", true, "/r:" + library);
+            Assert.True(code != 0, "Ordinary name was silently retargeted:\n" + source + "\n" + output);
+            Assert.DoesNotContain("GS0600", output, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

@@ -291,6 +291,13 @@ descriptor readonly; `ref (readonly slice[T])` borrows a readonly-element
 descriptor slot writable; `ref readonly (readonly slice[T])` restricts both.
 Neither `readonlySlice` nor `readonly map` is a magic type.
 
+Ordinary visible types and aliases named `slice` or `array` take precedence,
+including their ordinary wrong-arity/constraint/ambiguity diagnostics.
+`$slice[T]` and `$array[T]` force ordinary lookup; `$readonly` is not a modifier.
+When shadowed, use `Gsharp.Values.Slice[T]`,
+`Gsharp.Values.ReadOnlySlice[T]`, or `[]T` explicitly. The readonly modifier
+requires a resolved native slice, not an unrelated same-named type.
+
 | Operation | Native contract |
 | --- | --- |
 | `s[lo..hi]`, `s.Subslice(lo, hi)` | Require `0 <= lo <= hi <= Capacity`; result length `hi-lo`, capacity `Capacity-lo` |

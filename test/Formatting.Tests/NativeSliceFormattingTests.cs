@@ -10,6 +10,17 @@ namespace GSharp.Formatting.Tests;
 public sealed class NativeSliceFormattingTests
 {
     [Fact]
+    public void OrdinaryNameEscapesAreNotRemoved()
+    {
+        const string source = "let a=$slice[int32]{Value:1}\nvar b $array[int32]\nlet $readonly=3\n";
+        var result = GSharpFormatter.Format(SourceText.From(source));
+        Assert.Empty(result.Diagnostics);
+        Assert.Contains("$slice[int32]", result.Text!.ToString());
+        Assert.Contains("$array[int32]", result.Text!.ToString());
+        Assert.Contains("$readonly", result.Text!.ToString());
+    }
+
+    [Fact]
     public void NativeTypesAndLiteralsKeepModifierAndNullableBinding()
     {
         const string source = """

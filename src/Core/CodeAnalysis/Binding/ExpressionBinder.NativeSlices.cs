@@ -16,6 +16,61 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
+    private BoundExpression BindBufferAwareCallExpression(CallExpressionSyntax syntax)
+    {
+        if (syntax.ConversionTypeClause is { ReadOnlySliceModifier: null, Identifier: { } identifier } type
+            && identifier.Text is "slice" or "array"
+            && !binderCtx.CanUseNativeBufferAlias(scope, identifier, getCurrentFunction(), expression: true))
+        {
+            var ordinary = new CallExpressionSyntax(
+                syntax.SyntaxTree,
+                identifier,
+                type.QuestionToken,
+                BufferTypeArguments(type),
+                syntax.OpenParenthesisToken,
+                syntax.Arguments,
+                syntax.CloseParenthesisToken);
+            return overloads.BindCallExpression(ordinary);
+        }
+
+        return overloads.BindCallExpression(syntax);
+    }
+
+    private static TypeArgumentListSyntax BufferTypeArguments(TypeClauseSyntax type)
+        => new(type.SyntaxTree, type.TypeArgumentOpenBracketToken!, type.TypeArguments!, type.TypeArgumentCloseBracketToken!);
+
+    private BoundExpression BindOrdinaryBufferCollectionLiteral(CollectionInitializerExpressionSyntax syntax)
+    {
+        var type = syntax.BufferType!;
+        var position = type.TypeArgumentCloseBracketToken!.Span.End;
+        var constructor = new CallExpressionSyntax(
+            syntax.SyntaxTree,
+            type.Identifier!,
+            BufferTypeArguments(type),
+            new SyntaxToken(syntax.SyntaxTree, SyntaxKind.OpenParenthesisToken, position, "(", null),
+            new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
+            new SyntaxToken(syntax.SyntaxTree, SyntaxKind.CloseParenthesisToken, position, ")", null));
+        return BindCollectionInitializerSuffix(syntax, overloads.BindCallExpression(constructor));
+    }
+
+    private BoundExpression BindEmptyNativeBufferLiteral(StructLiteralExpressionSyntax syntax)
+    {
+        if (syntax.Elements.Count != 0 || syntax.SpreadExpression != null)
+        {
+            Diagnostics.ReportNativeSliceType(syntax.Location, "native buffer literals require positional elements");
+            return new BoundErrorExpression(syntax);
+        }
+
+        var arguments = syntax.TypeArgumentList!;
+        var type = new TypeClauseSyntax(syntax.SyntaxTree, null, null, null, syntax.TypeIdentifier, arguments.OpenBracketToken, arguments.Arguments, arguments.CloseBracketToken, null);
+        return BindNativeBufferLiteral(new CollectionInitializerExpressionSyntax(
+            syntax.SyntaxTree,
+            null,
+            syntax.OpenBraceToken,
+            new SeparatedSyntaxList<CollectionElementSyntax>(ImmutableArray<SyntaxNode>.Empty),
+            syntax.CloseBraceToken) { BufferType = type });
+    }
+
     private bool ValidateNativeSharingArguments(ImportedClassSymbol? container, string name, ImmutableArray<BoundExpression> arguments, SyntaxNode syntax)
     {
         if (container == null || name is not ("FromArray" or "TryFromMemory")
@@ -203,6 +258,12 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindNativeBufferLiteral(CollectionInitializerExpressionSyntax syntax)
     {
+        if (syntax.BufferType is { ReadOnlySliceModifier: null, Identifier: { } name }
+            && !binderCtx.CanUseNativeBufferAlias(scope, name, getCurrentFunction(), expression: true))
+        {
+            return BindOrdinaryBufferCollectionLiteral(syntax);
+        }
+
         var type = bindTypeClause(Invariant.Required(syntax.BufferType, "native literals carry their buffer type"));
         if (type == null || type == TypeSymbol.Error)
         {

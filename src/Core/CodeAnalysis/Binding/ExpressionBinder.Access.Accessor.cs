@@ -3092,6 +3092,24 @@ internal sealed partial class ExpressionBinder
         // spurious type diagnostics for a non-generic-type target.
         var arity = index.Indices.Count;
 
+        if (name == "slice" && binderCtx.CanUseNativeBufferAlias(scope, targetName.IdentifierToken, getCurrentFunction(), expression: true))
+        {
+            failureHandled = true;
+            if (!NativeSliceTypes.TryResolveDefinition(scope.References, false, out var nativeDefinition))
+            {
+                Diagnostics.ReportNativeSliceRuntime(index.Location);
+                return false;
+            }
+
+            if (!TryBindTypeArgumentExpressions(index.Indices, out var nativeArguments) || nativeArguments.Length != 1)
+            {
+                Diagnostics.ReportNativeSliceType(index.Location, "slice[T] requires one element type");
+                return false;
+            }
+
+            return TryCloseImportedGenericTypeReceiver(nativeDefinition, nativeArguments, index, out constructedImported, out failureHandled);
+        }
+
         // Issue #1395: when a non-generic (arity-0) type and a generic type
         // share the same simple name (arity overloading, e.g. `Box` and
         // `Box[T]`), the arity-unaware lookup prefers the arity-0 type and the
@@ -3107,14 +3125,22 @@ internal sealed partial class ExpressionBinder
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
+        ImportedTypeAmbiguity? genericAmbiguity = null;
         var clrGenericDef = !typeNameAmbiguous
-            && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+            && scope.TryLookupImportedGenericClass(name, arity, out openClrType, out genericAmbiguity);
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
                 && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
+        }
+
+        if (clrGenericDef && genericAmbiguity != null)
+        {
+            Diagnostics.ReportAmbiguousImportedTypeReference(index.Location, name, genericAmbiguity);
+            failureHandled = true;
+            return false;
         }
 
         if (!userGenericDef && !clrGenericDef)
@@ -3202,7 +3228,8 @@ internal sealed partial class ExpressionBinder
 
         var name = generic.Identifier.ValueText;
 
-        if (name == "slice")
+        if (name == "slice" && (generic.ReadOnlySliceModifier != null
+            || binderCtx.CanUseNativeBufferAlias(scope, generic.Identifier, getCurrentFunction(), expression: true)))
         {
             var args = generic.TypeArgumentList;
             var clause = new TypeClauseSyntax(generic.SyntaxTree, null, null, null, generic.Identifier, args.OpenBracketToken, args.Arguments, args.CloseBracketToken, null)
@@ -3243,14 +3270,22 @@ internal sealed partial class ExpressionBinder
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
+        ImportedTypeAmbiguity? genericAmbiguity = null;
         var clrGenericDef = !typeNameAmbiguous
-            && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+            && scope.TryLookupImportedGenericClass(name, arity, out openClrType, out genericAmbiguity);
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
                 && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
+        }
+
+        if (clrGenericDef && genericAmbiguity != null)
+        {
+            Diagnostics.ReportAmbiguousImportedTypeReference(generic.Location, name, genericAmbiguity);
+            failureHandled = true;
+            return false;
         }
 
         if (!userGenericDef && !clrGenericDef)

@@ -796,6 +796,17 @@ public partial class Parser
         };
         if (Current.Kind == SyntaxKind.OpenBraceToken)
         {
+            if (modifier == null && !BraceLooksLikeGenericCollectionInitializer())
+            {
+                var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+                var (spreadToken, spreadExpression, spreadSeparator, elements) = ParseStructLiteralInitializers();
+                var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+                return new StructLiteralExpressionSyntax(syntaxTree, identifier, openBrace, spreadToken, spreadExpression, spreadSeparator, elements, closeBrace)
+                {
+                    TypeArgumentList = arguments,
+                };
+            }
+
             var literal = (CollectionInitializerExpressionSyntax)ParseCollectionInitializerExpression(null);
             literal.BufferType = type;
             return literal;

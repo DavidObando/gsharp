@@ -1277,6 +1277,14 @@ public sealed class ReferenceResolver : IDisposable
     internal static string? FindBundledValuesRuntimePath(string baseDirectory)
         => FindBundledRuntimePath(baseDirectory, "Gsharp.Runtime.Values.dll", "Gsharp.Runtime.Values", "values");
 
+    internal bool HasTypeNameAtAnyArity(string fullName)
+    {
+        var genericPrefix = fullName + "`";
+        return typeNameIndex.Value.Keys.Any(candidate =>
+            (candidate == fullName || candidate.StartsWith(genericPrefix, StringComparison.Ordinal))
+            && TryResolveType(candidate, out _));
+    }
+
     private ImmutableHashSet<string> BuildNamespaceIndex()
     {
         var builder = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);

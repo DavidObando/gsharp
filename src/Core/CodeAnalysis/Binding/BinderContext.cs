@@ -389,6 +389,23 @@ internal sealed class BinderContext
 
     public SyntaxTree? CachedImportedExtensionSyntaxTree { get; set; }
 
+    public bool CanUseNativeBufferAlias(BoundScope scope, SyntaxToken identifier, FunctionSymbol? currentFunction, bool expression = false)
+    {
+        if (identifier.Text is not ("slice" or "array")
+            || TryLookupSourceType(scope, identifier.ValueText, -1, currentFunction, out _, out var ambiguous)
+            || ambiguous
+            || scope.HasImportedTypeName(identifier.ValueText))
+        {
+            return false;
+        }
+
+        return !expression || (scope.TryLookupSymbol(identifier.ValueText) == null
+            && scope.TryLookupFunctions(identifier.ValueText).IsDefaultOrEmpty
+            && !scope.EnumerateStaticImportClrTypes().Any(type => type.GetMethods(
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                .Any(method => method.Name == identifier.ValueText)));
+    }
+
     /// <summary>
     /// Resolves a source type at the current binding site. Lexically visible
     /// nested types on the containing type or an accessible base type are

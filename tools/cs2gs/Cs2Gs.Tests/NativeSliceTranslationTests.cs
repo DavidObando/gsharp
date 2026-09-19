@@ -25,6 +25,35 @@ public sealed class NativeSliceTranslationTests
     }
 
     [Fact]
+    public void ShadowedNativeAliasesUseQualifiedRuntimeTypes()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ShadowTranslation;
+            public class slice<T> { }
+            public class Buffers {
+                public Slice<int> Native;
+                public ReadOnlySlice<int> View;
+                public slice<int> Ordinary = new slice<int>();
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.Slice<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("Shadow.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Native Gsharp.Values.Slice[int32]", printed);
+        Assert.Contains("View Gsharp.Values.ReadOnlySlice[int32]", printed);
+        Assert.Contains("Ordinary slice[int32]", printed);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+    }
+
+    [Fact]
     public void MapperRecognizesRuntimeIdentityWithoutRewritingCSharpArrays()
     {
         const string source = """

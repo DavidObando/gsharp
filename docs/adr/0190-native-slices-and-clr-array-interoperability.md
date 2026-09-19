@@ -8,6 +8,7 @@
   [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
   [ADR-0016](0016-slice-storage.md),
   [ADR-0042](0042-async-sequence-type-clause.md),
+  [ADR-0170](0170-escaped-identifiers.md),
   [ADR-0159](0159-magic-collection-zero-values-and-nil-comparison.md),
   [ADR-0174](0174-goroutines-and-channels-wave-2.md),
   [ADR-0181](0181-readonly-managed-reference-contracts.md),
@@ -118,6 +119,14 @@ The code-model snapshot change is one reviewed new
 The original rationale and selected semantic matrices follow; references to
 proposal-stage gates below are historical context, resolved by this amendment.
 
+The ordinary-name/escape-precedence amendment merged with #4332 on September
+19, 2026 is also implemented. Source/imported lowercase generic types, explicit
+aliases, escaped identifiers, wrong arities, failed constraints and ambiguous
+imports have discriminating compiler tests. Generic import ambiguity uses the
+existing GS0547 diagnostic rather than a first-import or native fallback.
+Formatter escapes are retained, and cs2gs qualifies runtime native types when
+ordinary names at the C# binding site would shadow the aliases.
+
 ## Context
 
 At the inspected compiler snapshot, `88f4c4ad8`, the source forms `[]T` and
@@ -161,7 +170,8 @@ that same existing array representation.**
 This is the recommended additive path, not a temporary mode that changes
 `[]T` according to project flags. A future proposal could retire a spelling,
 but this ADR neither schedules nor authorizes an ABI-changing reinterpretation.
-There is one meaning per spelling across mixed-version assemblies.
+Resolved native types have the same CLR identity across mixed-version
+assemblies; ordinary-name lookup and shadowing are specified below.
 
 The spellings and members below describe the selected contracts, implemented
 as recorded in the acceptance amendment above.
@@ -243,6 +253,53 @@ arguments, tuples, and other existing type-clause positions. Formatters,
 diagnostics, completion, and symbol display use `readonly slice[T]`; the
 joined spelling is not an additional magic alias. This does not reserve a
 user-defined identifier named `readonlySlice`.
+
+#### Ordinary names take precedence over native aliases
+
+`slice` and `array` are currently ordinary identifiers; existing code can
+declare or import generic types with those names. The new aliases must not
+silently retarget such references. Preserve ordinary visible type/type-alias
+lookup first, including its normal scope, arity, accessibility, and ambiguity
+rules. A visible ordinary type or alias claiming the name prevents native
+fallback: wrong arity, failed constraints, or ambiguous imports remain the
+ordinary diagnostic, not a reason to reinterpret the spelling as a native
+type. Only an unescaped, otherwise unclaimed `slice[T]` or `array[T]` acquires
+the native meaning.
+
+Qualified names always use ordinary lookup; native behavior then follows the
+resolved runtime assembly/type identity, not a matching short name. When a
+user type shadows the aliases, the runtime spellings
+`Gsharp.Values.Slice[T]` / `Gsharp.Values.ReadOnlySlice[T]` and the existing
+exact-array `[]T` spelling remain explicit alternatives.
+[ADR-0170](0170-escaped-identifiers.md)'s `$slice[T]` and `$array[T]` force
+ordinary identifier lookup and never request a native alias; an unresolved
+escaped name stays unresolved. Formatters must not remove an escape when
+doing so would change that classification.
+
+```gsharp
+// Existing named-type behavior must survive the new aliases.
+class slice[T] { var Value T }
+let first = slice[int32]{Value: 1}
+let second = $slice[int32]{Value: 2}  // the same user-declared type
+// Proposed native runtime, explicitly selected despite that shadowing:
+let native = Gsharp.Values.Slice[int32].Create(2, 4)
+let raw = []int32{1, 2}
+```
+
+`readonly slice[T]` is admitted only when its `slice[T]` denotes the native
+slice category. If ordinary lookup selects an unrelated user type, report
+that the modifier requires the native slice and point to the explicit
+`Gsharp.Values.ReadOnlySlice[T]` spelling. It does not adapt an arbitrary
+same-named type. An escaped `$readonly` is an ordinary identifier, not this
+modifier.
+
+The parser must preserve enough original name/escape information for binding
+to make this choice, instead of committing every `IdentifierToken` followed
+by brackets to a new intrinsic. The same rule reaches literals, constructor
+and static-member expressions, and type clauses; ordinary generic function
+and value lookup must not be hijacked. Native-specific literal validation
+happens only after selecting the native type. Generated code uses qualified
+runtime spellings when a source declaration/import would shadow an alias.
 
 | Proposed spelling | Meaning |
 | --- | --- |

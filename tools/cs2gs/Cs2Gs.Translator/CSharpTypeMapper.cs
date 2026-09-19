@@ -1593,7 +1593,14 @@ public sealed class CSharpTypeMapper
                 && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
                 && named.Arity == 1 && named.Name is "Slice" or "ReadOnlySlice")
             {
-                return new NativeSliceTypeReference(this.Map(named.TypeArguments[0], context, location), named.Name == "ReadOnlySlice");
+                var element = this.Map(named.TypeArguments[0], context, location);
+                if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
+                    || context.SemanticModel.LookupNamespacesAndTypes(location.SourceSpan.Start, name: "slice").Any())
+                {
+                    return new NamedTypeReference("Gsharp.Values." + named.Name, new[] { element });
+                }
+
+                return new NativeSliceTypeReference(element, named.Name == "ReadOnlySlice");
             }
 
             // Value tuples map to the native G# tuple type. ADR-0172: G#
