@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Immutable;
-using System.Globalization;
 using System.Text.RegularExpressions;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -159,9 +158,12 @@ internal static class GeneratedRegexBinder
             return true;
         }
 
-        if (!TryExtractArguments(attribute, out var pattern, out var optionsValue, out var hasTimeout, out var timeoutMilliseconds, out var cultureName))
+        // TryExtractArguments reports its own diagnostic (GS0593 for a
+        // missing/non-constant pattern, GS0594 for a malformed `options`
+        // argument) before returning false, so there is nothing more to
+        // report here.
+        if (!TryExtractArguments(attribute, function, diagnostics, out var pattern, out var optionsValue, out var hasTimeout, out var timeoutMilliseconds, out var cultureName))
         {
-            diagnostics.ReportGeneratedRegexMissingPattern(attributeLocation, function.Name);
             return true;
         }
 
@@ -298,6 +300,8 @@ internal static class GeneratedRegexBinder
 
     private static bool TryExtractArguments(
         BoundAttribute attribute,
+        FunctionSymbol function,
+        DiagnosticBag diagnostics,
         out string pattern,
         out int optionsValue,
         out bool hasTimeout,
@@ -310,17 +314,33 @@ internal static class GeneratedRegexBinder
         timeoutMilliseconds = -1;
         cultureName = string.Empty;
 
+        var attributeLocation = attribute.Syntax.Location;
         var positional = attribute.PositionalArguments;
         if (positional.IsDefaultOrEmpty || positional[0].Value is not string patternText || patternText.Length == 0)
         {
+            diagnostics.ReportGeneratedRegexMissingPattern(attributeLocation, function.Name);
             return false;
         }
 
         pattern = patternText;
 
-        if (positional.Length > 1 && positional[1].Value is { } optionsBoxed)
+        // Issue #4301 review: the general attribute-argument binder accepts
+        // any compile-time constant here, not just an int/RegexOptions one —
+        // `Convert.ToInt32` on a raw boxed value is unsafe for that: it
+        // THROWS an uncaught FormatException for a non-numeric string
+        // (`@GeneratedRegex(pattern, "bogus")`), and it SILENTLY succeeds
+        // with a wrong value for e.g. `bool` (`Convert.ToInt32(true) == 1`,
+        // becoming `RegexOptions.IgnoreCase` with no diagnostic at all).
+        // `KnownAttributes.TryConvertToInt32` is the same closed-set-of-real-
+        // representations conversion `@DllImport`'s enum-valued arguments
+        // already use — reuse it instead of a second, unsafe one.
+        if (positional.Length > 1 && !KnownAttributes.TryConvertToInt32(positional[1].Value, out optionsValue))
         {
-            optionsValue = Convert.ToInt32(optionsBoxed, CultureInfo.InvariantCulture);
+            diagnostics.ReportGeneratedRegexInvalidFunctionShape(
+                attributeLocation,
+                function.Name,
+                "the 'options' argument must be a 'RegexOptions' value");
+            return false;
         }
 
         // The third positional argument is either `matchTimeoutMilliseconds`
@@ -349,7 +369,15 @@ internal static class GeneratedRegexBinder
             switch (named.Name)
             {
                 case "options" when named.Value is { } namedOptions:
-                    optionsValue = Convert.ToInt32(namedOptions, CultureInfo.InvariantCulture);
+                    if (!KnownAttributes.TryConvertToInt32(namedOptions, out optionsValue))
+                    {
+                        diagnostics.ReportGeneratedRegexInvalidFunctionShape(
+                            attributeLocation,
+                            function.Name,
+                            "the 'options' argument must be a 'RegexOptions' value");
+                        return false;
+                    }
+
                     break;
                 case "matchTimeoutMilliseconds" when named.Value is int namedTimeout:
                     hasTimeout = true;

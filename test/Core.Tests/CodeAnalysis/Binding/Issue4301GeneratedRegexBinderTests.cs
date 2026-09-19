@@ -121,6 +121,78 @@ class C {
     }
 
     [Fact]
+    public void NonNumericStringOptionsArgument_ReportsGS0594_DoesNotThrow()
+    {
+        // Issue #4301 review: `Convert.ToInt32("bogus")` throws an uncaught
+        // FormatException out of the binder for exactly this shape (a
+        // plausible user typo, e.g. swapped argument order). BindSource
+        // itself must not throw — a malformed `options` argument is a
+        // diagnostic, never a compiler crash.
+        const string source = @"
+package p
+import System.Text.RegularExpressions
+
+class C {
+    shared {
+        @GeneratedRegex(""^[a-z]+$"", ""bogus"")
+        func Pattern() Regex;
+    }
+}
+";
+        var globalScope = BindSource(source);
+        Assert.Contains(globalScope.Diagnostics, d => d.Id == "GS0594");
+        var structSym = globalScope.Structs.Single(s => s.Name == "C");
+        var method = structSym.StaticMethods.Single(m => m.Name == "Pattern");
+        Assert.False(method.IsGeneratedRegex);
+    }
+
+    [Fact]
+    public void BoolOptionsArgument_ReportsGS0594_DoesNotSilentlyBecomeIgnoreCase()
+    {
+        // Issue #4301 review: `Convert.ToInt32(true)` returns 1, which is
+        // exactly RegexOptions.IgnoreCase's bit value — a convertible-but-
+        // wrong-typed argument must not silently miscompile into an
+        // arbitrary RegexOptions combination with no diagnostic at all.
+        const string source = @"
+package p
+import System.Text.RegularExpressions
+
+class C {
+    shared {
+        @GeneratedRegex(""^[a-z]+$"", true)
+        func Pattern() Regex;
+    }
+}
+";
+        var globalScope = BindSource(source);
+        Assert.Contains(globalScope.Diagnostics, d => d.Id == "GS0594");
+        var structSym = globalScope.Structs.Single(s => s.Name == "C");
+        var method = structSym.StaticMethods.Single(m => m.Name == "Pattern");
+        Assert.False(method.IsGeneratedRegex);
+    }
+
+    [Fact]
+    public void BoolNamedOptionsArgument_ReportsGS0594()
+    {
+        // Same as above, but through the named-argument ("options:") path
+        // rather than the positional one — both call sites in
+        // GeneratedRegexBinder must validate.
+        const string source = @"
+package p
+import System.Text.RegularExpressions
+
+class C {
+    shared {
+        @GeneratedRegex(""^[a-z]+$"", options: true)
+        func Pattern() Regex;
+    }
+}
+";
+        var globalScope = BindSource(source);
+        Assert.Contains(globalScope.Diagnostics, d => d.Id == "GS0594");
+    }
+
+    [Fact]
     public void WrongReturnType_ReportsGS0594()
     {
         const string source = @"

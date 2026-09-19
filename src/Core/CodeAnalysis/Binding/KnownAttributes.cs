@@ -757,7 +757,23 @@ internal static class KnownAttributes
         return false;
     }
 
-    private static bool TryConvertToInt32(object? value, out int result)
+    /// <summary>
+    /// Narrows <paramref name="value"/> to its <c>int32</c> representation
+    /// when it is one of the CLR shapes an attribute-argument constant can
+    /// actually take for an integral/enum-typed argument — never for a
+    /// merely <c>Convert.ToInt32</c>-convertible type like <c>bool</c> or
+    /// <c>string</c> (issue #4301 review: <c>Convert.ToInt32(true)</c>
+    /// silently returns <c>1</c>, and <c>Convert.ToInt32("bogus")</c> throws
+    /// an uncaught <see cref="FormatException"/> out of the binder — both
+    /// wrong for a malformed <c>@GeneratedRegex</c> `options` argument,
+    /// which must report a diagnostic instead). Internal so
+    /// <see cref="GeneratedRegexBinder"/> can reuse the same safe,
+    /// closed-set conversion instead of hand-rolling a second one.
+    /// </summary>
+    /// <param name="value">The bound attribute-argument constant value.</param>
+    /// <param name="result">Receives the <c>int32</c> representation on success.</param>
+    /// <returns><c>true</c> when <paramref name="value"/> is one of the recognised integral/enum shapes.</returns>
+    internal static bool TryConvertToInt32(object? value, out int result)
     {
         switch (value)
         {

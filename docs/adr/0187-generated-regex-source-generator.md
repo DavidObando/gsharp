@@ -345,6 +345,84 @@ unsupported when the culture restriction applies — gsc's own GS0595 would
 also catch a mistranslation, but rejecting at cs2gs time gives a clearer
 migration-tool diagnostic).
 
+## Known limitations
+
+This ADR replicates real `[GeneratedRegex]`'s **observable behavior and
+caching contract** — `Match`/`IsMatch`/`Options`/`MatchTimeout`/reference
+identity across calls all behave correctly, verified end-to-end by this
+ADR's own emit tests — but it does **not** replicate the deeper feature
+the real C# source generator exists to provide: **compile-time-specialized
+matching**.
+
+Verified directly against the real generator's actual output (`dotnet new
+console`, a `[GeneratedRegex]` partial method, `<EmitCompilerGeneratedFiles>
+true</EmitCompilerGeneratedFiles>`, then reading the `.g.cs` file under
+`generated/System.Text.RegularExpressions.Generator/`): for a pattern like
+`[GeneratedRegex(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", RegexOptions.IgnoreCase)]`,
+Roslyn's generator does not emit anything resembling `new Regex(pattern,
+options)`. It emits a `Regex`-derived subclass —
+`EmailRegex_0 : Regex`, one per attributed method — whose constructor
+still sets `pattern`/`roptions`/`internalMatchTimeout` for introspection
+(`.ToString()`, `.Options`, `.MatchTimeout` all still work, which is why
+this ADR's plain-`Regex` approach is contract-compatible), but whose
+*matching* is driven by a hand-specialized `RegexRunnerFactory` /
+`RegexRunner` pair implementing that ONE pattern's algorithm as ordinary,
+straight-line C#: a generated `TryMatchAtCurrentPosition` method with
+character-class bitmask lookups, `while` loops walking the input span, and
+`goto`-based backtracking bookkeeping — no interpreted opcode loop, no
+runtime `Regex` engine invoked at all. Schematically:
+
+```csharp
+file sealed class EmailRegex_0 : Regex
+{
+    // ...ctor sets pattern/options/timeout for introspection...
+
+    private sealed class RunnerFactory : RegexRunnerFactory
+    {
+        protected override RegexRunner CreateInstance() => new Runner();
+
+        private sealed class Runner : RegexRunner
+        {
+            protected override void Scan(ReadOnlySpan<char> text) { /* ... */ }
+
+            private bool TryMatchAtCurrentPosition(ReadOnlySpan<char> inputSpan)
+            {
+                // Specialized to THIS pattern: character-class bitmask
+                // tests, `while` scanning loops, `goto`-based backtrack
+                // bookkeeping — the same kind of specialization
+                // RegexOptions.Compiled performs via runtime
+                // Reflection.Emit, but generated ahead of time as
+                // ordinary C# source instead.
+                ...
+            }
+        }
+    }
+}
+```
+
+This is functionally the same class of optimization `RegexOptions.Compiled`
+already does at runtime (via `Reflection.Emit`), except shifted to
+*compile time* as ordinary generated source — which is precisely what
+makes it AOT-friendly (no runtime codegen needed) and is the real
+generator's primary motivation, not an incidental detail. G#'s emitted
+`Regex(pattern, options[, timeout])` still runs through the BCL's ordinary
+*interpreted* matching engine every time — no per-pattern specialization,
+no AOT benefit beyond "no attribute-driven code generation happens at
+gsc's own compile time" (which was never the bottleneck; regex matching
+performance was).
+
+Building real compile-time regex-to-specialized-matcher generation would
+mean reimplementing a substantial slice of `System.Text.RegularExpressions`'s
+own regex-compiler internals inside gsc — disproportionate to pursue now,
+by the same reasoning this ADR's own Alternatives section already applies
+elsewhere (see "Full partial-method / partial-property language support"
+and "A general source-generator pipeline" below). It does not block this
+ADR's actual goal: retiring `__generatedRegex_` (issue #3501's
+zero-synthetic-identifiers goal) does not require matching-engine parity,
+only observable-behavior parity, which is what shipped. A future ADR could
+revisit this if G# ever needs AOT-published regex-heavy workloads to match
+real `[GeneratedRegex]`'s throughput — no such need is known today.
+
 ## Alternatives considered
 
 ### 1. Full partial-method / partial-property language support — rejected
@@ -368,7 +446,7 @@ identified, and the wrapper logic complex enough that bound-tree rewriting
 becomes the simpler implementation.* The first half of that trigger just
 fired (`@GeneratedRegex` is the additional consumer) — but the second half
 did not: this ADR's entire emission delta is one new binder helper
-(`GeneratedRegexBinder`, ~350 lines, structurally parallel to
+(`GeneratedRegexBinder`, ~500 lines, structurally parallel to
 `PInvokeBinder`), one new emit method
 (`EmitStructGeneratedRegexBackingFields`, ~25 lines, structurally parallel
 to `EmitStructStaticPropertyBackingFields`), a ~15-line addition to field-
