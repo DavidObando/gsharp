@@ -69,44 +69,29 @@ public sealed class Issue3086GeneratedRegexPipelineTests
             Environment.NewLine,
             Directory.GetFiles(appDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
-        // ADR-0179 phase 7b: the gsfmt post-pass wraps an over-wide backing
-        // field across several lines, so "the initializer of THIS field" is no
-        // longer "the line that declares it". Slice from the declaration to the
-        // next `__generatedRegex_` instead, which is the following member.
-        string defaultPatternField = GeneratedRegexInitializer(translated, "__generatedRegex_DefaultPattern");
-        string infinitePatternField = GeneratedRegexInitializer(translated, "__generatedRegex_InfinitePattern");
 
-        Assert.Contains("let __generatedRegex_Pattern Regex = Regex(", translated, StringComparison.Ordinal);
+        // ADR-0187 / issue #4301: cs2gs now emits the native
+        // `@GeneratedRegex(...)` discriminator on a bodyless `func` directly
+        // — no more `__generatedRegex_{name}` cache field or manual
+        // forwarding method. gsc's own binder synthesizes the cached
+        // backing field and the trivial accessor body.
+        Assert.DoesNotContain("__generatedRegex_", translated, StringComparison.Ordinal);
+        Assert.Contains("@GeneratedRegex(", translated, StringComparison.Ordinal);
         Assert.Contains("RegexOptions.ExplicitCapture", translated, StringComparison.Ordinal);
-        Assert.Contains("TimeSpan.FromMilliseconds(1000.0)", translated, StringComparison.Ordinal);
-        Assert.Contains("func Pattern() Regex -> __generatedRegex_Pattern", translated, StringComparison.Ordinal);
-        Assert.Contains("let __generatedRegex_DefaultPattern Regex = Regex(", translated, StringComparison.Ordinal);
+        Assert.Contains("matchTimeoutMilliseconds: 1000", translated, StringComparison.Ordinal);
+        Assert.Contains("func Pattern() Regex;", translated, StringComparison.Ordinal);
+        // G#'s printer escapes a literal '$' as "$$" in a string literal
+        // (unrelated to this ADR — the same escaping already applied to the
+        // pattern text when it was printed inside the old `Regex(...)`
+        // construction call; it round-trips correctly through gsc's lexer).
+        Assert.Contains("@GeneratedRegex(\"^default$$\", RegexOptions.None)", translated, StringComparison.Ordinal);
+        Assert.Contains("func DefaultPattern() Regex;", translated, StringComparison.Ordinal);
         Assert.Contains("RegexOptions.None", translated, StringComparison.Ordinal);
-        Assert.DoesNotContain("Regex.InfiniteMatchTimeout", defaultPatternField, StringComparison.Ordinal);
-        Assert.Contains(
-            "func DefaultPattern() Regex -> __generatedRegex_DefaultPattern",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "let __generatedRegex_InfinitePattern Regex = Regex(",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains("Regex.InfiniteMatchTimeout", infinitePatternField, StringComparison.Ordinal);
-        Assert.Contains(
-            "func InfinitePattern() Regex -> __generatedRegex_InfinitePattern",
-            translated,
-            StringComparison.Ordinal);
+        Assert.Contains("matchTimeoutMilliseconds: -1", translated, StringComparison.Ordinal);
+        Assert.Contains("func InfinitePattern() Regex;", translated, StringComparison.Ordinal);
         Assert.Contains("RegexOptions.CultureInvariant", translated, StringComparison.Ordinal);
-        Assert.Contains(
-            "let __generatedRegex_LowercaseWords Regex = Regex(",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "partial class InstanceRegexOwner {" + Environment.NewLine +
-            "    func LowercaseWords() Regex -> __generatedRegex_LowercaseWords",
-            translated,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("@GeneratedRegex", translated, StringComparison.Ordinal);
+        Assert.Contains("@GeneratedRegex(\"^[a-z]+$$\", RegexOptions.None)", translated, StringComparison.Ordinal);
+        Assert.Contains("func LowercaseWords() Regex;", translated, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
             string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
@@ -188,23 +173,6 @@ public sealed class Issue3086GeneratedRegexPipelineTests
         Assert.Contains("func EscapedLiteral()", translated, StringComparison.Ordinal);
         Assert.Contains("func CharacterClassLiteral()", translated, StringComparison.Ordinal);
         Assert.Contains("func InvariantIgnoreCase()", translated, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Returns the initializer text of one <c>[GeneratedRegex]</c> backing
-    /// field: everything between its declaration and the next
-    /// <c>__generatedRegex_</c>, which is the accessor that reads it. Slicing
-    /// by member rather than by line keeps the assertion honest once the
-    /// ADR-0179 post-pass is free to wrap the initializer.
-    /// </summary>
-    private static string GeneratedRegexInitializer(string translated, string field)
-    {
-        string marker = field + " Regex =";
-        int start = translated.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"expected '{marker}' in the migrated source.");
-        start += marker.Length;
-        int end = translated.IndexOf("__generatedRegex_", start, StringComparison.Ordinal);
-        return end < 0 ? translated[start..] : translated[start..end];
     }
 
     private static void CopyFixture(string destination)

@@ -50,13 +50,13 @@ public sealed partial class CSharpToGSharpTranslator
 
                     // A GeneratedRegex trigger is a non-void partial definition,
                     // so ordinary partial-method elision would drop its declaration
-                    // while value-position calls remain.
-                    if (this.TryTranslateGeneratedRegex(
-                        method,
-                        out FieldDeclaration generatedRegexField,
-                        out MethodDeclaration generatedRegexMethod))
+                    // while value-position calls remain. ADR-0187 / issue #4301:
+                    // this now emits a single native `@GeneratedRegex(...)`
+                    // bodyless `func` — gsc's own binder synthesizes the cached
+                    // backing field, so there is no separate field member to
+                    // yield here any more.
+                    if (this.TryTranslateGeneratedRegex(method, out MethodDeclaration generatedRegexMethod))
                     {
-                        yield return (generatedRegexField, true);
                         yield return (
                             generatedRegexMethod,
                             method.Modifiers.Any(SyntaxKind.StaticKeyword));
@@ -290,10 +290,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool TryTranslateGeneratedRegex(
             MethodDeclarationSyntax node,
-            out FieldDeclaration cacheField,
             out MethodDeclaration method)
         {
-            cacheField = null;
             method = null;
 
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
@@ -363,9 +361,14 @@ public sealed partial class CSharpToGSharpTranslator
             if (usesIgnoreCase &&
                 ((optionBits & CultureInvariant) == 0 || cultureName.Length > 0))
             {
+                // ADR-0187 / issue #4301: gsc's own binder rejects this exact
+                // shape with GS0595, but cs2gs must decide up front whether
+                // it can attempt the translation at all — report it here as
+                // a migration-tool diagnostic rather than emitting a native
+                // `@GeneratedRegex(...)` gsc would just reject.
                 const string Message = "GeneratedRegex with culture-sensitive IgnoreCase, including inline " +
-                    "option groups, cannot be lowered to Regex construction without changing culture or " +
-                    "Regex.Options semantics.";
+                    "option groups, cannot be lowered to native @GeneratedRegex without changing culture or " +
+                    "Regex.Options semantics (ADR-0187).";
                 this.context.ReportUnsupported(node, Message);
                 return false;
             }
@@ -384,58 +387,52 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            var constructionArguments = new List<GExpression>
+            // ADR-0187 / issue #4301: emit the native `@GeneratedRegex(...)`
+            // discriminator directly — gsc's own binder now owns the
+            // cached-Regex backing-field synthesis (ADR-0051's auto-property
+            // shape) that this function used to hand-roll as a
+            // `__generatedRegex_{name}` cache field plus a manual forwarding
+            // method. The `pattern` argument is always the RESOLVED constant
+            // string value, never an identifier reference to a sibling
+            // `const` field: gsc's attribute-argument binder does not
+            // resolve a bare name reference in an attribute-argument
+            // position (verified empirically; see ADR-0187 Context). This is
+            // not a fidelity loss — `pattern` above is already Roslyn's own
+            // resolved compile-time constant value
+            // (`constructorArguments[i].Value`), not a source-text
+            // identifier; this function was never printing an identifier
+            // like `PatternText` into G# source either, it only used the C#
+            // member's name to synthesize a readable cache-field name, which
+            // no longer exists to name.
+            var attributeArguments = new List<AttributeArgument>
             {
-                LiteralExpression.String(pattern),
-                options,
+                new AttributeArgument(LiteralExpression.String(pattern)),
+                new AttributeArgument(options),
             };
             if (hasMatchTimeoutArgument)
             {
-                string regexTypeName = regexType is NamedTypeReference namedRegex
-                    ? namedRegex.Name
-                    : "Regex";
-                GExpression matchTimeout = timeoutMilliseconds == -1
-                    ? new MemberAccessExpression(
-                        new IdentifierExpression(regexTypeName),
-                        "InfiniteMatchTimeout")
-                    : new InvocationExpression(
-                        new MemberAccessExpression(
-                            new IdentifierExpression("TimeSpan"),
-                            "FromMilliseconds"),
-                        new[]
-                        {
-                            LiteralExpression.Float(
-                                timeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + ".0"),
-                        });
-                constructionArguments.Add(matchTimeout);
+                attributeArguments.Add(new AttributeArgument(
+                    LiteralExpression.Int(timeoutMilliseconds.ToString(CultureInfo.InvariantCulture)),
+                    name: "matchTimeoutMilliseconds"));
             }
 
-            string emittedMethodName = this.EmittedName(symbol, node.Identifier.ValueText);
-            string cacheName = "__generatedRegex_" + emittedMethodName;
-            var occupiedNames = new HashSet<string>(
-                symbol.ContainingType.GetMembers().Select(member => member.Name),
-                StringComparer.Ordinal);
-            while (occupiedNames.Contains(cacheName))
+            if (cultureName.Length > 0)
             {
-                cacheName += "_";
+                attributeArguments.Add(new AttributeArgument(
+                    LiteralExpression.String(cultureName),
+                    name: "cultureName"));
             }
 
-            cacheField = new FieldDeclaration(
-                BindingKind.Let,
-                cacheName,
-                regexType,
-                BuildConstruction(regexType, constructionArguments),
-                Visibility.Private);
+            var generatedRegexAttribute = new AttributeUse("GeneratedRegex", attributeArguments);
+            var attributes = new List<AttributeUse> { generatedRegexAttribute };
+            attributes.AddRange(this.MapAttributes(node.AttributeLists)
+                .Where(mapped => !IsGeneratedRegexAttributeName(mapped.Name)));
 
-            List<AttributeUse> attributes = this.MapAttributes(node.AttributeLists)
-                .Where(mapped => !IsGeneratedRegexAttributeName(mapped.Name))
-                .ToList();
             method = new MethodDeclaration(
-                emittedMethodName,
+                this.EmittedName(symbol, node.Identifier.ValueText),
                 returnType: regexType,
                 visibility: MapVisibility(symbol, this.context, node),
-                attributes: attributes,
-                expressionBody: new ReturnStatement(new IdentifierExpression(cacheName)));
+                attributes: attributes);
             return true;
         }
 
