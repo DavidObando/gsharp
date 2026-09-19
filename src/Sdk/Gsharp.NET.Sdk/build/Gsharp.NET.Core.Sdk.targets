@@ -263,9 +263,33 @@
        ProjectLanguage=C# and our CompilerApiVersion, into a DISTINCT cache file,
        capturing only its Analyzers output. Then union in any user @(Analyzer)
        items. If the resulting set is empty, the generator run is skipped (fast
-       path via the Condition on _GsharpRunSourceGenerators). -->
+       path via the Condition on _GsharpRunSourceGenerators).
+
+       This covers NuGet-delivered generators (e.g. CommunityToolkit.Mvvm), but
+       NOT an SDK-BUNDLED generator such as System.Text.RegularExpressions.
+       Generator (backing `[GeneratedRegex]`) or System.Text.Json.Source
+       Generation: those ship inside the Microsoft.NETCore.App.Ref TARGETING
+       PACK (analyzers/dotnet/cs/*.dll), resolved by the wholly separate
+       ResolveTargetingPackAssets task/target (Microsoft.NET.Sdk.Framework
+       ReferenceResolution.targets) — never through project.assets.json, so
+       ResolvePackageAssets can never see them regardless of ProjectLanguage.
+       The standard ResolveTargetingPackAssets TARGET already ran (it hangs off
+       $(ResolveAssemblyReferencesDependsOn), unconditioned on Language) by the
+       time this target's DependsOnTargets reaches it below, but it ran with
+       ProjectLanguage=$(Language) (`Gsharp`), which matches no analyzer folder
+       and so contributes zero analyzers to @(Analyzer) — exactly the gap
+       confirmed empirically (a bare `[GeneratedRegex]`-eligible net10.0 .gsproj
+       with NO PackageReference resolves @(GsharpAnalyzer) to nothing). Mirror
+       the ResolvePackageAssets re-invocation above: call the SAME
+       ResolveTargetingPackAssets TASK a second time with ProjectLanguage=C#,
+       reusing the @(FrameworkReference)/@(ResolvedTargetingPack) items the
+       standard target already resolved, capturing only its AnalyzersToAdd
+       output. This is the same class of gap as ADR-0145's NBGV / Avalonia
+       follow-ups (a standard SDK extensibility point that only fires for a
+       $(Language) the SDK recognizes) — surfaced here for a build-in analyzer
+       instead of a NuGet package. -->
   <Target Name="_GsharpResolveAnalyzers"
-          DependsOnTargets="ResolvePackageAssets"
+          DependsOnTargets="ResolvePackageAssets;ResolveTargetingPackAssets"
           Condition=" '$(GsharpRunSourceGenerators)' != 'false' ">
     <ResolvePackageAssets
         ProjectAssetsFile="$(ProjectAssetsFile)"
@@ -297,6 +321,60 @@
         ContinueOnError="true">
       <Output TaskParameter="Analyzers" ItemName="GsharpAnalyzer" />
     </ResolvePackageAssets>
+
+    <!-- Second re-invocation, this time of ResolveTargetingPackAssets rather
+         than ResolvePackageAssets: surfaces an SDK-BUNDLED analyzer (e.g.
+         System.Text.RegularExpressions.Generator, backing `[GeneratedRegex]`)
+         that ships inside the Microsoft.NETCore.App.Ref targeting pack rather
+         than via NuGet, so the ResolvePackageAssets re-invocation above can
+         never see it regardless of ProjectLanguage. The standard
+         ResolveTargetingPackAssets TARGET (a DependsOnTargets dependency on
+         this target, above) already ran once with ProjectLanguage=$(Language)
+         ("Gsharp"), which matches no analyzer folder and so contributed zero
+         analyzers — confirmed empirically (a bare `[GeneratedRegex]`-eligible
+         net10.0 .gsproj with no PackageReference resolved @(GsharpAnalyzer) to
+         nothing before this fix). Re-invoke the SAME task with
+         ProjectLanguage=C#, reusing the @(FrameworkReference)/
+         @(ResolvedTargetingPack) items the standard target already resolved.
+         ReferencesToAdd and the task's other outputs are deliberately left
+         unwired here: the first (default-language) invocation already folded
+         the targeting pack's reference assemblies into @(Reference); wiring
+         ReferencesToAdd again would duplicate that item group. -->
+    <ResolveTargetingPackAssets
+        FrameworkReferences="@(FrameworkReference)"
+        ProjectLanguage="C#"
+        ResolvedTargetingPacks="@(ResolvedTargetingPack)"
+        RuntimeFrameworks="@(RuntimeFramework)"
+        GenerateErrorForMissingTargetingPacks="false"
+        NuGetRestoreSupported="$(_NuGetRestoreSupported)"
+        DisableTransitiveFrameworkReferenceDownloads="$(DisableTransitiveFrameworkReferenceDownloads)"
+        NetCoreTargetingPackRoot="$(NetCoreTargetingPackRoot)"
+        ContinueOnError="true"
+        Condition=" '@(FrameworkReference)' != '' ">
+      <Output TaskParameter="AnalyzersToAdd" ItemName="GsharpAnalyzer" />
+    </ResolveTargetingPackAssets>
+
+    <!-- Mirrors the standard SDK's ResolveOffByDefaultAnalyzers (Microsoft.
+         NET.Sdk.FrameworkReferenceResolution.targets), which removes
+         RequestDelegateGenerator/ConfigurationBindingGenerator from @(Analyzer)
+         unless their opt-in switch is set — but for a DIFFERENT reason here:
+         Microsoft.Interop.LibraryImportGenerator backs `[LibraryImport]`,
+         which gsc already implements natively end-to-end (ADR-0092's
+         PInvokeBinder synthesizes the P/Invoke wrapper directly at bind time;
+         `@LibraryImport(...) func ... ;` is a complete declaration, not a
+         partial awaiting an externally-generated part). Letting gsgen ALSO
+         run the real generator against the same trigger would be a second,
+         independent implementation of the same member with no coordination
+         between the two — remove it here rather than risk that collision.
+         Microsoft.Interop.ComInterfaceGenerator (`[GeneratedComInterface]`)
+         and Microsoft.Interop.JavaScript.JSImportGenerator have no gsc-native
+         equivalent (confirmed empirically — no binder references either
+         attribute) and Microsoft.Interop.SourceGeneration is shared interop
+         infrastructure those two depend on, so all three are left resolvable. -->
+    <ItemGroup>
+      <_GsharpNativelyImplementedAnalyzer Include="@(GsharpAnalyzer)" Condition="'%(GsharpAnalyzer.AssemblyName)' == 'Microsoft.Interop.LibraryImportGenerator'" />
+      <GsharpAnalyzer Remove="@(_GsharpNativelyImplementedAnalyzer)" />
+    </ItemGroup>
 
     <!-- Union in analyzers the user added directly (rare for .gsproj, but honor
          the standard @(Analyzer) item group like csc does). -->
