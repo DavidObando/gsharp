@@ -917,6 +917,87 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         }
     }
 
+    /// <summary>
+    /// ADR-0186 step 1: the plumbing, end to end —
+    /// <c>/nullability:platform-types</c> → <c>CommandLineArgs</c> →
+    /// <see cref="GsCompilation.Nullability"/> → the ambient scope →
+    /// <c>ClrNullability</c>.
+    /// <para>
+    /// Every other flag-on assertion in this fixture calls
+    /// <c>ClrNullability</c> directly, which is right for what step 1 builds
+    /// but leaves the scope-installation sites untested: a
+    /// <c>NullabilityOptions.Enter</c> placed on the wrong side of the lazy
+    /// bind would be completely invisible. This row is the one that fails if
+    /// the mode never reaches the importer.
+    /// </para>
+    /// <para>
+    /// The observation is the bound type of a global whose type is
+    /// <em>inferred</em> from an oblivious imported field — the one place step
+    /// 1 alone already makes the two modes produce different symbols, with no
+    /// conversion, lookup or coercion rule involved. Anything downstream of the
+    /// read is step 2's.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Compilation_Threads_Its_Nullability_Mode_Into_Metadata_Import()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, LibraryAssemblyName, CSharpLibrarySource);
+            var source = $$"""
+                package {{ConsumerAssemblyName}}
+                import Issue3705.NullabilityLibrary
+
+                let probe = ObliviousNullAtRuntimeSurface().ObliviousField
+                """;
+
+            // Mode off: ADR-0136's reading, unchanged.
+            Assert.IsType<NullableTypeSymbol>(BindGlobalProbeType(source, NullabilityMode.Enabled, libraryPath));
+
+            // Mode on: the read path produces `T!` — which can only happen if
+            // `Compilation.Nullability` actually reached `ClrNullability`.
+            var platform = BindGlobalProbeType(source, NullabilityMode.PlatformTypes, libraryPath);
+            Assert.IsType<PlatformTypeSymbol>(platform);
+            Assert.Equal("string!", platform.Name);
+
+            // …and the mode is scoped to the compilation that asked for it.
+            Assert.False(NullabilityOptions.PlatformTypesEnabled);
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// Binds <paramref name="source"/> under <paramref name="nullability"/> and
+    /// returns the inferred type of its <c>probe</c> global.
+    /// </summary>
+    /// <param name="source">The G# source.</param>
+    /// <param name="nullability">The mode the compilation declares.</param>
+    /// <param name="references">Reference assemblies.</param>
+    /// <returns>The bound type of the <c>probe</c> global.</returns>
+    private static TypeSymbol BindGlobalProbeType(
+        string source,
+        NullabilityMode nullability,
+        params string[] references)
+    {
+        using var resolver = ReferenceResolver.WithReferences(references);
+        resolver.CurrentAssemblyName = ConsumerAssemblyName;
+        var compilation = new GsCompilation(
+            resolver,
+            GsSyntaxTree.Parse(SourceText.From(source)))
+        {
+            AssemblyName = ConsumerAssemblyName,
+            Nullability = nullability,
+        };
+
+        var scope = compilation.GlobalScope;
+        Assert.DoesNotContain(scope.Diagnostics, diagnostic => diagnostic.IsError);
+        return Assert.Single(scope.Variables, variable => variable.Name == "probe").Type;
+    }
+
     private static string BuildSource(string kind, string state, bool nullableTarget)
     {
         var target = nullableTarget ? "string?" : "string";
@@ -1040,6 +1121,12 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         => string.Join(Environment.NewLine, result.Diagnostics.Select(d => d.Id + ": " + d.Message));
 
     private static CompileResult CompileGSharp(string source, params string[] references)
+        => CompileGSharp(source, NullabilityMode.Enabled, references);
+
+    private static CompileResult CompileGSharp(
+        string source,
+        NullabilityMode nullability,
+        params string[] references)
     {
         using var resolver = ReferenceResolver.WithReferences(references);
         resolver.CurrentAssemblyName = ConsumerAssemblyName;
@@ -1048,6 +1135,7 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             GsSyntaxTree.Parse(SourceText.From(source)))
         {
             AssemblyName = ConsumerAssemblyName,
+            Nullability = nullability,
         };
 
         using var output = new MemoryStream();
