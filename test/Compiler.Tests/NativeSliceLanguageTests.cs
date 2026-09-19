@@ -23,6 +23,23 @@ public sealed class NativeSliceLanguageTests
         yield return new object[]
         {
             """
+            package NativeSourceAliases
+            import System
+            type slice = int32
+            type array = int32
+            func Main() {
+                let first slice = 1
+                let second $slice = 2
+                let third array = 3
+                let fourth $array = 4
+                Console.WriteLine(first + second + third + fourth)
+            }
+            """,
+            "10\n",
+        };
+        yield return new object[]
+        {
+            """
             package NativeNamePrecedence
             import System
             class slice[T] { var Value T }
@@ -364,9 +381,18 @@ public sealed class NativeSliceLanguageTests
                 public class slice<T> { public T Value = default!; }
                 public class array<T> { public T Value = default!; }
             }
-            namespace ShadowTwo { public class slice<T> { } }
-            namespace WrongArity { public class slice<T, U> { } }
-            namespace Constrained { public class slice<T> where T : class { } }
+            namespace ShadowTwo {
+                public class slice<T> { }
+                public class array<T> { }
+            }
+            namespace WrongArity {
+                public class slice<T, U> { }
+                public class array<T, U> { }
+            }
+            namespace Constrained {
+                public class slice<T> where T : class { }
+                public class array<T> where T : class { }
+            }
             """, "OrdinaryNames");
         var dll = fixture.Compile(
             """
@@ -384,13 +410,37 @@ public sealed class NativeSliceLanguageTests
         IlVerifier.Verify(dll, new[] { library });
         Assert.Equal("15\n", fixture.Run(dll));
 
+        var aliasConsumer = fixture.Compile(
+            """
+            package ImportedAliasNames
+            import System
+            import slice = ShadowOne.slice
+            import array = ShadowOne.array
+            func Main() {
+                let a = slice[int32]{Value: 2}
+                let b = $slice[int32]{Value: 3}
+                let c = array[int32]{Value: 5}
+                let d = $array[int32]{Value: 7}
+                Console.WriteLine(a.Value + b.Value + c.Value + d.Value)
+            }
+            """, "ImportedAliasNames", true, "/r:" + library);
+        IlVerifier.Verify(aliasConsumer, new[] { library });
+        Assert.Equal("17\n", fixture.Run(aliasConsumer));
+
         foreach (var source in new[]
         {
             "import WrongArity\nfunc Main() { var value slice[int32] }",
+            "import WrongArity\nfunc Main() { var value array[int32] }",
             "import Constrained\nfunc Main() { var value slice[int32] }",
+            "import Constrained\nfunc Main() { var value array[int32] }",
             "import ShadowOne\nimport ShadowTwo\nfunc Main() { var value slice[int32] }",
+            "import ShadowOne\nimport ShadowTwo\nfunc Main() { var value array[int32] }",
             "import ShadowOne\nimport ShadowTwo\nfunc Main() { let value = slice[int32]{} }",
+            "import ShadowOne\nimport ShadowTwo\nfunc Main() { let value = array[int32]{} }",
             "class slice[T, U] { }\nfunc Main() { var value slice[int32] }",
+            "class array[T, U] { }\nfunc Main() { var value array[int32] }",
+            "type slice = int32\nfunc Main() { var value slice[int32] }",
+            "type array = int32\nfunc Main() { var value array[int32] }",
             "import slice = ShadowOne.slice\nfunc Main() { var value readonly slice[int32] }",
             "class slice[T] { }\nfunc Main() { var value readonly slice[int32] }",
         })
@@ -398,6 +448,7 @@ public sealed class NativeSliceLanguageTests
             var (code, output) = fixture.TryCompile("package ShadowFailures\n" + source, "ShadowFailures", true, "/r:" + library);
             Assert.True(code != 0, "Ordinary name was silently retargeted:\n" + source + "\n" + output);
             Assert.DoesNotContain("GS0600", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS0005", output, StringComparison.Ordinal);
         }
     }
 

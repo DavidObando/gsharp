@@ -620,7 +620,9 @@ Identity recognition uses assembly/type identity, not a user type named
 path with its own bounds lowering that calls `Subslice` directly. Parse the
 contextual `readonly slice` form at every type-clause entry point and preserve
 its distinction from `ref readonly`; do not recognize the type by concatenating
-tokens into a new keyword.
+tokens into a new keyword. Preserve ordinary-name precedence and escaped-name
+intent through parsing, partial/editor binding, code-model printing, and
+formatting; test source and imported lowercase generic types explicitly.
 
 Use normal generic MemberRefs and the existing ref-return/indexer emitter.
 Native element reads and writes must survive lowered async, compound
@@ -638,7 +640,10 @@ No global cs2gs rewrite changes C# ranges into native views.
 
 Migration is therefore opt-in:
 
-1. Existing code compiles with its current meanings.
+1. Existing array code and ordinary named-type references retain their
+   meanings under the precedence/escape rules above. Do not claim that new
+   contextual syntax is collision-free merely because its tokens are
+   identifiers; parser and binding compatibility are release gates.
 2. Buffer-oriented APIs can explicitly change signatures to `slice[T]`, an
    intentional CLR binary break at that API boundary.
 3. A copied range becomes `nativeRange.Clone()` or `.ToArray()` when converting
@@ -747,6 +752,7 @@ Discriminating conformance scenarios:
 | Side-effecting/throwing bounds and RHS | Exact event trace; catches repeated or reordered evaluation |
 | Nullable container versus nullable element; CLR defaults | Correct presence and metadata, not just successful parsing |
 | `readonly slice[T]` in generic/tuple/ref type positions | Correct modifier binding, canonical display, and `ReadOnlySlice<T>` metadata |
+| Source/imported `slice` and `array` types, aliases, escapes, wrong arity, and ambiguous imports | Ordinary binding or ordinary diagnostic survives; no silent native fallback |
 | Range syntax, `Subslice`, and imported `.Slice` extension | Same endpoints, capacity, and exceptions in G#/C#; no same-name C# member requirement |
 | Struct element field write versus value-local mutation | Backing write in first case, independent copy in second |
 | Covariant array, subrange-to-array, memory-owner mismatch | Explicit failure, not hidden copying |
