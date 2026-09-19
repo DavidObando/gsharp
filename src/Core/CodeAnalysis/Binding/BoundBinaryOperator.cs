@@ -239,8 +239,25 @@ public sealed record BoundBinaryOperator
         // null-coalescing operator token; no combinatorial dimension to tabulate.
         if (syntaxKind == SyntaxKind.QuestionQuestionToken)
         {
-            TypeSymbol leftUnderlying = leftType is NullableTypeSymbol leftNullable ? leftNullable.UnderlyingType : leftType;
-            TypeSymbol rightUnderlying = rightType is NullableTypeSymbol rightNullable ? rightNullable.UnderlyingType : rightType;
+            // ADR-0186 §6: `??` accepts a `T!` left operand, and the RESULT of
+            // a coalesce is non-null — that is the whole point of supplying a
+            // fallback. Stripping only `T?` here left `T! ?? T` typed `T!`,
+            // which is wrong twice over: it claims the compiler still does not
+            // know whether the value can be nil when the expression has just
+            // guaranteed it cannot, and it drags a spurious `T! -> T` check
+            // (and §3's overload tie-break) into everything downstream.
+            TypeSymbol leftUnderlying = leftType switch
+            {
+                NullableTypeSymbol leftNullable => leftNullable.UnderlyingType,
+                PlatformTypeSymbol leftPlatform => leftPlatform.UnderlyingType,
+                _ => leftType,
+            };
+            TypeSymbol rightUnderlying = rightType switch
+            {
+                NullableTypeSymbol rightNullable => rightNullable.UnderlyingType,
+                PlatformTypeSymbol rightPlatform => rightPlatform.UnderlyingType,
+                _ => rightType,
+            };
 
             // Issue #1018: `x ?? throw e`. The RHS is a throw-expression whose
             // bottom (`never`) type is convertible to anything, so the result is
@@ -546,7 +563,19 @@ public sealed record BoundBinaryOperator
             nullableOrUnderlying = annotated.BaseType;
         }
 
-        if (nullableOrUnderlying == TypeSymbol.Null || nullableOrUnderlying is NullableTypeSymbol)
+        // ADR-0186 §6: `x == nil` / `x != nil` is legal on a `T!`, and GS0129
+        // does not fire. Being able to SAY the value might be nil is the whole
+        // difference between `T!` and `T` — erasing the platform type to its
+        // underlying instead would re-create ADR-0136's original hole verbatim
+        // (alternative 3, rejected). This arm also covers ADR-0159's magic
+        // collections without a second rule: a platform-typed `map[K, V]!` or
+        // `[]T!` can genuinely be nil, so GS0523's "a bare collection can never
+        // be nil" premise simply does not apply, and the comparison is
+        // accepted here rather than reaching the reference-backed-builtin arms
+        // below that GS0523 polices.
+        if (nullableOrUnderlying == TypeSymbol.Null
+            || nullableOrUnderlying is NullableTypeSymbol
+            || nullableOrUnderlying is PlatformTypeSymbol)
         {
             return true;
         }

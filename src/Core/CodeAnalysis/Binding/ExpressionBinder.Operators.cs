@@ -86,6 +86,26 @@ internal sealed partial class ExpressionBinder
         }
 
         ReportNullAssertionIfRedundant(syntax.OperatorToken, boundOperand);
+
+        // ADR-0186 §6: a user-written `!!` over a `T!` operand IS §4's
+        // coercion, spelled explicitly — "the explicit spelling of a
+        // conversion the compiler would otherwise perform implicitly at the
+        // same point". It therefore gets §4's attributable message too, so a
+        // migrated corpus's existing `!!` does not silently produce a worse
+        // diagnostic than the implicit coercion beside it would have.
+        // `--platform-nil-checks=off` does NOT reach here: the switch governs
+        // checks the compiler *inserts*, never one the author wrote — hence
+        // `suppressible: false`.
+        if (syntax.OperatorToken.Kind == SyntaxKind.BangBangToken
+            && boundOperand.Type is PlatformTypeSymbol)
+        {
+            return PlatformCoercion.InsertCheck(
+                boundOperand,
+                syntax.OperatorToken.Location,
+                "an explicit '!!'",
+                suppressible: false);
+        }
+
         var boundOperator = BoundUnaryOperator.Bind(syntax.OperatorToken.Kind, boundOperand.Type);
 
         if (boundOperator == null)
@@ -173,10 +193,17 @@ internal sealed partial class ExpressionBinder
             return;
         }
 
+        // ADR-0186 §6/§7: a `T!` operand is NEVER redundant. The value may
+        // genuinely be nil — that is what oblivious means — and the assertion
+        // is the explicit spelling of the `T! -> T` coercion ADR-0186 §4 would
+        // otherwise insert implicitly at the same point, emitting the same
+        // check. Flagging it would tell an author (and cs2gs's polish pass,
+        // which strips exactly these spans) to delete a real runtime guard.
         if (operatorToken.Kind == SyntaxKind.BangBangToken
             && operand.Type is not null
             && operand.Type != TypeSymbol.Error
-            && operand.Type is not NullableTypeSymbol)
+            && operand.Type is not NullableTypeSymbol
+            && operand.Type is not PlatformTypeSymbol)
         {
             Diagnostics.ReportRedundantNullAssertion(operatorToken.Location);
         }
@@ -1389,6 +1416,24 @@ internal sealed partial class ExpressionBinder
             return NullableTypeSymbol.Get(result);
         }
 
+        // ADR-0186 §3, type unification: lub(`T!`, `T`) is `T!`, lub(`T!`,
+        // `T!`) is `T!`, and lub(`T!`, `T?`) is `T?` — which the arm above
+        // already produced, because it runs first.
+        //
+        // The governing principle is that AN EXPLICIT STATEMENT ALWAYS BEATS
+        // THE ABSENCE OF ONE, and the ADR is emphatic that this is
+        // deliberately NOT symmetric absorption: `T?` wins, `T` does not. A
+        // `T` arm asserts non-nullness for *that* branch only and says nothing
+        // whatever about the platform branch, so promoting the union to `T`
+        // would silently convert an unknown into a guarantee — at a point
+        // where §4 would then insert no check, because no `T! -> T` coercion
+        // would appear anywhere.
+        if (result is not PlatformTypeSymbol
+            && (left is PlatformTypeSymbol || right is PlatformTypeSymbol))
+        {
+            return PlatformTypeSymbol.Get(result);
+        }
+
         return result;
     }
 
@@ -2030,6 +2075,14 @@ internal sealed partial class ExpressionBinder
     /// <returns>Whether GS0523 should be reported.</returns>
     private static bool IsBareMagicCollectionNilCompareOperand(BoundExpression operand)
     {
+        // ADR-0186 §6: GS0523 must not fire for a PLATFORM-typed magic
+        // collection — `map[K, V]!` can genuinely be nil, so the comparison is
+        // not dead code. That holds by construction rather than by a new arm:
+        // a `PlatformTypeSymbol` is none of the kinds listed below, so the
+        // test declines before it reaches the "a bare collection can never be
+        // nil" premise. Recorded here because the property is load-bearing and
+        // a future widening of this list (e.g. to "anything reference-backed")
+        // would silently break it.
         if (operand.Type is not (
             MapTypeSymbol
             or SliceTypeSymbol
@@ -2065,6 +2118,25 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // ADR-0186 §6/§7: a platform result is the exact opposite of an
+        // "explicitly non-null" one — nobody stated anything about it, which
+        // is why `x == nil` on a `T!` must be legal and GS0129 must not fire.
+        // This predicate is the reason it otherwise does: it asks "is this a
+        // nullable result?" by testing `is not NullableTypeSymbol`, and a
+        // platform wrapper is not one, so an oblivious result read as `T!`
+        // was classified as explicitly non-null and the comparison rejected
+        // outright — before `BoundBinaryOperator.Bind`'s nil-compare arm was
+        // ever consulted.
+        //
+        // This is the shape ADR-0186's cost estimate warns about: 636
+        // `NullableTypeSymbol` sites, each one a decision about whether
+        // `PlatformTypeSymbol` belongs beside it. Most do not. A site that
+        // asks "does this admit nil?" does.
+        if (expression.Type is PlatformTypeSymbol)
+        {
+            return false;
+        }
+
         MethodInfo? method = expression switch
         {
             BoundImportedInstanceCallExpression instanceCall => instanceCall.Method,
@@ -2073,7 +2145,7 @@ internal sealed partial class ExpressionBinder
         };
 
         return method?.ReturnType is { IsValueType: false }
-            && ClrNullability.GetReturnTypeSymbol(method) is not NullableTypeSymbol;
+            && ClrNullability.GetReturnTypeSymbol(method) is not (NullableTypeSymbol or PlatformTypeSymbol);
     }
 
     /// <summary>

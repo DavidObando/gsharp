@@ -294,6 +294,7 @@ internal sealed partial class ExpressionBinder
         var significant = new List<TypeSymbol>(armTypes.Count);
         var hasNullArm = false;
         var hasNullableArm = false;
+        var hasPlatformArm = false;
         foreach (var t in armTypes)
         {
             if (t == TypeSymbol.Null)
@@ -306,6 +307,17 @@ internal sealed partial class ExpressionBinder
                 {
                     hasNullableArm = true;
                     significant.Add(nullableArm.UnderlyingType);
+                }
+                else if (t is PlatformTypeSymbol platformArm)
+                {
+                    // ADR-0186 §3: lub(`T!`, `T`) is `T!`. The arm's wrapper
+                    // is stripped here for the same reason the `T?` arm's is
+                    // — the common-type search runs over underlyings — and
+                    // re-applied below, where `T?` deliberately wins over
+                    // `T!` because an explicit statement beats the absence of
+                    // one.
+                    hasPlatformArm = true;
+                    significant.Add(platformArm.UnderlyingType);
                 }
                 else
                 {
@@ -362,6 +374,23 @@ internal sealed partial class ExpressionBinder
         if (common != null && hasNullableArm && common is not NullableTypeSymbol)
         {
             common = NullableTypeSymbol.Get(common);
+        }
+
+        // ADR-0186 §3, the same unification rule the two-arm conditional
+        // applies in `UnionArmNullability`, and in the same order: an
+        // explicit `T?` arm wins outright (handled just above), and a `T!`
+        // arm only reaches this point when no arm was explicitly nullable.
+        // It must NOT be symmetric absorption — a plain `T` arm asserts
+        // non-nullness for itself alone and says nothing about the platform
+        // arm, so the union stays `T!` rather than silently promoting an
+        // unknown to a guarantee that §4 would then never check.
+        if (common != null
+            && hasPlatformArm
+            && common is not (NullableTypeSymbol or PlatformTypeSymbol)
+            && common != TypeSymbol.Error
+            && common != TypeSymbol.Never)
+        {
+            common = PlatformTypeSymbol.Get(common);
         }
 
         return common;

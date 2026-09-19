@@ -216,6 +216,19 @@ internal sealed partial class StatementBinder
     {
         var collection = bindExpression(syntax.Collection);
 
+        // ADR-0186 §4/§5: a `foreach`/`range` source is one of the positions
+        // the ADR names explicitly — "used where the language requires a
+        // non-null reference" — so it takes the coercion check. It also has
+        // to be unwrapped for §5a's reason, and the two are the same
+        // operation: this switch dispatches on the collection's SYMBOL KIND,
+        // so a platform wrapper matched no arm at all and
+        // `for v in obliviousList()` reported GS0116 "not indexable" — the
+        // receiver's platform-ness changing what the binder found.
+        collection = PlatformCoercion.InsertCheck(
+            collection,
+            syntax.Collection.Location,
+            "a 'for … in' source");
+
         // ADR-0174 D3: `for v in ch` drains a channel until it is closed. Decided
         // before the enumerator probe: a channel handle has no GetEnumerator,
         // and a foreign `Channel<T>` must take the same receive path as `chan[T]`.
@@ -1011,6 +1024,16 @@ internal sealed partial class StatementBinder
         {
             return BindErrorStatement();
         }
+
+        // ADR-0186 §4: a `lock`/`sync` subject is a position the ADR names
+        // explicitly, and like `throw` it has its own binding path rather
+        // than passing through `BindConversion`. It also needs the unwrap for
+        // §5's reason: `IsLockableReferenceType` below dispatches on the
+        // target's symbol KIND, which a platform wrapper is not.
+        target = PlatformCoercion.InsertCheck(
+            target,
+            syntax.Expression.Location,
+            "a 'lock' subject");
 
         if (!IsLockableReferenceType(target.Type))
         {

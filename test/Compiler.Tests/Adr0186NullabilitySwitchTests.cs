@@ -100,11 +100,51 @@ public class Adr0186NullabilitySwitchTests
             Assert.Contains("/nullability:", help);
             Assert.Contains("enabled (default)", help);
             Assert.Contains("platform-types", help);
+            Assert.Contains("/platform-nil-checks:", help);
         }
         finally
         {
             Console.SetOut(previousOut);
         }
+    }
+
+    /// <summary>
+    /// ADR-0186 §4's escape hatch, through the real command line.
+    /// <para>
+    /// Both spellings and both values. The switch selects whether a runtime
+    /// nil check exists at every <c>T! → T</c> coercion, so a typo silently
+    /// accepted would be a typo that silently removes every check in the
+    /// build — which is why the malformed cases below are as much the point
+    /// as the valid ones.
+    /// </para>
+    /// </summary>
+    /// <param name="argument">The switch as a user would type it.</param>
+    [Theory]
+    [InlineData("/platform-nil-checks:on")]
+    [InlineData("/platform-nil-checks:off")]
+    [InlineData("/platformnilchecks:off")]
+    [InlineData("--platform-nil-checks=off")]
+    [InlineData("--platform-nil-checks=on")]
+    public void PlatformNilChecks_ValidValues_Are_Accepted(string argument)
+    {
+        var (exit, output, error) = RunGsc(argument);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("Success", output);
+        Assert.DoesNotContain("platform-nil-checks", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// An unknown value is rejected by name rather than silently defaulting.
+    /// </summary>
+    [Fact]
+    public void PlatformNilChecks_AnUnknownValue_Is_Rejected_By_Name()
+    {
+        var (exit, _, error) = RunGsc("/platform-nil-checks:maybe");
+
+        Assert.NotEqual(0, exit);
+        Assert.Contains("unknown value 'maybe'", error);
+        Assert.Contains("expected on or off", error);
     }
 
     /// <summary>

@@ -106,6 +106,25 @@ internal static class IfLetBindingSupport
             underlying = nullable.UnderlyingType;
             nullableStorageType = nullable;
         }
+        else if (initializerType is PlatformTypeSymbol platform)
+        {
+            // ADR-0186 §6: `if let` / `guard let` / `while let` accept a `T!`
+            // initializer and bind `T`. GS0296 asks "is there a nullability
+            // strip to do here?", and for a platform value the answer is yes —
+            // it may genuinely be nil, which is the whole difference between
+            // `T!` and `T`.
+            //
+            // The binding is stored at `T?` rather than `T!` deliberately: the
+            // synthesized condition is `variable != nil` and the observed type
+            // comes from ADR-0069 narrowing, both of which already do exactly
+            // the right thing for a nullable storage slot. The two wrappers
+            // erase to the same CLR type (§1), so this is a binder-level
+            // choice with no representation consequence — and after the bind
+            // the value IS known non-nil, which is the one fact `T!` cannot
+            // state and `T?`-plus-narrowing can.
+            underlying = platform.UnderlyingType;
+            nullableStorageType = NullableTypeSymbol.Get(platform.UnderlyingType);
+        }
         else if (initializerType == TypeSymbol.Null)
         {
             // A bare `nil` literal — there's no narrowing to do; bind to

@@ -119,6 +119,7 @@ internal sealed class WellKnownReferences
     private MemberReferenceHandle objectInstanceToStringRef;
     private MemberReferenceHandle objectInstanceGetHashCodeRef;
     private MemberReferenceHandle nullRefExceptionCtorRef;
+    private MemberReferenceHandle nullRefExceptionMessageCtorRef;
     private MemberReferenceHandle stringConcatArrayRef;
     private MemberReferenceHandle convertToStringRef;
     private MemberReferenceHandle cultureInvariantGetterRef;
@@ -947,6 +948,41 @@ internal sealed class WellKnownReferences
             name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
             signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
         return this.nullRefExceptionCtorRef;
+    }
+
+    /// <summary>
+    /// ADR-0186 §4: <c>System.NullReferenceException::.ctor(string)</c>, which
+    /// backs the coercion check inserted at a <c>T! -&gt; T</c> boundary.
+    /// <para>
+    /// The exception TYPE is deliberately the same one a user-written
+    /// <c>!!</c> already throws, so existing <c>catch</c> clauses in both G#
+    /// and interop code keep behaving as they do. The whole improvement is the
+    /// message, which names the expression and the boundary rather than
+    /// leaving an unattributed NRE (or an <c>ArgumentNullException</c> several
+    /// frames inside a library) for the reader to trace. No runtime-assembly
+    /// dependency is introduced: the cost is one extra <c>ldstr</c> per check.
+    /// </para>
+    /// </summary>
+    /// <returns>A callable MemberRef for the string-taking constructor.</returns>
+    public MemberReferenceHandle GetNullReferenceExceptionMessageCtorRef()
+    {
+        if (!this.nullRefExceptionMessageCtorRef.IsNil)
+        {
+            return this.nullRefExceptionMessageCtorRef;
+        }
+
+        var nreType = this.emitCtx.References.TryResolveType("System.NullReferenceException", requireExternalVisibility: false, out var resolved)
+            ? resolved
+            : typeof(NullReferenceException);
+        var nreTypeRef = this.getTypeReference(nreType);
+        var sigBlob = new BlobBuilder();
+        new BlobEncoder(sigBlob).MethodSignature(isInstanceMethod: true)
+            .Parameters(1, r => r.Void(), p => p.AddParameter().Type().String());
+        this.nullRefExceptionMessageCtorRef = this.emitCtx.Metadata.AddMemberReference(
+            parent: nreTypeRef,
+            name: this.emitCtx.Metadata.GetOrAddString(".ctor"),
+            signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+        return this.nullRefExceptionMessageCtorRef;
     }
 
     // Issue #504: returns a callable MemberRef for `System.Nullable<T>::get_Value`

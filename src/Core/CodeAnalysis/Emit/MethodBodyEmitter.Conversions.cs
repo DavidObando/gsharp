@@ -283,8 +283,17 @@ internal sealed partial class MethodBodyEmitter
         // future binder path forgets to lower, fail loudly instead of
         // silently emitting an `ldnull` against a value-type slot
         // (issue #504).
+        // ADR-0186 §3's last row: `nil -> T!` is an ordinary null store, and
+        // `T!` is a REFERENCE-nullability annotation (§2 excludes value types
+        // outright), so the `ldnull` the source already pushed is the whole
+        // conversion — exactly as for the `T?` sibling beside it. Without
+        // this arm the pair fell through to the "not yet supported by the
+        // emitter" throw at the end of this method: the binder admitted the
+        // store (correctly) and emit refused it, which is a GS9998 crash
+        // rather than a diagnostic.
         if (from == TypeSymbol.Null
             && ((to is NullableTypeSymbol toNullForNil && !ReflectionMetadataEmitter.IsValueTypeNullable(toNullForNil))
+                || to is PlatformTypeSymbol
                 || Conversion.IsNilAssignableWithoutNullableWrapper(to)))
         {
             return;

@@ -25,12 +25,27 @@ public sealed class BoundUnaryExpression : BoundExpression
     /// `checked { }` statement puts its arithmetic in this context; the default (no
     /// `checked` context) is unchecked, matching the C# project default.
     /// </param>
-    public BoundUnaryExpression(SyntaxNode? syntax, BoundUnaryOperator op, BoundExpression operand, bool isChecked = false)
+    /// <param name="platformCheckMessage">
+    /// ADR-0186 §4: when non-<see langword="null"/>, this node is a
+    /// <em>synthesized</em> platform coercion check rather than a user-written
+    /// <c>!!</c>, and the string is the message its
+    /// <see cref="System.NullReferenceException"/> carries — naming the
+    /// expression and the boundary that failed. Only observed for
+    /// <see cref="BoundUnaryOperatorKind.NullAssertion"/>; every other operator
+    /// ignores it.
+    /// </param>
+    public BoundUnaryExpression(
+        SyntaxNode? syntax,
+        BoundUnaryOperator op,
+        BoundExpression operand,
+        bool isChecked = false,
+        string? platformCheckMessage = null)
         : base(syntax)
     {
         Op = op;
         Operand = operand;
         IsChecked = isChecked;
+        PlatformCheckMessage = platformCheckMessage;
     }
 
     /// <inheritdoc/>
@@ -55,4 +70,25 @@ public sealed class BoundUnaryExpression : BoundExpression
     /// <see cref="BoundUnaryOperatorKind.Negation"/> on integral operands.
     /// </summary>
     public bool IsChecked { get; }
+
+    /// <summary>
+    /// Gets ADR-0186 §4's runtime-check message, or <see langword="null"/> for
+    /// a user-written <c>!!</c>.
+    /// <para>
+    /// A non-null value marks this node as the check the compiler inserted at
+    /// a <c>T! -&gt; T</c> coercion. The distinction is observable in two
+    /// places and nowhere else: the emitter selects the
+    /// <c>NullReferenceException(string)</c> constructor instead of the
+    /// parameterless one, and <c>--platform-nil-checks=off</c> suppresses
+    /// insertion of these nodes while leaving every user-written <c>!!</c>
+    /// exactly as it is.
+    /// </para>
+    /// <para>
+    /// There is no third consumer, and an earlier draft of this comment
+    /// wrongly claimed one: G# has no separate expression interpreter —
+    /// <c>Interpreter.Tests</c> drives emitted IL — so the emitter is the
+    /// only thing that reads this.
+    /// </para>
+    /// </summary>
+    public string? PlatformCheckMessage { get; }
 }

@@ -39,6 +39,25 @@ public sealed class NullableTypeSymbol : TypeSymbol
             return already;
         }
 
+        // ADR-0186: `T!?` is not a type this language has. Wrapping a platform
+        // type in `?` produces plain `T?`, by §3's governing principle — an
+        // explicit statement always beats the absence of one, which is the
+        // same rule that makes lub(`T!`, `T?`) be `T?`.
+        //
+        // Normalising HERE rather than at each caller is deliberate. The
+        // wrapper is applied at every result-lifting site in the language —
+        // `?.`, `?[`, a nil switch arm, a lifted operator — and three of
+        // those were independently producing `Nullable(Platform(U))` for an
+        // oblivious member. A `U!?` is not merely cosmetic: it is not a
+        // `NullableTypeSymbol` over the underlying that narrowing, `??` and
+        // `if let` expect, so platform-ness survived a guarded access and
+        // leaked into everything downstream of it. One normalisation point
+        // is the only version of this that cannot drift.
+        if (underlyingType is PlatformTypeSymbol platform)
+        {
+            underlyingType = platform.UnderlyingType;
+        }
+
         return Cache.GetOrAdd(underlyingType, t => new NullableTypeSymbol(t));
     }
 

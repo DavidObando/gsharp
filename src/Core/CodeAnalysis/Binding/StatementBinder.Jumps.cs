@@ -1171,6 +1171,18 @@ internal sealed partial class StatementBinder
         }
 
         var nullableType = boundRead.Type as NullableTypeSymbol;
+
+        // ADR-0186 §6: `??=` accepts a `T!` left operand and GS0298 does not
+        // fire. GS0298 exists to reject a target that can never be nil, and a
+        // platform target genuinely can be — that is what oblivious means.
+        // The target's `T?` view drives the rest of this method unchanged:
+        // the two wrappers share one CLR representation (§1), so the
+        // synthesized `read == nil` test and the write-back are identical.
+        if (nullableType == null && boundRead.Type is PlatformTypeSymbol platformTarget)
+        {
+            nullableType = NullableTypeSymbol.Get(platformTarget.UnderlyingType);
+        }
+
         var isNonNullableReferenceTarget = nullableType == null
             && Conversion.IsReferenceLikeTarget(boundRead.Type)
             && boundRead is BoundIndexExpression or BoundClrIndexExpression;

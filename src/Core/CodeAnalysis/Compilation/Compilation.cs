@@ -85,6 +85,15 @@ public class Compilation
     /// exactly as it does today.
     /// </summary>
     /// <remarks>
+    /// The default is read from <c>NullabilityOptions.DefaultMode</c>, which
+    /// is <see cref="NullabilityMode.Enabled"/> unless the
+    /// <c>GSHARP_NULLABILITY</c> environment variable overrides it. That
+    /// override is ADR-0186 step 2's verification scaffolding — it exists so
+    /// the full test suite can be run <em>both</em> ways, which is step 2's
+    /// stated verification requirement — and is deleted at step 3 along with
+    /// the rest of <see cref="NullabilityOptions"/>. An embedder that sets
+    /// this property always wins over it.
+    /// <para>
     /// The mode is installed as an ambient scope around binding and emit
     /// (<see cref="NullabilityOptions"/>) because the metadata reader that
     /// consults it, <c>ClrNullability</c>, is a static leaf with no
@@ -92,8 +101,26 @@ public class Compilation
     /// the <c>Symbols</c> namespace are process-wide: two compilations that
     /// disagree about this mode in one process should not share a
     /// <see cref="ReferenceResolver"/>.
+    /// </para>
     /// </remarks>
-    public NullabilityMode Nullability { get; set; } = NullabilityMode.Enabled;
+    public NullabilityMode Nullability { get; set; } = NullabilityOptions.DefaultMode;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether ADR-0186 §4's runtime nil check
+    /// is inserted wherever a platform value <c>T!</c> is coerced into a
+    /// non-null reference destination. Defaults to <see langword="true"/>.
+    /// </summary>
+    /// <remarks>
+    /// Only observable under <see cref="NullabilityMode.PlatformTypes"/> —
+    /// nothing constructs a <c>PlatformTypeSymbol</c> otherwise, so no such
+    /// coercion exists to check. Turning it off
+    /// (<c>--platform-nil-checks=off</c>) is a measurement and escape-hatch
+    /// switch and is <b>strictly weaker than either the old or the new
+    /// model</b>, not a supported mode: today many of the silenced sites are
+    /// compile errors, and with checks off they are neither an error nor a
+    /// check.
+    /// </remarks>
+    public bool PlatformNilChecks { get; set; } = true;
 
     /// <summary>
     /// Gets or sets a value indicating whether this compilation produces a
@@ -256,7 +283,7 @@ public class Compilation
                 // ADR-0186: metadata import happens under this bind, and the
                 // reader that decides what an oblivious byte means is a static
                 // leaf with no Compilation in reach.
-                using var nullabilityScope = NullabilityOptions.Enter(Nullability);
+                using var nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks);
                 var globalScope = ReusedGlobalScope
                     ?? Binder.BindGlobalScope(previous: null, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary, Submission);
                 Interlocked.CompareExchange<BoundGlobalScope?>(ref this.globalScope, globalScope, null);
@@ -290,7 +317,7 @@ public class Compilation
             if (boundProgram == null)
             {
                 // ADR-0186: body binding reads imported member signatures too.
-                using var nullabilityScope = NullabilityOptions.Enter(Nullability);
+                using var nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks);
                 var bp = Binder.BindProgram(GlobalScope, References, BodyCache, DirtyBodyTrees);
                 Interlocked.CompareExchange<BoundProgram?>(ref this.boundProgram, bp, null);
             }
@@ -353,7 +380,7 @@ public class Compilation
     public EmitResult Emit()
     {
         // ADR-0186: see the stream-based overload.
-        using var nullabilityScope = NullabilityOptions.Enter(Nullability);
+        using var nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks);
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics.AsEnumerable());
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
@@ -507,7 +534,7 @@ public class Compilation
         // ADR-0186: emit re-reads declaration nullability through
         // `NullableFlagsBuilder`, so the mode must still be installed here and
         // not only around the lazy binding properties above.
-        using var nullabilityScope = NullabilityOptions.Enter(Nullability);
+        using var nullabilityScope = NullabilityOptions.Enter(Nullability, PlatformNilChecks);
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics.AsEnumerable());
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 

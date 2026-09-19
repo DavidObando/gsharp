@@ -161,6 +161,28 @@ internal static class ExpressionTreeRestrictionValidator
                     diagnostics.ReportExpressionTreeUnsupported(LocationOf(unary.Syntax), "an unsafe pointer operation");
                 }
                 else if (unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion
+                    && unary.Operand.Type is PlatformTypeSymbol)
+                {
+                    // ADR-0186 §4: a null assertion over a PLATFORM operand is
+                    // the one reference-typed `!!` that is not pure static
+                    // annotation. It lowers to a real
+                    // `dup; brtrue; pop; newobj; throw`, whether the author
+                    // wrote it or §4 inserted it at a `T! -> T` coercion, and
+                    // `ExpressionTreeLowerer.BuildUnaryExpression` erases every
+                    // `NullAssertion` node on the reasoning directly below —
+                    // correct for a real `T?`, wrong here. Erased, the boundary
+                    // silently disappears inside an expression-tree lambda: no
+                    // check, no message, no diagnostic.
+                    //
+                    // Rejected rather than represented. `System.Linq.Expressions`
+                    // has no throw-on-nil-and-yield-the-value form that
+                    // preserves G#'s contract, which is exactly why the nullable
+                    // value-type case below is rejected too rather than lowered.
+                    diagnostics.ReportExpressionTreeUnsupported(
+                        LocationOf(unary.Syntax),
+                        "a nullability-oblivious value used where a non-null type is required");
+                }
+                else if (unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion
                     && IsNullableValueTypeAssertion(unary))
                 {
                     // Issue #3349: `!!` is only unrepresentable in an expression
