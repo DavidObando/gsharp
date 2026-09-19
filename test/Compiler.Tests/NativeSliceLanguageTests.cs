@@ -23,6 +23,25 @@ public sealed class NativeSliceLanguageTests
         yield return new object[]
         {
             """
+            package NativeRawArrayConversions
+            import System
+            class array { var Value int32 }
+            class slice { var Value int32 }
+            func Main() {
+                let arrays = []array{array{Value: 7}}
+                let slices = []slice{slice{Value: 9}}
+                let boxedArrays object = arrays
+                let boxedSlices object = slices
+                let recoveredArrays = []array(boxedArrays)
+                let recoveredSlices = []slice(boxedSlices)
+                Console.WriteLine(recoveredArrays[0].Value + recoveredSlices[0].Value)
+            }
+            """,
+            "16\n",
+        };
+        yield return new object[]
+        {
+            """
             package NativeSourceAliases
             import System
             type slice = int32

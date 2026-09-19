@@ -18,7 +18,7 @@ internal static class NativeSliceTypes
 {
     internal const string AssemblyName = "Gsharp.Runtime.Values";
 
-    internal static bool IsDefinition(Type? type, out bool readOnly)
+    internal static bool IsDefinition([NotNullWhen(true)] Type? type, out bool readOnly)
     {
         readOnly = false;
         if (type == null || !type.IsGenericType || !type.IsValueType || type.IsByRefLike
@@ -36,7 +36,8 @@ internal static class NativeSliceTypes
     {
         element = null;
         readOnly = false;
-        if (type is NullableTypeSymbol || !IsDefinition(type.ClrType, out readOnly))
+        var clrType = type.ClrType;
+        if (type is NullableTypeSymbol || !IsDefinition(clrType, out readOnly))
         {
             return false;
         }
@@ -50,7 +51,7 @@ internal static class NativeSliceTypes
         var arguments = type.ConstructedTypeArguments;
         element = arguments.Length == 1
             ? arguments[0]
-            : TypeSymbol.FromClrType(type.ClrType!.GetGenericArguments()[0]);
+            : TypeSymbol.FromClrType(clrType.GetGenericArguments()[0]);
         return true;
     }
 

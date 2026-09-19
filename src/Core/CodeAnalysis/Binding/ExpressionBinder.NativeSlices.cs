@@ -18,7 +18,7 @@ internal sealed partial class ExpressionBinder
 {
     private BoundExpression BindBufferAwareCallExpression(CallExpressionSyntax syntax)
     {
-        if (syntax.ConversionTypeClause is { ReadOnlySliceModifier: null, Identifier: { } identifier } type
+        if (syntax.ConversionTypeClause is { IsArray: false, HasQualifier: false, HasTypeArguments: true, ReadOnlySliceModifier: null, Identifier: { } identifier } type
             && identifier.Text is "slice" or "array"
             && !binderCtx.CanUseNativeBufferAlias(scope, identifier, getCurrentFunction(), expression: true))
         {
@@ -37,23 +37,30 @@ internal sealed partial class ExpressionBinder
     }
 
     private static TypeArgumentListSyntax BufferTypeArguments(TypeClauseSyntax type)
-        => new(type.SyntaxTree, type.TypeArgumentOpenBracketToken!, type.TypeArguments!, type.TypeArgumentCloseBracketToken!);
+        => new(
+            type.SyntaxTree,
+            Invariant.Required(type.TypeArgumentOpenBracketToken, "buffer call/literal parsing supplies the generic opening bracket"),
+            Invariant.Required(type.TypeArguments, "buffer call/literal parsing supplies the generic argument list"),
+            Invariant.Required(type.TypeArgumentCloseBracketToken, "buffer call/literal parsing supplies the generic closing bracket"));
 
-    private BoundExpression BindOrdinaryBufferCollectionLiteral(CollectionInitializerExpressionSyntax syntax)
+    private BoundExpression BindOrdinaryBufferCollectionLiteral(
+        CollectionInitializerExpressionSyntax syntax,
+        TypeClauseSyntax type,
+        SyntaxToken identifier)
     {
-        var type = syntax.BufferType!;
-        var position = type.TypeArgumentCloseBracketToken!.Span.End;
+        var typeArguments = BufferTypeArguments(type);
+        var position = typeArguments.CloseBracketToken.Span.End;
         var constructor = new CallExpressionSyntax(
             syntax.SyntaxTree,
-            type.Identifier!,
-            BufferTypeArguments(type),
+            identifier,
+            typeArguments,
             new SyntaxToken(syntax.SyntaxTree, SyntaxKind.OpenParenthesisToken, position, "(", null),
             new SeparatedSyntaxList<ExpressionSyntax>(ImmutableArray<SyntaxNode>.Empty),
             new SyntaxToken(syntax.SyntaxTree, SyntaxKind.CloseParenthesisToken, position, ")", null));
         return BindCollectionInitializerSuffix(syntax, overloads.BindCallExpression(constructor));
     }
 
-    private BoundExpression BindEmptyNativeBufferLiteral(StructLiteralExpressionSyntax syntax)
+    private BoundExpression BindEmptyNativeBufferLiteral(StructLiteralExpressionSyntax syntax, TypeArgumentListSyntax arguments)
     {
         if (syntax.Elements.Count != 0 || syntax.SpreadExpression != null)
         {
@@ -61,7 +68,6 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(syntax);
         }
 
-        var arguments = syntax.TypeArgumentList!;
         var type = new TypeClauseSyntax(syntax.SyntaxTree, null, null, null, syntax.TypeIdentifier, arguments.OpenBracketToken, arguments.Arguments, arguments.CloseBracketToken, null);
         return BindNativeBufferLiteral(new CollectionInitializerExpressionSyntax(
             syntax.SyntaxTree,
@@ -148,6 +154,8 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindNativeSliceIndex(BoundExpression target, ExpressionSyntax syntax, BoundExpression? boundIndex = null)
     {
         NativeSliceTypes.TryGetElement(target.Type, out var element, out _);
+        var elementType = Invariant.Required(element, "native index read/write dispatch calls this helper only after TryGetElement succeeds");
+        var clrType = Invariant.Required(target.Type.ClrType, "native index read/write dispatch verifies the runtime type with TryGetElement");
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var saved = DeclareRangeTemp("src", target.Type, target, statements);
         var receiver = new BoundVariableExpression(null, saved);
@@ -157,14 +165,14 @@ internal sealed partial class ExpressionBinder
         {
             arguments = ImmutableArray.Create<BoundExpression>(
                 conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32), new BoundLiteralExpression(null, true));
-            indexer = target.Type.ClrType!.GetProperties().Single(p => p.GetIndexParameters().Length == 2);
+            indexer = clrType.GetProperties().Single(p => p.GetIndexParameters().Length == 2);
         }
         else
         {
             var index = boundIndex ?? BindExpression(syntax);
             if (ClrTypeUtilities.AreSame(index.Type.ClrType, typeof(Range)))
             {
-                var method = target.Type.ClrType!.GetMethods().Single(m => m.Name == "Subslice" && m.GetParameters().Length == 1);
+                var method = clrType.GetMethods().Single(m => m.Name == "Subslice" && m.GetParameters().Length == 1);
                 return new BoundBlockExpression(
                     syntax,
                     statements.ToImmutable(),
@@ -178,12 +186,12 @@ internal sealed partial class ExpressionBinder
             }
 
             arguments = ImmutableArray.Create(index);
-            indexer = target.Type.ClrType!.GetProperties().Single(
+            indexer = clrType.GetProperties().Single(
                 p => p.GetIndexParameters() is { Length: 1 } parameters
                     && ClrTypeUtilities.AreSame(parameters[0].ParameterType, isIndex ? typeof(Index) : typeof(int)));
         }
 
-        var pointer = new BoundClrIndexExpression(syntax, receiver, indexer, arguments, ByRefTypeSymbol.Get(element!));
+        var pointer = new BoundClrIndexExpression(syntax, receiver, indexer, arguments, ByRefTypeSymbol.Get(elementType));
         return new BoundDereferenceExpression(syntax, new BoundBlockExpression(syntax, statements.ToImmutable(), pointer));
     }
 
@@ -258,10 +266,10 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindNativeBufferLiteral(CollectionInitializerExpressionSyntax syntax)
     {
-        if (syntax.BufferType is { ReadOnlySliceModifier: null, Identifier: { } name }
+        if (syntax.BufferType is { ReadOnlySliceModifier: null, Identifier: { } name } ordinaryType
             && !binderCtx.CanUseNativeBufferAlias(scope, name, getCurrentFunction(), expression: true))
         {
-            return BindOrdinaryBufferCollectionLiteral(syntax);
+            return BindOrdinaryBufferCollectionLiteral(syntax, ordinaryType, name);
         }
 
         var type = bindTypeClause(Invariant.Required(syntax.BufferType, "native literals carry their buffer type"));
@@ -300,8 +308,11 @@ internal sealed partial class ExpressionBinder
 
         // A symbolic declaring-type receiver keeps T in FromArray's MemberRef,
         // including source-defined value types whose CLR type does not exist yet.
-        var method = type.ClrType!.GetMethod("FromArray", BindingFlags.Public | BindingFlags.Static)!;
-        var container = new ImportedClassSymbol(type.ClrType, null, (ImportedTypeSymbol)type, scope.References);
+        var clrType = Invariant.Required(type.ClrType, "TryGetElement selected the native runtime type after the array-literal branch returned");
+        var method = Invariant.Required(
+            clrType.GetMethod("FromArray", BindingFlags.Public | BindingFlags.Static),
+            "native type binding selects the SDK Slice/ReadOnlySlice definition, whose ABI declares public static FromArray");
+        var container = new ImportedClassSymbol(clrType, null, (ImportedTypeSymbol)type, scope.References);
         var function = new ImportedFunctionSymbol("FromArray", container, method, null, type);
         return new BoundImportedCallExpression(
             syntax, function, ImmutableArray.Create<BoundExpression>(storage), staticContainerType: type);
@@ -312,8 +323,12 @@ internal sealed partial class ExpressionBinder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var saved = DeclareRangeTemp("src", target.Type, target, statements);
         var receiver = new BoundVariableExpression(null, saved);
+        var clrType = Invariant.Required(target.Type.ClrType, "BindRangeSlice dispatches here only after TryGetElement verifies the runtime type");
+        var lengthProperty = Invariant.Required(
+            clrType.GetProperty("Length"),
+            "BindRangeSlice selects the SDK native descriptor, whose ABI declares Length");
         var length = new BoundClrPropertyAccessExpression(
-            null, receiver, target.Type.ClrType!.GetProperty("Length")!, TypeSymbol.Int32);
+            null, receiver, lengthProperty, TypeSymbol.Int32);
 
         BoundExpression Bound(ExpressionSyntax? syntax, BoundExpression omitted)
             => syntax == null ? omitted
@@ -321,7 +336,7 @@ internal sealed partial class ExpressionBinder
 
         var lower = Bound(range.LowerBound, new BoundLiteralExpression(null, 0));
         var upper = Bound(range.UpperBound, length);
-        var method = target.Type.ClrType.GetMethods().Single(m => m.Name == "Subslice" && m.GetParameters().Length == 4);
+        var method = clrType.GetMethods().Single(m => m.Name == "Subslice" && m.GetParameters().Length == 4);
         var call = new BoundImportedInstanceCallExpression(
             range,
             receiver,

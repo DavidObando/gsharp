@@ -1863,7 +1863,10 @@ internal sealed partial class ExpressionBinder
             }
 
             var methodName = syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ? "op_Equality" : "op_Inequality";
-            var method = nativeEqualityLeftType.ClrType!.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static)!;
+            var clrType = Invariant.Required(nativeEqualityLeftType.ClrType, "the enclosing TryGetElement success establishes the native CLR type");
+            var method = Invariant.Required(
+                clrType.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static),
+                "TryGetElement selects the SDK Slice/ReadOnlySlice definition, whose ABI declares both equality operators");
             TryLiftNullableClrOperatorOperands(
                 syntax.OperatorToken.Kind,
                 ref boundLeft,

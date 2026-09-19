@@ -2004,10 +2004,10 @@ internal sealed partial class ExpressionBinder
         StructSymbol? resolvedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments = default)
     {
-        if (resolvedDefinition == null && syntax.TypeArgumentList != null
+        if (resolvedDefinition == null && syntax.TypeArgumentList is { } nativeTypeArguments
             && binderCtx.CanUseNativeBufferAlias(scope, syntax.TypeIdentifier, getCurrentFunction(), expression: true))
         {
-            return BindEmptyNativeBufferLiteral(syntax);
+            return BindEmptyNativeBufferLiteral(syntax, nativeTypeArguments);
         }
 
         if (syntax.SpreadExpression != null)

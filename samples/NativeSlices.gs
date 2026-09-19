@@ -23,8 +23,8 @@ func Fill(frames slice[StereoFrame]) {
 
 func Process(frames slice[StereoFrame]) {
     Fill(frames)
-    Gain(frames[1..], 2.0)
-    Gain(frames[1..2], 2.0)
+    Gain(frames[1 ..], 2.0)
+    Gain(frames[1 .. 2], 2.0)
 }
 
 func Main() {

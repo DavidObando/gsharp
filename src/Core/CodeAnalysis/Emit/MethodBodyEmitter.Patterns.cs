@@ -998,7 +998,8 @@ internal sealed partial class MethodBodyEmitter
         var rest = (BoundSlicePattern)lp.Elements[sliceIndex];
         if (rest.Variable != null && NativeSliceTypes.TryGetElement(lp.Type, out _, out _))
         {
-            var subslice = lp.Type.ClrType!.GetMethods().Single(
+            var clrType = Invariant.Required(lp.Type.ClrType, "the enclosing TryGetElement success establishes the native CLR type");
+            var subslice = clrType.GetMethods().Single(
                 method => method.Name == "Subslice" && method.GetParameters().Length == 2);
             loadReceiver();
             this.il.LoadConstantI4(prefix);

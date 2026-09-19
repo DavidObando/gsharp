@@ -3929,7 +3929,7 @@ public sealed class Binder
             && syntax.Identifier is { } nativeName
             && binderCtx.CanUseNativeBufferAlias(scope, nativeName, function))
         {
-            var arguments = syntax.TypeArguments!;
+            var arguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments means the parser supplied a generic argument list");
             if (arguments.Count != 1)
             {
                 Diagnostics.ReportNativeSliceType(syntax.Location, "slice[T] and array[T] require exactly one element type");
