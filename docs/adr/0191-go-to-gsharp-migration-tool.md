@@ -15,7 +15,7 @@
   [ADR-0174](0174-goroutines-and-channels-wave-2.md),
   [ADR-0182](0182-receiver-clause-is-always-extension.md)
 - **Dependency status**: ADRs 0190, 0188, and 0189 are Proposed in the
-  docs-only base [PR #4332](https://github.com/DavidObando/gsharp/pull/4332).
+  docs-only prerequisite [PR #4332](https://github.com/DavidObando/gsharp/pull/4332).
   Approval of their design direction is not implementation availability.
   This ADR neither accepts nor changes them.
 
