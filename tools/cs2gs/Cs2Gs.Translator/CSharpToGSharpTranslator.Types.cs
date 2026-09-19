@@ -2339,9 +2339,13 @@ public sealed partial class CSharpToGSharpTranslator
             // The query's "scope" is the set of range variables in play, in
             // declaration order — the C# spec's transparent identifier (§12.19.3).
             // A lone `from` starts with one; a second `from`, a `let`, or a `join`
-            // grows it. G# has no anonymous types to carry more than one variable
-            // through a lambda, so scope.Count > 1 is threaded as a positional
-            // tuple (see <see cref="BuildScopeParameter"/>).
+            // grows it. scope.Count > 1 is threaded as a positional tuple — not
+            // because G# lacks anonymous types (it has had them since
+            // ADR-0146), but because a tuple is the lighter-weight, more
+            // appropriate carrier for this ephemeral, translator-internal
+            // value (ADR-0185, Alternative 3). See <see cref="BuildScopeParameter"/>,
+            // which (as of ADR-0185) emits that tuple as a DESTRUCTURING
+            // parameter under the real range-variable names directly.
             var scope = new List<(string Name, GTypeReference Type, ISymbol Symbol)>
             {
                 (from.Identifier.ValueText, rangeType, this.context.GetDeclaredSymbol(from)),
@@ -2524,15 +2528,18 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Lowers `let x = e` (spec §12.19.3.4): a Select projecting the current
         // scope's transparent identifier widened by one member, `x`. Mirrors the
-        // spec's `(...).Select(x1 => new{x1, x2 = e})` — sans anonymous types, a
-        // positional tuple carries the widened scope forward.
+        // spec's `(...).Select(x1 => new{x1, x2 = e})`, with a positional tuple
+        // carrying the widened scope forward instead of an anonymous object
+        // (ADR-0185, Alternative 3 — the lighter-weight carrier for this
+        // ephemeral, translator-internal use, not a fallback for a missing
+        // feature).
         private GExpression LowerLetClause(
             LetClauseSyntax let,
             List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current)
         {
             var prologue = new List<GStatement>();
-            Parameter param = this.BuildScopeParameter(scope, prologue);
+            Parameter param = this.BuildScopeParameter(scope);
             this.ReportIfIndexOrRangeTypedRangeVariable(let, let.Identifier, this.context.GetTypeInfo(let.Expression).Type);
 
             // Issue #3348: as in `BuildScopeLambda`, the `let` value is evaluated
@@ -2701,7 +2708,7 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax lambdaBody)
         {
             var prologue = new List<GStatement>();
-            Parameter param = this.BuildScopeParameter(scope, prologue);
+            Parameter param = this.BuildScopeParameter(scope);
 
             // Issue #3348: translate the clause body INSIDE this lambda's own seam.
             // Anything it hoists — a single-evaluation spill (issue #1731) or an
@@ -2740,7 +2747,7 @@ public sealed partial class CSharpToGSharpTranslator
             (string Name, GTypeReference Type, ISymbol Symbol) rightVar)
         {
             var prologue = new List<GStatement>();
-            Parameter leftParam = this.BuildScopeParameter(leftScope, prologue);
+            Parameter leftParam = this.BuildScopeParameter(leftScope);
             var rightParam = new Parameter(
                 this.EmittedName(rightVar.Symbol, rightVar.Name),
                 rightVar.Type);
@@ -2760,13 +2767,17 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Builds the formal parameter a query-scope lambda binds to: a single
         // variable binds directly by name; a transparent identifier
-        // (scope.Count > 1) binds a synthetic tuple parameter and appends a `let
-        // (x1, x2, …) = __qN` deconstruction to `prologue` so the lambda body can
-        // still refer to each range variable by its own name (issue #1902 — G#
-        // has no anonymous types to bind the C# spec's transparent identifier to).
+        // (scope.Count > 1) binds a tuple-DESTRUCTURING parameter (ADR-0185,
+        // `(x1 T1, x2 T2, ...) -> ...`) under the real range-variable names
+        // directly — no prologue statement needed, and no synthetic name:
+        // ADR-0185 retired the `__q{N}` scheme (issue #4304) this function
+        // used to synthesize here, together with issue #1998's collision-
+        // avoidance loop it required (a same-name collision between a query
+        // range variable and an outer local is now just an ordinary
+        // identifier collision, already resolved by EmittedName/
+        // EmittedNameAllocator like everywhere else in this translator).
         private Parameter BuildScopeParameter(
-            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
-            List<GStatement> prologue)
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope)
         {
             if (scope.Count == 1)
             {
@@ -2783,6 +2794,9 @@ public sealed partial class CSharpToGSharpTranslator
             // only surface as an opaque GS0159 much later at G# bind time) and
             // still emit the best-effort shape so a single query with one
             // over-wide scope doesn't block translating the rest of the file.
+            // Unaffected by ADR-0185: this proposal changes how a scope's
+            // tuple parameter is SPELLED, not how wide a scope G# tuples can
+            // represent.
             if (scope.Count > 7 && this.state.CurrentQueryNode != null)
             {
                 string scopeMessage =
@@ -2797,41 +2811,9 @@ public sealed partial class CSharpToGSharpTranslator
                     TranslationSeverity.Unsupported));
             }
 
-            // Issue #1998: guard against a `__qN` collision with EITHER a
-            // range variable already in this scope OR any other user local
-            // visible at the query (a user local literally named `__q0`
-            // outside the query scope would otherwise still shadow/be
-            // shadowed by the synthesized tuple parameter) — bump the counter
-            // past any hit.
-            string tupleParamName;
-            do
-            {
-                tupleParamName = $"__q{this.state.QueryScopeCounter++}";
-            }
-            while (scope.Any(v => v.Name == tupleParamName) || this.IsNameVisibleAtCurrentQuery(tupleParamName));
-
-            prologue.Add(new TupleDeconstructionStatement(
-                BindingKind.Let,
-                scope.Select(v => this.EmittedName(v.Symbol, v.Name)).ToList(),
-                new IdentifierExpression(tupleParamName)));
-            return new Parameter(tupleParamName, new TupleTypeReference(scope.Select(v => v.Type).ToList()));
-        }
-
-        // Issue #1998: whether `name` resolves to any symbol (local, parameter,
-        // field, …) visible at the currently-lowering query's position, via the
-        // active semantic model. Backs the `__qN` collision guard above —
-        // `LookupSymbols` sees every C# local in scope at that source position,
-        // not just the query's own range variables (`scope`).
-        private bool IsNameVisibleAtCurrentQuery(string name)
-        {
-            if (this.state.CurrentQueryNode == null)
-            {
-                return false;
-            }
-
-            return this.context.SemanticModel
-                .LookupSymbols(this.state.CurrentQueryNode.SpanStart, name: name)
-                .Length > 0;
+            return new Parameter(scope
+                .Select(v => (this.EmittedName(v.Symbol, v.Name), v.Type))
+                .ToList());
         }
     }
 }

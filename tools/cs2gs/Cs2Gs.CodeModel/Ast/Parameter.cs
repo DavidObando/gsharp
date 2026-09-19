@@ -37,10 +37,27 @@ public sealed class Parameter : GNode
         Attributes = attributes ?? new List<AttributeUse>();
     }
 
-    /// <summary>Gets the parameter name.</summary>
+    /// <summary>
+    /// Initializes a new instance of the <see cref="Parameter"/> class for a
+    /// tuple-DESTRUCTURING arrow-lambda parameter (ADR-0185)
+    /// (<c>(name1 T1, name2 T2, ...)</c>) — <see cref="Name"/> and
+    /// <see cref="Type"/> are both <see langword="null"/> and
+    /// <see cref="DestructuredElements"/> carries the real range-variable
+    /// names/types instead. Used by <c>BuildScopeParameter</c> to emit a
+    /// query-scope lambda parameter directly under its real names, in place
+    /// of the retired <c>__q{N}</c> synthetic tuple parameter (issue #4304).
+    /// </summary>
+    /// <param name="destructuredElements">The pattern's <c>(name, type)</c> elements, in order.</param>
+    public Parameter(IReadOnlyList<(string Name, GTypeReference Type)> destructuredElements)
+    {
+        DestructuredElements = destructuredElements;
+        Attributes = new List<AttributeUse>();
+    }
+
+    /// <summary>Gets the parameter name, or <see langword="null"/> for a destructured parameter (ADR-0185).</summary>
     public string Name { get; }
 
-    /// <summary>Gets the parameter type (element type when variadic).</summary>
+    /// <summary>Gets the parameter type (element type when variadic), or <see langword="null"/> for a destructured parameter (ADR-0185).</summary>
     public GTypeReference Type { get; }
 
     /// <summary>Gets a value indicating whether the parameter is variadic.</summary>
@@ -54,6 +71,16 @@ public sealed class Parameter : GNode
 
     /// <summary>Gets the per-parameter attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>
+    /// Gets the <c>(name1 T1, name2 T2, ...)</c> tuple-destructuring pattern
+    /// (ADR-0185) elements, or <see langword="null"/> for an ordinary
+    /// single-identifier parameter.
+    /// </summary>
+    public IReadOnlyList<(string Name, GTypeReference Type)> DestructuredElements { get; }
+
+    /// <summary>Gets a value indicating whether this is a destructured parameter (ADR-0185).</summary>
+    public bool IsDestructured => DestructuredElements != null;
 }
 
 /// <summary>

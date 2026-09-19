@@ -253,13 +253,6 @@ internal sealed class DocumentTranslationState
     public Dictionary<ElementBindingExpressionSyntax, GExpression> ConditionalElementBindingReplacements { get; } =
         new Dictionary<ElementBindingExpressionSyntax, GExpression>();
 
-    // Issue #1902: numbers the `__qN` tuple parameter synthesized to carry a
-    // query's transparent identifier (multiple in-scope range variables)
-    // through a lambda that C#'s query-translation spec (§12.19.3) would bind
-    // via an anonymous type; G# has no anonymous types, so a positional tuple
-    // stands in (see <see cref="BuildScopeParameter"/>).
-    public int QueryScopeCounter { get; set; }
-
     // Issue #1998: the query currently being lowered, set for the duration of
     // `TranslateQuery` — anchors the arity-cap diagnostic in
     // `BuildScopeParameter`.
