@@ -1314,28 +1314,17 @@ internal sealed partial class DeclarationBinder
                         ValidateCompoundAssignmentOperatorShape(methodSyntax, methodName, returnType, methodParameters.Length);
                     }
 
-                    // Issue #987: a no-body `open func F() R;` inside a class is
-                    // the canonical G# spelling of a C# abstract method. Mark the
-                    // method abstract so the body binder skips it (there is no
-                    // body to bind) and the emitter writes an abstract virtual
-                    // slot rather than crashing on a null body. The bodyless form
-                    // is only valid as an `open` member of an `open` class — any
-                    // other shape (a non-`open` bodyless method, or one inside a
-                    // non-`open` class) is reported with GS0388.
-                    if (methodSyntax.HasSemicolonBody)
-                    {
-                        methodSymbol.IsAbstract = true;
-                        if (!methodSyntax.IsOpen || !structSymbol.IsOpen)
-                        {
-                            Diagnostics.ReportAbstractMethodRequiresOpenClass(
-                                methodSyntax.Identifier.Location,
-                                methodName,
-                                structSymbol.Name);
-                        }
-                    }
-
                     Binder.AttachDocumentation(methodSymbol, methodSyntax);
 
+                    // Issue #4301 / ADR-0187: attribute binding is hoisted ahead
+                    // of the abstract-method/semicolon-body check below so that
+                    // an `@GeneratedRegex` annotation is visible on
+                    // `methodSymbol.Attributes` before that check runs — an
+                    // instance `;`-bodied method annotated with
+                    // `@GeneratedRegex` (e.g. a migrated C#
+                    // `public partial Regex LowercaseWords()`) is NOT an
+                    // abstract open-class slot; it synthesizes a cached-Regex
+                    // backing field instead (see GeneratedRegexBinder).
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
                     {
                         var methodAttributes = BindAttributes(
@@ -1347,6 +1336,28 @@ internal sealed partial class DeclarationBinder
                         methodSymbol.SetAttributes(methodAttributes);
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
                         ValidateUnscopedRefPlacement(methodSymbol);
+                    }
+
+                    var isGeneratedRegex = GeneratedRegexBinder.TryAttachGeneratedRegexMetadata(methodSymbol, methodSyntax, Diagnostics);
+
+                    // Issue #987: a no-body `open func F() R;` inside a class is
+                    // the canonical G# spelling of a C# abstract method. Mark the
+                    // method abstract so the body binder skips it (there is no
+                    // body to bind) and the emitter writes an abstract virtual
+                    // slot rather than crashing on a null body. The bodyless form
+                    // is only valid as an `open` member of an `open` class — any
+                    // other shape (a non-`open` bodyless method, or one inside a
+                    // non-`open` class) is reported with GS0388.
+                    if (methodSyntax.HasSemicolonBody && !isGeneratedRegex)
+                    {
+                        methodSymbol.IsAbstract = true;
+                        if (!methodSyntax.IsOpen || !structSymbol.IsOpen)
+                        {
+                            Diagnostics.ReportAbstractMethodRequiresOpenClass(
+                                methodSyntax.Identifier.Location,
+                                methodName,
+                                structSymbol.Name);
+                        }
                     }
 
                     var nullableSequenceSpecializations = ExpandNullableSequenceIteratorSpecializations(methodSymbol);
@@ -2588,7 +2599,17 @@ internal sealed partial class DeclarationBinder
                     // bodyless `shared` method that is NOT a P/Invoke is reported
                     // with GS0325, mirroring the top-level free-function path.
                     var isStaticPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(methodSymbol, methodSyntax, Diagnostics);
-                    if (!isStaticPInvoke && methodSyntax.HasSemicolonBody)
+
+                    // ADR-0187 / issue #4301: a `shared`-block method may be a
+                    // static `@GeneratedRegex` (matching e.g. a migrated C#
+                    // `static partial Regex Pattern()`). Resolve and attach the
+                    // GeneratedRegexMetadata + backing field so body binding is
+                    // skipped (there is no source body to bind) and the emitter
+                    // synthesizes the trivial `return <field>` body plus the
+                    // field's `.cctor` initializer.
+                    var isGeneratedRegex = GeneratedRegexBinder.TryAttachGeneratedRegexMetadata(methodSymbol, methodSyntax, Diagnostics);
+
+                    if (!isStaticPInvoke && !isGeneratedRegex && methodSyntax.HasSemicolonBody)
                     {
                         Diagnostics.ReportSemicolonBodyRequiresDllImport(methodSyntax.Identifier.Location, methodSymbol.Name);
                     }
@@ -3951,8 +3972,22 @@ internal sealed partial class DeclarationBinder
         // the const that genuinely cannot fold.
         pendingCrossTypeConstFolds.AddRange(pendingConstFolds);
 
+        // ADR-0187 / issue #4301: every well-formed `@GeneratedRegex`
+        // function on this type (instance or static — the backing field is
+        // always `shared`/static, see GeneratedRegexBinder) needs its
+        // backing field's `new Regex(...)` initializer folded into THIS
+        // same `.cctor`-content dictionary, so it runs alongside any
+        // ordinary `shared` static-field initializer instead of needing a
+        // second, competing `.cctor`-assembly mechanism. Methods are bound
+        // (non-deferred) before this closure runs, so `structSymbol.Methods`
+        // / `StaticMethods` are already final.
+        var generatedRegexMethods = structSymbol.Methods
+            .Concat(structSymbol.StaticMethods)
+            .Where(m => m.IsGeneratedRegex)
+            .ToImmutableArray();
+
         // Bind `shared` static field initializers.
-        if (staticFieldInitializers.Count > 0 || zeroValueStaticFields.Count > 0)
+        if (staticFieldInitializers.Count > 0 || zeroValueStaticFields.Count > 0 || generatedRegexMethods.Length > 0)
         {
             var previousFunction = getCurrentFunction();
             var staticInitializerContext = CreateFieldInitializerAccessibilityContext(structSymbol);
@@ -3988,6 +4023,13 @@ internal sealed partial class DeclarationBinder
                     {
                         staticInitBuilder[fieldSym] = zeroValue;
                     }
+                }
+
+                foreach (var generatedRegexMethod in generatedRegexMethods)
+                {
+                    var backingField = generatedRegexMethod.GeneratedRegexBackingField
+                        ?? throw new InvalidOperationException("A well-formed @GeneratedRegex function must have a backing field.");
+                    staticInitBuilder[backingField] = GeneratedRegexBinder.BuildBackingFieldInitializer(generatedRegexMethod);
                 }
 
                 structSymbol.SetStaticFieldInitializers(staticInitBuilder.ToImmutable());

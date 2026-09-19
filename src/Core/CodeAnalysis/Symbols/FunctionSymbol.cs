@@ -502,6 +502,33 @@ public sealed class FunctionSymbol : Symbol
     public PInvokeMetadata? PInvokeMetadata { get; set; }
 
     /// <summary>
+    /// Gets or sets the resolved <c>@GeneratedRegex</c> metadata for a
+    /// bodyless <c>func</c> declaration (ADR-0187 / issue #4301). Non-null
+    /// when the function is a well-formed <c>@GeneratedRegex</c> stub; the
+    /// binder additionally attaches <see cref="GeneratedRegexBackingField"/>
+    /// (a synthesized <c>shared</c>/static <c>Regex</c>-typed field on the
+    /// declaring type). The emitter initializes that field in the type's
+    /// <c>.cctor</c> from this payload and synthesizes a trivial
+    /// <c>return &lt;backing field&gt;</c> body for this function — the same
+    /// cached instance is returned regardless of whether this method itself
+    /// is static or an instance method (real <c>[GeneratedRegex]</c>
+    /// semantics: the compiled pattern has no per-instance state). Defaults
+    /// to <c>null</c> for ordinary managed functions.
+    /// </summary>
+    public GeneratedRegexMetadata? GeneratedRegexMetadata { get; set; }
+
+    /// <summary>
+    /// Gets or sets the compiler-synthesized backing field that caches this
+    /// function's <c>Regex</c> instance (ADR-0187 / issue #4301), mirroring
+    /// ADR-0051's auto-property backing-field synthesis. Always a
+    /// <c>shared</c>/static field on the declaring type, even when this
+    /// function is an instance method — never printed in G# source, and
+    /// non-null exactly when <see cref="GeneratedRegexMetadata"/> is
+    /// non-null.
+    /// </summary>
+    public FieldSymbol? GeneratedRegexBackingField { get; set; }
+
+    /// <summary>
     /// Gets or sets the CLR interface slot this method explicitly implements via
     /// a covariant-return interface bridge (issue #985). Two same-name,
     /// same-parameter methods that differ only by return type and satisfy two
@@ -571,6 +598,9 @@ public sealed class FunctionSymbol : Symbol
 
     /// <summary>Gets a value indicating whether this function is a P/Invoke stub (ADR-0086).</summary>
     public bool IsPInvoke => PInvokeMetadata != null;
+
+    /// <summary>Gets a value indicating whether this function is a well-formed <c>@GeneratedRegex</c> stub (ADR-0187).</summary>
+    public bool IsGeneratedRegex => GeneratedRegexMetadata != null;
 
     /// <summary>Gets a value indicating whether a fieldless direct-call host needs no enclosing generic slots.</summary>
     internal bool HasNonGenericLexicalOwner =>

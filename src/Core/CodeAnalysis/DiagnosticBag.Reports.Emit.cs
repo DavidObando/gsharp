@@ -805,4 +805,57 @@ public sealed partial class DiagnosticBag
     /// <param name="typeName">The illegal measured type name.</param>
     public void ReportSizeOfRequiresUnmanagedType(TextLocation location, string typeName)
     => Report(location, DiagnosticDescriptors.SizeOfRequiresUnmanagedType, typeName);
+
+    /// <summary>
+    /// ADR-0187 / issue #4301: GS0593 — an <c>@GeneratedRegex(...)</c>
+    /// annotation is missing a non-empty constant string <c>pattern</c>
+    /// argument (the first positional argument).
+    /// </summary>
+    /// <param name="location">The location of the offending function identifier.</param>
+    /// <param name="functionName">The function name.</param>
+    public void ReportGeneratedRegexMissingPattern(TextLocation location, string functionName)
+    => Report(location, DiagnosticDescriptors.GeneratedRegexMissingPattern, functionName);
+
+    /// <summary>
+    /// ADR-0187 / issue #4301: GS0594 — <c>@GeneratedRegex</c> is applied to
+    /// a function shape it does not support: a real (non-<c>;</c>) body, a
+    /// parameter list, a generic function, an async function, or a return
+    /// type other than <c>System.Text.RegularExpressions.Regex</c>.
+    /// </summary>
+    /// <param name="location">The location of the offending function identifier (or body, for the "must not have a body" case).</param>
+    /// <param name="functionName">The function name.</param>
+    /// <param name="reason">A short reason for the rejection.</param>
+    public void ReportGeneratedRegexInvalidFunctionShape(TextLocation location, string functionName, string reason)
+    => Report(location, DiagnosticDescriptors.GeneratedRegexInvalidFunctionShape, functionName, reason);
+
+    /// <summary>
+    /// ADR-0187 / issue #4301: GS0595 — an <c>@GeneratedRegex</c> combines
+    /// <c>RegexOptions.IgnoreCase</c> (explicitly, or via an inline
+    /// <c>(?i)</c> option group in the pattern) with culture-sensitive
+    /// matching: no <c>RegexOptions.CultureInvariant</c>, or an explicit
+    /// non-empty <c>cultureName</c>. Lowering to a cached <c>Regex</c>
+    /// instance would silently change matching semantics, so this is
+    /// rejected rather than approximated.
+    /// </summary>
+    /// <param name="location">The location of the offending <c>@GeneratedRegex(...)</c> annotation.</param>
+    /// <param name="functionName">The function name.</param>
+    public void ReportGeneratedRegexCultureSensitiveIgnoreCase(TextLocation location, string functionName)
+    => Report(location, DiagnosticDescriptors.GeneratedRegexCultureSensitiveIgnoreCase, functionName);
+
+    /// <summary>
+    /// ADR-0187 / issue #4301: GS0596 — constructing
+    /// <c>Regex(pattern, options[, matchTimeout])</c> from the resolved
+    /// <c>@GeneratedRegex</c> arguments throws at compile time (an invalid
+    /// pattern, an unsupported <c>RegexOptions</c> bit combination, or a
+    /// non-positive explicit <c>matchTimeoutMilliseconds</c> other than
+    /// <c>-1</c>). The binder probes construction eagerly, at gsc's own
+    /// compile time, so a malformed declaration is reported here instead of
+    /// throwing a <c>TypeInitializationException</c> out of the emitted
+    /// type's <c>.cctor</c> at first use.
+    /// </summary>
+    /// <param name="location">The location of the offending <c>@GeneratedRegex(...)</c> annotation.</param>
+    /// <param name="functionName">The function name.</param>
+    /// <param name="reason">The <see cref="System.Exception.Message"/> from the failed construction probe.</param>
+    public void ReportGeneratedRegexConstructionFailed(TextLocation location, string functionName, string reason)
+    => Report(location, DiagnosticDescriptors.GeneratedRegexConstructionFailed, functionName, reason);
 }

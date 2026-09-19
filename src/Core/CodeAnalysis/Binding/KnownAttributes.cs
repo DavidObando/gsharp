@@ -757,7 +757,23 @@ internal static class KnownAttributes
         return false;
     }
 
-    private static bool TryConvertToInt32(object? value, out int result)
+    /// <summary>
+    /// Narrows <paramref name="value"/> to its <c>int32</c> representation
+    /// when it is one of the CLR shapes an attribute-argument constant can
+    /// actually take for an integral/enum-typed argument — never for a
+    /// merely <c>Convert.ToInt32</c>-convertible type like <c>bool</c> or
+    /// <c>string</c> (issue #4301 review: <c>Convert.ToInt32(true)</c>
+    /// silently returns <c>1</c>, and <c>Convert.ToInt32("bogus")</c> throws
+    /// an uncaught <see cref="FormatException"/> out of the binder — both
+    /// wrong for a malformed <c>@GeneratedRegex</c> `options` argument,
+    /// which must report a diagnostic instead). Internal so
+    /// <see cref="GeneratedRegexBinder"/> can reuse the same safe,
+    /// closed-set conversion instead of hand-rolling a second one.
+    /// </summary>
+    /// <param name="value">The bound attribute-argument constant value.</param>
+    /// <param name="result">Receives the <c>int32</c> representation on success.</param>
+    /// <returns><c>true</c> when <paramref name="value"/> is one of the recognised integral/enum shapes.</returns>
+    internal static bool TryConvertToInt32(object? value, out int result)
     {
         switch (value)
         {
@@ -904,6 +920,59 @@ internal static class KnownAttributes
         foreach (var attr in attributes)
         {
             if (IsLibraryImport(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Text.RegularExpressions.GeneratedRegexAttribute"/>.
+    /// ADR-0187 / issue #4301: <c>@GeneratedRegex(...)</c> is a third
+    /// attribute discriminator on a bodyless <c>func</c> declaration,
+    /// alongside <c>@DllImport</c>/<c>@LibraryImport</c> — the forward
+    /// compatibility ADR-0086 §1 and ADR-0092 promised for exactly this
+    /// kind of consumer. Recognition is type-identity based so renaming or
+    /// shadowing the source-level name cannot bypass the rule.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[GeneratedRegex]</c>.</returns>
+    public static bool IsGeneratedRegex(Type? clrType)
+    {
+        return clrType.IsSameAs(typeof(System.Text.RegularExpressions.GeneratedRegexAttribute));
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Text.RegularExpressions.GeneratedRegexAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[GeneratedRegex]</c>.</returns>
+    public static bool IsGeneratedRegex(BoundAttribute? attribute)
+    {
+        return IsGeneratedRegex(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@GeneratedRegex(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present.
+    /// Recognition is type-identity based (ADR-0187 / issue #4301).
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a function symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute? FindGeneratedRegex(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsGeneratedRegex(attr))
             {
                 return attr;
             }
@@ -1070,7 +1139,7 @@ internal static class KnownAttributes
     /// rows rather than a <c>CustomAttribute</c> row. The emitter elides
     /// these from the user-attribute pass to avoid producing a
     /// duplicate / misleading reflection view (ADR-0086 §6,
-    /// ADR-0092 §6, ADR-0093 §5, ADR-0096 §5, ADR-0084 §L5).
+    /// ADR-0092 §6, ADR-0093 §5, ADR-0096 §5, ADR-0084 §L5, ADR-0187).
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is pseudo-custom.</returns>
@@ -1081,7 +1150,8 @@ internal static class KnownAttributes
             || IsStructLayout(attribute)
             || IsFieldOffset(attribute)
             || IsMarshalAs(attribute)
-            || IsMethodImpl(attribute);
+            || IsMethodImpl(attribute)
+            || IsGeneratedRegex(attribute);
     }
 
     /// <summary>

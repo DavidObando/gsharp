@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -99,6 +100,28 @@ internal sealed class ConstructorBodyEmitter
             {
                 // Synthesize: field = initExpr (as an expression statement).
                 var assignment = new BoundFieldAssignmentExpression(null, null, typeSym, field, initExpr);
+                statements.Add(new BoundExpressionStatement(null, assignment));
+            }
+        }
+
+        // ADR-0187 / issue #4301: `@GeneratedRegex` backing fields are not
+        // part of `typeSym.StaticFields` (they are emitted via their own
+        // dedicated TypeDefEmitter pass, mirroring an auto-property's
+        // backing field), but their `new Regex(...)` initializer DOES live
+        // in this same `StaticFieldInitializers` dictionary so it runs as
+        // part of this one `.cctor` — see the loop above, which the
+        // dictionary alone does not drive; walk the generated-regex
+        // functions directly instead.
+        foreach (var method in typeSym.Methods.Concat(typeSym.StaticMethods))
+        {
+            if (!method.IsGeneratedRegex || method.GeneratedRegexBackingField is not { } backingField)
+            {
+                continue;
+            }
+
+            if (typeSym.StaticFieldInitializers.TryGetValue(backingField, out var generatedRegexInit))
+            {
+                var assignment = new BoundFieldAssignmentExpression(null, null, typeSym, backingField, generatedRegexInit);
                 statements.Add(new BoundExpressionStatement(null, assignment));
             }
         }

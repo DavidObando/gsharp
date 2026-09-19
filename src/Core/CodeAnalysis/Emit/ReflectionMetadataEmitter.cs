@@ -1808,6 +1808,34 @@ internal sealed class ReflectionMetadataEmitter
                     nextFieldRow++;
                 }
             }
+
+            // ADR-0187 / issue #4301: backing fields for `@GeneratedRegex`
+            // functions — always static, whether the annotated function
+            // itself is static (`s.StaticMethods`) or an instance method
+            // (`s.Methods`). Omitting this under-reserves the FieldDef
+            // range exactly like the missing const-field count did (#948 /
+            // #1070 above): the field still gets emitted (TypeDefEmitter
+            // adds a real FieldDef row for it), but the NEXT TypeDef's
+            // pre-reserved fieldList pointer ends up pointing at the SAME
+            // row, so this type's range collapses to empty and the field
+            // is silently attributed to the next TypeDef instead —
+            // producing ilverify's "Field is not visible" instead of a
+            // planning-time error.
+            foreach (var m in s.Methods)
+            {
+                if (m.IsGeneratedRegex)
+                {
+                    nextFieldRow++;
+                }
+            }
+
+            foreach (var m in s.StaticMethods)
+            {
+                if (m.IsGeneratedRegex)
+                {
+                    nextFieldRow++;
+                }
+            }
         }
 
         // Issue #193: each user-defined enum contributes 1 instance field

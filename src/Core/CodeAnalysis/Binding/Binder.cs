@@ -2143,6 +2143,16 @@ public sealed class Binder
 
             foreach (var method in structSym.Methods)
             {
+                // ADR-0187 / issue #4301: a well-formed `@GeneratedRegex`
+                // instance method (e.g. `public partial Regex Foo()`) has no
+                // source body at all — synthesize the trivial
+                // `return <backing field>` body instead of requiring one.
+                if (method.IsGeneratedRegex)
+                {
+                    functionBodies.Add(method, GeneratedRegexBinder.BuildMethodBody(method));
+                    continue;
+                }
+
                 // Issue #987: abstract methods (a no-body `open func F() R;`)
                 // have no managed body — register an empty synthetic block so
                 // the emitter still mints a MethodDef handle (it writes an
@@ -2516,7 +2526,16 @@ public sealed class Binder
                 // and crash with GS9998 (the static-path analogue of issue #987).
                 if (method.Declaration.Body == null)
                 {
-                    functionBodies.Add(method, new BoundBlockStatement(method.Declaration, ImmutableArray<BoundStatement>.Empty));
+                    // ADR-0187 / issue #4301: a well-formed static
+                    // `@GeneratedRegex` method (a `shared`-block
+                    // `partial static Regex Foo()`) synthesizes the trivial
+                    // `return <backing field>` body instead of the empty
+                    // block used for the other bodyless-`shared`-method
+                    // shape (P/Invoke).
+                    var bodylessSharedMethodBody = method.IsGeneratedRegex
+                        ? GeneratedRegexBinder.BuildMethodBody(method)
+                        : new BoundBlockStatement(method.Declaration, ImmutableArray<BoundStatement>.Empty);
+                    functionBodies.Add(method, bodylessSharedMethodBody);
                     continue;
                 }
 

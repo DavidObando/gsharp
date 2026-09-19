@@ -571,6 +571,18 @@ internal static class DiagnosticDescriptors
     // tuple-typed argument.
     internal static readonly DiagnosticDescriptor DestructuringParameterRequiresAtLeastTwoElements = new("GS0592", DiagnosticSeverity.Error, "A tuple-destructuring parameter pattern requires at least two elements, but got {0}.");
 
+    // ADR-0187 / issue #4301: `@GeneratedRegex` is a third attribute
+    // discriminator on a bodyless `func` declaration, alongside
+    // `@DllImport`/`@LibraryImport` (ADR-0086 §1 / ADR-0092). Unlike
+    // P/Invoke, it needs cached STATE (a `Regex` instance built once), so
+    // its diagnostics follow the GS0360 / GS9306 "one attribute, many shape
+    // rejections" convention rather than growing a wide numbered block like
+    // ADR-0086/ADR-0092's GS0322-GS0329/GS0342-GS0344.
+    internal static readonly DiagnosticDescriptor GeneratedRegexMissingPattern = new("GS0593", DiagnosticSeverity.Error, "'@GeneratedRegex' on '{0}' requires a non-empty constant string as its 'pattern' argument (ADR-0187).");
+    internal static readonly DiagnosticDescriptor GeneratedRegexInvalidFunctionShape = new("GS0594", DiagnosticSeverity.Error, "'@GeneratedRegex' is not valid on '{0}': {1} (ADR-0187).");
+    internal static readonly DiagnosticDescriptor GeneratedRegexCultureSensitiveIgnoreCase = new("GS0595", DiagnosticSeverity.Error, "'@GeneratedRegex' on '{0}' combines 'IgnoreCase' (explicitly or via an inline '(?i)' option group) with culture-sensitive matching (a non-invariant culture, or an explicit non-empty 'cultureName'); this cannot be lowered to a cached 'Regex' without changing matching semantics. Specify 'RegexOptions.CultureInvariant' with no 'cultureName', or drop 'IgnoreCase' (ADR-0187).");
+    internal static readonly DiagnosticDescriptor GeneratedRegexConstructionFailed = new("GS0596", DiagnosticSeverity.Error, "'@GeneratedRegex' on '{0}' is not valid: {1} (ADR-0187).");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");
