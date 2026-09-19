@@ -451,6 +451,9 @@ public class TypeSymbol : Symbol
                 return match(tp);
             case NullableTypeSymbol n:
                 return AnyTypeParameter(n.UnderlyingType, match);
+            case PlatformTypeSymbol p:
+                // ADR-0186 §1: `T!` wraps exactly as `T?` does.
+                return AnyTypeParameter(p.UnderlyingType, match);
             case SliceTypeSymbol s:
                 return AnyTypeParameter(s.ElementType, match);
             case ArrayTypeSymbol a:
@@ -927,6 +930,10 @@ public class TypeSymbol : Symbol
                 return;
             case NullableTypeSymbol n:
                 CollectReferencedTypeParameters(n.UnderlyingType, sink);
+                return;
+            case PlatformTypeSymbol p:
+                // ADR-0186 §1: `T!` wraps exactly as `T?` does.
+                CollectReferencedTypeParameters(p.UnderlyingType, sink);
                 return;
             case SliceTypeSymbol s:
                 CollectReferencedTypeParameters(s.ElementType, sink);
@@ -1582,6 +1589,16 @@ public class TypeSymbol : Symbol
                 yield return Invariant.Required(
                     n.UnderlyingType,
                     "a nullable type has an underlying type");
+                break;
+            case PlatformTypeSymbol p:
+                // ADR-0186 §1: `T!` is a wrapper exactly like `T?`, so it must
+                // appear in the single canonical unwrap or every `Contains*`
+                // walker that delegates here silently treats it as a leaf —
+                // the "wrapper kinds falling through as no inner type" bug
+                // #1790 centralised this switch to end.
+                yield return Invariant.Required(
+                    p.UnderlyingType,
+                    "a platform type has an underlying type");
                 break;
             case SliceTypeSymbol s:
                 yield return s.ElementType;

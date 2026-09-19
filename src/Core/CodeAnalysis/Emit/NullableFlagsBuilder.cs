@@ -137,8 +137,14 @@ internal static class NullableFlagsBuilder
                 // Read LITERALLY: `declaredFlags` would show a fabricated `2`
                 // here for a declaration that said nothing at all, which is the
                 // very case the carve-out exists to leave alone.
+                //
+                // ADR-0186 §2 leaves this carve-out exactly as it is: an open
+                // slot still widens only for an EXPLICIT `[Nullable(2)]`. There
+                // is no `K!` for the same reason there is no `K?` here — the
+                // answer arrives with the type argument. Routed through the
+                // classifier only so no byte comparison survives outside it.
                 var parameterFlag = literalFlags[position++];
-                return parameterFlag == Annotated
+                return ClrNullability.ClassifyFlag(parameterFlag) == ClrNullabilityState.Annotated
                     ? ApplyRootAnnotation(projected, parameterFlag)
                     : projected;
             }
@@ -251,7 +257,15 @@ internal static class NullableFlagsBuilder
             // byte `0`, which csc emits explicitly for a `#nullable disable`
             // member of a `[NullableContext(1)]` type — a NON-empty flags array
             // the removed short-circuit above never even saw.
-            if (ClrNullability.IsFlagNonNull(flag) || projected is NullableTypeSymbol)
+            //
+            // ADR-0186 §2: the predicate is now the three-state classifier, and
+            // this — the third of `ClrNullability`'s reading paths — defers to
+            // it exactly as the other two do, so the three cannot drift on what
+            // byte `0` means. `SymbolForState` holds the one answer that
+            // changes.
+            var state = ClrNullability.ClassifyFlag(flag);
+            if (state == ClrNullabilityState.NotAnnotated
+                || projected is NullableTypeSymbol or PlatformTypeSymbol)
             {
                 return projected;
             }
@@ -265,7 +279,7 @@ internal static class NullableFlagsBuilder
             };
             return isValueType
                 ? projected
-                : NullableTypeSymbol.Get(projected);
+                : ClrNullability.SymbolForState(projected, state);
         }
     }
 

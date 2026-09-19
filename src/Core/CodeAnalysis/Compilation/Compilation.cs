@@ -78,6 +78,24 @@ public class Compilation
     public bool ImplicitSystemImport { get; set; }
 
     /// <summary>
+    /// Gets or sets how this compilation reads nullability-<em>oblivious</em>
+    /// imported reference positions (ADR-0186, <c>--nullability=&lt;mode&gt;</c>).
+    /// Defaults to <see cref="NullabilityMode.Enabled"/> — ADR-0136's
+    /// <c>T?</c> reading — so an existing caller that never sets it behaves
+    /// exactly as it does today.
+    /// </summary>
+    /// <remarks>
+    /// The mode is installed as an ambient scope around binding and emit
+    /// (<see cref="NullabilityOptions"/>) because the metadata reader that
+    /// consults it, <c>ClrNullability</c>, is a static leaf with no
+    /// <see cref="Compilation"/> in reach. Note that the interning caches in
+    /// the <c>Symbols</c> namespace are process-wide: two compilations that
+    /// disagree about this mode in one process should not share a
+    /// <see cref="ReferenceResolver"/>.
+    /// </remarks>
+    public NullabilityMode Nullability { get; set; } = NullabilityMode.Enabled;
+
+    /// <summary>
     /// Gets or sets a value indicating whether this compilation produces a
     /// library (a <c>.dll</c> with no entry point) as opposed to an
     /// executable. When <see langword="true"/>, top-level statements are an
@@ -234,6 +252,11 @@ public class Compilation
                 // if the caller only ever set AssemblyName and never called
                 // Emit.
                 PrepareReferencesForBinding(assemblyName);
+
+                // ADR-0186: metadata import happens under this bind, and the
+                // reader that decides what an oblivious byte means is a static
+                // leaf with no Compilation in reach.
+                using var nullabilityScope = NullabilityOptions.Enter(Nullability);
                 var globalScope = ReusedGlobalScope
                     ?? Binder.BindGlobalScope(previous: null, SyntaxTrees, References, ImplicitSystemImport, PreprocessorSymbols, IsLibrary, Submission);
                 Interlocked.CompareExchange<BoundGlobalScope?>(ref this.globalScope, globalScope, null);
@@ -266,6 +289,8 @@ public class Compilation
         {
             if (boundProgram == null)
             {
+                // ADR-0186: body binding reads imported member signatures too.
+                using var nullabilityScope = NullabilityOptions.Enter(Nullability);
                 var bp = Binder.BindProgram(GlobalScope, References, BodyCache, DirtyBodyTrees);
                 Interlocked.CompareExchange<BoundProgram?>(ref this.boundProgram, bp, null);
             }
@@ -327,6 +352,8 @@ public class Compilation
     /// <returns>An emit result.</returns>
     public EmitResult Emit()
     {
+        // ADR-0186: see the stream-based overload.
+        using var nullabilityScope = NullabilityOptions.Enter(Nullability);
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics.AsEnumerable());
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 
@@ -476,6 +503,11 @@ public class Compilation
         string? targetFrameworkMoniker = null)
     {
         AssemblyName = assemblyName ?? AssemblyName;
+
+        // ADR-0186: emit re-reads declaration nullability through
+        // `NullableFlagsBuilder`, so the mode must still be installed here and
+        // not only around the lazy binding properties above.
+        using var nullabilityScope = NullabilityOptions.Enter(Nullability);
         var parseDiagnostics = SyntaxTrees.SelectMany(st => st.Diagnostics.AsEnumerable());
         var syntaxDiagnostics = parseDiagnostics.Concat(GlobalScope.Diagnostics).ToImmutableArray();
 

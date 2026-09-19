@@ -317,6 +317,7 @@ public sealed class ReferenceResolver : IDisposable
         // the lifetime of the process even though no live compilation can
         // reach them anymore (#1622).
         NullableTypeSymbol.ClearCache();
+        PlatformTypeSymbol.ClearCache();
         SliceTypeSymbol.ClearCache();
         MapTypeSymbol.ClearCache();
         PointerTypeSymbol.ClearCache();

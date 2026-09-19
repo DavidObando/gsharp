@@ -479,14 +479,16 @@ public static class ClrNullability
     /// placeholders are emitted as oblivious byte <c>0</c>, while
     /// metadata-transparent <c>Nullable&lt;T&gt;</c> recurses directly into T.
     /// Struct-constrained generic parameters likewise force a <c>0</c> slot.
-    /// Empty and missing positions use the importer's existing nullable-by-default
-    /// semantics and expand to byte <c>2</c>.
+    /// Empty and missing positions use the importer's current reading rule and
+    /// expand to <see cref="DefaultAbsentFill"/> — byte <c>2</c>
+    /// (nullable-by-default, ADR-0136) unless ADR-0186's platform-types mode is
+    /// on, in which case byte <c>0</c> (oblivious).
     /// </summary>
     /// <param name="type">CLR type tree to expand.</param>
     /// <param name="flags">Physical nullable flags, possibly scalar or empty.</param>
     /// <returns>One byte per CLR nullable-metadata position.</returns>
     internal static ImmutableArray<byte> ExpandNullableFlags(Type type, ImmutableArray<byte> flags)
-        => ExpandNullableFlags(type, flags, absentFill: 2);
+        => ExpandNullableFlags(type, flags, absentFill: DefaultAbsentFill());
 
     /// <summary>
     /// Issue #3705 family 2: <see cref="ExpandNullableFlags(Type, ImmutableArray{byte})"/>
@@ -593,28 +595,124 @@ public static class ClrNullability
     /// <c>flags[index] == 1</c>.</description></item>
     /// </list>
     /// Only an explicit <c>1</c> (NotAnnotated) means a non-null reference type; <c>2</c>
-    /// (Annotated), <c>0</c> (oblivious) and absent all mean nullable.
+    /// (Annotated), <c>0</c> (oblivious) and absent are all NOT non-null.
+    /// <para>
+    /// ADR-0186 §2: this predicate is now a projection of
+    /// <see cref="ClassifyPosition"/>, which is the real reader. It survives
+    /// because "is this position non-null?" is a question several callers
+    /// genuinely only need a <c>bool</c> for, and its answer is unchanged — but
+    /// it is no longer sufficient on its own, because <c>false</c> now covers
+    /// two different declarations (<c>T?</c> and <c>T!</c>). A caller that
+    /// needs to tell them apart must ask <see cref="ClassifyPosition"/>.
+    /// </para>
     /// </summary>
     /// <param name="flags">The nullable-flags byte array (possibly empty or scalar).</param>
     /// <param name="index">The DFS position index of the reference-type position.</param>
-    /// <returns><c>true</c> when the position is non-null, <c>false</c> when nullable.</returns>
+    /// <returns><c>true</c> when the position is explicitly non-null.</returns>
     internal static bool IsPositionNonNull(ImmutableArray<byte> flags, int index)
+        => ClassifyPosition(flags, index) == ClrNullabilityState.NotAnnotated;
+
+    /// <summary>
+    /// ADR-0186 §2 — <b>the</b> three-state classifier, and the successor to
+    /// <see cref="IsFlagNonNull"/>'s two-valued answer. Maps the DFS position
+    /// <paramref name="index"/> within <paramref name="flags"/> onto what the
+    /// declarer actually said about it:
+    /// <list type="table">
+    /// <listheader><term><paramref name="flags"/> shape</term><description>Result</description></listheader>
+    /// <item><term>empty (no <c>[Nullable]</c>, no <c>[NullableContext]</c> anywhere)</term>
+    /// <description><see cref="ClrNullabilityState.Oblivious"/></description></item>
+    /// <item><term>length 1, <c>flags[0] == 0</c> (oblivious context)</term>
+    /// <description><see cref="ClrNullabilityState.Oblivious"/></description></item>
+    /// <item><term>length 1, <c>flags[0] == 1</c></term>
+    /// <description><see cref="ClrNullabilityState.NotAnnotated"/></description></item>
+    /// <item><term>length 1, <c>flags[0] == 2</c></term>
+    /// <description><see cref="ClrNullabilityState.Annotated"/></description></item>
+    /// <item><term>length &gt; 1, <c>flags[index] == 0</c></term>
+    /// <description><see cref="ClrNullabilityState.Oblivious"/></description></item>
+    /// <item><term>length &gt; 1, <c>flags[index] == 1</c></term>
+    /// <description><see cref="ClrNullabilityState.NotAnnotated"/></description></item>
+    /// <item><term>length &gt; 1, <c>flags[index] == 2</c></term>
+    /// <description><see cref="ClrNullabilityState.Annotated"/></description></item>
+    /// <item><term>length &gt; 1, <c>index</c> beyond the array</term>
+    /// <description><see cref="ClrNullabilityState.Oblivious"/> — the declaration
+    /// supplied no byte for this position, which is the same statement as
+    /// supplying none at all</description></item>
+    /// </list>
+    /// <para>
+    /// A scalar/context byte is a genuine statement about <em>every</em>
+    /// position, so it is classified directly rather than treated as absent.
+    /// </para>
+    /// </summary>
+    /// <param name="flags">The nullable-flags byte array (possibly empty or scalar).</param>
+    /// <param name="index">The DFS position index of the reference-type position.</param>
+    /// <returns>What the declaration says about that position.</returns>
+    internal static ClrNullabilityState ClassifyPosition(ImmutableArray<byte> flags, int index)
     {
         if (flags.IsDefaultOrEmpty)
         {
-            // No annotation and no context anywhere → unannotated/oblivious → nullable.
-            return false;
+            // No annotation and no context anywhere → the declarer said nothing.
+            return ClrNullabilityState.Oblivious;
         }
 
         if (flags.Length == 1)
         {
             // Scalar/context byte applies to every position.
-            return IsFlagNonNull(flags[0]);
+            return ClassifyFlag(flags[0]);
         }
 
-        // Per-position array: index directly; beyond-length positions are nullable.
-        return index < flags.Length && IsFlagNonNull(flags[index]);
+        // Per-position array: index directly; beyond-length positions were
+        // never described, which is obliviousness by another route.
+        return index < flags.Length
+            ? ClassifyFlag(flags[index])
+            : ClrNullabilityState.Oblivious;
     }
+
+    /// <summary>
+    /// ADR-0186 §2: maps one C# nullable-metadata byte onto what it says. The
+    /// per-byte half of <see cref="ClassifyPosition"/>, kept separate because
+    /// <c>NullableFlagsBuilder</c> reads bytes out of an already-expanded array
+    /// and so has no position to classify.
+    /// <para>
+    /// Any byte other than <c>1</c> or <c>2</c> is <see cref="ClrNullabilityState.Oblivious"/>.
+    /// That is not leniency: <c>0</c> <em>is</em> the oblivious byte, and csc
+    /// emits no other value, so an unexpected byte can only mean the reader has
+    /// been handed something it cannot interpret — for which "the declarer said
+    /// nothing" is the honest reading and the safe one.
+    /// </para>
+    /// </summary>
+    /// <param name="flag">A single C# nullable-metadata byte (0, 1 or 2).</param>
+    /// <returns>What that byte says.</returns>
+    internal static ClrNullabilityState ClassifyFlag(byte flag) => flag switch
+    {
+        1 => ClrNullabilityState.NotAnnotated,
+        2 => ClrNullabilityState.Annotated,
+        _ => ClrNullabilityState.Oblivious,
+    };
+
+    /// <summary>
+    /// ADR-0186 §2: the single place that turns a
+    /// <see cref="ClrNullabilityState"/> into a G# type, and therefore the single
+    /// cell of ADR-0136's table that this ADR changes.
+    /// <list type="bullet">
+    /// <item><description><see cref="ClrNullabilityState.NotAnnotated"/> → <c>T</c>.</description></item>
+    /// <item><description><see cref="ClrNullabilityState.Annotated"/> → <c>T?</c>.</description></item>
+    /// <item><description><see cref="ClrNullabilityState.Oblivious"/> → <c>T!</c>
+    /// under <see cref="NullabilityMode.PlatformTypes"/>, and <c>T?</c>
+    /// otherwise — ADR-0136's answer, which is what keeps
+    /// <c>--nullability=platform-types</c> a genuine no-op while it is off.</description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="baseSymbol">The unwrapped position type.</param>
+    /// <param name="state">What the declaration says about the position.</param>
+    /// <returns>The nullability-aware type symbol.</returns>
+    internal static TypeSymbol SymbolForState(TypeSymbol baseSymbol, ClrNullabilityState state) => state switch
+    {
+        ClrNullabilityState.NotAnnotated => baseSymbol,
+        ClrNullabilityState.Annotated => NullableTypeSymbol.Get(baseSymbol),
+        _ => NullabilityOptions.PlatformTypesEnabled
+            ? PlatformTypeSymbol.Get(baseSymbol)
+            : NullableTypeSymbol.Get(baseSymbol),
+    };
 
     /// <summary>
     /// Issue #1354, issue #3705 family 2 — <b>the</b> predicate that turns one
@@ -631,10 +729,18 @@ public static class ClrNullability
     /// <c>NullableFlagsBuilder.MergeDeclarationNullability</c> both defer to it
     /// rather than comparing bytes themselves.
     /// </para>
+    /// <para>
+    /// ADR-0186 §2 preserves that single-predicate principle and gives it a
+    /// third value: the byte classifier is now <see cref="ClassifyFlag"/> and
+    /// this predicate is a projection of it. G#'s rule "non-null iff the byte
+    /// is <c>1</c>" is unchanged; what changed is that the <em>other</em> two
+    /// answers are no longer the same answer, because <c>0</c>/absent means
+    /// <c>T!</c> and only <c>2</c> means <c>T?</c>.
+    /// </para>
     /// </summary>
     /// <param name="flag">A single C# nullable-metadata byte (0, 1 or 2).</param>
     /// <returns><c>true</c> only for <c>1</c> (not-annotated).</returns>
-    internal static bool IsFlagNonNull(byte flag) => flag == 1;
+    internal static bool IsFlagNonNull(byte flag) => ClassifyFlag(flag) == ClrNullabilityState.NotAnnotated;
 
     /// <summary>
     /// Constructs a <see cref="TypeSymbol"/> for <paramref name="clrType"/> by
@@ -676,9 +782,7 @@ public static class ClrNullability
                     flags,
                     offset + 1);
                 var rectangular = RectangularArrayTypeSymbol.Get(elementType, clrType.GetArrayRank());
-                return IsPositionNonNull(flags, offset)
-                    ? rectangular
-                    : NullableTypeSymbol.Get(rectangular);
+                return SymbolForState(rectangular, ClassifyPosition(flags, offset));
             }
 
             TypeSymbol array = baseSymbol;
@@ -689,9 +793,7 @@ public static class ClrNullability
                     GetNullableFlagsForSubtree(clrType, flags, offset));
             }
 
-            return IsPositionNonNull(flags, offset)
-                ? array
-                : NullableTypeSymbol.Get(array);
+            return SymbolForState(array, ClassifyPosition(flags, offset));
         }
 
         if (clrType.IsValueType)
@@ -716,10 +818,13 @@ public static class ClrNullability
             return baseSymbol;
         }
 
-        // Issue #1354: a reference position is non-null only for an explicit `1`;
-        // absent / oblivious / annotated all mean nullable.
-        bool isNullable = !IsPositionNonNull(flags, offset);
-        TypeSymbol result = isNullable ? NullableTypeSymbol.Get(baseSymbol) : baseSymbol;
+        // Issue #1354: a reference position is non-null only for an explicit `1`.
+        // ADR-0186 §2: the other two bytes are no longer the same answer —
+        // `2` is `T?` and `0`/absent is `T!`. `SymbolForState` is where that
+        // one changed cell lives, and while `--nullability=platform-types` is
+        // off it still returns ADR-0136's `T?` for both.
+        var state = ClassifyPosition(flags, offset);
+        TypeSymbol result = SymbolForState(baseSymbol, state);
 
         // Propagate inner flags when the type is a closed generic.
         if (clrType.IsGenericType
@@ -730,7 +835,7 @@ public static class ClrNullability
             // is the byte for this type itself, matching the layout convention.
             var slicedFlags = GetNullableFlagsForSubtree(clrType, flags, offset);
             var annotated = new NullabilityAnnotatedTypeSymbol(baseSymbol, slicedFlags);
-            result = isNullable ? (TypeSymbol)NullableTypeSymbol.Get(annotated) : annotated;
+            result = SymbolForState(annotated, state);
         }
 
         return result;
@@ -754,6 +859,38 @@ public static class ClrNullability
             : ProjectNullableFlags(actualType, layoutType, flags);
         return SymbolFromFlagsOffset(actualType, projectedFlags, 0);
     }
+
+    /// <summary>
+    /// ADR-0186 §2: returns the byte an absent position expands to, which is
+    /// not a detail but <b>the rule itself</b> written as a value.
+    /// <para>
+    /// ADR-0136 says an absent position means <c>T?</c>, so the fill is
+    /// <c>2</c>. ADR-0186 says it means <c>T!</c>, so under
+    /// <see cref="NullabilityMode.PlatformTypes"/> the fill becomes <c>0</c> —
+    /// the oblivious byte, which <see cref="ClassifyPosition"/> then reads as
+    /// <see cref="ClrNullabilityState.Oblivious"/>.
+    /// </para>
+    /// <para>
+    /// This must track the mode, and an implementer who leaves it at <c>2</c>
+    /// gets a silent drift rather than a failure: the layout/projection paths
+    /// (<see cref="SymbolFromLayoutFlags"/> → <c>ProjectNullableFlags</c>, and
+    /// <c>NullableFlagsBuilder.MergeDeclarationNullability</c>'s
+    /// <c>declaredFlags</c>) would expand an absent byte to <c>2</c> and read
+    /// the position as <c>T?</c>, while the direct path
+    /// (<see cref="SymbolFromFlagsOffset"/> over the raw flags) reads the very
+    /// same declaration as <c>T!</c>. Two readers disagreeing about one
+    /// declaration is precisely the #3705 family-2 defect ADR-0136's
+    /// single-predicate rule exists to prevent, and ADR-0186 explicitly
+    /// preserves that rule.
+    /// </para>
+    /// <para>
+    /// With the mode off — the default — this is the literal constant
+    /// <c>2</c> the two-argument overload always used, so nothing changes.
+    /// </para>
+    /// </summary>
+    /// <returns>The fill byte for positions the declaration did not supply.</returns>
+    private static byte DefaultAbsentFill()
+        => NullabilityOptions.PlatformTypesEnabled ? (byte)0 : (byte)2;
 
     private static TupleTypeSymbol BuildTupleTypeSymbol(
         Type clrType,
