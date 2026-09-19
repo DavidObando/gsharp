@@ -1412,7 +1412,9 @@ public static class DefinitionComputer
             {
                 foreach (var param in funcDecl.Parameters)
                 {
-                    if (param.Identifier.Text == variable.Name)
+                    // ADR-0185: a named function's parameters never come from
+                    // the destructured arrow-lambda path.
+                    if (param.Identifier!.Text == variable.Name)
                     {
                         return param.Identifier;
                     }
@@ -1740,7 +1742,9 @@ public static class CompletionComputer
         {
             foreach (var param in containingFunction.Parameters)
             {
-                if (seen.Add(param.Identifier.Text))
+                // ADR-0185: a named function's parameters never come from the
+                // destructured arrow-lambda path.
+                if (seen.Add(param.Identifier!.Text))
                 {
                     items.Add(new CompletionItem
                     {

@@ -138,6 +138,11 @@ public class Issue1675SyntaxNodeChildEnumerationTests
         // a non-leading content spread interleaved with members.
         "package p\nfunc F(rows []int32) {\n  var c = Container{ Width: 1, 2, ...rows }\n}\n",
         "package p\nfunc F(rows []int32) {\n  var c = Container[int32](7){ ...rows, .Width: 1, key: 2, [key] = 3, }\n}\n",
+
+        // ADR-0185: tuple-destructuring arrow-lambda parameter — instantiates
+        // TupleDeconstructionPatternSyntax (the destructured shape's Elements
+        // reuse ParameterSyntax, already covered elsewhere).
+        "package p\nfunc F() int32 {\n  let f = ((x int32, y int32)) -> x + y\n  return f((1, 2))\n}\n",
     };
 
     /// <summary>

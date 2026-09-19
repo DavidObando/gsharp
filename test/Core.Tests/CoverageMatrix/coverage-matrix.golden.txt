@@ -257,6 +257,7 @@ ThrowStatement
 TrueKeyword
 TryKeyword
 TryStatement
+TupleDeconstructionPattern
 TupleDeconstructionStatement
 TupleLiteralExpression
 TypeAliasDeclaration

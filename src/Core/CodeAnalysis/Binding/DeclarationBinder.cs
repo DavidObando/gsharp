@@ -350,7 +350,10 @@ internal sealed partial class DeclarationBinder
         for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
         {
             var parameterSyntax = syntax.Parameters[pIndex];
-            var parameterName = parameterSyntax.Identifier.ValueText;
+
+            // ADR-0185: this declaration's parameters never come from the
+            // destructured arrow-lambda path.
+            var parameterName = parameterSyntax.Identifier!.ValueText;
             var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                 ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                 : TypeSymbol.Error;

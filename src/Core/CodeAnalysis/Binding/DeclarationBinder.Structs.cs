@@ -291,7 +291,9 @@ internal sealed partial class DeclarationBinder
             var ctorBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>();
             foreach (var paramSyntax in primaryConstructorParameters)
             {
-                var paramName = paramSyntax.Identifier.ValueText;
+                // ADR-0185: a primary-constructor parameter never comes from
+                // the destructured arrow-lambda path.
+                var paramName = paramSyntax.Identifier!.ValueText;
                 var paramType = paramSyntax.Type is { } paramTypeSyntax
                     ? bindTypeClause(paramTypeSyntax)
                     : TypeSymbol.Error;
@@ -1040,7 +1042,10 @@ internal sealed partial class DeclarationBinder
                     for (var pIndex = 0; pIndex < methodSyntax.Parameters.Count; pIndex++)
                     {
                         var parameterSyntax = methodSyntax.Parameters[pIndex];
-                        var parameterName = parameterSyntax.Identifier.ValueText;
+
+                        // ADR-0185: a struct method's parameters never come
+                        // from the destructured arrow-lambda path.
+                        var parameterName = parameterSyntax.Identifier!.ValueText;
                         var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                             ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;
@@ -1488,7 +1493,9 @@ internal sealed partial class DeclarationBinder
                     ParameterSyntax? parameterSyntax = null;
                     foreach (var candidate in primaryConstructorParameters)
                     {
-                        if (candidate.Identifier.ValueText == parameter.Name)
+                        // ADR-0185: a primary-constructor parameter never
+                        // comes from the destructured arrow-lambda path.
+                        if (candidate.Identifier!.ValueText == parameter.Name)
                         {
                             parameterSyntax = candidate;
                             break;
@@ -1528,7 +1535,9 @@ internal sealed partial class DeclarationBinder
                     var seenIndexParamNames = new HashSet<string>();
                     foreach (var indexParamSyntax in propSyntax.Parameters)
                     {
-                        var indexParamName = indexParamSyntax.Identifier.ValueText;
+                        // ADR-0185: an indexer's parameters never come from
+                        // the destructured arrow-lambda path.
+                        var indexParamName = indexParamSyntax.Identifier!.ValueText;
                         var indexParamType = indexParamSyntax.Type is { } indexParamTypeSyntax
                             ? bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;
@@ -2481,7 +2490,10 @@ internal sealed partial class DeclarationBinder
                     var seenParameterNames = new HashSet<string>();
                     foreach (var parameterSyntax in methodSyntax.Parameters)
                     {
-                        var parameterName = parameterSyntax.Identifier.ValueText;
+                        // ADR-0185: a static/shared struct method's
+                        // parameters never come from the destructured
+                        // arrow-lambda path.
+                        var parameterName = parameterSyntax.Identifier!.ValueText;
                         var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                             ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;

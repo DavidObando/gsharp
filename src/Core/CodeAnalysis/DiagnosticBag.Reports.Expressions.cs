@@ -962,6 +962,17 @@ public sealed partial class DiagnosticBag
     public void ReportLambdaBindingTypeCannotBeInferred(TextLocation location, string parameterName)
     => Report(location, DiagnosticDescriptors.LambdaBindingTypeCannotBeInferred, parameterName, parameterName);
 
+    /// <summary>
+    /// ADR-0185: reports GS0592 for a tuple-destructuring arrow-lambda
+    /// parameter pattern (<c>(x string, y int) -&gt; ...</c>) with fewer than
+    /// two elements — G# has no 1-tuples, so a single-element pattern can
+    /// never correspond to a real tuple-typed argument.
+    /// </summary>
+    /// <param name="location">The destructuring pattern's closing-parenthesis location.</param>
+    /// <param name="elementCount">The actual (too-small) element count.</param>
+    public void ReportDestructuringParameterRequiresAtLeastTwoElements(TextLocation location, int elementCount)
+    => Report(location, DiagnosticDescriptors.DestructuringParameterRequiresAtLeastTwoElements, elementCount);
+
     /// <summary>Reports GS0497 for an async iterator function literal, whose state-machine synthesis is unsupported.</summary>
     /// <param name="location">The function literal's source location.</param>
     /// <param name="returnType">The unsupported async-iterator return type.</param>

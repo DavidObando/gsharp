@@ -260,7 +260,9 @@ internal sealed partial class DeclarationBinder
             var seenParameterNames = new HashSet<string>();
             foreach (var parameterSyntax in methodSyntax.Parameters)
             {
-                var parameterName = parameterSyntax.Identifier.ValueText;
+                // ADR-0185: an interface method's parameters never come from
+                // the destructured arrow-lambda path.
+                var parameterName = parameterSyntax.Identifier!.ValueText;
                 var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                     ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                     : TypeSymbol.Error;
@@ -477,7 +479,9 @@ internal sealed partial class DeclarationBinder
                     var seenIndexParamNames = new HashSet<string>();
                     foreach (var indexParamSyntax in propSyntax.Parameters)
                     {
-                        var indexParamName = indexParamSyntax.Identifier.ValueText;
+                        // ADR-0185: an indexer's parameters never come from
+                        // the destructured arrow-lambda path.
+                        var indexParamName = indexParamSyntax.Identifier!.ValueText;
                         var indexParamType = indexParamSyntax.Type is { } indexParamTypeSyntax
                             ? bindTypeClause(indexParamTypeSyntax) ?? TypeSymbol.Error
                             : TypeSymbol.Error;

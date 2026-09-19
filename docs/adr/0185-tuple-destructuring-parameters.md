@@ -1,6 +1,6 @@
 # ADR-0185: Tuple-destructuring function-literal parameters
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-18
 - **Related**: ADR-0032 (deconstruction), ADR-0115 (cs2gs migration tool), ADR-0168
   (mixed deconstruction and discard bindings — the `let (a, b) = e` / `var (a, b)
@@ -123,7 +123,7 @@ selector invocation frequency, and the same buffering behavior — this ADR
 does not touch any of that. It only changes how one already-existing
 tuple-typed **parameter** is spelled.
 
-## Decision (proposed)
+## Decision
 
 **Add parameter-position tuple destructuring to G# lambda/arrow parameter
 lists**, extending the existing statement-position mechanism (`let (a, b)
@@ -180,13 +180,31 @@ Concretely:
      A destructured parameter's first token is `(`, so a query lambda with
      one would not even be recognized as a lambda start; it would misparse
      as a parenthesized tuple expression. This check needs to also accept
-     `(` as a legal opener and then apply a bounded trial-parse of the
-     interior as a destructuring pattern before committing — matching this
-     same function's existing style for a case it already can't resolve by
-     a cheap token check alone (see the `unsafeDepth > 0` trial-parse block
-     later in the same function: speculatively parse, and roll back
-     position/diagnostics if it doesn't cleanly commit to the closing `)`
-     already located).
+     `(` as a legal opener.
+     **As shipped**, this does NOT do a full bounded trial-parse of the
+     pattern's interior (the direction this ADR originally proposed here,
+     mirroring the function's own `unsafeDepth > 0` trial-parse block — see
+     "explored and withdrawn" below); instead it requires only that the
+     pattern's own first element slot (`Peek(j + 1)`, one token past its
+     opening `(`) itself look identifier-shaped, at the same one-token
+     depth of scrutiny this check already applies to an ordinary
+     parameter's own leading token just above it. A numeric/operator-first
+     interior like `((1 + 2)) -> foo` fails this and correctly falls back
+     to the expression path for its original diagnostic.
+     - *Explored and withdrawn: the full trial-parse.* A `unsafeDepth`-style
+       trial-parse — speculatively run the real destructuring-pattern
+       parser and reject on any diagnostic it reports — was implemented and
+       then reverted during implementation review: it cannot distinguish
+       "this `(` does not open a pattern at all" from "this `(` opens a
+       pattern with a missing element type," and BOTH surface a diagnostic
+       during the trial. That is fatal because this ADR's own grammar
+       deliberately makes a merely-untyped pattern (the C#-habit
+       `((x, y)) -> x + y`) COMMIT to the destructuring-pattern parse path
+       and report `ParseTupleDeconstructionPattern`'s own "expected a type"
+       diagnostic, rather than being silently misrouted to the expression
+       path — a full trial-parse would reject that case too, undoing the
+       very design choice this ADR makes for the one-token check that
+       shipped instead.
    - `ParseLambdaParameter` itself then needs the same destructured-name
      production described below, independently of `ParseParameter`, since
      the two functions don't share that code today.

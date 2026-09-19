@@ -327,8 +327,15 @@ public static class SemanticTokensComputer
             case VariableDeclarationSyntax varDecl:
                 positions.Add(varDecl.Identifier.Span.Start);
                 break;
-            case ParameterSyntax paramSyntax:
-                positions.Add(paramSyntax.Identifier.Span.Start);
+
+            // ADR-0185: a destructured arrow-lambda parameter has no
+            // Identifier of its own — nothing to add here, but each
+            // element (itself an ordinary ParameterSyntax with a real
+            // Identifier) is still visited, and matched by the case below,
+            // via the unconditional child recursion at the end of this
+            // function.
+            case ParameterSyntax { Identifier: { } identifier }:
+                positions.Add(identifier.Span.Start);
                 break;
             case StructDeclarationSyntax structDecl:
                 positions.Add(structDecl.Identifier.Span.Start);

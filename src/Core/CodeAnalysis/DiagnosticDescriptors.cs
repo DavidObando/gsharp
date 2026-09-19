@@ -562,6 +562,15 @@ internal static class DiagnosticDescriptors
     // the same reasoning that gave GS0589 its own identity in this ADR.
     internal static readonly DiagnosticDescriptor RefReturnThroughDefensivelyCopiedReceiver = new("GS0591", DiagnosticSeverity.Error, "Cannot return a reference obtained through a read-only receiver (an 'in' parameter, a 'ref readonly' alias, or a 'ref readonly' result): the receiver is defensively copied into function-local storage before the call, so the returned reference would point into that copy. Use a 'ref' parameter or alias, or return the value instead.");
 
+    // ADR-0185: a tuple-destructuring arrow-lambda parameter's pattern
+    // `(name1 T1, name2 T2, ...)` binds a tuple-typed argument — and G# has
+    // no 1-tuples (the same reason ParseTupleTypeClause treats a lone
+    // parenthesized `(T)` as grouping rather than a 1-tuple type). Reported
+    // at bind time rather than parse time: the pattern is syntactically
+    // well-formed with one element, it just cannot correspond to any real
+    // tuple-typed argument.
+    internal static readonly DiagnosticDescriptor DestructuringParameterRequiresAtLeastTwoElements = new("GS0592", DiagnosticSeverity.Error, "A tuple-destructuring parameter pattern requires at least two elements, but got {0}.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

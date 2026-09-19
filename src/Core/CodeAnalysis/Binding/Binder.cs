@@ -288,6 +288,15 @@ public sealed class Binder
             bindExpression: syntax => Expressions.BindExpression(syntax),
             bindTypeClause: BindTypeClause,
             isNilLiteral: StatementBinder.IsNilLiteral);
+
+        // ADR-0185: bindLocalVariable/bindTupleDestructuringPrelude below
+        // reuse StatementBinder's own local-declaration callback and its
+        // BindForTupleLoopPrelude helper for a destructured arrow-lambda
+        // parameter — see LambdaBinder's own ctor doc. `Statements` is
+        // assigned below in this same constructor, but these are closures
+        // (not invoked until an actual lambda is bound, well after
+        // construction finishes), matching the existing `Lambdas.*`
+        // back-references from the `statements =` call further down.
         lambdas = new LambdaBinder(
             binderCtx,
             conversions,
@@ -305,6 +314,14 @@ public sealed class Binder
                 ParameterAllowedTargets,
                 "a parameter declaration",
                 System.AttributeTargets.Parameter),
+            bindLocalVariable: (identifier, isReadOnly, type) =>
+            {
+                return Declarations.BindVariableDeclaration(identifier, isReadOnly, type);
+            },
+            bindTupleDestructuringPrelude: (identifiers, closeParenLocation, openParenLocation, elementVariable) =>
+            {
+                return Statements.BindForTupleLoopPrelude(identifiers, closeParenLocation, openParenLocation, elementVariable);
+            },
             bindLambdaBodyExpression: BindLambdaBodyExpressionForLambdas,
             bindTypeParameterList: syntax =>
             {

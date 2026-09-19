@@ -83,6 +83,22 @@ internal sealed class LambdaBinder
     private readonly Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression;
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
 
+    // ADR-0185: declares a single ordinary local (mirrors StatementBinder's
+    // own bindLocalVariable callback). Used directly for the arity<2
+    // error-recovery path of a destructured arrow-lambda parameter — the
+    // reusable prelude helper below always assumes a genuine tuple/data-
+    // struct element type, so an already-Error-typed pattern is declared
+    // straight through this instead.
+    private readonly Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable;
+
+    // ADR-0185: reuses StatementBinder.BindForTupleLoopPrelude — written for
+    // `for (a, b) in coll` to declare each destructured name as a local of a
+    // VariableSymbol that already holds the tuple (no extra synthetic temp
+    // needed) — for a destructured arrow-lambda parameter, whose underlying
+    // whole-tuple ParameterSymbol plays exactly that already-holds-the-tuple
+    // role.
+    private readonly Func<SeparatedSyntaxList<SyntaxToken>, TextLocation, TextLocation, VariableSymbol, ImmutableArray<BoundStatement>> bindTupleDestructuringPrelude;
+
     /// <summary>
     /// Issue #4221: every function literal's captured-variable set, keyed by
     /// its own <see cref="FunctionSymbol"/>, as of the most recent time it was
@@ -166,6 +182,16 @@ internal sealed class LambdaBinder
     /// <see cref="DeclarationBinder.BindTypeParameterList(TypeParameterListSyntax)"/>.
     /// Required only when <see cref="PrepareGenericLocalFunctionDeclaration"/>
     /// is invoked.</param>
+    /// <param name="bindLocalVariable">ADR-0185: callback that declares a
+    /// single ordinary local, reusing <c>DeclarationBinder.BindVariableDeclaration</c>
+    /// (the same delegate <see cref="StatementBinder"/> is constructed with).
+    /// Used for a destructured arrow-lambda parameter's arity-&lt;2
+    /// error-recovery path.</param>
+    /// <param name="bindTupleDestructuringPrelude">ADR-0185: callback that
+    /// reuses <see cref="StatementBinder.BindForTupleLoopPrelude"/> to declare
+    /// each destructured name of a tuple-destructuring arrow-lambda parameter
+    /// as an ordinary local and produce the field-extraction statements to
+    /// prepend to the lambda body.</param>
     public LambdaBinder(
         BinderContext binderCtx,
         ConversionClassifier conversions,
@@ -178,6 +204,8 @@ internal sealed class LambdaBinder
         Func<FunctionSymbol?> getCurrentFunction,
         Action<FunctionSymbol?> setCurrentFunction,
         Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
+        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable,
+        Func<SeparatedSyntaxList<SyntaxToken>, TextLocation, TextLocation, VariableSymbol, ImmutableArray<BoundStatement>> bindTupleDestructuringPrelude,
         Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression = null,
         Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList = null)
     {
@@ -188,6 +216,8 @@ internal sealed class LambdaBinder
         this.bindReturnTypeClause = bindReturnTypeClause ?? throw new ArgumentNullException(nameof(bindReturnTypeClause));
         this.isIteratorReturnType = isIteratorReturnType ?? throw new ArgumentNullException(nameof(isIteratorReturnType));
         this.isAsyncIteratorReturnType = isAsyncIteratorReturnType ?? throw new ArgumentNullException(nameof(isAsyncIteratorReturnType));
+        this.bindLocalVariable = bindLocalVariable ?? throw new ArgumentNullException(nameof(bindLocalVariable));
+        this.bindTupleDestructuringPrelude = bindTupleDestructuringPrelude ?? throw new ArgumentNullException(nameof(bindTupleDestructuringPrelude));
         this.resolveClrTypeForGenericArg = resolveClrTypeForGenericArg ?? throw new ArgumentNullException(nameof(resolveClrTypeForGenericArg));
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.setCurrentFunction = setCurrentFunction ?? throw new ArgumentNullException(nameof(setCurrentFunction));
@@ -300,7 +330,12 @@ internal sealed class LambdaBinder
         var seen = new HashSet<string>();
         foreach (var p in syntax.Parameters)
         {
-            var pname = p.Identifier.ValueText;
+            // ADR-0185: a function-literal parameter is parsed via
+            // Parser.Members.cs's ParseParameter, never the destructured
+            // arrow-lambda path (that path is ParseLambdaParameter-only, and
+            // function literals never go through it — see ADR-0185 Decision
+            // point 2), so Identifier is always set here.
+            var pname = p.Identifier!.ValueText;
 
             // The pre-migration code was `bindTypeClause(p.Type) ?? TypeSymbol.Error`.
             // Restored: a parameter whose type clause fails to bind should
@@ -1022,10 +1057,132 @@ internal sealed class LambdaBinder
         var hasIncompatibleExplicitParameter = false;
         var needsExplicitParameterAdapter = false;
         var exactTargetParameterSlots = new bool[syntax.Parameters.Count];
+
+        // ADR-0185: every destructured parameter's pattern, recorded here so
+        // its element locals can be declared (and their extraction
+        // statements produced) once the lambda's own scope is pushed below —
+        // a destructured parameter is not itself referenceable by name, so
+        // there is nothing more to do with it until then.
+        List<(ParameterSymbol TupleParameter, TupleDeconstructionPatternSyntax Pattern)>? destructuredParameters = null;
         for (var i = 0; i < syntax.Parameters.Count; i++)
         {
             var p = syntax.Parameters[i];
-            var pname = p.Identifier.ValueText;
+
+            if (p.DeconstructionPattern is { } pattern)
+            {
+                // ADR-0185: `(x T1, y T2, ...) -> body`. The parameter LIST's
+                // overall slot type is still the tuple type — a pure
+                // binding-time convenience, not a signature change (Decision
+                // point 3) — so bind each element's type and build that
+                // tuple type here; the element LOCALS themselves are only
+                // declared once the lambda's own scope exists, below.
+                var elementTypes = ImmutableArray.CreateBuilder<TypeSymbol>(pattern.Elements.Count);
+                foreach (var element in pattern.Elements)
+                {
+                    var elementType = element.Type is { } elementTypeSyntax
+                        ? bindTypeClause(elementTypeSyntax) ?? TypeSymbol.Error
+                        : TypeSymbol.Error;
+                    elementTypes.Add(elementType);
+                }
+
+                TypeSymbol tupleParameterType;
+                if (pattern.Elements.Count < 2)
+                {
+                    // G# has no 1-tuples (mirrors ParseTupleTypeClause's
+                    // existing `(T)` grouping / stray tuple-element-name
+                    // diagnostic for the tuple TYPE grammar) — a
+                    // single-element destructuring pattern can never
+                    // correspond to a real tuple-typed argument. Reported at
+                    // bind time (the pattern itself parses cleanly either
+                    // way) rather than duplicating this check into the
+                    // parser's lookahead.
+                    Diagnostics.ReportDestructuringParameterRequiresAtLeastTwoElements(
+                        pattern.CloseParenToken.Location,
+                        pattern.Elements.Count);
+                    tupleParameterType = TypeSymbol.Error;
+                }
+                else
+                {
+                    tupleParameterType = TupleTypeSymbol.Get(elementTypes.MoveToImmutable());
+                }
+
+                // Issue #2810 (ported to the destructured shape): an explicit
+                // parameter type is a contract the target delegate's slot
+                // type must convert implicitly TO, exactly like an ordinary
+                // explicitly-typed parameter below — a destructured
+                // parameter's written type is its built tuple type.
+                if (arityMatchesTarget
+                    && tupleParameterType != TypeSymbol.Error
+                    && Invariant.Required(
+                        targetFunctionType,
+                        "an explicitly typed lambda with a target has a target function type").ParameterTypes[i]
+                        is TypeSymbol targetParameterTypeForPattern
+                    && targetParameterTypeForPattern != TypeSymbol.Error)
+                {
+                    var runtimeEquivalent = TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                        targetParameterTypeForPattern,
+                        tupleParameterType);
+                    var conversion = Conversion.ClassifyNonStructural(targetParameterTypeForPattern, tupleParameterType);
+                    var compatible = runtimeEquivalent
+                        || conversion.IsImplicit
+                        || conversions.HasUserDefinedImplicitConversion(targetParameterTypeForPattern, tupleParameterType);
+                    if (!compatible)
+                    {
+                        if (conversion.Exists)
+                        {
+                            Diagnostics.ReportCannotConvertImplicitly(pattern.Location, targetParameterTypeForPattern, tupleParameterType);
+                        }
+                        else
+                        {
+                            Diagnostics.ReportCannotConvert(pattern.Location, targetParameterTypeForPattern, tupleParameterType);
+                        }
+
+                        hasIncompatibleExplicitParameter = true;
+                    }
+                    else if (!runtimeEquivalent)
+                    {
+                        needsExplicitParameterAdapter = true;
+                        exactTargetParameterSlots[i] = true;
+                    }
+                }
+
+                // The CLR parameter itself needs SOME name for signature
+                // metadata, but it is never referenceable from G# source —
+                // the body only ever sees the destructured element names,
+                // declared below once the lambda's scope exists. Mirrors
+                // this file's own `<lambdaN>` / BindForTupleRangeStatementCore's
+                // `<fortupleN>` synthetic-name convention for a compiler-
+                // internal binding with no source name of its own (NOT the
+                // `__q{N}` scheme ADR-0185 retires: that name was emitted
+                // into cs2gs's TRANSLATED G# SOURCE TEXT and so was a real
+                // synthetic identifier; this one never appears in any G#
+                // source a person reads).
+                var tupleParameterName = $"<destructured{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+                var tupleParameter = new ParameterSymbol(
+                    tupleParameterName,
+                    tupleParameterType,
+                    isVariadic: false,
+                    declaringSyntax: pattern,
+                    isScoped: false,
+                    refKind: RefKind.None);
+
+                // ADR-0063/ADR-0047: an annotation written before a
+                // destructured parameter's pattern (`@Attr ((x T, y U)) ->
+                // ...`) still lives on `p.Annotations` — WithAnnotations is
+                // called generically by ParseLambdaParameter for both the
+                // ordinary and destructured shapes — so it must be attached
+                // here too, exactly like the ordinary-parameter path below
+                // does, or it is silently dropped along with whatever
+                // attribute-target validation AttachParameterAttributes
+                // performs.
+                AttachParameterAttributes(p, tupleParameter);
+                parameterSymbols.Add(tupleParameter);
+                parameterTypes.Add(tupleParameterType);
+                (destructuredParameters ??= new()).Add((tupleParameter, pattern));
+                continue;
+            }
+
+            var pname = p.Identifier!.ValueText;
             TypeSymbol ptype;
             if (p.Type != null)
             {
@@ -1217,6 +1374,60 @@ internal sealed class LambdaBinder
             Scope.TryDeclareVariable(ps);
         }
 
+        // ADR-0185: now that the lambda's own scope exists and every
+        // ordinary parameter is declared into it, declare each destructured
+        // parameter's element names as ordinary locals too (so a later
+        // destructured pattern can see an earlier ordinary parameter, and
+        // vice versa) and collect the field-extraction statements to prepend
+        // to the body below — the same reuse of BindForTupleLoopPrelude
+        // described where destructuredParameters above is populated.
+        var destructuringPrelude = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (destructuredParameters != null)
+        {
+            foreach (var (tupleParameter, pattern) in destructuredParameters)
+            {
+                if (tupleParameter.Type == TypeSymbol.Error)
+                {
+                    // Arity < 2 already reported when the tuple type could
+                    // not be built; declare each element directly as an
+                    // Error-typed local (skipping `_`) so the body doesn't
+                    // cascade "undefined variable" diagnostics, without
+                    // going through BindForTupleLoopPrelude — that helper
+                    // always assumes a genuine tuple/data-struct element
+                    // type and would report ITS OWN (less precise)
+                    // "requires a tuple or data struct" diagnostic on top.
+                    foreach (var element in pattern.Elements)
+                    {
+                        var elementIdentifier = element.Identifier!;
+                        if (elementIdentifier.ValueText != "_")
+                        {
+                            bindLocalVariable(elementIdentifier, /* isReadOnly: */ true, TypeSymbol.Error);
+                        }
+                    }
+
+                    continue;
+                }
+
+                var identifierNodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+                for (var elementIndex = 0; elementIndex < pattern.Elements.Count; elementIndex++)
+                {
+                    identifierNodesAndSeparators.Add(pattern.Elements[elementIndex].Identifier!);
+                    var separator = pattern.Elements.GetSeparator(elementIndex);
+                    if (separator != null)
+                    {
+                        identifierNodesAndSeparators.Add(separator);
+                    }
+                }
+
+                var elementIdentifiers = new SeparatedSyntaxList<SyntaxToken>(identifierNodesAndSeparators.ToImmutable());
+                destructuringPrelude.AddRange(bindTupleDestructuringPrelude(
+                    elementIdentifiers,
+                    pattern.CloseParenToken.Location,
+                    pattern.OpenParenToken.Location,
+                    tupleParameter));
+            }
+        }
+
         // ADR-0069 / issue #700, amended by issue #2442: see the matching
         // comment in BindFunctionLiteralExpression — a read-only
         // plain-variable narrowing survives into the arrow-lambda body
@@ -1312,6 +1523,16 @@ internal sealed class LambdaBinder
         // Synthesize the lambda's BoundBlockStatement body: for void bodies, an
         // ExpressionStatement; for value bodies, a ReturnStatement.
         var bodyStatements = ImmutableArray.CreateBuilder<BoundStatement>();
+
+        // ADR-0185: a destructured parameter's element-extraction statements
+        // run first, unpacking the tuple argument before anything else in
+        // the body — the same position a statement-form `let (x, y) = e`
+        // deconstruction would occupy if the caller had to write one by
+        // hand. This works uniformly whether the lambda's own body was
+        // written as a plain expression or a `{ ... }` block: either way
+        // `bodyStatements` is the single list every body-statement,
+        // including this prelude, is collected into below.
+        bodyStatements.AddRange(destructuringPrelude);
         if (boundBody is BoundBlockExpression blockExpr
             && syntax.Body is BlockExpressionSyntax)
         {
@@ -2220,15 +2441,18 @@ internal sealed class LambdaBinder
                 continue;
             }
 
+            // ADR-0185: a destructured parameter's IsVariadic is always
+            // false (no ellipsis token), so the `continue` above already
+            // skipped it — Identifier is non-null on every path reaching here.
             if (firstVariadicSeen)
             {
-                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.ValueText);
+                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier!.ValueText);
             }
 
             firstVariadicSeen = true;
             if (i < parameters.Count - 1)
             {
-                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.ValueText);
+                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier!.ValueText);
             }
         }
     }
