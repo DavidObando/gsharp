@@ -390,6 +390,93 @@ public sealed class Adr0186PlatformTypeConversionTests
     }
 
     /// <summary>
+    /// The container arm must never decide the OUTER nullability question.
+    /// <para>
+    /// <c>TryGetPlatformArgumentPairs</c> strips a top-level <c>?</c> from
+    /// both sides — it has to, or <c>C[T!] → C[T?]?</c> could not be compared
+    /// at all — and that strip was silently answering a question it had no
+    /// business answering: a <c>C[T!]?</c> source reached a non-null
+    /// <c>C[T?]</c> slot as an implicit conversion, because this arm replied
+    /// before the ordinary nullable-to-non-null rejection ever ran. A nil
+    /// CONTAINER then lands in a slot declared never to hold one.
+    /// </para>
+    /// <para>
+    /// Asserted against the no-platform control, which is what makes the
+    /// claim concrete: the identical pair without a platform argument is
+    /// rejected today, so the platform version must be too.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheContainerRule_Does_Not_Decide_OuterNullability()
+    {
+        var platformElement = PlatformTypeSymbol.Get(TypeSymbol.String);
+        var nilableElement = NullableTypeSymbol.Get(TypeSymbol.String);
+
+        foreach (var (source, control, kind) in new[]
+        {
+            (
+                (TypeSymbol)NullableTypeSymbol.Get(SliceTypeSymbol.Get(platformElement)),
+                (TypeSymbol)NullableTypeSymbol.Get(SliceTypeSymbol.Get(TypeSymbol.String)),
+                "slice"),
+            (
+                NullableTypeSymbol.Get(ConstructedList(platformElement)),
+                NullableTypeSymbol.Get(ConstructedList(TypeSymbol.String)),
+                "generic"),
+        })
+        {
+            var target = kind == "slice"
+                ? (TypeSymbol)SliceTypeSymbol.Get(nilableElement)
+                : ConstructedList(nilableElement);
+
+            // The control fixes what "correct" is here.
+            Assert.False(Conversion.Classify(control, target).Exists, kind + " control");
+
+            // …and the platform source must not be treated more leniently.
+            Assert.False(Conversion.Classify(source, target).Exists, kind);
+        }
+    }
+
+    /// <summary>
+    /// A <c>Same</c> argument position means "no per-element check is needed
+    /// here", never "these two types agree" — and one legitimately widening
+    /// position must not carry an aggregate conversion whose other positions
+    /// are unrelated.
+    /// <para>
+    /// Measured: <c>map[int32, string!] → map[string, string?]</c> was
+    /// accepted, keys and all. The value pair widens legally under rule 2,
+    /// and the key pair — <c>int32</c> against <c>string</c>, no relationship
+    /// whatsoever — was marked <c>Same</c> purely because neither side
+    /// carried a platform wrapper, and so was never validated.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheContainerRule_Validates_Every_PlatformFree_Position()
+    {
+        var platformElement = PlatformTypeSymbol.Get(TypeSymbol.String);
+        var nilableElement = NullableTypeSymbol.Get(TypeSymbol.String);
+
+        var source = MapTypeSymbol.Get(TypeSymbol.Int32, platformElement);
+        var target = MapTypeSymbol.Get(TypeSymbol.String, nilableElement);
+
+        // The control: the same unrelated key pair with no platform argument
+        // anywhere is rejected, so the widening value pair must not rescue it.
+        Assert.False(
+            Conversion.Classify(
+                MapTypeSymbol.Get(TypeSymbol.Int32, TypeSymbol.String),
+                target).Exists,
+            "control");
+
+        Assert.False(Conversion.Classify(source, target).Exists);
+
+        // The positive control: with the keys actually matching, rule 2's
+        // widening still works — the fix must not have disabled the arm.
+        Assert.True(
+            Conversion.Classify(
+                MapTypeSymbol.Get(TypeSymbol.String, platformElement),
+                target).IsImplicit);
+    }
+
+    /// <summary>
     /// The container rule must not switch itself off for deeply nested
     /// generics.
     /// <para>

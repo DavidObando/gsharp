@@ -714,35 +714,90 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
-    /// ADR-0069 narrowing applies to a <c>T!</c>, and it is what makes the
+    /// ADR-0069 narrowing applies to a <c>T!</c>, and this is what makes the
     /// platform model ergonomic rather than merely permissive: inside
     /// <c>if x != nil { … }</c> the value has type <c>T</c>, so the coercion
     /// that follows is not a <c>T! → T</c> coercion at all and §4 inserts
     /// nothing.
     /// <para>
-    /// ADR-0186 is careful about the difference this makes: narrowing a
-    /// <c>T!</c> is a <em>convenience</em>, not an obligation. Today it is the
-    /// only way to compile.
+    /// <b>Asserted by counting the synthesized checks in the bound tree</b>,
+    /// because nothing weaker discriminates. An earlier version of this test
+    /// used a nil-valued source, which made the guarded branch dead and let
+    /// it pass whether or not narrowing happened; and even in a reachable
+    /// branch a plain "it compiles" assertion proves nothing, since
+    /// <c>T! → T</c> is an implicit conversion either way — it just carries
+    /// a check. The check count is the only observable that moves.
+    /// </para>
+    /// <para>
+    /// This was a real gap, not a hypothetical one:
+    /// <c>SmartCastStability.TryClassifyNilGuardLeaf</c> tested
+    /// <c>is not NullableTypeSymbol</c> and so rejected every platform target
+    /// outright, which made §6's narrowing claim false for <c>T!</c>.
     /// </para>
     /// </summary>
     [Fact]
     public void Section6_Narrowing_Applies_And_Removes_The_Coercion()
     {
-        const string body = """
-                let value = Ob.Nil()
+        const string guarded = """
+                let value = Ob.Value()
                 if value != nil {
                     let narrowed string = value
                     Console.WriteLine(narrowed)
-                } else {
-                    Console.WriteLine("nil")
                 }
+            """;
+
+        const string unguarded = """
+                let value = Ob.Value()
+                let narrowed string = value
+                Console.WriteLine(narrowed)
             """;
 
         using var world = new World();
 
-        // No throw: the narrowed branch is not entered, and the coercion
-        // inside it is from the NARROWED `string`, not from `string!`.
-        Assert.Equal("nil", world.Run(body, NullabilityMode.PlatformTypes, extraDeclarations: NilHelpers).Trim());
+        // The control: with no guard, the store is a `T! -> T` coercion and
+        // §4 inserts exactly one check.
+        Assert.Equal(1, world.CountPlatformChecks(unguarded));
+
+        // The claim: after the guard the read is already `T`, so there is no
+        // coercion left to check.
+        Assert.Equal(0, world.CountPlatformChecks(guarded));
+
+        // …and it still runs, on the branch that is actually reachable.
+        Assert.Equal("V", world.Run(guarded, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// ADR-0186 §3's unification rule in a ternary, both arm orders.
+    /// <para>
+    /// The same <c>T!?</c> defect as <c>?.</c> and <c>??</c> reached here
+    /// too, and worse: the common-type computation picks whichever arm it
+    /// sees first, so <c>platform ? : nilable</c> and
+    /// <c>nilable ? : platform</c> produced <em>different</em> result types.
+    /// A type that depends on the order the author happened to write the arms
+    /// in is not a type rule at all.
+    /// </para>
+    /// <para>
+    /// Fixed by the same normalisation as the others (<c>T!?</c> collapses to
+    /// <c>T?</c> at <c>NullableTypeSymbol.Get</c>), which is the argument for
+    /// having centralised it: this site was never touched directly.
+    /// </para>
+    /// </summary>
+    /// <param name="globals">A probe declaring <c>probe</c>.</param>
+    /// <param name="expected">The expected unified type.</param>
+    [Theory]
+    [InlineData("let n string? = \"n\"\nlet probe = if true { Ob.Value() } else { n }", "string?")]
+    [InlineData("let n string? = \"n\"\nlet probe = if true { n } else { Ob.Value() }", "string?")]
+
+    // lub(`T!`, `T`) is `T!` — deliberately NOT symmetric absorption, since a
+    // `T` arm says nothing whatever about the platform arm.
+    [InlineData("let probe = if true { Ob.Value() } else { \"x\" }", "string!")]
+    public void Section3_TernaryUnification_Is_ArmOrderIndependent(string globals, string expected)
+    {
+        using var world = new World();
+
+        var unified = world.GlobalProbeType(globals, NullabilityMode.PlatformTypes);
+
+        Assert.Equal(expected, unified.Name);
     }
 
     private const string NilHelpers = """
@@ -919,6 +974,54 @@ public sealed class Adr0186PlatformTypeBindingTests
             var scope = compilation.GlobalScope;
             Assert.DoesNotContain(scope.Diagnostics, d => d.IsError);
             return Assert.Single(scope.Variables, v => v.Name == "probe").Type;
+        }
+
+        /// <summary>
+        /// Counts the ADR-0186 §4 checks the binder synthesized in
+        /// <paramref name="body"/>. A synthesized check is the only one
+        /// carrying a <c>PlatformCheckMessage</c>, so this counts exactly the
+        /// coercions §4 inserted and never a user-written <c>!!</c>.
+        /// </summary>
+        /// <param name="body">The probe body.</param>
+        /// <returns>The number of inserted checks.</returns>
+        internal int CountPlatformChecks(string body)
+        {
+            using var resolver = ReferenceResolver.WithReferences(new[] { this.LibraryPath });
+            resolver.CurrentAssemblyName = Consumer;
+            var compilation = new GsCompilation(
+                resolver,
+                GsSyntaxTree.Parse(SourceText.From(BuildSource(body, string.Empty))))
+            {
+                AssemblyName = Consumer,
+                Nullability = NullabilityMode.PlatformTypes,
+            };
+
+            var program = compilation.BoundProgram;
+            Assert.DoesNotContain(program.Diagnostics, d => d.IsError);
+
+            var counter = new PlatformCheckCounter();
+            foreach (var function in program.Functions)
+            {
+                counter.Visit(function.Value);
+            }
+
+            return counter.Count;
+        }
+
+        /// <summary>Counts synthesized ADR-0186 §4 checks in a bound body.</summary>
+        private sealed class PlatformCheckCounter : BoundTreeWalker
+        {
+            internal int Count { get; private set; }
+
+            protected override void VisitUnaryExpression(BoundUnaryExpression node)
+            {
+                if (node.PlatformCheckMessage != null)
+                {
+                    this.Count++;
+                }
+
+                base.VisitUnaryExpression(node);
+            }
         }
 
         /// <summary>

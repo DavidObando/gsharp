@@ -231,7 +231,25 @@ internal static class SmartCastStability
             targetType = rightType;
         }
 
-        if (target == null || targetType is not NullableTypeSymbol nullable)
+        // ADR-0186 §6: a nil guard narrows a PLATFORM value exactly as it
+        // narrows a nullable one — "inside `if x != nil { … }`, `x` has type
+        // `T`". Without this arm the classifier rejected `T!` outright, so
+        // §6's narrowing claim was simply false for platform values and §4's
+        // check was never elided after a guard.
+        //
+        // It is also the safest possible narrowing: a platform wrapper shares
+        // its underlying's CLR type by construction (§1), and §2 excludes
+        // value types from the category entirely, so there is no
+        // storage-versus-narrowed-type divergence of the kind the value-type
+        // guard below exists for. Narrowing here is an IL no-op.
+        TypeSymbol? narrowedUnderlying = targetType switch
+        {
+            NullableTypeSymbol nullableTarget => nullableTarget.UnderlyingType,
+            PlatformTypeSymbol platformTarget => platformTarget.UnderlyingType,
+            _ => null,
+        };
+
+        if (target == null || narrowedUnderlying == null)
         {
             target = null;
             return false;
@@ -250,6 +268,7 @@ internal static class SmartCastStability
         // has the same storage-vs-narrowed-type divergence, but a null ClrType,
         // so include the symbol-aware predicate here too.
         if (referenceNullableOnly
+            && targetType is NullableTypeSymbol nullable
             && (NullableLifting.IsValueTypeNullable(nullable)
                 || NullableLifting.IsUserValueTypeNullable(nullable)))
         {
@@ -257,7 +276,7 @@ internal static class SmartCastStability
             return false;
         }
 
-        underlying = nullable.UnderlyingType;
+        underlying = narrowedUnderlying;
         nonNilWhenTrue = be.Op.Kind == BoundBinaryOperatorKind.NotEquals;
         return true;
     }

@@ -139,6 +139,21 @@ public sealed class Conversion
 
         /// <summary>An unsound direction; no conversion exists.</summary>
         Illegal,
+
+        /// <summary>
+        /// Platform-free on both sides but <b>not equivalent</b>, so this arm
+        /// cannot decide the pair and must hand it back to the ordinary
+        /// rules.
+        /// <para>
+        /// Distinct from <see cref="Same"/> on purpose. <c>Same</c> means "no
+        /// per-element check is needed at this position"; it never meant "the
+        /// two types agree", and reading it that way let one legitimately
+        /// widening position carry an aggregate conversion whose OTHER
+        /// positions were unrelated — <c>map[int32, string!]</c> to
+        /// <c>map[string, string?]</c> was accepted, keys and all.
+        /// </para>
+        /// </summary>
+        Unrelated,
     }
 
     /// <summary>
@@ -3489,6 +3504,10 @@ public sealed class Conversion
             {
                 case PlatformArgumentRelation.Same:
                     break;
+                case PlatformArgumentRelation.Unrelated:
+                    // A platform-free position that does not agree. This arm
+                    // has no opinion about such a pair; the ordinary rules do.
+                    return false;
                 case PlatformArgumentRelation.Widening:
                     widens = true;
                     break;
@@ -3510,6 +3529,24 @@ public sealed class Conversion
             return false;
         }
 
+        // The arm may only ACCEPT when the OUTER nullability is acceptable on
+        // its own terms. `TryGetPlatformArgumentPairs` strips a top-level `?`
+        // from both sides — it has to, so that `C[T!] -> C[T?]?` can be
+        // compared at all — and that strip was silently deciding a question
+        // it had no business deciding: a `C[T!]?` source reached a non-null
+        // `C[T?]` slot as an implicit conversion, because this arm answered
+        // before the ordinary nullable-to-non-null rejection ever ran. A nil
+        // CONTAINER then reaches a slot declared never to hold one.
+        //
+        // Rejecting is always safe, so only the accept path is guarded;
+        // declining hands the pair to the rules that already answer it
+        // correctly (measured: the same pair without platform-ness is
+        // rejected there today).
+        if (from is NullableTypeSymbol && to is not NullableTypeSymbol)
+        {
+            return false;
+        }
+
         conversion = Conversion.Implicit;
         return true;
     }
@@ -3522,7 +3559,14 @@ public sealed class Conversion
     {
         if (!ContainsPlatformType(a) && !ContainsPlatformType(b))
         {
-            return PlatformArgumentRelation.Same;
+            // Platform-free, so no check is needed here — but that is NOT the
+            // same as the two types agreeing, and this arm may not accept an
+            // aggregate conversion on the strength of a position it never
+            // looked at. Validate it the ordinary way and hand the pair back
+            // when it does not hold.
+            return a is not null && b is not null && AreTypeArgumentsEquivalent(a, b)
+                ? PlatformArgumentRelation.Same
+                : PlatformArgumentRelation.Unrelated;
         }
 
         var sourcePlatform = a as PlatformTypeSymbol;
@@ -3594,6 +3638,8 @@ public sealed class Conversion
             {
                 case PlatformArgumentRelation.Same:
                     break;
+                case PlatformArgumentRelation.Unrelated:
+                    return PlatformArgumentRelation.Unrelated;
                 case PlatformArgumentRelation.Widening:
                     relation = PlatformArgumentRelation.Widening;
                     break;
@@ -3929,22 +3975,16 @@ public sealed class Conversion
                 continue;
             }
 
+            // `GetWrappedTypes` already yields an `ImportedTypeSymbol`'s type
+            // arguments (its own arm does exactly that), so there is no
+            // second loop here. There used to be, and while the visited set
+            // now makes it merely redundant rather than exponential, a
+            // duplicate traversal that looks load-bearing is worse than none.
             foreach (var wrapped in TypeSymbol.GetWrappedTypes(current))
             {
                 if (wrapped is not null)
                 {
                     pending.Push(wrapped);
-                }
-            }
-
-            if (current is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } imported)
-            {
-                foreach (var argument in imported.TypeArguments)
-                {
-                    if (argument is not null)
-                    {
-                        pending.Push(argument);
-                    }
                 }
             }
         }
