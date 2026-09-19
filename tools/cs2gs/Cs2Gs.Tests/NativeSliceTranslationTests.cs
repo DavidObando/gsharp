@@ -8,6 +8,7 @@ using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Xunit;
 
@@ -15,6 +16,43 @@ namespace Cs2Gs.Tests;
 
 public sealed class NativeSliceTranslationTests
 {
+    [Theory]
+    [InlineData("int slice = 5;", "native[0] + slice + array.Length", 14)]
+    [InlineData("int slice(int value) => value + 5;", "slice(native[0]) + array.Length", 14)]
+    public void ValueAndFunctionCollisionsQualifyNativeStaticReferences(string declaration, string resultExpression, int expected)
+    {
+        var source = $$"""
+            using Gsharp.Values;
+            namespace NativeValueCollisions;
+            public class Probe {
+                public static int Run() {
+                    {{declaration}}
+                    int[] array = { 7, 8 };
+                    var native = Slice<int>.FromArray(array);
+                    return {{resultExpression}};
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.Slice<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("Collision.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Gsharp.Values.Slice[int32].FromArray(array)", printed);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+        var result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "Probe.Run()",
+            new[] { typeof(Gsharp.Values.Slice<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(expected, result.Value);
+    }
+
     [Fact]
     public void PrinterSeparatesNativePermissionsArrayIdentityAndNullability()
     {

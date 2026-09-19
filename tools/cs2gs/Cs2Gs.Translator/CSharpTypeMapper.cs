@@ -1595,7 +1595,7 @@ public sealed class CSharpTypeMapper
             {
                 var element = this.Map(named.TypeArguments[0], context, location);
                 if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
-                    || context.SemanticModel.LookupNamespacesAndTypes(location.SourceSpan.Start, name: "slice").Any())
+                    || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "slice").Any())
                 {
                     return new NamedTypeReference("Gsharp.Values." + named.Name, new[] { element });
                 }
