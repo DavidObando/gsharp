@@ -433,8 +433,8 @@ Teach gsc (or gsgen) to recognize the specific `@GeneratedRegex`-annotated
 body-less `func` and pair it with a generated body, without a general `partial`
 member modifier.
 
-> **This alternative is not hypothetical, and this ADR is on the losing side of
-> it elsewhere.** PR #4326's ADR-0187 proposes exactly this narrow
+> **This alternative is not hypothetical, and a parallel effort reached the
+> opposite conclusion.** PR #4326's ADR-0187 proposes exactly this narrow
 > attribute-dispatch mechanism and *explicitly rejects* general partial-method
 > support, on the grounds that "no second consumer would exist for general
 > partial-method support today, and the narrow `;`-body mechanism already does
