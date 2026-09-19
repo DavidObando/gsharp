@@ -32,6 +32,96 @@ NUPKG=$(ls -t out/bin/Release/nupkgs/Gsharp.NET.Sdk.*.nupkg | head -1)
 VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 
+# --- Phase 0 (Copilot review, PR #4334, finding #3): the targeting-pack
+# analyzer-resolution path (an SDK-BUNDLED generator, e.g.
+# System.Text.RegularExpressions.Generator, resolved via a second
+# ResolveTargetingPackAssets invocation) has NO PackageReference at all, so
+# the MVVM scenario below — which only ever exercises the NuGet
+# (ResolvePackageAssets) path — cannot catch a regression here. Build a
+# throwaway project with no PackageReference and assert @(GsharpAnalyzer):
+#   - contains a real targeting-pack generator (System.Text.RegularExpressions.Generator)
+#   - excludes Microsoft.Interop.LibraryImportGenerator (gsc already implements
+#     `@LibraryImport` natively; a colliding second implementation is excluded
+#     unconditionally, matching the read below)
+#   - excludes Microsoft.AspNetCore.Http.RequestDelegateGenerator by default
+#     (off-by-default, mirroring the standard SDK's ResolveOffByDefaultAnalyzers
+#     — EnableRequestDelegateGenerator is unset/false here)
+echo "==> Phase 0: targeting-pack analyzer resolution (no PackageReference)"
+PROBE_DIR="$(mktemp -d)"
+trap 'rm -rf "$PROBE_DIR"' EXIT
+
+cat > "$PROBE_DIR/global.json" <<EOF
+{
+  "msbuild-sdks": {
+    "Gsharp.NET.Sdk": "$VER"
+  }
+}
+EOF
+cat > "$PROBE_DIR/NuGet.config" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+    <packageSources>
+        <clear />
+        <add key="NuGet official package source" value="https://api.nuget.org/v3/index.json" />
+        <add key="Gsharp local packages" value="$ROOT/.nugs" />
+    </packageSources>
+    <disabledPackageSources>
+        <clear />
+    </disabledPackageSources>
+</configuration>
+EOF
+cat > "$PROBE_DIR/Program.gs" <<'EOF'
+package AnalyzerResolutionProbe
+import System
+Console.WriteLine("probe")
+EOF
+cat > "$PROBE_DIR/Probe.gsproj" <<'EOF'
+<Project Sdk="Gsharp.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>AnalyzerResolutionProbe</RootNamespace>
+  </PropertyGroup>
+  <!-- Pulls Microsoft.AspNetCore.Http.RequestDelegateGenerator into the
+       resolved targeting pack too, so the off-by-default exclusion has
+       something real to exclude. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <Target Name="DumpGsharpAnalyzers" DependsOnTargets="_GsharpResolveAnalyzers" BeforeTargets="_GsharpRunSourceGenerators">
+    <Message Importance="High" Text="PROBE_GsharpAnalyzer=@(GsharpAnalyzer)" />
+  </Target>
+</Project>
+EOF
+
+rm -f "$ROOT/.nugs"/*.lock 2>/dev/null || true
+PROBE_LOG=$(cd "$PROBE_DIR" && dotnet build Probe.gsproj --nologo 2>&1)
+echo "$PROBE_LOG"
+
+PROBE_LINE=$(echo "$PROBE_LOG" | grep "^  PROBE_GsharpAnalyzer=" || true)
+if [[ -z "$PROBE_LINE" ]]; then
+    echo "FAIL: DumpGsharpAnalyzers target never ran / emitted nothing."
+    exit 1
+fi
+if ! echo "$PROBE_LINE" | grep -q "System.Text.RegularExpressions.Generator.dll"; then
+    echo "FAIL: System.Text.RegularExpressions.Generator (targeting-pack, no PackageReference) did not resolve into @(GsharpAnalyzer)."
+    echo "$PROBE_LINE"
+    exit 1
+fi
+if echo "$PROBE_LINE" | grep -q "Microsoft.Interop.LibraryImportGenerator.dll"; then
+    echo "FAIL: Microsoft.Interop.LibraryImportGenerator resolved despite gsc's native @LibraryImport collision exclusion."
+    echo "$PROBE_LINE"
+    exit 1
+fi
+if echo "$PROBE_LINE" | grep -q "Microsoft.AspNetCore.Http.RequestDelegateGenerator.dll"; then
+    echo "FAIL: Microsoft.AspNetCore.Http.RequestDelegateGenerator resolved despite being off-by-default (EnableRequestDelegateGenerator unset)."
+    echo "$PROBE_LINE"
+    exit 1
+fi
+echo "PASS: targeting-pack generator resolved; LibraryImport and off-by-default RequestDelegateGenerator correctly excluded."
+rm -rf "$PROBE_DIR"
+trap - EXIT
+
 echo "==> Pinning samples/SourceGen/global.json to Gsharp.NET.Sdk $VER"
 cat > samples/SourceGen/global.json <<EOF
 {
