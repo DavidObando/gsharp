@@ -4,6 +4,7 @@
 - **Date**: 2026-07-04
 - **Phase**: Phase 9 — language surface completeness
 - **Related**: ADR-0001 (nullable types `T?`), issues [#1354](https://github.com/DavidObando/gsharp/issues/1354), [#914](https://github.com/DavidObando/gsharp/issues/914), [#1333](https://github.com/DavidObando/gsharp/issues/1333) and PRs [#1349](https://github.com/DavidObando/gsharp/pull/1349), [#1374](https://github.com/DavidObando/gsharp/pull/1374)
+- **Amended by**: [ADR-0186](0186-platform-types-for-oblivious-clr-interop.md) — §2's oblivious row (an unannotated imported reference position reads as the platform type `T!`, not `T?`) and §3's emit rule (an oblivious declaration emits oblivious metadata rather than the annotated shape). This ADR's central claim — that oblivious must never silently mean non-null — is preserved; only the type oblivious maps **to** changes
 
 ## Context
 
