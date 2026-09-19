@@ -14,6 +14,68 @@ namespace GSharp.LanguageServer.Tests;
 public class HoverHandlerTests
 {
     [Fact]
+    public void ComputeHover_DestructuredLambdaParameterElement_ResolvesToItsOwnLocal_NotAShadowedOuterSymbol()
+    {
+        // Review finding (Copilot, PR #4317): a destructured arrow-lambda
+        // parameter's element identifiers were invisible to
+        // SemanticLookup.ComputeFunctionLocals (its syntax-side node
+        // collection only walks the lambda's BODY, and a destructured
+        // pattern lives in the PARAMETER LIST, a sibling of the body, not a
+        // descendant of it) — so a same-named outer local would silently
+        // win hover resolution instead. Outer `x` is STRING, the
+        // destructured element `x` is INT32: the hover text disambiguates
+        // which symbol actually resolved. (A same-typed regression test
+        // here would not actually prove anything -- both wrong and right
+        // resolution look identical when the two locals share a type.)
+        const string source = "package P\nfunc main() int32 {\n    let x = \"hello\"\n    let f = ((x int32, y int32)) -> x + y\n    return f((1, 2))\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var outerDeclHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "x", 0));
+        var elementDeclHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "x", 1));
+        var useInsideLambdaHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "x", 2));
+
+        Assert.NotNull(outerDeclHover);
+        Assert.Contains("string", outerDeclHover!.Contents.ToString(), System.StringComparison.Ordinal);
+
+        Assert.NotNull(elementDeclHover);
+        Assert.Contains("int32", elementDeclHover!.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.DoesNotContain("string", elementDeclHover.Contents.ToString(), System.StringComparison.Ordinal);
+
+        Assert.NotNull(useInsideLambdaHover);
+        Assert.Contains("int32", useInsideLambdaHover!.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.DoesNotContain("string", useInsideLambdaHover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeHover_ForTupleLoopDestructuredElement_ResolvesToItsOwnLocal_NotAShadowedOuterSymbol()
+    {
+        // The pre-existing `for (a, b) in coll` deconstructing loop (issue
+        // #1922) shares the exact same underlying binder helper
+        // (StatementBinder.BindForTupleLoopPrelude) as the ADR-0185
+        // destructured lambda parameter above, and had the identical,
+        // pre-existing hover bug for the identical reason (its declarations
+        // carried no real Syntax reference to match against). Fixed by the
+        // same change; pinned here so it does not regress.
+        const string source = "package P\nfunc main() int32 {\n    let x = \"hello\"\n    var total = 0\n    var pairs = [](int32, int32){(1, 2)}\n    for (x, y) in pairs {\n        total = total + x + y\n    }\n    return total\n}\n";
+        var content = LanguageServerTestHelpers.Content(source);
+
+        var outerDeclHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "x", 0));
+        var loopVarDeclHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "x", 1));
+        var loopVarUseHover = HoverComputer.ComputeHover(content, LanguageServerTestHelpers.PositionOf(source, "x", 2));
+
+        Assert.NotNull(outerDeclHover);
+        Assert.Contains("string", outerDeclHover!.Contents.ToString(), System.StringComparison.Ordinal);
+
+        Assert.NotNull(loopVarDeclHover);
+        Assert.Contains("int32", loopVarDeclHover!.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.DoesNotContain("string", loopVarDeclHover.Contents.ToString(), System.StringComparison.Ordinal);
+
+        Assert.NotNull(loopVarUseHover);
+        Assert.Contains("int32", loopVarUseHover!.Contents.ToString(), System.StringComparison.Ordinal);
+        Assert.DoesNotContain("string", loopVarUseHover.Contents.ToString(), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ComputeHover_DisplaysConstructedSourceGenericType()
     {
         const string source = "class Box[T] {}\nfunc main() {\n    let box = Box[int32]()\n}\n";

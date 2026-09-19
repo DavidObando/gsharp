@@ -1113,9 +1113,47 @@ public static class SemanticLookup
                 .Select(pattern => pattern.Designation))
             .Concat(FindNodes<SlicePatternSyntax>(new[] { bodySyntax })
                 .Select(pattern => pattern.CaptureIdentifier))
+
+            // Issue #1922: `for (a, b, ...) in coll { ... }` binds one local
+            // per identifier — pre-existing gap, same root cause as the
+            // ADR-0185 case just below (both bind through
+            // StatementBinder.BindForTupleLoopPrelude).
+            .Concat(FindNodes<ForTupleRangeStatementSyntax>(new[] { bodySyntax })
+                .SelectMany(f => f.Identifiers))
+
+            // ADR-0185: a tuple-destructuring arrow-lambda parameter
+            // `((x T1, y T2, ...)) -> body` binds one local per element,
+            // exactly like the for-tuple-loop case above (both go through
+            // BindForTupleLoopPrelude) — but the pattern lives in the
+            // lambda's PARAMETER LIST, a sibling of its Body, not a
+            // descendant of it, so it can only be found by walking to the
+            // LambdaExpressionSyntax itself first and reading its
+            // Parameters, not by adding a node kind to the body-only walks
+            // above.
+            .Concat(FindNodes<LambdaExpressionSyntax>(new[] { bodySyntax })
+                .SelectMany(EnumerateDestructuredLambdaParameterIdentifiers))
             .OfType<SyntaxToken>();
 
         return MatchBoundLocals(body, syntaxLocalIdentifiers);
+    }
+
+    private static IEnumerable<SyntaxToken> EnumerateDestructuredLambdaParameterIdentifiers(LambdaExpressionSyntax lambda)
+    {
+        foreach (var parameter in lambda.Parameters)
+        {
+            if (parameter.DeconstructionPattern is not { } pattern)
+            {
+                continue;
+            }
+
+            foreach (var element in pattern.Elements)
+            {
+                if (element.Identifier is { } identifier)
+                {
+                    yield return identifier;
+                }
+            }
+        }
     }
 
     private static IEnumerable<SyntaxToken> EnumerateForRangeIdentifiers(ForRangeStatementSyntax syntax)

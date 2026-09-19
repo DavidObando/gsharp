@@ -1165,6 +1165,17 @@ internal sealed class LambdaBinder
                     declaringSyntax: pattern,
                     isScoped: false,
                     refKind: RefKind.None);
+
+                // ADR-0063/ADR-0047: an annotation written before a
+                // destructured parameter's pattern (`@Attr ((x T, y U)) ->
+                // ...`) still lives on `p.Annotations` — WithAnnotations is
+                // called generically by ParseLambdaParameter for both the
+                // ordinary and destructured shapes — so it must be attached
+                // here too, exactly like the ordinary-parameter path below
+                // does, or it is silently dropped along with whatever
+                // attribute-target validation AttachParameterAttributes
+                // performs.
+                AttachParameterAttributes(p, tupleParameter);
                 parameterSymbols.Add(tupleParameter);
                 parameterTypes.Add(tupleParameterType);
                 (destructuredParameters ??= new()).Add((tupleParameter, pattern));

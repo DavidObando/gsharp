@@ -213,6 +213,28 @@ public class Adr0185TupleDestructuringParameterParserTests
         Assert.False(Walk(tree.Root).OfType<LambdaExpressionSyntax>().Any());
     }
 
+    [Fact]
+    public void DoublyParenthesizedNonPatternExpression_NotMistakenForDestructuringLambda()
+    {
+        // A reviewer-flagged edge case: `(` opening the first parameter slot
+        // is ALSO the opener of an ordinary (here, doubly-parenthesized)
+        // EXPRESSION, e.g. `((1 + 2))`. The first element slot of a genuine
+        // destructuring pattern always starts with an identifier — `1` does
+        // not — so this must fall back to the expression path (and its own,
+        // unrelated diagnostic once `-> foo` follows a plain expression
+        // statement) rather than being misparsed as a destructuring pattern
+        // and reporting a confusing "expected identifier" cascade from
+        // inside ParseTupleDeconstructionPattern.
+        const string source = """
+            package P
+            let v = ((1 + 2)) -> foo
+            """;
+        var tree = SyntaxTree.Parse(source);
+
+        Assert.False(Walk(tree.Root).OfType<LambdaExpressionSyntax>().Any());
+        Assert.False(Walk(tree.Root).OfType<TupleDeconstructionPatternSyntax>().Any());
+    }
+
     private static T FindFirst<T>(SyntaxTree tree)
         where T : SyntaxNode
     {

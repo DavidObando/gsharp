@@ -154,6 +154,61 @@ public sealed class Adr0185TupleDestructuringParameterBinderTests
         Assert.Contains(diagnostics, d => d.Id == "GS0155");
     }
 
+    [Fact]
+    public void AnnotationOnDestructuredParameter_IsValidatedNotSilentlyDropped()
+    {
+        // Review finding: the destructured-parameter branch used to build
+        // the tuple ParameterSymbol and `continue` without ever calling
+        // AttachParameterAttributes — silently dropping any `@Attr` written
+        // before the pattern, and skipping whatever attribute-target
+        // validation that call performs. `@Obsolete`'s own [AttributeUsage]
+        // excludes Parameter (mirrors the ordinary-parameter regression test
+        // AttributeBinderTests.Obsolete_On_Parameter_Reports_GS0209): if
+        // validation now genuinely runs for a destructured parameter too,
+        // the same GS0209 must fire here.
+        var diagnostics = Bind("""
+            import System
+
+            func Test() int32 {
+                let f = (@Obsolete("dead") (x int32, y int32)) -> x + y
+                return f((1, 2))
+            }
+            """);
+        Assert.Contains(diagnostics, d => d.Id == "GS0209");
+    }
+
+    [Fact]
+    public void AnnotationOnDestructuredParameter_ValidTarget_AttachesWithNoDiagnostic()
+    {
+        // The positive counterpart: a user-declared attribute whose
+        // [AttributeUsage] DOES permit Parameter attaches cleanly (no
+        // GS0209, no diagnostics at all) to a destructured parameter,
+        // exactly as it would to an ordinary one — destructuring the
+        // parameter's SHAPE doesn't change what attribute targets are legal
+        // on it. Given an explicit argument list of its own (`@Marker(1)`,
+        // mirroring `@Obsolete("dead")` above): a ZERO-argument annotation
+        // immediately followed by `(` is a separate, pre-existing parser
+        // ambiguity (ParseAnnotation always greedily consumes a following
+        // `(` as ITS OWN argument list — unrelated to destructuring, and out
+        // of scope here) that would misparse `@Marker (x int32, y int32)` as
+        // `Marker`'s own (invalid) argument list instead of an annotation
+        // followed by a destructuring pattern.
+        var diagnostics = Bind("""
+            import System
+
+            @Attribute
+            @AttributeUsage(AttributeTargets.Parameter)
+            class MarkerAttribute(id int32) {
+            }
+
+            func Test() int32 {
+                let f = (@Marker(1) (x int32, y int32)) -> x + y
+                return f((1, 2))
+            }
+            """);
+        Assert.Empty(diagnostics);
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         using var references = ReferenceResolver.WithReferences(
