@@ -3521,6 +3521,37 @@ public sealed class Conversion
             return false;
         }
 
+        // A VALUE-TYPE container is copied, not aliased, so rule 3's argument
+        // does not reach it either.
+        //
+        // Rule 3 exists because "two views alias one object": a `nil` written
+        // through the `C[T?]` view is read as non-null through the `C[T]`
+        // view. Assigning a struct copies it — the destination is a different
+        // object — so there is no second view to read through and nothing to
+        // be unsound about. §2 already says value types are unaffected by
+        // this ADR; this is that statement applied to the container position.
+        //
+        // Measured, and it is not hypothetical: `samples/NestedTypeOfConstructedGeneric.gs`
+        // stopped compiling under `/nullability:platform-types` with
+        // *"Cannot convert type 'Dictionary[string, int32].Enumerator' to
+        // 'Dictionary[string, int32].Enumerator'"* — the two sides differ
+        // only in an enclosing type argument's obliviousness, which the
+        // nested type's display does not render, so the diagnostic named one
+        // type twice. `List[int32].Enumerator` on the line above was
+        // unaffected because `int32` contributes no reference position.
+        //
+        // The obliviousness there is itself spurious — `counts` is a
+        // G#-constructed `Dictionary[string, int32]`, so §2's open-type-
+        // parameter rule says the argument's own nullability wins and
+        // `ProjectNullableFlags` should not be stamping an absent byte over
+        // it. That is a separate defect in the projection path, tracked
+        // rather than fixed here; this gate is correct on its own terms and
+        // holds whether or not the projection is corrected.
+        if (UnwrapPlatformAndNullable(from) is { ClrType.IsValueType: true })
+        {
+            return false;
+        }
+
         if (!TryGetPlatformArgumentPairs(from, to, out var fromArguments, out var toArguments))
         {
             return false;
