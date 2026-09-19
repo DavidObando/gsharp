@@ -4,12 +4,12 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 
 ## Native slices (ADR-0190)
 
-| Code | Severity | Contract |
-| --- | --- | --- |
-| GS0600 | Error | Missing/incompatible `Gsharp.Runtime.Values` or pre-.NET-10 target; use the SDK's matching runtime. |
-| GS0601 | Error | Native slices require one ordinary heap-storable element type; sharing preserves element nullability and literals require positional elements. |
-| GS0602 | Error | A native element/value-field write cannot hold its selected location across suspension; evaluate the suspending value before selecting the element. |
-| GS0603 | Error | Cannot modify an element through `readonly slice[T]`; use a writable alias or explicit clone. |
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0600 | Error | Native slices require compatible `Gsharp.Runtime.Values` support and the .NET 10 target. | Use the matching SDK runtime reference; no fallback to arrays occurs. |
+| GS0601 | Error | Invalid native-buffer type, element, sharing conversion or literal shape. | Supply one heap-storable element type, preserve element nullability when sharing, and use positional literal elements (`AppendRange` for ranges). |
+| GS0602 | Error | A selected native element/value-field write would suspend while its location is borrowed. | Evaluate the suspending value before selecting the element. Ordinary async slice values and segment-local borrows are supported. |
+| GS0603 | Error | A store requires writable elements but its descriptor is `readonly slice[T]`. | Use a writable alias or explicitly clone; readonly views are not deep immutable copies. |
 
 ## Severity levels
 

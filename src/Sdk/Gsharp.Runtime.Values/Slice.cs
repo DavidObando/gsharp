@@ -99,7 +99,10 @@ public readonly struct Slice<T> : IEquatable<Slice<T>>, IEnumerable<T>
     public static Slice<T> FromArray(T[] array)
     {
         ArgumentNullException.ThrowIfNull(array);
-        if (array.GetType() != typeof(T[]))
+
+        // Runtime handles intentionally require exact CLR identity, not a
+        // structural name match or the compiler's metadata-context equivalence.
+        if (!array.GetType().TypeHandle.Equals(typeof(T[]).TypeHandle))
         {
             throw new ArrayTypeMismatchException();
         }
@@ -262,7 +265,7 @@ public readonly struct Slice<T> : IEquatable<Slice<T>>, IEnumerable<T>
         // TryGetArray normalizes empty non-array memory to Array.Empty<T>().
         // Reject those owners before that normalization loses their identity.
         if (MemoryMarshal.TryGetMemoryManager<T, MemoryManager<T>>(memory, out _)
-            || (typeof(T) == typeof(char)
+            || (typeof(T).TypeHandle.Equals(typeof(char).TypeHandle)
                 && MemoryMarshal.TryGetString(Unsafe.As<ReadOnlyMemory<T>, ReadOnlyMemory<char>>(ref memory), out _, out _, out _)))
         {
             result = default;
@@ -270,7 +273,7 @@ public readonly struct Slice<T> : IEquatable<Slice<T>>, IEnumerable<T>
         }
 
         if (MemoryMarshal.TryGetArray(memory, out var segment)
-            && segment.Array is { } array && array.GetType() == typeof(T[]))
+            && segment.Array is { } array && array.GetType().TypeHandle.Equals(typeof(T[]).TypeHandle))
         {
             result = new Slice<T>(array, segment.Offset, segment.Count, segment.Count);
             return true;

@@ -21,15 +21,23 @@ internal static class NativeSliceTypes
     internal static bool IsDefinition([NotNullWhen(true)] Type? type, out bool readOnly)
     {
         readOnly = false;
-        if (type == null || !type.IsGenericType || !type.IsValueType || type.IsByRefLike
-            || type.Assembly.GetName().Name != AssemblyName)
+        if (type == null || !type.IsGenericType)
         {
             return false;
         }
 
-        var name = type.GetGenericTypeDefinition().FullName;
+        // Symbolic constructed types need not implement IsByRefLike. Identify
+        // the SDK declaration first, then inspect traits on that definition.
+        var definition = type.GetGenericTypeDefinition();
+        if (definition.Assembly.GetName().Name != AssemblyName)
+        {
+            return false;
+        }
+
+        var name = definition.FullName;
         readOnly = name == "Gsharp.Values.ReadOnlySlice`1";
-        return readOnly || name == "Gsharp.Values.Slice`1";
+        return (readOnly || name == "Gsharp.Values.Slice`1")
+            && definition.IsValueType && !definition.IsByRefLike;
     }
 
     internal static bool TryGetElement(TypeSymbol type, [NotNullWhen(true)] out TypeSymbol? element, out bool readOnly)
