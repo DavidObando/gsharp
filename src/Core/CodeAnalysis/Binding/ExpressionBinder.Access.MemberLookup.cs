@@ -2117,6 +2117,18 @@ internal sealed partial class ExpressionBinder
         // Member/indexer lookup sees the effective type while loads still refer
         // to the original variable slot.
         var target = BuildNarrowedVariableRead(variable);
+
+        // ADR-0186 §4/§5, issue #4323: the indexer WRITE path needs the same
+        // receiver check and unwrap the READ path gets in
+        // `BindIndexAgainstTarget`. This is failure mode 1 of the ADR's own
+        // catalogue — "the read path and the call path drifted" — recurring
+        // one access kind over: `l[0]` bound correctly on a `List[string]!`
+        // receiver while `l[0] = "q"` reported GS0116 "not indexable",
+        // because only the read side had been taught to unwrap. It is the
+        // same one-line call at both sites deliberately; a second copy of
+        // the RULE is what the ADR forbids, not a second call to the one
+        // implementation.
+        target = PlatformCoercion.InsertCheck(target, diagnosticLocation, "an indexer receiver");
         var targetType = target.Type;
         var permissionReceiver = receiverCapabilitySource ?? target;
         var isReadOnlyReceiver = RefCapabilities.IsReadOnlyValueReference(permissionReceiver);

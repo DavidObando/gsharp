@@ -3492,6 +3492,66 @@ public sealed class Conversion
             return false;
         }
 
+        // A `func` literal being MATERIALIZED into a delegate is not a
+        // container being re-viewed, and rule 3 must not answer for it.
+        //
+        // Rule 3's soundness argument is entirely about ALIASING: two views
+        // of one existing object, where a write through one view is read
+        // through the other. A `FunctionTypeSymbol` source has no such
+        // object — the delegate instance is created at this very conversion,
+        // from this very literal — and its parameter/return compatibility is
+        // decided by CLR delegate variance in
+        // `IsFunctionToDelegateConvertible`, which is a different question
+        // with a different (and correct) answer.
+        //
+        // Letting it through was not academic. A `FunctionTypeSymbol`'s
+        // `ClrType` is the materialized delegate type, so
+        // `TryGetPlatformArgumentPairs`' `AreSame` check passed and
+        // `(ViewModel) -> void` against an oblivious event's
+        // `Action[ViewModel!]!` was read as `C[T] -> C[T!]` — rule 3's
+        // illegal write direction — and rejected outright:
+        // `Issue2585SemanticQualificationTests` reported *"Cannot convert
+        // type '(Oahu.App.ViewModel) -> void' to
+        // 'System.Action[Oahu.App.ViewModel!]!'"* for an ordinary lambda
+        // subscribed to an ordinary oblivious event. Declining here hands
+        // the pair back to the rules that already answer it, which is what
+        // this arm does for every pair it cannot speak to.
+        if (from is FunctionTypeSymbol)
+        {
+            return false;
+        }
+
+        // A VALUE-TYPE container is copied, not aliased, so rule 3's argument
+        // does not reach it either.
+        //
+        // Rule 3 exists because "two views alias one object": a `nil` written
+        // through the `C[T?]` view is read as non-null through the `C[T]`
+        // view. Assigning a struct copies it — the destination is a different
+        // object — so there is no second view to read through and nothing to
+        // be unsound about. §2 already says value types are unaffected by
+        // this ADR; this is that statement applied to the container position.
+        //
+        // Measured, and it is not hypothetical: `samples/NestedTypeOfConstructedGeneric.gs`
+        // stopped compiling under `/nullability:platform-types` with
+        // *"Cannot convert type 'Dictionary[string, int32].Enumerator' to
+        // 'Dictionary[string, int32].Enumerator'"* — the two sides differ
+        // only in an enclosing type argument's obliviousness, which the
+        // nested type's display does not render, so the diagnostic named one
+        // type twice. `List[int32].Enumerator` on the line above was
+        // unaffected because `int32` contributes no reference position.
+        //
+        // The obliviousness there is itself spurious — `counts` is a
+        // G#-constructed `Dictionary[string, int32]`, so §2's open-type-
+        // parameter rule says the argument's own nullability wins and
+        // `ProjectNullableFlags` should not be stamping an absent byte over
+        // it. That is a separate defect in the projection path, tracked
+        // rather than fixed here; this gate is correct on its own terms and
+        // holds whether or not the projection is corrected.
+        if (UnwrapPlatformAndNullable(from) is { ClrType.IsValueType: true })
+        {
+            return false;
+        }
+
         if (!TryGetPlatformArgumentPairs(from, to, out var fromArguments, out var toArguments))
         {
             return false;
@@ -4105,11 +4165,28 @@ public sealed class Conversion
     /// anyway (every reference type is nullable at the CLR level regardless
     /// of G#'s own annotation), so unwrapping here only widens what this
     /// reference-only check accepts.
+    /// <para>
+    /// ADR-0186: a <see cref="PlatformTypeSymbol"/> comes off for exactly the
+    /// same reason and with more force — <c>Base!</c> and <c>Base</c> are one
+    /// runtime type by construction (§1), and §3 makes <c>T -&gt; T!</c> an
+    /// implicit identity conversion, so a delegate slot declared
+    /// <c>Action[Base!]</c> must accept a lambda whose parameter is
+    /// <c>Base</c>. Found by the full suite rather than by reading:
+    /// <c>Issue2585SemanticQualificationTests</c> reported <em>"Cannot
+    /// convert type '(ViewModel) -&gt; void' to
+    /// 'System.Action[ViewModel!]!'"</em> — an oblivious event's handler
+    /// type, which is an entirely ordinary interop shape.
+    /// </para>
     /// </summary>
     /// <param name="type">The type to unwrap, possibly <see langword="null"/>.</param>
-    /// <returns>The underlying type when <paramref name="type"/> is nullable-wrapped; otherwise <paramref name="type"/> itself.</returns>
+    /// <returns>The underlying type when <paramref name="type"/> is nullable- or platform-wrapped; otherwise <paramref name="type"/> itself.</returns>
     private static TypeSymbol? UnwrapNullableForVariance(TypeSymbol? type)
-        => type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        => type switch
+        {
+            NullableTypeSymbol nullable => nullable.UnderlyingType,
+            PlatformTypeSymbol platform => platform.UnderlyingType,
+            _ => type,
+        };
 
     /// <summary>
     /// Issue #4184 (and its return-side sibling, #4186): true when accepting

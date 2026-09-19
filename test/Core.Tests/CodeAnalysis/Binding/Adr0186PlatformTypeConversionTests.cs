@@ -5,6 +5,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
@@ -39,6 +40,56 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// </summary>
 public sealed class Adr0186PlatformTypeConversionTests
 {
+    /// <summary>
+    /// §3 rule 3 does not reach a <b>value-type</b> container, because the
+    /// rule's whole argument is aliasing and a struct is copied.
+    /// <para>
+    /// Rule 3 rejects <c>C[T!] → C[T]</c> because "two views alias one
+    /// object": a nil written through one view is read as non-null through
+    /// the other. Assigning a struct copies it, so the destination is a
+    /// different object and there is no second view. §2 already excludes
+    /// value types from this ADR; this is that exclusion applied to the
+    /// container position.
+    /// </para>
+    /// <para>
+    /// Measured, not hypothetical:
+    /// <c>samples/NestedTypeOfConstructedGeneric.gs</c> stopped compiling
+    /// under <c>/nullability:platform-types</c> with <em>"Cannot convert type
+    /// 'Dictionary[string, int32].Enumerator' to
+    /// 'Dictionary[string, int32].Enumerator'"</em> — the two sides differ
+    /// only in an enclosing type argument's obliviousness, which a nested
+    /// type's display does not render, so the diagnostic named one type
+    /// twice.
+    /// </para>
+    /// <para>
+    /// The <b>reference</b>-container control below is what keeps this a
+    /// narrowing rather than a repeal: <c>List[string!] → List[string]</c>
+    /// must still be rejected.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_AValueTypeContainer_Is_Outside_TheContainerRule()
+    {
+        var platformElement = PlatformTypeSymbol.Get(TypeSymbol.String);
+
+        // A tuple is G#'s value-type container, and `TupleTypeSymbol.ClrType`
+        // is a `ValueTuple<…>`.
+        var fromTuple = TupleTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(platformElement, TypeSymbol.Int32));
+        var toTuple = TupleTypeSymbol.Get(
+            ImmutableArray.Create(TypeSymbol.String, TypeSymbol.Int32));
+
+        var valueTypeContainer = Conversion.Classify(fromTuple, toTuple);
+        Assert.True(valueTypeContainer.Exists, "a value-type container is copied, not aliased");
+
+        // The control: a REFERENCE container in the same direction stays
+        // rejected, so the gate above narrows rule 3 rather than repealing it.
+        var referenceContainer = Conversion.Classify(
+            SliceTypeSymbol.Get(platformElement),
+            SliceTypeSymbol.Get(TypeSymbol.String));
+        Assert.False(referenceContainer.Exists, "`[]string! -> []string` is rule 3's illegal direction");
+    }
+
     /// <summary>
     /// §3's first row, and the prerequisite this whole step rests on:
     /// <c>T! → T</c> is implicit and <b>inserts a check</b>.

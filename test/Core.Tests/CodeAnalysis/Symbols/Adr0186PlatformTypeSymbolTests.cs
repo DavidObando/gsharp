@@ -409,48 +409,118 @@ public class Adr0186PlatformTypeSymbolTests
     }
 
     /// <summary>
-    /// ADR-0186 §8 is step 5's work, and until it exists the emitter must
-    /// <b>refuse</b> a platform type rather than guess at one.
+    /// ADR-0186 §8's third round-trip value: a platform position is emitted as
+    /// the <b>oblivious</b> byte <c>0</c>, never as <c>1</c>.
     /// <para>
-    /// This is the one place where the cost of a missing arm is not a wrong
-    /// answer in memory but a wrong answer <em>in metadata</em>.
-    /// <c>NullableFlagsBuilder.Append</c> falls through to the CLR path for any
-    /// shape it does not recognise, which writes byte <c>1</c> — <b>non-null</b>
-    /// — and that is the worst possible encoding of "nobody said": it launders
-    /// an unknown into a guarantee that the next reader of the assembly has no
-    /// way to see through. ADR-0186 exists because exactly that conversion
-    /// happened once already.
+    /// This replaces step 1's
+    /// <c>Emit_Refuses_A_Platform_Type_Rather_Than_Encoding_It_As_NonNull</c>,
+    /// which pinned a <c>NotSupportedException</c>. That refusal was
+    /// right while <c>PlatformTypeSymbol</c> could not reach the emitter and
+    /// the only alternative was <c>Append</c>'s fall-through to
+    /// <c>AppendClrType</c>. It stopped being right at step 3: an inferred
+    /// local whose initializer is an oblivious CLR call has type <c>T!</c>,
+    /// and the moment it is captured into a closure display class, an async
+    /// state machine or a script result slot, its type is written to metadata
+    /// as a synthesized member's signature — ordinary default-on source, not
+    /// §9 territory.
     /// </para>
     /// <para>
-    /// The path is unreachable today (nothing produces a
-    /// <see cref="PlatformTypeSymbol"/> with the mode off). This test pins the
-    /// failure mode for the day it becomes reachable, and it is <em>expected to
-    /// be deleted</em> by step 5 when §8's emit shape is chosen and
-    /// round-tripped.
+    /// <b>The constraint that did not move is the important half</b>: byte
+    /// <c>1</c> would launder an unknown into a guarantee in metadata, where
+    /// the next reader has no way to tell. §8 offers two legal shapes for an
+    /// oblivious declaration and says both "read back as <c>T!</c>"; this is
+    /// the per-position byte of the second.
     /// </para>
     /// </summary>
     [Fact]
-    public void Emit_Refuses_A_Platform_Type_Rather_Than_Encoding_It_As_NonNull()
+    public void Emit_Encodes_A_Platform_Type_As_The_Oblivious_Byte()
     {
         var platform = PlatformTypeSymbol.Get(TypeSymbol.String);
 
-        var direct = Assert.Throws<NotSupportedException>(
-            () => NullableFlagsBuilder.Build(platform));
-        Assert.Contains("ADR-0186", direct.Message);
-        Assert.Contains("string!", direct.Message);
+        Assert.Equal(
+            new byte[] { 0 },
+            NullableFlagsBuilder.Build(platform).ToArray());
 
-        // …and nested, where the fall-through would be quietest of all.
-        Assert.Throws<NotSupportedException>(
-            () => NullableFlagsBuilder.Build(SliceTypeSymbol.Get(platform)));
+        // …and nested, where a fall-through would be quietest of all. Both
+        // positions are asserted because ADR-0132 binds the marker
+        // POSITIONALLY: `[]string!` (a non-null slice of platform elements)
+        // and `[]!string` (a platform slice of non-null elements) are
+        // different types and must not encode to the same bytes.
+        Assert.Equal(
+            new byte[] { 1, 0 },
+            NullableFlagsBuilder.Build(SliceTypeSymbol.Get(platform)).ToArray());
+        Assert.Equal(
+            new byte[] { 0, 1 },
+            NullableFlagsBuilder.Build(
+                PlatformTypeSymbol.Get(SliceTypeSymbol.Get(TypeSymbol.String))).ToArray());
 
-        // The negative control: the shapes this builder does handle are
-        // untouched, so the guard is a new arm and not a new gate.
+        // The negative control: the shapes this builder already handled are
+        // untouched, so this is a new arm and not a changed rule.
         Assert.Equal(
             new byte[] { 2 },
             NullableFlagsBuilder.Build(NullableTypeSymbol.Get(TypeSymbol.String)).ToArray());
         Assert.Equal(
             new byte[] { 1 },
             NullableFlagsBuilder.Build(TypeSymbol.String).ToArray());
+    }
+
+    /// <summary>
+    /// ADR-0186 §8's round-trip guarantee, made <b>total</b>: non-null stays
+    /// non-null, nullable stays nullable, <b>oblivious stays oblivious</b>.
+    /// <para>
+    /// The emit half alone proves nothing — a byte is only correct if the
+    /// reader gives it back. This asserts the composition
+    /// <c>NullableFlagsBuilder.Build</c> → <c>ClrNullability.ClassifyPosition</c>
+    /// → <c>SymbolForState</c> for all three states, in both modes, off the
+    /// same emitted bytes. Under ADR-0136 the third case was not expressible
+    /// at all; an oblivious G# declaration had to be emitted as something it
+    /// was not.
+    /// </para>
+    /// <para>
+    /// The mode-off arm is the one that shows the encoding is not a
+    /// platform-types-only convention: byte <c>0</c> is what ADR-0136 already
+    /// read as "not non-null", so an assembly emitted by a platform-types
+    /// compilation stays readable by an <c>Enabled</c> one — it simply reads
+    /// <c>T?</c> there, which is ADR-0136's answer for the same declaration.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Emit_And_Read_RoundTrip_All_Three_States()
+    {
+        var cases = new (TypeSymbol Emitted, byte Expected)[]
+        {
+            (TypeSymbol.String, 1),
+            (NullableTypeSymbol.Get(TypeSymbol.String), 2),
+            (PlatformTypeSymbol.Get(TypeSymbol.String), 0),
+        };
+
+        foreach (var (emitted, expectedByte) in cases)
+        {
+            var flags = NullableFlagsBuilder.Build(emitted);
+            Assert.Equal(new[] { expectedByte }, flags.ToArray());
+        }
+
+        using (NullabilityOptions.Enter(NullabilityMode.PlatformTypes))
+        {
+            Assert.Equal(
+                ClrNullabilityState.NotAnnotated,
+                ClrNullability.ClassifyPosition(ImmutableArray.Create((byte)1), 0));
+            Assert.Equal(
+                ClrNullabilityState.Annotated,
+                ClrNullability.ClassifyPosition(ImmutableArray.Create((byte)2), 0));
+            Assert.Equal(
+                ClrNullabilityState.Oblivious,
+                ClrNullability.ClassifyPosition(ImmutableArray.Create((byte)0), 0));
+
+            Assert.IsType<PlatformTypeSymbol>(
+                ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious));
+        }
+
+        // Mode off: the very same emitted byte still reads as "not non-null",
+        // which is ADR-0136's answer. The encoding is forward-compatible in
+        // both directions rather than a private convention.
+        Assert.IsType<NullableTypeSymbol>(
+            ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious));
     }
 
     /// <summary>

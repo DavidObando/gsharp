@@ -2064,6 +2064,18 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, initializer);
         }
 
+        // ADR-0186 §4/§5, issue #4325: deconstruction reads members out of
+        // the source, so the source is a receiver and gets the same check and
+        // unwrap every other receiver position gets. The unwrap is the half
+        // that matters for binding: the dispatch below switches on
+        // `initializer.Type is TupleTypeSymbol` / `is StructSymbol` and then
+        // probes for an imported `Deconstruct`, none of which a platform
+        // wrapper matches.
+        initializer = PlatformCoercion.InsertCheck(
+            initializer,
+            syntax.Initializer.Location,
+            "a deconstruction source");
+
         if (initializer.Type is TupleTypeSymbol tupleType)
         {
             if (syntax.Identifiers.Count != tupleType.Arity)
