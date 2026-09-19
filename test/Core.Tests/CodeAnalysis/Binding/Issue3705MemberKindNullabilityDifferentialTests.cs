@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Loader;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Text;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
@@ -766,6 +767,235 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         {
             DeleteOutputDirectory(directory);
         }
+    }
+
+    /// <summary>
+    /// ADR-0186 step 1 — <b>the third column</b>.
+    /// <para>
+    /// The four annotation states above collapse onto <em>two</em> answers:
+    /// <c>NonNull</c> binds non-null and the other three bind nullable. That
+    /// collapse is exactly what ADR-0186 ends. Under
+    /// <c>--nullability=platform-types</c> the table gains a third answer, and
+    /// it changes in the oblivious row and nowhere else:
+    /// </para>
+    /// <list type="table">
+    /// <listheader><term>State</term><description>mode off → mode on</description></listheader>
+    /// <item><term>NonNull</term><description><c>string</c> → <c>string</c></description></item>
+    /// <item><term>Nullable</term><description><c>string?</c> → <c>string?</c></description></item>
+    /// <item><term>ObliviousAbsent</term><description><c>string?</c> → <b><c>string!</c></b></description></item>
+    /// <item><term>ObliviousZero</term><description><c>string?</c> → <b><c>string!</c></b></description></item>
+    /// </list>
+    /// <para>
+    /// <b>Why this row asserts symbols rather than compiling a probe.</b> Step 1
+    /// builds the symbol and its read path only; conversions, member lookup and
+    /// the coercion check are step 2. A G# program that reads a <c>string!</c>
+    /// member therefore has nothing yet to bind that read <em>against</em>, so
+    /// an end-to-end probe here would be testing unbuilt machinery. What is
+    /// built — and what the whole pivot rests on — is that the three reading
+    /// paths give the same three-state answer for one declaration, so that is
+    /// what is asserted, off the same real csc-emitted metadata every other row
+    /// in this fixture uses.
+    /// </para>
+    /// <para>
+    /// The <c>NonNull</c> and <c>Nullable</c> assertions are the negative
+    /// controls, and they are the point as much as the oblivious ones are:
+    /// ADR-0186 changes <b>one</b> cell of ADR-0136's table, and an
+    /// implementation that widened the pivot — reading an annotated
+    /// <c>[Nullable(2)]</c> as a platform type, which would un-annotate the
+    /// entire modern BCL — fails here rather than in a corpus run.
+    /// </para>
+    /// <para>
+    /// This row must be rewritten, not merely kept green, when step 2 wires
+    /// <c>PlatformTypeSymbol</c> into real binding: at that point the probe
+    /// shape the other rows use becomes meaningful for the oblivious states and
+    /// this test should grow into it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ObliviousStates_Read_As_PlatformType_Only_Under_The_Platform_Types_Mode()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, LibraryAssemblyName, CSharpLibrarySource);
+            using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+            Assert.True(resolver.TryResolveType("Issue3705.NullabilityLibrary.Surface", out var surface));
+            Assert.True(resolver.TryResolveType("Issue3705.NullabilityLibrary.ObliviousAbsentSurface", out var absent));
+            Assert.True(resolver.TryResolveType("Issue3705.NullabilityLibrary.ObliviousZeroSurface", out var zero));
+            Assert.True(resolver.TryResolveType("Issue3705.NullabilityLibrary.ObliviousBox`1", out var box));
+
+            var fields = new (string State, System.Reflection.FieldInfo Field, ClrNullabilityState Expected)[]
+            {
+                ("NonNull", surface!.GetField("NonNullField")!, ClrNullabilityState.NotAnnotated),
+                ("Nullable", surface.GetField("NullableField")!, ClrNullabilityState.Annotated),
+                ("ObliviousAbsent", absent!.GetField("ObliviousAbsentField")!, ClrNullabilityState.Oblivious),
+                ("ObliviousZero", zero!.GetField("ObliviousZeroField")!, ClrNullabilityState.Oblivious),
+            };
+
+            // The classifier, first: this is the assertion that discriminates.
+            // With the mode OFF the two non-`NotAnnotated` states produce the
+            // same symbol by design, so a classifier that answered `Annotated`
+            // for an oblivious byte would be invisible at the symbol level.
+            foreach (var (state, field, expected) in fields)
+            {
+                Assert.Equal(
+                    expected,
+                    ClrNullability.ClassifyPosition(
+                        ClrNullability.ReadNullableFlags(field, field.DeclaringType),
+                        0));
+            }
+
+            // Mode OFF — today's answers, unchanged. This is step 1's
+            // load-bearing claim, asserted on the same four real declarations.
+            Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[0].Field));
+            foreach (var (state, field, _) in fields[1..])
+            {
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(field));
+            }
+
+            // Mode ON — the third column.
+            using (NullabilityOptions.Enter(NullabilityMode.PlatformTypes))
+            {
+                Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[0].Field));
+                Assert.IsNotType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[0].Field));
+
+                // The negative control: an explicit `[Nullable(2)]` stays `T?`.
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[1].Field));
+
+                // Both physical shapes of "the declarer said nothing" — an
+                // EMPTY flags array and an explicit `[Nullable(0)]` — must give
+                // the same answer, which is what #3705 family 2 was about and
+                // what ADR-0186 preserves.
+                Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[2].Field));
+                Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[3].Field));
+
+                Assert.Equal(
+                    "string!",
+                    ClrNullability.GetFieldTypeSymbol(fields[2].Field).Name);
+
+                // The LAYOUT path, not just the scalar one. A generic member
+                // read through `MergeDeclarationNullability` expands the
+                // declaration's flags before classifying them, and if that
+                // expansion still fills absent positions with `2` the two paths
+                // disagree about one declaration — the #3705 family-2 defect
+                // ADR-0136's single-predicate rule exists to prevent, and which
+                // ADR-0186 §2 explicitly preserves. A scalar-only assertion
+                // passes while that drift is live.
+                var openValue = box!.GetProperty("Value")!;
+                var merged = NullableFlagsBuilder.MergeDeclarationNullability(
+                    TypeSymbol.String,
+                    openValue.PropertyType,
+                    ClrNullability.ReadNullableFlags(openValue, box));
+
+                // ADR-0186 §2 keeps ADR-0136's open-type-parameter exclusion
+                // verbatim: the slot's nullability arrives with the ARGUMENT,
+                // so an oblivious open `T` is neither `T?` nor `T!`.
+                Assert.Same(TypeSymbol.String, merged);
+
+                // …while a CONCRETE oblivious position reached through the same
+                // expansion does become a platform type.
+                var concrete = zero.GetProperty("ObliviousZeroProperty")!;
+                var concreteMerged = NullableFlagsBuilder.MergeDeclarationNullability(
+                    TypeSymbol.String,
+                    concrete.PropertyType,
+                    ClrNullability.ReadNullableFlags(concrete, zero));
+                Assert.IsType<PlatformTypeSymbol>(concreteMerged);
+
+                var concreteAbsent = absent.GetProperty("ObliviousAbsentProperty")!;
+                Assert.IsType<PlatformTypeSymbol>(NullableFlagsBuilder.MergeDeclarationNullability(
+                    TypeSymbol.String,
+                    concreteAbsent.PropertyType,
+                    ClrNullability.ReadNullableFlags(concreteAbsent, absent)));
+            }
+
+            // …and the mode is scoped, so the rest of the suite is unaffected.
+            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[2].Field));
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// ADR-0186 step 1: the plumbing, end to end —
+    /// <c>/nullability:platform-types</c> → <c>CommandLineArgs</c> →
+    /// <see cref="GsCompilation.Nullability"/> → the ambient scope →
+    /// <c>ClrNullability</c>.
+    /// <para>
+    /// Every other flag-on assertion in this fixture calls
+    /// <c>ClrNullability</c> directly, which is right for what step 1 builds
+    /// but leaves the scope-installation sites untested: a
+    /// <c>NullabilityOptions.Enter</c> placed on the wrong side of the lazy
+    /// bind would be completely invisible. This row is the one that fails if
+    /// the mode never reaches the importer.
+    /// </para>
+    /// <para>
+    /// The observation is the bound type of a global whose type is
+    /// <em>inferred</em> from an oblivious imported field — the one place step
+    /// 1 alone already makes the two modes produce different symbols, with no
+    /// conversion, lookup or coercion rule involved. Anything downstream of the
+    /// read is step 2's.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Compilation_Threads_Its_Nullability_Mode_Into_Metadata_Import()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, LibraryAssemblyName, CSharpLibrarySource);
+            var source = $$"""
+                package {{ConsumerAssemblyName}}
+                import Issue3705.NullabilityLibrary
+
+                let probe = ObliviousNullAtRuntimeSurface().ObliviousField
+                """;
+
+            // Mode off: ADR-0136's reading, unchanged.
+            Assert.IsType<NullableTypeSymbol>(BindGlobalProbeType(source, NullabilityMode.Enabled, libraryPath));
+
+            // Mode on: the read path produces `T!` — which can only happen if
+            // `Compilation.Nullability` actually reached `ClrNullability`.
+            var platform = BindGlobalProbeType(source, NullabilityMode.PlatformTypes, libraryPath);
+            Assert.IsType<PlatformTypeSymbol>(platform);
+            Assert.Equal("string!", platform.Name);
+
+            // …and the mode is scoped to the compilation that asked for it.
+            Assert.False(NullabilityOptions.PlatformTypesEnabled);
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// Binds <paramref name="source"/> under <paramref name="nullability"/> and
+    /// returns the inferred type of its <c>probe</c> global.
+    /// </summary>
+    /// <param name="source">The G# source.</param>
+    /// <param name="nullability">The mode the compilation declares.</param>
+    /// <param name="references">Reference assemblies.</param>
+    /// <returns>The bound type of the <c>probe</c> global.</returns>
+    private static TypeSymbol BindGlobalProbeType(
+        string source,
+        NullabilityMode nullability,
+        params string[] references)
+    {
+        using var resolver = ReferenceResolver.WithReferences(references);
+        resolver.CurrentAssemblyName = ConsumerAssemblyName;
+        var compilation = new GsCompilation(
+            resolver,
+            GsSyntaxTree.Parse(SourceText.From(source)))
+        {
+            AssemblyName = ConsumerAssemblyName,
+            Nullability = nullability,
+        };
+
+        var scope = compilation.GlobalScope;
+        Assert.DoesNotContain(scope.Diagnostics, diagnostic => diagnostic.IsError);
+        return Assert.Single(scope.Variables, variable => variable.Name == "probe").Type;
     }
 
     private static string BuildSource(string kind, string state, bool nullableTarget)

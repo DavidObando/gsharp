@@ -137,8 +137,14 @@ internal static class NullableFlagsBuilder
                 // Read LITERALLY: `declaredFlags` would show a fabricated `2`
                 // here for a declaration that said nothing at all, which is the
                 // very case the carve-out exists to leave alone.
+                //
+                // ADR-0186 §2 leaves this carve-out exactly as it is: an open
+                // slot still widens only for an EXPLICIT `[Nullable(2)]`. There
+                // is no `K!` for the same reason there is no `K?` here — the
+                // answer arrives with the type argument. Routed through the
+                // classifier only so no byte comparison survives outside it.
                 var parameterFlag = literalFlags[position++];
-                return parameterFlag == Annotated
+                return ClrNullability.ClassifyFlag(parameterFlag) == ClrNullabilityState.Annotated
                     ? ApplyRootAnnotation(projected, parameterFlag)
                     : projected;
             }
@@ -251,7 +257,15 @@ internal static class NullableFlagsBuilder
             // byte `0`, which csc emits explicitly for a `#nullable disable`
             // member of a `[NullableContext(1)]` type — a NON-empty flags array
             // the removed short-circuit above never even saw.
-            if (ClrNullability.IsFlagNonNull(flag) || projected is NullableTypeSymbol)
+            //
+            // ADR-0186 §2: the predicate is now the three-state classifier, and
+            // this — the third of `ClrNullability`'s reading paths — defers to
+            // it exactly as the other two do, so the three cannot drift on what
+            // byte `0` means. `SymbolForState` holds the one answer that
+            // changes.
+            var state = ClrNullability.ClassifyFlag(flag);
+            if (state == ClrNullabilityState.NotAnnotated
+                || projected is NullableTypeSymbol or PlatformTypeSymbol)
             {
                 return projected;
             }
@@ -265,7 +279,7 @@ internal static class NullableFlagsBuilder
             };
             return isValueType
                 ? projected
-                : NullableTypeSymbol.Get(projected);
+                : ClrNullability.SymbolForState(projected, state);
         }
     }
 
@@ -277,6 +291,36 @@ internal static class NullableFlagsBuilder
         if (type == null)
         {
             return;
+        }
+
+        if (type is PlatformTypeSymbol)
+        {
+            // ADR-0186 step 5 (§8) territory, deliberately NOT implemented here.
+            //
+            // Emitting an oblivious declaration as oblivious is the third value
+            // of §8's round-trip guarantee, and it needs a real decision — emit
+            // nothing at all (csc's own `#nullable disable` shape) or an
+            // explicit `[NullableContext(0)]` — plus the round-trip tests that
+            // pin whichever is chosen. None of that exists yet.
+            //
+            // What must NOT happen in the meantime is the silent answer. Every
+            // arm below either handles a wrapper explicitly or falls through to
+            // `AppendClrType`, which would write byte `1` — NON-NULL — for a
+            // `T!`. That is the worst possible encoding of "nobody said": it
+            // launders an unknown into a guarantee, in metadata, where the next
+            // reader has no way to tell it was a guess. ADR-0186 exists because
+            // that conversion happened once already.
+            //
+            // This path is unreachable today: `PlatformTypeSymbol` is produced
+            // only by `ClrNullability` under `--nullability=platform-types`,
+            // which defaults off. If it ever becomes reachable — step 5, or an
+            // accidental caller before then — failing here is strictly better
+            // than shipping a mis-encoded assembly.
+            throw new NotSupportedException(
+                $"Cannot emit nullable metadata for the platform type '{type.Name}': "
+                + "ADR-0186 §8's oblivious emit shape is step 5's work and is not "
+                + "implemented. A platform type must not reach the emitter while "
+                + "--nullability=platform-types is still an incomplete mode.");
         }
 
         // Imported wrapper that already carries the C# DFS byte array — pass

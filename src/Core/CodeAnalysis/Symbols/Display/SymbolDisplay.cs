@@ -704,6 +704,32 @@ public static class SymbolDisplay
                 return nullable.UnderlyingType is FunctionTypeSymbol
                     ? $"({underlying})?"
                     : $"{underlying}?";
+            case PlatformTypeSymbol platform:
+                // ADR-0186 §1: `T!` renders with the same POSITIONAL rule
+                // ADR-0132 gives `?`, and it needs its own arm rather than
+                // inheriting one — `[]!T` is a platform slice, `[]T!` a slice
+                // of platform elements, and those are different types. A
+                // platform function type parenthesises for issue #2160's
+                // reason: `((int32) -> void)!`, never `(int32) -> void!`.
+                if (platform.UnderlyingType is SliceTypeSymbol platformSlice)
+                {
+                    return $"[]!{FormatType(platformSlice.ElementType)}";
+                }
+
+                if (platform.UnderlyingType is ArrayTypeSymbol platformArray)
+                {
+                    return $"[{platformArray.Length}]!{FormatType(platformArray.ElementType)}";
+                }
+
+                if (platform.UnderlyingType is RectangularArrayTypeSymbol platformRectangular)
+                {
+                    return $"[{new string(',', platformRectangular.Rank - 1)}]!{FormatType(platformRectangular.ElementType)}";
+                }
+
+                var platformUnderlying = FormatType(platform.UnderlyingType);
+                return platform.UnderlyingType is FunctionTypeSymbol
+                    ? $"({platformUnderlying})!"
+                    : $"{platformUnderlying}!";
             case NullabilityAnnotatedTypeSymbol annotated:
                 return FormatType(annotated.BaseType);
             case FunctionTypeSymbol function:

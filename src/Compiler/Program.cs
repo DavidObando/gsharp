@@ -138,6 +138,7 @@ public class Program
                 var compilation = new Compilation(references, syntaxTrees.ToArray())
                 {
                     ImplicitSystemImport = parsed.ImplicitSystemImport,
+                    Nullability = parsed.Nullability,
                     IsLibrary = parsed.Target == OutputTarget.Library,
                     Optimize = parsed.Optimize,
                     Logger = logger,
@@ -880,6 +881,7 @@ public class Program
           /lib:<path>                   Accepted for csc compatibility (currently a no-op).
           /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
+          /nullability:<mode>           How oblivious imported reference positions are read: enabled (default) or platform-types (ADR-0186).
           /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
           /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
           /optimize[+|-]                Enable/disable JIT optimization (default: enabled).
@@ -1088,6 +1090,19 @@ public class Program
                     case "noimplicitimports":
                     case "no-implicit-imports":
                         result.ImplicitSystemImport = false;
+                        break;
+
+                    case "nullability":
+                        // ADR-0186: how an oblivious imported reference
+                        // position is read. `enabled` is ADR-0136's `T?` and is
+                        // the default; `platform-types` reads it as `T!`.
+                        result.Nullability = value.ToLowerInvariant() switch
+                        {
+                            "enabled" => NullabilityMode.Enabled,
+                            "platform-types" or "platformtypes" => NullabilityMode.PlatformTypes,
+                            _ => throw new CommandLineException(
+                                $"/nullability: unknown mode '{value}'; expected enabled or platform-types."),
+                        };
                         break;
 
                     case "nowarn":
@@ -1449,6 +1464,14 @@ public class Program
         public bool ShowHelp { get; set; }
 
         public bool ImplicitSystemImport { get; set; } = true;
+
+        /// <summary>
+        /// Gets or sets how oblivious imported reference positions are read
+        /// (from /nullability:&lt;mode&gt;, ADR-0186). Defaults to
+        /// <see cref="NullabilityMode.Enabled"/>, which is ADR-0136's reading
+        /// and therefore no change from today.
+        /// </summary>
+        public NullabilityMode Nullability { get; set; } = NullabilityMode.Enabled;
 
         /// <summary>Gets the set of diagnostic IDs to suppress (from /nowarn).</summary>
         public HashSet<string> NoWarnIds { get; } = new(StringComparer.OrdinalIgnoreCase);
