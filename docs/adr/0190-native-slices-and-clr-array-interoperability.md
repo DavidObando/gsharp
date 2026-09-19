@@ -8,6 +8,7 @@
   [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
   [ADR-0016](0016-slice-storage.md),
   [ADR-0042](0042-async-sequence-type-clause.md),
+  [ADR-0170](0170-escaped-identifiers.md),
   [ADR-0159](0159-magic-collection-zero-values-and-nil-comparison.md),
   [ADR-0174](0174-goroutines-and-channels-wave-2.md),
   [ADR-0181](0181-readonly-managed-reference-contracts.md),
@@ -60,7 +61,8 @@ that same existing array representation.**
 This is the recommended additive path, not a temporary mode that changes
 `[]T` according to project flags. A future proposal could retire a spelling,
 but this ADR neither schedules nor authorizes an ABI-changing reinterpretation.
-There is one meaning per spelling across mixed-version assemblies.
+Resolved native types have the same CLR identity across mixed-version
+assemblies; ordinary-name lookup and shadowing are specified below.
 
 All new spellings and members below are **proposed**, not implemented examples.
 The semantic contracts are selected here; parser lookahead and final diagnostic
@@ -143,6 +145,53 @@ arguments, tuples, and other existing type-clause positions. Formatters,
 diagnostics, completion, and symbol display use `readonly slice[T]`; the
 joined spelling is not an additional magic alias. This does not reserve a
 user-defined identifier named `readonlySlice`.
+
+#### Ordinary names take precedence over native aliases
+
+`slice` and `array` are currently ordinary identifiers; existing code can
+declare or import generic types with those names. The new aliases must not
+silently retarget such references. Preserve ordinary visible type/type-alias
+lookup first, including its normal scope, arity, accessibility, and ambiguity
+rules. A visible ordinary type or alias claiming the name prevents native
+fallback: wrong arity, failed constraints, or ambiguous imports remain the
+ordinary diagnostic, not a reason to reinterpret the spelling as a native
+type. Only an unescaped, otherwise unclaimed `slice[T]` or `array[T]` acquires
+the native meaning.
+
+Qualified names always use ordinary lookup; native behavior then follows the
+resolved runtime assembly/type identity, not a matching short name. When a
+user type shadows the aliases, the runtime spellings
+`Gsharp.Values.Slice[T]` / `Gsharp.Values.ReadOnlySlice[T]` and the existing
+exact-array `[]T` spelling remain explicit alternatives.
+[ADR-0170](0170-escaped-identifiers.md)'s `$slice[T]` and `$array[T]` force
+ordinary identifier lookup and never request a native alias; an unresolved
+escaped name stays unresolved. Formatters must not remove an escape when
+doing so would change that classification.
+
+```gsharp
+// Existing named-type behavior must survive the new aliases.
+class slice[T] { var Value T }
+let first = slice[int32]{Value: 1}
+let second = $slice[int32]{Value: 2}  // the same user-declared type
+// Proposed native runtime, explicitly selected despite that shadowing:
+let native = Gsharp.Values.Slice[int32].Create(2, 4)
+let raw = []int32{1, 2}
+```
+
+`readonly slice[T]` is admitted only when its `slice[T]` denotes the native
+slice category. If ordinary lookup selects an unrelated user type, report
+that the modifier requires the native slice and point to the explicit
+`Gsharp.Values.ReadOnlySlice[T]` spelling. It does not adapt an arbitrary
+same-named type. An escaped `$readonly` is an ordinary identifier, not this
+modifier.
+
+The parser must preserve enough original name/escape information for binding
+to make this choice, instead of committing every `IdentifierToken` followed
+by brackets to a new intrinsic. The same rule reaches literals, constructor
+and static-member expressions, and type clauses; ordinary generic function
+and value lookup must not be hijacked. Native-specific literal validation
+happens only after selecting the native type. Generated code uses qualified
+runtime spellings when a source declaration/import would shadow an alias.
 
 | Proposed spelling | Meaning |
 | --- | --- |
@@ -463,7 +512,9 @@ Identity recognition uses assembly/type identity, not a user type named
 path with its own bounds lowering that calls `Subslice` directly. Parse the
 contextual `readonly slice` form at every type-clause entry point and preserve
 its distinction from `ref readonly`; do not recognize the type by concatenating
-tokens into a new keyword.
+tokens into a new keyword. Preserve ordinary-name precedence and escaped-name
+intent through parsing, partial/editor binding, code-model printing, and
+formatting; test source and imported lowercase generic types explicitly.
 
 Use normal generic MemberRefs and the existing ref-return/indexer emitter.
 Native element reads and writes must survive lowered async, compound
@@ -481,7 +532,10 @@ No global cs2gs rewrite changes C# ranges into native views.
 
 Migration is therefore opt-in:
 
-1. Existing code compiles with its current meanings.
+1. Existing array code and ordinary named-type references retain their
+   meanings under the precedence/escape rules above. Do not claim that new
+   contextual syntax is collision-free merely because its tokens are
+   identifiers; parser and binding compatibility are release gates.
 2. Buffer-oriented APIs can explicitly change signatures to `slice[T]`, an
    intentional CLR binary break at that API boundary.
 3. A copied range becomes `nativeRange.Clone()` or `.ToArray()` when converting
@@ -590,6 +644,7 @@ Discriminating conformance scenarios:
 | Side-effecting/throwing bounds and RHS | Exact event trace; catches repeated or reordered evaluation |
 | Nullable container versus nullable element; CLR defaults | Correct presence and metadata, not just successful parsing |
 | `readonly slice[T]` in generic/tuple/ref type positions | Correct modifier binding, canonical display, and `ReadOnlySlice<T>` metadata |
+| Source/imported `slice` and `array` types, aliases, escapes, wrong arity, and ambiguous imports | Ordinary binding or ordinary diagnostic survives; no silent native fallback |
 | Range syntax, `Subslice`, and imported `.Slice` extension | Same endpoints, capacity, and exceptions in G#/C#; no same-name C# member requirement |
 | Struct element field write versus value-local mutation | Backing write in first case, independent copy in second |
 | Covariant array, subrange-to-array, memory-owner mismatch | Explicit failure, not hidden copying |
