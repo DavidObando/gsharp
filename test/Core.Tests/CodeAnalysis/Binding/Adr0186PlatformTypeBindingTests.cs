@@ -1025,7 +1025,14 @@ public sealed class Adr0186PlatformTypeBindingTests
     // `(s.ToUpper()).Trim()` did not, for the life of the "fix".
     [InlineData("    let f = Ob.NilThunk()\n    Console.WriteLine((f)())", "delegate invocation, parenthesised callee")]
     [InlineData("    let n = Ob.NilNested()\n    n.Num += 1", "compound member assignment")]
-    [InlineData("    let (a, b) = Ob.NilPt()\n    Console.WriteLine(a + b)", "deconstruction")]
+    [InlineData("    let (a, b) = Ob.NilPt()\n    Console.WriteLine(a + b)", "deconstruction, statement form")]
+
+    // The SHARED prelude (ADR-0185) that a tuple-deconstructing `for … in`
+    // and a destructured arrow-lambda parameter both go through. Covering
+    // only the statement form would have been failure mode 1 in miniature:
+    // one deconstruction path taught, its sibling not. Copilot review on
+    // this PR caught it.
+    [InlineData("    for (a, b) in Ob.WrapList(Ob.NilPt()) {\n        Console.WriteLine(a + b)\n    }", "deconstruction, loop prelude")]
     [InlineData("    let p = Ob.NilNest()\n    Console.WriteLine(p.Prop)", "member read (the covered control)")]
     public void Section4_TheRemainingPositions_Produce_AnAttributedFailure(string body, string site)
     {
@@ -1053,6 +1060,7 @@ public sealed class Adr0186PlatformTypeBindingTests
     [InlineData("    let n = Ob.Nest2()\n    n.Num += 1\n    Console.WriteLine(n.Num)", "1")]
     [InlineData("    let (a, b) = Ob.Pair()\n    Console.WriteLine(a + b)", "ab")]
     [InlineData("    let (a, b) = Ob.Pt2()\n    Console.WriteLine(a + b)", "ab")]
+    [InlineData("    for (a, b) in Ob.WrapList(Ob.Pt2()) {\n        Console.WriteLine(a + b)\n    }", "ab")]
     public void Section4_TheRemainingPositions_Still_Run_When_NotNil(string body, string expected)
     {
         using var world = new World();

@@ -41,6 +41,77 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 public sealed class Adr0186PlatformTypeConversionTests
 {
     /// <summary>
+    /// §3 rule 3 does not reach a <b>function shape</b>, in either
+    /// direction, because a signature is not a container — and the residual
+    /// hole that leaves is ADR-0186 <b>open question 13</b>, pinned here as
+    /// the status quo rather than left untested.
+    /// <para>
+    /// A `func` value or literal has no aliased object: converting to or
+    /// from a function type is a <em>signature relation</em>, and its
+    /// parameter/return compatibility is CLR delegate variance's question.
+    /// The concrete regression this gate exists for is an ordinary lambda
+    /// subscribed to an ordinary oblivious event —
+    /// <c>Issue2585SemanticQualificationTests</c> reported <em>"Cannot
+    /// convert type '(ViewModel) -&gt; void' to 'Action[ViewModel!]!'"</em>,
+    /// because a `FunctionTypeSymbol`'s <c>ClrType</c> is the materialized
+    /// delegate and rule 3 therefore read the pair as <c>C[T] → C[T!]</c>.
+    /// </para>
+    /// <para>
+    /// <b>What is deliberately still open.</b> The second case below —
+    /// a nested platform argument inside a function parameter position —
+    /// converts, which means a callee could write nil through a view whose
+    /// caller expects non-null elements. ADR-0186 open question 13 states
+    /// exactly this and accepts it: <em>"delegate conversion … is a
+    /// signature relation, not a value conversion, so there is no
+    /// expression at which a `T! → T` check could be inserted … Kotlin has
+    /// the identical hole."</em> Rule 3 catching a <em>subset</em> of those
+    /// pairs — only the shapes the argument-pair walk recognises — would be
+    /// an accident, not a design. Asserting it here means closing open
+    /// question 13 flips a deliberate assertion.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_AFunctionShape_Is_AConformanceBoundary_Not_AContainer()
+    {
+        var platformElement = PlatformTypeSymbol.Get(TypeSymbol.String);
+
+        // The regression: a `(T) -> void` literal against a delegate-shaped
+        // target whose parameter is `T!`. Modelled here as function-to-function
+        // because that is the shape this classifier can be handed directly.
+        var plainParameter = FunctionTypeSymbol.Get(
+            ImmutableArray.Create(TypeSymbol.String), TypeSymbol.Void);
+        var platformParameter = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(platformElement), TypeSymbol.Void);
+
+        Assert.True(
+            Conversion.Classify(plainParameter, platformParameter).Exists,
+            "a function shape is a signature relation, not a container");
+
+        // Open question 13's residual hole, pinned rather than hidden: a
+        // platform argument NESTED in a function parameter position also
+        // converts, with no check anywhere.
+        var platformElementSlice = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(SliceTypeSymbol.Get(platformElement)),
+            TypeSymbol.Void);
+        var plainElementSlice = FunctionTypeSymbol.Get(
+            ImmutableArray.Create<TypeSymbol>(SliceTypeSymbol.Get(TypeSymbol.String)),
+            TypeSymbol.Void);
+
+        Assert.True(
+            Conversion.Classify(platformElementSlice, plainElementSlice).Exists,
+            "ADR-0186 open question 13: conformance boundaries have no check point, and this ADR does not close them");
+
+        // The control that keeps the gate narrow: the same element mismatch
+        // in a plain container, with no function shape anywhere, is still
+        // rule 3's illegal direction.
+        Assert.False(
+            Conversion.Classify(
+                SliceTypeSymbol.Get(platformElement),
+                SliceTypeSymbol.Get(TypeSymbol.String)).Exists,
+            "`[]string! -> []string` outside a signature is still rejected");
+    }
+
+    /// <summary>
     /// §3 rule 3 does not reach a <b>value-type</b> container, because the
     /// rule's whole argument is aliasing and a struct is copied.
     /// <para>

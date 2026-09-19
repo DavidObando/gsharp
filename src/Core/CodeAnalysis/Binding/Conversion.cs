@@ -3492,20 +3492,20 @@ public sealed class Conversion
             return false;
         }
 
-        // A `func` literal being MATERIALIZED into a delegate is not a
-        // container being re-viewed, and rule 3 must not answer for it.
+        // A FUNCTION SHAPE is a conformance boundary, not a container, and
+        // rule 3 must not answer for it in either direction.
         //
         // Rule 3's soundness argument is entirely about ALIASING: two views
         // of one existing object, where a write through one view is read
-        // through the other. A `FunctionTypeSymbol` source has no such
-        // object — the delegate instance is created at this very conversion,
-        // from this very literal — and its parameter/return compatibility is
-        // decided by CLR delegate variance in
-        // `IsFunctionToDelegateConvertible`, which is a different question
-        // with a different (and correct) answer.
+        // through the other. A function type has no such object — it is a
+        // signature, and converting to or from one is a *signature relation*
+        // whose parameter/return compatibility is decided by CLR delegate
+        // variance (`IsFunctionToDelegateConvertible`,
+        // `IsFunctionShapeAssignable`), a different question with a
+        // different answer.
         //
         // Letting it through was not academic. A `FunctionTypeSymbol`'s
-        // `ClrType` is the materialized delegate type, so
+        // `ClrType` is its materialized delegate type, so
         // `TryGetPlatformArgumentPairs`' `AreSame` check passed and
         // `(ViewModel) -> void` against an oblivious event's
         // `Action[ViewModel!]!` was read as `C[T] -> C[T!]` — rule 3's
@@ -3513,10 +3513,32 @@ public sealed class Conversion
         // `Issue2585SemanticQualificationTests` reported *"Cannot convert
         // type '(Oahu.App.ViewModel) -> void' to
         // 'System.Action[Oahu.App.ViewModel!]!'"* for an ordinary lambda
-        // subscribed to an ordinary oblivious event. Declining here hands
-        // the pair back to the rules that already answer it, which is what
-        // this arm does for every pair it cannot speak to.
-        if (from is FunctionTypeSymbol)
+        // subscribed to an ordinary oblivious event.
+        //
+        // <b>Both sides, and that is deliberate rather than an oversight.</b>
+        // Copilot review on this PR pointed out that gating only the source
+        // still leaves, say, `(List[string!]) -> void -> (List[string]) -> void`
+        // admitted by `IsFunctionShapeAssignable`, whose runtime-equivalence
+        // test erases nested platform annotations — the callee could write
+        // nil through a view whose caller expects non-null elements. That is
+        // true, and it is <b>ADR-0186 open question 13</b>, which states the
+        // hole and accepts it: *"Interface implementation, delegate
+        // conversion and generic-constraint substitution are signature
+        // relations, not value conversions, so there is no expression at
+        // which a `T! -> T` check could be inserted … Kotlin has the
+        // identical hole."* Rule 3 catching a subset of those pairs — only
+        // the shapes `TryGetPlatformArgumentPairs` happens to recognise, and
+        // only when a platform type is present somewhere — is an accident,
+        // not a design, and an accident that rejects the ordinary
+        // lambda-to-oblivious-event case while missing the interface one is
+        // worse than a consistently open boundary. Pinned as the status quo
+        // by `Adr0186PlatformTypeConversionTests.Section3_AFunctionShape_Is_AConformanceBoundary_Not_AContainer`,
+        // so closing open question 13 flips a deliberate assertion rather
+        // than silently changing untested behaviour.
+        //
+        // Declining hands the pair back to the rules that already answer it,
+        // which is what this arm does for every pair it cannot speak to.
+        if (from is FunctionTypeSymbol || to is FunctionTypeSymbol)
         {
             return false;
         }

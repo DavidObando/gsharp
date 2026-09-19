@@ -2211,8 +2211,26 @@ internal sealed partial class StatementBinder
         TextLocation openParenLocation,
         VariableSymbol elementVariable)
     {
-        var elementType = elementVariable.Type;
-        var elementAccessBase = new BoundVariableExpression(null, elementVariable);
+        // ADR-0186 §4/§5, issue #4325 (Copilot review on the gates PR): this
+        // is the SHARED deconstruction prelude — a tuple-deconstructing
+        // `for … in` element and a destructured arrow-lambda parameter both
+        // arrive here (ADR-0185) — and it needs the same receiver check and
+        // unwrap as the statement form in
+        // `BindTupleDeconstructionStatement`. Fixing only the statement form
+        // would have been failure mode 1 of the ADR's catalogue in miniature:
+        // one deconstruction path taught, its sibling not, and the difference
+        // invisible until someone deconstructs in a loop.
+        //
+        // The unwrap is the half that decides binding: every arm below
+        // dispatches on `elementType is TupleTypeSymbol` / `is StructSymbol`
+        // and then probes for an imported `Deconstruct`, and a platform
+        // wrapper matches none of them — it reaches the imported probe
+        // through its relayed `ClrType` and binds with no check at all.
+        BoundExpression elementAccessBase = PlatformCoercion.InsertCheck(
+            new BoundVariableExpression(null, elementVariable),
+            openParenLocation,
+            "a deconstruction source");
+        var elementType = elementAccessBase.Type ?? elementVariable.Type;
 
         if (elementType is TupleTypeSymbol tupleType)
         {
