@@ -195,12 +195,20 @@ public partial class Parser
             j++;
         }
 
-        // The first parameter slot must be an identifier (the parameter name).
-        // Anything else (e.g. `(42)`, `(x + y)`) is treated as a parenthesized
-        // expression / tuple even though `->` follows — the parser surfaces a
-        // better diagnostic from the expression path than from the parameter
-        // path.
-        if (Peek(j).Kind != SyntaxKind.IdentifierToken)
+        // The first parameter slot must be an identifier (the parameter name)
+        // OR — ADR-0185 — `(`, the opener of a tuple-destructuring parameter
+        // pattern `(x T1, y T2, ...)`. There is no real ambiguity to resolve
+        // here: an ORDINARY parameter's own grammar never starts with `(`
+        // (its first token is always the name), so `(` at this position can
+        // only be a destructuring pattern's own open paren — the
+        // otherwise-similar-looking `(pair (string, int))` shape (one
+        // parameter named `pair`, of parenthesized tuple TYPE) has `pair`,
+        // an identifier, as ITS first interior token, so it never reaches
+        // this branch at all. Anything else (e.g. `(42)`, `(x + y)`) is
+        // treated as a parenthesized expression / tuple even though `->`
+        // follows — the parser surfaces a better diagnostic from the
+        // expression path than from the parameter path.
+        if (Peek(j).Kind != SyntaxKind.IdentifierToken && Peek(j).Kind != SyntaxKind.OpenParenthesisToken)
         {
             return false;
         }
@@ -367,6 +375,18 @@ public partial class Parser
         // ADR-0047: parameter-level annotations precede the identifier.
         var annotations = ParseAnnotations();
 
+        // ADR-0185: a tuple-destructuring parameter `(x T1, y T2, ...)`.
+        // Unambiguous at this point — see LooksLikeLambdaStart's matching
+        // comment — so no scoped/ref/ellipsis/default-value handling
+        // applies to this shape; those modifiers are ordinary-parameter-only
+        // and a destructured parameter's own tuple type is never optional or
+        // variadic.
+        if (Current.Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            var pattern = ParseTupleDeconstructionPattern();
+            return new ParameterSyntax(syntaxTree, pattern).WithAnnotations(annotations);
+        }
+
         // ADR-0058 / issue #376: optional `scoped` contextual modifier.
         SyntaxToken? scopedModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "scoped"
@@ -411,6 +431,63 @@ public partial class Parser
         parameter.EqualsToken = equalsToken;
         parameter.DefaultValue = defaultValue;
         return parameter;
+    }
+
+    // ADR-0185: `(name1 T1, name2 T2, ...)` — a flat tuple-destructuring
+    // pattern in arrow-lambda parameter position, extending the existing
+    // statement-position mechanism (`let (a, b) = e`, ADR-0032/ADR-0168)
+    // into parameter position. Each element requires an explicit type (this
+    // proposal deliberately does not extend target-typed parameter
+    // inference, ADR-0076/issue #716, to a destructured element — see
+    // ADR-0185's Decision) — a missing type surfaces its own diagnostic from
+    // ParseTypeClause rather than silently falling back to inference, which
+    // also means a malformed pattern (e.g. a C#-habit untyped
+    // `((x, y)) -> x + y`) still commits to the lambda/parameter path and
+    // gets a real "expected type" diagnostic instead of a confusing
+    // tuple-expression error from the parenthesized-expression fallback.
+    // Flat only (open question 3): an element can never itself be another
+    // destructuring pattern — the grammar simply never offers that
+    // production, so a stray `(` in element position fails as "expected
+    // identifier" rather than opening a nested pattern.
+    //
+    // A pattern with fewer than two elements (e.g. `(x string)`) parses
+    // cleanly here — G# has no 1-tuples, but that is a BINDER-time
+    // rejection (mirroring ParseTupleTypeClause's existing `(T)` grouping /
+    // stray-name handling for the tuple TYPE grammar), not a parse error;
+    // rejecting it here would make the LooksLikeLambdaStart lookahead's
+    // trial-parse (used only in the pre-existing unsafeDepth > 0 ambiguity)
+    // reject an otherwise well-formed destructuring attempt outright.
+    private TupleDeconstructionPatternSyntax ParseTupleDeconstructionPattern()
+    {
+        var openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
+
+        var parseNextElement = true;
+        while (parseNextElement &&
+               Current.Kind != SyntaxKind.CloseParenthesisToken &&
+               Current.Kind != SyntaxKind.EndOfFileToken)
+        {
+            var elementIdentifier = MatchToken(SyntaxKind.IdentifierToken);
+            var elementType = ParseTypeClause();
+            nodesAndSeparators.Add(new ParameterSyntax(syntaxTree, elementIdentifier, ellipsisToken: null, elementType));
+
+            if (Current.Kind == SyntaxKind.CommaToken)
+            {
+                var comma = MatchToken(SyntaxKind.CommaToken);
+                nodesAndSeparators.Add(comma);
+            }
+            else
+            {
+                parseNextElement = false;
+            }
+        }
+
+        var closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new TupleDeconstructionPatternSyntax(
+            syntaxTree,
+            openParen,
+            new SeparatedSyntaxList<ParameterSyntax>(nodesAndSeparators.ToImmutable()),
+            closeParen);
     }
 
     private ExpressionSyntax ParseSwitchExpression()

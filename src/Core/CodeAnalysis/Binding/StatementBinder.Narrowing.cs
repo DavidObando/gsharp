@@ -2181,7 +2181,19 @@ internal sealed partial class StatementBinder
     /// <param name="openParenLocation">Location used for a wrong-shape-initializer diagnostic.</param>
     /// <param name="elementVariable">The already-declared, single, hidden loop variable.</param>
     /// <returns>The bound field-extraction statements, or empty on error (identifiers still get error-typed locals so the body doesn't cascade "undefined variable" diagnostics).</returns>
-    private ImmutableArray<BoundStatement> BindForTupleLoopPrelude(
+    /// <remarks>
+    /// ADR-0185: also reused (via a callback wired through <see cref="Binder"/>)
+    /// by <see cref="LambdaBinder.BindLambdaExpression"/> for a destructured
+    /// arrow-lambda parameter <c>(x T1, y T2, ...) -&gt; body</c> — the
+    /// destructured parameter symbol itself plays the role
+    /// <paramref name="elementVariable"/> already plays here (a variable that
+    /// already holds the tuple, needing no extra synthetic temp), which is
+    /// exactly why this helper — rather than
+    /// <see cref="BindTupleDeconstructionStatement"/>'s statement-position
+    /// machinery, which always spills into its OWN synthetic temp — is the
+    /// reusable one for parameter-bind time.
+    /// </remarks>
+    internal ImmutableArray<BoundStatement> BindForTupleLoopPrelude(
         SeparatedSyntaxList<SyntaxToken> identifiers,
         TextLocation closeParenLocation,
         TextLocation openParenLocation,

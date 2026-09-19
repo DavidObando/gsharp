@@ -53,7 +53,10 @@ public sealed class FieldSymbol : Symbol
     public override ImmutableArray<SyntaxNode> DeclaringSyntaxNodes => Declaration switch
     {
         FieldDeclarationSyntax fieldDeclaration => ImmutableArray.Create<SyntaxNode>(fieldDeclaration.Identifier),
-        ParameterSyntax parameter => ImmutableArray.Create<SyntaxNode>(parameter.Identifier),
+
+        // ADR-0185: a field-backing parameter is always a primary-constructor
+        // parameter, never the destructured arrow-lambda path.
+        ParameterSyntax parameter => ImmutableArray.Create<SyntaxNode>(parameter.Identifier!),
         _ => ImmutableArray<SyntaxNode>.Empty,
     };
 

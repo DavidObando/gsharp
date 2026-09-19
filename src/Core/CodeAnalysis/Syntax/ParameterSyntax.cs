@@ -45,6 +45,30 @@ public sealed class ParameterSyntax : SyntaxNode
     {
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ParameterSyntax"/> class
+    /// for a DESTRUCTURED arrow-lambda parameter (ADR-0185) — <c>Identifier</c>
+    /// and <c>Type</c> are both <see langword="null"/> and
+    /// <see cref="DeconstructionPattern"/> carries the
+    /// <c>(name1 T1, name2 T2, ...)</c> pattern instead. Only
+    /// <see cref="Parser.ParseLambdaParameter"/> ever constructs this shape
+    /// (ADR-0185 Decision point 2: every OTHER surface that shares
+    /// <c>Parser.Members.cs</c>'s <c>ParseParameter</c> — named functions,
+    /// primary constructors, indexers, receiver clauses, <c>init</c>
+    /// declarations, event payloads — never sees a null <see cref="Identifier"/>).
+    /// </summary>
+    /// <param name="syntaxTree">The parent syntax tree.</param>
+    /// <param name="deconstructionPattern">The destructuring pattern this parameter binds.</param>
+    public ParameterSyntax(SyntaxTree syntaxTree, TupleDeconstructionPatternSyntax deconstructionPattern)
+        : base(syntaxTree)
+    {
+        Identifier = null;
+        EllipsisToken = null;
+        Type = null;
+        DeconstructionPattern = deconstructionPattern;
+        Annotations = ImmutableArray<AnnotationSyntax>.Empty;
+    }
+
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.Parameter;
 
@@ -56,15 +80,33 @@ public sealed class ParameterSyntax : SyntaxNode
     public ImmutableArray<AnnotationSyntax> Annotations { get; private set; }
 
     /// <summary>
-    /// Gets the parameter identifier.
+    /// Gets the parameter identifier, or <see langword="null"/> for a
+    /// destructured parameter (ADR-0185) — see <see cref="DeconstructionPattern"/>.
+    /// Every non-lambda parameter production (<c>Parser.Members.cs</c>'s
+    /// <c>ParseParameter</c>) always sets this; only a destructured
+    /// arrow-lambda parameter leaves it null.
     /// </summary>
-    public SyntaxToken Identifier { get; }
+    public SyntaxToken? Identifier { get; }
+
+    /// <summary>
+    /// Gets the <c>(name1 T1, name2 T2, ...)</c> tuple-destructuring pattern
+    /// (ADR-0185) this parameter binds, or <see langword="null"/> for an
+    /// ordinary single-identifier parameter. Exactly one of
+    /// <see cref="Identifier"/>/<see cref="DeconstructionPattern"/> is
+    /// non-null. Only <see cref="Parser.ParseLambdaParameter"/> ever
+    /// produces a non-null value here (ADR-0185 Decision point 2).
+    /// </summary>
+    public TupleDeconstructionPatternSyntax? DeconstructionPattern { get; }
+
+    /// <summary>Gets a value indicating whether this is a destructured parameter (ADR-0185).</summary>
+    public bool IsDestructured => DeconstructionPattern != null;
 
     /// <summary>Gets the optional <c>...</c> token marking the parameter as variadic (Phase 4.8).</summary>
     public SyntaxToken? EllipsisToken { get; }
 
     /// <summary>
-    /// Gets the parameter type.
+    /// Gets the parameter type. Always <see langword="null"/> for a
+    /// destructured parameter (ADR-0185) — see <see cref="DeconstructionPattern"/>.
     /// </summary>
     public TypeClauseSyntax? Type { get; }
 

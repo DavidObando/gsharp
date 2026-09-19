@@ -1346,7 +1346,10 @@ internal sealed partial class DeclarationBinder
         var seenParameterNames = new HashSet<string>();
         foreach (var parameterSyntax in ctorSyntax.Parameters)
         {
-            var parameterName = parameterSyntax.Identifier.ValueText;
+            // ADR-0185: a constructor parameter never comes from the
+            // destructured arrow-lambda path (Parser.Members.cs's
+            // ParseParameter always sets Identifier).
+            var parameterName = parameterSyntax.Identifier!.ValueText;
             var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                 ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                 : TypeSymbol.Error;

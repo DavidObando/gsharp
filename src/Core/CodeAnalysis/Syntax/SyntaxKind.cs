@@ -185,6 +185,13 @@ public enum SyntaxKind
     EnumDeclaration,
     EnumMember,
     Parameter,
+
+    // ADR-0185: `(name1 T1, name2 T2, ...)` — a flat tuple-destructuring
+    // pattern occupying an arrow-lambda parameter slot (see
+    // TupleDeconstructionPatternSyntax). Distinct from TupleDeconstructionStatement
+    // (ADR-0032/0168's `let (a, b) = e`), which deconstructs at statement
+    // position instead of parameter-bind time.
+    TupleDeconstructionPattern,
     TypeClause,
     TypeParameter,
     TypeParameterList,

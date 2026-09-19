@@ -765,7 +765,9 @@ internal sealed partial class DeclarationBinder
                 return new FunctionReceiverBindingResult(TypeSymbol.Error, null, null, false);
             }
 
-            var recvName = receiverSyntax.Identifier.ValueText;
+            // ADR-0185: a receiver clause is parsed via Parser.Members.cs's
+            // ParseParameter, never the destructured arrow-lambda path.
+            var recvName = receiverSyntax.Identifier!.ValueText;
             receiverType = receiverSyntax.Type is { } receiverTypeSyntax
                 ? bindTypeClause(receiverTypeSyntax)
                 : TypeSymbol.Error;
@@ -802,7 +804,10 @@ internal sealed partial class DeclarationBinder
         for (var pIndex = 0; pIndex < syntax.Parameters.Count; pIndex++)
         {
             var parameterSyntax = syntax.Parameters[pIndex];
-            var parameterName = parameterSyntax.Identifier.ValueText;
+
+            // ADR-0185: an ordinary function declaration's parameters never
+            // come from the destructured arrow-lambda path.
+            var parameterName = parameterSyntax.Identifier!.ValueText;
             var parameterType = parameterSyntax.Type is { } parameterTypeSyntax
                 ? bindTypeClause(parameterTypeSyntax) ?? TypeSymbol.Error
                 : TypeSymbol.Error;
@@ -3111,15 +3116,17 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
+            // ADR-0185: a destructured parameter's IsVariadic is always
+            // false, so the `continue` above already skipped it here too.
             if (firstVariadicSeen)
             {
-                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier.ValueText);
+                Diagnostics.ReportMultipleVariadicParameters(parameters[i].Location, parameters[i].Identifier!.ValueText);
             }
 
             firstVariadicSeen = true;
             if (i < parameters.Count - 1)
             {
-                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier.ValueText);
+                Diagnostics.ReportVariadicParameterMustBeLast(parameters[i].Location, parameters[i].Identifier!.ValueText);
             }
         }
     }

@@ -661,7 +661,9 @@ public static class SemanticLookup
                         : null);
                 if (receiverParameter != null && function.Declaration.Receiver != null)
                 {
-                    declarations[function.Declaration.Receiver.Identifier] = receiverParameter;
+                    // ADR-0185: a receiver clause never comes from the
+                    // destructured arrow-lambda path.
+                    declarations[function.Declaration.Receiver.Identifier!] = receiverParameter;
                     GetLocals(localDeclarations, function.Declaration)[receiverParameter.Name] = receiverParameter;
                 }
             }
@@ -889,7 +891,11 @@ public static class SemanticLookup
         for (var i = 0; i < syntaxParameters.Length && symbolIndex + i < parameters.Length; i++)
         {
             var symbol = parameters[symbolIndex + i];
-            declarations[syntaxParameters[i].Identifier] = symbol;
+
+            // ADR-0185: every MapParameters caller passes a named function's,
+            // method's, or constructor's syntax parameters, never a
+            // (possibly destructured) arrow-lambda's.
+            declarations[syntaxParameters[i].Identifier!] = symbol;
             MapTypeClauseReference(syntaxParameters[i].Type, symbol.Type, declarations);
             GetLocals(localDeclarations, scope)[symbol.Name] = symbol;
         }

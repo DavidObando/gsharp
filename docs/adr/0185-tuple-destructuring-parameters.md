@@ -1,6 +1,6 @@
 # ADR-0185: Tuple-destructuring function-literal parameters
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-18
 - **Related**: ADR-0032 (deconstruction), ADR-0115 (cs2gs migration tool), ADR-0168
   (mixed deconstruction and discard bindings — the `let (a, b) = e` / `var (a, b)

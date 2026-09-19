@@ -248,10 +248,13 @@ public static class IncrementalGlobalScopeReuse
                 SyntaxNode? updated = declaration switch
                 {
                     FieldDeclarationSyntax fieldDeclaration when fieldMap.TryGetValue(fieldDeclaration, out var updatedField) => updatedField,
+
+                    // ADR-0185: a primary-constructor parameter never comes
+                    // from the destructured arrow-lambda path.
                     ParameterSyntax when structSymbol.Declaration is { } structDeclaration
                         && structMap.TryGetValue(structDeclaration, out var updatedStruct)
                         => updatedStruct.PrimaryConstructorParameters?.FirstOrDefault(
-                            parameter => parameter.Identifier.ValueText == field.Name),
+                            parameter => parameter.Identifier!.ValueText == field.Name),
                     _ => null,
                 };
                 if (updated == null)

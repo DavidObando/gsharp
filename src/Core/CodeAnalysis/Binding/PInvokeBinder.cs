@@ -1109,9 +1109,13 @@ internal static class PInvokeBinder
                 var lastSegment = ann.NameSegments[ann.NameSegments.Length - 1].Text;
                 if (lastSegment == "MarshalAs" || lastSegment == "MarshalAsAttribute")
                 {
+                    // ADR-0185: a P/Invoke declaration's parameters come from
+                    // Parser.Members.cs's ParseParameter, never from a
+                    // destructured arrow-lambda parameter — Identifier is
+                    // always set here.
                     diagnostics.ReportMarshalAsRejected(
                         ann.Location,
-                        ps.Identifier.ValueText,
+                        ps.Identifier!.ValueText,
                         "the enclosing function is not a P/Invoke declaration (`@DllImport` or `@LibraryImport`)");
                 }
             }

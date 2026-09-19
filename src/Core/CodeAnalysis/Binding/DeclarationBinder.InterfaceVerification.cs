@@ -2112,10 +2112,25 @@ internal sealed partial class DeclarationBinder
             // which can never resolve to an instance member, and type clauses
             // carry no expressions either.
             case LambdaExpressionSyntax lambda:
-                var lambdaParameterNames = new string[lambda.Parameters.Count];
-                for (var i = 0; i < lambda.Parameters.Count; i++)
+                // ADR-0185: an arrow-lambda parameter may be destructured
+                // (`(x string, y int) -> ...`) — every destructured element
+                // name shadows within the body exactly like an ordinary
+                // parameter name, so flatten each pattern's elements in
+                // instead of the (absent) outer Identifier.
+                var lambdaParameterNames = new List<string>(lambda.Parameters.Count);
+                foreach (var lambdaParam in lambda.Parameters)
                 {
-                    lambdaParameterNames[i] = lambda.Parameters[i].Identifier.ValueText;
+                    if (lambdaParam.DeconstructionPattern is { } pattern)
+                    {
+                        foreach (var element in pattern.Elements)
+                        {
+                            lambdaParameterNames.Add(element.Identifier!.ValueText);
+                        }
+                    }
+                    else
+                    {
+                        lambdaParameterNames.Add(lambdaParam.Identifier!.ValueText);
+                    }
                 }
 
                 return TryFindInstanceMemberReference(
@@ -2125,7 +2140,11 @@ internal sealed partial class DeclarationBinder
                 var functionParameterNames = new string[func.Parameters.Count];
                 for (var i = 0; i < func.Parameters.Count; i++)
                 {
-                    functionParameterNames[i] = func.Parameters[i].Identifier.ValueText;
+                    // ADR-0185: a function-literal's parameters are parsed via
+                    // Parser.Members.cs's ParseParameter (never the
+                    // destructured arrow-lambda path — see ADR-0185 Decision
+                    // point 2), so Identifier is always set.
+                    functionParameterNames[i] = func.Parameters[i].Identifier!.ValueText;
                 }
 
                 return TryFindInstanceMemberReference(
