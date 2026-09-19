@@ -20,6 +20,7 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     private TypeClauseSyntax? explicitInterfaceType;
     private SyntaxToken? explicitInterfaceCloseParenToken;
     private SyntaxToken? retiredExtensionKeyword;
+    private SyntaxToken? partialModifier;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionDeclarationSyntax"/> class.
@@ -246,6 +247,50 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <summary>Gets a value indicating whether this declaration uses a
     /// <c>;</c> body marker instead of a block body (ADR-0086).</summary>
     public bool HasSemicolonBody => SemicolonBodyToken != null;
+
+    /// <summary>
+    /// Gets or sets the optional <c>partial</c> contextual modifier (ADR-0192 /
+    /// issue #4301) preceding this method's <c>func</c> keyword. When non-null
+    /// the declaration is one part of a partial method: either the
+    /// <em>declaring</em> part (<see cref="HasSemicolonBody"/> is <c>true</c> —
+    /// signature and annotations only) or the <em>implementing</em> part
+    /// (<see cref="Body"/> is non-null). <c>PartialMethodMerger</c> collapses
+    /// the two parts into a single declaration before the body binder runs, so
+    /// a merged node carries this token but has a real body. Deliberately NOT
+    /// <c>[SyntaxChildIgnore]</c>: the token must participate in child
+    /// enumeration so <see cref="SyntaxNode.Span"/> covers it and tooling that
+    /// walks the tree sees it. Assigned by the parser; <c>null</c> for an
+    /// ordinary method.
+    /// </summary>
+    public SyntaxToken? PartialModifier
+    {
+        get => partialModifier;
+        set
+        {
+            partialModifier = value;
+            InvalidateCachedSpan();
+        }
+    }
+
+    /// <summary>Gets a value indicating whether this declaration carries the <c>partial</c> contextual modifier (ADR-0192).</summary>
+    public bool IsPartial => PartialModifier != null;
+
+    /// <summary>
+    /// Gets or sets the <em>declaring</em> part this node was merged from
+    /// (ADR-0192). Non-<see langword="null"/> only on the synthetic node
+    /// <c>PartialMethodMerger</c> builds from a declaring/implementing pair; it
+    /// records the signature-only part so tooling can report both part
+    /// locations, and it is the merger's idempotency guard — a method whose
+    /// <c>DeclaringPart</c> is already set is passed through untouched when the
+    /// same syntax tree is bound again (the LSP rebinds, and a test may compile
+    /// one tree more than once).
+    /// <c>[SyntaxChildIgnore]</c>: the declaring part's tokens already belong to
+    /// their own declaration in its own file, so re-parenting them here would
+    /// double-count them in child enumeration and stretch this node's
+    /// <see cref="SyntaxNode.Span"/> across two files.
+    /// </summary>
+    [SyntaxChildIgnore]
+    public FunctionDeclarationSyntax? DeclaringPart { get; set; }
 
     /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
     public SyntaxToken? ReceiverOpenParenthesisToken { get; }

@@ -27,6 +27,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     private ImmutableArray<ConstructorDeclarationSyntax> constructors = ImmutableArray<ConstructorDeclarationSyntax>.Empty;
     private DeinitDeclarationSyntax? deinitializer;
     private ImmutableArray<MemberSyntax> nestedTypes = ImmutableArray<MemberSyntax>.Empty;
+    private ImmutableArray<FunctionDeclarationSyntax> methods = ImmutableArray<FunctionDeclarationSyntax>.Empty;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="StructDeclarationSyntax"/> class.
@@ -507,8 +508,25 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets the event declarations in the body (ADR-0052). Empty for types that declare no events.</summary>
     public ImmutableArray<EventDeclarationSyntax> Events { get; }
 
-    /// <summary>Gets the method declarations declared inside the body (Phase 3.B.3 sub-step 2b — classes only). Empty for struct types and for bodyless declarations.</summary>
-    public ImmutableArray<FunctionDeclarationSyntax> Methods { get; }
+    /// <summary>
+    /// Gets or sets the method declarations declared inside the body (Phase
+    /// 3.B.3 sub-step 2b — classes only). Empty for struct types and for
+    /// bodyless declarations. Settable since ADR-0192 so
+    /// <c>PartialMethodMerger</c> can replace the list with one in which each
+    /// partial method's declaring and implementing parts have been collapsed
+    /// into a single declaration — the same in-place normalization
+    /// <see cref="NestedTypes"/> already receives from
+    /// <c>PartialTypeMerger</c>.
+    /// </summary>
+    public ImmutableArray<FunctionDeclarationSyntax> Methods
+    {
+        get => methods;
+        set
+        {
+            methods = value;
+            InvalidateCachedSpan();
+        }
+    }
 
     /// <summary>Gets the closing brace.</summary>
     public SyntaxToken CloseBraceToken { get; }

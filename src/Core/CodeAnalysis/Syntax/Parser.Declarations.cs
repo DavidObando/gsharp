@@ -583,6 +583,21 @@ public partial class Parser
             // threads annotations onto class members.
             var annotations = ParseAnnotations();
 
+            // ADR-0192 / issue #4301: partial methods are a `class`/`struct`
+            // feature. An interface method signature is already body-less and
+            // already expects an implementation elsewhere, so splitting it into
+            // a declaring and an implementing part has no meaning — `partial`
+            // on an interface member is GS0600. (A `partial interface` TYPE, per
+            // ADR-0144, remains legal; only its MEMBERS cannot be partial.)
+            if (TryConsumePartialFuncModifier(out var interfacePartialModifier) && interfacePartialModifier != null)
+            {
+                Diagnostics.ReportPartialModifierNotValidHere(interfacePartialModifier.Location);
+            }
+            else
+            {
+                TryRejectMisplacedPartialModifier();
+            }
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
                 // Issue #865 revision: static-virtual members live in a
@@ -1344,7 +1359,14 @@ public partial class Parser
                     ahead++;
                 }
 
-                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                // ADR-0192: `public partial func …` — the accessibility token is
+                // still a member modifier when a `partial`/`unsafe`/colour
+                // modifier run separates it from `func`.
+                if (FunctionModifierRunEndsInFunc(ahead))
+                {
+                    memberAccessibility = NextToken();
+                }
+                else if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "init" && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken) ||
@@ -1380,13 +1402,26 @@ public partial class Parser
                 }
             }
 
+            // ADR-0192 / issue #4301: an optional `partial` contextual modifier
+            // may precede `func` on a class/struct instance method, in either
+            // order relative to `async`/`suspend` and `unsafe`. It is probed
+            // both before and after those two so all of `partial async func`,
+            // `async partial func`, `partial unsafe func` and `unsafe partial
+            // func` are accepted (the parser has always collected modifiers
+            // order-independently — ADR-0144 §A). Whether the enclosing type is
+            // itself `partial` is checked later, by PartialMethodMerger: the
+            // aggregate's own `partial` token is not attached until after its
+            // member list has been parsed.
+            SyntaxToken? memberPartialModifier = null;
+            TryConsumePartialFuncModifier(out memberPartialModifier);
+
             // Issue #502 / ADR-0023: an optional `async` modifier may precede
             // `func` on a class instance method, mirroring the top-level path
             // in ParseMember. The modifier is consumed only when immediately
             // followed by `func`; otherwise it is left for ParseFieldDeclaration
             // (or another fallback) to surface a diagnostic.
             SyntaxToken? memberAsyncModifier = null;
-            if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            if (IsFunctionColorModifier(Current.Kind) && FunctionModifierRunEndsInFunc(1))
             {
                 memberAsyncModifier = NextToken();
             }
@@ -1396,14 +1431,26 @@ public partial class Parser
             // by `func` (or `async func`).
             SyntaxToken? memberUnsafeModifier = null;
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-                && (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)))
+                && (FunctionModifierRunEndsInFunc(1) || IsFunctionColorModifier(Peek(1).Kind)))
             {
                 memberUnsafeModifier = NextToken();
-                if (memberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                if (memberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && FunctionModifierRunEndsInFunc(1))
                 {
                     memberAsyncModifier = NextToken();
                 }
             }
+
+            // ADR-0192: second probe — `unsafe partial func` / `async partial func`.
+            if (memberPartialModifier == null)
+            {
+                TryConsumePartialFuncModifier(out memberPartialModifier);
+            }
+
+            // ADR-0192: a `partial` that heads neither a `func` nor a nested
+            // aggregate declaration (`partial prop`, `partial event`,
+            // `partial var`, …) is rejected with GS0600 here, so it never
+            // reaches ParseFieldDeclaration as a stray type-clause token.
+            TryRejectMisplacedPartialModifier();
 
             // ADR-0065 §2: optional `convenience` contextual keyword may
             // precede `init` (or `func init`) on a class constructor.
@@ -1611,11 +1658,26 @@ public partial class Parser
                         method.UnsafeModifier = memberUnsafeModifier;
                     }
 
+                    // ADR-0192 / issue #4301: mark this declaration as one part
+                    // of a partial method. PartialMethodMerger collapses the
+                    // declaring and implementing parts into one node before the
+                    // body binder runs.
+                    method.PartialModifier = memberPartialModifier;
+
                     methods.Add(method);
                 }
             }
             else
             {
+                // ADR-0192: `partial` was consumed for a member that did not
+                // turn out to be a `func` (the probe requires `func`, so this
+                // is only reachable through error recovery). Diagnose rather
+                // than silently dropping the modifier.
+                if (memberPartialModifier != null)
+                {
+                    Diagnostics.ReportPartialModifierNotValidHere(memberPartialModifier.Location);
+                }
+
                 if (memberOpenModifier != null || memberOverrideModifier != null)
                 {
                     // The enclosing `if` tests these same modifiers for non-null,

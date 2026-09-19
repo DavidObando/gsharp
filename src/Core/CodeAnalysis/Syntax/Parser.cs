@@ -383,6 +383,17 @@ public partial class Parser
             accessibilityModifier = NextToken();
         }
 
+        // ADR-0192 / issue #4301: `partial` is never valid on a TOP-LEVEL
+        // `func` — a partial method is a member of a `partial class` or
+        // `partial struct`. Consume and diagnose here (rather than letting
+        // `partial` fall through to the global-statement parser as an
+        // undefined-name expression) so the `func` that follows still parses
+        // and binds normally, and the user gets one precise error.
+        if (TryConsumePartialFuncModifier(out var topLevelPartialModifier) && topLevelPartialModifier != null)
+        {
+            Diagnostics.ReportPartialModifierNotValidHere(topLevelPartialModifier.Location);
+        }
+
         // ADR-0122 / issue #1014: an optional `unsafe` contextual modifier may
         // precede `func` (with or without an accessibility / async modifier).
         // It introduces an unsafe context in which unmanaged raw pointers
@@ -391,19 +402,33 @@ public partial class Parser
         // it composes with `open`/`sealed`/etc. in any order.
         SyntaxToken? unsafeModifier = null;
         if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-            && (Peek(1).Kind == SyntaxKind.FuncKeyword
+            && (FunctionModifierRunEndsInFunc(1)
                 || IsFunctionColorModifier(Peek(1).Kind)))
         {
             unsafeModifier = NextToken();
+        }
+
+        // ADR-0192: second probe, for `unsafe partial func` at top level. The
+        // modifier is still invalid here (GS0600) — consuming it keeps the
+        // `func` that follows parseable.
+        if (TryConsumePartialFuncModifier(out var afterUnsafePartialModifier) && afterUnsafePartialModifier != null)
+        {
+            Diagnostics.ReportPartialModifierNotValidHere(afterUnsafePartialModifier.Location);
         }
 
         // Phase 5.1 / ADR-0023: an optional `async` modifier may precede
         // `func` (with or without an accessibility modifier). ADR-0174 D4:
         // `suspend` takes the same slot.
         SyntaxToken? asyncModifier = null;
-        if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+        if (IsFunctionColorModifier(Current.Kind) && FunctionModifierRunEndsInFunc(1))
         {
             asyncModifier = NextToken();
+        }
+
+        // ADR-0192: third probe, for `async partial func` at top level.
+        if (TryConsumePartialFuncModifier(out var afterAsyncPartialModifier) && afterAsyncPartialModifier != null)
+        {
+            Diagnostics.ReportPartialModifierNotValidHere(afterAsyncPartialModifier.Location);
         }
 
         MemberSyntax member;

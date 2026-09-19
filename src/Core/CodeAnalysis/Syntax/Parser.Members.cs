@@ -14,6 +14,116 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 public partial class Parser
 {
     /// <summary>
+    /// ADR-0192 / issue #4301: probes for the contextual <c>partial</c> modifier
+    /// at member position and consumes it when it heads a <c>func</c> member.
+    /// <c>partial</c> stays an ordinary identifier everywhere else (<c>var
+    /// partial = 1</c>, <c>func partial()</c>) — it is only special when the
+    /// modifier run it starts terminates in <c>func</c>, exactly as ADR-0144
+    /// made it special only when the run terminates in an aggregate keyword.
+    /// </summary>
+    /// <param name="partialModifier">Receives the consumed token, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when a <c>partial</c> modifier was consumed.</returns>
+    private bool TryConsumePartialFuncModifier(out SyntaxToken? partialModifier)
+    {
+        partialModifier = null;
+        if (!PartialModifierIntroducesFunc())
+        {
+            return false;
+        }
+
+        partialModifier = NextToken();
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0192: returns <see langword="true"/> when the current token is the
+    /// contextual <c>partial</c> identifier and the modifier run it starts
+    /// terminates in <c>func</c>. <c>unsafe</c> (ADR-0122) and the function
+    /// colour modifiers <c>async</c>/<c>suspend</c> (ADR-0023/ADR-0174) may
+    /// appear between <c>partial</c> and <c>func</c> in either order, so all of
+    /// <c>partial func</c>, <c>partial async func</c>, <c>partial unsafe async
+    /// func</c> are recognised. The scan does not consume tokens.
+    /// </summary>
+    /// <returns><see langword="true"/> when <c>partial</c> heads a <c>func</c> member.</returns>
+    private bool PartialModifierIntroducesFunc()
+        => Current.Kind == SyntaxKind.IdentifierToken
+        && Current.Text == "partial"
+        && FunctionModifierRunEndsInFunc(1);
+
+    /// <summary>
+    /// ADR-0192: scans the run of <c>func</c>-member modifiers starting at
+    /// <paramref name="startOffset"/> — <c>partial</c> (ADR-0192),
+    /// <c>unsafe</c> (ADR-0122), and the colour modifiers
+    /// <c>async</c>/<c>suspend</c> (ADR-0023 / ADR-0174 D4), each at most once
+    /// and in any order — and reports whether the run terminates in <c>func</c>.
+    /// The existing probes for those modifiers used to hard-code
+    /// <c>Peek(n) == func</c>, which is why they must route through this helper
+    /// now: `partial` may sit between them and the keyword. The scan does not
+    /// consume tokens.
+    /// </summary>
+    /// <param name="startOffset">The lookahead offset to start scanning at.</param>
+    /// <returns><see langword="true"/> when the modifier run ends in <c>func</c>.</returns>
+    private bool FunctionModifierRunEndsInFunc(int startOffset)
+    {
+        var offset = startOffset;
+        var sawUnsafe = false;
+        var sawColor = false;
+        var sawPartial = false;
+        while (true)
+        {
+            var token = Peek(offset);
+            if (!sawUnsafe && token.Kind == SyntaxKind.IdentifierToken && token.Text == "unsafe")
+            {
+                sawUnsafe = true;
+                offset++;
+                continue;
+            }
+
+            if (!sawPartial && token.Kind == SyntaxKind.IdentifierToken && token.Text == "partial")
+            {
+                sawPartial = true;
+                offset++;
+                continue;
+            }
+
+            if (!sawColor && IsFunctionColorModifier(token.Kind))
+            {
+                sawColor = true;
+                offset++;
+                continue;
+            }
+
+            break;
+        }
+
+        return Peek(offset).Kind == SyntaxKind.FuncKeyword;
+    }
+
+    /// <summary>
+    /// ADR-0192 / issue #4301: consumes a <c>partial</c> token that sits at
+    /// member position but heads neither a <c>func</c> (ADR-0192) nor an
+    /// aggregate declaration (ADR-0144) — for example <c>partial prop</c>,
+    /// <c>partial event</c>, or <c>partial var</c> — and reports GS0600. Doing
+    /// this here keeps the token out of <c>ParseFieldDeclaration</c>, which
+    /// would otherwise surface a misleading "expected type clause" cascade.
+    /// </summary>
+    /// <returns><see langword="true"/> when a misplaced <c>partial</c> was consumed and diagnosed.</returns>
+    private bool TryRejectMisplacedPartialModifier()
+    {
+        if (Current.Kind != SyntaxKind.IdentifierToken
+            || Current.Text != "partial"
+            || PartialModifierIntroducesFunc()
+            || TryDetectAggregateDeclarationHead())
+        {
+            return false;
+        }
+
+        Diagnostics.ReportPartialModifierNotValidHere(Current.Location);
+        NextToken();
+        return true;
+    }
+
+    /// <summary>
     /// ADR-0068 / issue #698: parses a class-body destructor declaration
     /// <c>deinit { body }</c>. The keyword carries no parameters, no return
     /// type, no accessibility modifier. A malformed parameter list (the user
@@ -153,7 +263,9 @@ public partial class Parser
                     ahead++;
                 }
 
-                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                // ADR-0192: `public partial func …` inside `shared { }`.
+                if (FunctionModifierRunEndsInFunc(ahead) ||
+                    Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event"))
                 {
@@ -161,10 +273,18 @@ public partial class Parser
                 }
             }
 
+            // ADR-0192 / issue #4301: `partial` is allowed on a static method
+            // inside a `shared` block, mirroring the instance-method path. This
+            // is the shape the motivating scenario needs — C#'s
+            // `[GeneratedRegex] private static partial Regex Foo();` translates
+            // to a `partial func` inside `shared { }`.
+            SyntaxToken? sharedMemberPartialModifier = null;
+            TryConsumePartialFuncModifier(out sharedMemberPartialModifier);
+
             // Issue #502: `async` modifier is allowed on static methods inside
             // a `shared` block, mirroring the instance-method path above.
             SyntaxToken? sharedMemberAsyncModifier = null;
-            if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            if (IsFunctionColorModifier(Current.Kind) && FunctionModifierRunEndsInFunc(1))
             {
                 sharedMemberAsyncModifier = NextToken();
             }
@@ -176,14 +296,24 @@ public partial class Parser
             // context too (the binder consults the per-method `IsUnsafe` flag).
             SyntaxToken? sharedMemberUnsafeModifier = null;
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-                && (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)))
+                && (FunctionModifierRunEndsInFunc(1) || IsFunctionColorModifier(Peek(1).Kind)))
             {
                 sharedMemberUnsafeModifier = NextToken();
-                if (sharedMemberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                if (sharedMemberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && FunctionModifierRunEndsInFunc(1))
                 {
                     sharedMemberAsyncModifier = NextToken();
                 }
             }
+
+            // ADR-0192: second probe — `unsafe partial func` / `async partial func`.
+            if (sharedMemberPartialModifier == null)
+            {
+                TryConsumePartialFuncModifier(out sharedMemberPartialModifier);
+            }
+
+            // ADR-0192: `partial` on a shared-block member that is not a `func`
+            // (`partial prop`, `partial var`, `partial init { }`) is GS0600.
+            TryRejectMisplacedPartialModifier();
 
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init"
                 && Peek(1).Kind == SyntaxKind.OpenBraceToken)
@@ -255,10 +385,21 @@ public partial class Parser
                     method.UnsafeModifier = sharedMemberUnsafeModifier;
                 }
 
+                // ADR-0192 / issue #4301: mark this static method as one part of
+                // a partial method.
+                method.PartialModifier = sharedMemberPartialModifier;
+
                 methods.Add(method);
             }
             else
             {
+                // ADR-0192: `partial` consumed for a shared-block member that
+                // did not turn out to be a `func` (error recovery only).
+                if (sharedMemberPartialModifier != null)
+                {
+                    Diagnostics.ReportPartialModifierNotValidHere(sharedMemberPartialModifier.Location);
+                }
+
                 if (sharedMemberAsyncModifier != null)
                 {
                     Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
@@ -315,6 +456,21 @@ public partial class Parser
             // (ADR-0047) like class members — parse them here and attach to the
             // property / event / method signature that follows.
             var annotations = ParseAnnotations();
+
+            // ADR-0192 / issue #4301: partial methods are a `class`/`struct`
+            // feature. An interface method signature is already body-less and
+            // already expects an implementation elsewhere, so splitting it into
+            // a declaring and an implementing part has no meaning — `partial`
+            // on an interface member is GS0600. (A `partial interface` TYPE, per
+            // ADR-0144, remains legal; only its MEMBERS cannot be partial.)
+            if (TryConsumePartialFuncModifier(out var interfacePartialModifier) && interfacePartialModifier != null)
+            {
+                Diagnostics.ReportPartialModifierNotValidHere(interfacePartialModifier.Location);
+            }
+            else
+            {
+                TryRejectMisplacedPartialModifier();
+            }
 
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
@@ -524,6 +680,18 @@ public partial class Parser
             if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
             {
                 accessibilityModifier = NextToken();
+            }
+
+            // ADR-0192 / issue #4301: partial methods are out of scope for
+            // interfaces (see the instance-member loop above) — that includes
+            // an interface's static-virtual `shared { }` slots.
+            if (TryConsumePartialFuncModifier(out var sharedPartialModifier) && sharedPartialModifier != null)
+            {
+                Diagnostics.ReportPartialModifierNotValidHere(sharedPartialModifier.Location);
+            }
+            else
+            {
+                TryRejectMisplacedPartialModifier();
             }
 
             if (Current.Kind == SyntaxKind.FuncKeyword)

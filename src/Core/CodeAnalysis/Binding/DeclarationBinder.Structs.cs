@@ -1328,7 +1328,17 @@ internal sealed partial class DeclarationBinder
                     if (methodSyntax.HasSemicolonBody)
                     {
                         methodSymbol.IsAbstract = true;
-                        if (!methodSyntax.IsOpen || !structSymbol.IsOpen)
+
+                        // ADR-0192 / issue #4301: a body-less method that also
+                        // carries `partial` is the DECLARING part of a partial
+                        // method that PartialMethodMerger could not pair with an
+                        // implementing part — it has already been reported with
+                        // GS0602 (or GS0603). It reaches here only as error
+                        // recovery, so the symbol stays abstract (the body
+                        // binder must still skip the absent body) but GS0388 is
+                        // suppressed: the user's mistake is the missing
+                        // implementation, not a missing `open`.
+                        if ((!methodSyntax.IsOpen || !structSymbol.IsOpen) && !methodSyntax.IsPartial)
                         {
                             Diagnostics.ReportAbstractMethodRequiresOpenClass(
                                 methodSyntax.Identifier.Location,
@@ -2593,8 +2603,15 @@ internal sealed partial class DeclarationBinder
                     // (absent) body and the emitter writes the ImplMap row. A
                     // bodyless `shared` method that is NOT a P/Invoke is reported
                     // with GS0325, mirroring the top-level free-function path.
+                    // ADR-0192 / issue #4301: `&& !methodSyntax.IsPartial` — a
+                    // body-less `partial func` inside `shared { }` is the
+                    // DECLARING part of a partial method, whose body legitimately
+                    // lives in another part. If no implementing part was found,
+                    // PartialMethodMerger has already reported GS0602/GS0603;
+                    // GS0325 ("only @DllImport functions may use a ';' body
+                    // marker") would be a misleading second error.
                     var isStaticPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(methodSymbol, methodSyntax, Diagnostics);
-                    if (!isStaticPInvoke && methodSyntax.HasSemicolonBody)
+                    if (!isStaticPInvoke && methodSyntax.HasSemicolonBody && !methodSyntax.IsPartial)
                     {
                         Diagnostics.ReportSemicolonBodyRequiresDllImport(methodSyntax.Identifier.Location, methodSymbol.Name);
                     }

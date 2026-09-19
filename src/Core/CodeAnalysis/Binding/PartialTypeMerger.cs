@@ -67,6 +67,19 @@ internal static class PartialTypeMerger
             result.Add(MergeStructGroup(group, diagnostics));
         }
 
+        // ADR-0192 / issue #4301: with every type's parts now concatenated into
+        // one declaration, the declaring and implementing parts of each
+        // `partial func` are two entries in the same member list — collapse
+        // them into one. Runs over EVERY declaration, not just merged ones: a
+        // lone `partial class` may carry both parts of a method itself, and a
+        // NON-partial type carrying a `partial func` is the GS0601 case the
+        // parser cannot detect (the aggregate's own `partial` token is attached
+        // only after its member list has been parsed).
+        foreach (var declaration in result)
+        {
+            PartialMethodMerger.Normalize(declaration, diagnostics);
+        }
+
         return result;
     }
 
