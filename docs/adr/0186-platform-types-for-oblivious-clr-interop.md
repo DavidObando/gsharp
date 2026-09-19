@@ -29,6 +29,40 @@
   [#3501](https://github.com/DavidObando/gsharp/issues/3501); PR
   [#4308](https://github.com/DavidObando/gsharp/pull/4308) (`fix/4287-nullable-clr-instance-call-receiver`)
 
+> ## Baseline: what is on `main`, and what is not
+>
+> **PR #4308 is closed and unmerged.** `git merge-base --is-ancestor
+> origin/fix/4287-nullable-clr-instance-call-receiver origin/main` is false, and
+> none of `IsImportedClrChainReceiver`, `ExtensionDeclaresNilableReceiver` or
+> `ImportedReceiverParameterAdmitsNil` exists on `main`. The name
+> `nullableInnerVt` *does* exist on main
+> (`ExpressionBinder.Calls.Invocation.cs:3706`) but belongs to an unrelated
+> value-type `Nullable<T>` path; the `IsValueType: false` block this ADR discusses
+> is branch-only.
+>
+> **What `main` actually has** is a single-arm carve-out
+> (`ExpressionBinder.Access.MemberLookup.cs:941–946`):
+>
+> ```csharp
+> private static bool CanBindClrInstanceMember(BoundExpression? receiver)
+> {
+>     return receiver?.Type?.ClrType != null
+>         && (receiver.Type is not NullableTypeSymbol
+>             || receiver is BoundClrPropertyAccessExpression);
+> }
+> ```
+>
+> **This ADR is written against `main`**, and the structural diagnosis below is
+> derived from that one-arm predicate. PR #4308's thirteen commits are cited
+> throughout as *the evidence trail* — the catalogue of what each additional arm
+> cost and what it broke — not as the code being edited. Where a section discusses
+> deleting or keeping branch-only code, it is stated as conditional on that branch
+> landing first; see *Implementation impact*, which gives both baselines.
+>
+> The diagnosis does not weaken under the correct baseline. A one-arm proxy for a
+> metadata fact is still a proxy; PR #4308 is simply the measurement of how many
+> arms it grows when pushed, and of what the growth costs.
+
 ## Context
 
 ### What ADR-0136 decided, and what it cost
@@ -91,23 +125,31 @@ or from the absence of information in imported metadata?* — **is not in the
 type**. `NullableTypeSymbol` cannot tell the two apart; its constructor takes
 `underlyingType.ClrType` directly, so for an imported type its `ClrType` is
 never null and the pre-#4287 fallback never fired. So the binder reconstructs
-the answer, at every use site, from the *shape of the bound receiver node*:
+the answer from the *shape of the bound receiver node*. On `main` that
+reconstruction is one arm:
 
 ```csharp
-private static bool IsImportedClrChainReceiver(BoundExpression receiver)
-{
-    return receiver is BoundClrPropertyAccessExpression
-        or BoundImportedInstanceCallExpression
-        or BoundImportedCallExpression
-        or BoundClrStaticCallExpression;
-}
+// ExpressionBinder.Access.MemberLookup.cs:941-946 (main)
+return receiver?.Type?.ClrType != null
+    && (receiver.Type is not NullableTypeSymbol
+        || receiver is BoundClrPropertyAccessExpression);
 ```
 
-A four-arm `is`-pattern over bound node kinds is a *proxy* for a fact about
-metadata. It is wrong whenever a fifth node kind appears (failure mode 1, fixed
-by adding three arms), and it is unavailable wherever the node in question has no
-syntax (failure mode 3) or is the wrong syntactic spelling of the same path
-(failure mode 4). The combinatorial surface is (every receiver shape) × (every
+`receiver is BoundClrPropertyAccessExpression` is a *proxy* for "this `?` came
+from oblivious CLR metadata." It is a good proxy for the case it was written for
+and silently wrong for every other node kind that carries the same fact. PR
+#4308's first correction (failure mode 1) grew it to four arms —
+`BoundImportedInstanceCallExpression`, `BoundImportedCallExpression`,
+`BoundClrStaticCallExpression` — because a chained *call* result carries
+metadata-origin nullability exactly as a property read does, and the one-arm
+predicate could not see it.
+
+That is the shape of the whole problem: the predicate is wrong whenever a new
+node kind appears (failure mode 1), unavailable wherever the node has no syntax
+(failure mode 3), and blind to the fact that the same path spelled differently is
+the same path (failure mode 4). Nothing bounds the number of arms, because
+nothing connects them — each is an independently-remembered answer to a question
+the type could have answered once. The combinatorial surface is (every receiver shape) × (every
 access kind: read, call, index, `foreach`, method group) × (every binding path:
 own surface, inherited CLR, interface, extension, imported extension, delegate,
 constrained), and there is no invariant tying the cells together — only
@@ -140,23 +182,30 @@ no carve-out predicate to get wrong, no chain to track, no field-vs-property
 distinction, no extension-vs-instance interaction — because nothing is being
 proved.
 
-### One fact about gsc's emit that shapes the design
+### Two facts about gsc's emit that shape the design
 
-`gsc` already emits `callvirt` for every instance call and property access
-through a reference-typed receiver (`MethodBodyEmitter.Calls.cs`,
-`MethodBodyEmitter.MemberAccess.cs`: `receiverIsClass || receiverIsInterface ?
-ILOpCode.Callvirt : ILOpCode.Call`), and `ldfld` for a field read. The CLR
-performs a null check on the receiver of all three, at that exact IL offset, in
-the *caller's* frame.
+**First: the runtime mechanism already exists.** `!!` lowers to a real check —
+`dup; brtrue; pop; newobj NullReferenceException; throw`
+(`MethodBodyEmitter.Operators.cs`) — so nothing new has to be invented to insert
+one.
 
-This matters twice. First, `!!` already lowers to a real runtime check
-(`dup; brtrue; pop; newobj NullReferenceException; throw`), so the runtime
-mechanism this ADR needs already exists in the emitter. Second — and this is what
-keeps the design small — **a member access on a platform-typed receiver needs no
-inserted check**, because the CLR performs an identical check at an identical
-point. The inserted assertion is needed exactly where the CLR gives you nothing:
-a static call taking the value as an argument (an extension receiver is one), a
-store into a slot declared non-null, and a return.
+**Second: gsc's receiver-opcode selection is narrower than "reference type", and
+that bounds what this design may assume.** The emitter chooses `callvirt` by
+literal symbol-kind tests:
+
+```csharp
+var receiverIsClass = access.Receiver.Type is StructSymbol rs && rs.IsClass;
+var receiverIsInterface = access.Receiver.Type is InterfaceSymbol;
+```
+
+A *wrapped* receiver type (`NullableTypeSymbol`, and so `PlatformTypeSymbol`)
+fails both, as do `string`, `Array`, and imported types that are not
+`StructSymbol{IsClass:true}`. Four families therefore emit `call` and perform no
+receiver nil check at all. An earlier draft of this ADR built a receiver
+*exemption* on the assumption that the CLR always checks; §4 records that claim,
+its falsification, and the honest rule that replaces it. The short version: the
+check goes in at every coercion including receivers, and the CLR's own check is a
+reason to **elide** where it provably fires, not to specify an exemption.
 
 ## Decision
 
@@ -277,9 +326,12 @@ majority of cs2gs's argument-position assertions.
 
 **Type unification** (ternary branches, `??` results, inferred array elements,
 generic inference): the least upper bound of `T!` and `T` is `T!`; of `T!` and
-`T?` is `T?`; of `T!` and `T!` is `T!`. Platform-ness is absorbed by an explicit
-annotation in either direction, which is the conservative choice — an explicit
-statement always beats the absence of one.
+`T?` is `T?`; of `T!` and `T!` is `T!`. The governing principle is that **an
+explicit statement always beats the absence of one** — so unifying with an
+explicit `T?` yields `T?`, while unifying with a `T` (whose non-nullness is
+asserted only for *that* branch, and says nothing about the platform branch)
+must stay `T!` rather than silently promoting an unknown to a guarantee. Note
+this is deliberately *not* symmetric absorption: `T?` wins, `T` does not.
 
 **Type inference for an unannotated binding**: `let s = obliviousCall()` gives
 `s` type `string!`. Platform-ness propagates through inference exactly as
@@ -320,8 +372,7 @@ when a platform value is:
 - **returned** from a function whose declared return type is non-null;
 - the operand of `!!` (which *is* the explicit spelling of this conversion);
 - used where the language requires a non-null reference: a `throw` operand, a
-  `lock`/`sync` subject, a `foreach`/`range` source, a `switch`/`case` scrutinee
-  of a non-null-typed pattern.
+  `lock`/`sync` subject, a `foreach`/`range` source.
 
 And a check is **not** inserted when a platform value is:
 
@@ -329,25 +380,69 @@ And a check is **not** inserted when a platform value is:
   no conversion to non-null occurs, so interop-to-interop flow costs nothing;
 - bound by `let x = …` with no explicit type — `x` is `T!`, no conversion;
 - compared to `nil`, tested by `if let`, or traversed by `?.` (§6);
-- **the receiver of an instance member access, call, or indexer** (§5).
+- **the scrutinee of a type pattern.** A type pattern against a nil scrutinee
+  **does not match**; it does not throw. `case s string:` on a nil `string!`
+  falls through to the next arm, exactly as C#'s `is T` and Kotlin's `is T` do
+  for a null subject, and exactly as G# already does for a `T?` scrutinee. A
+  pattern test is a *question about* the value, not a use of it as non-null, so
+  it is not a `T! → T` conversion at all. The binding a matching pattern
+  introduces is non-null because the match succeeded, not because anything was
+  checked.
+- **the receiver of an instance member access, call, or indexer** — but this one
+  is *conditional*, and the condition is not currently met. See below.
 
-#### Why the receiver is exempt, and why that is not a carve-out
+#### The receiver exemption is conditional, and its condition does not hold today
 
-A receiver exemption looks exactly like the thing this ADR exists to delete, so
-it needs its justification stated precisely. It is this: **gsc emits `callvirt`
-for an instance call or property access through a reference receiver and `ldfld`
-for a field read, and the CLR performs an identical nil check on the receiver at
-that identical IL offset in the caller's frame.** Inserting a G# check ahead of
-it would duplicate a check that already exists, at the same place, with the same
-outcome. The exemption is *deferral to an existing check*, provable from the emit
-shape, not a judgment about which receiver shapes are safe. It is stated once, in
-one place, and it is falsifiable: if gsc ever emitted `call` for a reference
-receiver, the exemption would be wrong and the check would be required.
+An earlier draft of this ADR claimed the receiver exemption was *provable from
+the emit shape*: gsc emits `callvirt`/`ldfld` for a reference receiver, the CLR
+checks it at the same IL offset in the same frame, so a G# check would be pure
+duplication. **That claim is false as stated, and an adversarial review falsified
+it by enumerating the emitter's opcode-selection sites.** The correction is
+recorded here rather than quietly dropped, because the original claim is exactly
+the kind of "stated once, in one place, falsifiable" reasoning this ADR asks
+readers to trust.
 
-The two receiver positions the CLR does **not** check are already covered by the
-argument rule above: an **extension** receiver (a static call — argument 0) and a
-**constrained** call through a type parameter that turns out to be a reference
-type. Both are `T! → T` argument conversions, both are checked.
+What the emitter actually tests is not "is this a reference type":
+
+```csharp
+// MethodBodyEmitter.MemberAccess.cs:1002, 1007 (main)
+var receiverIsClass = access.Receiver.Type is StructSymbol rs && rs.IsClass;
+var receiverIsInterface = access.Receiver.Type is InterfaceSymbol;
+…
+this.il.OpCode(receiverIsClass || receiverIsInterface ? ILOpCode.Callvirt : ILOpCode.Call);
+```
+
+Both are literal symbol-kind tests. A `NullableTypeSymbol`- or
+`PlatformTypeSymbol`-**wrapped** receiver type fails both, and so do `string`,
+`Array`, and any imported type that is not a `StructSymbol{IsClass:true}`. The
+review found four families that emit `call` — and therefore perform **no** nil
+check — today: a wrapper-typed property receiver, non-virtual event accessors,
+`string`/`Array` receivers, and method-group capture. (The wrapper-typed property
+case is a real, reachable, pre-existing bug independent of this ADR — it also
+silently drops virtual dispatch — and is filed separately as #4312.)
+
+So the honest rule is:
+
+> **Instance-member receivers get the check, the same as every other `T! → T`
+> coercion.** The CLR's own check on a `callvirt`/`ldfld` receiver makes the
+> inserted check *redundant where it fires*, which is a reason to **elide** it
+> as an optimization (§4's elision paragraph), not a reason to specify an
+> exemption.
+
+An exemption may be re-derived later, and should be, because the redundant checks
+are pure cost. Its prerequisite is that the emitter's opcode selection be unified
+onto a single "is this receiver a reference at runtime" predicate that sees
+through type wrappers — that is #4312/#4313's work, not this ADR's. Until then
+the exemption is a performance optimization gated on a correctness fix, and
+writing it into the specification would make the design's safety depend on an
+emit property that four known code paths violate.
+
+Two receiver positions would need the check even under a future exemption, and
+are already covered by the argument rule above: an **extension** receiver (a
+static call — argument 0, where the CLR checks nothing) and a **constrained**
+call through a type parameter. The constrained case is wrong in the *safe*
+direction — a check there is redundant rather than missing — which is acceptable
+and worth noting only so a reader does not mistake it for a hole.
 
 #### What the check emits
 
@@ -378,31 +473,52 @@ optimization, not a semantic rule, and it reuses the redundancy knowledge GS0536
 already has.
 
 A compiler switch `--platform-nil-checks=off` suppresses insertion for
-measurement and for builds that accept the trade. It is **on** by default, and
-turning it off restores exactly today's behaviour at those boundaries: a nil
-reaches library code and fails there.
+measurement and for builds that accept the trade. It is **on** by default.
+Turning it off is **strictly weaker than either the old or the new model**, and
+should be described that way: today many of those sites are compile *errors*, and
+with checks off they are neither an error nor a check — the nil simply travels
+until something else notices. It is a measurement and escape-hatch switch, not a
+supported mode.
 
 ### 5. Member access on a platform receiver: the lookup invariant
 
-> **The invariant.** Member lookup, overload resolution and extension resolution
-> on a receiver of type `T!` run against `T`, and produce **exactly** the binding
-> they would produce for a receiver of type `T`.
+The invariant has **two clauses**, and both are load-bearing. An earlier draft
+stated only the first, which constrains *which member is selected* but says
+nothing about *what type the expression has afterwards*.
 
-This is the single mechanism that replaces the whole carve-out system, and it is
-the property that makes failure mode 5 unrepresentable. A receiver's
-platform-ness cannot influence *which member is chosen* — it cannot, because the
-lookup never sees it. An instance member wins over an extension by the ordinary
-priority rule; `List[int32]!.Reverse()` binds `List<T>.Reverse` because
-`List[int32].Reverse()` does; `string!.Trim()` binds `string.Trim` because
-`string.Trim()` does.
+> **5a — Selection.** Member lookup, overload resolution and extension resolution
+> on a receiver of type `T!` run against `T`, and select **exactly** the member
+> they would select for a receiver of type `T`.
+>
+> **5b — Result type.** The resulting expression's type is **exactly** the type
+> it would have for a receiver of type `T`, with the callee's own declared
+> nullability applied. Unwrapping `T!` for lookup must not degrade a symbolic or
+> generic-substituted projection to an erased one.
 
-The receiver is passed through unchanged (§4's receiver exemption); the CLR
-checks it. The result type carries the callee's *own* declared nullability: an
+**5a** is the mechanism that replaces the carve-out system and makes failure mode
+5 unrepresentable: a receiver's platform-ness cannot influence which member is
+chosen, because the lookup never sees it. An instance member wins over an
+extension by the ordinary priority rule; `List[int32]!.Reverse()` binds
+`List<T>.Reverse` because `List[int32].Reverse()` does; `string!.Trim()` binds
+`string.Trim` because `string.Trim()` does.
+
+**5b** is the clause an implementer will get wrong by default, and it has a
+named hazard. `GetImportedTypeSymbol` is a *closed switch* over receiver type
+symbols with no `PlatformTypeSymbol` arm; reached with one, it falls through to
+the erased answer, which would silently drop symbolic projection at its **11 call
+sites** — turning `Queue[Entry]!.Dequeue()` from `Entry` into an erased CLR
+mapping. The fix is to unwrap `T!` to `T` *before* type resolution runs, on the
+same path that resolution already uses, rather than teaching each consumer about
+the wrapper. (This is adjacent to, but distinct from, pre-existing bug #4314: this
+one is a gap this ADR introduces if the unwrap is placed too late.)
+
+The result type then carries the callee's *own* declared nullability: an
 oblivious member's result is `T!`, an annotated nullable member's result is `T?`,
 an annotated non-null member's result is `T`. Chains therefore compose with no
 chain-tracking predicate at all — `s.ToUpper().Trim()` is `string! → string!`,
 and the intermediate needs no syntax, no `BoundNode` kind check, and no
-threading of `receiverSyntax`.
+threading of `receiverSyntax`. The receiver itself is passed through unchanged
+and checked per §4.
 
 ### 6. Narrowing, nil comparison, and the existing operators
 
@@ -612,12 +728,29 @@ impact claim and an inflated one.
 
 #### The headline, stated conservatively
 
-**Roughly 8,300–8,600 lines are attributable to the oblivious-promotion model and
-become deletable; roughly 1,900 lines of gsc-narrowing compensation survive any
-nullability model.** The claim is checkable before any code is written: every
-`ReceiverNeedsNullForgiveness` rule already records a distinct
+**Total nullability surface in cs2gs is roughly 10,300–10,700 lines. The split
+between deletable and surviving is an estimate that has already moved once under
+review, and should be measured rather than quoted.**
+
+The current best estimate is **~7,000–7,300 deletable** against **~3,300–3,600
+surviving**. An earlier draft of this ADR said 8,300–8,600 / ~1,900, and was
+wrong on the surviving side by roughly 2×, for one instructive reason: it
+conflated *"lives in `ObliviousNullabilityAnalyzer.cs`"* with *"is oblivious
+machinery."* That file also hosts **~1,150–1,250 lines that serve nullable-enabled
+C#** — the `<auto-generated/>` evidence family, `HasAllowNullWriteContract`,
+`HasNullDataRowArgument` — which this ADR's own bucket-(b) list separately claims
+survives. Both claims cannot hold; the file-level attribution was the wrong one.
+The same draft counted 11 of `ReceiverNeedsNullForgiveness`'s 13 rules as bucket
+(a); the correct count is **9**, since rules 3 and 4 are the
+`GuardedFieldLocalCapture` family and are narrowing compensation.
+
+The lesson generalises: **an impact estimate derived by reading gates and file
+boundaries is not a measurement, and this one has now been wrong once in the
+direction that flatters the proposal.** The claim is checkable before any code is
+written — every `ReceiverNeedsNullForgiveness` rule already records a distinct
 `NullForgivenessTelemetry` key, so one corpus run gives the real per-rule `!!`
-counts and divides them between the buckets. **Run that first.**
+counts and divides them between the buckets. **Run that before quoting any figure
+in a planning document, and treat the numbers above as provisional until then.**
 
 The self-migration `nullAssertionCeiling` becomes a shrinking metric rather than
 a corpus-size-tracking one. This is the headline verification signal: the
@@ -686,8 +819,12 @@ to member lookup, so it cannot select a different member.** The same argument
 gives `string!.Trim()` the type `string` via `string.Trim`, never
 `ReadOnlySpan<char>` via `MemoryExtensions`. A platform receiver never reaches
 the probe at all, so there is nothing for the probe to get wrong. **The gate
-itself is not deleted**: a G#-declared `List[int32]?` still reaches the probe and
-still needs `ExtensionDeclaresNilableReceiver` to reject `Enumerable.Reverse`.
+itself is not deleted, and is not widened**: a G#-declared `List[int32]?` still
+reaches the probe and still needs `ExtensionDeclaresNilableReceiver` — testing
+`is NullableTypeSymbol`, *not* `or PlatformTypeSymbol` — to reject
+`Enumerable.Reverse`. (This presumes PR #4308's gate lands; on `main` today it
+does not exist, and the miscompile is reachable for a G#-declared `T?` receiver
+independently of this ADR.)
 What this design removes is the entire *population* of receivers whose
 nullability came from metadata — which is where the miscompile was found and
 where it could never have been reasoned about, because nobody stated the fact the
@@ -710,14 +847,28 @@ requires a decision about how far the change should reach.
 
 ### Deleted
 
+**Binder — against `main`'s baseline** (the only baseline that is certain):
+
 | Location | What goes |
 | --- | --- |
-| `ExpressionBinder.Access.MemberLookup.cs` | `IsImportedClrChainReceiver` in full; the `is not NullableTypeSymbol \|\| …` disjunct of `CanBindClrInstanceMember` reverts to the plain non-nullable test. |
-| `ExpressionBinder.Calls.Invocation.cs` | **One condition**: the `&& !CanBindClrInstanceMember(receiver)` conjunct guarding PR #4308's `nullableInnerVt is { IsValueType: false }` block. The block **body stays** — see below. |
-| cs2gs `ObliviousNullabilityAnalyzer.cs` | The whole file — 5,385 lines: the `IsTainted` fixpoint, its three taint domains, ~40 edge collectors, and cross-project remapping. |
-| cs2gs `ConditionalNotNullPostcondition.cs` | The whole file — 185 lines; it exists only to feed that fixpoint. |
-| cs2gs `…Translator.Nullability.cs` | ~1,400 of 1,790 lines: `ShouldPromoteToNullableReference`'s taint/EF/pure-forwarding arms, the `Promote*` family, the shared-document/positional-record taint plumbing, and `TargetWillRemainNonNullableReference`'s imported-oblivious arm. |
-| cs2gs `…Translator.Expressions.cs` | ~1,500–1,700 lines: 11 of `ReceiverNeedsNullForgiveness`'s 13 rules, both oblivious arms of `ReceiverIsNullableReferenceFieldOrProperty`, `ReceiverValueIsPromotedNullable`, `ReceiverValueIsObliviouslyReadAnnotatedResult`, and the imported-oblivious mirror predicates. |
+| `ExpressionBinder.Access.MemberLookup.cs:941–946` | The `\|\| receiver is BoundClrPropertyAccessExpression` disjunct of `CanBindClrInstanceMember`. It reverts to the plain non-nullable test, because a `PlatformTypeSymbol` receiver is not a `NullableTypeSymbol` and never enters the branch the disjunct exists to rescue. **That is the entire binder deletion on main: one disjunct.** |
+
+**Binder — additionally, *if* PR #4308 lands first** (it is closed and unmerged;
+none of these symbols exists on `main`):
+
+| Location | What goes |
+| --- | --- |
+| `ExpressionBinder.Access.MemberLookup.cs` | `IsImportedClrChainReceiver` in full — the four-arm successor to main's one-arm disjunct. |
+| `ExpressionBinder.Calls.Invocation.cs` | **One condition**: the `&& !CanBindClrInstanceMember(receiver)` conjunct guarding the `nullableInnerVt is { IsValueType: false }` block. The block **body stays** — see *Kept*. |
+
+**cs2gs** (all on `main`):
+
+| Location | What goes |
+| --- | --- |
+| `ObliviousNullabilityAnalyzer.cs` | The `IsTainted` fixpoint, its three taint domains, ~40 edge collectors, and cross-project remapping — **most, but not all, of the file's 5,385 lines**. See the bucket note below: ~1,150–1,250 lines in this file serve nullable-*enabled* C# and survive. |
+| `ConditionalNotNullPostcondition.cs` | The whole file — 185 lines; it exists only to feed that fixpoint. |
+| `…Translator.Nullability.cs` | `ShouldPromoteToNullableReference`'s taint/EF/pure-forwarding arms, the `Promote*` family, the shared-document/positional-record taint plumbing, and `TargetWillRemainNonNullableReference`'s imported-oblivious arm. |
+| `…Translator.Expressions.cs` | **9 of `ReceiverNeedsNullForgiveness`'s 13 rules**, both oblivious arms of `ReceiverIsNullableReferenceFieldOrProperty`, `ReceiverValueIsPromotedNullable`, `ReceiverValueIsObliviouslyReadAnnotatedResult`, and the imported-oblivious mirror predicates. |
 | cs2gs pipeline | The whole-repository compilation load `TranslationContext` documents as existing *"purely for this taint lookup."* |
 
 ### Simplified
@@ -729,11 +880,18 @@ requires a decision about how far the change should reach.
   receiver — which, under §2, is now always a source-declared or
   annotated-nullable `T?`. That is a simplification of the condition, not of the
   body.
-- `ExtensionDeclaresNilableReceiver` /
-  `ImportedReceiverParameterAdmitsNil`: the test widens to
-  `is NullableTypeSymbol or PlatformTypeSymbol`, since an oblivious imported
-  extension's `this` parameter now surfaces as `T!` rather than `T?`. The gate
-  itself is unchanged and still load-bearing.
+- `ExtensionDeclaresNilableReceiver` / `ImportedReceiverParameterAdmitsNil`
+  (branch-only): **unchanged — the test stays `is NullableTypeSymbol`.** An
+  earlier draft proposed widening it to
+  `is NullableTypeSymbol or PlatformTypeSymbol`, which was wrong and re-admitted
+  failure mode 5: a **G#-declared** `List[int32]?` receiver against an
+  **oblivious-assembly** extension would pass the widened gate and bind the wrong
+  method again — commit `359538cd`'s exact shape. It also contradicted §3's
+  governing principle, *an explicit statement always beats the absence of one*.
+  An oblivious author declared *nothing* about nil, which is not a declaration
+  that nil is welcome. Commit `359538cd`'s own rationale for admitting oblivious
+  extensions was that "unannotated metadata surfaces as `T?`" — under §2 it no
+  longer does, so that rationale evaporates rather than transferring.
 - `NullAssertionPolishPass` (549 lines): same code, far less input; retire only if
   measurement supports it, since bucket-(b) speculation still needs it.
 - `DiagnosticBag.ReportUnableToFindFunction`'s nullable-`receiverName` overload:
@@ -768,12 +926,16 @@ to do. This is worth stating precisely, because a careless reading of "delete th
 - The extension probe's *purpose* — `func (s string?) OrEmpty() string` must stay
   callable on a `string?` without narrowing — is unchanged.
 - All of ADR-0069 / ADR-0071 / ADR-0073 narrowing, unchanged.
-- On the cs2gs side, the whole of bucket (b) — ~1,900 lines (§10).
+- On the cs2gs side, the whole of bucket (b) — ~3,300–3,600 lines (§10),
+  including the ~1,150–1,250 lines *inside* `ObliviousNullabilityAnalyzer.cs`
+  that serve nullable-enabled C# and must be preserved when that file's fixpoint
+  is removed. The file is not deleted wholesale; it is gutted.
 
 So the accurate claim is: **the bug class is eliminated** — no site anywhere
 reconstructs metadata origin from a bound-node shape, because the type carries it
-— and the large line-count win is on the cs2gs side, at roughly 8,300–8,600
-lines. The binder's win is structural rather than numeric.
+— and the large line-count win is on the cs2gs side, provisionally ~7,000–7,300
+lines pending the telemetry measurement (§10). The binder's win is structural
+rather than numeric: on `main`'s baseline it is **one disjunct**.
 
 ### Cost the implementer must budget for
 
@@ -850,7 +1012,7 @@ This ADR changes **nothing** about G#'s own nullability story:
   nothing** — an extension receiver, an argument, a store, a return — instead of
   an `ArgumentNullException` several frames inside a library.
 - **cs2gs gets dramatically simpler and, more importantly, *exact*.** A
-  5,385-line whole-program fixpoint that guesses is replaced by a per-position
+  whole-program fixpoint that guesses (most of a 5,385-line file) is replaced by a per-position
   read of the annotation state the C# compiler itself used — local, exact, and
   identical in every compilation that asks. The migration pipeline also stops
   loading every compilation in the repository on every run.
@@ -896,9 +1058,11 @@ This ADR changes **nothing** about G#'s own nullability story:
   positions × four annotation states — remains the standing uniformity gate. Its
   expected column changes in the oblivious row and nowhere else, which is a
   precise, mechanical statement of this ADR's entire metadata-reading change.
-- Emitted IL grows by the inserted checks. The receiver exemption (§4) keeps
-  this small: the checks land at coercion boundaries, not at every interop
-  member access.
+- Emitted IL grows by the inserted checks, and by **more** than an earlier draft
+  claimed, since §4's receiver exemption did not survive review: receivers are
+  checked too, with the CLR's own check making many of them elidable only once
+  the emitter's opcode selection is unified (#4312/#4313). Sizing this is part of
+  step 2's measurement, not an assumption.
 
 ## Alternatives considered
 
@@ -962,27 +1126,33 @@ Ordered by how much a wrong answer would cost.
    default, trading language surface for output noise. **Scrutinise this
    section first.**
 
-2. **Call-site coercion vs. callee-entry checks, and self-migration test
-   parity.** With call-site checks, an *oblivious* test project calling an
-   *enabled* production function with a nil argument throws
-   `NullReferenceException` at the call site — where today it reaches the callee,
-   which may have an `ArgumentNullException` guard that the test is deliberately
-   exercising. ADR-0155 A8 documents exactly that pattern (`f(null!)` in tests).
-   This is a concrete self-migration parity risk with a known shape, it is not
-   hypothetical, and I have not measured how many tests it touches. It may argue
-   for excluding a throw-guard-argument position from the coercion check, which
-   would be an unprincipled carve-out and should be resisted — more likely it
-   argues for keeping the check and updating those tests.
+2. **`nil` from an oblivious scope into an enabled non-null parameter has no
+   translation, and this is a missing case rather than a timing risk.** §3's
+   table gives `nil → T!`, which covers an oblivious sink. It does **not** cover
+   an *oblivious caller* passing `nil` to an *enabled* callee's non-null `T`
+   parameter — and that is precisely ADR-0155 A8's `f(null!)` pattern, which
+   post-migration test projects (deliberately oblivious, per A5) use to exercise
+   `ArgumentNullException` guards in enabled production code. Under this ADR as
+   written there is simply no rule for it: `nil → T` is still an error, and `!!`
+   cannot bridge a literal `nil` (A9). Three candidate answers, none chosen here:
+   permit `nil → T` from an oblivious scope with a check at the boundary; require
+   those tests to route through a `T!`-typed local; or accept that such tests must
+   be rewritten. **This subsumes the earlier draft's "call-site vs. callee-entry"
+   framing, which treated it as a parity risk to measure rather than a hole in the
+   conversion table.** The volume is still unmeasured.
 
-3. **The receiver exemption in §4.** I argue it is deferral to the CLR's own
-   `callvirt`/`ldfld` check rather than a carve-out, and I believe that is
-   right — but it is the one place in the design where a reader could reasonably
-   say "you deleted a carve-out and added one." The claim rests on an emit fact
-   (`receiverIsClass || receiverIsInterface ? Callvirt : Call`) that I verified by
-   reading `MethodBodyEmitter.Calls.cs` / `.MemberAccess.cs` but did not verify
-   exhaustively across every receiver-emitting path. **Someone should enumerate
-   every path that emits an instance-member access and confirm none emits `call`
-   for a reference receiver.** If one does, that path needs the check.
+3. ~~**The receiver exemption in §4.**~~ **Settled — the exemption was wrong, and
+   §4 now says so.** An adversarial review enumerated the emitter's
+   opcode-selection sites and falsified the claim: `receiverIsClass` is
+   `is StructSymbol rs && rs.IsClass` and `receiverIsInterface` is
+   `is InterfaceSymbol`, so a *wrapped* receiver type, `string`, `Array`,
+   non-virtual event accessors and method-group capture all emit `call` with **no**
+   nil check today. The exemption is now specified as a *future optimization*
+   whose prerequisite is unifying that opcode selection (#4312/#4313), not as a
+   property the design may rely on. Recorded rather than deleted because it is a
+   worked example of the failure mode this ADR warns about: a rule that is
+   "provable from the emit shape, stated once, in one place" is worth exactly as
+   much as the enumeration behind it, and mine had not been done.
 
 4. **Type-argument flexibility (§3).** `Box[string!]` assignable to and from
    `Box[string]` and `Box[string?]` is Kotlin's rule and erases to one CLR type,
@@ -1012,26 +1182,29 @@ Ordered by how much a wrong answer would cost.
    is what the same code shape already produces for an instance call), but it is a
    judgment call.
 
-8. **A contradiction inside cs2gs's own justification, which may make one more
-   rule deletable.** `ShouldPromoteToNullableReference`'s tail rule (#1072,
-   "promote a symbol used as nullable in local syntax") is justified at
-   `Nullability.cs:38–41` on the grounds that *"gsc only permits `== nil` on a
-   nullable operand, otherwise GS0129"* — but `Nullability.cs:158–161`, in the
-   same file, states that *"gsc admits `x == nil` / `x != nil` on a bare
-   reference class."* Both cannot be current. If the second is, rule 8 may be
-   unnecessary today, independently of this ADR. I could not settle it from
-   source and it should be settled by a test, not by reading. It matters here
-   because rule 8 is the largest piece of `ShouldPromoteToNullableReference` that
-   this ADR classifies as *surviving*.
+8. ~~**A contradiction inside cs2gs's own justification…**~~ **Settled
+   empirically, and the conclusion reverses.** An earlier draft flagged that
+   `ShouldPromoteToNullableReference`'s tail rule (#1072) is justified at
+   `Nullability.cs:38–41` by *"gsc only permits `== nil` on a nullable operand"*
+   while `Nullability.cs:158–161` says *"gsc admits `x == nil` on a bare reference
+   class"*, and speculated the rule might therefore be unnecessary. **That
+   speculation is unsafe and is withdrawn.** The GS0129 argument covers only the
+   *comparison* half of what the rule protects; nil **assignment** — `x = nil`,
+   `??=`, declarator and property initializers — is gated independently and
+   remains load-bearing. The two comments are both about comparison and only one
+   of them is stale; the rule stays in bucket (b) regardless. Fixing the stale
+   comment is worth an issue; deleting the rule is not.
 
-9. **The ~8,300-line cs2gs deletion figure is an estimate, not a measurement.**
-   The bucket (a)/(b) split was derived by reading gates and rule tables, and the
-   boundary inside `Expressions.cs` in particular is a judgment call at the
-   ±200-line level. The figure is independently checkable before implementation:
-   every `ReceiverNeedsNullForgiveness` rule already records a distinct
-   `NullForgivenessTelemetry` key, so one corpus run produces the true per-rule
-   `!!` distribution. **Do that run before quoting the number anywhere it
-   matters.**
+9. **The cs2gs line-count split is an estimate that has already been wrong once,
+   in the flattering direction.** An earlier draft said ~8,300–8,600 deletable /
+   ~1,900 surviving; review corrected it to ~7,000–7,300 / ~3,300–3,600, chiefly
+   because file-level attribution (`ObliviousNullabilityAnalyzer.cs`) was
+   conflated with role-level attribution — ~1,150–1,250 lines in that file serve
+   nullable-*enabled* C#. Total surface (~10,300–10,700) was about right both
+   times, which is exactly why the total is the safe thing to quote and the split
+   is not. Every `ReceiverNeedsNullForgiveness` rule already records a distinct
+   `NullForgivenessTelemetry` key. **Run that corpus measurement before any figure
+   enters a planning document.**
 
 10. **Overload re-selection on a G#-declared `G(string)` / `G(string?)` pair.**
     §3's tie-break changes which one `G(obliviousCall())` picks. I judged this
@@ -1043,19 +1216,59 @@ Ordered by how much a wrong answer would cost.
     alternative is to make a `T!` argument ambiguous against such a pair and
     require disambiguation.
 
-11. **The binder change is one condition, not one block.** PR #4308's
-    `nullableInnerVt` block **must not be deleted** — it is the only path that
-    reports GS0159 for `this.name.ToUpper()` on a G#-declared `string?`, because
-    `NullableTypeSymbol.ClrType` is non-null and the older fallback never fires
-    (`b7856060`'s root cause). Only its `CanBindClrInstanceMember` conjunct goes.
-    I have stated this in three places because it is the single easiest way to
-    reintroduce #4287 while believing you are implementing this ADR, and a
-    reviewer should check that the implementing PR's diff matches.
+11. **The binder change is one condition, not one block — and only if that block
+    exists.** On `main` the deletion is a single disjunct
+    (`|| receiver is BoundClrPropertyAccessExpression`); PR #4308's
+    `nullableInnerVt is { IsValueType: false }` block is **branch-only** and not
+    on `main` at all, so this item applies only in the world where that branch
+    lands first. In that world the block **must not be deleted** — it is the only
+    path reporting GS0159 for `this.name.ToUpper()` on a G#-declared `string?`,
+    because `NullableTypeSymbol.ClrType` is non-null and the older fallback never
+    fires (`b7856060`'s root cause). Only its `CanBindClrInstanceMember` conjunct
+    goes. Stated in several places because it is the single easiest way to
+    reintroduce #4287 while believing you are implementing this ADR; a reviewer
+    should check the implementing PR's diff against whichever baseline is real at
+    that time.
 
-12. **The `Amended by` back-reference on ADR-0136.** Following the
-   ADR-0058/ADR-0184 precedent, ADR-0136 should gain
-   `**Amended by**: ADR-0186 — §2's oblivious row and §3's emit`. This ADR does
-   not make that edit; it is a one-line follow-up.
+12. **§9 covers declaration *signatures* only, and that is corpus-wide
+    insufficient.** The oblivious-scope mechanism as specified governs types,
+    functions, properties, fields, events and parameters. cs2gs also renders
+    **explicitly-typed locals**, and §9 says nothing about them — nor about `out`
+    parameters, `foreach` variables, lambda parameters, or catch and pattern
+    variables. Every one of those is a position where cs2gs writes a type today.
+    This is not an edge case to discover during implementation; it is a
+    substantial extension of §9's surface, and either the scope rule must reach
+    every type-writing position uniformly (preferable — it is the same rule) or
+    §9 must say explicitly which positions it does not cover and what cs2gs emits
+    there instead.
+
+13. **Conformance boundaries have no check point, and this pivot does not close
+    them.** Interface implementation, delegate conversion and generic-constraint
+    substitution are *signature relations*, not value conversions, so there is no
+    expression at which a `T! → T` check could be inserted. A platform value can
+    therefore reach a non-null position by implementing an interface whose member
+    is declared `T`, or by conversion to a delegate whose signature says `T`, with
+    zero check. **Kotlin has the identical hole**, which is evidence that it is
+    inherent to the category rather than a defect in this rendering of it — but
+    the ADR should not be read as claiming it closes every gap ADR-0136 cared
+    about. It closes the *expression-level* ones, which is where all six failure
+    modes lived, and leaves the conformance-level ones open. Callee-entry checks
+    (Alternative 4) would close them; that is their strongest argument and is
+    recorded here rather than in the alternative's own paragraph because this is
+    the concrete cost of not taking it.
+
+14. **The test surface is unaccounted-for scope, and it is larger than the
+    production code being deleted.** Roughly **20,000–25,000 lines of
+    `Cs2Gs.Tests`** reference the taint/oblivious machinery. One fixture —
+    `Issue4167SelfHostedEnumPatternRegressionTests.cs:105` — is keyed on
+    `ObliviousNullabilityAnalyzer.cs` existing *by name*, so it breaks the moment
+    that file is gutted regardless of behaviour. None of this appears in
+    *Implementation impact*, which discusses production lines only. Size it before
+    committing to a schedule.
+
+15. **The `Amended by` back-reference on ADR-0136** — *done*: ADR-0136 now carries
+    `**Amended by**: [ADR-0186] — §2's oblivious row … and §3's emit rule`,
+    following the ADR-0058/ADR-0184 precedent.
 
 ## Recommendation
 
@@ -1072,19 +1285,40 @@ Suggested sequencing, each step independently landable and green:
    behind `--nullability=platform-types` defaulting **off**. No behaviour change
    when off; the differential test (ADR-0136's
    `Issue3705MemberKindNullabilityDifferentialTests`) gains its third column.
-2. §3 conversions, §5 lookup projection, §6 operator acceptance, and §4's
-   coercion check. Land the §5 mutation witness (the `Reverse` differential) with
-   this step — it is the invariant the whole design rests on.
-3. Delete `IsImportedClrChainReceiver` and the `CanBindClrInstanceMember`
-   conjunct guarding PR #4308's block — **keeping the block body**, which now
-   runs for every `NullableTypeSymbol` receiver. Verify the #4287 regression
+2. §3 conversions, §5a **and §5b**, §6 operator acceptance, and §4's coercion
+   check. Land the §5 mutation witness with this step — it is the invariant the
+   whole design rests on — and note that the witness must assert **both** clauses:
+   that a `List[int32]` and a `List[int32]!` receiver select the *same method* and
+   produce the *same mutation*, **and** that a symbolic/generic-substituted call
+   (`Queue[Entry]!.Dequeue()`) keeps the *same result type* it has for a
+   `Queue[Entry]` receiver. A witness that checks only selection passes while
+   §5b is broken.
+3. **Flip `--nullability=platform-types` on by default.** This step exists and
+   must be named: while the flag is off, oblivious positions are still `T?`, so
+   performing step 4's deletion first would transiently reinstate failure mode 1
+   (`Environment.Version.ToString()` reporting GS0159 again, with main's
+   property-read carve-out removed and nothing replacing it). The flip is the
+   point at which the new model becomes load-bearing and the old carve-out becomes
+   dead code — in that order, never the reverse.
+4. Delete the old carve-out — on `main`'s baseline, the
+   `|| receiver is BoundClrPropertyAccessExpression` disjunct; additionally
+   `IsImportedClrChainReceiver` and the `CanBindClrInstanceMember` conjunct if PR
+   #4308 landed first, **keeping that block's body**. Verify the #4287 regression
    suite still reports on G#-declared `string?` receivers, and that the
    `ListReverse` / `StringTrim` gate witnesses from `359538cd` stay green for a
    source-declared `List[int32]?`.
-4. §9's oblivious scope and §8's emit; verify the three-valued round-trip.
-5. cs2gs: switch to the per-position Roslyn read, delete the fixpoint and the
+5. §9's oblivious scope — **covering every type-writing position, not only
+   declaration signatures (open question 12)** — and §8's emit; verify the
+   three-valued round-trip.
+6. cs2gs: switch to the per-position Roslyn read, gut the fixpoint (**preserving
+   the enabled-C# rules that share its file**), remove the oblivious half of the
    forgiveness insertion, re-baseline `nullAssertionCeiling`, and run the full
    self-migration gate. **This step is the real verification**: the corpus must
-   stay at its `greenFloor` while the assertion count falls sharply.
-6. Optional: GS0592, and retire `NullAssertionPolishPass` if measurement supports
+   stay at its `greenFloor` while the assertion count falls sharply. Budget the
+   `Cs2Gs.Tests` surface (open question 14) here, not as a surprise.
+7. Optional: GS0592, and retire `NullAssertionPolishPass` if measurement supports
    it.
+
+Before step 1, two cheap measurements that change the plan's numbers rather than
+its shape: the `NullForgivenessTelemetry` corpus run (open question 9), and a
+count of the `Cs2Gs.Tests` references (open question 14).
