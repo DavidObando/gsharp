@@ -3442,27 +3442,40 @@ internal sealed partial class ExpressionBinder
         }
 
         var memberName = member.IdentifierToken.ValueText;
-        if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
-        {
-            // Issue #4331 (base-field-access): the nearest GSharp base declares
-            // a plain FIELD (not a property) of this name. Fields are never
-            // virtually dispatched, so this needs no non-virtual distinction —
-            // it produces the exact same BoundFieldAccessExpression an ordinary
-            // `this.Field`/`obj.Field` read would, just rooted at the resolved
-            // base type rather than the most-derived one, so a field the
-            // derived class shadows still reads the base's own storage.
-            if (searchBase != null
-                && TypeMemberModel.TryGetFieldIncludingInherited(searchBase, memberName, MemberQuery.Instance(MemberKinds.Field), out var baseField, out var baseFieldDeclaringType)
-                && GetEffectiveThisParameter() is { } fieldReadThisParameter)
-            {
-                if (!AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function))
-                {
-                    Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, baseField.Name, baseFieldDeclaringType.Name, baseField.Accessibility);
-                }
 
-                return new BoundFieldAccessExpression(member, new BoundVariableExpression(null, fieldReadThisParameter), baseFieldDeclaringType, baseField);
+        // Issue #4331 (base-field-access), Copilot review round (PR #4334):
+        // field-before-property precedence, mirroring the ordinary
+        // (non-`base.`) lookup order in
+        // ExpressionBinder.Access.MemberLookup.cs — TryGetFieldIncludingInherited
+        // is checked, and returned on success, BEFORE TryGetProperty is even
+        // attempted there. That is NOT "nearest declaration wins regardless
+        // of kind": TryGetProperty below walks searchBase's ENTIRE hierarchy
+        // for a property before ever returning false, so this field check
+        // must run first and unconditionally — nesting it inside
+        // `!TryGetProperty(...)` let a same-named property on a DISTANT
+        // ancestor incorrectly win over a field the IMMEDIATE base declares
+        // (the bug the field-before-property regression test below covers).
+        //
+        // Fields are never virtually dispatched, so this needs no
+        // non-virtual distinction — it produces the exact same
+        // BoundFieldAccessExpression an ordinary `this.Field`/`obj.Field`
+        // read would, just rooted at the resolved base type rather than the
+        // most-derived one, so a field the derived class shadows still
+        // reads the base's own storage.
+        if (searchBase != null
+            && TypeMemberModel.TryGetFieldIncludingInherited(searchBase, memberName, MemberQuery.Instance(MemberKinds.Field), out var baseField, out var baseFieldDeclaringType)
+            && GetEffectiveThisParameter() is { } fieldReadThisParameter)
+        {
+            if (!AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, baseField.Name, baseFieldDeclaringType.Name, baseField.Accessibility);
             }
 
+            return new BoundFieldAccessExpression(member, new BoundVariableExpression(null, fieldReadThisParameter), baseFieldDeclaringType, baseField);
+        }
+
+        if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
+        {
             // Issue #3501: `base.M` used as a method GROUP (an argument, a
             // `let` initializer, …) — the base declares a METHOD, not a
             // property. Bind the group over `this` with non-virtual dispatch
@@ -3580,35 +3593,39 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
+        // Issue #4331 (base-field-access), Copilot review round (PR #4334):
+        // field-before-property precedence — see the read-side twin in
+        // BindBaseClassPropertyRead for why this must run BEFORE, and
+        // unconditionally on, the TryGetProperty check below (that call
+        // walks searchBase's entire hierarchy for a property before
+        // returning false, so nesting this field check inside it would let
+        // a distant ancestor's same-named property beat an immediate base's
+        // field).
+        if (searchBase != null
+            && TypeMemberModel.TryGetFieldIncludingInherited(searchBase, memberName, MemberQuery.Instance(MemberKinds.Field), out var baseField, out var baseFieldDeclaringType))
         {
-            // Issue #4331 (base-field-access): the nearest GSharp base declares
-            // a plain FIELD (not a property). See the read-side twin in
-            // BindBaseClassPropertyRead for the "fields are never virtually
-            // dispatched" rationale.
-            if (searchBase != null
-                && TypeMemberModel.TryGetFieldIncludingInherited(searchBase, memberName, MemberQuery.Instance(MemberKinds.Field), out var baseField, out var baseFieldDeclaringType))
+            if (!AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function))
             {
-                if (!AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function))
-                {
-                    Diagnostics.ReportMemberInaccessible(memberLocation, baseField.Name, baseFieldDeclaringType.Name, baseField.Accessibility);
-                }
-
-                if (baseField.IsReadOnly)
-                {
-                    Diagnostics.ReportCannotAssign(equalsLocation, memberName);
-                    return new BoundErrorExpression(null);
-                }
-
-                var baseFieldConverted = conversions.BindConversion(valueLocation, value, baseField.Type);
-                if (GetEffectiveThisParameter() is not { } fieldWriteThisParameter)
-                {
-                    return new BoundErrorExpression(null);
-                }
-
-                return new BoundFieldAssignmentExpression(value.Syntax, fieldWriteThisParameter, baseFieldDeclaringType, baseField, baseFieldConverted);
+                Diagnostics.ReportMemberInaccessible(memberLocation, baseField.Name, baseFieldDeclaringType.Name, baseField.Accessibility);
             }
 
+            if (baseField.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(equalsLocation, memberName);
+                return new BoundErrorExpression(null);
+            }
+
+            var baseFieldConverted = conversions.BindConversion(valueLocation, value, baseField.Type);
+            if (GetEffectiveThisParameter() is not { } fieldWriteThisParameter)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundFieldAssignmentExpression(value.Syntax, fieldWriteThisParameter, baseFieldDeclaringType, baseField, baseFieldConverted);
+        }
+
+        if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
+        {
             // Issue #1260: no GSharp base declares the property — fall back to the
             // imported/BCL base type so `base.Prop = value` writes the inherited
             // member non-virtually.

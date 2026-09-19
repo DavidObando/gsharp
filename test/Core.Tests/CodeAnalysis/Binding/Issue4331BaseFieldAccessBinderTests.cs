@@ -75,6 +75,63 @@ Console.WriteLine(d.Bump())
     }
 
     [Fact]
+    public void BaseField_NearerFieldBeatsFartherProperty_ReadAndWrite()
+    {
+        // Copilot review, PR #4334: TryGetProperty walks searchBase's ENTIRE
+        // ancestor chain before ever returning false, so nesting the field
+        // fallback inside `!TryGetProperty(...)` let a same-named PROPERTY on
+        // a DISTANT ancestor (Grandparent) win over a FIELD the IMMEDIATE
+        // base (Parent, i.e. searchBase itself) declares -- the opposite of
+        // the field-before-property precedence the ordinary (non-`base.`)
+        // lookup already follows (ExpressionBinder.Access.MemberLookup.cs).
+        // `base.X` from Derived must resolve to Parent's FIELD, never
+        // Grandparent's property.
+        var source = @"
+import System
+
+open class Grandparent {
+    var backing int32 = 111
+    prop X int32 {
+        get -> backing
+        set { backing = value }
+    }
+}
+
+open class Parent : Grandparent {
+    protected var X int32 = 1
+}
+
+class Derived : Parent {
+    func RoundTrip() int32 {
+        base.X = 42
+        return base.X
+    }
+
+    // ADR-0091/#1104's explicit base-selector form independently probes
+    // Grandparent's PROPERTY specifically (bypassing the nearest-base
+    // resolution `base.X` uses), so this must stay at its untouched initial
+    // value -- proving `base.X` above never went anywhere near it.
+    func GrandparentPropertyValue() int32 -> base[Grandparent].X
+}
+
+var d = Derived{}
+Console.WriteLine(d.RoundTrip())
+Console.WriteLine(d.GrandparentPropertyValue())
+";
+        var result = EmittedOracle.Evaluate(source);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+
+        // `base.X` must resolve to Parent's FIELD (round-trips to 42) while
+        // Grandparent's PROPERTY (backed by `backing`) stays completely
+        // untouched at its initial value 111 -- if this ever regresses back
+        // to resolving `base.X` against Grandparent's property instead, this
+        // second line would read 42, not 111.
+        Assert.Equal(
+            "42" + System.Environment.NewLine + "111" + System.Environment.NewLine,
+            result.Output);
+    }
+
+    [Fact]
     public void BaseField_UnrelatedName_StillDiagnosticGS0384()
     {
         // Regression guard: the new field fallback must not swallow a

@@ -354,32 +354,72 @@
       <Output TaskParameter="AnalyzersToAdd" ItemName="GsharpAnalyzer" />
     </ResolveTargetingPackAssets>
 
-    <!-- Mirrors the standard SDK's ResolveOffByDefaultAnalyzers (Microsoft.
-         NET.Sdk.FrameworkReferenceResolution.targets), which removes
-         RequestDelegateGenerator/ConfigurationBindingGenerator from @(Analyzer)
-         unless their opt-in switch is set — but for a DIFFERENT reason here:
-         Microsoft.Interop.LibraryImportGenerator backs `[LibraryImport]`,
-         which gsc already implements natively end-to-end (ADR-0092's
-         PInvokeBinder synthesizes the P/Invoke wrapper directly at bind time;
-         `@LibraryImport(...) func ... ;` is a complete declaration, not a
-         partial awaiting an externally-generated part). Letting gsgen ALSO
-         run the real generator against the same trigger would be a second,
-         independent implementation of the same member with no coordination
-         between the two — remove it here rather than risk that collision.
-         Microsoft.Interop.ComInterfaceGenerator (`[GeneratedComInterface]`)
-         and Microsoft.Interop.JavaScript.JSImportGenerator have no gsc-native
-         equivalent (confirmed empirically — no binder references either
-         attribute) and Microsoft.Interop.SourceGeneration is shared interop
-         infrastructure those two depend on, so all three are left resolvable. -->
-    <ItemGroup>
-      <_GsharpNativelyImplementedAnalyzer Include="@(GsharpAnalyzer)" Condition="'%(GsharpAnalyzer.AssemblyName)' == 'Microsoft.Interop.LibraryImportGenerator'" />
-      <GsharpAnalyzer Remove="@(_GsharpNativelyImplementedAnalyzer)" />
-    </ItemGroup>
-
-    <!-- Union in analyzers the user added directly (rare for .gsproj, but honor
-         the standard @(Analyzer) item group like csc does). -->
+    <!-- Union ALL analyzer sources — NuGet (above), targeting-pack (above),
+         AND any user-supplied @(Analyzer) item — BEFORE filtering anything
+         out. Filtering earlier (i.e. before this union) would only ever
+         cover the resolved-task output, not a user item that names the same
+         assembly directly; a user's own <Analyzer Include="...
+         LibraryImportGenerator.dll"> would then bypass the exclusion below
+         entirely (Copilot review, PR #4334). -->
     <ItemGroup>
       <GsharpAnalyzer Include="@(Analyzer)" />
+    </ItemGroup>
+
+    <!-- Apply both filters once, over the full unioned set, keyed on the
+         well-known/intrinsic %(FileName) metadata (populated for EVERY item
+         in EVERY list — including a plain user <Analyzer Include="..."/>,
+         which carries no task-supplied AssemblyName metadata at all — unlike
+         AssemblyName, which only resolved-task output items carry). This is
+         the same metadata key the standard SDK's own ResolveOffByDefaultAnalyzers
+         (below) matches on.
+
+         1. Mirrors ResolveOffByDefaultAnalyzers itself (Microsoft.NET.Sdk.
+            FrameworkReferenceResolution.targets): that target's Remove only
+            ever touches @(Analyzer) — the STANDARD, default-language
+            (ProjectLanguage=$(Language), i.e. "Gsharp") invocation's output,
+            captured above into @(GsharpAnalyzer) — but our SECOND (C#)
+            invocation of the same task, immediately above, feeds its
+            AnalyzersToAdd into that same @(GsharpAnalyzer) item list SEPARATELY
+            and is never touched by ResolveOffByDefaultAnalyzers regardless of
+            target execution order, since that target only ever names
+            @(Analyzer). So RequestDelegateGenerator/ConfigurationBindingGenerator
+            get their own off-by-default removal here, gated the identical
+            way (EnableRequestDelegateGenerator/EnableConfigurationBindingGenerator)
+            as defense in depth for THIS item list — empirically, on the SDK
+            version this was verified against (10.0.401 / ref pack 10.0.12),
+            ResolveTargetingPackAssets's own AnalyzersToAdd output already
+            excludes both regardless of this filter's presence, for a reason
+            unrelated to ResolveOffByDefaultAnalyzers (not yet root-caused —
+            possibly a Roslyn/analyzer-API-version compatibility check inside
+            the task itself); this filter still matters if that upstream
+            behavior ever changes, or on an SDK version where it doesn't hold.
+
+         2. Microsoft.Interop.LibraryImportGenerator backs `[LibraryImport]`,
+            which gsc already implements natively end-to-end (ADR-0092's
+            PInvokeBinder synthesizes the P/Invoke wrapper directly at bind
+            time; `@LibraryImport(...) func ... ;` is a complete declaration,
+            not a partial awaiting an externally-generated part). Letting
+            gsgen ALSO run the real generator against the same trigger would
+            be a second, independent implementation of the same member with
+            no coordination between the two — remove it, unconditionally
+            (not gated by any opt-in switch, unlike (1)).
+            Microsoft.Interop.ComInterfaceGenerator (`[GeneratedComInterface]`)
+            and Microsoft.Interop.JavaScript.JSImportGenerator have no
+            gsc-native equivalent (confirmed empirically — no binder
+            references either attribute) and Microsoft.Interop.SourceGeneration
+            is shared interop infrastructure those two depend on, so all
+            three are left resolvable. -->
+    <ItemGroup>
+      <!-- IsEnabled="false" (never 'true') makes the LibraryImportGenerator
+           removal below unconditional, via the exact same Remove/Condition/
+           MatchOnMetadata mechanism as the two opt-in-gated entries — rather
+           than a separate literal-string Remove, whose comparison semantics
+           against a computed %(FileName) (extension-stripped from a real
+           .dll path) are not worth relying on being exactly equivalent. -->
+      <_GsharpOffByDefaultAnalyzer Include="Microsoft.AspNetCore.Http.RequestDelegateGenerator.dll" IsEnabled="$(EnableRequestDelegateGenerator)" />
+      <_GsharpOffByDefaultAnalyzer Include="Microsoft.Extensions.Configuration.Binder.SourceGeneration.dll" IsEnabled="$(EnableConfigurationBindingGenerator)" />
+      <_GsharpOffByDefaultAnalyzer Include="Microsoft.Interop.LibraryImportGenerator.dll" IsEnabled="false" />
+      <GsharpAnalyzer Remove="@(_GsharpOffByDefaultAnalyzer)" Condition="'%(_GsharpOffByDefaultAnalyzer.IsEnabled)' != 'true'" MatchOnMetadata="FileName" />
     </ItemGroup>
 
     <Message Importance="Low" Text="gsgen: resolved analyzers: @(GsharpAnalyzer)" />
