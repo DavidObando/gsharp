@@ -455,7 +455,7 @@ public sealed class ReferenceResolver : IDisposable
 
     /// <summary>
     /// Resolves the references supplied to a driver and appends the bundled
-    /// Gsharp.Extensions and Gsharp.Runtime.Channels assemblies when they are
+    /// Gsharp.Extensions, Gsharp.Runtime.Channels, and Gsharp.Runtime.Values assemblies when they are
     /// available.
     /// </summary>
     /// <param name="referencePaths">Explicit reference paths.</param>
@@ -476,6 +476,7 @@ public sealed class ReferenceResolver : IDisposable
 
         AppendBundledPath(paths, FindBundledExtensionPath(AppContext.BaseDirectory));
         AppendBundledPath(paths, FindBundledChannelsRuntimePath(AppContext.BaseDirectory));
+        AppendBundledPath(paths, FindBundledValuesRuntimePath(AppContext.BaseDirectory));
         return paths;
     }
 
@@ -1272,6 +1273,9 @@ public sealed class ReferenceResolver : IDisposable
         // the SDK NuGet under tools/channels/.
         return FindBundledRuntimePath(baseDirectory, "Gsharp.Runtime.Channels.dll", "Gsharp.Runtime.Channels", "channels");
     }
+
+    internal static string? FindBundledValuesRuntimePath(string baseDirectory)
+        => FindBundledRuntimePath(baseDirectory, "Gsharp.Runtime.Values.dll", "Gsharp.Runtime.Values", "values");
 
     private ImmutableHashSet<string> BuildNamespaceIndex()
     {

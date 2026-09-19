@@ -37,6 +37,7 @@
          bootstrap can and must reference it — Gsharp.Extensions' own .gs
          sources use channels once ADR-0174 Phase 4 lands `merge`/`after`. -->
     <GsharpChannelsRuntimeAssemblyFullPath Condition=" '$(GsharpChannelsRuntimeAssemblyFullPath)' == '' ">$(GsharpBootstrapBinDir)Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.dll</GsharpChannelsRuntimeAssemblyFullPath>
+    <GsharpValuesRuntimeAssemblyFullPath Condition=" '$(GsharpValuesRuntimeAssemblyFullPath)' == '' ">$(GsharpBootstrapBinDir)Gsharp.Runtime.Values\Gsharp.Runtime.Values.dll</GsharpValuesRuntimeAssemblyFullPath>
 
     <!-- Take ownership of CoreCompile; the only dependency is the standard
          _ComputeNonExistentFileProperty helper. -->
@@ -58,6 +59,9 @@
        consumer SDK (build/Gsharp.NET.Sdk.props). -->
   <ItemGroup Condition="Exists('$(GsharpChannelsRuntimeAssemblyFullPath)')">
     <_ExplicitReference Include="$(GsharpChannelsRuntimeAssemblyFullPath)" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(GsharpValuesRuntimeAssemblyFullPath)')">
+    <_ExplicitReference Include="$(GsharpValuesRuntimeAssemblyFullPath)" />
   </ItemGroup>
 
   <!-- Issue #1666: same property-only-change hazard as
