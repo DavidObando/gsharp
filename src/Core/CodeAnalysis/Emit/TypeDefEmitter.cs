@@ -7,6 +7,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
@@ -198,6 +199,7 @@ internal sealed class TypeDefEmitter
         this.EmitStructConstFields(structSym, ref firstField);
         this.EmitStructStaticPropertyBackingFields(structSym, ref firstField);
         this.EmitStructStaticEventBackingFields(structSym, ref firstField);
+        this.EmitStructGeneratedRegexBackingFields(structSym, ref firstField);
         EnsureStructFirstField(firstFieldRow, ref firstField);
 
         var (typeAccessibility, structNamespace) = this.ResolveStructNamespaceAndAccessibility(structSym);
@@ -469,6 +471,42 @@ internal sealed class TypeDefEmitter
             }
 
             this.cache.StructFieldDefs[ev.BackingField] = backingHandle;
+        }
+    }
+
+    private void EmitStructGeneratedRegexBackingFields(StructSymbol structSym, ref FieldDefinitionHandle firstField)
+    {
+        // ADR-0187 / issue #4301: emit backing FieldDefs for `@GeneratedRegex`
+        // functions — always `static` regardless of whether the annotated
+        // function itself is static or an instance method (the compiled
+        // pattern has no per-instance state; see GeneratedRegexBinder).
+        // Mirrors EmitStructStaticPropertyBackingFields immediately above.
+        foreach (var method in structSym.Methods.Concat(structSym.StaticMethods))
+        {
+            if (!method.IsGeneratedRegex || method.GeneratedRegexBackingField is not { } backingField)
+            {
+                continue;
+            }
+
+            if (this.cache.StructFieldDefs.ContainsKey(backingField))
+            {
+                continue;
+            }
+
+            var sigBlob = new BlobBuilder();
+            this.encodeTypeSymbol(new BlobEncoder(sigBlob).FieldSignature(), backingField.Type);
+            var attrs = AccessibilityMap.MapFieldAccessibility(backingField.Accessibility) | FieldAttributes.Static;
+
+            var backingHandle = this.emitCtx.Metadata.AddFieldDefinition(
+                attributes: attrs,
+                name: this.emitCtx.Metadata.GetOrAddString(backingField.Name),
+                signature: this.emitCtx.Metadata.GetOrAddBlob(sigBlob));
+            if (firstField.IsNil)
+            {
+                firstField = backingHandle;
+            }
+
+            this.cache.StructFieldDefs[backingField] = backingHandle;
         }
     }
 

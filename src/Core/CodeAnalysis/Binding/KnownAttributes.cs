@@ -914,6 +914,59 @@ internal static class KnownAttributes
 
     /// <summary>
     /// Returns <c>true</c> when <paramref name="clrType"/> is
+    /// <see cref="System.Text.RegularExpressions.GeneratedRegexAttribute"/>.
+    /// ADR-0187 / issue #4301: <c>@GeneratedRegex(...)</c> is a third
+    /// attribute discriminator on a bodyless <c>func</c> declaration,
+    /// alongside <c>@DllImport</c>/<c>@LibraryImport</c> — the forward
+    /// compatibility ADR-0086 §1 and ADR-0092 promised for exactly this
+    /// kind of consumer. Recognition is type-identity based so renaming or
+    /// shadowing the source-level name cannot bypass the rule.
+    /// </summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute is <c>[GeneratedRegex]</c>.</returns>
+    public static bool IsGeneratedRegex(Type? clrType)
+    {
+        return clrType.IsSameAs(typeof(System.Text.RegularExpressions.GeneratedRegexAttribute));
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="attribute"/> is
+    /// <see cref="System.Text.RegularExpressions.GeneratedRegexAttribute"/>.
+    /// </summary>
+    /// <param name="attribute">A bound attribute application.</param>
+    /// <returns><c>true</c> when the attribute is <c>[GeneratedRegex]</c>.</returns>
+    public static bool IsGeneratedRegex(BoundAttribute? attribute)
+    {
+        return IsGeneratedRegex(attribute?.AttributeType?.ClrType);
+    }
+
+    /// <summary>
+    /// Finds the first <c>@GeneratedRegex(...)</c> attribute on
+    /// <paramref name="attributes"/>, or <c>null</c> when none is present.
+    /// Recognition is type-identity based (ADR-0187 / issue #4301).
+    /// </summary>
+    /// <param name="attributes">The attributes attached to a function symbol.</param>
+    /// <returns>The matching attribute, or <c>null</c>.</returns>
+    public static BoundAttribute? FindGeneratedRegex(ImmutableArray<BoundAttribute> attributes)
+    {
+        if (attributes.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        foreach (var attr in attributes)
+        {
+            if (IsGeneratedRegex(attr))
+            {
+                return attr;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when <paramref name="clrType"/> is
     /// <see cref="System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute"/>.
     /// ADR-0095 / issue #761: delegate types passed to native callbacks
     /// must carry this attribute so the CLR records the unmanaged
@@ -1070,7 +1123,7 @@ internal static class KnownAttributes
     /// rows rather than a <c>CustomAttribute</c> row. The emitter elides
     /// these from the user-attribute pass to avoid producing a
     /// duplicate / misleading reflection view (ADR-0086 §6,
-    /// ADR-0092 §6, ADR-0093 §5, ADR-0096 §5, ADR-0084 §L5).
+    /// ADR-0092 §6, ADR-0093 §5, ADR-0096 §5, ADR-0084 §L5, ADR-0187).
     /// </summary>
     /// <param name="attribute">A bound attribute application.</param>
     /// <returns><c>true</c> when the attribute is pseudo-custom.</returns>
@@ -1081,7 +1134,8 @@ internal static class KnownAttributes
             || IsStructLayout(attribute)
             || IsFieldOffset(attribute)
             || IsMarshalAs(attribute)
-            || IsMethodImpl(attribute);
+            || IsMethodImpl(attribute)
+            || IsGeneratedRegex(attribute);
     }
 
     /// <summary>
