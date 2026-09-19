@@ -391,6 +391,65 @@ public sealed class NativeSliceLanguageTests
     }
 
     [Fact]
+    public void SourceAndClrStaticImportsWinOverNativeAliases()
+    {
+        using var fixture = new Fixture();
+        foreach (var name in new[] { "slice", "array" })
+        {
+            foreach (var kind in new[] { "field", "property", "method" })
+            {
+                var invocation = kind == "method" ? $"{name}[int32](42)" : $"{name}[index](41)";
+                var sourceMember = kind switch
+                {
+                    "field" => $"public var {name} []Func[int32, int32] = []Func[int32, int32]{{func(value int32) int32 {{ return value + 1 }} }}",
+                    "property" => $"private var items []Func[int32, int32] = []Func[int32, int32]{{func(value int32) int32 {{ return value + 1 }} }}\npublic prop {name} []Func[int32, int32] -> items",
+                    _ => $"public func {name}[T](value T) T {{ return value }}",
+                };
+                var source = $$"""
+                    package SourceStaticImports
+                    import System
+                    import SourceStaticImports.Registry
+                    class Registry {
+                        shared {
+                            {{sourceMember}}
+                        }
+                    }
+                    func Main() {
+                        let index = 0
+                        Console.WriteLine({{invocation}})
+                    }
+                    """;
+                var sourceDll = fixture.Compile(source, "SourceStaticImports", true);
+                IlVerifier.Verify(sourceDll);
+                Assert.Equal("42\n", fixture.Run(sourceDll));
+
+                var clrMember = kind switch
+                {
+                    "field" => $"public static Func<int, int>[] {name} = {{ value => value + 1 }};",
+                    "property" => $"public static Func<int, int>[] {name} => new Func<int, int>[] {{ value => value + 1 }};",
+                    _ => $"public static T {name}<T>(T value) => value;",
+                };
+                var libraryName = "StaticImports" + name + kind;
+                var library = fixture.CompileCSharp(
+                    $"using System;\nnamespace {libraryName};\npublic static class Registry {{ {clrMember} }}",
+                    libraryName);
+                var consumer = fixture.Compile(
+                    $$"""
+                    package ClrStaticImports
+                    import System
+                    import {{libraryName}}.Registry
+                    func Main() {
+                        let index = 0
+                        Console.WriteLine({{invocation}})
+                    }
+                    """, "ClrStaticImports", true, "/r:" + library);
+                IlVerifier.Verify(consumer, new[] { library });
+                Assert.Equal("42\n", fixture.Run(consumer));
+            }
+        }
+    }
+
+    [Fact]
     public void OrdinaryImportedAliasesArityAmbiguityAndReadonlyNeverFallBack()
     {
         using var fixture = new Fixture();

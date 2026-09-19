@@ -2827,8 +2827,10 @@ internal sealed partial class ExpressionBinder
             // bare identifier and the receiver really has a VALUE member of
             // this name — so a genuine unresolvable type argument on a generic
             // method still reports its own diagnostic.
+            var indexableOwner = receiver?.Type ?? classSymbol?.SymbolicReceiver
+                ?? (classSymbol == null ? null : TypeSymbol.FromClrType(classSymbol.ClassType));
             if (!IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList)
-                || receiver?.Type is not { } receiverType
+                || indexableOwner is not { } receiverType
                 || !HasCallableIndexableValueMember(receiverType, methodName))
             {
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);

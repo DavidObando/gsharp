@@ -2485,7 +2485,7 @@ internal sealed partial class ExpressionBinder
         {
             return !TypeMemberModel.GetMethods(type, headName, MemberQuery.InheritedStatic(MemberKinds.Method)).IsEmpty
                 || (type is StructSymbol structType
-                    && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structType)?.ClrType, headName));
+                    && BinderContext.ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structType)?.ClrType, headName));
         }
 
         return TypeMemberModel.LookupMember(
@@ -2493,7 +2493,7 @@ internal sealed partial class ExpressionBinder
             headName,
             MemberQuery.InheritedStatic(MemberKinds.Field | MemberKinds.Property)) != null
             || (type is StructSymbol nonCallStructType
-                && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(nonCallStructType)?.ClrType, headName));
+                && BinderContext.ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(nonCallStructType)?.ClrType, headName));
     }
 
     private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)
@@ -3823,7 +3823,7 @@ internal sealed partial class ExpressionBinder
         var ambiguous = false;
         foreach (var importedType in binderCtx.GetStaticImportTypes())
         {
-            if (!ImportedTypeExposesStaticMember(importedType, name))
+            if (!BinderContext.ImportedTypeExposesStaticMember(importedType, name))
             {
                 continue;
             }
@@ -3859,7 +3859,7 @@ internal sealed partial class ExpressionBinder
         var clrAmbiguous = false;
         foreach (var clrType in scope.EnumerateStaticImportClrTypes())
         {
-            if (!ClrTypeExposesStaticMember(clrType, name))
+            if (!BinderContext.ClrTypeExposesStaticMember(clrType, name))
             {
                 continue;
             }
@@ -3971,59 +3971,6 @@ internal sealed partial class ExpressionBinder
 
         return true;
     }
-
-    /// <summary>
-    /// Whether the referenced-assembly CLR <paramref name="type"/> declares a
-    /// <c>public static</c> field, property, or method named <paramref name="name"/>
-    /// — the imported-CLR analogue of <see cref="ImportedTypeExposesStaticMember"/>.
-    /// </summary>
-    private static bool ClrTypeExposesStaticMember(System.Type? type, string name)
-    {
-        if (type == null)
-        {
-            return false;
-        }
-
-        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public;
-        foreach (var m in ClrTypeUtilities.SafeGetMethods(type, flags))
-        {
-            if (ClrTypeUtilities.EmittedMemberNameMatches(m, name))
-            {
-                return true;
-            }
-        }
-
-        foreach (var p in ClrTypeUtilities.SafeGetProperties(type, flags))
-        {
-            if (ClrTypeUtilities.EmittedMemberNameMatches(p, name))
-            {
-                return true;
-            }
-        }
-
-        foreach (var f in ClrTypeUtilities.SafeGetFields(type, flags))
-        {
-            if (ClrTypeUtilities.EmittedMemberNameMatches(f, name))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Issue #1201: whether <paramref name="structSym"/> declares a <c>shared</c>
-    /// (static) field, property, or method named <paramref name="name"/> —
-    /// i.e. a member a type import would expose for unqualified reference.
-    /// </summary>
-    /// <param name="structSym">The imported type.</param>
-    /// <param name="name">The member name.</param>
-    /// <returns><c>true</c> when a matching static member exists.</returns>
-    private static bool ImportedTypeExposesStaticMember(StructSymbol structSym, string name)
-        => TypeMemberModel.TryGetStaticFieldIncludingInherited(structSym, name, out _, out _)
-            || TypeMemberModel.TryGetStaticPropertyIncludingInherited(structSym, name, out _, out _)
-            || !TypeMemberModel.GetMethods(structSym, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty;
 
     private BoundExpression BindUserTypeStaticMemberAccess(StructSymbol structSym, NameExpressionSyntax ne)
     {
