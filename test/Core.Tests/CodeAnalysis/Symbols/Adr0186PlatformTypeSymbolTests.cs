@@ -5,6 +5,7 @@
 #nullable enable
 
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Symbols.Display;
 using Xunit;
@@ -392,6 +393,51 @@ public class Adr0186PlatformTypeSymbolTests
         Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
             platform,
             TypeSymbol.Object));
+    }
+
+    /// <summary>
+    /// ADR-0186 §8 is step 5's work, and until it exists the emitter must
+    /// <b>refuse</b> a platform type rather than guess at one.
+    /// <para>
+    /// This is the one place where the cost of a missing arm is not a wrong
+    /// answer in memory but a wrong answer <em>in metadata</em>.
+    /// <c>NullableFlagsBuilder.Append</c> falls through to the CLR path for any
+    /// shape it does not recognise, which writes byte <c>1</c> — <b>non-null</b>
+    /// — and that is the worst possible encoding of "nobody said": it launders
+    /// an unknown into a guarantee that the next reader of the assembly has no
+    /// way to see through. ADR-0186 exists because exactly that conversion
+    /// happened once already.
+    /// </para>
+    /// <para>
+    /// The path is unreachable today (nothing produces a
+    /// <see cref="PlatformTypeSymbol"/> with the mode off). This test pins the
+    /// failure mode for the day it becomes reachable, and it is <em>expected to
+    /// be deleted</em> by step 5 when §8's emit shape is chosen and
+    /// round-tripped.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Emit_Refuses_A_Platform_Type_Rather_Than_Encoding_It_As_NonNull()
+    {
+        var platform = PlatformTypeSymbol.Get(TypeSymbol.String);
+
+        var direct = Assert.Throws<NotSupportedException>(
+            () => NullableFlagsBuilder.Build(platform));
+        Assert.Contains("ADR-0186", direct.Message);
+        Assert.Contains("string!", direct.Message);
+
+        // …and nested, where the fall-through would be quietest of all.
+        Assert.Throws<NotSupportedException>(
+            () => NullableFlagsBuilder.Build(SliceTypeSymbol.Get(platform)));
+
+        // The negative control: the shapes this builder does handle are
+        // untouched, so the guard is a new arm and not a new gate.
+        Assert.Equal(
+            new byte[] { 2 },
+            NullableFlagsBuilder.Build(NullableTypeSymbol.Get(TypeSymbol.String)).ToArray());
+        Assert.Equal(
+            new byte[] { 1 },
+            NullableFlagsBuilder.Build(TypeSymbol.String).ToArray());
     }
 
     /// <summary>

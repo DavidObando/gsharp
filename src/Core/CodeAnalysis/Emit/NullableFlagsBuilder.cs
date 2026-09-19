@@ -293,6 +293,36 @@ internal static class NullableFlagsBuilder
             return;
         }
 
+        if (type is PlatformTypeSymbol)
+        {
+            // ADR-0186 step 5 (§8) territory, deliberately NOT implemented here.
+            //
+            // Emitting an oblivious declaration as oblivious is the third value
+            // of §8's round-trip guarantee, and it needs a real decision — emit
+            // nothing at all (csc's own `#nullable disable` shape) or an
+            // explicit `[NullableContext(0)]` — plus the round-trip tests that
+            // pin whichever is chosen. None of that exists yet.
+            //
+            // What must NOT happen in the meantime is the silent answer. Every
+            // arm below either handles a wrapper explicitly or falls through to
+            // `AppendClrType`, which would write byte `1` — NON-NULL — for a
+            // `T!`. That is the worst possible encoding of "nobody said": it
+            // launders an unknown into a guarantee, in metadata, where the next
+            // reader has no way to tell it was a guess. ADR-0186 exists because
+            // that conversion happened once already.
+            //
+            // This path is unreachable today: `PlatformTypeSymbol` is produced
+            // only by `ClrNullability` under `--nullability=platform-types`,
+            // which defaults off. If it ever becomes reachable — step 5, or an
+            // accidental caller before then — failing here is strictly better
+            // than shipping a mis-encoded assembly.
+            throw new NotSupportedException(
+                $"Cannot emit nullable metadata for the platform type '{type.Name}': "
+                + "ADR-0186 §8's oblivious emit shape is step 5's work and is not "
+                + "implemented. A platform type must not reach the emitter while "
+                + "--nullability=platform-types is still an incomplete mode.");
+        }
+
         // Imported wrapper that already carries the C# DFS byte array — pass
         // physical flags through verbatim. An empty wrapper represents
         // absent/oblivious metadata; expand it using the importer's existing
