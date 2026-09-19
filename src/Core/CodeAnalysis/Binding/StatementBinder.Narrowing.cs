@@ -2222,7 +2222,13 @@ internal sealed partial class StatementBinder
                 var elemType = tupleType.ElementTypes[i];
                 var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, elemType);
                 var access = new BoundTupleElementAccessExpression(null, elementAccessBase, tupleType, i);
-                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
+
+                // LanguageServer fix: carry the real declaring identifier
+                // token as this declaration's Syntax (instead of null) so
+                // SemanticLookup.MatchBoundLocals's exact-reference match
+                // finds THIS declaration instead of falling back to a
+                // same-named symbol from an unrelated enclosing scope.
+                statements.Add(new BoundVariableDeclaration(identifiers[i], elemVar, access));
             }
 
             return statements.ToImmutable();
@@ -2251,7 +2257,10 @@ internal sealed partial class StatementBinder
                 var member = members[i];
                 var elemVar = bindLocalVariable(identifiers[i], isReadOnly: true, GetDeconstructionMemberType(member));
                 var access = BindDeconstructionMemberAccess(elementAccessBase, structType, member);
-                statements.Add(new BoundVariableDeclaration(null, elemVar, access));
+
+                // LanguageServer fix: see the matching comment in the tuple
+                // branch above.
+                statements.Add(new BoundVariableDeclaration(identifiers[i], elemVar, access));
             }
 
             return statements.ToImmutable();
