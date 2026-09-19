@@ -2984,6 +2984,11 @@ public sealed class Binder
         var body = lowered.PreEmitAnalysisBody ?? lowered;
         MethodGroupDiagnostics.ReportUnresolved(body, diagnostics);
         DefiniteAssignmentAnalyzer.Analyze(body, function, diagnostics);
+        if (function.IsAsyncOrSuspending)
+        {
+            new NativeSliceSuspensionAnalyzer(diagnostics).Visit(body);
+        }
+
         RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics);
     }
 
@@ -3920,6 +3925,46 @@ public sealed class Binder
             return MapTypeSymbol.Get(keyType, valueType);
         }
 
+        if (!syntax.HasQualifier && syntax.HasTypeArguments
+            && syntax.Identifier?.ValueText is "slice" or "array")
+        {
+            var arguments = syntax.TypeArguments!;
+            if (arguments.Count != 1)
+            {
+                Diagnostics.ReportNativeSliceType(syntax.Location, "slice[T] and array[T] require exactly one element type");
+                return null;
+            }
+
+            var bufferElement = BindTypeClause(arguments[0]);
+            if (bufferElement == null || bufferElement == TypeSymbol.Error)
+            {
+                return null;
+            }
+
+            if (syntax.Identifier.ValueText == "array")
+            {
+                return ApplyArraySuffix(syntax, SliceTypeSymbol.Get(bufferElement));
+            }
+
+            if (bufferElement == TypeSymbol.Void || bufferElement is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol
+                || TypeSymbol.IsByRefLike(bufferElement))
+            {
+                Diagnostics.ReportNativeSliceType(arguments[0].Location, "native slices require an ordinary heap-storable element type");
+                return null;
+            }
+
+            if (!NativeSliceTypes.TryResolveDefinition(scope.References, syntax.ReadOnlySliceModifier != null, out var definition))
+            {
+                Diagnostics.ReportNativeSliceRuntime(syntax.Location);
+                return null;
+            }
+
+            var symbolic = false;
+            var clrElement = ProjectGenericArgument(bufferElement, typeof(object), ref symbolic);
+            return ApplyArraySuffix(syntax, ImportedTypeSymbol.GetConstructed(
+                definition.MakeGenericType(clrElement), definition, ImmutableArray.Create(bufferElement)));
+        }
+
         if (syntax.IsChannel)
         {
             // ADR-0174 D2: `chan[T]` / `in chan[T]` / `out chan[T]`. The
@@ -4106,7 +4151,7 @@ public sealed class Binder
             try
             {
                 var closed = clrOpenType.MakeGenericType(clrArgs);
-                if (hasSymbolicArg)
+                if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _))
                 {
                     // #313 / #671: keep the symbolic type arguments alongside
                     // the type-erased closed CLR shape so call-site inference,
@@ -5138,7 +5183,7 @@ public sealed class Binder
         try
         {
             var closed = clrType.MakeGenericType(clrArgs);
-            if (hasSymbolicArg)
+            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _))
             {
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable());
             }
@@ -5403,7 +5448,7 @@ public sealed class Binder
         try
         {
             var closed = nestedDef.MakeGenericType(clrArgs);
-            if (hasSymbolicArg)
+            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _))
             {
                 return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable());
             }

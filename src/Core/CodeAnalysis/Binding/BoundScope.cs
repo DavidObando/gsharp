@@ -688,6 +688,11 @@ public sealed class BoundScope
     {
         type = null;
         ambiguity = null;
+        if (name == "slice" && arity == 1)
+        {
+            return NativeSliceTypes.TryResolveDefinition(References, readOnly: false, out type);
+        }
+
         if (arity <= 0)
         {
             return false;

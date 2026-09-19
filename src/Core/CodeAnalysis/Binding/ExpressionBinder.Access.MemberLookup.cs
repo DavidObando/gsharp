@@ -1417,6 +1417,11 @@ internal sealed partial class ExpressionBinder
             return BindRangeSlice(target, rangeSyntax, targetLocation);
         }
 
+        if (NativeSliceTypes.TryGetElement(target.Type, out _, out _))
+        {
+            return BindNativeSliceIndex(target, indexSyntax, boundIndexOverride);
+        }
+
         // Issue #1022: a from-end index (`a[^n]`) reads the single element
         // `length - n`.
         if (boundIndexOverride != null
@@ -1855,6 +1860,12 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(outerSyntax);
         }
 
+        if (NativeSliceTypes.TryGetElement(boundReceiver.Type, out _, out _)
+            && compoundOperatorToken != null && compoundRhsSyntax != null)
+        {
+            return BindNativeSliceCompoundAssignment(boundReceiver, indexSyntax, compoundOperatorToken, compoundRhsSyntax);
+        }
+
         var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
         var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, boundReceiver.Type);
         if (!scope.TryDeclareVariable(tempVar))
@@ -2220,6 +2231,11 @@ internal sealed partial class ExpressionBinder
             return BindExpression(
                 Invariant.Required(valueSyntax, "index assignments have a value expression"),
                 elementType);
+        }
+
+        if (NativeSliceTypes.TryGetElement(targetType, out var nativeElement, out _))
+        {
+            return BindNativeSliceAssignment(target, indexSyntax, BindValue(nativeElement), diagnosticLocation, boundIndexOverride);
         }
 
         if (boundIndexOverride != null
@@ -3144,6 +3160,11 @@ internal sealed partial class ExpressionBinder
             }
 
             return new BoundErrorExpression(null);
+        }
+
+        if (NativeSliceTypes.TryGetElement(target.Type, out _, out _))
+        {
+            return BindNativeSliceRange(target, range);
         }
 
         var arrayElement = GetArraySliceElementType(target.Type);

@@ -516,7 +516,9 @@ internal sealed partial class ExpressionBinder
 
         if (receiver is BoundDereferenceExpression dereference)
         {
-            return TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type);
+            return (TypeSymbol.IsUnmanagedPointer(dereference.Operand.Type)
+                    || dereference.Operand.Type is ByRefTypeSymbol)
+                && !RefCapabilities.IsReadOnlyReference(dereference.Operand);
         }
 
         // Issue #3292: an array/slice element is real storage — the emitter
@@ -2002,6 +2004,12 @@ internal sealed partial class ExpressionBinder
         EventSubscriptionExpressionSyntax syntax,
         SyntaxKind baseOpSyntaxKind)
     {
+        if (TrySaveNativeElementReceiver(boundReceiver, out var savedReceiver, out var prefix))
+        {
+            var assignment = TryBindChainedCompoundAssignment(structSym, savedReceiver, memberName, memberNameSyntax, syntax, baseOpSyntaxKind);
+            return assignment == null ? null : new BoundBlockExpression(syntax, prefix, assignment);
+        }
+
         var boundRhs = BindExpression(syntax.Value);
 
         // ADR-0112 A3: this-first base-chain instance field walk, using the
@@ -2141,6 +2149,12 @@ internal sealed partial class ExpressionBinder
         SyntaxKind baseOpSyntaxKind,
         bool includeInherited = false)
     {
+        if (TrySaveNativeElementReceiver(boundReceiver, out var savedReceiver, out var prefix))
+        {
+            var assignment = TryBindChainedClrCompoundAssignment(savedReceiver, clrReceiverType, memberName, memberNameSyntax, syntax, baseOpSyntaxKind, includeInherited);
+            return assignment == null ? null : new BoundBlockExpression(syntax, prefix, assignment);
+        }
+
         MemberInfo? instanceMember;
         if (includeInherited)
         {

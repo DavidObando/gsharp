@@ -2,6 +2,15 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Native slices (ADR-0190)
+
+| Code | Severity | Contract |
+| --- | --- | --- |
+| GS0600 | Error | Missing/incompatible `Gsharp.Runtime.Values` or pre-.NET-10 target; use the SDK's matching runtime. |
+| GS0601 | Error | Native slices require one ordinary heap-storable element type; sharing preserves element nullability and literals require positional elements. |
+| GS0602 | Error | A native element/value-field write cannot hold its selected location across suspension; evaluate the suspending value before selecting the element. |
+| GS0603 | Error | Cannot modify an element through `readonly slice[T]`; use a writable alias or explicit clone. |
+
 ## Severity levels
 
 | Level | Meaning |

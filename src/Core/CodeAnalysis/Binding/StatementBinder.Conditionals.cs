@@ -774,6 +774,11 @@ internal sealed partial class StatementBinder
             inner = unary.Operand;
         }
 
+        while (inner is BoundBlockExpression block)
+        {
+            inner = block.Expression;
+        }
+
         if (inner is BoundImportedCallExpression importedCall && importedCall.Type == TypeSymbol.Bool)
         {
             var (thenFrame, elseFrame) = ClassifyImportedBoolCallNarrowing(importedCall, negate);
@@ -1083,6 +1088,11 @@ internal sealed partial class StatementBinder
             && IsFlowTransparentConversion(conversion))
         {
             expression = conversion.Expression;
+        }
+
+        if (expression is BoundAddressOfExpression address)
+        {
+            expression = address.Operand;
         }
 
         if (expression.Type is not NullableTypeSymbol nullable)

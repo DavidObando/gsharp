@@ -507,6 +507,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.TypeClause;
 
+    /// <summary>Gets the contextual readonly modifier of a native slice type.</summary>
+    public SyntaxToken? ReadOnlySliceModifier { get; internal set; }
+
     /// <summary>Gets the opening bracket token, or <c>null</c> for non-array types.</summary>
     public SyntaxToken? OpenBracketToken { get; }
 

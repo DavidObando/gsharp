@@ -181,6 +181,8 @@ internal static class StructuralProjectionPlanner
 
         if (source == null || target == null
             || source == TypeSymbol.Error || target == TypeSymbol.Error
+            || NativeSliceTypes.TryGetElement(source, out _, out _)
+            || NativeSliceTypes.TryGetElement(target, out _, out _)
             || !IsProjectionObjectType(source)
             || !IsProjectionObjectType(target)
             || target is InterfaceSymbol

@@ -158,6 +158,9 @@ public static class GSharpPrinter
     {
         switch (type)
         {
+            case NativeSliceTypeReference slice:
+                return $"{(slice.IsReadOnly ? "readonly " : string.Empty)}slice[{RenderType(slice.ElementType)}]";
+
             case NamedTypeReference named:
                 var name = named.ContainingType == null
                     ? named.Name

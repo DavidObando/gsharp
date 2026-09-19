@@ -3202,6 +3202,24 @@ internal sealed partial class ExpressionBinder
 
         var name = generic.Identifier.ValueText;
 
+        if (name == "slice")
+        {
+            var args = generic.TypeArgumentList;
+            var clause = new TypeClauseSyntax(generic.SyntaxTree, null, null, null, generic.Identifier, args.OpenBracketToken, args.Arguments, args.CloseBracketToken, null)
+            {
+                ReadOnlySliceModifier = generic.ReadOnlySliceModifier,
+            };
+            var nativeType = bindTypeClause(clause);
+            failureHandled = true;
+            if (nativeType is not ImportedTypeSymbol native)
+            {
+                return false;
+            }
+
+            constructedImported = new ImportedClassSymbol(native.Type, generic, native, scope.References);
+            return true;
+        }
+
         // A value-named receiver is genuine element access, never a type.
         if (scope.TryLookupSymbol(name) is VariableSymbol)
         {
@@ -3558,7 +3576,7 @@ internal sealed partial class ExpressionBinder
             // Issue #4024: the SLICE spelling `[]T` shares that backing and is
             // retained by the same gate, so `EqualityComparer[[]int32].Default`
             // no longer reads as a metadata-only `EqualityComparer<int32[]>`.
-            var symbolicReceiver = typeArgs.Any(static a =>
+            var symbolicReceiver = NativeSliceTypes.IsDefinition(closed, out _) || typeArgs.Any(static a =>
                 TypeSymbol.RequiresSymbolicProjection(a)
                 || TypeSymbol.ContainsNamedTupleElements(a)
                 || TypeSymbol.ContainsSourceArrayShape(a))

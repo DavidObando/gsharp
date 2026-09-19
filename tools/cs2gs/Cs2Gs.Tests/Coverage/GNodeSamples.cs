@@ -269,6 +269,7 @@ public static class GNodeSamples
             // Type references.
             [typeof(NamedTypeReference)] = () => Field(new NamedTypeReference("List", List<GTypeReference>(Type("int32")))),
             [typeof(ArrayTypeReference)] = () => Field(new ArrayTypeReference(Type("int32"))),
+            [typeof(NativeSliceTypeReference)] = () => Field(new NativeSliceTypeReference(Type("int32"), isReadOnly: true)),
             [typeof(TupleTypeReference)] = () => Field(new TupleTypeReference(List<GTypeReference>(Type("int32"), Type("string")))),
             [typeof(PointerTypeReference)] = () => Field(new PointerTypeReference(Type("uint8"))),
             [typeof(ArrowTypeReference)] = () => Field(new ArrowTypeReference(

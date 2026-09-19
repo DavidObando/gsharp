@@ -592,6 +592,12 @@ internal static class IlVerifier
             refs.Add(channelsRuntime);
         }
 
+        var valuesRuntime = Path.Combine(AppContext.BaseDirectory, "Gsharp.Runtime.Values.dll");
+        if (File.Exists(valuesRuntime))
+        {
+            refs.Add(valuesRuntime);
+        }
+
         return refs;
     }
 }

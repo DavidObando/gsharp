@@ -1502,6 +1502,8 @@ public sealed class CSharpTypeMapper
     {
         switch (reference)
         {
+            case NativeSliceTypeReference slice:
+                return new NativeSliceTypeReference(slice.ElementType, slice.IsReadOnly) { IsNullable = isNullable };
             case NamedTypeReference named:
                 return new NamedTypeReference(named.Name, named.TypeArguments, named.ContainingType)
                 {
@@ -1587,6 +1589,13 @@ public sealed class CSharpTypeMapper
 
         if (type is INamedTypeSymbol named)
         {
+            if (named.ContainingAssembly.Name == "Gsharp.Runtime.Values"
+                && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
+                && named.Arity == 1 && named.Name is "Slice" or "ReadOnlySlice")
+            {
+                return new NativeSliceTypeReference(this.Map(named.TypeArguments[0], context, location), named.Name == "ReadOnlySlice");
+            }
+
             // Value tuples map to the native G# tuple type. ADR-0172: G#
             // now has named tuple elements, so C# element names are
             // PRESERVED name-first — `(int Line, int Column)` becomes

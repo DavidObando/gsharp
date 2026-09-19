@@ -1532,7 +1532,10 @@ internal sealed partial class MethodBodyEmitter
         // the parent is the `Memory`1<!!T>` TypeSpec. An open declaring type is
         // a shape ordinary CLR operator resolution never produces, so this
         // cannot re-target an existing conversion.
-        this.il.Token(method.DeclaringType is { IsGenericTypeDefinition: true }
+        var nativeOwner = conv.Type is NullableTypeSymbol nullableNativeOwner ? nullableNativeOwner.UnderlyingType : conv.Type;
+        this.il.Token(NativeSliceTypes.IsDefinition(method.DeclaringType, out _) && NativeSliceTypes.TryGetElement(nativeOwner, out _, out _)
+            ? this.outer.memberRefs.GetMethodEntityHandle(method, nativeOwner)
+            : method.DeclaringType is { IsGenericTypeDefinition: true }
             ? this.outer.memberRefs.GetMethodEntityHandle(
                 method,
                 default(ImmutableArray<TypeSymbol?>),
@@ -1665,7 +1668,10 @@ internal sealed partial class MethodBodyEmitter
         // operator arrives as the OPEN method and must be parented at the
         // constructed TypeSpec rather than at the open definition.
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(conversionMethod.DeclaringType is { IsGenericTypeDefinition: true }
+        var nativeOwner = conversion.Type is NullableTypeSymbol nullableNativeOwner ? nullableNativeOwner.UnderlyingType : conversion.Type;
+        this.il.Token(NativeSliceTypes.IsDefinition(conversionMethod.DeclaringType, out _) && NativeSliceTypes.TryGetElement(nativeOwner, out _, out _)
+            ? this.outer.memberRefs.GetMethodEntityHandle(conversionMethod, nativeOwner)
+            : conversionMethod.DeclaringType is { IsGenericTypeDefinition: true }
             ? this.outer.memberRefs.GetMethodEntityHandle(
                 conversionMethod,
                 default(ImmutableArray<TypeSymbol?>),
