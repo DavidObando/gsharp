@@ -1064,6 +1064,25 @@ internal sealed partial class OverloadResolver
             }
         }
 
+        // ADR-0186 §4/§5, issue #4325: invoking a delegate VALUE is a
+        // receiver position with no CLR check of its own worth relying on —
+        // the nil surfaces from inside the invocation, not at the call site —
+        // so it gets §4's attributed check like every other coercion. The
+        // unwrap it carries is also what lets the arms below see the delegate
+        // at all: each tests `callee.Type is FunctionTypeSymbol` /
+        // `is DelegateTypeSymbol`, and a platform wrapper matches neither.
+        //
+        // Skipped for a null-conditional invocation (`f?.()`), where `callee`
+        // is already the guarded `WhenNotNull` branch: §4 inserts nothing for
+        // a guarded access, because no coercion to non-null occurs there.
+        if (nullConditionalCallee == null)
+        {
+            callee = PlatformCoercion.InsertCheck(
+                callee,
+                calleeLocation,
+                "a delegate invocation target");
+        }
+
         if (TryReportNullableDelegateReceiver(
             callee.Type,
             calleeLocation,

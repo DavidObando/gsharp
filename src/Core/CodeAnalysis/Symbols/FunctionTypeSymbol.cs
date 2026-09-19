@@ -286,6 +286,27 @@ public sealed class FunctionTypeSymbol : TypeSymbol
                 builder.Append(')');
                 break;
 
+            // ADR-0186: the same regression, one wrapper over, and worse.
+            // `PlatformTypeSymbol.ClrType` is its underlying's by
+            // construction (§1) and its `Name` only differs by a trailing
+            // `!`, so without this arm `string!` and `string` collapse to one
+            // key in every process-wide interning cache that uses this
+            // builder — `TupleTypeSymbol`, `FunctionTypeSymbol`,
+            // `FunctionPointerTypeSymbol`.
+            //
+            // Measured, and it is not a display nit: `TupleTypeSymbol.Get`
+            // for `(string!, bool)` returned the already-interned
+            // `(string, bool)` built moments earlier from a sibling argument
+            // literal, so an oblivious `params T[]`'s element arrived at the
+            // conversion NON-NULL. That is the whole of issue #4322 — the
+            // element type was computed correctly and then thrown away by
+            // the cache.
+            case PlatformTypeSymbol pt:
+                builder.Append("!platform(");
+                AppendIdentityKey(builder, pt.UnderlyingType);
+                builder.Append(')');
+                break;
+
             // #1777 follow-up: SliceTypeSymbol/ArrayTypeSymbol both build their
             // ClrType as `elementType.ClrType.MakeArrayType()` — a fixed-length
             // array's Length is symbol-only metadata that never reaches the CLR
@@ -348,6 +369,14 @@ public sealed class FunctionTypeSymbol : TypeSymbol
             case NullableTypeSymbol n:
                 builder.Append("!nullable(");
                 AppendIdentityKey(builder, n.UnderlyingType);
+                builder.Append(')');
+                break;
+            case PlatformTypeSymbol p2:
+                // ADR-0186: see the matching arm in `AppendIdentityKey`. This
+                // copy is reachable through the `ContainsTypeParameter` /
+                // same-compilation-user-type routes, which come here directly.
+                builder.Append("!platform(");
+                AppendIdentityKey(builder, p2.UnderlyingType);
                 builder.Append(')');
                 break;
             case SliceTypeSymbol s:

@@ -119,8 +119,19 @@ public sealed record BoundBinaryOperator
         if (syntaxKind == SyntaxKind.PlusToken
             && IsStringOrNullableString(leftType)
             && IsStringOrNullableString(rightType)
-            && (leftType is NullableTypeSymbol || rightType is NullableTypeSymbol))
+            && (leftType is NullableTypeSymbol or PlatformTypeSymbol
+                || rightType is NullableTypeSymbol or PlatformTypeSymbol))
         {
+            // ADR-0186 §6 / issue #4324: `string!` joins `string?` on this
+            // arm. The guard is "at least one operand is wrapped", because
+            // the homogeneous `string + string` case belongs to the
+            // `supportedOperators` table above, whose lookup is an exact
+            // `op.LeftType == leftType` match and therefore cannot see
+            // through a wrapper of any kind. The result stays the non-null
+            // `string` and NO §4 check is inserted, deliberately: this
+            // operator's contract is that a nil operand concatenates as the
+            // empty string, so the value never reaches a non-null
+            // destination — exactly as for `string?` today.
             return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.Sum, leftType, rightType, TypeSymbol.String);
         }
 
@@ -544,11 +555,28 @@ public sealed record BoundBinaryOperator
         }
     }
 
-    /// <summary>Issue #1927: true when <paramref name="type"/> is <c>string</c> or <c>string?</c>.</summary>
+    /// <summary>
+    /// Issue #1927: true when <paramref name="type"/> is <c>string</c>,
+    /// <c>string?</c> or — ADR-0186 §6, issue #4324 — <c>string!</c>.
+    /// <para>
+    /// The platform arm is not a new rule but the absence of a carve-out: §6
+    /// says <c>T!</c> participates in every existing construct, and the
+    /// concatenation arm's whole justification ("a null operand is treated as
+    /// an empty string by <c>String.Concat</c>") is a statement about the
+    /// runtime value, which a <c>string!</c> shares with a <c>string?</c> by
+    /// construction. Answering <see langword="false"/> here made
+    /// <c>string! + "x"</c> report GS0129 in both operand orders, which is an
+    /// oblivious value being treated as <em>less</em> capable than either
+    /// <c>string</c> or <c>string?</c> — the one thing §6 rules out.
+    /// </para>
+    /// </summary>
+    /// <param name="type">The operand type.</param>
+    /// <returns>Whether the operand is a string in any of the three states.</returns>
     private static bool IsStringOrNullableString(TypeSymbol type)
     {
         return type == TypeSymbol.String
-            || (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String);
+            || (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String)
+            || (type is PlatformTypeSymbol platform && platform.UnderlyingType == TypeSymbol.String);
     }
 
     private static bool IsNullCompare(TypeSymbol nullableOrUnderlying, TypeSymbol nullCandidate)

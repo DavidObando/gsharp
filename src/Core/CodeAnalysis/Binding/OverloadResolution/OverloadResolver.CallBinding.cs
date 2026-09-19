@@ -1661,6 +1661,25 @@ internal sealed partial class OverloadResolver
                 }
             }
 
+            // ADR-0186 §4, issue #4325: invoking a delegate VALUE. This is a
+            // receiver position — the call lowers to `Invoke` on the delegate
+            // — and it reaches this arm rather than any of the
+            // `FunctionTypeSymbol` paths above precisely BECAUSE
+            // `PlatformTypeSymbol` relays its underlying's `ClrType` (§1), so
+            // `ClrTypeUtilities.IsDelegateType(delegateClrType)` is true for a
+            // `Func[string]!` while `callableType as FunctionTypeSymbol` is
+            // null. Without the check a nil oblivious delegate produced a bare
+            // `NullReferenceException` from inside the lowered `Invoke`,
+            // naming nothing.
+            //
+            // Deliberately NOT applied on the `?(...)` branch above: that
+            // branch already short-circuits on nil, so no coercion to non-null
+            // occurs and §4 inserts nothing for a guarded access.
+            receiver = PlatformCoercion.InsertCheck(
+                receiver,
+                syntax.Identifier.Location,
+                "a delegate invocation target");
+
             // The callback uses null to mean that no explicit type arguments were supplied.
             if (tryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))
             {

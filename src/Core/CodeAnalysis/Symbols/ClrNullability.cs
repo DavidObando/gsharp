@@ -945,10 +945,23 @@ public static class ClrNullability
         ImmutableArray<byte> flags)
     {
         var layoutFlags = ExpandNullableFlags(layoutType, flags);
+
+        // Two expansions with DIFFERENT absent fills, used only to answer one
+        // question the single expansion cannot: did the declaration actually
+        // DESCRIBE this position, or did the expansion invent a byte for it?
+        // A position the declaration described expands to the same byte under
+        // both fills; one it did not expands to the fill itself, so the two
+        // disagree. The open-type-parameter arm below is the only consumer,
+        // and the distinction is load-bearing there — see the comment at the
+        // arm.
+        var describedLow = ExpandNullableFlags(layoutType, flags, absentFill: 1);
+        var describedHigh = ExpandNullableFlags(layoutType, flags, absentFill: 2);
         var builder = ImmutableArray.CreateBuilder<byte>();
         var layoutOffset = 0;
         Append(actualType, layoutType);
         return builder.ToImmutable();
+
+        bool LayoutDescribed(int position) => describedLow[position] == describedHigh[position];
 
         void Append(Type actual, Type layout)
         {
@@ -965,6 +978,82 @@ public static class ClrNullability
             if (layout.IsGenericParameter)
             {
                 var flag = layoutFlags[layoutOffset++];
+
+                // ADR-0186 §2's open-type-parameter carve-out, applied to the
+                // PROJECTION path — "Open type parameters keep ADR-0136's
+                // exclusion, unchanged. An open slot still widens only for an
+                // explicit `[Nullable(2)]`."
+                //
+                // This arm stamps the byte the OPEN declaration carries onto
+                // the SUBSTITUTED argument, which is exactly what §2 says must
+                // not happen for anything but an explicit `2`. Under ADR-0136
+                // the mis-stamp was invisible: it produced `T?`, and
+                // `Conversion.ClassifyCore` strips inner nullability before
+                // any rule runs, so nothing downstream could tell. Under
+                // ADR-0186 it produces `T!`, which §3 rule 3 treats as a
+                // genuinely different constructed type — and the mis-stamp
+                // becomes a compile error on ordinary code.
+                //
+                // Measured, twice, both reduced from the self-migration guard
+                // and from `samples/`:
+                //
+                //   let a = t.GetConstructors().Cast[MethodBase]()
+                //   let b = cast[IEnumerable[MethodBase]](t.GetMethods())
+                //   let c = if true { a } else { b }
+                //   // GS0263: "branches have no common result type — the true
+                //   // branch is 'IEnumerable[MethodBase]' and the false branch
+                //   // is 'IEnumerable[MethodBase]'"
+                //
+                // `Enumerable.Cast<TResult>`'s return carries byte `0` at its
+                // unconstrained `TResult` slot (csc's encoding for an open
+                // parameter that may be a value type), so `a` came back as
+                // `IEnumerable[MethodBase!]` — obliviousness invented for a
+                // position whose nullability arrives with the ARGUMENT, and a
+                // diagnostic that names one type twice because a nested
+                // argument's `!` does not reach the display.
+                // `Dictionary[string, int32].Enumerator` in
+                // `samples/NestedTypeOfConstructedGeneric.gs` is the same
+                // defect through the enclosing type's arguments.
+                //
+                // Gated on the mode, and that is deliberate rather than
+                // timid: with `--nullability=enabled` the fabricated byte is
+                // `2`, which is the answer ADR-0136 has given for its whole
+                // life and which several emit and read paths are pinned to.
+                // Changing it there would be an ADR-0136 semantics change
+                // smuggled into an ADR-0186 step. Under platform types the
+                // fabrication is observable, so §2's rule is applied and the
+                // argument is left to speak for itself.
+                //
+                // Gated on `LayoutDescribed` too, and THAT distinction is the
+                // whole correctness of this arm. Two different declarations
+                // reach here with byte `0` at an open slot and they mean
+                // opposite things:
+                //
+                //   * `Enumerable.Cast<TResult>` in the ANNOTATED BCL carries
+                //     an EXPLICIT `0` there — csc's encoding for an
+                //     unconstrained parameter that may be a value type. The
+                //     declaration described the slot and did not say `T?`, so
+                //     §2 applies and the caller's argument wins.
+                //   * A method in a `#nullable disable` assembly carries NO
+                //     nullable metadata at all, and the `0` is this
+                //     expansion's own fill. The declaration described
+                //     nothing, which is obliviousness in the ordinary sense,
+                //     and §2's table says that reads as `T!`.
+                //
+                // Collapsing the two re-broke issue #4322 — a `nil` tuple
+                // element stopped widening through an oblivious `params T[]`
+                // again, because the element came back non-null instead of
+                // `T!`. Both directions are pinned:
+                // `Issue4044NilTupleInferenceTests` for the absent case and
+                // `Adr0186_AnOpenSlot_TakesItsNullabilityFromTheArgument`
+                // for the explicit one.
+                if (NullabilityOptions.PlatformTypesEnabled
+                    && LayoutDescribed(layoutOffset - 1)
+                    && ClassifyFlag(flag) != ClrNullabilityState.Annotated)
+                {
+                    flag = 1;
+                }
+
                 builder.AddRange(
                     ExpandNullableFlags(actual, ImmutableArray.Create(flag)));
                 return;
