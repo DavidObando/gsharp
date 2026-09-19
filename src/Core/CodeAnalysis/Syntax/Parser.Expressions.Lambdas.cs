@@ -198,18 +198,55 @@ public partial class Parser
         // The first parameter slot must be an identifier (the parameter name)
         // OR — ADR-0185 — `(`, the opener of a tuple-destructuring parameter
         // pattern `(x T1, y T2, ...)`. There is no real ambiguity to resolve
-        // here: an ORDINARY parameter's own grammar never starts with `(`
-        // (its first token is always the name), so `(` at this position can
-        // only be a destructuring pattern's own open paren — the
-        // otherwise-similar-looking `(pair (string, int))` shape (one
+        // between the TWO SHAPES here: an ORDINARY parameter's own grammar
+        // never starts with `(` (its first token is always the name), so `(`
+        // at this position can only be an attempt at a destructuring pattern
+        // — the otherwise-similar-looking `(pair (string, int))` shape (one
         // parameter named `pair`, of parenthesized tuple TYPE) has `pair`,
         // an identifier, as ITS first interior token, so it never reaches
-        // this branch at all. Anything else (e.g. `(42)`, `(x + y)`) is
-        // treated as a parenthesized expression / tuple even though `->`
-        // follows — the parser surfaces a better diagnostic from the
-        // expression path than from the parameter path.
-        if (Peek(j).Kind != SyntaxKind.IdentifierToken && Peek(j).Kind != SyntaxKind.OpenParenthesisToken)
+        // this branch at all.
+        //
+        // But `(` is also the opener of an ordinary parenthesized (or
+        // doubly-parenthesized) EXPRESSION, e.g. `((1 + 2)) -> foo` — not a
+        // lambda at all, just already-invalid code (`->` has no meaning
+        // there outside a lambda or, in an unsafe context, pointer-arrow
+        // access). Require the FIRST element slot of the candidate pattern
+        // to itself look identifier-shaped — `Peek(j + 1)`, one token past
+        // the pattern's own `(` — before committing, at exactly the same
+        // one-token depth of scrutiny this check already applies to an
+        // ORDINARY parameter's own first token just below; a numeric/
+        // operator-first interior like `(1 + 2)` fails this and falls back
+        // to the expression path for its original, clearer diagnostic.
+        //
+        // A full bounded trial-parse of the pattern (mirroring this
+        // function's `unsafeDepth > 0` trial-parse block below) was tried
+        // and rejected: it rejects on ANY diagnostic from the trial, which
+        // wrongly also rejects a merely-untyped pattern like the C#-habit
+        // `((x, y)) -> x + y` — that shape must still commit to the
+        // destructuring-pattern path and surface
+        // ParseTupleDeconstructionPattern's own "expected a type" diagnostic
+        // (deliberate, and pinned by
+        // MalformedDestructuringPattern_MissingElementType_ProducesDiagnostic),
+        // not be silently misrouted to the expression path. This one-token
+        // check accepts both `((x, y))` and `((x string, y int))` while
+        // still rejecting `((1 + 2))`; it does not (and is not intended to)
+        // catch every malformed shape — `((x + y)) -> foo` still commits and
+        // gets a less-than-ideal diagnostic, exactly as the pre-existing,
+        // un-flagged single-parameter case `(x + y) -> foo` already does
+        // today (same one-token scrutiny level, applied uniformly).
+        if (Peek(j).Kind == SyntaxKind.OpenParenthesisToken)
         {
+            if (Peek(j + 1).Kind != SyntaxKind.IdentifierToken)
+            {
+                return false;
+            }
+        }
+        else if (Peek(j).Kind != SyntaxKind.IdentifierToken)
+        {
+            // Anything else (e.g. `(42)`, `(x + y)`) is treated as a
+            // parenthesized expression / tuple even though `->` follows —
+            // the parser surfaces a better diagnostic from the expression
+            // path than from the parameter path.
             return false;
         }
 
