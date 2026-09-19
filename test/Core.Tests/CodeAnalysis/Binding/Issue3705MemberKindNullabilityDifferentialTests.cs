@@ -762,10 +762,29 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             // Annotated non-null is the only one of the four that is not
             // nullable — if this ever collapses, every non-`NonNull` row above
             // becomes vacuous.
+            //
+            // ADR-0186 step 3: the "three nullable states" claim is a
+            // statement about ADR-0136's reading, so it is asserted under
+            // `enabled` explicitly now that that is not the default. Under
+            // `platform-types` the two oblivious states read as `T!`
+            // instead, which is the flip and is asserted immediately below —
+            // the anti-vacuity property this method exists for is that the
+            // four states are DISTINCT, and they are distinct in both modes.
+            using (NullabilityOptions.Enter(NullabilityMode.Enabled))
+            {
+                Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nonNullField));
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nullableField));
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(absentField));
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(zeroField));
+            }
+
+            // The default reading: annotated non-null stays `T`, annotated
+            // nullable stays `T?`, and both oblivious shapes are `T!`.
             Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nonNullField));
+            Assert.IsNotType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nonNullField));
             Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nullableField));
-            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(absentField));
-            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(zeroField));
+            Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(absentField));
+            Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(zeroField));
 
             // …and the three nullable states must not be nullable for the SAME
             // reason. `ObliviousZero` in particular must be a NON-empty `[0]`:
@@ -883,12 +902,17 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
                         0));
             }
 
-            // Mode OFF — today's answers, unchanged. This is step 1's
-            // load-bearing claim, asserted on the same four real declarations.
-            Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[0].Field));
-            foreach (var (state, field, _) in fields[1..])
+            // The `enabled` mode — ADR-0136's answers, asserted on the same
+            // four real declarations. ADR-0186 step 3 made the scope
+            // explicit: this is no longer the default, and a claim about a
+            // specific mode should say which mode it is about.
+            using (NullabilityOptions.Enter(NullabilityMode.Enabled))
             {
-                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(field));
+                Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[0].Field));
+                foreach (var (state, field, _) in fields[1..])
+                {
+                    Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(field));
+                }
             }
 
             // Mode ON — the third column.
@@ -999,8 +1023,11 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             Assert.IsType<PlatformTypeSymbol>(platform);
             Assert.Equal("string!", platform.Name);
 
-            // …and the mode is scoped to the compilation that asked for it.
-            Assert.False(NullabilityOptions.PlatformTypesEnabled);
+            // …and the mode is scoped to the compilation that asked for it,
+            // which is now shown the other way round: the `enabled`
+            // compilation above must not have left `enabled` installed
+            // ambiently, so the default reading is back in force here.
+            Assert.True(NullabilityOptions.PlatformTypesEnabled);
         }
         finally
         {
