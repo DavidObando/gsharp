@@ -19,14 +19,27 @@ namespace Cs2Gs.Tests;
 /// reports a precise, actionable <see cref="TranslationDiagnostic"/> instead
 /// of silently emitting a tuple shape that would only surface as an opaque
 /// GS0159 much later at G# bind time;</item>
-/// <item>the synthesized transparent-identifier tuple parameter name
-/// (<c>__qN</c>) now guards against colliding with a user-declared range
-/// variable literally named <c>__q0</c>/etc.;</item>
 /// <item>previously-untested query-clause combinations (join after a
 /// preceding <c>let</c>, a join continuing a <c>group ... into</c>, and a
 /// scope with more than 3 range variables) are locked in with regression
 /// tests.</item>
 /// </list>
+///
+/// <para>
+/// ADR-0185 (issue #4304) retired the second item above: the synthesized
+/// <c>__qN</c> tuple-parameter name — and the collision-avoidance loop
+/// bumping it past a colliding user local — no longer exist, because a
+/// multi-variable scope now binds a tuple-DESTRUCTURING lambda parameter
+/// directly under its real range-variable names
+/// (<c>((name1 T1, name2 T2, ...)) -&gt; body</c>). The former regression
+/// test for that collision-avoidance loop
+/// (<c>QueryScope_WithUserLocalNamed__q0_DoesNotCollideWithSynthesizedTupleParam</c>)
+/// tested a mechanism that no longer exists and was removed rather than
+/// updated; a same-name collision between a range variable and an outer
+/// local is now an ordinary identifier collision, resolved the same way
+/// this translator already resolves every other such collision
+/// (<c>EmittedName</c>/<c>SanitizeIdentifier</c>).
+/// </para>
 /// </summary>
 public class Issue1998LinqFollowUpTests
 {
@@ -74,11 +87,14 @@ namespace Corpus.Issue1998
     }
 
     [Fact]
-    public void QueryScope_WithUserLocalNamed__q0_DoesNotCollideWithSynthesizedTupleParam()
+    public void QueryScope_WithUserLocalNamed__q0_NoLongerSynthesizesAnyQName()
     {
-        // A user local literally named `__q0` sits alongside the query so the
-        // synthesized tuple parameter (which would otherwise also start at
-        // `__q0`) must be bumped past it.
+        // ADR-0185: the mechanism this test used to lock in (a user local
+        // literally named `__q0` forcing the synthesized tuple-parameter
+        // counter to bump past it) is retired along with `__q{N}` itself —
+        // the destructured parameter now binds under the REAL range-variable
+        // names (`n`, `sq`), so a user local named `__q0` has nothing of
+        // this translator's own making left to collide with at all.
         string rendered = Render(@"
 using System.Linq;
 
@@ -99,9 +115,26 @@ namespace Corpus.Issue1998
 }
 ");
 
-        Assert.DoesNotContain("let (n, sq) = __q0", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (n, sq) = __q1", rendered, StringComparison.Ordinal);
+        // The user's own `__q0` local is untouched (declared, then
+        // referenced once) — every `__q` occurrence left is one THEY wrote,
+        // none of them a synthesized tuple-parameter name.
+        Assert.Contains("let __q0 = 41", rendered, StringComparison.Ordinal);
+        Assert.Contains("((n int32, sq int32)) -> sq > __q0", rendered, StringComparison.Ordinal);
+        Assert.Equal(2, CountOccurrences(rendered, "__q"));
         AssertRoundTripParses(rendered);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = haystack.IndexOf(needle, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += needle.Length;
+        }
+
+        return count;
     }
 
     [Fact]
@@ -143,13 +176,16 @@ namespace Corpus.Issue1998
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("return (o, o.Amount + o.Amount / 10)", rendered, StringComparison.Ordinal);
+
+        // ADR-0185: the outer key selector destructures the widened (o,
+        // taxed) scope directly under its real names — no `__qN` parameter
+        // or `let` deconstruction.
         Assert.Contains(
-            "}).Join(customers, (__q0 (Order, int32)) -> {",
+            "}).Join(customers, ((o Order, taxed int32)) -> o.CustomerId, (c Customer) -> c.Id, ((o Order, taxed int32), c Customer) -> {",
             rendered,
             StringComparison.Ordinal);
-        Assert.Contains("let (o, taxed) = __q0", rendered, StringComparison.Ordinal);
-        Assert.Contains("return o.CustomerId", rendered, StringComparison.Ordinal);
-        Assert.Contains("(c Customer) -> c.Id", rendered, StringComparison.Ordinal);
+        Assert.Contains("return (o, taxed, c)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__q", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -216,13 +252,49 @@ namespace Corpus.Issue1998
 }
 ");
 
-        Assert.Contains("}).Select((__q0 (int32, int32)) -> {", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (a, b) = __q0", rendered, StringComparison.Ordinal);
-        Assert.Contains("}).Select((__q1 (int32, int32, int32)) -> {", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (a, b, c) = __q1", rendered, StringComparison.Ordinal);
-        Assert.Contains("}).Select((__q2 (int32, int32, int32, int32)) -> {", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (a, b, c, d) = __q2", rendered, StringComparison.Ordinal);
-        Assert.Contains("return a + b + c + d", rendered, StringComparison.Ordinal);
+        // ADR-0185: each successive `let` widens the scope by one more
+        // element; every intermediate Select's lambda destructures the
+        // scope-so-far directly under its real names (no `__qN` parameter
+        // or `let` deconstruction at any width), and the FINAL select — which
+        // widens no further — collapses all the way to an expression body.
+        Assert.Contains("}).Select(((a int32, b int32)) -> {", rendered, StringComparison.Ordinal);
+        Assert.Contains("return (a, b, a + 2)", rendered, StringComparison.Ordinal);
+        Assert.Contains("}).Select(((a int32, b int32, c int32)) -> {", rendered, StringComparison.Ordinal);
+        Assert.Contains("return (a, b, c, a + 3)", rendered, StringComparison.Ordinal);
+        Assert.Contains("}).Select(((a int32, b int32, c int32, d int32)) -> a + b + c + d)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__q", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void OrderByThenByClause_OverWidenedScope_DestructuresDirectlyNoQName()
+    {
+        // ADR-0185's clause table: orderby/thenby was not otherwise covered
+        // by an existing test with a widened (> 1 variable) scope. Both key
+        // selectors here run over the two-element (n, sq) scope a preceding
+        // `let` widened.
+        string rendered = Render(@"
+using System.Linq;
+
+namespace Corpus.Issue1998
+{
+    public class Holder
+    {
+        public int[] Sorted(int[] nums)
+        {
+            var sorted = from n in nums
+                         let sq = n * n
+                         orderby sq descending, n
+                         select n + sq;
+            return sorted.ToArray();
+        }
+    }
+}
+");
+
+        Assert.Contains(".OrderByDescending(((n int32, sq int32)) -> sq)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".ThenBy(((n int32, sq int32)) -> n)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__q", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

@@ -22,10 +22,18 @@ namespace Cs2Gs.Tests;
 /// a "scope" of range variables (mirroring Roslyn's own transparent
 /// identifiers, §12.19.3 of the C# spec) threaded as a positional
 /// <c>(name1, name2, ...)</c> tuple whenever more than one variable is in
-/// scope — since G# lambdas bind only a single parameter and has no anonymous
-/// types, a multi-variable scope becomes one synthesized <c>__qN</c> tuple
-/// parameter destructured via a <c>let (name1, name2, ...) = __qN</c>
-/// statement at the top of a block-bodied lambda.
+/// scope.
+///
+/// <para>
+/// ADR-0185 (issue #4304): a multi-variable scope now binds a
+/// tuple-DESTRUCTURING lambda parameter directly under the real
+/// range-variable names — <c>((name1 T1, name2 T2, ...)) -&gt; body</c> —
+/// instead of the retired <c>__q{N}</c> synthetic tuple parameter plus a
+/// <c>let (name1, name2, ...) = __qN</c> deconstruction prologue. The
+/// assertions below were updated in the same change (this repo's practice of
+/// keeping regression tests in sync rather than leaving stale assertions
+/// alongside new ones).
+/// </para>
 /// </summary>
 public class Issue1902LinqQueryTranslationTests
 {
@@ -55,9 +63,13 @@ namespace Corpus.Issue1902
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("return (t, o)", rendered, StringComparison.Ordinal);
-        Assert.Contains("}).Select((__q0 (int32, int32)) -> {", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (t, o) = __q0", rendered, StringComparison.Ordinal);
-        Assert.Contains("return t + o", rendered, StringComparison.Ordinal);
+
+        // ADR-0185: the final `select t + o` widens no further scope — its
+        // lambda destructures the (t, o) tuple directly under its real
+        // names, and (having no other prologue to hoist) collapses to an
+        // expression body with no `__qN` / `let` deconstruction at all.
+        Assert.Contains("}).Select(((t int32, o int32)) -> t + o)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__q", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -85,11 +97,13 @@ namespace Corpus.Issue1902
 
         Assert.Contains("nums.Select((n int32) -> {", rendered, StringComparison.Ordinal);
         Assert.Contains("return (n, n * n)", rendered, StringComparison.Ordinal);
-        Assert.Contains("}).Where((__q0 (int32, int32)) -> {", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (n, sq) = __q0", rendered, StringComparison.Ordinal);
-        Assert.Contains("return sq > 4", rendered, StringComparison.Ordinal);
-        Assert.Contains("}).Select((__q1 (int32, int32)) -> {", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (n, sq) = __q1", rendered, StringComparison.Ordinal);
+
+        // ADR-0185: both the `where sq > 4` predicate and the final `select`
+        // widen no further scope — each destructures the (n, sq) tuple
+        // directly under its real names and collapses to an expression body.
+        Assert.Contains("}).Where(((n int32, sq int32)) -> sq > 4)", rendered, StringComparison.Ordinal);
+        Assert.Contains(".Select(((n int32, sq int32)) -> \"$n->$sq\")", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__q", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -131,8 +145,12 @@ namespace Corpus.Issue1902
             rendered,
             StringComparison.Ordinal);
         Assert.Contains("return (o, p)", rendered, StringComparison.Ordinal);
-        Assert.Contains("}).Select((__q0 (Owner, Pet)) -> {", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (o, p) = __q0", rendered, StringComparison.Ordinal);
+
+        // ADR-0185: the final `select` destructures the (o, p) tuple
+        // directly under its real names — no `__qN` parameter or `let`
+        // deconstruction.
+        Assert.Contains("}).Select(((o Owner, p Pet)) -> o.Name + \"+\" + p.Name)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__q", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

@@ -271,6 +271,29 @@ public static class GSharpPrinter
             sb.Append(' ');
         }
 
+        // ADR-0185: a tuple-destructuring arrow-lambda parameter renders as
+        // `(name1 T1, name2 T2, ...)` — no ref-kind/variadic/default-value
+        // modifiers apply to this shape.
+        if (parameter.IsDestructured)
+        {
+            sb.Append('(');
+            for (var i = 0; i < parameter.DestructuredElements.Count; i++)
+            {
+                if (i > 0)
+                {
+                    sb.Append(", ");
+                }
+
+                var element = parameter.DestructuredElements[i];
+                sb.Append(element.Name);
+                sb.Append(' ');
+                sb.Append(RenderType(element.Type));
+            }
+
+            sb.Append(')');
+            return sb.ToString();
+        }
+
         if (!string.IsNullOrEmpty(parameter.RefKind))
         {
             sb.Append(parameter.RefKind);
