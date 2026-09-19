@@ -304,11 +304,7 @@ public class Adr0186PlatformTypeSymbolTests
     [Fact]
     public void The_Wrapper_Participates_In_The_Canonical_Structural_Walk()
     {
-        var parameter = new TypeParameterSymbol(
-            "T",
-            ordinal: 0,
-            TypeParameterConstraint.Any,
-            TypeParameterVariance.None);
+        var parameter = TypeParameter();
         var platform = PlatformTypeSymbol.Get(SliceTypeSymbol.Get(parameter));
 
         Assert.True(TypeSymbol.ContainsTypeParameter(platform));
@@ -317,4 +313,118 @@ public class Adr0186PlatformTypeSymbolTests
         TypeSymbol.CollectReferencedTypeParameters(platform, sink);
         Assert.Same(parameter, Assert.Single(sink));
     }
+
+    /// <summary>
+    /// The <b>writer</b> half of the same walk, and the half that fails worse.
+    /// <para>
+    /// The readers above and <c>TrySubstituteCompositeType</c> are two sides of
+    /// one contract: what <see cref="TypeSymbol.GetWrappedTypes"/> can see
+    /// inside, substitution must be able to rebuild. A wrapper present in the
+    /// readers and absent from the writer is not a missed answer but a
+    /// <em>wrong</em> one — the readers report that a <c>T!</c> over a type
+    /// parameter contains one, the writer answers "not a composite shape", and
+    /// the caller keeps the unsubstituted type. That is issue #1790's own bug
+    /// class, which is why ADR-0186 touches these walkers at all.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void The_Wrapper_Is_Rebuilt_By_The_Canonical_Substitution()
+    {
+        var parameter = TypeParameter();
+
+        // `[]T!` — the platform wrapper outermost.
+        var platformSlice = PlatformTypeSymbol.Get(SliceTypeSymbol.Get(parameter));
+        Assert.True(TypeSymbol.TrySubstituteCompositeType(
+            platformSlice,
+            inner => SubstituteRecursively(inner, parameter, TypeSymbol.Int32),
+            out var substituted));
+        var rebuilt = Assert.IsType<PlatformTypeSymbol>(substituted);
+        var rebuiltSlice = Assert.IsType<SliceTypeSymbol>(rebuilt.UnderlyingType);
+        Assert.Same(TypeSymbol.Int32, rebuiltSlice.ElementType);
+
+        // `[]T!` with the wrapper nested one level down, so it is reached
+        // through the recursion rather than at the root.
+        var sliceOfPlatform = SliceTypeSymbol.Get(PlatformTypeSymbol.Get(parameter));
+        Assert.True(TypeSymbol.TrySubstituteCompositeType(
+            sliceOfPlatform,
+            inner => SubstituteRecursively(inner, parameter, TypeSymbol.Int32),
+            out var nested));
+        var nestedSlice = Assert.IsType<SliceTypeSymbol>(nested);
+        Assert.Same(
+            PlatformTypeSymbol.Get(TypeSymbol.Int32),
+            Assert.IsType<PlatformTypeSymbol>(nestedSlice.ElementType));
+
+        // An identity substitution must return the very same symbol, not an
+        // equal copy — the cache is what makes `T!` one type.
+        Assert.True(TypeSymbol.TrySubstituteCompositeType(
+            platformSlice,
+            static t => t,
+            out var unchanged));
+        Assert.Same(platformSlice, unchanged);
+    }
+
+    /// <summary>
+    /// ADR-0186 §1: <c>T!</c> carries reference-nullability information with no
+    /// distinct runtime <c>Type</c>, so it must both (a) count as such an
+    /// annotation for gates that decide whether reflection can re-derive a
+    /// type, and (b) be stripped by the comparison that comes to a runtime
+    /// signature <em>ignoring</em> reference nullability. Those two are the
+    /// same fact read in opposite directions, and getting either wrong makes
+    /// <c>string!</c> and <c>string</c> differ where they must not.
+    /// </summary>
+    [Fact]
+    public void The_Wrapper_Is_Reference_Nullability_Only()
+    {
+        var platform = PlatformTypeSymbol.Get(TypeSymbol.String);
+
+        Assert.True(TypeSymbol.ContainsReferenceNullableAnnotation(platform));
+        Assert.True(TypeSymbol.ContainsReferenceNullableAnnotation(
+            SliceTypeSymbol.Get(platform)));
+
+        Assert.True(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            platform,
+            TypeSymbol.String));
+        Assert.True(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            platform,
+            NullableTypeSymbol.Get(TypeSymbol.String)));
+
+        // …but it is still not the same runtime signature as an unrelated type.
+        Assert.False(TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            platform,
+            TypeSymbol.Object));
+    }
+
+    /// <summary>
+    /// The recursive substitution callback shape every real caller of
+    /// <c>TrySubstituteCompositeType</c> passes: replace the leaf, else let the
+    /// canonical walk rebuild the composite around a recursive call.
+    /// </summary>
+    /// <param name="type">The type to substitute in.</param>
+    /// <param name="from">The type parameter to replace.</param>
+    /// <param name="to">Its replacement.</param>
+    /// <returns>The substituted type.</returns>
+    private static TypeSymbol SubstituteRecursively(
+        TypeSymbol type,
+        TypeParameterSymbol from,
+        TypeSymbol to)
+    {
+        if (ReferenceEquals(type, from))
+        {
+            return to;
+        }
+
+        return TypeSymbol.TrySubstituteCompositeType(
+            type,
+            inner => SubstituteRecursively(inner, from, to),
+            out var result)
+            ? result
+            : type;
+    }
+
+    private static TypeParameterSymbol TypeParameter()
+        => new TypeParameterSymbol(
+            "T",
+            ordinal: 0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
 }

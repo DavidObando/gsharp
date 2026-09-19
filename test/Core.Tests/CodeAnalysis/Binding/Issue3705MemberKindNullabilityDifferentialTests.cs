@@ -1121,12 +1121,6 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         => string.Join(Environment.NewLine, result.Diagnostics.Select(d => d.Id + ": " + d.Message));
 
     private static CompileResult CompileGSharp(string source, params string[] references)
-        => CompileGSharp(source, NullabilityMode.Enabled, references);
-
-    private static CompileResult CompileGSharp(
-        string source,
-        NullabilityMode nullability,
-        params string[] references)
     {
         using var resolver = ReferenceResolver.WithReferences(references);
         resolver.CurrentAssemblyName = ConsumerAssemblyName;
@@ -1135,7 +1129,6 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             GsSyntaxTree.Parse(SourceText.From(source)))
         {
             AssemblyName = ConsumerAssemblyName,
-            Nullability = nullability,
         };
 
         using var output = new MemoryStream();

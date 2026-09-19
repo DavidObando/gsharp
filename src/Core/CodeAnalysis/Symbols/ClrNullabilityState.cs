@@ -1,4 +1,4 @@
-// <copyright file="ClrClrNullabilityState.cs" company="GSharp">
+// <copyright file="ClrNullabilityState.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 

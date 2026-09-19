@@ -1119,6 +1119,16 @@ public class TypeSymbol : Symbol
     /// <returns><c>true</c> when a nullable-reference wrapper is present.</returns>
     public static bool ContainsReferenceNullableAnnotation(TypeSymbol type)
     {
+        if (type is PlatformTypeSymbol)
+        {
+            // ADR-0186 §1: `T!` is reference-nullability information with no
+            // distinct runtime `Type`, which is exactly the property this
+            // predicate tests for. A gate that answered `false` here would let
+            // reflection-only substitution re-derive `string` from a
+            // `string!`, silently erasing the platform-ness.
+            return true;
+        }
+
         if (type is NullableTypeSymbol nullable)
         {
             if (!NullableLifting.IsAnyValueTypeNullable(nullable))
@@ -1315,6 +1325,16 @@ public class TypeSymbol : Symbol
                     case NullableTypeSymbol nullable when !NullableLifting.IsAnyValueTypeNullable(nullable):
                         type = nullable.UnderlyingType;
                         continue;
+                    case PlatformTypeSymbol platform:
+                        // ADR-0186 §1: `T!` is a reference-nullability
+                        // annotation with no runtime shape of its own — its
+                        // `ClrType` is the underlying's — so a method whose
+                        // whole purpose is comparing runtime signatures while
+                        // IGNORING reference nullability must strip it. Leaving
+                        // it would make `string!` and `string` compare as
+                        // different runtime signatures, which they are not.
+                        type = platform.UnderlyingType;
+                        continue;
                     default:
                         return type;
                 }
@@ -1415,6 +1435,13 @@ public class TypeSymbol : Symbol
                 return false;
             case NullableTypeSymbol n:
                 return IsSameCompilationUserTypeTopLevel(n.UnderlyingType);
+            case PlatformTypeSymbol p:
+                // ADR-0186 §1: `T!` unwraps here for the same reason `T?` does.
+                // Unreachable until ADR-0186 §9 makes an `@Oblivious` G# source
+                // declaration platform-typed (today the only producer is the
+                // metadata reader, whose results are always imported), but the
+                // unwrap list must not be the one place the wrapper is missing.
+                return IsSameCompilationUserTypeTopLevel(p.UnderlyingType);
             case SliceTypeSymbol s:
                 return IsSameCompilationUserTypeTopLevel(s.ElementType);
             case ArrayTypeSymbol a:
@@ -1453,6 +1480,19 @@ public class TypeSymbol : Symbol
                 result = ReferenceEquals(nullableInner, nullable.UnderlyingType)
                     ? type
                     : NullableTypeSymbol.Get(nullableInner);
+                return true;
+            case PlatformTypeSymbol platform:
+                // ADR-0186 §1: `T!` is a wrapper exactly like `T?`, and this is
+                // the WRITER half of the walk `GetWrappedTypes` reads. Omitting
+                // it here while the readers know about the wrapper is the worse
+                // failure of the two: the readers would report that a `T!` over
+                // a type parameter CONTAINS one, this method would answer "not a
+                // composite shape", and the caller would keep the unsubstituted
+                // type — a silently wrong answer rather than a missed one.
+                var platformInner = substitute(platform.UnderlyingType);
+                result = ReferenceEquals(platformInner, platform.UnderlyingType)
+                    ? type
+                    : PlatformTypeSymbol.Get(platformInner);
                 return true;
             case SliceTypeSymbol slice:
                 var sliceElement = substitute(slice.ElementType);
