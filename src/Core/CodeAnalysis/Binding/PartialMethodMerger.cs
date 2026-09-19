@@ -47,11 +47,9 @@ internal static class PartialMethodMerger
     /// <param name="diagnostics">The bag that receives GS0601-GS0604.</param>
     public static void Normalize(StructDeclarationSyntax declaration, DiagnosticBag diagnostics)
     {
-        var typeName = declaration.Identifier?.Text ?? string.Empty;
-
         if (!declaration.Methods.IsDefaultOrEmpty)
         {
-            var merged = MergeMethodList(declaration.Methods, declaration.IsPartial, typeName, diagnostics);
+            var merged = MergeMethodList(declaration.Methods, declaration.IsPartial, diagnostics);
             if (!merged.Equals(declaration.Methods))
             {
                 declaration.Methods = merged;
@@ -60,7 +58,7 @@ internal static class PartialMethodMerger
 
         if (declaration.SharedBlock is { } shared && !shared.Methods.IsDefaultOrEmpty)
         {
-            var mergedStatic = MergeMethodList(shared.Methods, declaration.IsPartial, typeName, diagnostics);
+            var mergedStatic = MergeMethodList(shared.Methods, declaration.IsPartial, diagnostics);
             if (!mergedStatic.Equals(shared.Methods))
             {
                 declaration.SharedBlock = new SharedBlockSyntax(
@@ -99,7 +97,6 @@ internal static class PartialMethodMerger
     private static ImmutableArray<FunctionDeclarationSyntax> MergeMethodList(
         ImmutableArray<FunctionDeclarationSyntax> methods,
         bool enclosingTypeIsPartial,
-        string typeName,
         DiagnosticBag diagnostics)
     {
         // Fast path: nothing partial (and nothing already merged) to do.
