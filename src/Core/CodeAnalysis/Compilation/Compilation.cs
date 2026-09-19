@@ -80,19 +80,18 @@ public class Compilation
     /// <summary>
     /// Gets or sets how this compilation reads nullability-<em>oblivious</em>
     /// imported reference positions (ADR-0186, <c>--nullability=&lt;mode&gt;</c>).
-    /// Defaults to <see cref="NullabilityMode.Enabled"/> — ADR-0136's
-    /// <c>T?</c> reading — so an existing caller that never sets it behaves
-    /// exactly as it does today.
+    /// <b>Defaults to <see cref="NullabilityMode.PlatformTypes"/> since
+    /// ADR-0186 step 3</b> — an oblivious imported reference position is the
+    /// platform type <c>T!</c>. <see cref="NullabilityMode.Enabled"/> selects
+    /// ADR-0136's older <c>T?</c> reading and stays available.
     /// </summary>
     /// <remarks>
     /// The default is read from <c>NullabilityOptions.DefaultMode</c>, which
-    /// is <see cref="NullabilityMode.Enabled"/> unless the
-    /// <c>GSHARP_NULLABILITY</c> environment variable overrides it. That
-    /// override is ADR-0186 step 2's verification scaffolding — it exists so
-    /// the full test suite can be run <em>both</em> ways, which is step 2's
-    /// stated verification requirement — and is deleted at step 3 along with
-    /// the rest of <see cref="NullabilityOptions"/>. An embedder that sets
-    /// this property always wins over it.
+    /// the <c>GSHARP_NULLABILITY</c> environment variable can set back to
+    /// <see cref="NullabilityMode.Enabled"/>. That override exists so the
+    /// full test suite can be run <em>both</em> ways from one tree, which is
+    /// how the flip's before/after was measured. An embedder that sets this
+    /// property always wins over it.
     /// <para>
     /// The mode is installed as an ambient scope around binding and emit
     /// (<see cref="NullabilityOptions"/>) because the metadata reader that

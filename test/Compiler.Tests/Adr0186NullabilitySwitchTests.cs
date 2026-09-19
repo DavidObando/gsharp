@@ -98,8 +98,13 @@ public class Adr0186NullabilitySwitchTests
             Assert.Equal(0, Program.Main(new[] { "/?" }));
             var help = outWriter.ToString();
             Assert.Contains("/nullability:", help);
-            Assert.Contains("enabled (default)", help);
-            Assert.Contains("platform-types", help);
+
+            // ADR-0186 step 3: the default moved, and `/help` has to say so.
+            // This assertion is the reason the string is checked at all — a
+            // help text that still names the old default is a documentation
+            // bug that no other test can see.
+            Assert.Contains("platform-types (default", help);
+            Assert.Contains("enabled", help);
             Assert.Contains("/platform-nil-checks:", help);
         }
         finally

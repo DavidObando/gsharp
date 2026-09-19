@@ -379,7 +379,22 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         {
             foreach (var state in States)
             {
-                yield return new object[] { kind, state, state == "NonNull" };
+                // ADR-0186 step 3 — "its expected column changes in the
+                // oblivious row and nowhere else", which is the ADR's own
+                // precise, mechanical statement of its entire
+                // metadata-reading change, and this line is that statement
+                // in code.
+                //
+                // Both oblivious states now bind to a NON-NULL local, because
+                // the position is `T!` and `T! -> T` is an implicit
+                // conversion carrying §4's runtime check rather than a
+                // compile error. The `NonNull` and `Nullable` rows are
+                // untouched, and they are the controls that keep this an
+                // amendment to one cell rather than a weakening of the gate:
+                // an annotated-nullable position still must not bind to a
+                // non-null local.
+                var bindsNonNull = state == "NonNull" || state.StartsWith("Oblivious", StringComparison.Ordinal);
+                yield return new object[] { kind, state, bindsNonNull };
             }
         }
     }
@@ -398,10 +413,28 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
     /// through <c>ClrNullability</c> must not widen an explicitly non-null
     /// declaration.
     /// </para>
+    /// <para>
+    /// <b>ADR-0186 step 3 changed the oblivious rows and nothing else.</b>
+    /// Both <c>Oblivious*</c> states now bind to a non-null local, because
+    /// the position reads as <c>T!</c> and <c>T! → T</c> is an implicit
+    /// conversion carrying §4's runtime check rather than a compile error.
+    /// The ADR names this fixture's expected column as the precise,
+    /// mechanical statement of its whole metadata-reading change; the
+    /// <c>NonNull</c> and <c>Nullable</c> rows are unchanged and are what
+    /// keeps that an amendment to one cell rather than a weakening of the
+    /// gate. The <em>runtime marker</em> column did not move at all: an
+    /// oblivious position still holds a non-null value, and a
+    /// <c>Nullable</c> one still holds nil.
+    /// </para>
+    /// <para>
+    /// The uniformity claim is unchanged and is the point: every one of the
+    /// thirteen signature positions must give the <em>same</em> answer for a
+    /// given annotation state. The kind never appears on the right-hand side.
+    /// </para>
     /// </summary>
     /// <param name="kind">The signature-position kind.</param>
     /// <param name="state">The declaration's annotation state.</param>
-    /// <param name="expectedNonNull">Whether the position must bind non-null.</param>
+    /// <param name="expectedNonNull">Whether the position must bind into a non-null local.</param>
     [Theory]
     [MemberData(nameof(Matrix))]
     public void SignaturePositions_Agree_On_DeclarationNullability(
