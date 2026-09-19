@@ -464,6 +464,56 @@ public class ClrNullabilityTests
     /// container of nullable elements".
     /// </para>
     /// </summary>
+    /// <summary>
+    /// ADR-0186 §2's open-type-parameter carve-out, and the distinction the
+    /// projection path has to make to honour it: <b>an explicit byte at an
+    /// open slot is not obliviousness.</b>
+    /// <para>
+    /// Two declarations reach <c>ProjectNullableFlags</c> with byte <c>0</c>
+    /// at an open type-parameter slot and they mean opposite things.
+    /// <c>Enumerable.Cast&lt;TResult&gt;</c>, in the fully ANNOTATED BCL,
+    /// carries an <em>explicit</em> <c>0</c> there — csc's encoding for an
+    /// unconstrained parameter that may be a value type. §2 says the
+    /// argument wins, so <c>Cast[MethodBase]()</c> must be
+    /// <c>IEnumerable[MethodBase]</c> and not
+    /// <c>IEnumerable[MethodBase!]</c>.
+    /// </para>
+    /// <para>
+    /// Reading it as the latter is what made an ordinary two-armed
+    /// conditional stop compiling under the flip, with a diagnostic that
+    /// named one type twice because a nested argument's <c>!</c> does not
+    /// reach the display — and it is what took the self-migration guard from
+    /// 8/8 to 2/8. The absent case (a declaration with no nullable metadata
+    /// at all, where <c>0</c> IS obliviousness and the answer IS <c>T!</c>)
+    /// is pinned by <c>Issue4044NilTupleInferenceTests</c>; collapsing the
+    /// two re-breaks issue #4322.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Adr0186_AnOpenSlot_TakesItsNullabilityFromTheArgument()
+    {
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
+
+        var cast = typeof(System.Linq.Enumerable)
+            .GetMethods()
+            .Single(m => m.Name == "Cast" && m.IsGenericMethodDefinition)
+            .MakeGenericMethod(typeof(System.Reflection.MethodBase));
+
+        var returned = ClrNullability.GetReturnTypeSymbol(cast);
+
+        // Neither the container nor its element is platform-typed: the
+        // container is an annotated non-null `IEnumerable`, and the element
+        // is whatever the caller supplied — here G#'s non-null `MethodBase`.
+        Assert.IsNotType<PlatformTypeSymbol>(returned);
+        Assert.IsNotType<NullableTypeSymbol>(returned);
+        Assert.DoesNotContain("!", returned.Name, StringComparison.Ordinal);
+
+        if (returned is NullabilityAnnotatedTypeSymbol annotated)
+        {
+            Assert.IsNotType<PlatformTypeSymbol>(annotated.GetTypeArgumentSymbol(0));
+        }
+    }
+
     [Fact]
     public void Adr0186_TheSameReaders_Under_ThePlatformTypesDefault()
     {
