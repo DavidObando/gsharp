@@ -285,11 +285,27 @@ public sealed class Adr0186PlatformTypeBindingTests
     {
         using var world = new World();
 
+        // The source has to be a container whose ELEMENT is oblivious, and
+        // that means a CONCRETE oblivious position — `Ob.NilStrings()`
+        // returns `List<string>` from a `#nullable disable` scope, so both
+        // the container and its element say nothing and it reads
+        // `List[string!]!`.
+        //
+        // `Ob.WrapList[string]("x")` — what this test used before — is NOT
+        // that shape, and reading it as one was a defect rather than a
+        // convenience. Its `T` is an OPEN type parameter closed by the
+        // caller with G#'s non-null `string`, and ADR-0186 §2 says an open
+        // slot takes its nullability from the ARGUMENT. It is therefore
+        // `List[string]!` — a possibly-nil container of non-null strings —
+        // and converting it to `List[string]` is an ordinary top-level
+        // `T! -> T` with a §4 check, not rule 3's business at all. See the
+        // open-type-parameter carve-out in `ClrNullability.ProjectNullableFlags`.
+
         // The unsound direction: a non-null read of a container that may hold
         // nil. This is the aliasing hole, and it must be a compile error.
         var toNonNull = world.Compile(
             """
-                let alias List[string] = Ob.WrapList[string]("x")
+                let alias List[string] = Ob.NilStrings()
                 Console.WriteLine(alias[0])
             """,
             NullabilityMode.PlatformTypes);
@@ -299,11 +315,23 @@ public sealed class Adr0186PlatformTypeBindingTests
         // The one legal direction.
         var toNilable = world.Compile(
             """
-                let alias List[string?] = Ob.WrapList[string]("x")
+                let alias List[string?] = Ob.NilStrings()
                 Console.WriteLine(alias.Count)
             """,
             NullabilityMode.PlatformTypes);
         Assert.True(toNilable.Success, Describe(toNilable));
+
+        // The open-slot control, and it is the half the projection fix is
+        // about: a container whose element came from an explicit type
+        // ARGUMENT is not a `C[T!]`, so it converts to `C[T]` by the
+        // top-level rule with a check, not by rule 3.
+        var openSlot = world.Compile(
+            """
+                let alias List[string] = Ob.WrapList[string]("x")
+                Console.WriteLine(alias[0])
+            """,
+            NullabilityMode.PlatformTypes);
+        Assert.True(openSlot.Success, Describe(openSlot));
 
         // The two remaining unsound directions — `C[T] -> C[T!]` and
         // `C[T?] -> C[T!]` — have no source spelling to test here, because

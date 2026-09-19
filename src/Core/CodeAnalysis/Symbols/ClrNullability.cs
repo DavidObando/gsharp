@@ -965,6 +965,57 @@ public static class ClrNullability
             if (layout.IsGenericParameter)
             {
                 var flag = layoutFlags[layoutOffset++];
+
+                // ADR-0186 §2's open-type-parameter carve-out, applied to the
+                // PROJECTION path — "Open type parameters keep ADR-0136's
+                // exclusion, unchanged. An open slot still widens only for an
+                // explicit `[Nullable(2)]`."
+                //
+                // This arm stamps the byte the OPEN declaration carries onto
+                // the SUBSTITUTED argument, which is exactly what §2 says must
+                // not happen for anything but an explicit `2`. Under ADR-0136
+                // the mis-stamp was invisible: it produced `T?`, and
+                // `Conversion.ClassifyCore` strips inner nullability before
+                // any rule runs, so nothing downstream could tell. Under
+                // ADR-0186 it produces `T!`, which §3 rule 3 treats as a
+                // genuinely different constructed type — and the mis-stamp
+                // becomes a compile error on ordinary code.
+                //
+                // Measured, twice, both reduced from the self-migration guard
+                // and from `samples/`:
+                //
+                //   let a = t.GetConstructors().Cast[MethodBase]()
+                //   let b = cast[IEnumerable[MethodBase]](t.GetMethods())
+                //   let c = if true { a } else { b }
+                //   // GS0263: "branches have no common result type — the true
+                //   // branch is 'IEnumerable[MethodBase]' and the false branch
+                //   // is 'IEnumerable[MethodBase]'"
+                //
+                // `Enumerable.Cast<TResult>`'s return carries byte `0` at its
+                // unconstrained `TResult` slot (csc's encoding for an open
+                // parameter that may be a value type), so `a` came back as
+                // `IEnumerable[MethodBase!]` — obliviousness invented for a
+                // position whose nullability arrives with the ARGUMENT, and a
+                // diagnostic that names one type twice because a nested
+                // argument's `!` does not reach the display.
+                // `Dictionary[string, int32].Enumerator` in
+                // `samples/NestedTypeOfConstructedGeneric.gs` is the same
+                // defect through the enclosing type's arguments.
+                //
+                // Gated on the mode, and that is deliberate rather than
+                // timid: with `--nullability=enabled` the fabricated byte is
+                // `2`, which is the answer ADR-0136 has given for its whole
+                // life and which several emit and read paths are pinned to.
+                // Changing it there would be an ADR-0136 semantics change
+                // smuggled into an ADR-0186 step. Under platform types the
+                // fabrication is observable, so §2's rule is applied and the
+                // argument is left to speak for itself.
+                if (NullabilityOptions.PlatformTypesEnabled
+                    && ClassifyFlag(flag) != ClrNullabilityState.Annotated)
+                {
+                    flag = 1;
+                }
+
                 builder.AddRange(
                     ExpandNullableFlags(actual, ImmutableArray.Create(flag)));
                 return;
