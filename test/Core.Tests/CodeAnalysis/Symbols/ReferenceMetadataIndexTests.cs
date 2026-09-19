@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using Xunit;
 
@@ -60,6 +61,45 @@ public class ReferenceMetadataIndexTests
         }
 
         return lines;
+    }
+
+    [Fact]
+    public void ArityInsensitivePresenceUsesWarmIndexWithoutMaterializingColdTypes()
+    {
+        var references = CoreReferenceSet();
+        using var producer = ReferenceResolver.WithReferences(references);
+        var metadata = producer.ExportMetadataIndex();
+        using var warm = ReferenceResolver.WithReferences(references);
+        Assert.True(warm.TryUseMetadataIndex(metadata));
+        var field = typeof(ReferenceResolver).GetField("typeNameIndex", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var coldIndex = Assert.IsType<Lazy<Dictionary<string, Type>>>(field.GetValue(warm));
+        Assert.False(coldIndex.IsValueCreated);
+
+        for (var i = 0; i < 100; i++)
+        {
+            Assert.True(warm.HasTypeNameAtAnyArity("System.Collections.Generic.List"));
+            Assert.True(warm.HasTypeNameAtAnyArity("System.Collections.Generic.Dictionary"));
+            Assert.True(warm.HasTypeNameAtAnyArity("System.String"));
+            Assert.False(warm.HasTypeNameAtAnyArity("System.Collections.Generic.ListExtra"));
+            Assert.False(warm.HasTypeNameAtAnyArity("GSharp.Core.CodeAnalysis.Invariant"));
+            Assert.False(warm.HasTypeNameAtAnyArity("No.Such.Type"));
+        }
+
+        Assert.False(coldIndex.IsValueCreated);
+    }
+
+    [Fact]
+    public void ArityInsensitivePresenceMatchesColdAndWarmPaths()
+    {
+        var references = CoreReferenceSet();
+        using var cold = ReferenceResolver.WithReferences(references);
+        using var warm = ReferenceResolver.WithReferences(references);
+        Assert.True(warm.TryUseMetadataIndex(cold.ExportMetadataIndex()));
+        foreach (var name in CuratedNames.Select(name => name.Split('`')[0]))
+        {
+            Assert.Equal(cold.HasTypeNameAtAnyArity(name), warm.HasTypeNameAtAnyArity(name));
+        }
     }
 
     [Fact]
