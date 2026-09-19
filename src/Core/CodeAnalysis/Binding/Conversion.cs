@@ -3869,52 +3869,82 @@ public sealed class Conversion
     /// platform wrapper in that mode.
     /// </summary>
     /// <param name="type">The type to scan.</param>
-    /// <param name="depth">Recursion guard for pathological nesting.</param>
     /// <returns><see langword="true"/> when the type mentions a platform type.</returns>
-    private static bool ContainsPlatformType(TypeSymbol? type, int depth = 0)
+    private static bool ContainsPlatformType(TypeSymbol? type)
     {
-        if (type is null || depth > 16)
+        if (type is null)
         {
             return false;
         }
 
-        if (type is PlatformTypeSymbol)
-        {
-            return true;
-        }
+        // Iterative with cycle detection, not recursion with a depth cap.
+        //
+        // The cap was the bug: answering `false` at depth 17 means "no
+        // platform type here", and every caller reads that as "this arm has
+        // no business with this pair" — so a `C[...[T!]...]` nested deeply
+        // enough fell straight through to the ordinary rules, which erase
+        // inner nullability, and the container check silently switched off.
+        // A guard against pathological input must not be spelled as a
+        // negative ANSWER when the caller cannot tell the two apart.
+        //
+        // The real hazard the cap was reaching for is a cyclic symbol graph
+        // (CRTP: `class C[T] : Base[C[T]]`), and a visited set handles that
+        // exactly, with no arbitrary limit and no wrong answers below it.
+        var pending = new Stack<TypeSymbol>();
+        var visited = new HashSet<TypeSymbol>(ReferenceEqualityComparer.Instance);
+        pending.Push(type);
 
-        if (type is NullabilityAnnotatedTypeSymbol annotated)
+        while (pending.Count > 0)
         {
-            if (annotated.ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } annotatedClr)
+            var current = pending.Pop();
+            if (!visited.Add(current))
             {
-                var count = annotatedClr.GetGenericArguments().Length;
-                for (var i = 0; i < count; i++)
-                {
-                    if (ContainsPlatformType(annotated.GetTypeArgumentSymbol(i), depth + 1))
-                    {
-                        return true;
-                    }
-                }
+                continue;
             }
 
-            return ContainsPlatformType(annotated.BaseType, depth + 1);
-        }
-
-        foreach (var wrapped in TypeSymbol.GetWrappedTypes(type))
-        {
-            if (ContainsPlatformType(wrapped, depth + 1))
+            if (current is PlatformTypeSymbol)
             {
                 return true;
             }
-        }
 
-        if (type is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } imported)
-        {
-            foreach (var argument in imported.TypeArguments)
+            if (current is NullabilityAnnotatedTypeSymbol annotated)
             {
-                if (ContainsPlatformType(argument, depth + 1))
+                if (annotated.ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } annotatedClr)
                 {
-                    return true;
+                    var count = annotatedClr.GetGenericArguments().Length;
+                    for (var i = 0; i < count; i++)
+                    {
+                        if (annotated.GetTypeArgumentSymbol(i) is { } argument)
+                        {
+                            pending.Push(argument);
+                        }
+                    }
+                }
+
+                if (annotated.BaseType is { } annotatedBase)
+                {
+                    pending.Push(annotatedBase);
+                }
+
+                continue;
+            }
+
+            foreach (var wrapped in TypeSymbol.GetWrappedTypes(current))
+            {
+                if (wrapped is not null)
+                {
+                    pending.Push(wrapped);
+                }
+            }
+
+            if (current is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } imported)
+            {
+                foreach (var argument in imported.TypeArguments)
+                {
+                    if (argument is not null)
+                    {
+                        pending.Push(argument);
+                    }
                 }
             }
         }

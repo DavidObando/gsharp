@@ -280,6 +280,102 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
+    /// ADR-0186 §6: a guarded access yields a plain <c>U?</c>, never
+    /// <c>U!?</c>.
+    /// <para>
+    /// When the accessed member is itself oblivious, the null-conditional
+    /// result lifting was wrapping the platform type instead of its
+    /// underlying, producing <c>Nullable(Platform(U))</c>. That is not a
+    /// cosmetic difference: <c>U!?</c> is a nullable over a platform type,
+    /// so platform-ness survived a guarded access and leaked into everything
+    /// downstream — narrowing, <c>??</c>, <c>if let</c> — none of which
+    /// expects to find a wrapper underneath the <c>?</c>.
+    /// </para>
+    /// <para>
+    /// Fixed at <c>NullableTypeSymbol.Get</c> rather than at the three
+    /// lifting sites that had the bug, because <c>T!?</c> is not a type this
+    /// language has at all: by §3's governing principle an explicit
+    /// statement beats the absence of one, which is the same rule that makes
+    /// lub(<c>T!</c>, <c>T?</c>) be <c>T?</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="globals">A probe declaring <c>probe</c>.</param>
+    [Theory]
+    [InlineData("let probe = Ob.NilNest()?.Prop")]
+    [InlineData("let probe = Ob.TableWithNil()?[\"k\"]")]
+    public void Section6_AGuardedAccess_Yields_APlainNullable(string globals)
+    {
+        using var world = new World();
+
+        var result = world.GlobalProbeType(globals, NullabilityMode.PlatformTypes);
+
+        var nullable = Assert.IsType<NullableTypeSymbol>(result);
+        Assert.Equal("string?", nullable.Name);
+        Assert.IsNotType<PlatformTypeSymbol>(nullable.UnderlyingType);
+    }
+
+    /// <summary>
+    /// ADR-0186 §6: the result of <c>??</c> over a platform left operand is
+    /// the non-null underlying, not <c>T!</c>.
+    /// <para>
+    /// Supplying a fallback is precisely the act that removes the doubt, so a
+    /// result still typed <c>T!</c> claims the compiler does not know
+    /// something the expression has just guaranteed — and drags a spurious
+    /// <c>T! -&gt; T</c> check, plus §3's overload tie-break, into every use
+    /// downstream of it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section6_Coalescing_APlatformOperand_Yields_TheNonNullUnderlying()
+    {
+        using var world = new World();
+
+        var result = world.GlobalProbeType(
+            "let probe = Ob.Value() ?? \"fallback\"",
+            NullabilityMode.PlatformTypes);
+
+        Assert.IsNotType<PlatformTypeSymbol>(result);
+        Assert.IsNotType<NullableTypeSymbol>(result);
+        Assert.Equal("string", result.Name);
+    }
+
+    /// <summary>
+    /// ADR-0186 §4 inside an expression-tree lambda: rejected, not silently
+    /// dropped.
+    /// <para>
+    /// <c>ExpressionTreeLowerer</c> erases every <c>NullAssertion</c> node,
+    /// on the reasoning that over a reference type <c>!!</c> is pure static
+    /// annotation with nothing to emit. That is true of a real <c>T?</c> and
+    /// false of a platform operand, whose assertion lowers to an actual
+    /// <c>dup; brtrue; pop; newobj; throw</c> — so a <c>T! -&gt; T</c>
+    /// boundary crossed inside such a lambda produced no check, no message
+    /// and no diagnostic.
+    /// </para>
+    /// <para>
+    /// Rejected rather than represented, following the precedent of the
+    /// nullable value-type case in the same validator:
+    /// <c>System.Linq.Expressions</c> has no throw-on-nil-and-yield form that
+    /// preserves G#'s contract.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section4_APlatformCoercion_InsideAnExpressionTreeLambda_Is_Rejected()
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(
+            "    let e Expression[Func[string]] = () -> Ob.Value()!!\n    Console.WriteLine(e)",
+            NullabilityMode.PlatformTypes,
+            extraDeclarations: string.Empty);
+
+        Assert.False(compiled.Success, Describe(compiled));
+        Assert.Contains(
+            compiled.Diagnostics,
+            d => d.Id == "GS0473"
+                && d.Message.Contains("nullability-oblivious", StringComparison.Ordinal));
+    }
+
+    /// <summary>
     /// ADR-0186 §3 rule 3, for <b>magic collections</b> — the shape the first
     /// version of the container arm missed entirely, and the one place this
     /// step was measurably <em>worse</em> than the model it replaces.
@@ -742,10 +838,16 @@ public sealed class Adr0186PlatformTypeBindingTests
             var context = new AssemblyLoadContext(
                 nameof(Adr0186PlatformTypeBindingTests) + "-" + Guid.NewGuid().ToString("N"),
                 isCollectible: true);
-            var libraryPath = this.LibraryPath;
+            // Load the oblivious library from BYTES, not from its path, so the
+            // file stays deletable: a path load keeps the DLL locked until the
+            // collectible context finishes unloading, `Dispose` then fails to
+            // delete the directory, and the swallowed failure leaks one
+            // workspace per test case. This mirrors `EmittedFixture.Load`'s
+            // existing comment, which is there for the same reason.
+            var libraryImage = File.ReadAllBytes(this.LibraryPath);
             context.Resolving += (loadContext, name) =>
                 string.Equals(name.Name, Library, StringComparison.Ordinal)
-                    ? loadContext.LoadFromAssemblyPath(libraryPath)
+                    ? loadContext.LoadFromStream(new MemoryStream(libraryImage))
                     : null;
 
             try
@@ -890,6 +992,7 @@ public sealed class Adr0186PlatformTypeBindingTests
                 import System
                 import System.Collections.Generic
                 import System.Linq
+                import System.Linq.Expressions
 
                 func Main() {
                 {{body}}

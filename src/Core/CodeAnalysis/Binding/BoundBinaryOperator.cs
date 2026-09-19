@@ -239,8 +239,25 @@ public sealed record BoundBinaryOperator
         // null-coalescing operator token; no combinatorial dimension to tabulate.
         if (syntaxKind == SyntaxKind.QuestionQuestionToken)
         {
-            TypeSymbol leftUnderlying = leftType is NullableTypeSymbol leftNullable ? leftNullable.UnderlyingType : leftType;
-            TypeSymbol rightUnderlying = rightType is NullableTypeSymbol rightNullable ? rightNullable.UnderlyingType : rightType;
+            // ADR-0186 §6: `??` accepts a `T!` left operand, and the RESULT of
+            // a coalesce is non-null — that is the whole point of supplying a
+            // fallback. Stripping only `T?` here left `T! ?? T` typed `T!`,
+            // which is wrong twice over: it claims the compiler still does not
+            // know whether the value can be nil when the expression has just
+            // guaranteed it cannot, and it drags a spurious `T! -> T` check
+            // (and §3's overload tie-break) into everything downstream.
+            TypeSymbol leftUnderlying = leftType switch
+            {
+                NullableTypeSymbol leftNullable => leftNullable.UnderlyingType,
+                PlatformTypeSymbol leftPlatform => leftPlatform.UnderlyingType,
+                _ => leftType,
+            };
+            TypeSymbol rightUnderlying = rightType switch
+            {
+                NullableTypeSymbol rightNullable => rightNullable.UnderlyingType,
+                PlatformTypeSymbol rightPlatform => rightPlatform.UnderlyingType,
+                _ => rightType,
+            };
 
             // Issue #1018: `x ?? throw e`. The RHS is a throw-expression whose
             // bottom (`never`) type is convertible to anything, so the result is

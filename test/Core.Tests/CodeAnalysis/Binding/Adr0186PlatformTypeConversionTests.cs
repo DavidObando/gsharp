@@ -390,6 +390,48 @@ public sealed class Adr0186PlatformTypeConversionTests
     }
 
     /// <summary>
+    /// The container rule must not switch itself off for deeply nested
+    /// generics.
+    /// <para>
+    /// The platform-detection walk was recursive with a depth cap, and
+    /// answering <see langword="false"/> past the cap meant "no platform type
+    /// here" — which every caller reads as "this arm has no business with
+    /// this pair". So a <c>C[…[T!]…]</c> nested past the limit fell through
+    /// to the ordinary rules, which erase inner nullability, and the whole
+    /// check silently vanished for exactly the inputs most likely to hide a
+    /// mistake. A guard against pathological input must never be spelled as a
+    /// negative <em>answer</em> when the caller cannot distinguish the two.
+    /// </para>
+    /// <para>
+    /// Twenty levels is comfortably past the old cap of sixteen. The walk is
+    /// now iterative with a visited set, so the real hazard it was reaching
+    /// for — a cyclic symbol graph, as CRTP produces — is handled exactly,
+    /// with no limit and no wrong answers below one.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheContainerRule_Survives_DeepNesting()
+    {
+        TypeSymbol platform = PlatformTypeSymbol.Get(TypeSymbol.String);
+        TypeSymbol nonNull = TypeSymbol.String;
+        TypeSymbol nilable = NullableTypeSymbol.Get(TypeSymbol.String);
+
+        for (var depth = 0; depth < 20; depth++)
+        {
+            platform = SliceTypeSymbol.Get(platform);
+            nonNull = SliceTypeSymbol.Get(nonNull);
+            nilable = SliceTypeSymbol.Get(nilable);
+        }
+
+        // Still rejected twenty levels down.
+        Assert.False(Conversion.Classify(platform, nonNull).Exists);
+        Assert.False(Conversion.Classify(nonNull, platform).Exists);
+
+        // …and the one legal direction still works down there too.
+        Assert.True(Conversion.Classify(platform, nilable).IsImplicit);
+    }
+
+    /// <summary>
     /// ADR-0186 §3 rule 4: <c>C[T] ↔ C[T?]</c> is "unchanged by this ADR",
     /// and this test records what "unchanged" actually is on this compiler so
     /// the container arm cannot quietly acquire responsibility for it.
