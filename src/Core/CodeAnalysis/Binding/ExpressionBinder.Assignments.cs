@@ -2975,6 +2975,18 @@ internal sealed partial class ExpressionBinder
             return receiver;
         }
 
+        // ADR-0186 §4/§5: the WRITE side of a member access has its own
+        // receiver path, and failure mode 1 of ADR-0186's catalogue is
+        // literally "the read and call paths drifted". Checking and
+        // unwrapping here keeps this path identical to
+        // `ExpressionBinder.CheckPlatformReceiver`'s: the same check, and the
+        // same guarantee that the dispatch below — which switches on the
+        // receiver's symbol KIND — never sees a platform wrapper.
+        receiver = PlatformCoercion.InsertCheck(
+            receiver,
+            syntax.Receiver.Location,
+            "a member assignment receiver");
+
         var receiverType = receiver.Type;
         var fieldName = receiverType is TupleTypeSymbol tupleType
             ? GetTupleFieldName(syntax.FieldIdentifier.ValueText, tupleType)

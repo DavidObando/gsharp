@@ -551,7 +551,18 @@ public abstract class BoundTreeRewriter
             return node;
         }
 
-        return new BoundUnaryExpression(node.Syntax, node.Op, operand);
+        // ADR-0186 §4: `IsChecked` and `PlatformCheckMessage` are both
+        // carried through. Dropping the message would not break anything the
+        // compiler can observe — the check still emits — which is exactly why
+        // it is easy to lose: the only symptom is an unattributed
+        // `NullReferenceException` inside an async body, an iterator or a
+        // lambda, i.e. precisely the frames where attribution matters most.
+        return new BoundUnaryExpression(
+            node.Syntax,
+            node.Op,
+            operand,
+            node.IsChecked,
+            node.PlatformCheckMessage);
     }
 
     /// <summary>

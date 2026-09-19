@@ -1683,7 +1683,15 @@ public static class SpillSequenceSpiller
             }
 
             var spilled = SpillExpression(unary.Operand);
-            var value = new BoundUnaryExpression(null, unary.Op, spilled.Value);
+
+            // ADR-0186 §4: preserve the coercion check's message across the
+            // await spill, for the same reason `BoundTreeRewriter` does.
+            var value = new BoundUnaryExpression(
+                null,
+                unary.Op,
+                spilled.Value,
+                unary.IsChecked,
+                unary.PlatformCheckMessage);
             return new BoundSpillSequenceExpression(
                 null,
                 spilled.Locals,

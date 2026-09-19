@@ -29,9 +29,22 @@ namespace GSharp.Core.Tests.CodeAnalysis.Symbols;
 /// symbol-level assertions have to run with the mode on.
 /// </para>
 /// <para>
-/// These tests will need updating — not silently passing — when ADR-0186 step 2
-/// teaches conversions and member lookup about <c>T!</c> and step 3 flips the
-/// mode on by default.
+/// <b>Step 2 has landed.</b> Conversions (§3), the coercion check (§4),
+/// member lookup (§5) and operator acceptance (§6) are now taught about
+/// <c>T!</c>, and they are covered end-to-end by
+/// <c>Adr0186PlatformTypeConversionTests</c> (the §3 table and the
+/// generic-container rule, at the classifier) and
+/// <c>Adr0186PlatformTypeBindingTests</c> (§4's check, §5's two-clause
+/// mutation witness and §6's operator matrix, against real oblivious
+/// metadata). <em>This</em> fixture keeps its original scope deliberately —
+/// the symbol, its display forms and the three-state classifier — because
+/// those are the facts the rest of the design is derived from and they
+/// deserve a witness that does not depend on any of it.
+/// <para>
+/// Still to come: step 3 flips the mode on by default, at which point the
+/// mode-off assertions here become assertions about a mode nobody selects
+/// and should be revisited rather than merely kept green.
+/// </para>
 /// </para>
 /// </summary>
 public class Adr0186PlatformTypeSymbolTests

@@ -65,7 +65,18 @@ public sealed record BoundUnaryOperator
         // the operand type at runtime. No combinatorial dimension to tabulate.
         if (syntaxKind == SyntaxKind.BangBangToken)
         {
-            var underlying = operandType is NullableTypeSymbol n ? n.UnderlyingType : operandType;
+            // ADR-0186 §6: `!!` on a `T!` yields `T` and emits the check. It is
+            // legal and it is NOT redundant — it is the explicit spelling of
+            // the very conversion §4 would otherwise perform implicitly at the
+            // same point, which is what keeps every existing `!!` in the
+            // migrated corpus compiling and meaning precisely what it means
+            // today.
+            var underlying = operandType switch
+            {
+                NullableTypeSymbol n => n.UnderlyingType,
+                PlatformTypeSymbol p => p.UnderlyingType,
+                _ => operandType,
+            };
             return new BoundUnaryOperator(syntaxKind, BoundUnaryOperatorKind.NullAssertion, operandType, underlying);
         }
 

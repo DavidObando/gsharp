@@ -1572,6 +1572,15 @@ internal sealed partial class ExpressionBinder
         {
             underlying = nullable.UnderlyingType;
         }
+        else if (receiverType is PlatformTypeSymbol platform)
+        {
+            // ADR-0186 §6: `?.` accepts a `T!` receiver and yields `U?` as
+            // usual. This is also §4's "no check" case: the access is guarded
+            // by the `?.` itself, so no coercion to a non-null destination
+            // ever occurs — the capture is bound at the underlying `T` only
+            // on the branch where the value is already known non-nil.
+            underlying = platform.UnderlyingType;
+        }
         else if (receiverType == TypeSymbol.Null)
         {
             // `nil?.x` is statically nil.

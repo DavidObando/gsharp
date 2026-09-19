@@ -546,7 +546,19 @@ public sealed record BoundBinaryOperator
             nullableOrUnderlying = annotated.BaseType;
         }
 
-        if (nullableOrUnderlying == TypeSymbol.Null || nullableOrUnderlying is NullableTypeSymbol)
+        // ADR-0186 §6: `x == nil` / `x != nil` is legal on a `T!`, and GS0129
+        // does not fire. Being able to SAY the value might be nil is the whole
+        // difference between `T!` and `T` — erasing the platform type to its
+        // underlying instead would re-create ADR-0136's original hole verbatim
+        // (alternative 3, rejected). This arm also covers ADR-0159's magic
+        // collections without a second rule: a platform-typed `map[K, V]!` or
+        // `[]T!` can genuinely be nil, so GS0523's "a bare collection can never
+        // be nil" premise simply does not apply, and the comparison is
+        // accepted here rather than reaching the reference-backed-builtin arms
+        // below that GS0523 polices.
+        if (nullableOrUnderlying == TypeSymbol.Null
+            || nullableOrUnderlying is NullableTypeSymbol
+            || nullableOrUnderlying is PlatformTypeSymbol)
         {
             return true;
         }

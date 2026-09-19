@@ -805,10 +805,15 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
     /// entire modern BCL — fails here rather than in a corpus run.
     /// </para>
     /// <para>
-    /// This row must be rewritten, not merely kept green, when step 2 wires
-    /// <c>PlatformTypeSymbol</c> into real binding: at that point the probe
-    /// shape the other rows use becomes meaningful for the oblivious states and
-    /// this test should grow into it.
+    /// <b>Step 2 has landed, and the probe shape it unblocked lives
+    /// elsewhere.</b> <c>Adr0186PlatformTypeBindingTests</c> compiles and
+    /// <em>runs</em> G# against oblivious metadata in both modes — §4's check
+    /// throwing at each coercion site, §5's two-clause mutation witness, §6's
+    /// operator matrix. This row deliberately stays at the symbol level: its
+    /// job in this fixture is the <em>uniformity</em> claim — that all three
+    /// reading paths give one answer for one declaration — which is a
+    /// statement about the reader, not about what the binder later does with
+    /// the result, and which an end-to-end probe would test only indirectly.
     /// </para>
     /// </summary>
     [Fact]

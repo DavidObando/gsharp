@@ -139,6 +139,7 @@ public class Program
                 {
                     ImplicitSystemImport = parsed.ImplicitSystemImport,
                     Nullability = parsed.Nullability,
+                    PlatformNilChecks = parsed.PlatformNilChecks,
                     IsLibrary = parsed.Target == OutputTarget.Library,
                     Optimize = parsed.Optimize,
                     Logger = logger,
@@ -882,6 +883,7 @@ public class Program
           /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
           /nullability:<mode>           How oblivious imported reference positions are read: enabled (default) or platform-types (ADR-0186).
+          /platform-nil-checks:<on|off> Insert the ADR-0186 nil check at each T! -> T coercion (default: on; off is an escape hatch, not a supported mode).
           /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
           /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
           /optimize[+|-]                Enable/disable JIT optimization (default: enabled).
@@ -1102,6 +1104,23 @@ public class Program
                             "platform-types" or "platformtypes" => NullabilityMode.PlatformTypes,
                             _ => throw new CommandLineException(
                                 $"/nullability: unknown mode '{value}'; expected enabled or platform-types."),
+                        };
+                        break;
+
+                    case "platformnilchecks":
+                    case "platform-nil-checks":
+                        // ADR-0186 §4: the coercion check at each `T! -> T`
+                        // boundary. On by default; `off` is a measurement and
+                        // escape-hatch switch, STRICTLY WEAKER than either the
+                        // old or the new model (the silenced sites are neither
+                        // an error nor a check), and deliberately not a
+                        // supported mode.
+                        result.PlatformNilChecks = value.ToLowerInvariant() switch
+                        {
+                            "" or "on" or "true" or "+" => true,
+                            "off" or "false" or "-" => false,
+                            _ => throw new CommandLineException(
+                                $"/platform-nil-checks: unknown value '{value}'; expected on or off."),
                         };
                         break;
 
@@ -1472,6 +1491,14 @@ public class Program
         /// and therefore no change from today.
         /// </summary>
         public NullabilityMode Nullability { get; set; } = NullabilityMode.Enabled;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether ADR-0186 §4's runtime nil
+        /// check is inserted at each <c>T! -&gt; T</c> coercion (from
+        /// /platform-nil-checks:&lt;on|off&gt;). Defaults to
+        /// <see langword="true"/>.
+        /// </summary>
+        public bool PlatformNilChecks { get; set; } = true;
 
         /// <summary>Gets the set of diagnostic IDs to suppress (from /nowarn).</summary>
         public HashSet<string> NoWarnIds { get; } = new(StringComparer.OrdinalIgnoreCase);

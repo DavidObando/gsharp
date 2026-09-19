@@ -131,10 +131,7 @@ internal sealed partial class MethodBodyEmitter
                 this.il.Token(tpToken);
                 this.il.Branch(ILOpCode.Brtrue, tpNonNull);
 
-                var tpNreCtor = this.outer.wellKnown.GetNullReferenceExceptionCtorRef();
-                this.il.OpCode(ILOpCode.Newobj);
-                this.il.Token(tpNreCtor);
-                this.il.OpCode(ILOpCode.Throw);
+                this.EmitNullAssertionThrow(u.PlatformCheckMessage);
 
                 this.il.MarkLabel(tpNonNull);
                 this.il.LoadLocal(tpUnwrapSlot);
@@ -180,10 +177,7 @@ internal sealed partial class MethodBodyEmitter
             var nonNull = this.il.DefineLabel();
             this.il.Branch(ILOpCode.Brtrue, nonNull);
             this.il.OpCode(ILOpCode.Pop);
-            var nreCtor = this.outer.wellKnown.GetNullReferenceExceptionCtorRef();
-            this.il.OpCode(ILOpCode.Newobj);
-            this.il.Token(nreCtor);
-            this.il.OpCode(ILOpCode.Throw);
+            this.EmitNullAssertionThrow(u.PlatformCheckMessage);
             this.il.MarkLabel(nonNull);
             return;
         }
@@ -1259,6 +1253,30 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
+    /// Emits the throw half of a null assertion: <c>newobj</c> +
+    /// <c>throw</c>, choosing the message-carrying
+    /// <see cref="NullReferenceException"/> constructor for ADR-0186 §4's
+    /// synthesized coercion check and the parameterless one for a
+    /// user-written <c>!!</c>.
+    /// </summary>
+    /// <param name="platformCheckMessage">The §4 message, or <see langword="null"/>.</param>
+    private void EmitNullAssertionThrow(string? platformCheckMessage)
+    {
+        if (platformCheckMessage != null)
+        {
+            this.il.LoadString(this.outer.emitCtx.Metadata.GetOrAddUserString(platformCheckMessage));
+            this.il.OpCode(ILOpCode.Newobj);
+            this.il.Token(this.outer.wellKnown.GetNullReferenceExceptionMessageCtorRef());
+            this.il.OpCode(ILOpCode.Throw);
+            return;
+        }
+
+        this.il.OpCode(ILOpCode.Newobj);
+        this.il.Token(this.outer.wellKnown.GetNullReferenceExceptionCtorRef());
+        this.il.OpCode(ILOpCode.Throw);
+    }
+
+    /// <summary>
     /// Issue #2333: returns <see langword="true"/> when <paramref name="type"/>
     /// is a bare (non-<see cref="NullableTypeSymbol"/>) value type — a
     /// primitive, enum, struct, tuple, or a type parameter constrained to
@@ -1275,7 +1293,13 @@ internal sealed partial class MethodBodyEmitter
     /// <returns><see langword="true"/> when no runtime null check applies.</returns>
     private static bool IsNonNullableValueOperand(TypeSymbol type)
     {
-        if (type is NullableTypeSymbol)
+        // ADR-0186: a platform wrapper is a REFERENCE-nullability annotation
+        // (§2 excludes value types outright), so it can never make an operand
+        // structurally non-nil. Listed explicitly beside its `T?` sibling so
+        // the reference check below is reached by construction rather than by
+        // `ClrType.IsValueType` happening to answer correctly through the
+        // wrapper's relay.
+        if (type is NullableTypeSymbol or PlatformTypeSymbol)
         {
             return false;
         }

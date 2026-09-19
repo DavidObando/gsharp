@@ -157,6 +157,69 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax rightPart,
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
+        => BindAccessorStepAfterPlatformReceiverCheck(
+            CheckPlatformReceiver(receiver, receiverSyntax?.Location ?? rightPart.Location),
+            classSymbol,
+            rightPart,
+            receiverSyntax,
+            receiverStart);
+
+    /// <summary>
+    /// ADR-0186 §4 and §5, in one move: replaces a platform-typed receiver
+    /// with the checked, <b>unwrapped</b> value before member binding runs.
+    /// <para>
+    /// <b>§4.</b> The ADR's revised §4 is explicit that instance-member
+    /// receivers get the check <em>like every other coercion</em>. The earlier
+    /// draft's receiver exemption — "the CLR checks a <c>callvirt</c> receiver
+    /// anyway" — was falsified by enumerating the emitter's opcode selection:
+    /// <c>receiverIsClass</c> is <c>is StructSymbol {IsClass: true}</c> and
+    /// <c>receiverIsInterface</c> is <c>is InterfaceSymbol</c>, so a
+    /// <em>wrapped</em> receiver type, <c>string</c>, <c>Array</c>,
+    /// non-virtual event accessors and method-group capture all emit
+    /// <c>call</c> — or <c>ldftn</c>, which does not dereference the receiver
+    /// at all and lets the nil travel into a delegate's <c>Target</c> slot and
+    /// arbitrarily far from the site that produced it. The exemption may be
+    /// re-derived once #4312/#4313 unify that opcode selection onto a single
+    /// "is this a reference at runtime" predicate; until then it would make
+    /// the design's safety depend on an emit property four known paths
+    /// violate.
+    /// </para>
+    /// <para>
+    /// <b>§5.</b> Because the replacement expression's type is
+    /// <c>platform.UnderlyingType</c> — the same symbol the reader built, not
+    /// one re-minted from <c>ClrType</c> — member lookup, overload resolution
+    /// and extension resolution run against <c>T</c> <em>by construction</em>.
+    /// A receiver's platform-ness is therefore not an input to member
+    /// selection and cannot select a different member (§5a), and the symbolic
+    /// or generic-substituted projection the underlying carries survives
+    /// intact, so the result type is the one a <c>T</c> receiver would get
+    /// (§5b). That is the whole mechanism: nothing downstream needs a
+    /// <c>PlatformTypeSymbol</c> arm, which is exactly the point — the closed
+    /// switch in <c>MemberLookup.GetImportedTypeSymbol</c> would otherwise
+    /// fall through to the erased answer at each of its call sites and turn
+    /// <c>Queue[Entry]!.Dequeue()</c> from <c>Entry</c> into a CLR erasure.
+    /// </para>
+    /// <para>
+    /// Guarded accesses are deliberately NOT routed here: <c>?.</c> and
+    /// <c>?[</c> unwrap their own receiver on the branch where it is already
+    /// known non-nil, so no coercion to non-null occurs and §4 inserts
+    /// nothing.
+    /// </para>
+    /// </summary>
+    /// <param name="receiver">The bound receiver, possibly <see langword="null"/> for a static access.</param>
+    /// <param name="location">The access site, for the check's message.</param>
+    /// <returns>The checked receiver, or the original when it is not platform-typed.</returns>
+    private BoundExpression? CheckPlatformReceiver(BoundExpression? receiver, TextLocation location)
+        => receiver is null
+            ? null
+            : PlatformCoercion.InsertCheck(receiver, location, "a member access receiver");
+
+    private BoundExpression BindAccessorStepAfterPlatformReceiverCheck(
+        BoundExpression? receiver,
+        ImportedClassSymbol? classSymbol,
+        ExpressionSyntax rightPart,
+        ExpressionSyntax? receiverSyntax = null,
+        int? receiverStart = null)
         => receiver != null
             && (receiver is BoundMethodGroupExpression or BoundClrMethodGroupExpression)
             && !MethodGroupDiagnostics.HasDelegateTarget(receiver)
@@ -1222,6 +1285,16 @@ internal sealed partial class ExpressionBinder
         {
             underlying = nullable.UnderlyingType;
         }
+        else if (receiverType is PlatformTypeSymbol platform)
+        {
+            // ADR-0186 §6: `?[` accepts a `T!` receiver and yields `U?` as
+            // usual; GS0300 does NOT fire. The warning says "the null-check is
+            // dead code", which is true for a `T` receiver and false for a
+            // platform one — it may genuinely be nil. Note this is also the
+            // one receiver position that takes no §4 check: the access is
+            // guarded, so no coercion to non-null happens at all.
+            underlying = platform.UnderlyingType;
+        }
         else if (receiverType == TypeSymbol.Null)
         {
             // `nil?[i]` is statically nil.
@@ -1284,6 +1357,14 @@ internal sealed partial class ExpressionBinder
         TextLocation targetLocation,
         BoundExpression? boundIndexOverride = null)
     {
+        // ADR-0186 §4/§5: an indexer receiver is a receiver. Checked and
+        // unwrapped here for the same two reasons `BindAccessorStep` does it
+        // — see `CheckPlatformReceiver`. Without the unwrap, indexing a
+        // platform receiver reported GS0116 "type 'List[int32]!' is not
+        // indexable", which is §5a's failure in its plainest form: the
+        // receiver's platform-ness changed what member lookup found.
+        target = PlatformCoercion.InsertCheck(target, targetLocation, "an indexer receiver");
+
         // ADR-0122 / issue #1014: pointer indexing `p[i]` == `*(p + i)`.
         if (target.Type is PointerTypeSymbol pointerTarget)
         {

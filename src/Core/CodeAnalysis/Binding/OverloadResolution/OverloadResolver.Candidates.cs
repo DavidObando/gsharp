@@ -988,6 +988,32 @@ internal sealed partial class OverloadResolver
     /// </summary>
     private static int CompareUserConversions(ClrOverloadResolution.ImplicitConversionKind ka, TypeSymbol? paramA, bool tailA, ClrOverloadResolution.ImplicitConversionKind kb, TypeSymbol? paramB, bool tailB, TypeSymbol? source)
     {
+        // ADR-0186 §3's tie-break, stated here because it cannot fall out of
+        // the ranking below. A `T!` argument is applicable to a `T` parameter
+        // and to a `T?` parameter, and when both apply the `T` parameter wins
+        // — "the tie-break that keeps a platform argument behaving like the
+        // non-null value it usually is."
+        //
+        // The ranking below cannot decide it: every conversion kind here is
+        // derived from CLR types, and `string`, `string?` and `string!` are
+        // one CLR type (§1), so both candidates land in the same bucket and
+        // tie. Nor could the classifier decide it by making `T! -> T?` an
+        // identity conversion, which is the shape that looks natural: identity
+        // beats implicit in this comparison, so that would select `T?` —
+        // exactly backwards — and it would also stop §4's check from ever
+        // materialising (see `Conversion.PlatformChecked`).
+        //
+        // ADR-0186 open question 10 records that this is the one place the
+        // design reproduces failure mode 5's *shape* — the same line selecting
+        // a different method by typing — and accepts it deliberately: the `T`
+        // overload is the one a non-nilable argument would have picked, and
+        // CLR metadata cannot express such a pair, so no imported API moves.
+        var platformTieBreak = ComparePlatformArgumentTargets(source, paramA, paramB);
+        if (platformTieBreak != 0)
+        {
+            return platformTieBreak;
+        }
+
         // Issue #1631 (B1'): per C# §7.5.3.2, "non-expanded form preferred
         // over expanded form" is a LATE tie-break applied only when per-arg
         // betterness is otherwise tied across every argument — it is not a
@@ -1054,6 +1080,44 @@ internal sealed partial class OverloadResolver
             && paramA != null && paramB != null && !ReferenceEquals(paramA, paramB))
         {
             return CompareReferenceTargets(paramA, paramB);
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// ADR-0186 §3: for a <c>T!</c> argument, a non-null <c>T</c> parameter
+    /// beats a <c>T?</c> parameter over the same underlying type.
+    /// <para>
+    /// Scoped as narrowly as the rule is: it fires only when the argument is
+    /// platform-typed and the two candidate parameters are exactly <c>U</c>
+    /// and <c>U?</c> over one underlying. Any other pair — including
+    /// <c>U</c> against an unrelated <c>V</c>, and every pair at all while
+    /// <c>--nullability=platform-types</c> is off, since nothing constructs a
+    /// platform type then — is left to the ordinary ranking below.
+    /// </para>
+    /// </summary>
+    /// <param name="source">The argument's static type.</param>
+    /// <param name="targetA">The first candidate's parameter type.</param>
+    /// <param name="targetB">The second candidate's parameter type.</param>
+    /// <returns>Negative when A wins, positive when B wins, 0 when the rule does not apply.</returns>
+    private static int ComparePlatformArgumentTargets(TypeSymbol? source, TypeSymbol? targetA, TypeSymbol? targetB)
+    {
+        if (source is not PlatformTypeSymbol || targetA == null || targetB == null)
+        {
+            return 0;
+        }
+
+        if (targetA is not NullableTypeSymbol && targetB is NullableTypeSymbol nilableB
+            && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(targetA, nilableB.UnderlyingType))
+        {
+            return -1;
+        }
+
+        if (targetB is not NullableTypeSymbol && targetA is NullableTypeSymbol nilableA
+            && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(targetB, nilableA.UnderlyingType))
+        {
+            return 1;
         }
 
         return 0;

@@ -874,6 +874,21 @@ internal sealed class ConversionClassifier
             return expression;
         }
 
+        // ADR-0186 §4: the coercion check. `Conversion.Classify` already
+        // decided whether this pairing is "a platform value into a
+        // destination whose declared type is a non-null reference type", so
+        // this site does not re-derive it — the one place the rule is stated
+        // is the classifier, and every call site that funnels through
+        // `BindConversion` (a declared-type `let`/`var`, a field or property
+        // store, an array/slice element store, an `out`/`ref` target, a call
+        // argument — INCLUDING an extension method's receiver, which is
+        // argument 0 — a `return`, a `throw` operand, a `lock` subject and a
+        // `foreach` source) inherits it for free.
+        if (conversion.RequiresPlatformNilCheck)
+        {
+            return BindPlatformCoercionCheck(diagnosticLocation, expression, type);
+        }
+
         // Issue #2732: Nullable<T>.ClrType aliases T, but its IL stack shape
         // remains Nullable<T>. Lower an explicit nullable-to-underlying
         // conversion to the existing `!!` unwrap before async hoisting.
@@ -3088,6 +3103,44 @@ internal sealed class ConversionClassifier
     }
 
     // ----- Private helpers (kept here because they are only used by methods in this class) -----
+
+    /// <summary>
+    /// ADR-0186 §4: materialises the coercion check for a
+    /// <see cref="Conversion.RequiresPlatformNilCheck"/> classification, then
+    /// finishes the conversion from the now-checked, non-platform value.
+    /// </summary>
+    /// <param name="diagnosticLocation">The coercion site.</param>
+    /// <param name="expression">The platform-typed source expression.</param>
+    /// <param name="type">The non-null reference destination.</param>
+    /// <returns>The checked (and, for an upcast, converted) expression.</returns>
+    private BoundExpression BindPlatformCoercionCheck(
+        TextLocation diagnosticLocation,
+        BoundExpression expression,
+        TypeSymbol type)
+    {
+        var checkedExpression = PlatformCoercion.InsertCheck(
+            expression,
+            diagnosticLocation,
+            $"a conversion to the non-null type '{type.Name}'");
+
+        if (ReferenceEquals(checkedExpression, expression))
+        {
+            // `--platform-nil-checks=off`: the value keeps its `T!` type and
+            // flows on unconverted, exactly as it did before §4 existed.
+            return expression;
+        }
+
+        // The destination may be a SUPERTYPE (`object`, a base class, an
+        // interface) rather than `T` itself — §3's upcast rows, which check
+        // precisely because a non-null destination is a non-null destination.
+        // The remaining `T -> object` step is an ordinary reference upcast
+        // and cannot re-enter this arm, because the checked expression's type
+        // is the bare underlying and carries no platform wrapper.
+        return checkedExpression.Type == type
+            ? checkedExpression
+            : BindConversion(diagnosticLocation, checkedExpression, type, allowExplicit: true);
+    }
+
     private static TypeSymbol? PreserveParameterTopLevelNullability(ParameterInfo parameter, TypeSymbol? mapped)
     {
         var flags = ClrNullability.ReadNullableFlags(parameter, parameter.Member);
