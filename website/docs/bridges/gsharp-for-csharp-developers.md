@@ -26,7 +26,8 @@ G# is a modern .NET language with concise syntax influenced by Go, Kotlin, and S
 | collection initializer `new List<int>{1,2}` | `List[int32]{1, 2}` | Dictionaries support `"k": v` and `[k] = v` entries. |
 | structural value/reference aggregate | `data struct` / `data class` | Structural value or reference aggregates. |
 | `readonly struct CustomerId` | `inline struct CustomerId(value string)` | Inline structs are nominal single-field wrappers. |
-| partial type | `partial class` / `partial struct` / `partial interface` | Partial enums and partial members are not supported. |
+| partial type | `partial class` / `partial struct` / `partial interface` | Partial enums are not supported. |
+| partial method | `partial func F() int32;` + `partial func F() int32 { … }` | Only inside a `partial class`/`partial struct`. Unlike C#, the implementing part is required — an unimplemented partial method is an error, never silently elided. Partial properties and partial interface members are not supported. |
 | `Task<T>` | `Task[T]` | Generic type arguments use brackets. |
 | `async Task<T>` | `async func ... T` | Await is available inside async functions. |
 | `async void` | `async func ... void` | Intended for void delegate/event handlers; not awaitable. |
@@ -168,7 +169,7 @@ Use `unmanaged` constraints and `sizeof(T)` for generic pointer code. Pointer me
 
 C# anonymous types translate to `object { ... }` literals. Field-only literals infer member types; `data object` adds value semantics and `with` copy/update. Rich anonymous objects can implement an interface or extend a base class, but rich object fields need explicit types.
 
-Use `partial` on every split declaration of a class, struct, or interface. The compiler merges parts into one emitted CLR type; partial methods/properties and partial enums are not part of the 0.4 surface.
+Use `partial` on every split declaration of a class, struct, or interface. The compiler merges parts into one emitted CLR type. A `func` member of a `partial class`/`partial struct` may also be `partial`, split into a signature-only declaring part (which carries the annotations) and one implementing part with the body; both parts carry `partial`, and the compiler merges them into one emitted method. Unlike C#, G# requires the implementing part: there is no silent elision of an unimplemented partial method. Partial properties, partial interface members, and partial enums are not part of the surface.
 
 ## Where to go next
 

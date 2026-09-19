@@ -581,6 +581,49 @@ partial class A {
     }
 
     [Fact]
+    public void ParameterAnnotationOnOnlyOnePart_ReportsGS0604()
+    {
+        // ADR-0192 §D: a parameter's annotations are part of what both parts
+        // must state, because the merged node takes the implementing part's
+        // parameter nodes verbatim and a parameter annotation such as
+        // `@AllowNull` is part of the contract callers see. This DIVERGES from
+        // C#, which unions parameter attributes across the two parts — the
+        // divergence is deliberate and documented, and this test pins it so a
+        // future relaxation is a conscious change rather than an accident.
+        var diagnostics = Compile(@"package App
+import System.Diagnostics.CodeAnalysis
+
+partial class A {
+    partial func F(@AllowNull x string) int32;
+}
+
+partial class A {
+    partial func F(x string) int32 { return 1 }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0604");
+    }
+
+    [Fact]
+    public void ParameterAnnotationOnBothParts_DoesNotReportGS0604()
+    {
+        // The complement: restating the annotation on both parts is accepted,
+        // so the rule above is "must match", not "must be absent".
+        var diagnostics = Compile(@"package App
+import System.Diagnostics.CodeAnalysis
+
+partial class A {
+    partial func F(@AllowNull x string) int32;
+}
+
+partial class A {
+    partial func F(@AllowNull x string) int32 { return 1 }
+}
+");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0604");
+    }
+
+    [Fact]
     public void PartsWithDifferentTypeParameterNames_ReportGS0604()
     {
         var diagnostics = Compile(@"package App

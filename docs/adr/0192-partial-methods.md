@@ -17,11 +17,14 @@
   [#3501](https://github.com/DavidObando/gsharp/issues/3501) (self-migration,
   zero synthetic identifiers).
 - **Related but explicitly out of scope**: PR #4326's ADR-0187 proposes a
-  *native* `@GeneratedRegex` implementation inside gsc. That is a separate,
-  independent effort. This ADR neither depends on it nor modifies it, and the
-  language feature here is useful whether or not it lands. (This ADR also
-  deliberately skips diagnostic codes GS0593–GS0596, which PR #4326 has claimed
-  on its own branch — see §E.)
+  *native* `@GeneratedRegex` implementation inside gsc via narrow
+  attribute-dispatch on a `;`-bodied `func`. That is a separate, independent
+  effort. This ADR neither depends on it nor modifies it, and the language
+  feature here is useful whether or not it lands. ADR-0187 explicitly rejects
+  general partial-method support; Alternative 1 below records that disagreement
+  and answers it rather than eliding it. (This ADR also deliberately skips
+  diagnostic codes GS0593–GS0596, which PR #4326 has claimed on its own branch —
+  see §E.)
 
 > **Numbering note.** `main`'s highest ADR at the time of writing is 0186, and
 > PR #4326 uses 0187 on its own branch. 0192 was assigned by the repo owner to
@@ -231,7 +234,18 @@ part first.**
 This matches C#'s own partial-method rule — the combined attributes of the
 defining and implementing declarations — and it matches ADR-0144 §C's
 annotation-union rule for type parts, so partial types and partial methods do
-not disagree. Parameter-level annotations ride along on their parameters.
+not disagree.
+
+**Exception, deliberate: parameter-level annotations are *not* unioned; they
+must match on both parts (§D).** C# does union parameter attributes. G# does
+not, for two reasons. Mechanically, the merged node takes the implementing
+part's `ParameterSyntax` nodes verbatim, so unioning would mean rebuilding
+those nodes — real cost for a case the motivating scenario does not have
+(`[GeneratedRegex]` methods take no parameters). Semantically, a parameter
+annotation like `@AllowNull` is part of the contract callers see, which is the
+same reasoning that makes `async`/`suspend` a must-match aspect (§D) rather
+than an implementation detail. This is pinned by a test so a future relaxation
+to C#'s union rule is a conscious change, not an accident.
 
 The declaring part is where an author naturally writes the attribute
 (`@GeneratedRegex(...)` describes the contract, not the implementation), and
@@ -257,7 +271,7 @@ differs from C#:
 | Type parameters | Identical names, order, constraints | Mirrors GS0480 for types. |
 | Accessibility | Agree **where stated**; a part may omit (effective = the stated one) | ADR-0144 §C's rule for type parts, applied unchanged. |
 | `open` / `override` | Identical presence | Both are part of the vtable contract. |
-| Parameters | Identical count, and each parameter identical as normalized text — name, `ref`/`out`/`in`/`scoped`/`params` modifiers, default value, annotations | **Stricter than C#**, which only warns (CS8826) on differing parameter *names*. A G# caller may pass an argument by name, so the parts would disagree about the method's public surface. |
+| Parameters | Identical count, and each parameter identical as normalized text — name, `ref`/`out`/`in`/`scoped`/`params` modifiers, default value, **and annotations** | **Stricter than C#** on two counts: C# only *warns* (CS8826) on differing parameter names, and it *unions* parameter attributes rather than requiring them on both parts. A G# caller may pass an argument by name, and a parameter annotation such as `@AllowNull` is part of the contract callers see — so both belong to the signature the two parts must agree on. See §C for the mechanical half of the reason. |
 | `unsafe` | Union | Per-part in ADR-0144 §C, but the merged node carries ONE signature: if either part's signature was written in an unsafe context (raw `*T` parameters), the merged node must bind in one. |
 | Annotations | Union, declaring part first | §C. |
 | Explicit-interface qualifier, receiver clause | Identical | Prevents silent divergence; see §F for why neither is a supported partial shape. |
@@ -395,6 +409,15 @@ part's modifiers rather than silently defaulting.
   strict superset of the old `Peek(n) == func` checks (it additionally accepts
   runs containing `partial`, which were previously errors), so no previously-legal
   program changes meaning.
+- **Negative, known**: **tooling on the declaring part degrades until follow-on
+  #5 lands.** The bound `FunctionSymbol`'s declaration is the merged node — the
+  *implementing* part's tokens — so hover, go-to-definition, and
+  find-references anchored on the **declaring** part's signature resolve to no
+  symbol. This is the member-level version of the gap ADR-0144 §G closed for
+  types with `PartialPartLocations`, and the merged node already retains
+  `DeclaringPart`, so closing it is a definition-computer change with no
+  binder work. Diagnostics are unaffected: `GS0602`/`GS0603` are reported at the
+  declaring part's own identifier location.
 - **Negative / deliberate**: the C# "optional generator hook"
   (`partial void OnFoo()` with no implementation) is not expressible in G#
   source. Handled at the cs2gs/gsgen translation layer, unchanged (§B).
@@ -410,16 +433,32 @@ Teach gsc (or gsgen) to recognize the specific `@GeneratedRegex`-annotated
 body-less `func` and pair it with a generated body, without a general `partial`
 member modifier.
 
-Rejected on the same proportionality reasoning ADR-0092 used for
-`@LibraryImport` and ADR-0187 used elsewhere: **the general feature is not
-meaningfully bigger to build than the special case**, and is far more useful.
-The entire merge is one pre-pass over declarations that ADR-0144's existing
-partial-type-fragment mechanism has *already* placed in the same member list —
-a special case would need the same pairing, the same signature validation, and
-the same attribute handling, just gated on one attribute name. It would also
-be dead weight the moment the next generator pattern appeared (JSON, MVVM,
-logging all want the same shape), and it would fork the mental model: G#
-authors could not write the pattern that generated G# code uses.
+> **This alternative is not hypothetical, and this ADR is on the losing side of
+> it elsewhere.** PR #4326's ADR-0187 proposes exactly this narrow
+> attribute-dispatch mechanism and *explicitly rejects* general partial-method
+> support, on the grounds that "no second consumer would exist for general
+> partial-method support today, and the narrow `;`-body mechanism already does
+> everything actually needed." That disagreement is recorded here honestly
+> rather than papered over — and it is not a conflict: the two efforts are
+> independent, and neither blocks the other.
+
+Rejected here for two reasons ADR-0187's framing does not weigh:
+
+- **There are second consumers, and they are the norm rather than the
+  exception.** The declaring-part/implementing-part shape is the *standard* C#
+  source-generator member contract, not a regex peculiarity: JSON source
+  generation, MVVM command generation, and logging generators all use it. Every
+  one of them arrives through the same ADR-0145 gsgen path, and every one of
+  them needs this and nothing more. A narrow mechanism is dead weight the moment
+  the second pattern appears.
+- **The general feature is not meaningfully bigger to build.** The entire merge
+  is one pre-pass over declarations that ADR-0144's existing partial-type
+  mechanism has *already* placed in the same member list. A special case would
+  still need the pairing, the signature validation, and the attribute union —
+  just gated on one attribute name.
+
+It would also fork the mental model: G# authors could not write by hand the
+pattern that generated G# code uses.
 
 ### 2. Bind each part into a shared symbol with accumulating installers — rejected
 
