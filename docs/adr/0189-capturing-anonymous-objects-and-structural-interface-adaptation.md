@@ -163,17 +163,83 @@ The new lexical-construction contract is deterministic:
    literal's lexical environment. Method/event declarations introduce no
    initializer effects of their own.
 4. Construct the ordinary generated class with the saved values and capture
-   environment. Initialize its explicit fields and hidden environment before
-   invoking the selected base constructor.
+   environment. A new generated-rich-constructor lowering stores those saved
+   values into its own declared fields and hidden environment before invoking
+   the selected base constructor.
 5. Invoke the base constructor once and return the object after it completes.
 
 This deliberately ensures an override called by a base constructor observes
-the initialized snapshot fields and valid capture environment. It requires
-the same legal pre-base field-initialization capability used by normal class
-construction; do not achieve it by invoking methods on an otherwise
-uninitialized `this`. Initializer expressions cannot access the new object.
-If the existing emitter cannot satisfy this order in verifiable IL, that
-inheritance combination remains diagnosed until the emitter is corrected.
+the initialized snapshot fields and valid capture environment. It is **not**
+what the current G# constructor emitter does:
+[ConstructorBodyEmitter.cs](../../src/Core/CodeAnalysis/Emit/ConstructorBodyEmitter.cs)
+calls the base constructor before default/primary/explicit derived stores
+(lines 317-325, 369-397, and 559-595 at the inspected baseline).
+[ADR-0183](0183-narrow-immutable-fields-and-properties.md) relies on that
+existing observation. Reusing the class/interface emitter does not mean this
+new constructor order is already implemented.
+
+Introduce an explicit constructor plan for synthesized rich objects:
+saved capture/initializer parameters, stores to fields declared by the
+synthesized class, then the selected base call with its saved arguments.
+Before the base call, emit only legal loads of those saved arguments and
+`stfld` to the new class's own fields. Do not read through the uninitialized
+receiver, invoke its methods/setters, publish it, or evaluate user
+initializers there. Those computations already happened in the enclosing
+lexical context. Reuse field-token and ordinary base-call emission, including
+constructed-generic owner MemberRefs, but add this deliberate pre-base store
+phase rather than reordering every named-class constructor.
+
+The existing default/primary/explicit named-class order is unchanged by this
+feature. Capturing rich inheritance is part of Stage A's required lowering,
+not an unspecified combination deferred with "diagnose until corrected."
+
+#### Verifiable pre-base-store witness
+
+The [C# specification, sections 15.11.3-15.11.4](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/language-specification/classes#15113-instance-variable-initializers)
+provides an existing language precedent: instance field initializers can
+store derived fields before a base constructor performs virtual dispatch.
+The following C# shape was compiled as an independent representation proof
+on September 19, 2026:
+
+```csharp
+public sealed class Captures { public int Value = 40; }
+public abstract class Base
+{
+    protected Base() => Observed = Read();
+    public int Observed { get; }
+    public abstract int Read();
+}
+public sealed class Derived(Captures captured, int snapshot) : Base
+{
+    private readonly Captures environment = captured;
+    private readonly int initial = snapshot;
+    public override int Read() => environment.Value + initial;
+}
+```
+
+A harness constructing `new Derived(captures, 2)` observed `42` from the
+base constructor's virtual call; changing `captures.Value` to `41` then
+produced `43` from `Read()`. The emitted derived constructor was:
+
+```cil
+ldarg.0
+ldarg.1
+stfld class Captures Derived::environment
+ldarg.0
+ldarg.2
+stfld int32 Derived::initial
+ldarg.0
+call instance void Base::.ctor()
+ret
+```
+
+The Release proof used .NET SDK 10.0.400 / runtime 10.0.11. The constructor's
+21-byte body was inspected for these two field stores before the base call;
+ILVerify 10.0.8 verified all 5 types and 7 methods with runtime references and
+**no suppressions**. This establishes legality of the selected CLI shape,
+not completion of the G# feature. Stage A must produce the corresponding
+shape itself and add G# generic, capture, exception-order, and base-virtual-call
+witnesses; moving the stores after the base call must fail those witnesses.
 
 If an argument/initializer throws, later initializers and the base constructor
 do not run. If the base constructor throws, already executed argument and
@@ -611,7 +677,9 @@ This proposal adds no implementation and claims no executed validation.
 
 1. **Stage A: capture and inference.** Bind rich fields/base arguments at the
    literal site, synthesize constructor/environment state, and share lexical
-   cells with closures. Support existing methods/events, inherited overrides,
+   cells with closures. Implement the verified pre-base-store constructor plan
+   for generated rich objects without changing ordinary named-class order.
+   Support existing methods/events, inherited overrides,
    generic captures, and visibility narrowing. Diagnose unsupported capture
    shapes. This stage is independently useful.
 2. **Stage B1: explicit method forwarding.** Add the initial matrix for
@@ -659,8 +727,10 @@ belong in the implementation PR before measurements, not fabricated here.
 - Ratify `adapt[I](e)` and the explicit persistent-handle operand spelling
   with parser/name-collision tests. The explicit allocation/conversion boundary
   must remain regardless of final spelling.
-- Verify pre-base field/environment initialization and existing constructor
-  traces in the real emitter before enabling captured base overrides.
+- Reproduce the pre-base-store proof through G#'s generated-rich-constructor
+  path, including generic owner tokens and exact existing named-constructor
+  traces, before enabling captured base overrides. The CLI representation is
+  demonstrated above; its G# lowering remains an implementation obligation.
 - Decide the exact B2 member order by existing emitter readiness; the matrix's
   diagnostics remain mandatory until each contract passes cross-assembly tests.
 - Coordinate shared capture-cell planning with ADR-0188 without making
