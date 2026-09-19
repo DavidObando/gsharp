@@ -620,7 +620,14 @@ partial class A {
     partial func F(@AllowNull x string) int32 { return 1 }
 }
 ");
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0604");
+
+        // Asserted as "no errors at all", not merely "no GS0604": if `@AllowNull`
+        // on a parameter did not bind (wrong import, unsupported target), a
+        // GS0604-free result would be vacuously true and this test would prove
+        // nothing about the rule it claims to pin.
+        Assert.DoesNotContain(
+            diagnostics,
+            d => d.IsError);
     }
 
     [Fact]
