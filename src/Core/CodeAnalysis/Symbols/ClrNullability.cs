@@ -945,10 +945,23 @@ public static class ClrNullability
         ImmutableArray<byte> flags)
     {
         var layoutFlags = ExpandNullableFlags(layoutType, flags);
+
+        // Two expansions with DIFFERENT absent fills, used only to answer one
+        // question the single expansion cannot: did the declaration actually
+        // DESCRIBE this position, or did the expansion invent a byte for it?
+        // A position the declaration described expands to the same byte under
+        // both fills; one it did not expands to the fill itself, so the two
+        // disagree. The open-type-parameter arm below is the only consumer,
+        // and the distinction is load-bearing there — see the comment at the
+        // arm.
+        var describedLow = ExpandNullableFlags(layoutType, flags, absentFill: 1);
+        var describedHigh = ExpandNullableFlags(layoutType, flags, absentFill: 2);
         var builder = ImmutableArray.CreateBuilder<byte>();
         var layoutOffset = 0;
         Append(actualType, layoutType);
         return builder.ToImmutable();
+
+        bool LayoutDescribed(int position) => describedLow[position] == describedHigh[position];
 
         void Append(Type actual, Type layout)
         {
@@ -1010,7 +1023,32 @@ public static class ClrNullability
                 // smuggled into an ADR-0186 step. Under platform types the
                 // fabrication is observable, so §2's rule is applied and the
                 // argument is left to speak for itself.
+                //
+                // Gated on `LayoutDescribed` too, and THAT distinction is the
+                // whole correctness of this arm. Two different declarations
+                // reach here with byte `0` at an open slot and they mean
+                // opposite things:
+                //
+                //   * `Enumerable.Cast<TResult>` in the ANNOTATED BCL carries
+                //     an EXPLICIT `0` there — csc's encoding for an
+                //     unconstrained parameter that may be a value type. The
+                //     declaration described the slot and did not say `T?`, so
+                //     §2 applies and the caller's argument wins.
+                //   * A method in a `#nullable disable` assembly carries NO
+                //     nullable metadata at all, and the `0` is this
+                //     expansion's own fill. The declaration described
+                //     nothing, which is obliviousness in the ordinary sense,
+                //     and §2's table says that reads as `T!`.
+                //
+                // Collapsing the two re-broke issue #4322 — a `nil` tuple
+                // element stopped widening through an oblivious `params T[]`
+                // again, because the element came back non-null instead of
+                // `T!`. Both directions are pinned:
+                // `Issue4044NilTupleInferenceTests` for the absent case and
+                // `Adr0186_AnOpenSlot_TakesItsNullabilityFromTheArgument`
+                // for the explicit one.
                 if (NullabilityOptions.PlatformTypesEnabled
+                    && LayoutDescribed(layoutOffset - 1)
                     && ClassifyFlag(flag) != ClrNullabilityState.Annotated)
                 {
                     flag = 1;
