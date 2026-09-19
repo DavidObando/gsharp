@@ -920,7 +920,11 @@ internal sealed partial class MethodBodyEmitter
             loadIndex();
             this.il.OpCode(receiverIsValueType ? ILOpCode.Call : ILOpCode.Callvirt);
             this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(itemGetter, lp.Type));
-            if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(lp.Type, indexerProperty, out _))
+            if (itemGetter.ReturnType.IsByRef)
+            {
+                this.EmitLoadIndirect(lp.ElementType);
+            }
+            else if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(lp.Type, indexerProperty, out _))
             {
                 this.EmitErasedObjectReturnWidening(
                     TypeSymbol.FromClrType(itemGetter.ReturnType),
@@ -989,6 +993,25 @@ internal sealed partial class MethodBodyEmitter
                 }),
                 lp.ElementType,
                 failLabel);
+        }
+
+        var rest = (BoundSlicePattern)lp.Elements[sliceIndex];
+        if (rest.Variable != null && NativeSliceTypes.TryGetElement(lp.Type, out _, out _))
+        {
+            var clrType = Invariant.Required(lp.Type.ClrType, "the enclosing TryGetElement success establishes the native CLR type");
+            var subslice = clrType.GetMethods().Single(
+                method => method.Name == "Subslice" && method.GetParameters().Length == 2);
+            loadReceiver();
+            this.il.LoadConstantI4(prefix);
+            EmitLength();
+            this.il.LoadConstantI4(suffix);
+            this.il.OpCode(ILOpCode.Sub);
+            this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(subslice, lp.Type));
+            this.EmitStoreVariable(rest.Variable);
+            if (rest.Pattern != null)
+            {
+                this.EmitPattern(rest.Pattern, () => this.EmitLoadVariable(rest.Variable), lp.Type, failLabel);
+            }
         }
     }
 

@@ -657,6 +657,24 @@ public sealed class BoundScope
         return Parent?.TryLookupSymbol(name);
     }
 
+    /// <summary>Checks whether an imported ordinary type claims a name at any arity.</summary>
+    /// <param name="name">The unqualified identifier.</param>
+    /// <returns>Whether ordinary lookup must take precedence over a native alias.</returns>
+    public bool HasImportedTypeName(string name)
+    {
+        foreach (var import in EnumerateImports())
+        {
+            if ((import.IsAlias && import.Name == name)
+                || References.HasTypeNameAtAnyArity(import.Target + "." + name))
+            {
+                return true;
+            }
+        }
+
+        return GetCurrentDeclaringPackage() is { } package
+            && References.HasTypeNameAtAnyArity(package + "." + name);
+    }
+
     /// <summary>
     /// Tries to lookup an imported generic open type by simple name and arity (Phase 4.4 / ADR-0020).
     /// CLR generic types are stored under the mangled name <c>Name`N</c>; this overload

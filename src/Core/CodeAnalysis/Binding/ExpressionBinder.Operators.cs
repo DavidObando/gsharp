@@ -1850,6 +1850,37 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        var nativeEqualityLeftType = boundLeft.Type is NullableTypeSymbol nullableNativeLeft ? nullableNativeLeft.UnderlyingType : boundLeft.Type;
+        var nativeEqualityRightType = boundRight.Type is NullableTypeSymbol nullableNativeRight ? nullableNativeRight.UnderlyingType : boundRight.Type;
+        if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+            && NativeSliceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnly)
+            && NativeSliceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnly))
+        {
+            if (leftReadOnly != rightReadOnly || NativeSliceTypes.HaveIncompatibleElements(nativeEqualityLeftType, nativeEqualityRightType))
+            {
+                Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundLeft.Type, boundRight.Type);
+                return new BoundErrorExpression(syntax);
+            }
+
+            var methodName = syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ? "op_Equality" : "op_Inequality";
+            var clrType = Invariant.Required(nativeEqualityLeftType.ClrType, "the enclosing TryGetElement success establishes the native CLR type");
+            var method = Invariant.Required(
+                clrType.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static),
+                "TryGetElement selects the SDK Slice/ReadOnlySlice definition, whose ABI declares both equality operators");
+            TryLiftNullableClrOperatorOperands(
+                syntax.OperatorToken.Kind,
+                ref boundLeft,
+                ref boundRight,
+                syntax.Left.Location,
+                syntax.Right.Location,
+                nativeEqualityLeftType,
+                nativeEqualityLeftType,
+                TypeSymbol.Bool,
+                hasByRefSignature: false,
+                out _);
+            return new BoundClrBinaryOperatorExpression(syntax, syntax.OperatorToken.Kind, boundLeft, boundRight, method, TypeSymbol.Bool);
+        }
+
         // ADR-0122 / issue #1014: pointer arithmetic (`p + i`, `i + p`, `p - i`)
         // and pointer comparison (`==`, `!=`, `<`, …) inside an unsafe context.
         // Lowered to native-int (`nint`) arithmetic/comparison plus pointer

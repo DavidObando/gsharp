@@ -2728,6 +2728,24 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
     {
+        if (receiver != null && NativeSliceTypes.TryGetElement(receiver.Type, out _, out _))
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            var saved = DeclareRangeTemp("callReceiver", receiver.Type, receiver, statements);
+            var call = BindAccessorCallCore(new BoundVariableExpression(receiver.Syntax, saved), classSymbol, ce, receiverSyntax, receiverStart);
+            return new BoundBlockExpression(ce, statements.ToImmutable(), call);
+        }
+
+        return BindAccessorCallCore(receiver, classSymbol, ce, receiverSyntax, receiverStart);
+    }
+
+    private BoundExpression BindAccessorCallCore(
+        BoundExpression? receiver,
+        ImportedClassSymbol? classSymbol,
+        CallExpressionSyntax ce,
+        ExpressionSyntax? receiverSyntax,
+        int? receiverStart)
+    {
         var methodName = ce.Identifier.ValueText;
         if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal))
         {
@@ -2809,8 +2827,10 @@ internal sealed partial class ExpressionBinder
             // bare identifier and the receiver really has a VALUE member of
             // this name — so a genuine unresolvable type argument on a generic
             // method still reports its own diagnostic.
+            var indexableOwner = receiver?.Type ?? classSymbol?.SymbolicReceiver
+                ?? (classSymbol == null ? null : TypeSymbol.FromClrType(classSymbol.ClassType));
             if (!IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList)
-                || receiver?.Type is not { } receiverType
+                || indexableOwner is not { } receiverType
                 || !HasCallableIndexableValueMember(receiverType, methodName))
             {
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
@@ -3048,6 +3068,11 @@ internal sealed partial class ExpressionBinder
 
         var arguments = boundArguments.ToImmutable();
 
+        if (!ValidateNativeSharingArguments(classSymbol, methodName, arguments, ce))
+        {
+            return new BoundErrorExpression(ce);
+        }
+
         if (classSymbol != null)
         {
             if (classSymbol.TryLookupFunction(
@@ -3096,9 +3121,9 @@ internal sealed partial class ExpressionBinder
                 // placeholder (an Error-typed address-of) would flow into the
                 // parameter-conversion path below and the inline-declared local
                 // would never exist for the rest of the body. Static calls have
-                // no receiver, so pass null; the mapping aligns source args to
-                // parameters for out-parameters in any position.
-                arguments = RebindInlineOutVarArguments(ce, arguments, staticFn.Method, staticMapping, receiver?.Type, typeArgSymbols);
+                // no value receiver, but the constructed container still supplies
+                // type arguments (including native slice element nullability).
+                arguments = RebindInlineOutVarArguments(ce, arguments, staticFn.Method, staticMapping, classSymbol.SymbolicReceiver ?? receiver?.Type, typeArgSymbols);
 
                 // Issue #1330: when the receiver is a generic type constructed
                 // over an in-scope generic type parameter (`Comparer[TResult]`),

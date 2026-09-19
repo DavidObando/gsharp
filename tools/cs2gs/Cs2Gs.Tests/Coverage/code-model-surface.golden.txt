@@ -110,6 +110,7 @@ ArrayTypeReference
 ArrowTypeReference
 FunctionPointerTypeReference
 NamedTypeReference
+NativeSliceTypeReference
 PointerTypeReference
 TupleTypeReference
 

@@ -2004,6 +2004,12 @@ internal sealed partial class ExpressionBinder
         StructSymbol? resolvedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments = default)
     {
+        if (resolvedDefinition == null && syntax.TypeArgumentList is { } nativeTypeArguments
+            && binderCtx.CanUseNativeBufferAlias(scope, syntax.TypeIdentifier, getCurrentFunction(), expression: true))
+        {
+            return BindEmptyNativeBufferLiteral(syntax, nativeTypeArguments);
+        }
+
         if (syntax.SpreadExpression != null)
         {
             return BindStructuralSpreadLiteral(syntax, resolvedDefinition, enclosingTypeArguments);
@@ -2032,13 +2038,15 @@ internal sealed partial class ExpressionBinder
                 out var typeNameAmbiguous);
             var resolvedStruct = resolvedType as StructSymbol;
             ImportedClassSymbol? importedCandidate = null;
+            ImportedTypeAmbiguity? importedAmbiguity = null;
             bool hasImportedCandidate =
                 !typeNameAmbiguous
                 && scope.TryLookupImportedClassByArity(
                     typeName,
                     preferredArity,
                     declaration: null,
-                    out importedCandidate);
+                    out importedCandidate,
+                    out importedAmbiguity);
 
             // Issue #3466: a nested source type may retain the bare (name,
             // arity) key for references from its containing type. Outside that
@@ -2059,6 +2067,12 @@ internal sealed partial class ExpressionBinder
                     importedCandidate.ClassType);
             if (!foundAlias || resolvedStruct == null || importedTypeTakesPrecedence)
             {
+                if (importedAmbiguity != null)
+                {
+                    Diagnostics.ReportAmbiguousImportedTypeReference(syntax.TypeIdentifier.Location, typeName, importedAmbiguity);
+                    return new BoundErrorExpression(syntax);
+                }
+
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also
                 // targets an IMPORTED reference-type class (a BCL class such as
                 // `System.Text.Json.JsonSerializerOptions`) or an imported

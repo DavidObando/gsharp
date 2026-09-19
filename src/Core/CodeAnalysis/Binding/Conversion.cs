@@ -229,6 +229,11 @@ public sealed class Conversion
         bool allowStructuralProjection,
         bool allowExplicitReference = true)
     {
+        if (NativeSliceTypes.HaveIncompatibleElements(from, to))
+        {
+            return None;
+        }
+
         // ADR-0186 §3 rule 3, the container half: `C[T!]`, `C[T]` and `C[T?]`
         // are three DISTINCT constructed types, and exactly one implicit
         // conversion exists between them — `C[T!] -> C[T?]`, recursively.

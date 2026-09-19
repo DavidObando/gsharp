@@ -903,6 +903,11 @@ internal sealed partial class StatementBinder
             // treatment exactly when the CLR author has declared the same
             // intent @UnscopedRef signals for a native G# member.
             case BoundClrIndexExpression clrIndex:
+                if (NativeSliceTypes.TryGetElement(clrIndex.Target.Type, out _, out _))
+                {
+                    return false;
+                }
+
                 // ADR-0184 amendment (hook A): an [UnscopedRef] CLR indexer
                 // reached through a READ-ONLY reference is copied before the
                 // call exactly like a native member would be, so its result

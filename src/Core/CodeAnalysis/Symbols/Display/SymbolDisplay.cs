@@ -668,6 +668,11 @@ public static class SymbolDisplay
             return "void";
         }
 
+        if (type is not NullableTypeSymbol && NativeSliceTypes.TryGetElement(type, out var sliceElement, out var readOnlySlice))
+        {
+            return $"{(readOnlySlice ? "readonly " : string.Empty)}slice[{FormatType(sliceElement)}]";
+        }
+
         // Reconstruct the display name from the type's structure rather than
         // returning the raw TypeSymbol.Name. For constructed generics backed by
         // a CLR type (e.g. Task[string]) that raw name is the assembly-qualified
@@ -995,6 +1000,11 @@ public static class SymbolDisplay
 
     private static string FormatClrTypeName(Type? clrType, bool qualifyNames)
     {
+        if (NativeSliceTypes.IsDefinition(clrType, out var readOnlySlice))
+        {
+            return $"{(readOnlySlice ? "readonly " : string.Empty)}slice[{FormatClrTypeName(clrType!.GetGenericArguments()[0], qualifyNames)}]";
+        }
+
         if (clrType == null)
         {
             return "void";

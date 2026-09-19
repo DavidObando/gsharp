@@ -1909,8 +1909,7 @@ internal sealed partial class MethodBodyEmitter
 
         this.EmitExpression(op.Left);
         this.EmitExpression(op.Right);
-        this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(operatorMethod));
+        this.EmitCallResolvedClrOrFunctionOperator(op);
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(operatorMethod.ReturnType), op.Type);
     }
 
@@ -2095,7 +2094,8 @@ internal sealed partial class MethodBodyEmitter
 
     private EntityHandle GetNullableResultConstructor(NullableTypeSymbol nullable)
     {
-        if (NullableLifting.IsUserValueTypeNullable(nullable))
+        if (NullableLifting.RequiresSymbolicNullableGetValue(nullable)
+            && nullable.UnderlyingType is not TypeParameterSymbol)
         {
             return this.outer.memberRefs.GetNullableCtorMemberRefForUserValueType(nullable);
         }
@@ -2172,10 +2172,14 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        this.il.OpCode(ILOpCode.Call);
-        this.il.Token(this.outer.memberRefs.GetMethodReference(Invariant.Required(
+        var method = Invariant.Required(
             op.Method,
-            "this is the imported-CLR-operator branch; the same-compilation form (issue #2388) carries Function instead and is handled above")));
+            "this is the imported-CLR-operator branch; the same-compilation form (issue #2388) carries Function instead and is handled above");
+        var owner = op.Left.Type is NullableTypeSymbol nullableOwner ? nullableOwner.UnderlyingType : op.Left.Type;
+        this.il.OpCode(ILOpCode.Call);
+        this.il.Token(NativeSliceTypes.TryGetElement(owner, out _, out _)
+            ? this.outer.memberRefs.GetMethodEntityHandle(method, owner)
+            : this.outer.memberRefs.GetMethodReference(method));
     }
 
     private void EmitCallResolvedUserFunction(

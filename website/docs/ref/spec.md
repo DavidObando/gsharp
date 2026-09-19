@@ -178,6 +178,11 @@ Integral types are `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64
 
 ### Arrays and slices
 
+There are two distinct buffer representations. `[]T` (also `array[T]`) and
+`[N]T` retain their exact CLR-array ABI and copying ranges described below.
+The separate native `slice[T]` and `readonly slice[T]` forms use shared-storage
+value descriptors; see [Native shared-storage slices](#native-shared-storage-slices).
+
 Fixed arrays are written `[N]T`, slices are written `[]T`, and native CLR rectangular arrays are written `[,]T`, `[,,]T`, and so on through rank 32. Rank is part of rectangular-array type identity; runtime dimension lengths are not. A fixed array's declared length is part of its identity when it appears as a **generic type argument**: `List[[3]int32]` and `List[[4]int32]` are different types and do not convert, in either direction and at any nesting depth, because the length is retained beside the erased CLR shape (`List<T[]>`, which cannot represent it) rather than compared through it. The **spelling** is part of that identity too: `List[[]int32]` and `List[[3]int32]` are likewise different types and do not convert in either direction, because a slice type argument is retained beside the erased shape for the same reason a fixed length is — `[]T` and `[N]T` share the one CLR `T[]`. Note that this deliberately does not mirror the bare rule below, where `[3]int32` *does* widen implicitly to `[]int32`: a generic's type argument is matched by **identity**, not by convertibility, so `List` being invariant in `T` makes the two instantiations as unrelated as `List[Derived]` and `List[Base]`. Generic **variance** does not readmit such a pair either, so `IEnumerable[[3]int32]` does not convert to `IEnumerable[[4]int32]` or to `IEnumerable[[]int32]` despite `IEnumerable`'s covariance. A matching length is still one type, a matching spelling is still one type, a covariant widening over the same argument still widens, and an array recovered from imported metadata still converts either way and against *either* spelling — reflection records neither a length nor a slice-ness to disagree with, so a G# `List[[3]int32]` and a G# `List[[]int32]` both reach a C# `List<int[]>` parameter, and a C# `List<int[]>` return fills either slot. The same rule holds between the bare array types themselves, stated as a **widening**: `[N]T` converts implicitly to `[]T` — dropping a known length for an unknown one is a representation no-op, so a fixed array still reaches every `[]T` slot — while **nothing converts implicitly *into* a `[N]T`** except a `[N]T` of the same length. So `[3]int32` does not convert to `[4]int32`, `[]int32` does not convert to `[3]int32`, and `var lit [3]int32 = [2]int32{1, 2}` is rejected rather than binding a length-2 value into a length-3 slot. Each rejected pair keeps its explicit `cast[…]`, exactly as slice covariance does (`GS0156` points at it); the cast reinterprets and does not change the value, so a `[3]int32` cast to `[4]int32` still reports `.Length` 3. An array recovered from imported metadata is exempt in both directions — reflection records no length to disagree with — so a G# `[3]int32` still reaches a C# `int[]` parameter and a C# `int[]` return still fills a `[3]int32` slot. The rule reaches a **generic's member slot** as well: `List[[3]int32]`'s `Add` takes a `[3]int32`, because the slot is projected through the type argument the receiver retained rather than read off the erased `List<int32[]>`, so `xs.Add([4]int32{…})` reports `GS0156` and `xs.Add([]Foo{…})` does too. A member slot over a **slice** argument keeps the bare widening, because `[]T` and the CLR `T[]` describe the same shape: `List[[]int32]`'s `Add` still takes a `[3]int32`. So retaining the slice makes the two *instantiations* distinct without narrowing what either one's members accept. The element type `T` is an arbitrary type clause, not just an identifier: it may itself be an array/slice, so jagged arrays such as `[][]uint8` (the G# spelling of C# `byte[][]`) and deeper nestings (`[][][]int32`) remain distinct from rectangular arrays. Arrays may also contain pointers (`[]*int32`), maps (`[]map[K,V]`), channels (`[]chan[T]`), and generic or qualified names (`[]List[int32]`, `[]Outer.Inner`). Array and slice composite literals use the same bracketed prefix with the element type, which likewise may be nested (`[][]int32{ []int32{1, 2}, []int32{3} }`):
 
 ```gsharp
@@ -248,6 +253,103 @@ var first = maybe?[0]                     // null-conditional index, first : int
 Slices are backed by CLR arrays. `len` and `cap` observe array length, and `append` allocates and copies into a new array in the current implementation.
 
 Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule: `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. Rectangular indices use CLR `Get`/`Set`/`Address` pseudo-methods and therefore convert every integer index to `int32`. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
+
+### Native shared-storage slices
+
+`slice[T]` is a heap-storable immutable descriptor over an exact managed array,
+with independent offset, `Length`, and `Capacity`. `readonly slice[T]` grants
+readonly element access to the same storage. Their public ABI is respectively
+`Gsharp.Values.Slice<T>` and `Gsharp.Values.ReadOnlySlice<T>` in the SDK's
+`Gsharp.Runtime.Values` assembly (.NET 10). They are not `ref struct`s.
+Assignment copies the descriptor, never its elements. Views retain the entire
+owner array; there is no pooling, disposal, or implicit ownership transfer.
+
+```gsharp
+import Gsharp.Values
+
+var samples = slice[int32]{10, 20, 30}
+let tail = samples[1..]
+tail[0] = 99                         // samples[1] is now 99
+let raw = array[int32]{1, 2, 3}      // still exactly int32[]
+let shared = slice[int32].FromArray(raw)
+let view readonly slice[int32] = shared
+let independent = shared.ToArray()  // explicit copy
+```
+
+Native literals initialize positional elements in lexical order and have
+length = capacity = element count. `Create(length, capacity)` requires
+`0 <= length <= capacity` and allocates CLR-default elements, including null
+reference elements. Default descriptors are usable empty values. `slice[T]?`
+is a nullable **descriptor**, whereas `slice[T?]` has nullable **elements**.
+Non-null native descriptors cannot be assigned or compared to `nil`.
+Both permission kinds are invariant, including element nullability.
+Managed-byref, byref-like, pointer and `void` element types are rejected.
+
+The contextual modifier works in every type position, including generic
+arguments and tuples. `ref readonly slice[T]` borrows a mutable-element
+descriptor readonly; `ref (readonly slice[T])` borrows a readonly-element
+descriptor slot writable; `ref readonly (readonly slice[T])` restricts both.
+Neither `readonlySlice` nor `readonly map` is a magic type.
+
+Ordinary visible types and aliases named `slice` or `array` take precedence,
+including their ordinary wrong-arity/constraint/ambiguity diagnostics.
+`$slice[T]` and `$array[T]` force ordinary lookup; `$readonly` is not a modifier.
+When shadowed, use `Gsharp.Values.Slice[T]`,
+`Gsharp.Values.ReadOnlySlice[T]`, or `[]T` explicitly. The readonly modifier
+requires a resolved native slice, not an unrelated same-named type.
+
+| Operation | Native contract |
+| --- | --- |
+| `s[lo..hi]`, `s.Subslice(lo, hi)` | Require `0 <= lo <= hi <= Capacity`; result length `hi-lo`, capacity `Capacity-lo` |
+| `s.Subslice(lo, hi, max)` | Require `0 <= lo <= hi <= max <= Capacity`; result capacity `max-lo` |
+| `s.Slice(lo, hi[, max])` | Extension facade imported from `Gsharp.Values`; **endpoints, not BCL start/count** |
+| `s.Append(value)`, `s.AppendRange(source)` | Return an extended descriptor; reuse spare capacity or allocate/copy logical elements on growth |
+| `s.CopyTo(destination)` | Memmove-safe shallow copy of `min(source.Length, destination.Length)`; return copied count |
+| `s.Clear()` | Set only logical elements to CLR defaults |
+| `s.Clone()`, `s.ToArray()` | Independent shallow copies with exact logical length |
+| `s.AsReadOnly()` | Permission weakening without copying elements |
+| `s.AsSpan()`, `s.AsMemory()` | Share exactly the logical range; readonly descriptors return readonly counterparts |
+| `s.TryGetArray(out owner)` | Writable descriptor only; succeed exactly when offset = 0 and Length = Capacity = owner.Length |
+| `slice[T].TryFromMemory(memory, out s)` | Array-backed exact `T[]` only; capacity = supplied range length; no copying |
+
+Omitted lower bounds are zero; omitted upper bounds and `^n` use the saved
+Length, not Capacity. A zero-length view retains its owner, offset and capacity.
+The receiver is saved once before written bounds/indices, in source order.
+Written range bounds all evaluate before normalization/validation. Invalid
+elements throw `IndexOutOfRangeException`; invalid bounds/factory dimensions
+throw `ArgumentOutOfRangeException`; append-length overflow throws
+`OverflowException` before mutation. No growth factor is promised.
+
+Indexers return actual element references. Nested value-field stores mutate
+backing storage; by-value element locals are copies. `let` prevents descriptor
+rebinding, not element mutation. Readonly views forbid element stores and
+writable refs; non-readonly value-type calls use defensive copies. Reference
+objects reached through elements are not deeply immutable. Old views and refs
+remain on the old owner after append reallocates.
+
+Readonly descriptors expose observations, slicing, iteration, `CopyTo`,
+`ToArray`, readonly span/memory, and mutable independent `Clone`, but not append,
+clear, or writable owner recovery. `FromArray` rejects null and every covariant
+runtime array (including empty arrays); `TryFromMemory` rejects custom owners
+and readonly string memory, including empty ranges. `TryGetArray` failure writes
+null. Subranges never implicitly become exact arrays or copy-in/copy-out proxies.
+
+Equality and hashing use owner identity, offset, Length and Capacity, not
+contents; the default owner normalizes to `Array.Empty<T>()`. Native G# equality
+requires the same declared permission kind. Iteration saves the descriptor and
+Length, reading current elements as visited. Native list-pattern rest bindings
+are shared views; CLR-array rest bindings still copy.
+
+Slices can live in fields, closures, generic values and async state machines.
+Borrowed element references/spans obey existing liveness rules. A write that
+would suspend after selecting an element or nested value-field location is
+diagnosed with GS0602 rather than silently reselecting it after suspension.
+Evaluate the suspending value first and then select the desired location.
+
+Changing an existing array API to native slices is an intentional public ABI
+change. cs2gs retains C# array/range/list-pattern semantics. Go fixed-value arrays
+remain separate: use an ordinary value `StereoFrame`, not `[2]float64`, for
+value-copy stereo frames. See `samples/NativeSlices.gs` in the repository.
 
 ### Maps
 
@@ -857,6 +959,7 @@ The binder resolves the target type to one of the following sliceable shapes and
 | Array `[N]T` / slice `[]T` | a fresh `[]T` allocated with the computed length and filled via `System.Array.Copy(src, start, dst, 0, length)` (a copy, not an alias) |
 | `string` | `s.Substring(start, length)` |
 | Span-like value (`int Length`/`int Count` + `Slice(int, int)`, e.g. `Span[T]`, `ReadOnlySpan[T]`, `Memory[T]`, `ArraySegment[T]`) | `value.Slice(start, length)` |
+| Native `slice[T]` / `readonly slice[T]` | Shared capacity-aware `Subslice` view with exclusive endpoints; never the span-like start/count convention |
 | A type exposing an indexer accepting `System.Range` | the `this[System.Range]` indexer is called directly with a constructed `System.Range` |
 
 Slicing a target that matches none of these shapes reports `GS0392`.

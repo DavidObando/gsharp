@@ -2485,7 +2485,7 @@ internal sealed partial class ExpressionBinder
         {
             return !TypeMemberModel.GetMethods(type, headName, MemberQuery.InheritedStatic(MemberKinds.Method)).IsEmpty
                 || (type is StructSymbol structType
-                    && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structType)?.ClrType, headName));
+                    && BinderContext.ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(structType)?.ClrType, headName));
         }
 
         return TypeMemberModel.LookupMember(
@@ -2493,7 +2493,7 @@ internal sealed partial class ExpressionBinder
             headName,
             MemberQuery.InheritedStatic(MemberKinds.Field | MemberKinds.Property)) != null
             || (type is StructSymbol nonCallStructType
-                && ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(nonCallStructType)?.ClrType, headName));
+                && BinderContext.ClrTypeExposesStaticMember(TypeMemberModel.GetNearestImportedBase(nonCallStructType)?.ClrType, headName));
     }
 
     private BoundExpression BindEnumAccessorStep(EnumSymbol enumSymbol, ExpressionSyntax rightPart)
@@ -3092,6 +3092,24 @@ internal sealed partial class ExpressionBinder
         // spurious type diagnostics for a non-generic-type target.
         var arity = index.Indices.Count;
 
+        if (name == "slice" && binderCtx.CanUseNativeBufferAlias(scope, targetName.IdentifierToken, getCurrentFunction(), expression: true))
+        {
+            failureHandled = true;
+            if (!NativeSliceTypes.TryResolveDefinition(scope.References, false, out var nativeDefinition))
+            {
+                Diagnostics.ReportNativeSliceRuntime(index.Location);
+                return false;
+            }
+
+            if (!TryBindTypeArgumentExpressions(index.Indices, out var nativeArguments) || nativeArguments.Length != 1)
+            {
+                Diagnostics.ReportNativeSliceType(index.Location, "slice[T] requires one element type");
+                return false;
+            }
+
+            return TryCloseImportedGenericTypeReceiver(nativeDefinition, nativeArguments, index, out constructedImported, out failureHandled);
+        }
+
         // Issue #1395: when a non-generic (arity-0) type and a generic type
         // share the same simple name (arity overloading, e.g. `Box` and
         // `Box[T]`), the arity-unaware lookup prefers the arity-0 type and the
@@ -3107,14 +3125,22 @@ internal sealed partial class ExpressionBinder
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
+        ImportedTypeAmbiguity? genericAmbiguity = null;
         var clrGenericDef = !typeNameAmbiguous
-            && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+            && scope.TryLookupImportedGenericClass(name, arity, out openClrType, out genericAmbiguity);
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
                 && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
+        }
+
+        if (clrGenericDef && genericAmbiguity != null)
+        {
+            Diagnostics.ReportAmbiguousImportedTypeReference(index.Location, name, genericAmbiguity);
+            failureHandled = true;
+            return false;
         }
 
         if (!userGenericDef && !clrGenericDef)
@@ -3202,6 +3228,25 @@ internal sealed partial class ExpressionBinder
 
         var name = generic.Identifier.ValueText;
 
+        if (name == "slice" && (generic.ReadOnlySliceModifier != null
+            || binderCtx.CanUseNativeBufferAlias(scope, generic.Identifier, getCurrentFunction(), expression: true)))
+        {
+            var args = generic.TypeArgumentList;
+            var clause = new TypeClauseSyntax(generic.SyntaxTree, null, null, null, generic.Identifier, args.OpenBracketToken, args.Arguments, args.CloseBracketToken, null)
+            {
+                ReadOnlySliceModifier = generic.ReadOnlySliceModifier,
+            };
+            var nativeType = bindTypeClause(clause);
+            failureHandled = true;
+            if (nativeType is not ImportedTypeSymbol native)
+            {
+                return false;
+            }
+
+            constructedImported = new ImportedClassSymbol(native.Type, generic, native, scope.References);
+            return true;
+        }
+
         // A value-named receiver is genuine element access, never a type.
         if (scope.TryLookupSymbol(name) is VariableSymbol)
         {
@@ -3225,14 +3270,22 @@ internal sealed partial class ExpressionBinder
             && ((alias is StructSymbol sDef && sDef.IsGenericDefinition && sDef.TypeParameters.Length == arity)
                 || (alias is InterfaceSymbol iDef && iDef.IsGenericDefinition && iDef.TypeParameters.Length == arity));
         Type? openClrType = null;
+        ImportedTypeAmbiguity? genericAmbiguity = null;
         var clrGenericDef = !typeNameAmbiguous
-            && scope.TryLookupImportedGenericClass(name, arity, out openClrType);
+            && scope.TryLookupImportedGenericClass(name, arity, out openClrType, out genericAmbiguity);
         if (userGenericDef)
         {
             var importedGenericTakesPrecedence = clrGenericDef
                 && ImportedGenericTypeHasPrecedence(name, alias, openClrType, arity);
             userGenericDef = !importedGenericTakesPrecedence;
             clrGenericDef = importedGenericTakesPrecedence;
+        }
+
+        if (clrGenericDef && genericAmbiguity != null)
+        {
+            Diagnostics.ReportAmbiguousImportedTypeReference(generic.Location, name, genericAmbiguity);
+            failureHandled = true;
+            return false;
         }
 
         if (!userGenericDef && !clrGenericDef)
@@ -3558,7 +3611,7 @@ internal sealed partial class ExpressionBinder
             // Issue #4024: the SLICE spelling `[]T` shares that backing and is
             // retained by the same gate, so `EqualityComparer[[]int32].Default`
             // no longer reads as a metadata-only `EqualityComparer<int32[]>`.
-            var symbolicReceiver = typeArgs.Any(static a =>
+            var symbolicReceiver = NativeSliceTypes.IsDefinition(closed, out _) || typeArgs.Any(static a =>
                 TypeSymbol.RequiresSymbolicProjection(a)
                 || TypeSymbol.ContainsNamedTupleElements(a)
                 || TypeSymbol.ContainsSourceArrayShape(a))
@@ -3770,7 +3823,7 @@ internal sealed partial class ExpressionBinder
         var ambiguous = false;
         foreach (var importedType in binderCtx.GetStaticImportTypes())
         {
-            if (!ImportedTypeExposesStaticMember(importedType, name))
+            if (!BinderContext.ImportedTypeExposesStaticMember(importedType, name))
             {
                 continue;
             }
@@ -3806,7 +3859,7 @@ internal sealed partial class ExpressionBinder
         var clrAmbiguous = false;
         foreach (var clrType in scope.EnumerateStaticImportClrTypes())
         {
-            if (!ClrTypeExposesStaticMember(clrType, name))
+            if (!BinderContext.ClrTypeExposesStaticMember(clrType, name))
             {
                 continue;
             }
@@ -3918,59 +3971,6 @@ internal sealed partial class ExpressionBinder
 
         return true;
     }
-
-    /// <summary>
-    /// Whether the referenced-assembly CLR <paramref name="type"/> declares a
-    /// <c>public static</c> field, property, or method named <paramref name="name"/>
-    /// — the imported-CLR analogue of <see cref="ImportedTypeExposesStaticMember"/>.
-    /// </summary>
-    private static bool ClrTypeExposesStaticMember(System.Type? type, string name)
-    {
-        if (type == null)
-        {
-            return false;
-        }
-
-        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public;
-        foreach (var m in ClrTypeUtilities.SafeGetMethods(type, flags))
-        {
-            if (ClrTypeUtilities.EmittedMemberNameMatches(m, name))
-            {
-                return true;
-            }
-        }
-
-        foreach (var p in ClrTypeUtilities.SafeGetProperties(type, flags))
-        {
-            if (ClrTypeUtilities.EmittedMemberNameMatches(p, name))
-            {
-                return true;
-            }
-        }
-
-        foreach (var f in ClrTypeUtilities.SafeGetFields(type, flags))
-        {
-            if (ClrTypeUtilities.EmittedMemberNameMatches(f, name))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
-    /// Issue #1201: whether <paramref name="structSym"/> declares a <c>shared</c>
-    /// (static) field, property, or method named <paramref name="name"/> —
-    /// i.e. a member a type import would expose for unqualified reference.
-    /// </summary>
-    /// <param name="structSym">The imported type.</param>
-    /// <param name="name">The member name.</param>
-    /// <returns><c>true</c> when a matching static member exists.</returns>
-    private static bool ImportedTypeExposesStaticMember(StructSymbol structSym, string name)
-        => TypeMemberModel.TryGetStaticFieldIncludingInherited(structSym, name, out _, out _)
-            || TypeMemberModel.TryGetStaticPropertyIncludingInherited(structSym, name, out _, out _)
-            || !TypeMemberModel.GetMethods(structSym, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty;
 
     private BoundExpression BindUserTypeStaticMemberAccess(StructSymbol structSym, NameExpressionSyntax ne)
     {

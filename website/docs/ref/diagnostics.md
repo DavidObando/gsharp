@@ -330,6 +330,15 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0412 | Error | A `stackalloc [n]T{…}` initializer length must match the explicit count. | A `stackalloc [n]T{…}` whose explicit constant count `n` disagrees with the number of initializer elements (e.g. `stackalloc [2]int32{1, 2, 3}`). As in C#, the two must match; use the count-inferred `stackalloc []T{…}` to avoid repeating the length. |
 | GS9007 | Error | A type may contain at most one `shared` block. | A class or struct with two `shared { ... }` blocks; merge them into one. |
 
+### Native slice diagnostics (GS0600–GS0603)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0600 | Error | Native slices require compatible `Gsharp.Runtime.Values` support and the .NET 10 target. | Use the matching SDK runtime reference; no fallback to arrays occurs. |
+| GS0601 | Error | Invalid native-buffer type, element, sharing conversion or literal shape. | Supply one heap-storable element type, preserve element nullability when sharing, and use positional literal elements (`AppendRange` for ranges). |
+| GS0602 | Error | A selected native element/value-field write would suspend while its location is borrowed. | Evaluate the suspending value before selecting the element. Ordinary async slice values and segment-local borrows are supported. |
+| GS0603 | Error | A store requires writable elements but its descriptor is `readonly slice[T]`. | Use a writable alias or explicitly clone; readonly views are not deep immutable copies. |
+
 ### Reference closure diagnostics (GS9100)
 
 | ID | Severity | Description | Example trigger |

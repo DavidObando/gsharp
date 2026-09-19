@@ -881,7 +881,7 @@ public abstract class BoundTreeRewriter
                     elementsBuilder?.Add(element);
                 }
 
-                return elementsBuilder == null ? node : new BoundListPattern(node.Syntax, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType);
+                return elementsBuilder == null ? node : new BoundListPattern(node.Syntax, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType, list.LengthProperty, list.IndexerProperty, list.InputVariable);
             case BoundNodeKind.SlicePattern:
                 var slice = (BoundSlicePattern)node;
                 var newSliceInner = slice.Pattern == null ? null : RewritePattern(slice.Pattern);

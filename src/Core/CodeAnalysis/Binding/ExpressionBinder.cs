@@ -450,7 +450,7 @@ internal sealed partial class ExpressionBinder
             case SyntaxKind.BinaryExpression:
                 return BindBinaryExpression((BinaryExpressionSyntax)syntax);
             case SyntaxKind.CallExpression:
-                return overloads.BindCallExpression((CallExpressionSyntax)syntax);
+                return BindBufferAwareCallExpression((CallExpressionSyntax)syntax);
             case SyntaxKind.GenericNameExpression:
                 return BindGenericNameExpression((GenericNameExpressionSyntax)syntax);
             case SyntaxKind.ObjectCreationExpression:

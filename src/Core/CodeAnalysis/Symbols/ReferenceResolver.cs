@@ -131,6 +131,11 @@ public sealed class ReferenceResolver : IDisposable
     private readonly Lazy<Dictionary<string, string>> emittedTypeNameIndex;
     private readonly Lazy<ImmutableHashSet<string>> namespaceIndex;
 
+    // Group metadata names once, using the warm keyset when present. Resolve
+    // only the matching arities at query time so visibility and type forwarding
+    // remain governed by TryResolveType without forcing the cold type index.
+    private readonly Lazy<Dictionary<string, ImmutableArray<string>>> arityInsensitiveTypeNames;
+
     // ADR-0107 (cold-start cache): an optional, externally-supplied
     // full-name -> declaring-assembly-index map that stands in for the eager
     // `typeNameIndex` below. When set (via TryUseMetadataIndex), TryResolveType
@@ -193,6 +198,9 @@ public sealed class ReferenceResolver : IDisposable
         this.typeNameIndex = typeNameIndex ?? CreateTypeNameIndex(assemblies);
         this.namespaceIndex = new Lazy<ImmutableHashSet<string>>(
             BuildNamespaceIndex,
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        this.arityInsensitiveTypeNames = new Lazy<Dictionary<string, ImmutableArray<string>>>(
+            BuildArityInsensitiveTypeNames,
             LazyThreadSafetyMode.ExecutionAndPublication);
         this.emittedTypeNameIndex = new Lazy<Dictionary<string, string>>(
             () => BuildEmittedTypeNameIndex(
@@ -455,7 +463,7 @@ public sealed class ReferenceResolver : IDisposable
 
     /// <summary>
     /// Resolves the references supplied to a driver and appends the bundled
-    /// Gsharp.Extensions and Gsharp.Runtime.Channels assemblies when they are
+    /// Gsharp.Extensions, Gsharp.Runtime.Channels, and Gsharp.Runtime.Values assemblies when they are
     /// available.
     /// </summary>
     /// <param name="referencePaths">Explicit reference paths.</param>
@@ -476,6 +484,7 @@ public sealed class ReferenceResolver : IDisposable
 
         AppendBundledPath(paths, FindBundledExtensionPath(AppContext.BaseDirectory));
         AppendBundledPath(paths, FindBundledChannelsRuntimePath(AppContext.BaseDirectory));
+        AppendBundledPath(paths, FindBundledValuesRuntimePath(AppContext.BaseDirectory));
         return paths;
     }
 
@@ -1271,6 +1280,40 @@ public sealed class ReferenceResolver : IDisposable
         // layout has it under out/bin/<Config>/Gsharp.Runtime.Channels/, and
         // the SDK NuGet under tools/channels/.
         return FindBundledRuntimePath(baseDirectory, "Gsharp.Runtime.Channels.dll", "Gsharp.Runtime.Channels", "channels");
+    }
+
+    internal static string? FindBundledValuesRuntimePath(string baseDirectory)
+        => FindBundledRuntimePath(baseDirectory, "Gsharp.Runtime.Values.dll", "Gsharp.Runtime.Values", "values");
+
+    internal bool HasTypeNameAtAnyArity(string fullName)
+        => arityInsensitiveTypeNames.Value.TryGetValue(fullName, out var candidates)
+            && candidates.Any(candidate => TryResolveType(candidate, out _));
+
+    private Dictionary<string, ImmutableArray<string>> BuildArityInsensitiveTypeNames()
+    {
+        IEnumerable<string> names = warmNameIndex != null ? warmNameIndex.Keys : typeNameIndex.Value.Keys;
+        var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var name in names)
+        {
+            var suffix = name.Length;
+            while (suffix > 0 && char.IsAsciiDigit(name[suffix - 1]))
+            {
+                suffix--;
+            }
+
+            var key = suffix > 0 && suffix < name.Length && name[suffix - 1] == '`'
+                ? name.Substring(0, suffix - 1)
+                : name;
+            if (!groups.TryGetValue(key, out var group))
+            {
+                group = new List<string>();
+                groups.Add(key, group);
+            }
+
+            group.Add(name);
+        }
+
+        return groups.ToDictionary(pair => pair.Key, pair => pair.Value.ToImmutableArray(), StringComparer.Ordinal);
     }
 
     private ImmutableHashSet<string> BuildNamespaceIndex()
