@@ -3442,6 +3442,38 @@ internal sealed partial class ExpressionBinder
         }
 
         var memberName = member.IdentifierToken.ValueText;
+
+        // Issue #4331 (base-field-access), Copilot review round (PR #4334):
+        // field-before-property precedence, mirroring the ordinary
+        // (non-`base.`) lookup order in
+        // ExpressionBinder.Access.MemberLookup.cs — TryGetFieldIncludingInherited
+        // is checked, and returned on success, BEFORE TryGetProperty is even
+        // attempted there. That is NOT "nearest declaration wins regardless
+        // of kind": TryGetProperty below walks searchBase's ENTIRE hierarchy
+        // for a property before ever returning false, so this field check
+        // must run first and unconditionally — nesting it inside
+        // `!TryGetProperty(...)` let a same-named property on a DISTANT
+        // ancestor incorrectly win over a field the IMMEDIATE base declares
+        // (the bug the field-before-property regression test below covers).
+        //
+        // Fields are never virtually dispatched, so this needs no
+        // non-virtual distinction — it produces the exact same
+        // BoundFieldAccessExpression an ordinary `this.Field`/`obj.Field`
+        // read would, just rooted at the resolved base type rather than the
+        // most-derived one, so a field the derived class shadows still
+        // reads the base's own storage.
+        if (searchBase != null
+            && TypeMemberModel.TryGetFieldIncludingInherited(searchBase, memberName, MemberQuery.Instance(MemberKinds.Field), out var baseField, out var baseFieldDeclaringType)
+            && GetEffectiveThisParameter() is { } fieldReadThisParameter)
+        {
+            if (!AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, baseField.Name, baseFieldDeclaringType.Name, baseField.Accessibility);
+            }
+
+            return new BoundFieldAccessExpression(member, new BoundVariableExpression(null, fieldReadThisParameter), baseFieldDeclaringType, baseField);
+        }
+
         if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
         {
             // Issue #3501: `base.M` used as a method GROUP (an argument, a
@@ -3466,6 +3498,15 @@ internal sealed partial class ExpressionBinder
             if (TryBindBaseClrPropertyRead(member, clrBaseFallback, out var bclRead))
             {
                 return bclRead;
+            }
+
+            // Issue #4331: no GSharp/CLR base PROPERTY declares this name —
+            // fall back to an inherited/imported CLR base FIELD (e.g.
+            // RegexRunner.runtextpos), matching TryBindBaseClrPropertyRead's
+            // sibling shape for fields.
+            if (TryBindBaseClrFieldRead(member, clrBaseFallback, out var bclFieldRead))
+            {
+                return bclFieldRead;
             }
 
             Diagnostics.ReportBaseClassCallMemberNotFound(member.IdentifierToken.Location, searchBase?.Name ?? ClrTypeDisplayName(clrBaseFallback), memberName);
@@ -3552,6 +3593,37 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // Issue #4331 (base-field-access), Copilot review round (PR #4334):
+        // field-before-property precedence — see the read-side twin in
+        // BindBaseClassPropertyRead for why this must run BEFORE, and
+        // unconditionally on, the TryGetProperty check below (that call
+        // walks searchBase's entire hierarchy for a property before
+        // returning false, so nesting this field check inside it would let
+        // a distant ancestor's same-named property beat an immediate base's
+        // field).
+        if (searchBase != null
+            && TypeMemberModel.TryGetFieldIncludingInherited(searchBase, memberName, MemberQuery.Instance(MemberKinds.Field), out var baseField, out var baseFieldDeclaringType))
+        {
+            if (!AccessibilityChecker.IsAccessible(baseField.Accessibility, baseFieldDeclaringType, this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(memberLocation, baseField.Name, baseFieldDeclaringType.Name, baseField.Accessibility);
+            }
+
+            if (baseField.IsReadOnly)
+            {
+                Diagnostics.ReportCannotAssign(equalsLocation, memberName);
+                return new BoundErrorExpression(null);
+            }
+
+            var baseFieldConverted = conversions.BindConversion(valueLocation, value, baseField.Type);
+            if (GetEffectiveThisParameter() is not { } fieldWriteThisParameter)
+            {
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundFieldAssignmentExpression(value.Syntax, fieldWriteThisParameter, baseFieldDeclaringType, baseField, baseFieldConverted);
+        }
+
         if (searchBase == null || !TypeMemberModel.TryGetProperty(searchBase, memberName, out var prop, out var declaringType))
         {
             // Issue #1260: no GSharp base declares the property — fall back to the
@@ -3560,6 +3632,13 @@ internal sealed partial class ExpressionBinder
             if (TryBindBaseClrPropertyWrite(memberName, memberLocation, value, valueLocation, equalsLocation, clrBaseFallback, out var bclWrite))
             {
                 return bclWrite;
+            }
+
+            // Issue #4331: no GSharp/CLR base PROPERTY declares this name —
+            // fall back to an inherited/imported CLR base FIELD write.
+            if (TryBindBaseClrFieldWrite(memberName, memberLocation, value, valueLocation, equalsLocation, clrBaseFallback, out var bclFieldWrite))
+            {
+                return bclFieldWrite;
             }
 
             Diagnostics.ReportBaseClassCallMemberNotFound(memberLocation, searchBase?.Name ?? ClrTypeDisplayName(clrBaseFallback), memberName);
@@ -3753,6 +3832,112 @@ internal sealed partial class ExpressionBinder
             TypeSymbol.Void,
             ImmutableArray.Create(converted),
             isNonVirtualBaseCall: true);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4331 (base-field-access): binds a <c>base.Field</c> READ into an
+    /// imported/BCL base class FIELD (as opposed to a property — see
+    /// <see cref="TryBindBaseClrPropertyRead"/>). Fields are never virtually
+    /// dispatched, so unlike the method/property base-call paths this needs no
+    /// non-virtual distinction at emission time: it produces the exact same
+    /// <see cref="BoundClrPropertyAccessExpression"/> that an ordinary
+    /// inherited-CLR-field read already does (see
+    /// <see cref="TryBindInheritedClrInstanceMemberByBareName"/>) — the only
+    /// "base" semantics needed is resolving the field starting from
+    /// <paramref name="clrBase"/> (the nearest base type) rather than the
+    /// most-derived receiver type, matching C#'s <c>base.Field</c> shadowing
+    /// semantics.
+    /// </summary>
+    /// <param name="member">The member-name syntax (<c>Field</c>).</param>
+    /// <param name="clrBase">The CLR base type to resolve the inherited field against.</param>
+    /// <param name="result">The bound field read (or an error node) when handled.</param>
+    /// <returns><see langword="true"/> when a readable inherited field was found (or a precise diagnostic was reported).</returns>
+    private bool TryBindBaseClrFieldRead(
+        NameExpressionSyntax member,
+        System.Type? clrBase,
+        [NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+        if (clrBase == null)
+        {
+            return false;
+        }
+
+        var memberName = member.IdentifierToken.ValueText;
+        var clrField = ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, memberName, CanAccessInternalsOf);
+        if (clrField == null)
+        {
+            return false;
+        }
+
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return false;
+        }
+
+        var receiver = new BoundVariableExpression(null, thisParameter);
+        result = new BoundClrPropertyAccessExpression(
+            member,
+            receiver,
+            clrField,
+            GetInheritedClrMemberType(thisParameter.Type, clrField));
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4331: binds a <c>base.Field = value</c> WRITE into an
+    /// imported/BCL base class FIELD. See <see cref="TryBindBaseClrFieldRead"/>
+    /// for why fields need no non-virtual emission distinction. A readonly
+    /// (<c>InitOnly</c>) or literal (<c>const</c>) field is reported as
+    /// cannot-assign, matching the ordinary inherited-field write path
+    /// (<see cref="TryGetWritableClrMember(MemberInfo?, TypeSymbol?, out Type?, out TypeSymbol?, out bool, bool)"/>).
+    /// </summary>
+    /// <param name="memberName">The field name.</param>
+    /// <param name="memberLocation">The location of the field name token, for diagnostics.</param>
+    /// <param name="value">The already-bound right-hand value expression.</param>
+    /// <param name="valueLocation">The location of the value expression (for conversion diagnostics).</param>
+    /// <param name="equalsLocation">The location of the <c>=</c> token (for GS cannot-assign).</param>
+    /// <param name="clrBase">The CLR base type to resolve the inherited field against.</param>
+    /// <param name="result">The bound field write (or an error node) when handled.</param>
+    /// <returns><see langword="true"/> when a writable inherited field was found (or a precise diagnostic was reported).</returns>
+    private bool TryBindBaseClrFieldWrite(
+        string memberName,
+        TextLocation memberLocation,
+        BoundExpression value,
+        TextLocation valueLocation,
+        TextLocation equalsLocation,
+        System.Type? clrBase,
+        [NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+        if (clrBase == null)
+        {
+            return false;
+        }
+
+        var clrField = ClrTypeUtilities.SafeGetInheritedInstanceField(clrBase, memberName, CanAccessInternalsOf);
+        if (clrField == null)
+        {
+            return false;
+        }
+
+        if (clrField.IsInitOnly || clrField.IsLiteral)
+        {
+            Diagnostics.ReportCannotAssign(equalsLocation, memberName);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (function?.ThisParameter is not { } thisParameter)
+        {
+            return false;
+        }
+
+        var fieldType = GetInheritedClrMemberType(thisParameter.Type, clrField);
+        var converted = conversions.BindConversion(valueLocation, value, fieldType);
+        var receiver = new BoundVariableExpression(null, thisParameter);
+        result = new BoundClrPropertyAssignmentExpression(value.Syntax, receiver, clrField, converted, fieldType, staticContainerType: null);
         return true;
     }
 
