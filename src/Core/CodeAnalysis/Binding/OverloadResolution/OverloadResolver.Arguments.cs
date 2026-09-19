@@ -406,11 +406,26 @@ internal sealed partial class OverloadResolver
         // The parameter's own type carries the flags; the array may itself be
         // nullable (`params object?[]?`), so peel that wrapper before reading
         // the element position out of the annotation.
+        //
+        // ADR-0186 §2/§5b, issue #4322: an OBLIVIOUS `params T[]` is wrapped
+        // in a `PlatformTypeSymbol`, not a `NullableTypeSymbol`, so peeling
+        // only the latter made this fall through to
+        // `TypeSymbol.FromClrType(elementClrType)` — the ERASED answer, which
+        // types the element non-null `T` and loses the obliviousness the
+        // container is carrying. That is §5b's hazard one level down: the
+        // container reads as `[]T!` while its element reads as `T`, so the
+        // two disagree about the same declaration. Measured: it made a `nil`
+        // tuple element stop widening through an oblivious `params T[]`
+        // (`Issue4044NilTupleInferenceTests`, 2 tests), because the element
+        // came back `(string, bool)` where the declaration says nothing about
+        // the string and `nil -> string!` is legal by §3's last row.
         var parameterType = ClrNullability.GetParameterTypeSymbol(parameter);
-        if (parameterType is NullableTypeSymbol nullableArray)
+        parameterType = parameterType switch
         {
-            parameterType = nullableArray.UnderlyingType;
-        }
+            NullableTypeSymbol nullableArray => nullableArray.UnderlyingType,
+            PlatformTypeSymbol platformArray => platformArray.UnderlyingType,
+            _ => parameterType,
+        };
 
         return parameterType is NullabilityAnnotatedTypeSymbol annotated
             ? annotated.GetTypeArgumentSymbolForClrType(elementClrType)

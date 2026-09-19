@@ -272,6 +272,23 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            // ADR-0186 §4/§5, issue #4325: this method binds BOTH event
+            // subscription (`x.E += h`) and compound member assignment
+            // (`n.Num += 1`) — the parser routes every `accessor op= value`
+            // shape here — and neither had the receiver check the plain write
+            // path got in `BindMemberFieldAssignmentExpression`. The dispatch
+            // below switches on the receiver's symbol KIND
+            // (`is StructSymbol`, `is TypeParameterSymbol`, …) and then falls
+            // back to a `ClrType` relay, so a platform wrapper did not fail
+            // loudly: it bound through the relay with no unwrap, and a nil
+            // receiver produced an unattributed failure instead of §4's
+            // message. This is the same one-line call the read, write and
+            // indexer paths make.
+            boundReceiver = PlatformCoercion.InsertCheck(
+                boundReceiver,
+                accessor.LeftPart.Location,
+                "a compound member assignment receiver");
+
             if (boundReceiver.Type is TupleTypeSymbol tupleType)
             {
                 eventName = GetTupleFieldName(eventName, tupleType);

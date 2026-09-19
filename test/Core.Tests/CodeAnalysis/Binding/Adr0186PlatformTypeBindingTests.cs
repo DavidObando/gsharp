@@ -97,11 +97,46 @@ public sealed class Adr0186PlatformTypeBindingTests
             }
 
             public static List<T> WrapList<T>(T value) => new List<T> { value };
+
+            // Issue #4325's three positions need oblivious sources of their
+            // own shapes: a delegate, a member-bearing object to compound-assign
+            // through, and a deconstructible pair.
+            public static Func<string> Thunk() => () => "V";
+
+            public static Func<string> NilThunk() => null;
+
+            public static Nested NilNested() => null;
+
+            public static ValueTuple<string, string> Pair() => ("a", "b");
+
+            // A REFERENCE deconstructible. `ValueTuple` is a struct, so it is
+            // never nil and never platform-typed (ADR-0186 §2 excludes value
+            // types) — a deconstruction-source check has nothing to bite on
+            // there, and a fixture built only on `Pair()` would witness
+            // nothing.
+            public static Pt Pt2() => new Pt();
+
+            public static Pt NilPt() => null;
+
+            // Issue #4324's shape, as a value rather than a literal, so the
+            // operand really is `string!` and not a constant.
+            public static string Suffix() => "x";
         }
 
         public class Nested
         {
             public string Prop { get; set; } = "V";
+
+            public int Num { get; set; }
+        }
+
+        public class Pt
+        {
+            public void Deconstruct(out string a, out string b)
+            {
+                a = "a";
+                b = "b";
+            }
         }
         """;
 
@@ -798,6 +833,245 @@ public sealed class Adr0186PlatformTypeBindingTests
         var unified = world.GlobalProbeType(globals, NullabilityMode.PlatformTypes);
 
         Assert.Equal(expected, unified.Name);
+    }
+
+    /// <summary>
+    /// ADR-0186 §8, the half step 3 cannot do without: a platform type
+    /// <b>reaches the emitter from ordinary source</b>, and it must be
+    /// encoded rather than refused.
+    /// <para>
+    /// Step 1 made <c>NullableFlagsBuilder.Append</c> throw
+    /// <c>NotSupportedException</c> for a <c>T!</c>, on the reasoning that
+    /// the path was unreachable with the flag off and that the alternative
+    /// then available — the fall-through writing byte <c>1</c> — would
+    /// launder an unknown into a guarantee in metadata. Both halves were
+    /// right; only the first stopped being true. Every row below is a
+    /// <em>synthesized member signature</em> whose type came from type
+    /// inference over an oblivious call, with no <c>@Oblivious</c> anywhere
+    /// and nothing from §9:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>a global <c>let</c> with no type clause — a static
+    /// field of type <c>string!</c>;</description></item>
+    /// <item><description>a local captured by a lambda — a display-class
+    /// field of type <c>string!</c>;</description></item>
+    /// <item><description>a local captured across a <c>defer</c>, which is
+    /// the shape <c>DeferStatementTests</c> hit.</description></item>
+    /// </list>
+    /// <para>
+    /// This is the fixture that says the refusal was a step-3 blocker and not
+    /// a test artifact. Each row turns red on the parent commit with the
+    /// emitter's <c>NotSupportedException</c>, and the byte it now writes is
+    /// pinned — at <c>0</c>, never <c>1</c> — by
+    /// <c>Adr0186PlatformTypeSymbolTests.Emit_Encodes_A_Platform_Type_As_The_Oblivious_Byte</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="extra">Extra top-level declarations.</param>
+    /// <param name="expected">The expected program output.</param>
+    [Theory]
+    [InlineData(
+        "    let s = Ob.Value()\n    let f = func() string { return s }\n    Console.WriteLine(f())",
+        "",
+        "V")]
+    [InlineData(
+        "    let s = Ob.Value()\n    defer Console.WriteLine(s)",
+        "",
+        "V")]
+    public void Section8_APlatformTypedSynthesizedSignature_Emits_Rather_Than_Refusing(
+        string body,
+        string extra,
+        string expected)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes, extra);
+        Assert.True(compiled.Success, Describe(compiled));
+
+        Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes, extra).Trim());
+    }
+
+    /// <summary>
+    /// The third synthesized-signature shape: a <b>global</b> <c>let</c> with
+    /// no type clause, which becomes a static field typed <c>string!</c>.
+    /// <para>
+    /// Asserted on <em>emit success</em> only, not on program output, and the
+    /// reason is a property of the fixture rather than of this change: this
+    /// world's probe source declares <c>func Main()</c> as the entry point,
+    /// and a top-level global's initializer does not run ahead of it here —
+    /// measured with a platform-free <c>let probe = "V"</c>, which prints
+    /// nothing either. Asserting output would be asserting that fixture
+    /// quirk. What this row is for is the emitter, and the emitter is
+    /// exactly what threw: on the parent commit this reports
+    /// <c>NotSupportedException: Cannot emit nullable metadata for the
+    /// platform type 'string!'</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section8_AGlobalInferredLet_Emits_ItsPlatformTypedField()
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(
+            "    Console.WriteLine(probe)",
+            NullabilityMode.PlatformTypes,
+            "let probe = Ob.Value()");
+
+        Assert.True(compiled.Success, Describe(compiled));
+    }
+
+    /// <summary>
+    /// Issue #4323 — ADR-0186 §5a for the indexer <b>write</b> path.
+    /// <para>
+    /// Failure mode 1 of the ADR's catalogue, one access kind over: reading
+    /// <c>l[0]</c> through a platform receiver bound correctly because
+    /// <c>BindIndexAgainstTarget</c> unwraps, while writing <c>l[0] = "q"</c>
+    /// reported GS0116 <em>"type 'List[string]!' is not indexable"</em>,
+    /// because the assignment path had no equivalent. A receiver's
+    /// platform-ness deciding whether a member exists is precisely what §5a
+    /// forbids, and "the read path and the write path drifted" is how the
+    /// predicate system this ADR replaces started.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="expected">The expected program output.</param>
+    [Theory]
+    [InlineData("    let l = Ob.WrapList(\"a\")\n    l[0] = \"q\"\n    Console.WriteLine(l[0])", "q")]
+    [InlineData("    let t = Ob.Table()\n    t[\"k\"] = 9\n    Console.WriteLine(t[\"k\"])", "9")]
+    [InlineData("    let a = Ob.ArrWithNil()\n    a[0] = \"q\"\n    Console.WriteLine(a[0])", "q")]
+    public void Section5_TheIndexerWritePath_Unwraps_Like_TheReadPath(string body, string expected)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+        Assert.True(compiled.Success, Describe(compiled));
+        Assert.DoesNotContain(compiled.Diagnostics, d => d.Id == "GS0116");
+
+        Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// Issue #4324 — ADR-0186 §6 for the concatenation operator.
+    /// <para>
+    /// <c>string! + "x"</c> reported GS0129 <em>"operator '+' is not defined
+    /// for types 'string!' and 'string'"</em> in both operand orders, because
+    /// <c>BoundBinaryOperator.IsStringOrNullableString</c> tested only
+    /// <c>string</c> and <c>string?</c> while the <c>supportedOperators</c>
+    /// table matches operand types exactly and cannot see through a wrapper.
+    /// §6's claim is that <c>T!</c> participates in every existing construct;
+    /// an oblivious string being <em>less</em> capable than either a
+    /// <c>string</c> or a <c>string?</c> is that claim failing.
+    /// </para>
+    /// <para>
+    /// The <c>string? + "x"</c> control is what makes this a difference
+    /// rather than a restatement: it has compiled since issue #1927, and the
+    /// platform row is being brought into line with it, not given a new rule.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="expected">The expected program output.</param>
+    [Theory]
+    [InlineData("    Console.WriteLine(Ob.Value() + \"x\")", "Vx")]
+    [InlineData("    Console.WriteLine(\"x\" + Ob.Value())", "xV")]
+    [InlineData("    Console.WriteLine(Ob.Value() + Ob.Suffix())", "Vx")]
+
+    // A nil platform operand concatenates as the empty string, exactly as a
+    // nil `string?` does. No §4 check fires here, and that is deliberate:
+    // the operand never reaches a non-null destination.
+    [InlineData("    Console.WriteLine(\"[\" + Ob.Nil() + \"]\")", "[]")]
+
+    // The control: the same shape with a source-declared `string?`, which has
+    // compiled since #1927.
+    [InlineData("    let n string? = nil\n    Console.WriteLine(\"[\" + n + \"]\")", "[]")]
+    public void Section6_StringConcatenation_Accepts_APlatformOperand(string body, string expected)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+        Assert.True(compiled.Success, Describe(compiled));
+
+        Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// Issue #4325 — the three remaining §4 positions: delegate invocation,
+    /// compound member assignment, and deconstruction.
+    /// <para>
+    /// None of these was a silent escape — each already failed at runtime for
+    /// a nil platform value. What was missing is the <em>attribution</em>,
+    /// which is the entire justification §4 gives for preferring a call-site
+    /// check over whatever the CLR happens to do: an
+    /// <c>NullReferenceException</c> naming the expression, the oblivious
+    /// origin, and the file:line beats a bare one from inside a lowered
+    /// construct.
+    /// </para>
+    /// <para>
+    /// Asserted on the <b>message</b>, not on the exception type, because the
+    /// type does not move: §4 keeps <c>NullReferenceException</c> deliberately
+    /// so existing <c>catch</c> clauses behave as they do. A test that
+    /// asserted only "it throws" would be green on the parent commit.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="site">What the row covers.</param>
+    [Theory]
+    [InlineData("    let f = Ob.NilThunk()\n    Console.WriteLine(f())", "delegate invocation")]
+
+    // The parenthesised callee is a DIFFERENT binder path (issue #2185's
+    // `(expr)(args)` shape, which carries a non-null `syntax.Callee` and
+    // routes through `BindIndirectCallExpression` instead of the bare-name
+    // delegate-variable arm). Both are covered because covering only one is
+    // how failure mode 3 shipped: `s.ToUpper()` reported and
+    // `(s.ToUpper()).Trim()` did not, for the life of the "fix".
+    [InlineData("    let f = Ob.NilThunk()\n    Console.WriteLine((f)())", "delegate invocation, parenthesised callee")]
+    [InlineData("    let n = Ob.NilNested()\n    n.Num += 1", "compound member assignment")]
+    [InlineData("    let (a, b) = Ob.NilPt()\n    Console.WriteLine(a + b)", "deconstruction")]
+    [InlineData("    let p = Ob.NilNest()\n    Console.WriteLine(p.Prop)", "member read (the covered control)")]
+    public void Section4_TheRemainingPositions_Produce_AnAttributedFailure(string body, string site)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+        Assert.True(compiled.Success, site + ": " + Describe(compiled));
+
+        var failure = Assert.ThrowsAny<Exception>(
+            () => world.Run(body, NullabilityMode.PlatformTypes));
+        var message = Unwrap(failure).Message;
+        Assert.Contains("nullability-oblivious", message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The positive controls for the fixture above: the same three shapes on
+    /// a <b>non-nil</b> platform value run normally, so the inserted checks
+    /// are checks and not unconditional failures.
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="expected">The expected program output.</param>
+    [Theory]
+    [InlineData("    let f = Ob.Thunk()\n    Console.WriteLine(f())", "V")]
+    [InlineData("    let f = Ob.Thunk()\n    Console.WriteLine((f)())", "V")]
+    [InlineData("    let n = Ob.Nest2()\n    n.Num += 1\n    Console.WriteLine(n.Num)", "1")]
+    [InlineData("    let (a, b) = Ob.Pair()\n    Console.WriteLine(a + b)", "ab")]
+    [InlineData("    let (a, b) = Ob.Pt2()\n    Console.WriteLine(a + b)", "ab")]
+    public void Section4_TheRemainingPositions_Still_Run_When_NotNil(string body, string expected)
+    {
+        using var world = new World();
+
+        Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>Unwraps the reflection/target-invocation wrappers a run adds.</summary>
+    /// <param name="failure">The thrown exception.</param>
+    /// <returns>The innermost exception.</returns>
+    private static Exception Unwrap(Exception failure)
+    {
+        var current = failure;
+        while (current.InnerException is { } inner)
+        {
+            current = inner;
+        }
+
+        return current;
     }
 
     private const string NilHelpers = """

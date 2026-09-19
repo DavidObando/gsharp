@@ -293,34 +293,60 @@ internal static class NullableFlagsBuilder
             return;
         }
 
-        if (type is PlatformTypeSymbol)
+        if (type is PlatformTypeSymbol platform)
         {
-            // ADR-0186 step 5 (§8) territory, deliberately NOT implemented here.
+            // ADR-0186 §8's third round-trip value: an oblivious position is
+            // emitted as the oblivious byte `0`, so it re-imports as `T!`.
             //
-            // Emitting an oblivious declaration as oblivious is the third value
-            // of §8's round-trip guarantee, and it needs a real decision — emit
-            // nothing at all (csc's own `#nullable disable` shape) or an
-            // explicit `[NullableContext(0)]` — plus the round-trip tests that
-            // pin whichever is chosen. None of that exists yet.
+            // Step 1 refused this path outright with a `NotSupportedException`,
+            // on the (correct at the time) reasoning that the alternative
+            // then available was the fall-through to `AppendClrType`, which
+            // writes byte `1` — NON-NULL. That is the worst possible encoding
+            // of "nobody said": it launders an unknown into a guarantee, in
+            // metadata, where the next reader has no way to tell it was a
+            // guess. ADR-0186 exists because that conversion happened once
+            // already, and that constraint has not moved: **never `1`**.
             //
-            // What must NOT happen in the meantime is the silent answer. Every
-            // arm below either handles a wrapper explicitly or falls through to
-            // `AppendClrType`, which would write byte `1` — NON-NULL — for a
-            // `T!`. That is the worst possible encoding of "nobody said": it
-            // launders an unknown into a guarantee, in metadata, where the next
-            // reader has no way to tell it was a guess. ADR-0186 exists because
-            // that conversion happened once already.
+            // The refusal became unshippable at step 3. `PlatformTypeSymbol`
+            // reaches the emitter from ordinary default-on source, not only
+            // from §9's not-yet-existing oblivious scopes: any inferred local
+            // whose initializer is an oblivious CLR call (`let s =
+            // DeferFixture.Snapshot()`) has type `string!`, and the moment
+            // that local is captured — a closure display class, an async
+            // state machine, a script's result slot — its type is written to
+            // metadata as a synthesized member's signature.
             //
-            // This path is unreachable today: `PlatformTypeSymbol` is produced
-            // only by `ClrNullability` under `--nullability=platform-types`,
-            // which defaults off. If it ever becomes reachable — step 5, or an
-            // accidental caller before then — failing here is strictly better
-            // than shipping a mis-encoded assembly.
-            throw new NotSupportedException(
-                $"Cannot emit nullable metadata for the platform type '{type.Name}': "
-                + "ADR-0186 §8's oblivious emit shape is step 5's work and is not "
-                + "implemented. A platform type must not reach the emitter while "
-                + "--nullability=platform-types is still an incomplete mode.");
+            // §8 sanctions exactly two shapes for an oblivious declaration:
+            // emit nothing at all (csc's `#nullable disable` shape), or "an
+            // explicit `[NullableContext(0)]` with byte `0` for oblivious
+            // positions in any per-member array", and says both "read back as
+            // `T!` under §2's table ... so either is correct and the choice is
+            // an emit-size question". This is the per-position half of the
+            // second shape, and nothing more: the type-level context byte and
+            // §9's scope mechanism remain step 5's work. `ClassifyPosition`
+            // reads byte `0` as `ClrNullabilityState.Oblivious` and
+            // `SymbolForState` maps that back to `T!`, so the round trip is
+            // total rather than merely non-lossy in the safe direction.
+            //
+            // Value types are excluded by §2 (there is no `int32!`), so unlike
+            // the `NullableTypeSymbol` arm below there is no `Nullable<T>`
+            // lowering case to consider.
+            var platformInner = platform.UnderlyingType;
+            builder.Add(Oblivious);
+            if (platformInner is NullabilityAnnotatedTypeSymbol annotatedPlatformInner)
+            {
+                AppendAnnotatedTail(
+                    annotatedPlatformInner,
+                    builder,
+                    allowScalarCompression: isRoot,
+                    uniformFlag: Oblivious);
+            }
+            else
+            {
+                AppendGenericArguments(platformInner, builder);
+            }
+
+            return;
         }
 
         // Imported wrapper that already carries the C# DFS byte array — pass
@@ -568,10 +594,27 @@ internal static class NullableFlagsBuilder
         builder.Add(NotAnnotated);
     }
 
+    /// <summary>
+    /// Appends the nested positions of an imported annotated wrapper, dropping
+    /// them entirely when every one of them repeats <paramref name="uniformFlag"/>
+    /// — the byte the caller has already written for the outer position — so
+    /// that <c>NullableAttribute(byte)</c>'s scalar form can stand for the whole
+    /// tree.
+    /// </summary>
+    /// <param name="annotated">The imported wrapper carrying the DFS byte array.</param>
+    /// <param name="builder">The flags being built.</param>
+    /// <param name="allowScalarCompression">Whether the caller is at the root, where the scalar form is legal.</param>
+    /// <param name="uniformFlag">
+    /// The outer byte the caller already wrote. <see cref="Annotated"/> for a
+    /// <c>T?</c> wrapper; ADR-0186 §8 adds <see cref="Oblivious"/> for a
+    /// <c>T!</c> one. Compression is only sound when the nested positions all
+    /// repeat it, because the scalar form applies one byte to every position.
+    /// </param>
     private static void AppendAnnotatedTail(
         NullabilityAnnotatedTypeSymbol annotated,
         ImmutableArray<byte>.Builder builder,
-        bool allowScalarCompression)
+        bool allowScalarCompression,
+        byte uniformFlag = Annotated)
     {
         if (annotated.ClrType == null)
         {
@@ -590,15 +633,16 @@ internal static class NullableFlagsBuilder
 
         foreach (var flag in tail)
         {
-            if (flag != Annotated)
+            if (flag != uniformFlag)
             {
                 builder.AddRange(tail.ToArray());
                 return;
             }
         }
 
-        // Every nested position is also nullable. Keep the single outer `2`;
-        // NullableAttribute(byte) applies that scalar to the whole type tree.
+        // Every nested position repeats the outer byte. Keep the single outer
+        // one; NullableAttribute(byte) applies that scalar to the whole type
+        // tree.
     }
 
     private static void AppendGenericArguments(TypeSymbol type, ImmutableArray<byte>.Builder builder)

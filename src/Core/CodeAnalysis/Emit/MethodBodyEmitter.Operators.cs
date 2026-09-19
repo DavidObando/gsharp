@@ -1160,10 +1160,22 @@ internal sealed partial class MethodBodyEmitter
             && (nullable.UnderlyingType is EnumSymbol
                 || (nullable.UnderlyingType is StructSymbol s && !s.IsClass));
 
-    /// <summary>Issue #1927: true when <paramref name="type"/> is <c>string</c> or <c>string?</c>. A <c>string?</c> operand is a possibly-null <c>string</c> reference at runtime, so the existing <c>String.Concat</c>/<c>String.Equals</c> IL handles it without extra null-checks.</summary>
+    /// <summary>
+    /// Issue #1927: true when <paramref name="type"/> is <c>string</c>,
+    /// <c>string?</c> or (ADR-0186 §6 / issue #4324) <c>string!</c>. All three
+    /// are a possibly-null <c>string</c> reference at runtime, so the existing
+    /// <c>String.Concat</c>/<c>String.Equals</c> IL handles them without extra
+    /// null-checks. This must stay in step with the binder's
+    /// <c>BoundBinaryOperator.IsStringOrNullableString</c>: the binder deciding
+    /// the operator exists while the emitter declines to emit it is a
+    /// crash, not a diagnostic.
+    /// </summary>
+    /// <param name="type">The operand type.</param>
+    /// <returns>Whether the operand is a string in any of the three states.</returns>
     private static bool IsStringOrNullableStringEmit(TypeSymbol type)
         => type == TypeSymbol.String
-            || (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String);
+            || (type is NullableTypeSymbol nullable && nullable.UnderlyingType == TypeSymbol.String)
+            || (type is PlatformTypeSymbol platform && platform.UnderlyingType == TypeSymbol.String);
 
     /// <summary>
     /// Issue #831 / #2300: matches `T? == nil` / `T? != nil` AND bare
