@@ -88,6 +88,7 @@ public class BoundNodeKindExhaustivenessTests
         "Attribute",
 
         // Lowered-away expression kinds: always removed by earlier passes.
+        "ManagedReferenceExpression",   // ManagedReferenceLowerer runs after capture boxing, before emission on both Compilation emit paths
         "AwaitExpression",              // lowered by async rewriter
         "SpillSequenceExpression",      // removed by SpillSequenceSpiller
         "AwaitYieldPoint",              // synthetic async markers (statement-like)
@@ -152,6 +153,8 @@ public class BoundNodeKindExhaustivenessTests
         "SwitchExpression",
         "BlockExpression",
         "AddressOfExpression",
+        "ManagedReferenceExpression",
+        "ManagedFieldKeyExpression",
         "DereferenceExpression",
         "StateMachineAwaitOnCompleted",
         "StateMachineBuilderMoveNext",
@@ -311,6 +314,8 @@ public class BoundNodeKindExhaustivenessTests
         "SwitchExpression",
         "BlockExpression",
         "AddressOfExpression",
+        "ManagedReferenceExpression",
+        "ManagedFieldKeyExpression",
         "DereferenceExpression",
         "StateMachineAwaitOnCompleted",
         "StateMachineBuilderMoveNext",
