@@ -1042,7 +1042,10 @@ internal sealed partial class StatementBinder
         ClosureCaptureLegalityChecker.CheckCapturedVariables(goCaptured, Diagnostics, syntax.Expression.Location);
 
         var sink = binderCtx.ScopeFrames.Count > 0 ? new BoundVariableExpression(null, binderCtx.ScopeFrames.Peek()) : null;
-        return new BoundGoStatement(syntax, shapedExpression, sink);
+        var lexicalEnclosingType = function?.ReceiverType
+            ?? function?.StaticOwnerType
+            ?? function?.LexicalEnclosingType;
+        return new BoundGoStatement(syntax, shapedExpression, sink, resultCell: null, resultType: null, lexicalEnclosingType);
     }
 
     private BoundStatement BindChannelSendStatement(ChannelSendStatementSyntax syntax)

@@ -132,7 +132,13 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
             // choice would be wrong for half the programs.
             var resultType = rewritten.ResultType ?? TypeSymbol.Error;
             var body = runtime.BindAsyncLetRun(cell, rewritten.Expression, resultType);
-            return new BoundGoStatement(rewritten.Syntax, body, rewritten.Sink, rewritten.ResultCell, resultType);
+            return new BoundGoStatement(
+                rewritten.Syntax,
+                body,
+                rewritten.Sink,
+                rewritten.ResultCell,
+                resultType,
+                rewritten.LexicalEnclosingType);
         }
         finally
         {

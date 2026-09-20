@@ -475,6 +475,11 @@ internal sealed class ClosureEmitter
                     new BoundReturnStatement(null, new BoundDefaultExpression(null, valueTaskType))));
 
             var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+            var enclosingType = go.LexicalEnclosingType;
+            var requiredTypeParameters = enclosingType is StructSymbol enclosingStruct
+                ? StructSymbol.CollectEnclosingTypeParameters(enclosingStruct)
+                    .AddRange((enclosingStruct.Definition ?? enclosingStruct).TypeParameters)
+                : ImmutableArray<TypeParameterSymbol>.Empty;
             var info = this.SynthesizeDisplayClass(
                 closureName,
                 captured,
@@ -482,7 +487,16 @@ internal sealed class ClosureEmitter
                 returnType,
                 body,
                 hostPackage,
-                invokeName: "InvokeAction");
+                invokeName: "InvokeAction",
+                requiredTypeParameters: requiredTypeParameters);
+
+            // A go operand was bound with the access rights of its lexical
+            // member. Keep those rights after lowering by placing its helper in
+            // the same CLR accessibility domain, as ordinary lambda hosts do.
+            if (enclosingType is StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true })
+            {
+                info.ClassSym.SetContainingType(enclosingType);
+            }
 
             this.GoClosureInfos[go] = info;
             if (go.Syntax != null)
