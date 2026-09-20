@@ -408,9 +408,11 @@ internal sealed class BinderContext
             || !TypeMemberModel.GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty;
 
     public bool CanUseNativeBufferAlias(BoundScope scope, SyntaxToken identifier, FunctionSymbol? currentFunction, bool expression = false)
+        => identifier.Text is "slice" or "array" && CanUseIntrinsicAlias(scope, identifier, currentFunction, expression);
+
+    public bool CanUseIntrinsicAlias(BoundScope scope, SyntaxToken identifier, FunctionSymbol? currentFunction, bool expression = false)
     {
-        if (identifier.Text is not ("slice" or "array")
-            || TryLookupSourceType(scope, identifier.ValueText, -1, currentFunction, out _, out var ambiguous)
+        if (TryLookupSourceType(scope, identifier.ValueText, -1, currentFunction, out _, out var ambiguous)
             || ambiguous
             || scope.HasImportedTypeName(identifier.ValueText))
         {

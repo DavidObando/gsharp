@@ -396,7 +396,7 @@ internal sealed class ConversionClassifier
         bool allowExplicit = false,
         ParameterSymbol? callParameter = null)
     {
-        if (NativeSliceTypes.HaveIncompatibleElements(expression.Type, type))
+        if (NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) || ManagedReferenceTypes.HaveIncompatibleElements(expression.Type, type))
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
             return new BoundErrorExpression(expression.Syntax);

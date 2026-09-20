@@ -48,4 +48,12 @@ public class LocalVariableSymbol : VariableSymbol
     /// pointee type <c>T</c>. Reads/writes are implicitly indirected by the emitter and interpreter.
     /// </summary>
     public virtual RefKind RefKind { get; set; }
+
+    internal BoundExpression? ManagedReferenceOrigin { get; set; }
+
+    internal LocalVariableSymbol? ManagedReferenceStorage { get; set; }
+
+    internal BoundExpression? ManagedReferenceStorageOrigin { get; set; }
+
+    internal bool HoldsScopedManagedReference { get; set; }
 }

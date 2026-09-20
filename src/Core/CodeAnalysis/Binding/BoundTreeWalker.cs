@@ -298,6 +298,12 @@ public abstract class BoundTreeWalker
             case BoundNodeKind.AddressOfExpression:
                 VisitAddressOfExpression((BoundAddressOfExpression)node);
                 break;
+            case BoundNodeKind.ManagedReferenceExpression:
+                VisitManagedReferenceExpression((BoundManagedReferenceExpression)node);
+                break;
+            case BoundNodeKind.ManagedFieldKeyExpression:
+                VisitExpression(((BoundManagedFieldKeyExpression)node).Parent);
+                break;
             case BoundNodeKind.ConditionalAddressExpression:
                 VisitConditionalAddressExpression((BoundConditionalAddressExpression)node);
                 break;
@@ -884,6 +890,11 @@ public abstract class BoundTreeWalker
     protected virtual void VisitAddressOfExpression(BoundAddressOfExpression node)
     {
         VisitExpression(node.Operand);
+    }
+
+    protected virtual void VisitManagedReferenceExpression(BoundManagedReferenceExpression node)
+    {
+        VisitExpression(node.Location);
     }
 
     /// <summary>ADR-0061: visits a conditional address-of expression.</summary>

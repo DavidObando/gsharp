@@ -254,6 +254,71 @@ Slices are backed by CLR arrays. `len` and `cap` observe array length, and `appe
 
 Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule: `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. Rectangular indices use CLR `Get`/`Set`/`Address` pseudo-methods and therefore convert every integer index to `int32`. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
 
+### Persistent managed references
+
+`managed[T]` and `readonlyManaged[T]` name the invariant reference types
+`Gsharp.Values.ManagedRef<T>` and `ReadOnlyManagedRef<T>`, supplied by
+`Gsharp.Runtime.Values`. They are **heap-storable location handles**, not CLR
+`T&`. Existing `*T`, `&x`, `ref`, `in`, `out` and `scoped` keep their borrowed
+contracts. Ordinary names and `$` escapes take precedence over the contextual
+handle spellings.
+
+```gsharp
+func Counter() managed[int32] {
+    var x = 1
+    let ref early = x
+    let p = managed(x)
+    early = 2
+    x += 3
+    return p
+}
+let p = Counter()
+*p += 1
+let readonlyView = p.AsReadOnly()
+let ref readonly observed = readonlyView.Borrow()
+```
+
+All accesses to an addressed local use one planned closure-compatible cell,
+including borrowed aliases formed before the persistent request. Copies of
+struct values and by-value parameters remain independent; parameters keep
+their existing readonly binding permission. Copying a handle copies its
+location identity, while `var value = *p` copies the referent normally.
+
+Factories admit compiler-owned storage, known borrowed aliases, existing
+persistent dereferences, accessible instance fields, nested value fields,
+exact one-dimensional CLR array elements, and native slice elements. Owners
+and indices are evaluated once. Rebinding an object/array/slice variable or
+growing a slice cannot retarget an existing handle. Replacing a struct in its
+promoted slot does update the value seen by that slot's field handles.
+
+`.Borrow()` returns `ref T` or `ref readonly T`. Readonly permission is shallow:
+the slot cannot be replaced, but an object reached through it is not deeply
+immutable. There is no writable upgrade. Ordinary readonly struct calls
+retain defensive-copy behavior. `==` compares locations of the same invariant
+handle type; `.SameLocation(other)` compares writable and readonly views.
+Hashes use owner identity and a canonical typed path, never mutable contents.
+`ReferenceEquals` observes wrapper identity instead.
+
+A non-null handle must be initialized (or definitely assigned before local
+use); `default` is permitted for `managed[T]?` / `readonlyManaged[T]?` and is
+nil. Compiler-owned aggregate initialization cannot silently invent null
+non-null handle fields. Foreign and unconstrained generic initialization can
+still supply null despite annotations; dereference/Borrow then throws
+`NullReferenceException`, never allocates a substitute location.
+
+Handles may cross `await`, `yield` and channel suspension. Temporary borrows
+may not: retain the handle and borrow again in the next execution segment.
+An earlier borrowed argument followed by a suspending argument is diagnosed;
+evaluate the suspending value first.
+
+GS0604 rejects incoming/scoped caller storage, unknown or merged borrowed
+provenance, borrowed struct `this`, spans/ref-struct/native memory, ordinary
+property values and temporaries, map/string elements, statics/thread-statics,
+multidimensional arrays and explicit-layout fields. Explicitly copying a value
+to a new local is allowed, but that local is not an alias to the old storage.
+Handles provide GC reachability, not exclusivity, synchronization, native
+ownership or race freedom. Existing atomic APIs can consume lawful borrows.
+
 ### Native shared-storage slices
 
 `slice[T]` is a heap-storable immutable descriptor over an exact managed array,

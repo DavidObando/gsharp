@@ -18,6 +18,12 @@ internal sealed partial class ExpressionBinder
 {
     private BoundExpression BindBufferAwareCallExpression(CallExpressionSyntax syntax)
     {
+        if (syntax.Identifier.Text is "managed" or "readonlyManaged"
+            && binderCtx.CanUseIntrinsicAlias(scope, syntax.Identifier, getCurrentFunction(), expression: true))
+        {
+            return BindManagedReference(syntax);
+        }
+
         if (syntax.ConversionTypeClause is { IsArray: false, HasQualifier: false, HasTypeArguments: true, ReadOnlySliceModifier: null, Identifier: { } identifier } type
             && identifier.Text is "slice" or "array"
             && !binderCtx.CanUseNativeBufferAlias(scope, identifier, getCurrentFunction(), expression: true))

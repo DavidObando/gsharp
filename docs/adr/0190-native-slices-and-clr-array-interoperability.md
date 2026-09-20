@@ -24,8 +24,10 @@ The maintainer approved this design on **2026-09-19**, after requesting the
 contextual **`readonly slice[T]`** spelling and endpoint-based `Subslice`
 instance / imported `Slice` extension distinction. PR #4332 deliberately kept
 all three capability proposals Proposed. Acceptance belongs to this feature's
-implementation, not that documentation-only PR. ADR-0188 and ADR-0189 remain
-Proposed and are not dependencies of the bounded core below.
+implementation, not that documentation-only PR. ADR-0188 and ADR-0189 were
+Proposed at the native-slice merge and are not dependencies of the bounded core
+below. Persistent-reference composition is accepted separately in ADR-0188;
+ADR-0189 remains Proposed.
 
 Implemented contracts:
 

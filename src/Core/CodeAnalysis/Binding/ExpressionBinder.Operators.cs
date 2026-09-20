@@ -425,6 +425,11 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (ManagedReferenceTypes.TryGetElement(operand.Type, out _, out _))
+        {
+            return new BoundDereferenceExpression(syntax, ManagedReferenceTypes.Borrow(operand));
+        }
+
         if (!TypeSymbol.TryGetPointeeType(operand.Type, out _))
         {
             Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, operand.Type);
@@ -1852,6 +1857,21 @@ internal sealed partial class ExpressionBinder
 
         var nativeEqualityLeftType = boundLeft.Type is NullableTypeSymbol nullableNativeLeft ? nullableNativeLeft.UnderlyingType : boundLeft.Type;
         var nativeEqualityRightType = boundRight.Type is NullableTypeSymbol nullableNativeRight ? nullableNativeRight.UnderlyingType : boundRight.Type;
+        if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+            && ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnlyManaged)
+            && ManagedReferenceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnlyManaged))
+        {
+            if (leftReadOnlyManaged != rightReadOnlyManaged || ManagedReferenceTypes.HaveIncompatibleElements(nativeEqualityLeftType, nativeEqualityRightType))
+            {
+                Diagnostics.ReportManagedReference(syntax.OperatorToken.Location, "location equality requires identical referent permissions and type; use SameLocation to compare permissions");
+                return new BoundErrorExpression(syntax);
+            }
+
+            var name = syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ? "op_Equality" : "op_Inequality";
+            var method = Invariant.Required(Invariant.Required(nativeEqualityLeftType.ClrType, "managed handles have a CLR type").GetMethod(name), "the runtime declares location equality");
+            return new BoundClrBinaryOperatorExpression(syntax, syntax.OperatorToken.Kind, boundLeft, boundRight, method, TypeSymbol.Bool);
+        }
+
         if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
             && NativeSliceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnly)
             && NativeSliceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnly))

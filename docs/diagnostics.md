@@ -11,6 +11,12 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 | GS0602 | Error | A selected native element/value-field write would suspend while its location is borrowed. | Evaluate the suspending value before selecting the element. Ordinary async slice values and segment-local borrows are supported. |
 | GS0603 | Error | A store requires writable elements but its descriptor is `readonly slice[T]`. | Use a writable alias or explicitly clone; readonly views are not deep immutable copies. |
 
+## Persistent managed references (ADR-0188)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0604 | Error | Invalid persistent-reference type, origin, permission, initialization, scoped escape, or suspension of a temporary borrow. | Use an admitted GC-owned location and compatible runtime; initialize non-null handles on every path, weaken permissions explicitly, and evaluate suspending values before borrowing. Unknown borrowed storage is never copied into a replacement location. |
+
 ## Severity levels
 
 | Level | Meaning |

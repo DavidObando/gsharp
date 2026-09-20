@@ -3092,6 +3092,20 @@ internal sealed partial class ExpressionBinder
         // spurious type diagnostics for a non-generic-type target.
         var arity = index.Indices.Count;
 
+        if (targetName.IdentifierToken.Text is "managed" or "readonlyManaged"
+            && binderCtx.CanUseIntrinsicAlias(scope, targetName.IdentifierToken, getCurrentFunction(), expression: true))
+        {
+            failureHandled = true;
+            if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, name == "readonlyManaged", out var definition)
+                || !TryBindTypeArgumentExpressions(index.Indices, out var arguments) || arguments.Length != 1)
+            {
+                Diagnostics.ReportManagedReference(index.Location, "managed reference types require one referent type and a matching runtime");
+                return false;
+            }
+
+            return TryCloseImportedGenericTypeReceiver(definition, arguments, index, out constructedImported, out failureHandled);
+        }
+
         if (name == "slice" && binderCtx.CanUseNativeBufferAlias(scope, targetName.IdentifierToken, getCurrentFunction(), expression: true))
         {
             failureHandled = true;
@@ -3611,7 +3625,7 @@ internal sealed partial class ExpressionBinder
             // Issue #4024: the SLICE spelling `[]T` shares that backing and is
             // retained by the same gate, so `EqualityComparer[[]int32].Default`
             // no longer reads as a metadata-only `EqualityComparer<int32[]>`.
-            var symbolicReceiver = NativeSliceTypes.IsDefinition(closed, out _) || typeArgs.Any(static a =>
+            var symbolicReceiver = NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) || typeArgs.Any(static a =>
                 TypeSymbol.RequiresSymbolicProjection(a)
                 || TypeSymbol.ContainsNamedTupleElements(a)
                 || TypeSymbol.ContainsSourceArrayShape(a))

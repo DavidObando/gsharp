@@ -78,6 +78,54 @@ public readonly struct Slice<T> : IEquatable<Slice<T>>, IEnumerable<T>
     /// <returns>Whether the descriptors differ.</returns>
     public static bool operator !=(Slice<T> left, Slice<T> right) => !left.Equals(right);
 
+    /// <summary>Retains a selected backing element without exposing the backing owner.</summary>
+    /// <param name="index">The logical element index.</param>
+    /// <returns>A persistent writable location.</returns>
+    public ManagedRef<T> GetManagedReference(int index)
+    {
+        ValidateIndex(index);
+        return ManagedRef<T>.FromArray(Owner, offset + index);
+    }
+
+    /// <summary>Retains a logical element selected by a from-end index.</summary>
+    /// <param name="index">The logical index.</param>
+    /// <returns>A persistent writable location.</returns>
+    public ManagedRef<T> GetManagedReference(Index index) => GetManagedReference(index.GetOffset(Length));
+
+    /// <summary>Retains a native-syntax element after checking its operand.</summary>
+    /// <param name="index">The written nonnegative operand.</param>
+    /// <param name="fromEnd">Whether the operand is relative to Length.</param>
+    /// <returns>A persistent writable location.</returns>
+    public ManagedRef<T> GetManagedReference(int index, bool fromEnd)
+    {
+        ValidateIndexOperand(index);
+        return GetManagedReference(fromEnd ? Length - index : index);
+    }
+
+    /// <summary>Retains a selected element with only readonly permission.</summary>
+    /// <param name="index">The logical element index.</param>
+    /// <returns>A persistent readonly location.</returns>
+    public ReadOnlyManagedRef<T> GetReadOnlyManagedReference(int index)
+    {
+        ValidateIndex(index);
+        return ReadOnlyManagedRef<T>.FromArray(Owner, offset + index);
+    }
+
+    /// <summary>Retains a readonly element using a from-end index.</summary>
+    /// <param name="index">The logical index.</param>
+    /// <returns>A persistent readonly location.</returns>
+    public ReadOnlyManagedRef<T> GetReadOnlyManagedReference(Index index) => GetReadOnlyManagedReference(index.GetOffset(Length));
+
+    /// <summary>Retains a native-syntax readonly element after checking its operand.</summary>
+    /// <param name="index">The written nonnegative operand.</param>
+    /// <param name="fromEnd">Whether the operand is relative to Length.</param>
+    /// <returns>A persistent readonly location.</returns>
+    public ReadOnlyManagedRef<T> GetReadOnlyManagedReference(int index, bool fromEnd)
+    {
+        ValidateIndexOperand(index);
+        return GetReadOnlyManagedReference(fromEnd ? Length - index : index);
+    }
+
     /// <summary>Creates CLR-default elements with independent length and capacity.</summary>
     /// <param name="length">The logical length.</param>
     /// <param name="capacity">The allocated capacity.</param>

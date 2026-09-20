@@ -1591,6 +1591,20 @@ public sealed class CSharpTypeMapper
         {
             if (named.ContainingAssembly.Name == "Gsharp.Runtime.Values"
                 && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
+                && named.Arity == 1 && named.Name is "ManagedRef" or "ReadOnlyManagedRef")
+            {
+                var spelling = named.Name == "ManagedRef" ? "managed" : "readonlyManaged";
+                if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
+                    || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: spelling).Any())
+                {
+                    spelling = "Gsharp.Values." + named.Name;
+                }
+
+                return new NamedTypeReference(spelling, new[] { this.Map(named.TypeArguments[0], context, location) });
+            }
+
+            if (named.ContainingAssembly.Name == "Gsharp.Runtime.Values"
+                && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
                 && named.Arity == 1 && named.Name is "Slice" or "ReadOnlySlice")
             {
                 var element = this.Map(named.TypeArguments[0], context, location);

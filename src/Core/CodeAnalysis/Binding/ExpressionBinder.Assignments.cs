@@ -213,6 +213,12 @@ internal sealed partial class ExpressionBinder
 
         var convertedExpression = conversions.BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
+        if (variable is LocalVariableSymbol local && ManagedReferenceOrigins.IsScopedHandle(convertedExpression))
+        {
+            local.IsScoped = true;
+            local.HoldsScopedManagedReference = true;
+        }
+
         return new BoundAssignmentExpression(null, variable, convertedExpression, boundExpression.Type);
     }
 
@@ -2312,6 +2318,17 @@ internal sealed partial class ExpressionBinder
             return pointer;
         }
 
+        if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
+        {
+            pointer = ManagedReferenceTypes.Borrow(pointer);
+        }
+
+        if (RefCapabilities.IsReadOnlyReference(pointer))
+        {
+            Diagnostics.ReportManagedReference(syntax.Target.Location, "readonly storage cannot be written through");
+            return new BoundErrorExpression(syntax);
+        }
+
         if (!TypeSymbol.TryGetPointeeType(pointer.Type, out var pointeeType))
         {
             Diagnostics.ReportUndefinedUnaryOperator(syntax.Target.OperatorToken.Location, syntax.Target.OperatorToken.Text, pointer.Type);
@@ -2364,6 +2381,17 @@ internal sealed partial class ExpressionBinder
         if (pointer is BoundErrorExpression)
         {
             return pointer;
+        }
+
+        if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
+        {
+            pointer = ManagedReferenceTypes.Borrow(pointer);
+        }
+
+        if (RefCapabilities.IsReadOnlyReference(pointer))
+        {
+            Diagnostics.ReportManagedReference(syntax.Target.Location, "readonly storage cannot be written through");
+            return new BoundErrorExpression(syntax);
         }
 
         if (!TypeSymbol.TryGetPointeeType(pointer.Type, out var pointeeType))

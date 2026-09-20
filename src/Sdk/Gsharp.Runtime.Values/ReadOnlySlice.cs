@@ -55,6 +55,22 @@ public readonly struct ReadOnlySlice<T> : IEquatable<ReadOnlySlice<T>>, IEnumera
     /// <returns>Whether the descriptors differ.</returns>
     public static bool operator !=(ReadOnlySlice<T> left, ReadOnlySlice<T> right) => !left.Equals(right);
 
+    /// <summary>Retains a selected element without granting writable access.</summary>
+    /// <param name="index">The logical element index.</param>
+    /// <returns>A persistent readonly location.</returns>
+    public ReadOnlyManagedRef<T> GetReadOnlyManagedReference(int index) => slice.GetReadOnlyManagedReference(index);
+
+    /// <summary>Retains a readonly element using a from-end index.</summary>
+    /// <param name="index">The logical index.</param>
+    /// <returns>A persistent readonly location.</returns>
+    public ReadOnlyManagedRef<T> GetReadOnlyManagedReference(Index index) => slice.GetReadOnlyManagedReference(index);
+
+    /// <summary>Retains a native-syntax readonly element after checking its operand.</summary>
+    /// <param name="index">The written nonnegative operand.</param>
+    /// <param name="fromEnd">Whether the operand is relative to Length.</param>
+    /// <returns>A persistent readonly location.</returns>
+    public ReadOnlyManagedRef<T> GetReadOnlyManagedReference(int index, bool fromEnd) => slice.GetReadOnlyManagedReference(index, fromEnd);
+
     /// <summary>Shares a non-null exact array after rejecting covariance.</summary>
     /// <param name="array">The exact array.</param>
     /// <returns>The readonly whole-array descriptor.</returns>

@@ -769,7 +769,7 @@ public sealed class NativeSliceLanguageTests
         }
     }
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         public Fixture()
         {

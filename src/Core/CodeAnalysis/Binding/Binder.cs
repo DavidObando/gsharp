@@ -2600,6 +2600,9 @@ public sealed class Binder
         // pointless. Reported here, over the bound bodies, because the question
         // is about the receiver's declaration rather than the call.
         RendezvousBatchAnalyzer.Run(functionBodies, diagnostics);
+        var managedReferenceDiagnostics = new DiagnosticBag();
+        ManagedReferenceSafetyAnalyzer.Analyze(functionBodies, allStructs, managedReferenceDiagnostics);
+        diagnostics.AddRange(managedReferenceDiagnostics.ToImmutableArray());
         if (entryBodyWasTheStatementBlock && functionBodies.TryGetValue(globalScope.EntryPoint!, out var inferredEntryBody))
         {
             // The synthesized top-level block IS the entry point's body; a user
@@ -3926,6 +3929,42 @@ public sealed class Binder
         }
 
         if (!syntax.HasQualifier && syntax.HasTypeArguments
+            && syntax.Identifier is { Text: "managed" or "readonlyManaged" } managedName
+            && binderCtx.CanUseIntrinsicAlias(scope, managedName, function))
+        {
+            var arguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments establishes the argument list");
+            if (arguments.Count != 1)
+            {
+                Diagnostics.ReportManagedReference(syntax.Location, "managed[T] and readonlyManaged[T] require one referent type");
+                return null;
+            }
+
+            var managedElement = BindTypeClause(arguments[0]);
+            if (managedElement == null || managedElement == TypeSymbol.Error)
+            {
+                return null;
+            }
+
+            if (managedElement == TypeSymbol.Void || managedElement is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol
+                || TypeSymbol.IsByRefLike(managedElement))
+            {
+                Diagnostics.ReportManagedReference(arguments[0].Location, "the referent must be an ordinary heap-storable type");
+                return null;
+            }
+
+            if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, managedName.Text == "readonlyManaged", out var definition))
+            {
+                Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime");
+                return null;
+            }
+
+            var symbolic = false;
+            var clrElement = ProjectGenericArgument(managedElement, typeof(object), ref symbolic);
+            return ApplyArraySuffix(syntax, ImportedTypeSymbol.GetConstructed(
+                definition.MakeGenericType(clrElement), definition, ImmutableArray.Create(managedElement)));
+        }
+
+        if (!syntax.HasQualifier && syntax.HasTypeArguments
             && syntax.Identifier is { } nativeName
             && binderCtx.CanUseNativeBufferAlias(scope, nativeName, function))
         {
@@ -4158,7 +4197,7 @@ public sealed class Binder
             try
             {
                 var closed = clrOpenType.MakeGenericType(clrArgs);
-                if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _))
+                if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _))
                 {
                     // #313 / #671: keep the symbolic type arguments alongside
                     // the type-erased closed CLR shape so call-site inference,
@@ -5214,7 +5253,7 @@ public sealed class Binder
         try
         {
             var closed = clrType.MakeGenericType(clrArgs);
-            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _))
+            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _))
             {
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable());
             }
@@ -5479,7 +5518,7 @@ public sealed class Binder
         try
         {
             var closed = nestedDef.MakeGenericType(clrArgs);
-            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _))
+            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _))
             {
                 return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable());
             }

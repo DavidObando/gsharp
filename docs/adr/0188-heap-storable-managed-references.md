@@ -1,8 +1,9 @@
 # ADR-0188: Heap-storable managed references alongside borrowed ref contracts
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-19
-- **Phase**: Language and runtime design; bounded storage origins first
+- **Implemented**: 2026-09-20 UTC (2026-09-19 PDT)
+- **Phase**: Bounded managed-reference language/runtime implementation
 - **Issue**: [#4330](https://github.com/DavidObando/gsharp/issues/4330)
 - **Related**: [ADR-0190](0190-native-slices-and-clr-array-interoperability.md),
   [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
@@ -18,6 +19,86 @@
   definition-side work. Add an initialization restriction for the new
   non-null handle type alongside ADR-0100. Existing ADRs remain unchanged
   while this proposal is under review.
+
+## Acceptance and implementation amendment — September 20, 2026 (UTC)
+
+The maintainer approved this design on **2026-09-19**. Proposal PR #4332
+intentionally left its status Proposed; this implementation records acceptance
+alongside the feature, following native slices in #4338 / ADR-0190.
+ADR-0189 remains Proposed. Neither structural adaptation nor go2gs is
+implemented by this amendment.
+
+The implemented spelling is `managed[T]` / `readonlyManaged[T]`, including
+nullable handles, `managed(location)` / `readonlyManaged(location)`, and `*p`.
+Ordinary visible types, aliases, values, functions, static imports and escaped
+identifiers retain precedence. Explicit `Gsharp.Values` names remain available.
+The nominal classes ship in the existing `Gsharp.Runtime.Values` assembly.
+
+Implementation:
+
+- Whole-body discovery precedes address emission. Locals, containing value
+  roots, and by-value parameters reuse the existing closure-box plan, including
+  early borrows, nested literals, conditional requests and per-iteration cells.
+  By-value parameters retain G#'s existing readonly binding permission:
+  `readonlyManaged(parameter)` retains their independent entry copy; an
+  explicit mutable local copy is required for a writable handle.
+- Known borrowed aliases save a descriptor at their original selection site.
+  A nested persistent request captures that descriptor, not a raw byref.
+  Stable `let` pointer aliases are also tracked. Unknown/merged mutable
+  pointer provenance remains diagnosed, never repaired by copying a referent.
+- Ordinary accessible source/imported fields, nested value fields, exact CLR
+  array elements and native writable/readonly slice elements retain their
+  selected owners. Reference-valued traversal snapshots a new object root;
+  replacing a value root continues to update the same slot.
+- Generated ordinary typed classes implement `Borrow` using field addresses
+  and parent borrows. Array factories use typed array element addresses.
+  The canonical key is owner reference identity, absolute array index and a
+  flattened path of runtime field handles paired with constructed declaring
+  type handles. Equality is independent of helper site/assembly and referent
+  contents. `SameLocation` compares permission views; CLR wrapper identity
+  remains a separate observation.
+- Writable and readonly borrowed contracts use the existing metadata path.
+  Implementation and `/refout` are tested with a C# producer/consumer.
+  Async, iterator and channel state retain ordinary handles/cells only;
+  temporary borrows still obey execution-segment liveness.
+- Non-null handle locals participate in definite assignment. Explicit
+  non-null defaults, missing aggregate fields, incomplete source constructors
+  and compiler-created arrays with unsupplied non-null handle elements are
+  diagnosed. Nullable defaults are nil. Generic/foreign CLR zero-initialization
+  remains an explicit boundary: annotations cannot prevent foreign nulls,
+  `default(T)`, or a foreign/generic factory from supplying null. Such a null
+  throws on dereference/Borrow; no fake target is allocated.
+- GS0604 diagnoses unsupported provenance, permissions, initialization and
+  suspended borrowed operations. Imported unknown ref returns, caller/scoped
+  storage, borrowed struct `this`, ref-like/native storage, property-value
+  copies, statics, multidimensional arrays and explicit-layout fields are not
+  turned into persistent aliases. A borrowed argument preceding a suspending
+  argument is diagnosed rather than hoisted or re-evaluated.
+
+The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
+completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,
+`ManagedReferenceRuntimeTests`, `ManagedReferenceFormattingTests`,
+`NativeSliceCompletionTests`, and `ManagedReferenceTranslationTests`.
+The runtime benchmark declares its budget before execution: **zero allocated
+bytes for one million warmed dereferences**, with a five-second sanity bound,
+and reports direct borrowed and explicit `StrongBox` baselines. This is not a
+zero-cost or portable throughput claim. Generated `Borrow` bodies are also
+checked for allocation/boxing/delegate construction and generated heap fields
+for forbidden byref/ref-like types. No verifier suppression is added.
+
+ADR-0154 discrimination: replacing promoted roots with independent value
+snapshots compiled and verified but made **eight of ten** execution programs
+fail their output assertions. A runtime mutant that copied array owners and
+omitted covariance rejection made **all four** runtime tests fail. Both
+mutants were reverted. A real packed-SDK consumer and an in-tree bootstrap
+consumer both execute the early-borrow/returned-cell witness and print `42`.
+The actual REPL script also prints `42`. On the validation host, the warmed
+million-operation observation was 2.1063 ms for the handle, 0.3248 ms for the
+direct borrow, and 2.0172 ms for `StrongBox`, with zero measured allocations
+in the handle loop. These measurements are informational and machine-specific.
+
+The proposal-stage text below retains the original rationale and matrices;
+its “proposed” and staged-implementation wording is historical.
 
 ## Context
 
