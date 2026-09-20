@@ -91,7 +91,7 @@ public sealed class ManagedReferenceRuntimeContractTests
         const string source = """
             package CompleteManagedRuntime
             func Capture(values []int32) managed[int32] { return managed(values[0]) }
-            func View(p managed[int32]) readonlyManaged[int32] { return p.AsReadOnly() }
+            func View(p managed[int32]) readonly managed[int32] { return p.AsReadOnly() }
             """;
         var compilation = new GSharpCompilation(references, GSharpSyntaxTree.Parse(source)) { IsLibrary = true };
         using var output = new MemoryStream();

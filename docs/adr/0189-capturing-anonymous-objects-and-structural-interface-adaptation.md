@@ -326,7 +326,7 @@ future capability interface or introducing dependency cycles.
 | `adapt[I](structExpression)` | One value copy in a mutable private field of adapter | Calls act on that field; changes persist across calls, not in original variable |
 | `adapt[I](interfaceExpression)` | Evaluated interface value | Forward only statically available interface members; never discover dynamic shape |
 | `adapt[I](ref handle)` | ADR-0188 `managed[T]` for value-type `T` | Each call borrows that persistent location; updates original slot |
-| `adapt[I](ref readonlyHandle)` | ADR-0188 `readonlyManaged[T]` for value-type `T` | Only compatible readonly source members admitted |
+| `adapt[I](ref readonlyHandle)` | ADR-0188 `readonly managed[T]` for value-type `T` | Only compatible readonly source members admitted |
 | Raw borrowed/ref-like source or location | Not admitted | Ordinary heap adapter cannot retain it |
 
 The `ref` operand form is a **proposed adaptation mode**, not a CLR borrowed

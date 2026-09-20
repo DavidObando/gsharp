@@ -273,7 +273,13 @@ public static class BoundNodePrinter
                 break;
             case BoundNodeKind.ManagedReferenceExpression:
                 var managed = (BoundManagedReferenceExpression)node;
-                WriteIntrinsicCall(managed.IsReadOnly ? "readonlyManaged" : "managed", managed.Location, writer);
+                if (managed.IsReadOnly)
+                {
+                    writer.WriteIdentifier("readonly");
+                    writer.WriteSpace();
+                }
+
+                WriteIntrinsicCall("managed", managed.Location, writer);
                 break;
             case BoundNodeKind.ManagedFieldKeyExpression:
                 WriteManagedFieldKeyExpression((BoundManagedFieldKeyExpression)node, writer);

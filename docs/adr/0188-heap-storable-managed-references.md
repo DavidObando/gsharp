@@ -22,14 +22,42 @@
 
 ## Acceptance and implementation amendment — September 20, 2026 (UTC)
 
+### Readonly spelling amendment
+
+The maintainer approved **`readonly managed[T]`** and
+**`readonly managed(location)`** on **September 19, 2026 PDT / September 20,
+2026 UTC**, superseding the initial joined `readonlyManaged` intrinsic spelling
+before release. The joined spelling is no longer a compiler alias; ordinary
+user-defined types, functions and values named `readonlyManaged` still resolve
+normally. Neither `readonly` nor `managed` becomes a globally reserved word.
+
+The modifier is represented by a separate syntax token, as with `readonly
+slice[T]`. It binds to the managed category before a trailing nullable marker:
+`readonly managed[T]?` and `(readonly managed[T])?` are nullable handles;
+`readonly managed[T?]` has a nullable referent. Nested generic/tuple/array
+positions retain these distinctions. After `ref`, the first `readonly` remains
+the borrowed-return modifier: `ref readonly managed[T]` borrows a writable
+handle slot readonly; `ref readonly readonly managed[T]` borrows a readonly
+handle slot readonly.
+
+The expression modifier applies only to the address intrinsic and requires an
+admitted addressable location; it is not a readonly operator on arbitrary
+values. Visible ordinary names and escapes retain precedence. When shadowed,
+use the explicit `Gsharp.Values.ReadOnlyManagedRef[T]` CLR type/API rather than
+retargeting an ordinary callable. The CLR classes, `.AsReadOnly()`, location
+identity, permissions and lifetime contracts are unchanged. ADR-0189 and
+ADR-0191 remain Proposed.
+
+### Original design acceptance and delivered scope
+
 The maintainer approved this design on **2026-09-19**. Proposal PR #4332
 intentionally left its status Proposed; this implementation records acceptance
 alongside the feature, following native slices in #4338 / ADR-0190.
 ADR-0189 remains Proposed. Neither structural adaptation nor go2gs is
 implemented by this amendment.
 
-The implemented spelling is `managed[T]` / `readonlyManaged[T]`, including
-nullable handles, `managed(location)` / `readonlyManaged(location)`, and `*p`.
+The implemented spelling is `managed[T]` / `readonly managed[T]`, including
+nullable handles, `managed(location)` / `readonly managed(location)`, and `*p`.
 Ordinary visible types, aliases, values, functions, static imports and escaped
 identifiers retain precedence. Explicit `Gsharp.Values` names remain available.
 The nominal classes ship in the existing `Gsharp.Runtime.Values` assembly.
@@ -40,7 +68,7 @@ Implementation:
   roots, and by-value parameters reuse the existing closure-box plan, including
   early borrows, nested literals, conditional requests and per-iteration cells.
   By-value parameters retain G#'s existing readonly binding permission:
-  `readonlyManaged(parameter)` retains their independent entry copy; an
+  `readonly managed(parameter)` retains their independent entry copy; an
   explicit mutable local copy is required for a writable handle.
 - Constructor and type-initializer expressions use emit-local initialization
   plans under their actual owning type/function. Base arguments, primary
@@ -173,8 +201,8 @@ All new syntax below is **proposed**.
 | Existing writable borrow | `ref T`, `*T`, `let ref x`, `&x` | `T&` with existing parameter/return contracts | No ordinary heap storage |
 | Existing readonly borrow | `ref readonly T`, readonly alias, `in` contract | `T&` plus exact readonly metadata | No ordinary heap storage |
 | New writable persistent handle | `managed[T]` | `Gsharp.Values.ManagedRef<T>` reference type | Yes |
-| New readonly persistent handle | `readonlyManaged[T]` | `Gsharp.Values.ReadOnlyManagedRef<T>` reference type | Yes |
-| Nullable persistent handle | `managed[T]?` / `readonlyManaged[T]?` | Nullable reference annotation on that handle type | Yes |
+| New readonly persistent handle | `readonly managed[T]` | `Gsharp.Values.ReadOnlyManagedRef<T>` reference type | Yes |
+| Nullable persistent handle | `managed[T]?` / `readonly managed[T]?` | Nullable reference annotation on that handle type | Yes |
 
 Outside unsafe contexts, `*T` continues to mean the existing managed byref.
 `&x` continues to produce a borrowed address. Neither changes meaning because
@@ -201,7 +229,7 @@ let ref readonly observed = ro.Borrow()
 
 `managed(location)` is a compiler intrinsic on an addressable expression;
 it is not a generic method accepting a `ref T` whose provenance can be lost.
-`readonlyManaged(location)` admits the same supported locations with readonly
+`readonly managed(location)` admits the same supported locations with readonly
 permission. Dereferencing a handle with `*p` is an lvalue, subject to its
 permission. `.Borrow()` returns `ref T` or `ref readonly T` for existing APIs.
 `managed(*p)` denotes the same location and may return the existing handle.
@@ -477,7 +505,7 @@ persistence across an assembly boundary, an API returns the handle itself.
 
 ### 8. Generic, metadata, GC, and concurrency contracts
 
-`managed[T]` and `readonlyManaged[T]` are invariant. No `managed[Derived]` to
+`managed[T]` and `readonly managed[T]` are invariant. No `managed[Derived]` to
 `managed[Base]` conversion can widen writable storage. The readonly category
 also remains invariant initially to avoid different identity/borrow contracts.
 Generic substitutions preserve permission and pointee nullability. Ref-like,
@@ -519,7 +547,7 @@ func AlsoBad(scoped caller *int32) managed[int32] {
 let q = managed(ForeignRef())       // ERROR: imported T& has no owner contract
 let r = managed(stackSpan[0])       // ERROR: unsupported borrowed owner
 let bad managed[Span[int32]] = ...  // ERROR: ref-like referent cannot be stored
-let ro = readonlyManaged(value)
+let ro = readonly managed(value)
 WriteByRef(&*ro)                    // ERROR: readonly capability
 ```
 
@@ -651,7 +679,7 @@ zero-cost abstraction.
 
 ## Remaining questions and acceptance gates
 
-- Ratify `managed[T]` / `readonlyManaged[T]` and address-intrinsic parsing.
+- Ratify `managed[T]` / `readonly managed[T]` and address-intrinsic parsing.
   Existing `*T` and borrowed ABI are non-negotiable compatibility boundaries.
 - Validate the small compiler-facing handle-base ABI, field-path identity,
   visibility, and readonly adapters through AOT and separate-assembly emission.

@@ -675,7 +675,7 @@ public static class SymbolDisplay
 
         if (ManagedReferenceTypes.TryGetElement(type, out var managedElement, out var readOnlyManaged))
         {
-            return $"{(readOnlyManaged ? "readonlyManaged" : "managed")}[{FormatType(managedElement)}]";
+            return $"{(readOnlyManaged ? "readonly " : string.Empty)}managed[{FormatType(managedElement)}]";
         }
 
         // Reconstruct the display name from the type's structure rather than
@@ -1007,7 +1007,7 @@ public static class SymbolDisplay
     {
         if (ManagedReferenceTypes.IsDefinition(clrType, out var readOnlyManaged))
         {
-            return $"{(readOnlyManaged ? "readonlyManaged" : "managed")}[{FormatClrTypeName(clrType.GetGenericArguments()[0], qualifyNames)}]";
+            return $"{(readOnlyManaged ? "readonly " : string.Empty)}managed[{FormatClrTypeName(clrType.GetGenericArguments()[0], qualifyNames)}]";
         }
 
         if (NativeSliceTypes.IsDefinition(clrType, out var readOnlySlice))

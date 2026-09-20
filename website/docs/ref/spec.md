@@ -256,7 +256,7 @@ Array and slice element access (`a[i]`, read or write) accepts **any** integer-t
 
 ### Persistent managed references
 
-`managed[T]` and `readonlyManaged[T]` name the invariant reference types
+`managed[T]` and `readonly managed[T]` name the invariant reference types
 `Gsharp.Values.ManagedRef<T>` and `ReadOnlyManagedRef<T>`, supplied by
 `Gsharp.Runtime.Values`. They are **heap-storable location handles**, not CLR
 `T&`. Existing `*T`, `&x`, `ref`, `in`, `out` and `scoped` keep their borrowed
@@ -275,8 +275,20 @@ func Counter() managed[int32] {
 let p = Counter()
 *p += 1
 let readonlyView = p.AsReadOnly()
+let sameReadonlyView = readonly managed(*p)
 let ref readonly observed = readonlyView.Borrow()
 ```
+
+`readonly managed(location)` is the readonly address intrinsic, not an
+operator on arbitrary values. `readonly` and `managed` remain contextual
+identifiers; the former joined spelling `readonlyManaged` has no intrinsic
+meaning. A shadowing ordinary type or callable keeps normal lookup; use the
+qualified `Gsharp.Values.ReadOnlyManagedRef[T]` type/API when necessary.
+The modifier binds before nullability: `readonly managed[T]?` and
+`(readonly managed[T])?` are nullable handles, whereas `readonly managed[T?]`
+has a nullable referent. In `ref readonly managed[T]`, the first `readonly`
+modifies the borrowed return of a writable handle slot. A readonly borrow of
+a readonly handle slot is `ref readonly readonly managed[T]`.
 
 All accesses to an addressed local use one planned closure-compatible cell,
 including borrowed aliases formed before the persistent request. Copies of
@@ -300,7 +312,7 @@ Hashes use owner identity and a canonical typed path, never mutable contents.
 `ReferenceEquals` observes wrapper identity instead.
 
 A non-null handle must be initialized (or definitely assigned before local
-use); `default` is permitted for `managed[T]?` / `readonlyManaged[T]?` and is
+use); `default` is permitted for `managed[T]?` / `readonly managed[T]?` and is
 nil. Compiler-owned aggregate initialization cannot silently invent null
 non-null handle fields. Foreign and unconstrained generic initialization can
 still supply null despite annotations; dereference/Borrow then throws

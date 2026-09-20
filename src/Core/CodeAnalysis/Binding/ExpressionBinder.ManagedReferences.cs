@@ -22,7 +22,7 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindManagedReference(CallExpressionSyntax syntax)
     {
-        var readOnly = syntax.Identifier.Text == "readonlyManaged";
+        var readOnly = syntax.ReadOnlyManagedModifier != null;
         if (syntax.TypeArgumentList != null || syntax.Arguments.Count != 1 || syntax.NullableQuestionToken != null)
         {
             Diagnostics.ReportManagedReference(syntax.Location, "a persistent address requires exactly one location expression");

@@ -14,7 +14,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 public partial class Parser
 {
-    private ExpressionSyntax ParseCallExpression()
+    private CallExpressionSyntax ParseCallExpression()
     {
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var openParenthesisToken = MatchToken(SyntaxKind.OpenParenthesisToken);

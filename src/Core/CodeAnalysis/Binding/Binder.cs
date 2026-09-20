@@ -3929,13 +3929,13 @@ public sealed class Binder
         }
 
         if (!syntax.HasQualifier && syntax.HasTypeArguments
-            && syntax.Identifier is { Text: "managed" or "readonlyManaged" } managedName
+            && syntax.Identifier is { Text: "managed" } managedName
             && binderCtx.CanUseIntrinsicAlias(scope, managedName, function))
         {
             var arguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments establishes the argument list");
             if (arguments.Count != 1)
             {
-                Diagnostics.ReportManagedReference(syntax.Location, "managed[T] and readonlyManaged[T] require one referent type");
+                Diagnostics.ReportManagedReference(syntax.Location, "managed[T] and readonly managed[T] require one referent type");
                 return null;
             }
 
@@ -3952,7 +3952,7 @@ public sealed class Binder
                 return null;
             }
 
-            if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, managedName.Text == "readonlyManaged", out var definition))
+            if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, syntax.ReadOnlyManagedModifier != null, out var definition))
             {
                 Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime");
                 return null;
@@ -4503,6 +4503,30 @@ public sealed class Binder
             if (bound == null)
             {
                 return null;
+            }
+
+            if (syntax.ReadOnlyManagedModifier != null)
+            {
+                if (!ManagedReferenceTypes.TryGetElement(bound, out var element, out var alreadyReadOnly))
+                {
+                    Diagnostics.ReportManagedReference(syntax.ReadOnlyManagedModifier.Location, "readonly requires the native managed-reference category; use Gsharp.Values.ReadOnlyManagedRef[T] explicitly when managed is shadowed");
+                    return null;
+                }
+
+                if (!alreadyReadOnly)
+                {
+                    if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, true, out var definition))
+                    {
+                        Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime");
+                        return null;
+                    }
+
+                    var symbolic = false;
+                    bound = ImportedTypeSymbol.GetConstructed(
+                        definition.MakeGenericType(ProjectGenericArgument(element, typeof(object), ref symbolic)),
+                        definition,
+                        ImmutableArray.Create(element));
+                }
             }
 
             if (syntax.ReadOnlySliceModifier != null)

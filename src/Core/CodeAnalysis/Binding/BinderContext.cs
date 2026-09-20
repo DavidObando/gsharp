@@ -419,11 +419,14 @@ internal sealed class BinderContext
             return false;
         }
 
-        return !expression || (scope.TryLookupSymbol(identifier.ValueText) == null
-            && scope.TryLookupFunctions(identifier.ValueText).IsDefaultOrEmpty
-            && !GetStaticImportTypes().Any(type => ImportedTypeExposesStaticMember(type, identifier.ValueText))
-            && !scope.EnumerateStaticImportClrTypes().Any(type => ClrTypeExposesStaticMember(type, identifier.ValueText)));
+        return !expression || !HasValueName(scope, identifier.ValueText);
     }
+
+    public bool HasValueName(BoundScope scope, string name)
+        => scope.TryLookupSymbol(name) != null
+            || !scope.TryLookupFunctions(name).IsDefaultOrEmpty
+            || GetStaticImportTypes().Any(type => ImportedTypeExposesStaticMember(type, name))
+            || scope.EnumerateStaticImportClrTypes().Any(type => ClrTypeExposesStaticMember(type, name));
 
     /// <summary>
     /// Resolves a source type at the current binding site. Lexically visible

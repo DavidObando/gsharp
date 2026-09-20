@@ -19,9 +19,9 @@ public sealed class ManagedReferenceInitializationTests
     private const string Source = """
         package ManagedInitializers
         import System
-        open class Base[T](Saved readonlyManaged[T]) { }
-        class Holder[T](Value T) : Base[T](readonlyManaged(Value)) {
-            var Other readonlyManaged[T] = readonlyManaged(Value)
+        open class Base[T](Saved readonly managed[T]) { }
+        class Holder[T](Value T) : Base[T](readonly managed(Value)) {
+            var Other readonly managed[T] = readonly managed(Value)
             var Reader () -> T = func () T { return Value }
             var Local managed[int32] = {
                 const initial = 2
@@ -43,9 +43,9 @@ public sealed class ManagedReferenceInitializationTests
         }
         interface GenericShared[T] {
             shared {
-                var Value readonlyManaged[T] = {
+                var Value readonly managed[T] = {
                     var local T = default
-                    readonlyManaged(local)
+                    readonly managed(local)
                 }
             }
         }
@@ -120,17 +120,17 @@ public sealed class ManagedReferenceInitializationTests
                 }
             }
             open class Parent {
-                var Saved readonlyManaged[int32]
-                init(saved readonlyManaged[int32], marker int32) {
+                var Saved readonly managed[int32]
+                init(saved readonly managed[int32], marker int32) {
                     this.Saved = saved
                     Trace.Mark("B")
                 }
             }
             class Child : Parent {
-                var Other readonlyManaged[int32]
+                var Other readonly managed[int32]
                 var Marker int32 = Trace.Mark("F")
-                init(value int32) : Parent(readonlyManaged(value), Trace.Mark("A")) {
-                    this.Other = readonlyManaged(value)
+                init(value int32) : Parent(readonly managed(value), Trace.Mark("A")) {
+                    this.Other = readonly managed(value)
                     Trace.Mark("C")
                 }
             }

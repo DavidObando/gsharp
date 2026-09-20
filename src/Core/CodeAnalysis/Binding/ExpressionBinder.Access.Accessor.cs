@@ -3092,11 +3092,11 @@ internal sealed partial class ExpressionBinder
         // spurious type diagnostics for a non-generic-type target.
         var arity = index.Indices.Count;
 
-        if (targetName.IdentifierToken.Text is "managed" or "readonlyManaged"
+        if (targetName.IdentifierToken.Text == "managed"
             && binderCtx.CanUseIntrinsicAlias(scope, targetName.IdentifierToken, getCurrentFunction(), expression: true))
         {
             failureHandled = true;
-            if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, name == "readonlyManaged", out var definition)
+            if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, false, out var definition)
                 || !TryBindTypeArgumentExpressions(index.Indices, out var arguments) || arguments.Length != 1)
             {
                 Diagnostics.ReportManagedReference(index.Location, "managed reference types require one referent type and a matching runtime");
@@ -3241,6 +3241,31 @@ internal sealed partial class ExpressionBinder
         failureHandled = false;
 
         var name = generic.Identifier.ValueText;
+
+        if (generic.Identifier.Text == "managed" && (generic.ReadOnlyManagedModifier != null
+            || binderCtx.CanUseIntrinsicAlias(scope, generic.Identifier, getCurrentFunction(), expression: true)))
+        {
+            failureHandled = true;
+            if (binderCtx.HasValueName(scope, name))
+            {
+                Diagnostics.ReportManagedReference(generic.Location, "a same-named value shadows the managed type receiver; use the qualified runtime type");
+                return false;
+            }
+
+            var arguments = generic.TypeArgumentList;
+            var clause = new TypeClauseSyntax(
+                generic.SyntaxTree, null, null, null, generic.Identifier, arguments.OpenBracketToken, arguments.Arguments, arguments.CloseBracketToken, null)
+            {
+                ReadOnlyManagedModifier = generic.ReadOnlyManagedModifier,
+            };
+            if (bindTypeClause(clause) is not ImportedTypeSymbol managedType)
+            {
+                return false;
+            }
+
+            constructedImported = new ImportedClassSymbol(managedType.Type, generic, managedType, scope.References);
+            return true;
+        }
 
         if (name == "slice" && (generic.ReadOnlySliceModifier != null
             || binderCtx.CanUseNativeBufferAlias(scope, generic.Identifier, getCurrentFunction(), expression: true)))

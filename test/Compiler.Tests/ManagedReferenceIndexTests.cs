@@ -30,12 +30,12 @@ public sealed class ManagedReferenceIndexTests
             func Main() {
                 let values = []int32{10, 20}
                 let mutable = managed(values[Index({{type}}(1))])
-                let view = readonlyManaged(values[Index({{type}}(1))])
+                let view = readonly managed(values[Index({{type}}(1))])
                 *mutable = 42
                 Console.WriteLine(*view)
                 try { let bad = managed(values[Index({{type}}({{high}}))]) }
                 catch (e IndexOutOfRangeException) { Console.WriteLine("writable bounds") }
-                try { let bad = readonlyManaged(values[Index({{type}}({{high}}))]) }
+                try { let bad = readonly managed(values[Index({{type}}({{high}}))]) }
                 catch (e IndexOutOfRangeException) { Console.WriteLine("readonly bounds") }
                 Console.WriteLine(calls)
             }

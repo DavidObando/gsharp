@@ -24,7 +24,7 @@ public sealed class ManagedReferenceReviewTests
             package ManagedPrinting
             func Make() managed[int32] {
                 var value = 42
-                let view = readonlyManaged(value)
+                let view = readonly managed(value)
                 return managed(value)
             }
             """;
@@ -34,7 +34,7 @@ public sealed class ManagedReferenceReviewTests
         using var before = new StringWriter();
         compilation.EmitTree(before);
         Assert.Contains("managed(value)", before.ToString());
-        Assert.Contains("readonlyManaged(value)", before.ToString());
+        Assert.Contains("readonly managed(value)", before.ToString());
 
         var boxed = CaptureBoxingRewriter.Lower(compilation.BoundProgram, references.MapClrTypeToReferences);
         var lowered = ManagedReferenceLowerer.Lower(boxed, references);

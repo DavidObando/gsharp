@@ -331,6 +331,7 @@ public partial class Parser
         if (Current.Kind != SyntaxKind.IdentifierToken
             || Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
             || Peek(1).Kind == SyntaxKind.DotToken
+            || IsReadOnlyManagedHead()
             || IsChannelDirectionHead())
         {
             var nestedElementType = ParseTypeClause();
@@ -681,7 +682,11 @@ public partial class Parser
         bool allowContextualOperators = true)
     {
         ExpressionSyntax current;
-        if (IsReadOnlySliceHead()
+        if (IsReadOnlyManagedHead() || IsReadOnlyManagedHead(address: true))
+        {
+            current = ParseReadOnlyManagedExpression();
+        }
+        else if (IsReadOnlySliceHead()
             || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text is "slice" or "array"
                 && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeGenericCallSite(1)))
         {
@@ -774,6 +779,37 @@ public partial class Parser
         }
 
         return ParsePostfixChain(current, stopBeforeIndirectInvocation);
+    }
+
+    private ExpressionSyntax ParseReadOnlyManagedExpression()
+    {
+        var modifier = NextToken();
+        if (Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            var call = ParseCallExpression();
+            call.ReadOnlyManagedModifier = modifier;
+            return call;
+        }
+
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var arguments = ParseTypeArgumentList();
+        if (Current.Kind == SyntaxKind.DotToken)
+        {
+            return new GenericNameExpressionSyntax(syntaxTree, identifier, arguments)
+            {
+                ReadOnlyManagedModifier = modifier,
+            };
+        }
+
+        var question = Current.Kind == SyntaxKind.QuestionToken ? NextToken() : null;
+        var type = new TypeClauseSyntax(syntaxTree, null, null, null, identifier, arguments.OpenBracketToken, arguments.Arguments, arguments.CloseBracketToken, question)
+        {
+            ReadOnlyManagedModifier = modifier,
+        };
+        var open = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var values = ParseArguments();
+        var close = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new CallExpressionSyntax(syntaxTree, type, open, values, close);
     }
 
     private ExpressionSyntax ParseNativeBufferExpression()
@@ -1073,7 +1109,7 @@ public partial class Parser
             }
         }
 
-        if (IsReadOnlySliceHead(pos))
+        if (IsReadOnlySliceHead(pos) || IsReadOnlyManagedHead(pos))
         {
             pos++;
             isComplex = true;

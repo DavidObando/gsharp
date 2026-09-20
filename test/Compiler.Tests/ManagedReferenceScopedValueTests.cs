@@ -55,7 +55,7 @@ public sealed class ManagedReferenceScopedValueTests
     [InlineData("managed[int32]", "return location!!")]
     [InlineData("managed[int32]?", "return location")]
     [InlineData("managed[int32]", "let refined = location!!\nreturn refined")]
-    [InlineData("readonlyManaged[int32]", "return (location!!).AsReadOnly()")]
+    [InlineData("readonly managed[int32]", "return (location!!).AsReadOnly()")]
     [InlineData("managed[int32]", "return managed(*(location!!))")]
     [InlineData("void", "let holder = Holder()\nholder.Value = location!!")]
     [InlineData("void", "let holder = Holder{Value: location!!}")]
@@ -70,7 +70,7 @@ public sealed class ManagedReferenceScopedValueTests
     [InlineData("managed[int32]", "var local = 0\nlet fallback = managed(local)\nreturn location ?? fallback")]
     [InlineData("managed[int32]", "let fallback managed[int32]? = nil\nreturn fallback ?? location!!")]
     [InlineData("managed[int32]?", "return switch true { case true: location default: nil }")]
-    [InlineData("readonlyManaged[int32]?", "return location?.AsReadOnly()")]
+    [InlineData("readonly managed[int32]?", "return location?.AsReadOnly()")]
     public void RefinementDoesNotPermitRealEscapes(string returnType, string body)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

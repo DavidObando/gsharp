@@ -59,7 +59,7 @@ public sealed class ManagedReferenceLanguageTests
                 Console.WriteLine(value)
                 let input object = 17
                 if input is int32 number {
-                    let saved = readonlyManaged(number)
+                    let saved = readonly managed(number)
                     Console.WriteLine(*saved)
                 }
             }
@@ -79,7 +79,7 @@ public sealed class ManagedReferenceLanguageTests
             }
             func Same[T](p managed[T], q managed[T]) bool { return p == q }
             func Borrow[T](p managed[T]) ref T { return ref *p }
-            func View[T](p readonlyManaged[T]) ref readonly T { return ref *p }
+            func View[T](p readonly managed[T]) ref readonly T { return ref *p }
             func Main() {
                 var values = []Pair{Pair{Number: 1, Child: Node{Value: 2}}}
                 let root = managed(values[0])
@@ -128,9 +128,9 @@ public sealed class ManagedReferenceLanguageTests
             class Box { let Value int32 = 17 }
             func Main() {
                 let box = Box()
-                let view = readonlyManaged(box.Value)
+                let view = readonly managed(box.Value)
                 Console.WriteLine(*view)
-                let factory = func (value int32) readonlyManaged[int32] { return readonlyManaged(value) }
+                let factory = func (value int32) readonly managed[int32] { return readonly managed(value) }
                 Console.WriteLine(*factory(23))
             }
             """,
@@ -182,7 +182,7 @@ public sealed class ManagedReferenceLanguageTests
                 var copy = value
                 return managed(copy)
             }
-            func Observe[T](value T) readonlyManaged[T] { return readonlyManaged(value) }
+            func Observe[T](value T) readonly managed[T] { return readonly managed(value) }
             func Main() {
                 var x = 1
                 let writer = func () { x += 1 }
@@ -225,7 +225,7 @@ public sealed class ManagedReferenceLanguageTests
                 x = 8
                 Console.WriteLine(*q)
                 let ref readonly observe = early
-                let ro = readonlyManaged(observe)
+                let ro = readonly managed(observe)
                 *q = 9
                 Console.WriteLine(*ro)
                 let pointer = &x
@@ -254,7 +254,7 @@ public sealed class ManagedReferenceLanguageTests
                 *p = 12
                 Console.WriteLine(c.Read())
                 Console.WriteLine(p == c.Address())
-                Console.WriteLine(p.SameLocation(readonlyManaged(*p)))
+                Console.WriteLine(p.SameLocation(readonly managed(*p)))
                 Console.WriteLine(Interlocked.Increment(&*p))
                 Console.WriteLine(IsNil[int32](nil))
             }
@@ -315,10 +315,10 @@ public sealed class ManagedReferenceLanguageTests
                 Console.WriteLine(*left)
                 *left = 8
                 Console.WriteLine(pair.Left)
-                let readonlyPair = readonlyManaged(pair)
+                let readonlyPair = readonly managed(pair)
                 (*readonlyPair).Bump()
                 Console.WriteLine(pair.Left)
-                let readonlyObject = readonlyManaged(obj)
+                let readonlyObject = readonly managed(obj)
                 (*readonlyObject).Value = 17
                 Console.WriteLine(obj.Value)
                 var values = []int32{10, 20}
@@ -375,7 +375,7 @@ public sealed class ManagedReferenceLanguageTests
     [InlineData("func Bad(ref value int32) managed[int32] { return managed(value) }", "GS0604")]
     [InlineData("func Bad() { var p managed[int32] = default }", "GS0604")]
     [InlineData("func Bad() { var p managed[int32]; Console.WriteLine(p.GetHashCode()) }", "GS0604")]
-    [InlineData("func Bad() { var value = 1; let p = readonlyManaged(value); *p = 2 }", "GS0604")]
+    [InlineData("func Bad() { var value = 1; let p = readonly managed(value); *p = 2 }", "GS0604")]
     [InlineData("func Bad() { var span = Span[int32]([]int32{1}); let p = managed(span[0]) }", "GS0604")]
     [InlineData("func Foreign(ref value int32) ref int32 { return ref value }\nfunc Bad() { var x = 0; let p = managed(Foreign(ref x)) }", "GS0604")]
     [InlineData("func Bad(scoped p managed[int32]) managed[int32] { return p }", "GS0604")]
@@ -385,7 +385,7 @@ public sealed class ManagedReferenceLanguageTests
     [InlineData("var value = 1\nfunc Bad() { let p = managed(value) }", "GS0604")]
     [InlineData("func Bad() { let p = managed(DateTime.Now) }", "GS0604")]
     [InlineData("func Bad(scoped p managed[int32]) []managed[int32] { return []managed[int32]{p} }", "GS0604")]
-    [InlineData("func Bad() { var x = 1; let p = readonlyManaged(x); let q = managed(*p) }", "GS0604")]
+    [InlineData("func Bad() { var x = 1; let p = readonly managed(x); let q = managed(*p) }", "GS0604")]
     [InlineData("import System.Threading.Tasks\nasync func Bad(p managed[int32]) { let ref value = p.Borrow(); await Task.Delay(1); Console.WriteLine(value) }", "GS0258")]
     public void InvalidProgramsDiagnose(string declaration, string diagnostic)
     {
@@ -451,10 +451,10 @@ public sealed class ManagedReferenceLanguageTests
             class Api {
                 shared {
                     func Field(box Box) managed[int32] { return managed(box.Value) }
-                    func Read(box Box) readonlyManaged[int32] { return readonlyManaged(box.Readonly) }
+                    func Read(box Box) readonly managed[int32] { return readonly managed(box.Readonly) }
                     func Element[T](values []T) managed[T] { return managed(values[0]) }
                     func Borrow[T](p managed[T]) ref T { return ref *p }
-                    func View[T](p readonlyManaged[T]) ref readonly T { return ref *p }
+                    func View[T](p readonly managed[T]) ref readonly T { return ref *p }
                 }
             }
             """, "ManagedApi", false, "/r:" + producer, "/refout:" + reference);
@@ -490,7 +490,7 @@ public sealed class ManagedReferenceLanguageTests
                 let second = managed(box.Value)
                 Console.WriteLine(first == second)
                 Console.WriteLine(first.GetHashCode() == second.GetHashCode())
-                Console.WriteLine(first.SameLocation(readonlyManaged(box.Value)))
+                Console.WriteLine(first.SameLocation(readonly managed(box.Value)))
                 Console.WriteLine(Consumer.Run(box))
                 Console.WriteLine(*second)
             }

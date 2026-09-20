@@ -1504,6 +1504,8 @@ public sealed class CSharpTypeMapper
         {
             case NativeSliceTypeReference slice:
                 return new NativeSliceTypeReference(slice.ElementType, slice.IsReadOnly) { IsNullable = isNullable };
+            case ManagedReferenceTypeReference referenceType:
+                return new ManagedReferenceTypeReference(referenceType.ElementType, referenceType.IsReadOnly) { IsNullable = isNullable };
             case NamedTypeReference named:
                 return new NamedTypeReference(named.Name, named.TypeArguments, named.ContainingType)
                 {
@@ -1593,14 +1595,16 @@ public sealed class CSharpTypeMapper
                 && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
                 && named.Arity == 1 && named.Name is "ManagedRef" or "ReadOnlyManagedRef")
             {
-                var spelling = named.Name == "ManagedRef" ? "managed" : "readonlyManaged";
+                var readOnly = named.Name == "ReadOnlyManagedRef";
+                var element = this.Map(named.TypeArguments[0], context, location);
                 if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
-                    || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: spelling).Any())
+                    || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "managed").Any()
+                    || (readOnly && context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "readonly").Any()))
                 {
-                    spelling = "Gsharp.Values." + named.Name;
+                    return new NamedTypeReference("Gsharp.Values." + named.Name, new[] { element });
                 }
 
-                return new NamedTypeReference(spelling, new[] { this.Map(named.TypeArguments[0], context, location) });
+                return new ManagedReferenceTypeReference(element, readOnly);
             }
 
             if (named.ContainingAssembly.Name == "Gsharp.Runtime.Values"

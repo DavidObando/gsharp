@@ -510,6 +510,9 @@ public sealed class TypeClauseSyntax : SyntaxNode
     /// <summary>Gets the contextual readonly modifier of a native slice type.</summary>
     public SyntaxToken? ReadOnlySliceModifier { get; internal set; }
 
+    /// <summary>Gets the contextual readonly modifier of a managed-reference type.</summary>
+    public SyntaxToken? ReadOnlyManagedModifier { get; internal set; }
+
     /// <summary>Gets the opening bracket token, or <c>null</c> for non-array types.</summary>
     public SyntaxToken? OpenBracketToken { get; }
 
