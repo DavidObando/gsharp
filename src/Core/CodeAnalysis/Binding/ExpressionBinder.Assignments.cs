@@ -213,7 +213,8 @@ internal sealed partial class ExpressionBinder
 
         var convertedExpression = conversions.BindConversion(syntax.Expression.Location, boundExpression, variable.Type);
 
-        if (variable is LocalVariableSymbol local && ManagedReferenceOrigins.IsScopedHandle(convertedExpression))
+        if (variable is LocalVariableSymbol { RefKind: RefKind.None } local
+            && ManagedReferenceOrigins.IsScopedHandle(convertedExpression))
         {
             local.IsScoped = true;
             local.HoldsScopedManagedReference = true;
@@ -2320,7 +2321,11 @@ internal sealed partial class ExpressionBinder
 
         if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
         {
-            pointer = ManagedReferenceTypes.Borrow(pointer);
+            pointer = BorrowManagedReference(pointer, syntax.Target);
+            if (pointer is BoundErrorExpression)
+            {
+                return pointer;
+            }
         }
 
         if (RefCapabilities.IsReadOnlyReference(pointer))
@@ -2385,7 +2390,11 @@ internal sealed partial class ExpressionBinder
 
         if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
         {
-            pointer = ManagedReferenceTypes.Borrow(pointer);
+            pointer = BorrowManagedReference(pointer, syntax.Target);
+            if (pointer is BoundErrorExpression)
+            {
+                return pointer;
+            }
         }
 
         if (RefCapabilities.IsReadOnlyReference(pointer))

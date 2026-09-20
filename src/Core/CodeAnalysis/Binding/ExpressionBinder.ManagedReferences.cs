@@ -9,6 +9,17 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
+    private BoundExpression BorrowManagedReference(BoundExpression handle, SyntaxNode syntax)
+    {
+        if (!ManagedReferenceTypes.IsCompatible(handle.Type.ClrType))
+        {
+            Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime; the managed-reference ABI is incompatible");
+            return new BoundErrorExpression(syntax);
+        }
+
+        return ManagedReferenceTypes.Borrow(handle);
+    }
+
     private BoundExpression BindManagedReference(CallExpressionSyntax syntax)
     {
         var readOnly = syntax.Identifier.Text == "readonlyManaged";

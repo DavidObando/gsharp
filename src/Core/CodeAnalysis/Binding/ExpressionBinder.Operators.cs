@@ -427,7 +427,8 @@ internal sealed partial class ExpressionBinder
 
         if (ManagedReferenceTypes.TryGetElement(operand.Type, out _, out _))
         {
-            return new BoundDereferenceExpression(syntax, ManagedReferenceTypes.Borrow(operand));
+            var borrow = BorrowManagedReference(operand, syntax);
+            return borrow is BoundErrorExpression ? borrow : new BoundDereferenceExpression(syntax, borrow);
         }
 
         if (!TypeSymbol.TryGetPointeeType(operand.Type, out _))
@@ -1857,6 +1858,13 @@ internal sealed partial class ExpressionBinder
 
         var nativeEqualityLeftType = boundLeft.Type is NullableTypeSymbol nullableNativeLeft ? nullableNativeLeft.UnderlyingType : boundLeft.Type;
         var nativeEqualityRightType = boundRight.Type is NullableTypeSymbol nullableNativeRight ? nullableNativeRight.UnderlyingType : boundRight.Type;
+        if ((ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out _) && !ManagedReferenceTypes.IsCompatible(nativeEqualityLeftType.ClrType))
+            || (ManagedReferenceTypes.TryGetElement(nativeEqualityRightType, out _, out _) && !ManagedReferenceTypes.IsCompatible(nativeEqualityRightType.ClrType)))
+        {
+            Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime; the managed-reference ABI is incompatible");
+            return new BoundErrorExpression(syntax);
+        }
+
         if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
             && ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnlyManaged)
             && ManagedReferenceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnlyManaged))

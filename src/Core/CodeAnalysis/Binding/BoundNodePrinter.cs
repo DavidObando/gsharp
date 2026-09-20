@@ -271,6 +271,13 @@ public static class BoundNodePrinter
             case BoundNodeKind.AddressOfExpression:
                 WriteAddressOfExpression((BoundAddressOfExpression)node, writer);
                 break;
+            case BoundNodeKind.ManagedReferenceExpression:
+                var managed = (BoundManagedReferenceExpression)node;
+                WriteIntrinsicCall(managed.IsReadOnly ? "readonlyManaged" : "managed", managed.Location, writer);
+                break;
+            case BoundNodeKind.ManagedFieldKeyExpression:
+                WriteManagedFieldKeyExpression((BoundManagedFieldKeyExpression)node, writer);
+                break;
             case BoundNodeKind.ConditionalAddressExpression:
                 WriteConditionalAddressExpression((BoundConditionalAddressExpression)node, writer);
                 break;
@@ -1203,6 +1210,35 @@ public static class BoundNodePrinter
         writer.WriteIdentifier("typeof");
         writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
         writer.WriteIdentifier(node.OperandType.Name);
+        writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
+    }
+
+    private static void WriteManagedFieldKeyExpression(BoundManagedFieldKeyExpression node, IndentedTextWriter writer)
+    {
+        writer.WriteIdentifier("managedFieldKey");
+        writer.WritePunctuation(SyntaxKind.OpenParenthesisToken);
+        node.Parent.WriteTo(writer);
+        writer.WritePunctuation(SyntaxKind.CommaToken);
+        writer.WriteSpace();
+
+        // The field's original receiver is metadata, not a second evaluation.
+        switch (node.Field)
+        {
+            case BoundFieldAccessExpression field:
+                writer.WriteIdentifier(Invariant.Required(field.StructType, "persistent fields have a declaring type").Name);
+                writer.WritePunctuation(SyntaxKind.DotToken);
+                writer.WriteIdentifier(field.Field.Name);
+                break;
+            case BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo field } access:
+                writer.WriteIdentifier(access.StaticContainerType?.Name
+                    ?? Invariant.Required(field.DeclaringType, "instance fields have a declaring type").ToString());
+                writer.WritePunctuation(SyntaxKind.DotToken);
+                writer.WriteIdentifier(field.Name);
+                break;
+            default:
+                throw new InvalidOperationException("Persistent field identity requires a resolved field.");
+        }
+
         writer.WritePunctuation(SyntaxKind.CloseParenthesisToken);
     }
 

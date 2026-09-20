@@ -43,7 +43,8 @@ internal static class ManagedReferenceOrigins
     }
 
     internal static bool IsHandleBorrow(BoundImportedInstanceCallExpression call)
-        => call.Method.Name == "Borrow" && ManagedReferenceTypes.TryGetElement(call.Receiver.Type, out _, out _);
+        => call.Method.Name == "Borrow" && ManagedReferenceTypes.TryGetElement(call.Receiver.Type, out _, out _)
+            && ManagedReferenceTypes.IsCompatible(call.Receiver.Type.ClrType);
 
     internal static bool IsScopedHandle(VariableSymbol variable)
         => variable is LocalVariableSymbol local

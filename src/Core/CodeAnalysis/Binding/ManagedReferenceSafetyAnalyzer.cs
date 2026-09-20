@@ -17,6 +17,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 {
     private readonly DiagnosticBag diagnostics;
     private readonly Dictionary<TypeSymbol, TypeSymbol?> required = new();
+    private readonly HashSet<VariableSymbol> managedLocations = new();
 
     private ManagedReferenceSafetyAnalyzer(DiagnosticBag diagnostics) => this.diagnostics = diagnostics;
 
@@ -73,6 +74,14 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 }
 
                 break;
+            case BoundMapLiteralExpression map:
+                foreach (var entry in map.Entries)
+                {
+                    this.CheckScopedStore(entry.Key);
+                    this.CheckScopedStore(entry.Value);
+                }
+
+                break;
             case BoundConstructorCallExpression call:
                 this.CheckConstruction(call.StructType, call, Enumerable.Empty<FieldSymbol?>(), call.SelectedConstructor != null);
                 foreach (var argument in call.Arguments)
@@ -96,18 +105,33 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 break;
             case BoundFieldAssignmentExpression field:
                 this.CheckScopedStore(field.Value);
+                this.CheckSuspendingLocation(field.ReceiverExpression ?? VariableReceiver(field.Receiver), field.Value);
                 break;
             case BoundPropertyAssignmentExpression property:
                 this.CheckScopedStore(property.Value);
+                this.CheckSuspendingLocation(property.Receiver, property.Value);
                 break;
             case BoundClrPropertyAssignmentExpression property:
                 this.CheckScopedStore(property.Value);
+                this.CheckSuspendingLocation(property.Receiver, property.Value);
                 break;
             case BoundIndexAssignmentExpression index:
                 this.CheckScopedStore(index.Value);
+                foreach (var argument in index.Indices)
+                {
+                    this.CheckScopedStore(argument);
+                }
+
                 break;
             case BoundClrIndexAssignmentExpression index:
                 this.CheckScopedStore(index.Value);
+                foreach (var argument in index.Arguments)
+                {
+                    this.CheckScopedStore(argument);
+                    this.CheckSuspendingLocation(index.TargetExpression ?? VariableReceiver(index.Target), argument);
+                }
+
+                this.CheckSuspendingLocation(index.TargetExpression ?? VariableReceiver(index.Target), index.Value);
                 break;
             case BoundClrConstructorCallExpression constructor:
                 foreach (var argument in constructor.Arguments)
@@ -116,38 +140,37 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 }
 
                 break;
-            case BoundAssignmentExpression { Variable: not LocalVariableSymbol } globalAssignment:
+            case BoundAssignmentExpression globalAssignment when globalAssignment.Variable is not LocalVariableSymbol { RefKind: RefKind.None }:
                 this.CheckScopedStore(globalAssignment.Expression);
                 break;
             case BoundIndirectAssignmentExpression indirect:
                 this.CheckScopedStore(indirect.Value);
                 break;
+            case BoundIndirectCallExpression indirect:
+                this.CheckArguments(indirect.Arguments);
+                break;
+            case BoundBaseClassCallExpression baseCall:
+                this.CheckArguments(baseCall.Arguments, baseCall.Method, baseCall.Receiver);
+                break;
+            case BoundClrIndexExpression index:
+                this.CheckArguments(index.Arguments, receiver: index.Target);
+                break;
         }
 
         if (node is BoundCallOperationExpression operation)
         {
-            var borrowed = false;
-            for (var i = 0; i < operation.Arguments.Length; i++)
+            var receiver = operation switch
             {
-                var argument = operation.Arguments[i];
-                if (ManagedReferenceOrigins.IsScopedHandle(argument)
-                    && !(operation.CalledFunction is FunctionSymbol target && i < target.Parameters.Length
-                        && ManagedReferenceOrigins.IsScopedHandle(target.Parameters[i])))
-                {
-                    this.Report(argument, "a scoped managed-reference value requires a scoped parameter");
-                }
-
-                if (borrowed && AsyncBoundTreeQueries.HasAwait(argument))
-                {
-                    this.Report(argument, "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow");
-                }
-
-                borrowed |= ContainsManagedBorrow(argument);
-            }
+                BoundImportedInstanceCallExpression call when !RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(call.Receiver, RefCapabilities.IsReadOnlyMethod(call.Method)) => call.Receiver,
+                BoundUserInstanceCallExpression call when !RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(call.Receiver) => call.Receiver,
+                BoundBaseInterfaceCallExpression call when !RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(call.Receiver) => call.Receiver,
+                _ => null,
+            };
+            this.CheckArguments(operation.Arguments, operation.CalledFunction as FunctionSymbol, receiver);
         }
 
         if (node is BoundIndirectAssignmentExpression assignment
-            && ContainsManagedBorrow(assignment.Pointer) && AsyncBoundTreeQueries.HasAwait(assignment.Value))
+            && this.IsManagedLocation(assignment.Pointer) && AsyncBoundTreeQueries.HasAwait(assignment.Value))
         {
             this.Report(assignment, "a borrowed write cannot survive suspension; evaluate the value before selecting the borrow");
         }
@@ -162,6 +185,12 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
     {
+        if (node.Initializer != null && this.IsManagedLocation(node.Initializer)
+            && (node.Variable.Type is ByRefTypeSymbol || node.Variable is LocalVariableSymbol { RefKind: not RefKind.None }))
+        {
+            this.managedLocations.Add(node.Variable);
+        }
+
         if (node.Initializer is BoundDefaultExpression
             && node.Variable is LocalVariableSymbol
             && node.Syntax is VariableDeclarationSyntax { Initializer: null }
@@ -173,6 +202,64 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
         base.VisitVariableDeclaration(node);
     }
+
+    protected override void VisitYieldStatement(BoundYieldStatement node)
+    {
+        this.CheckScopedStore(node.Expression);
+        base.VisitYieldStatement(node);
+    }
+
+    private void CheckArguments(ImmutableArray<BoundExpression> arguments, FunctionSymbol? target = null, BoundExpression? receiver = null)
+    {
+        var borrowed = false;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var argument = arguments[i];
+            if (ManagedReferenceOrigins.IsScopedHandle(argument)
+                && !(target != null && i < target.Parameters.Length && ManagedReferenceOrigins.IsScopedHandle(target.Parameters[i])))
+            {
+                this.Report(argument, "a scoped managed-reference value requires a scoped parameter");
+            }
+
+            this.CheckSuspendingLocation(receiver, argument);
+            if (borrowed && AsyncBoundTreeQueries.HasAwait(argument))
+            {
+                this.Report(argument, "a borrowed argument cannot survive a later suspension; evaluate the suspending value before selecting the borrow");
+            }
+
+            borrowed |= argument.Type is ByRefTypeSymbol && this.IsManagedLocation(argument);
+        }
+    }
+
+    private void CheckSuspendingLocation(BoundExpression? receiver, BoundExpression value)
+    {
+        if (receiver != null && !Binder.IsReferenceTypeForConstraint(receiver.Type)
+            && this.IsManagedLocation(receiver) && AsyncBoundTreeQueries.HasAwait(value))
+        {
+            this.Report(value, "a borrowed receiver cannot survive a later suspension; evaluate the suspending value before selecting the location");
+        }
+    }
+
+    private bool IsManagedLocation(BoundExpression expression)
+        => expression switch
+        {
+            BoundImportedInstanceCallExpression call => ManagedReferenceOrigins.IsHandleBorrow(call)
+                || (call.Type is ByRefTypeSymbol && this.IsManagedLocation(call.Receiver)),
+            BoundUserInstanceCallExpression call => call.Method.ReturnRefKind != RefKind.None && this.IsManagedLocation(call.Receiver),
+            BoundPropertyAccessExpression property => property.Property.ReturnRefKind != RefKind.None
+                && property.Receiver != null && this.IsManagedLocation(property.Receiver),
+            BoundBlockExpression block => this.IsManagedLocation(block.Expression),
+            BoundAddressOfExpression address => this.IsManagedLocation(address.Operand),
+            BoundDereferenceExpression dereference => this.IsManagedLocation(dereference.Operand),
+            BoundFieldAccessExpression { Receiver: { } receiver } => this.IsManagedLocation(receiver),
+            BoundClrPropertyAccessExpression { Receiver: { } receiver, Member: FieldInfo } => this.IsManagedLocation(receiver),
+            BoundVariableExpression variable => this.managedLocations.Contains(variable.Variable)
+                || (variable.Variable is LocalVariableSymbol { RefKind: not RefKind.None, ManagedReferenceOrigin: { } origin } && this.IsManagedLocation(origin)),
+            _ => false,
+        };
+
+    private static BoundExpression? VariableReceiver(VariableSymbol? variable)
+        => variable == null ? null : new BoundVariableExpression(variable.DeclaringSyntax, variable);
 
     private void CheckConstruction(StructSymbol type, BoundExpression node, IEnumerable<FieldSymbol?> initialized, bool explicitConstructor)
     {
@@ -250,24 +337,6 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         if (ManagedReferenceOrigins.IsScopedHandle(value))
         {
             this.Report(value, "a scoped managed-reference value cannot be stored in heap-owned or unknown storage");
-        }
-    }
-
-    private static bool ContainsManagedBorrow(BoundExpression expression)
-    {
-        var visitor = new BorrowFinder();
-        visitor.VisitExpression(expression);
-        return visitor.Found;
-    }
-
-    private sealed class BorrowFinder : BoundTreeWalker
-    {
-        internal bool Found { get; private set; }
-
-        protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
-        {
-            this.Found |= ManagedReferenceOrigins.IsHandleBorrow(node);
-            base.VisitImportedInstanceCallExpression(node);
         }
     }
 
