@@ -553,6 +553,9 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public ImmutableArray<TypeParameterSymbol> ReifiedFromTypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
+    /// <summary>Gets the first class generic-parameter ordinal occupied by <see cref="ReifiedFromTypeParameters"/>.</summary>
+    public int ReifiedTypeParameterOrdinalOffset { get; private set; }
+
     /// <summary>Gets a value indicating whether this is a generic definition (has type parameters and no type arguments).</summary>
     public bool IsGenericDefinition => !TypeParameters.IsDefaultOrEmpty && TypeArguments.IsDefaultOrEmpty;
 
@@ -970,10 +973,14 @@ public sealed class StructSymbol : TypeSymbol
     /// clone 1:1 (see <see cref="ReifiedFromTypeParameters"/>). Called once at
     /// synthesis time alongside <see cref="SetTypeParameters"/>.
     /// </summary>
-    /// <param name="reifiedFrom">The original enclosing type parameters, aligned to <see cref="TypeParameters"/>.</param>
-    public void SetReifiedFromTypeParameters(ImmutableArray<TypeParameterSymbol> reifiedFrom)
+    /// <param name="reifiedFrom">The original enclosing type parameters.</param>
+    /// <param name="ordinalOffset">The first corresponding ordinal in <see cref="TypeParameters"/>.</param>
+    public void SetReifiedFromTypeParameters(
+        ImmutableArray<TypeParameterSymbol> reifiedFrom,
+        int ordinalOffset = 0)
     {
         ReifiedFromTypeParameters = reifiedFrom;
+        ReifiedTypeParameterOrdinalOffset = ordinalOffset;
     }
 
     /// <summary>

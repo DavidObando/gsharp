@@ -536,11 +536,14 @@ internal sealed class ReflectionMetadataEmitter
         // its clone occupies. Real user receivers have an empty reified list,
         // so this is a no-op there.
         var reifiedFrom = receiverDef?.ReifiedFromTypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
-        if (!reifiedFrom.IsDefaultOrEmpty && reifiedFrom.Length == classTPs.Length)
+        var reifiedOffset = receiverDef?.ReifiedTypeParameterOrdinalOffset ?? 0;
+        if (!reifiedFrom.IsDefaultOrEmpty
+            && reifiedOffset >= 0
+            && reifiedOffset + reifiedFrom.Length <= classTPs.Length)
         {
             for (var i = 0; i < reifiedFrom.Length; i++)
             {
-                remap[reifiedFrom[i]] = i;
+                remap[reifiedFrom[i]] = reifiedOffset + i;
             }
         }
 
@@ -739,9 +742,10 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var remap = new Dictionary<TypeParameterSymbol, int>(origTPs.Length);
+            var offset = s.ReifiedTypeParameterOrdinalOffset;
             for (var i = 0; i < origTPs.Length; i++)
             {
-                remap[origTPs[i]] = i;
+                remap[origTPs[i]] = offset + i;
             }
 
             this.remaps.RegisterClassRemap(s, remap);

@@ -1,0 +1,94 @@
+// <copyright file="InterfaceAdaptationReviewTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.Loader;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
+using Xunit;
+
+namespace GSharp.Core.Tests.CodeAnalysis.Emit;
+
+public sealed class InterfaceAdaptationReviewTests
+{
+    [Fact]
+    public void SourceInitOnlyMismatchIsPartOfTheStructuralPropertyContract()
+    {
+        var tree = SyntaxTree.Parse(
+            """
+            package InitContract
+            interface Target { prop Value int32 { get; set; } }
+            class Source { prop Value int32 { get; init; } }
+            func Bad() { let value = adapt[Target](Source()) }
+            """);
+        var compilation = new Compilation(tree) { IsLibrary = true };
+        using var pe = new MemoryStream();
+        var result = compilation.Emit(pe);
+        var target = Assert.Single(compilation.GlobalScope.Interfaces, symbol => symbol.Name == "Target");
+        var source = Assert.Single(compilation.GlobalScope.Structs, symbol => symbol.Name == "Source");
+        Assert.False(Assert.Single(target.Properties).IsInitOnly);
+        Assert.True(Assert.Single(source.Properties).IsInitOnly);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "GS0606");
+    }
+
+    [Fact]
+    public void AdapterNamesRemainUniqueAcrossBindingPhasesFilesPackagesAndRepeatedEmit()
+    {
+        var trees = new[]
+        {
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package AdapterNames
+                public interface Reader { func Read() int32; }
+                public class Source(Value int32) { public func Read() int32 -> Value }
+                let top = adapt[Reader](Source(1))
+                """,
+                "top.gs")),
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package AdapterNames
+                public func Build() Reader { return adapt[Reader](Source(2)) }
+                """,
+                "body.gs")),
+            SyntaxTree.Parse(SourceText.From(
+                """
+                package AdapterNames.Consumer
+                import AdapterNames
+                public func BuildOther() Reader { return adapt[Reader](Source(3)) }
+                """,
+                "other.gs")),
+        };
+        var compilation = new Compilation(trees);
+        using var first = new MemoryStream();
+        using var second = new MemoryStream();
+        var firstResult = compilation.Emit(first);
+        var secondResult = compilation.Emit(second);
+        Assert.True(firstResult.Success, string.Join("; ", firstResult.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        Assert.True(secondResult.Success, string.Join("; ", secondResult.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        Assert.Equal(first.ToArray(), second.ToArray());
+
+        first.Position = 0;
+        var context = new AssemblyLoadContext(nameof(AdapterNamesRemainUniqueAcrossBindingPhasesFilesPackagesAndRepeatedEmit), isCollectible: true);
+        try
+        {
+            var assembly = context.LoadFromStream(first);
+            var adapters = assembly.GetTypes()
+                .Where(type => type.Name.StartsWith("<>Adapter", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(3, adapters.Length);
+            Assert.Equal(adapters.Length, adapters.Select(type => type.FullName).Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(
+                new[] { "<>Adapter0", "<>Adapter1", "<>Adapter2" },
+                adapters.Select(type => type.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        }
+        finally
+        {
+            context.Unload();
+        }
+    }
+}

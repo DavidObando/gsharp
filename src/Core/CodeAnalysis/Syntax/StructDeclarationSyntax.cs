@@ -641,4 +641,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// compiler-generated class behind a rich anonymous-object literal.
     /// </summary>
     internal bool IsSynthesizedRichAnonymousObject { get; set; }
+
+    /// <summary>Gets or sets the number of lexical generic parameters predeclared on a rich-anonymous shell.</summary>
+    internal int RichAnonymousShellTypeParameterCount { get; set; }
 }
