@@ -3,10 +3,12 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -16,6 +18,34 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 public sealed class InterfaceAdaptationReviewTests
 {
+    [Fact]
+    public void BodiesWithRichOrAdapterSynthesisBypassIncrementalBodyReuse()
+    {
+        var tree = SyntaxTree.Parse(
+            """
+            package AdapterCache
+            interface Reader { func Read() int32; }
+            class Source(Value int32) { func Read() int32 -> Value }
+            func Build(value int32) Reader {
+                let rich = object : Reader {
+                    func Read() int32 -> value
+                }
+                return adapt[Reader](Source(rich.Read()))
+            }
+            """);
+        var global = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
+            previous: null,
+            ImmutableArray.Create(tree));
+        var cache = new BoundBodyCache();
+        var first = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: null, cache);
+        var second = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(global, references: null, cache);
+        var build = global.Functions.Single(function => function.Name == "Build");
+        Assert.NotSame(first.Functions[build], second.Functions[build]);
+        Assert.True(cache.Hits > 0);
+        AssertSyntheticBodiesRegistered(first);
+        AssertSyntheticBodiesRegistered(second);
+    }
+
     [Fact]
     public void SourceInitOnlyMismatchIsPartOfTheStructuralPropertyContract()
     {
@@ -89,6 +119,19 @@ public sealed class InterfaceAdaptationReviewTests
         finally
         {
             context.Unload();
+        }
+    }
+
+    private static void AssertSyntheticBodiesRegistered(BoundProgram program)
+    {
+        var syntheticTypes = program.Structs
+            .Where(type => type.Name.StartsWith("<>AnonClass", StringComparison.Ordinal)
+                || type.Name.StartsWith("<>Adapter", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, syntheticTypes.Length);
+        foreach (var method in syntheticTypes.SelectMany(type => type.Methods))
+        {
+            Assert.True(program.Functions.ContainsKey(method), method.Name);
         }
     }
 }

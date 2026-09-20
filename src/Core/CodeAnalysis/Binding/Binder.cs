@@ -2726,12 +2726,13 @@ public sealed class Binder
         Func<BodyBindResult> bindAndLower)
     {
         var isDirty = dirtyTrees != null
-            && bodySyntax?.SyntaxTree != null
+            && bodySyntax.SyntaxTree != null
             && dirtyTrees.Contains(bodySyntax.SyntaxTree);
+        var cacheable = !ContainsSyntheticBodySideEffects(bodySyntax);
 
         if (!isDirty
+            && cacheable
             && cache != null
-            && bodySyntax != null
             && cache.TryReuse(member, bodySyntax, out var reusedBody, out var reusedDiagnostics))
         {
             AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member);
@@ -2741,11 +2742,37 @@ public sealed class Binder
         var result = bindAndLower();
         AppendBodyDiagnostics(diagnostics, result.Diagnostics, member);
 
-        // bodySyntax is this method's own non-nullable parameter, never
-        // reassigned above (the `bodySyntax?.SyntaxTree` read a few lines up
-        // is a redundant null-conditional, not a narrowing of bodySyntax).
-        cache?.Store(member, bodySyntax!, result.Body, result.Diagnostics);
+        if (cacheable)
+        {
+            cache?.Store(member, bodySyntax, result.Body, result.Diagnostics);
+        }
+
         return result.Body;
+    }
+
+    private static bool ContainsSyntheticBodySideEffects(SyntaxNode node)
+    {
+        if (node is AnonymousClassExpressionSyntax anonymous
+            && IsRichAnonymousObject(anonymous))
+        {
+            return true;
+        }
+
+        if (node is CallExpressionSyntax call
+            && call.Identifier.Text == "adapt")
+        {
+            return true;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            if (ContainsSyntheticBodySideEffects(child))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void AppendBodyDiagnostics(
@@ -3835,6 +3862,7 @@ public sealed class Binder
         if (userTarget != null)
         {
             var unmatchedDefaults = new List<(InterfaceSymbol Owner, FunctionSymbol Slot)>();
+            var unmatchedDefaultProperties = new List<(InterfaceSymbol Owner, PropertySymbol Slot)>();
             foreach (var iface in userTarget.SelfAndAllBaseInterfaces())
             {
                 iface.EnsureMembersResolved();
@@ -3911,6 +3939,7 @@ public sealed class Binder
                             || slot.SetterSymbol?.IsAbstract == true;
                         if (!required)
                         {
+                            unmatchedDefaultProperties.Add((iface, slot));
                             continue;
                         }
 
@@ -4023,11 +4052,38 @@ public sealed class Binder
                     failed = true;
                 }
             }
+
+            for (var i = 0; i < unmatchedDefaultProperties.Count; i++)
+            {
+                var current = unmatchedDefaultProperties[i];
+                var conflicts = unmatchedDefaultProperties
+                    .Where(candidate => UserAdapterPropertySlotsEquivalent(current.Slot, candidate.Slot))
+                    .ToArray();
+                if (conflicts.Length < 2
+                    || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+                {
+                    continue;
+                }
+
+                var mostSpecific = conflicts.Where(candidate =>
+                    conflicts.All(other => ReferenceEquals(candidate.Owner, other.Owner)
+                        || candidate.Owner.SelfAndAllBaseInterfaces().Contains(other.Owner))).ToArray();
+                if (mostSpecific.Length != 1)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"default interface property/indexer '{current.Slot.Name}' has no unique most-specific implementation");
+                    failed = true;
+                }
+            }
         }
         else
         {
             var targetClr = Invariant.Required(target.ClrType, "an imported interface has a CLR type");
             var unmatchedDefaults = new List<(Type Owner, MethodInfo Slot)>();
+            var unmatchedDefaultProperties = new List<(Type Owner, PropertyInfo Slot)>();
             var unmatchedDefaultEvents = new List<(Type Owner, EventInfo Slot)>();
             foreach (var targetInterface in targetClr.GetInterfaces().Prepend(targetClr))
             {
@@ -4143,6 +4199,7 @@ public sealed class Binder
                     {
                         if (!required)
                         {
+                            unmatchedDefaultProperties.Add((targetInterface, slot));
                             continue;
                         }
 
@@ -4295,6 +4352,32 @@ public sealed class Binder
                         sourceMemberType.Name,
                         target.Name,
                         $"default interface event '{current.Slot.Name}' has no unique most-specific implementation");
+                    failed = true;
+                }
+            }
+
+            for (var i = 0; i < unmatchedDefaultProperties.Count; i++)
+            {
+                var current = unmatchedDefaultProperties[i];
+                var conflicts = unmatchedDefaultProperties
+                    .Where(candidate => ImportedPropertySlotsEquivalent(current.Slot, candidate.Slot))
+                    .ToArray();
+                if (conflicts.Length < 2
+                    || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+                {
+                    continue;
+                }
+
+                var mostSpecific = conflicts.Where(candidate =>
+                    conflicts.All(other => ClrTypeUtilities.AreSame(candidate.Owner, other.Owner)
+                        || other.Owner.IsAssignableFrom(candidate.Owner))).ToArray();
+                if (mostSpecific.Length != 1)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"default interface property/indexer '{current.Slot.Name}' has no unique most-specific implementation");
                     failed = true;
                 }
             }
@@ -4820,7 +4903,7 @@ public sealed class Binder
         TypeSymbol slotOwner,
         EventInfo sourceEvent)
     {
-        var eventType = TypeSymbol.FromClrType(Invariant.Required(slot.EventHandlerType, "an event has a handler type"));
+        var eventType = MemberLookup.GetClrEventHandlerTypeSymbol(slotOwner, slot);
         var eventSymbol = new EventSymbol(
             slot.Name,
             eventType,
@@ -5017,6 +5100,18 @@ public sealed class Binder
 
         return true;
     }
+
+    private static bool UserAdapterPropertySlotsEquivalent(PropertySymbol left, PropertySymbol right)
+        => left.Name == right.Name
+            && AdapterTypesMatch(left.Type, right.Type)
+            && ((left.GetterSymbol == null && right.GetterSymbol == null)
+                || (left.GetterSymbol != null
+                    && right.GetterSymbol != null
+                    && UserAdapterSlotsEquivalent(left.GetterSymbol, right.GetterSymbol)))
+            && ((left.SetterSymbol == null && right.SetterSymbol == null)
+                || (left.SetterSymbol != null
+                    && right.SetterSymbol != null
+                    && UserAdapterSlotsEquivalent(left.SetterSymbol, right.SetterSymbol)));
 
     private bool AdapterGenericConstraintsMatch(
         TypeParameterSymbol target,
@@ -5516,6 +5611,11 @@ public sealed class Binder
             && right.RemoveMethod != null
             && AdapterMethodMetadataMatches(left.AddMethod, right.AddMethod)
             && AdapterMethodMetadataMatches(left.RemoveMethod, right.RemoveMethod);
+
+    private static bool ImportedPropertySlotsEquivalent(PropertyInfo left, PropertyInfo right)
+        => left.Name == right.Name
+            && ImportedPropertyContractsMatch(left, right)
+            && ImportedPropertyContractsMatch(right, left);
 
     private static bool AdapterTypesMatch(TypeSymbol left, TypeSymbol right)
         => Conversion.ClassifyNonStructural(left, right).IsIdentity

@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.Loader;
 using GSharp.Tests;
 using Xunit;
 
@@ -13,6 +14,29 @@ namespace GSharp.Compiler.Tests;
 
 public sealed class InterfaceAdaptationReviewTests
 {
+    [Fact]
+    public void GenericRichLiteralOmittedReturnUsesTheEnclosingConstruction()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package GenericRichReturn
+            import System
+            interface Reader[T] { func Read() T; }
+            private func Make[T](value T) -> object : Reader[T] {
+                func Read() T -> value
+            }
+            func Main() {
+                Console.WriteLine(Make[string]("generic").Read())
+                Console.WriteLine(Make[int32](42).Read())
+            }
+            """,
+            "generic-rich-return",
+            executable: true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("generic\n42\n", fixture.Run(dll));
+    }
+
     [Fact]
     public void BorrowedCapturesRejectWhileSnapshotsAndManagedHandlesRemainSafe()
     {
@@ -300,6 +324,112 @@ public sealed class InterfaceAdaptationReviewTests
             Assert.NotEqual(0, code);
             Assert.Contains("error GS0606:", output);
         }
+    }
+
+    [Fact]
+    public void DefaultPropertyDiamondsRequireOneMostSpecificImplementation()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (userCode, userOutput) = fixture.TryCompile(
+            """
+            package UserDefaultPropertyConflict
+            interface IA { prop Value int32 { get { return 1 } } }
+            interface IB { prop Value int32 { get { return 2 } } }
+            interface IConflict : IA, IB { }
+            class Source { }
+            func Bad() { let adapted = adapt[IConflict](Source()) }
+            """,
+            "user-default-property-conflict",
+            executable: false);
+        Assert.NotEqual(0, userCode);
+        Assert.Contains("error GS0606:", userOutput);
+        Assert.Contains("no unique most-specific", userOutput);
+
+        var contracts = fixture.CompileCSharp(
+            """
+            namespace ImportedDefaultProperties;
+            public interface IA { int Value => 1; }
+            public interface IB { int Value => 2; }
+            public interface IConflict : IA, IB { }
+            public interface IMostSpecific : IA, IB { new int Value => 3; }
+            public sealed class Source { }
+            """,
+            "ImportedDefaultProperties");
+        var valid = fixture.Compile(
+            """
+            package ImportedDefaultPropertyControl
+            import ImportedDefaultProperties
+            func Main() { let adapted = adapt[IMostSpecific](Source()) }
+            """,
+            "imported-default-property-control",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(valid, new[] { contracts });
+
+        var (importedCode, importedOutput) = fixture.TryCompile(
+            """
+            package ImportedDefaultPropertyConflict
+            import ImportedDefaultProperties
+            func Bad() { let adapted = adapt[IConflict](Source()) }
+            """,
+            "imported-default-property-conflict",
+            executable: false,
+            "/r:" + contracts);
+        Assert.NotEqual(0, importedCode);
+        Assert.Contains("error GS0606:", importedOutput);
+        Assert.Contains("no unique most-specific", importedOutput);
+    }
+
+    [Fact]
+    public void ImportedAdapterEventsPreserveNestedNullabilityMetadata()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            #nullable enable
+            using System;
+            namespace NullableAdapterEvents;
+            public interface ITarget { event Action<string?> Changed; }
+            public sealed class Source
+            {
+                public event Action<string?>? Changed;
+                public void Raise(string? value) => Changed?.Invoke(value);
+            }
+            """,
+            "NullableAdapterEvents");
+        var reference = Path.Combine(fixture.Directory, "NullableAdapterEventApi.ref.dll");
+        var dll = fixture.Compile(
+            """
+            package NullableAdapterEventApi
+            import NullableAdapterEvents
+            public func Create() ITarget { return adapt[ITarget](Source()) }
+            """,
+            "NullableAdapterEventApi",
+            executable: false,
+            "/r:" + contracts,
+            "/refout:" + reference);
+        IlVerifier.Verify(dll, new[] { contracts });
+        Assert.True(File.Exists(reference));
+
+        AssemblyLoadContext.Default.LoadFromAssemblyPath(contracts);
+        var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
+        var adapter = Assert.Single(
+            assembly.GetTypes(),
+            type => type.Name.StartsWith("<>Adapter", StringComparison.Ordinal));
+        var eventInfo = adapter.GetEvent(
+            "Changed",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(eventInfo);
+        var addMethod = eventInfo.GetAddMethod(nonPublic: true);
+        Assert.NotNull(addMethod);
+        var addParameter = Assert.Single(addMethod.GetParameters());
+        var addNullability = new NullabilityInfoContext().Create(addParameter);
+        Assert.Equal(NullabilityState.Nullable, Assert.Single(addNullability.GenericTypeArguments).ReadState);
+        var removeMethod = eventInfo.GetRemoveMethod(nonPublic: true);
+        Assert.NotNull(removeMethod);
+        var removeParameter = Assert.Single(removeMethod.GetParameters());
+        var removeNullability = new NullabilityInfoContext().Create(removeParameter);
+        Assert.Equal(NullabilityState.Nullable, Assert.Single(removeNullability.GenericTypeArguments).ReadState);
     }
 
     [Fact]
