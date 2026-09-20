@@ -2408,11 +2408,7 @@ internal sealed partial class DeclarationBinder
                 {
                     // Issue #3310 / ADR-0159 channel carve-out: a bare
                     // `chan T` static field has no usable default.
-                    if (ManagedReferenceTypes.TryGetElement(fieldType, out _, out _))
-                    {
-                        Diagnostics.ReportManagedReference(fieldSyntax.Identifier.Location, "a non-null managed-reference field requires initialization");
-                    }
-                    else
+                    if (!ManagedReferenceTypes.TryGetElement(fieldType, out _, out _))
                     {
                         Diagnostics.ReportChannelRequiresInitializer(fieldSyntax.Identifier.Location, fieldName, fieldType.Name);
                     }

@@ -161,6 +161,16 @@ Implementation:
   property, or index) and argument position. Scalar/value copies and ordinary
   handles remain valid. A Roslyn analyzer would only duplicate individual G#
   behavior here; focused bound-node tests are the stronger guard.
+- Required initialization now has one flow model for class/struct shared
+  storage. Static fields and static auto-property backing fields whose type
+  contains a non-null managed handle are projected through direct field
+  initializers and every path of `shared { init { ... } }`, then checked by the
+  existing definite-assignment engine. Nullable storage remains an allowed
+  zero value. This replaces the direct-handle-only declaration special case and
+  covers generic/nested aggregate storage and synthesized backing fields.
+  Cross-assembly/refout, repeated emit, and ILVerify tests guard the model; a
+  Roslyn analyzer cannot reproduce G# initializer lowering or backing-field
+  identity without duplicating compiler semantics.
 
 The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
 completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,

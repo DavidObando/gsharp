@@ -52,13 +52,20 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
             analyzer.Visit(new BoundBlockStatement(type.Declaration, type.StaticInitializerStatements));
 
-            var fields = type.Fields.Where(f => analyzer.RequiredHandle(f.Type) != null).ToImmutableArray();
-            if (fields.IsDefaultOrEmpty)
+            var staticFields = type.StaticFields
+                .Concat(type.StaticProperties.Where(p => p.IsAutoProperty).Select(p => p.BackingField).OfType<FieldSymbol>())
+                .Where(f => analyzer.RequiredHandle(f.Type) != null)
+                .ToImmutableArray();
+            if (!staticFields.IsDefaultOrEmpty)
             {
-                continue;
+                analyzer.CheckRequiredStaticPaths(type, staticFields);
             }
 
-            analyzer.CheckRequiredConstructorPaths(type, fields, functions);
+            var instanceFields = type.Fields.Where(f => analyzer.RequiredHandle(f.Type) != null).ToImmutableArray();
+            if (!instanceFields.IsDefaultOrEmpty)
+            {
+                analyzer.CheckRequiredConstructorPaths(type, instanceFields, functions);
+            }
         }
 
         foreach (var type in interfaces)
@@ -391,6 +398,25 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         }
     }
 
+    private void CheckRequiredStaticPaths(StructSymbol type, ImmutableArray<FieldSymbol> fields)
+    {
+        var function = new FunctionSymbol(
+            "<static-initializer>",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void,
+            declaration: null)
+        {
+            IsStatic = true,
+            StaticOwnerType = type,
+            IsStaticInitializer = true,
+        };
+        var projection = new StaticAssignmentProjection(type, fields, this);
+        DefiniteAssignmentAnalyzer.Analyze(
+            projection.Project(type.StaticInitializerStatements),
+            function,
+            this.diagnostics);
+    }
+
     private void CheckImplicitConstructorPath(StructSymbol type, ImmutableArray<FieldSymbol> fields)
     {
         var initialized = type.InstanceFieldInitializers.Keys.Select(field => field.Name)
@@ -583,5 +609,80 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         private ImmutableArray<BoundStatement> ReadFields()
             => this.fields.Values.Select(variable => (BoundStatement)new BoundExpressionStatement(
                 this.syntax, new BoundVariableExpression(this.syntax, variable))).ToImmutableArray();
+    }
+
+    private sealed class StaticAssignmentProjection : BoundTreeRewriter
+    {
+        private readonly StructSymbol type;
+        private readonly SyntaxNode? syntax;
+        private readonly Dictionary<FieldSymbol, LocalVariableSymbol> fields = new();
+
+        internal StaticAssignmentProjection(StructSymbol type, ImmutableArray<FieldSymbol> fields, ManagedReferenceSafetyAnalyzer analyzer)
+        {
+            this.type = type;
+            this.syntax = type.Declaration;
+            foreach (var field in fields)
+            {
+                this.fields.Add(field, new LocalVariableSymbol(
+                    field.Name,
+                    false,
+                    Invariant.Required(analyzer.RequiredHandle(field.Type), "the caller selected required managed-reference fields"),
+                    field.Declaration));
+            }
+        }
+
+        internal BoundBlockStatement Project(ImmutableArray<BoundStatement> statements)
+        {
+            var projected = ImmutableArray.CreateBuilder<BoundStatement>();
+            foreach (var pair in this.fields)
+            {
+                var initializer = this.type.StaticFieldInitializers.TryGetValue(pair.Key, out var value)
+                    ? value : new BoundDefaultExpression(pair.Key.Declaration ?? this.syntax, pair.Value.Type);
+                projected.Add(new BoundVariableDeclaration(pair.Key.Declaration ?? this.syntax, pair.Value, initializer));
+            }
+
+            projected.AddRange(((BoundBlockStatement)this.RewriteStatement(
+                new BoundBlockStatement(this.syntax, statements))).Statements);
+            projected.AddRange(this.ReadFields());
+            return new BoundBlockStatement(this.syntax, projected.ToImmutable());
+        }
+
+        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+        {
+            if (node.Variable is ImplicitStaticFieldVariableSymbol staticField
+                && this.fields.TryGetValue(staticField.Field, out var variable))
+            {
+                return new BoundAssignmentExpression(node.Syntax, variable, this.RewriteExpression(node.Expression));
+            }
+
+            return base.RewriteAssignmentExpression(node);
+        }
+
+        protected override BoundExpression RewriteFieldAssignmentExpression(BoundFieldAssignmentExpression node)
+        {
+            if (node.Receiver == null && node.ReceiverExpression == null
+                && this.fields.TryGetValue(node.Field, out var variable))
+            {
+                return new BoundAssignmentExpression(node.Syntax, variable, this.RewriteExpression(node.Value));
+            }
+
+            return base.RewriteFieldAssignmentExpression(node);
+        }
+
+        protected override BoundExpression RewritePropertyAssignmentExpression(BoundPropertyAssignmentExpression node)
+        {
+            if (node.Receiver == null && node.Property.BackingField is { } field
+                && this.fields.TryGetValue(field, out var variable))
+            {
+                return new BoundAssignmentExpression(node.Syntax, variable, this.RewriteExpression(node.Value));
+            }
+
+            return base.RewritePropertyAssignmentExpression(node);
+        }
+
+        private ImmutableArray<BoundStatement> ReadFields()
+            => this.fields.Values.Select(variable => (BoundStatement)new BoundExpressionStatement(
+                variable.DeclaringSyntax ?? this.syntax,
+                new BoundVariableExpression(variable.DeclaringSyntax ?? this.syntax, variable))).ToImmutableArray();
     }
 }

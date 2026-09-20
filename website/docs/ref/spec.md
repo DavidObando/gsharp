@@ -316,10 +316,13 @@ use); `default` is permitted for `managed[T]?` / `readonly managed[T]?` and is
 nil. Compiler-owned aggregate initialization cannot silently invent null
 non-null handle fields. Every source primary, designated and synthesized/default
 constructor path is checked even when the declaring library constructs no
-instance itself. A primary-constructor parameter becomes a field and therefore
-cannot be a scoped handle. Explicit constructor calls and convenience chaining
-honor same-compilation scoped parameters; imported constructor/operator metadata
-does not preserve this by-value contract and is treated conservatively.
+instance itself. Required shared/static fields and static auto-property backing
+fields on classes and structs are checked across direct initializers and every
+path through `shared { init { ... } }`; nullable static storage may remain nil.
+A primary-constructor parameter becomes a field and therefore cannot be a
+scoped handle. Explicit constructor calls and convenience chaining honor
+same-compilation scoped parameters; imported constructor/operator metadata does
+not preserve this by-value contract and is treated conservatively.
 Foreign and unconstrained generic initialization can still supply null despite
 annotations; dereference/Borrow then throws `NullReferenceException`, never
 allocates a substitute location.
