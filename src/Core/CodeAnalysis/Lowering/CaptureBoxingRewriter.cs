@@ -118,7 +118,13 @@ internal static class CaptureBoxingRewriter
         {
             var plan = pair.Value;
             var prepared = ManagedAliasPlanner.Prepare(plan.Body);
-            var arguments = plan.Arguments.Select(ManagedAliasPlanner.Prepare).ToImmutableArray();
+            var argumentBuilder = ImmutableArray.CreateBuilder<BoundExpression>(plan.Arguments.Length);
+            foreach (var argument in plan.Arguments)
+            {
+                argumentBuilder.Add(ManagedAliasPlanner.Prepare(argument));
+            }
+
+            var arguments = argumentBuilder.MoveToImmutable();
             var (body, updates) = RewriteFunctionBody(
                 plan.Function, prepared, program, newStructs, ref counter, mapClrType, arguments, out var rewrittenArguments, out var prologue);
             initializers[pair.Key] = new BoundInitializationPlan(

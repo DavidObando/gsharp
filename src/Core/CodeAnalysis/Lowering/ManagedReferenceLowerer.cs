@@ -163,9 +163,13 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
             isClass: true);
         helper.SetImportedBaseType(type);
         var enclosing = this.function?.ReceiverType ?? this.function?.StaticOwnerType ?? this.function?.LexicalEnclosingType;
-        if (enclosing is StructSymbol or InterfaceSymbol)
+        if (enclosing is StructSymbol aggregate)
         {
-            helper.SetContainingType(enclosing is StructSymbol aggregate ? aggregate.Definition : enclosing);
+            helper.SetContainingType(aggregate.Definition);
+        }
+        else if (enclosing is InterfaceSymbol interfaceType)
+        {
+            helper.SetContainingType(interfaceType);
         }
 
         var borrow = new FunctionSymbol(

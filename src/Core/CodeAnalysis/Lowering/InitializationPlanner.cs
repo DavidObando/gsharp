@@ -90,7 +90,7 @@ internal static class InitializationPlanner
                 .Select(field => (BoundStatement)new BoundExpressionStatement(
                     null,
                     new BoundFieldAssignmentExpression(null, field, type, new BoundLiteralExpression(null, field.ConstantValue, field.Type))));
-            var statements = constants.Concat(type.StaticFields.Where(type.StaticFieldInitializers.ContainsKey)
+            var statements = constants.Concat(type.StaticFields.Where(field => type.StaticFieldInitializers.ContainsKey(field))
                 .Select(field => (BoundStatement)new BoundExpressionStatement(
                     type.StaticFieldInitializers[field].Syntax,
                     new BoundFieldAssignmentExpression(type.StaticFieldInitializers[field].Syntax, field, type, type.StaticFieldInitializers[field]))))
