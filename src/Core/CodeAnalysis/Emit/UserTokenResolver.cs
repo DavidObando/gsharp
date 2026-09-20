@@ -2173,18 +2173,22 @@ internal sealed class UserTokenResolver
         var def = structType.Definition ?? structType;
         var defParams = def.PrimaryConstructorParameters;
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob)
-            .MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                defParams.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in defParams)
+        using (this.remaps.PushSmRemap(def))
+        {
+            new BlobEncoder(sigBlob)
+                .MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    defParams.Length,
+                    r => r.Void(),
+                    ps =>
                     {
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                    }
-                });
+                        foreach (var p in defParams)
+                        {
+                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+                    });
+        }
+
         return this.GetUserStructMethodRef(structType, primaryDef, ".ctor", sigBlob);
     }
 

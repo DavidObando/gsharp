@@ -23,6 +23,30 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class DeclarationBinder
 {
+    internal BaseConstructorInitializer? ResolveRichAnonymousBaseConstructor(
+        StructSymbol structSymbol,
+        ImmutableArray<BoundExpression> arguments,
+        TextLocation location)
+    {
+        var builder = arguments.ToBuilder();
+        if (structSymbol.ImportedBaseType?.ClrType is Type clrBase)
+        {
+            return ResolveClrBaseConstructor(_ => location, clrBase, structSymbol.ImportedBaseType, builder, location);
+        }
+
+        if (structSymbol.BaseClass is { } baseClass)
+        {
+            return ResolveGSharpBaseConstructor(_ => location, structSymbol.Name, baseClass, builder, location);
+        }
+
+        if (!arguments.IsEmpty)
+        {
+            Diagnostics.ReportBaseConstructorArgumentsWithoutBase(location);
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Binds a class declaration's explicit <c>: Base(args)</c> initializer, or
     /// its implicit zero-argument base call when no <c>init</c> body owns that

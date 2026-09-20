@@ -635,4 +635,10 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// Empty for ordinary declarations and GS0480-mismatched partial groups.
     /// </summary>
     internal ImmutableArray<TypeParameterListSyntax> PartialTypeParameterLists { get; set; } = ImmutableArray<TypeParameterListSyntax>.Empty;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether this declaration is the
+    /// compiler-generated class behind a rich anonymous-object literal.
+    /// </summary>
+    internal bool IsSynthesizedRichAnonymousObject { get; set; }
 }

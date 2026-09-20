@@ -77,7 +77,9 @@ Because the rich map is populated during `BindGlobalScope` but consumed during t
 ### Diagnostics
 
 - **GS0485** — `init`/`deinit` members are rejected inside an anonymous object (they are explicitly out of scope for this feature).
-- **GS0486** — a rich anonymous object's field member requires an explicit type (see Deviations); inferred-type fields are supported only on the field-only path.
+- **GS0486** — historical rich-field explicit-type diagnostic. ADR-0189
+  (accepted and implemented on 2026-09-20) replaces this limitation with
+  literal-site inference and `GS0605` for genuinely uninferable shapes.
 
 Interface-implementation and invalid-`override` errors reuse the existing named-class diagnostics unchanged, since rich objects go through the named-class binder.
 
@@ -101,7 +103,10 @@ C# anonymous types (`new { A = x, B = y }`) are always property-only with no met
 
    The placeholder test (`AnonymousClassExpressionTests.PublicApiBoundary_NarrowsToDeclaredSupertypeOrObject`) is no longer skipped and asserts the public/no-supertype case; `PublicApiBoundary_WithDeclaredSupertype_NarrowsToThatSupertype`, `PrivateFunction_ReturningAnonymousClassLiteral_RetainsFullAccess`, and `LocalVariable_BoundDirectlyToAnonymousClassLiteral_RetainsFullAccess` cover the declared-supertype, private, and local-binding cases respectively.
 
-2. **Rich anonymous objects require explicit field types (GS0486).** Field-type inference is implemented only on the field-only path (where the field is bound at the literal site). A rich object's fields are materialized into the synthesized class declaration, which — like any ordinary class field — requires an explicit type. The issue's rich examples declare no fields, so this is a low-impact restriction.
+2. **Historical: rich anonymous objects required explicit field types
+   (GS0486).** ADR-0189 lifts this deviation by binding rich initializers at the
+   literal site and inferring heap-storable field types. `GS0605` now covers
+   ambiguous/untyped/ref-like cases.
 
 3. **Rich field initializers and base-constructor arguments must be self-contained.** They are spliced verbatim into the synthesized top-level class, so they cannot reference enclosing locals. The issue's rich examples use only literal/constant base-constructor arguments, so this is acceptable in practice.
 
@@ -124,5 +129,7 @@ Positive:
 Negative / follow-ups:
 
 - **Kotlin visibility narrowing is implemented** (deviation 1), with one residual, documented limitation: a **field-only** anonymous literal returned (via the omitted-return-type arrow shorthand) from a **private/internal** function falls back to `object` rather than its full synthesized type, since that shape's type is not yet known at declare time; a `let`/`var` local binding is unaffected and always retains full access.
-- Rich objects cannot infer field types or capture enclosing locals in field/base-ctor initializers (deviations 2–3); both are acceptable for the issue's examples and can be lifted later if needed.
+- ADR-0189 (2026-09-20) lifts the rich-field inference and lexical-capture
+  deviations, including literal-site base arguments and generated pre-base
+  snapshot/environment stores.
 - The split between a value-type field-only path and a reference-type rich path means two structurally identical-looking literals (`object { let A int = 1 }` vs `object : I { ... }`) synthesize different kinds of CLR type; this is intentional (Kotlin semantics differ by capability) but worth noting for future readers.

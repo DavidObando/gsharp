@@ -386,10 +386,13 @@ internal sealed class ConstructorBodyEmitter
         var localsSignature = session.BuildLocalsSignature();
         var emitter = session.CreateEmitter(paramSlots);
 
-        // base()
-        il.LoadArgument(0);
-        il.OpCode(ILOpCode.Call);
-        il.Token(baseCtorToken);
+        var richObject = classSym.Declaration?.IsSynthesizedRichAnonymousObject == true;
+        if (!richObject)
+        {
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
+        }
 
         // Primary ctor parameter → field assignments. ADR-0087 §3 R3:
         // for a generic class the stfld must reference the field via
@@ -409,6 +412,13 @@ internal sealed class ConstructorBodyEmitter
             il.LoadArgument(i + 1);
             il.OpCode(ILOpCode.Stfld);
             il.Token(fieldHandle);
+        }
+
+        if (richObject)
+        {
+            il.LoadArgument(0);
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
         }
 
         // Instance field initializers
@@ -586,15 +596,18 @@ internal sealed class ConstructorBodyEmitter
         var localsSignature = session.BuildLocalsSignature();
         var emitter = session.CreateEmitter(paramSlots);
 
-        // base(args) — `this` followed by the (ref-kind aware) base arguments.
-        il.LoadArgument(0);
-        if (!init.Arguments.IsDefaultOrEmpty)
+        var richObject = classSym.Declaration?.IsSynthesizedRichAnonymousObject == true;
+        if (!richObject)
         {
-            emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
-        }
+            il.LoadArgument(0);
+            if (!init.Arguments.IsDefaultOrEmpty)
+            {
+                emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
+            }
 
-        il.OpCode(ILOpCode.Call);
-        il.Token(baseCtorToken);
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
+        }
 
         // this.<field> = arg; positional 1:1 with same-named fields.
         // Issue #2338 / ADR-0087 §3 R3: for a generic class the stfld must
@@ -615,6 +628,18 @@ internal sealed class ConstructorBodyEmitter
             il.LoadArgument(i + 1);
             il.OpCode(ILOpCode.Stfld);
             il.Token(fieldHandle);
+        }
+
+        if (richObject)
+        {
+            il.LoadArgument(0);
+            if (!init.Arguments.IsDefaultOrEmpty)
+            {
+                emitter.EmitBaseConstructorArguments(init.Arguments, init.ArgumentRefKinds);
+            }
+
+            il.OpCode(ILOpCode.Call);
+            il.Token(baseCtorToken);
         }
 
         // Issue #640: emit instance field initializer assignments.

@@ -17,6 +17,8 @@ Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severi
 | Code | Severity | Meaning | Remedy |
 | --- | --- | --- | --- |
 | GS0604 | Error | Invalid persistent-reference type, origin, permission, initialization, scoped escape, or suspension of a temporary borrow. | Use an admitted GC-owned location and compatible runtime; initialize non-null handles on every path, weaken permissions explicitly, and evaluate suspending values before borrowing. Unknown borrowed storage is never copied into a replacement location. |
+| GS0605 | Error | A rich anonymous field with an omitted type has no unambiguous heap-storable inferred type. | Add an explicit field type; `nil`, untyped lambdas/method groups, cycles, and ref-like values are not widened to `object`. |
+| GS0606 | Error | `adapt[I](source)` cannot produce a complete exact forwarding plan. | Supply an interface target and a non-null admitted source whose accessible public instance members exactly match every required slot. Static abstract/virtual members and operators require a separate design. |
 
 ## Severity levels
 
@@ -344,6 +346,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0601 | Error | Invalid native-buffer type, element, sharing conversion or literal shape. | Supply one heap-storable element type, preserve element nullability when sharing, and use positional literal elements (`AppendRange` for ranges). |
 | GS0602 | Error | A selected native element/value-field write would suspend while its location is borrowed. | Evaluate the suspending value before selecting the element. Ordinary async slice values and segment-local borrows are supported. |
 | GS0603 | Error | A store requires writable elements but its descriptor is `readonly slice[T]`. | Use a writable alias or explicitly clone; readonly views are not deep immutable copies. |
+
 
 ### Reference closure diagnostics (GS9100)
 

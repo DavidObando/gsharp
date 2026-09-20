@@ -1248,7 +1248,16 @@ let value = data object { let X = 1; let Y = 2 }
 let moved = value with { X = 10 }
 ```
 
-A rich anonymous object may declare a base class or interfaces with `object : Base(args), IFace { ... }` and may contain fields, methods, properties, and events. Rich objects synthesize a private class and reuse normal class/interface/override checking. Field members in rich objects require explicit types (`GS0486`) and `init` / `deinit` members are not allowed (`GS0485`). A function or method written as an omitted-return-type arrow whose body is exactly an anonymous-object literal infers the anonymous type for private/internal exposure, but public/protected APIs narrow to the declared supertype or to `object`.
+A rich anonymous object may declare a base class or interfaces with
+`object : Base(args), IFace { ... }` and may contain fields, methods, and
+events. Rich objects synthesize a private class and reuse normal
+class/interface/override checking. Rich field types may be inferred from their
+literal-site initializers; `nil`, untyped callable expressions, cycles, and
+ref-like values require an explicit admissible type (`GS0605`). `init` /
+`deinit` members are not allowed (`GS0485`). A function or method written as an
+omitted-return-type arrow whose body is exactly an anonymous-object literal
+infers the anonymous type for private/internal exposure, but public/protected
+APIs narrow to the declared supertype or to `object`.
 
 ```gsharp
 let listener = object : MouseListener {
@@ -1260,7 +1269,67 @@ let dog = object : Animal("Fluffy") {
 }
 ```
 
+Base arguments and explicit field initializers bind in the enclosing lexical
+scope and evaluate once: base arguments left-to-right, then fields in
+declaration order. An explicit field is a snapshot. A free variable used by a
+member body captures its lexical binding, so outer assignments and sibling
+closures observe one shared cell. Captures are hidden implementation state and
+are not public anonymous members or data-value components. Raw borrowed
+aliases, scoped handles, and ref-like values cannot escape into the generated
+heap class.
+
+The generated rich-object constructor stores snapshots and capture state before
+calling the selected base constructor. This allows a base virtual call to
+observe initialized rich-object state without changing ordinary named-class
+constructor ordering.
+
 `object` is contextual here: only `object {` and `object :` (optionally preceded by `data`) start the literal.
+
+### Explicit structural interface adaptation
+
+`adapt[I](source)` evaluates `source` once and allocates a fresh ordinary
+generated wrapper whose static type is interface `I`:
+
+```gsharp
+interface Reader { func Read() int32; }
+class Source { func Read() int32 -> 42 }
+
+let first = adapt[Reader](Source())
+let second = adapt[Reader](Source())
+```
+
+Adaptation is explicit; it adds no implicit conversion-classifier edge.
+Repeated calls create distinct wrapper identities even when the source already
+implements `I`. Reflection and `GetType()` observe the wrapper, and the wrapper
+implements only `I` and its inherited interfaces. `$adapt` is an ordinary
+escaped identifier.
+
+The compiler resolves the complete plan statically and emits the wrapper in the
+caller assembly. Accessible public instance methods, exact generic methods,
+properties, indexers, events, ref-kind parameters/returns, inherited abstract
+slots, and default interface members participate. Matching is case-sensitive
+and exact after generic substitution, including nullability, ref kinds,
+constraints, required metadata, and accessor sets. Numeric/user conversions,
+optional arguments, `params` expansion, projection, covariance repairs,
+extensions, inaccessible members, and runtime shape discovery are not used.
+Missing, ambiguous, incompatible, or unsupported slots report `GS0606`; static
+abstract/virtual members and operators remain a separate design.
+
+Source storage is explicit:
+
+- A reference/interface source stores the evaluated object once. Reassigning
+  the source local does not retarget the wrapper.
+- A struct source stores one mutable value copy. Mutations persist in the
+  adapter copy, not in the original.
+- `adapt[I](ref handle)` stores a `managed[T]` or
+  `readonly managed[T]` value for value-type `T` and borrows that retained
+  location on each call. Writable handles update the original storage;
+  readonly handles admit only metadata-proven readonly members.
+
+Nullable reference/interface sources must be narrowed. A foreign oblivious
+null throws `ArgumentNullException` during adaptation. Forwarded calls preserve
+the original exception and task identity; no reflection, `dynamic`,
+`DispatchProxy`, runtime code generation, or default-return stub is used.
 
 ### Switch expressions and patterns
 

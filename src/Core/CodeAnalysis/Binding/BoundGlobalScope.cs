@@ -339,6 +339,11 @@ public sealed class BoundGlobalScope
     internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> RichAnonymousClassMap { get; set; }
         = new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
 
+    internal Dictionary<StructSymbol, RichAnonymousObjectPlan> RichAnonymousObjectPlans { get; set; }
+        = new Dictionary<StructSymbol, RichAnonymousObjectPlan>();
+
+    internal StructuralAdapterRegistry StructuralAdapters { get; set; } = new StructuralAdapterRegistry();
+
     /// <summary>
     /// Gets or sets the ref-kind delegate cache (issue #3501 A2) shared with
     /// <c>BindProgram</c>'s body-binding pass so a function-type shape with

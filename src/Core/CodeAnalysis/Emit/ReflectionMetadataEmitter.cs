@@ -2805,9 +2805,8 @@ internal sealed class ReflectionMetadataEmitter
                 var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
                 this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
                 this.PreResolveReifiedGenericConstraints(gpRowStart);
+                EmitInterfaceImplRows(c);
             }
-
-            EmitInterfaceImplRows(c);
         }
 
         // Issue #976: emit the InterfaceImpl metadata rows for an aggregate
