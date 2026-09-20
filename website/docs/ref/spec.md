@@ -332,13 +332,18 @@ ordinary scalar/value results and may be passed normally.
 Handles may cross `await`, `yield` and channel suspension. Temporary borrows
 may not: retain the handle and borrow again in the next execution segment.
 An earlier borrowed argument followed by a suspending argument is diagnosed;
-evaluate the suspending value first.
+evaluate the suspending value first. This includes array elements, imported
+ref-return indexers and imported ref-return properties selected through a
+managed handle. A scalar or by-value property copied before suspension is not a
+borrow and remains valid.
 
 GS0604 rejects incoming/scoped caller storage, unknown or merged borrowed
 provenance, borrowed struct `this`, spans/ref-struct/native memory, ordinary
 property values and temporaries, map/string elements, statics/thread-statics,
 multidimensional arrays and explicit-layout fields. Explicitly copying a value
 to a new local is allowed, but that local is not an alias to the old storage.
+A scoped handle cannot be stored as an instance/static field initializer,
+top-level global initializer, or assignment in a `shared` initializer block.
 Handles provide GC reachability, not exclusivity, synchronization, native
 ownership or race freedom. Existing atomic APIs can consume lawful borrows.
 

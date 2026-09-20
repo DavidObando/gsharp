@@ -44,8 +44,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
             foreach (var initializer in type.InstanceFieldInitializers.Values.Concat(type.StaticFieldInitializers.Values))
             {
+                analyzer.CheckScopedStore(initializer);
                 analyzer.VisitExpression(initializer);
             }
+
+            analyzer.Visit(new BoundBlockStatement(type.Declaration, type.StaticInitializerStatements));
 
             var fields = type.Fields.Where(f => analyzer.RequiredHandle(f.Type) != null).ToImmutableArray();
             if (fields.IsDefaultOrEmpty)
@@ -123,19 +126,19 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
                 break;
             case BoundFieldAssignmentExpression field:
-                this.CheckScopedStore(field.Value);
+                this.CheckScopedStore(field.Value, field);
                 this.CheckSuspendingLocation(field.ReceiverExpression ?? VariableReceiver(field.Receiver), field.Value);
                 break;
             case BoundPropertyAssignmentExpression property:
-                this.CheckScopedStore(property.Value);
+                this.CheckScopedStore(property.Value, property);
                 this.CheckSuspendingLocation(property.Receiver, property.Value);
                 break;
             case BoundClrPropertyAssignmentExpression property:
-                this.CheckScopedStore(property.Value);
+                this.CheckScopedStore(property.Value, property);
                 this.CheckSuspendingLocation(property.Receiver, property.Value);
                 break;
             case BoundIndexAssignmentExpression index:
-                this.CheckScopedStore(index.Value);
+                this.CheckScopedStore(index.Value, index);
                 foreach (var argument in index.Indices)
                 {
                     this.CheckScopedStore(argument);
@@ -143,7 +146,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
                 break;
             case BoundClrIndexAssignmentExpression index:
-                this.CheckScopedStore(index.Value);
+                this.CheckScopedStore(index.Value, index);
                 foreach (var argument in index.Arguments)
                 {
                     this.CheckScopedStore(argument);
@@ -157,10 +160,10 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
                 break;
             case BoundAssignmentExpression globalAssignment when globalAssignment.Variable is not LocalVariableSymbol { RefKind: RefKind.None }:
-                this.CheckScopedStore(globalAssignment.Expression);
+                this.CheckScopedStore(globalAssignment.Expression, globalAssignment);
                 break;
             case BoundIndirectAssignmentExpression indirect:
-                this.CheckScopedStore(indirect.Value);
+                this.CheckScopedStore(indirect.Value, indirect);
                 break;
             case BoundIndirectCallExpression indirect:
                 this.CheckArguments(indirect.Arguments);
@@ -214,6 +217,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
     {
+        if (node.Initializer != null && node.Variable is GlobalVariableSymbol)
+        {
+            this.CheckScopedStore(node.Initializer, node);
+        }
+
         if (node.Initializer != null && this.IsManagedLocation(node.Initializer)
             && (node.Variable.Type is ByRefTypeSymbol || node.Variable is LocalVariableSymbol { RefKind: not RefKind.None }))
         {
@@ -378,6 +386,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             BoundDereferenceExpression dereference => this.IsManagedLocation(dereference.Operand),
             BoundFieldAccessExpression { Receiver: { } receiver } => this.IsManagedLocation(receiver),
             BoundClrPropertyAccessExpression { Receiver: { } receiver, Member: FieldInfo } => this.IsManagedLocation(receiver),
+            BoundIndexExpression index when index.IsArrayBackedElementAccess => this.IsManagedLocation(index.Target),
+            BoundClrIndexExpression index when RefCapabilities.GetReturnRefKind(index.Indexer) != RefKind.None =>
+                this.IsManagedLocation(index.Target),
+            BoundClrPropertyAccessExpression { Receiver: { } receiver, Member: PropertyInfo property }
+                when RefCapabilities.GetReturnRefKind(property) != RefKind.None => this.IsManagedLocation(receiver),
             BoundVariableExpression variable => this.managedLocations.Contains(variable.Variable)
                 || (variable.Variable is LocalVariableSymbol { RefKind: not RefKind.None, ManagedReferenceOrigin: { } origin } && this.IsManagedLocation(origin)),
             _ => false,
@@ -450,19 +463,19 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         return null;
     }
 
-    private void Report(BoundNode node, string reason)
+    private void Report(BoundNode node, string reason, BoundNode? fallback = null)
     {
-        if (node.Syntax is { } syntax)
+        if ((node.Syntax ?? fallback?.Syntax) is { } syntax)
         {
             this.diagnostics.ReportManagedReference(syntax.Location, reason);
         }
     }
 
-    private void CheckScopedStore(BoundExpression value)
+    private void CheckScopedStore(BoundExpression value, BoundNode? sink = null)
     {
         if (ManagedReferenceOrigins.IsScopedHandle(value))
         {
-            this.Report(value, "a scoped managed-reference value cannot be stored in heap-owned or unknown storage");
+            this.Report(value, "a scoped managed-reference value cannot be stored in heap-owned or unknown storage", sink);
         }
     }
 

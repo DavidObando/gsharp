@@ -126,7 +126,12 @@ Implementation:
   storage, borrowed struct `this`, ref-like/native storage, property-value
   copies, statics, multidimensional arrays and explicit-layout fields are not
   turned into persistent aliases. A borrowed argument preceding a suspending
-  argument is diagnosed rather than hoisted or re-evaluated.
+  argument is diagnosed rather than hoisted or re-evaluated. Scoped handles
+  cannot become instance/static field or top-level global initializer results,
+  including stores in `shared { init { ... } }`. Array elements, CLR ref
+  indexers and imported ref-return properties reached through a managed handle
+  remain borrowed locations and cannot be selected before a later suspension;
+  scalar and by-value property copies remain ordinary values.
 
 The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
 completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,
