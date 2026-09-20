@@ -171,6 +171,21 @@ Implementation:
   Cross-assembly/refout, repeated emit, and ILVerify tests guard the model; a
   Roslyn analyzer cannot reproduce G# initializer lowering or backing-field
   identity without duplicating compiler semantics.
+- Durable exhaustiveness is enforced by a test-side semantic inventory.
+  Reflection discovers every concrete high-risk `BoundExpression` family
+  (assignments, calls/invocations, method groups, argument-bearing nodes,
+  aggregate/default/managed-reference creation), and the test requires an
+  explicit managed-reference disposition for each. A separate context matrix
+  pins provenance, sinks, call contracts, managed locations, suspension
+  ordering, delegate/state-machine/closure capture, and instance/static
+  required initialization to concrete implementation markers. Mutation
+  self-tests remove a function-pointer node and add an unclassified context to
+  prove both guards fail. The existing `GSharp.InternalAnalyzers` conventions
+  were inspected, but a new Roslyn analyzer is intentionally not added: it
+  would have to mirror the same G#-specific bound-type/context inventory in a
+  second assembly, cannot observe runtime-discovered bound subclasses more
+  directly than the Core test, and would add noise or suppressions without
+  preventing a broader class of gaps.
 
 The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
 completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,
