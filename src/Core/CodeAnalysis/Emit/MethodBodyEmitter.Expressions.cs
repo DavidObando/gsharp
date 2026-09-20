@@ -1269,8 +1269,7 @@ internal sealed partial class MethodBodyEmitter
                 }
                 else
                 {
-                    throw new InvalidOperationException(
-                        $"Class field '{initField.Name}' has no emitted FieldDef.");
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField);
                 }
 
                 this.il.OpCode(ILOpCode.Dup);

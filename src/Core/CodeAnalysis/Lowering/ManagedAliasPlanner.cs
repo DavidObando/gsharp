@@ -14,6 +14,9 @@ internal sealed class ManagedAliasPlanner : BoundTreeRewriter
     internal static BoundBlockStatement Prepare(BoundBlockStatement body)
         => (BoundBlockStatement)new ManagedAliasPlanner().RewriteStatement(body);
 
+    internal static BoundExpression Prepare(BoundExpression expression)
+        => new ManagedAliasPlanner().RewriteExpression(expression);
+
     protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
     {
         if (node.Variable is not LocalVariableSymbol { ManagedReferenceStorage: { } saved } alias)

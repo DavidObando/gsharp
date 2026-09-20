@@ -39,20 +39,11 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
             functions[pair.Key] = (BoundBlockStatement)rewriter.RewriteStatement(pair.Value);
         }
 
-        foreach (var type in program.Structs)
+        var initializers = program.Initializers.ToBuilder();
+        foreach (var pair in program.Initializers)
         {
-            rewriter.function = new FunctionSymbol(
-                "<>fieldInitializer",
-                ImmutableArray<ParameterSymbol>.Empty,
-                TypeSymbol.Void,
-                declaration: null,
-                package: null,
-                Accessibility.Private,
-                receiverType: type);
-            type.SetInstanceFieldInitializers(type.InstanceFieldInitializers.ToImmutableDictionary(
-                pair => pair.Key, pair => rewriter.RewriteExpression(pair.Value)));
-            type.SetStaticFieldInitializers(type.StaticFieldInitializers.ToImmutableDictionary(
-                pair => pair.Key, pair => rewriter.RewriteExpression(pair.Value)));
+            rewriter.function = pair.Value.Function;
+            initializers[pair.Key] = pair.Value.Rewrite(rewriter.RewriteExpression, rewriter.RewriteStatement);
         }
 
         foreach (var pair in rewriter.methods)
@@ -75,6 +66,7 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
             program.Globals,
             program.Delegates)
         {
+            Initializers = initializers.ToImmutable(),
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,
@@ -107,7 +99,8 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
             case BoundDereferenceExpression dereference:
                 return this.CapturePointer(dereference.Operand, type, readOnly);
             case BoundIndexExpression index:
-                var arrayFactory = RequiredClr(type).GetMethods().Single(m => m.Name == "FromArray");
+                var factoryName = index.Index.Type == TypeSymbol.NInt ? "FromArrayNative" : "FromArray";
+                var arrayFactory = RequiredClr(type).GetMethods().Single(m => m.Name == factoryName);
                 return new BoundClrStaticCallExpression(location.Syntax, arrayFactory, type, ImmutableArray.Create(index.Target, index.Index));
             case BoundFieldAccessExpression { Receiver: { } receiver }:
                 return this.CaptureField(location, receiver, type, readOnly);
@@ -169,9 +162,10 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
             isInline: false,
             isClass: true);
         helper.SetImportedBaseType(type);
-        if ((this.function?.ReceiverType ?? this.function?.StaticOwnerType ?? this.function?.LexicalEnclosingType) is StructSymbol enclosing)
+        var enclosing = this.function?.ReceiverType ?? this.function?.StaticOwnerType ?? this.function?.LexicalEnclosingType;
+        if (enclosing is StructSymbol or InterfaceSymbol)
         {
-            helper.SetContainingType(enclosing.Definition);
+            helper.SetContainingType(enclosing is StructSymbol aggregate ? aggregate.Definition : enclosing);
         }
 
         var borrow = new FunctionSymbol(

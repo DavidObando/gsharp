@@ -24,6 +24,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     public static void Analyze(
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functions,
         ImmutableArray<StructSymbol> types,
+        ImmutableArray<InterfaceSymbol> interfaces,
         DiagnosticBag diagnostics)
     {
         var analyzer = new ManagedReferenceSafetyAnalyzer(diagnostics);
@@ -34,6 +35,12 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
         foreach (var type in types)
         {
+            analyzer.CheckBaseInitializer(type.BaseConstructorInitializer);
+            foreach (var constructor in type.ExplicitConstructors)
+            {
+                analyzer.CheckBaseInitializer(constructor.BaseInitializer);
+            }
+
             foreach (var initializer in type.InstanceFieldInitializers.Values.Concat(type.StaticFieldInitializers.Values))
             {
                 analyzer.VisitExpression(initializer);
@@ -51,6 +58,24 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 {
                     var projection = new ConstructorAssignmentProjection(type, constructor, fields, analyzer);
                     DefiniteAssignmentAnalyzer.Analyze(projection.Project(body), constructor.Function, diagnostics);
+                }
+            }
+        }
+
+        foreach (var type in interfaces)
+        {
+            foreach (var field in type.StaticFields)
+            {
+                if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))
+                {
+                    analyzer.CheckScopedStore(initializer);
+                    analyzer.VisitExpression(initializer);
+                }
+                else if (analyzer.RequiredHandle(field.Type) != null)
+                {
+                    diagnostics.ReportManagedReference(
+                        Invariant.Required(field.Declaration ?? type.Declaration, "source interface fields have a declaration").Location,
+                        $"interface field '{field.Name}' requires a non-null managed-reference initializer");
                 }
             }
         }
@@ -231,6 +256,20 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         }
     }
 
+    private void CheckBaseInitializer(BaseConstructorInitializer? initializer)
+    {
+        if (initializer == null)
+        {
+            return;
+        }
+
+        this.CheckArguments(initializer.Arguments, initializer.GSharpConstructor?.Function);
+        foreach (var argument in initializer.Arguments)
+        {
+            this.VisitExpression(argument);
+        }
+    }
+
     private void CheckSuspendingLocation(BoundExpression? receiver, BoundExpression value)
     {
         if (receiver != null && !Binder.IsReferenceTypeForConstraint(receiver.Type)
@@ -273,6 +312,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         {
             if (this.RequiredHandle(field.Type) != null && !supplied.Contains(field.Name)
                 && !type.InstanceFieldInitializers.ContainsKey(field)
+                && !type.Definition.InstanceFieldInitializers.Keys.Any(declared => declared.Name == field.Name)
                 && !type.PrimaryConstructorParameters.Any(p => p.Name == field.Name))
             {
                 this.Report(node, $"construction must initialize non-null managed-reference field '{field.Name}'");

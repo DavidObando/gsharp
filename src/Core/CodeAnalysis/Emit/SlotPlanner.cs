@@ -107,6 +107,19 @@ internal sealed class SlotPlanner
             collector.Visit(kvp.Value);
         }
 
+        var plannedInstanceOwners = this.emitCtx.Program.Initializers.Values
+            .Select(plan => plan.Function.ReceiverType).Where(owner => owner != null).ToHashSet();
+        foreach (var plan in this.emitCtx.Program.Initializers.Values)
+        {
+            collector.Visit(plan.Prologue);
+            foreach (var argument in plan.Arguments)
+            {
+                collector.Visit(argument);
+            }
+
+            collector.Visit(plan.Body);
+        }
+
         foreach (var type in this.emitCtx.Program.Structs
             .OrderBy(s => s.Declaration?.Span.Start ?? int.MaxValue)
             .ThenBy(s => s.Name, StringComparer.Ordinal))
@@ -115,7 +128,7 @@ internal sealed class SlotPlanner
             // after MethodDef planning, so discover their lambdas here.
             foreach (var field in type.Fields)
             {
-                if (type.InstanceFieldInitializers.TryGetValue(field, out var initializer))
+                if (!plannedInstanceOwners.Contains(type) && type.InstanceFieldInitializers.TryGetValue(field, out var initializer))
                 {
                     collector.Visit(initializer);
                 }
@@ -123,13 +136,14 @@ internal sealed class SlotPlanner
 
             foreach (var field in type.StaticFields)
             {
-                if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))
+                if (!this.emitCtx.Program.Initializers.ContainsKey((type, true)) && type.StaticFieldInitializers.TryGetValue(field, out var initializer))
                 {
                     collector.Visit(initializer);
                 }
             }
 
-            foreach (var statement in type.StaticInitializerStatements)
+            foreach (var statement in this.emitCtx.Program.Initializers.ContainsKey((type, true))
+                ? ImmutableArray<BoundStatement>.Empty : type.StaticInitializerStatements)
             {
                 collector.Visit(statement);
             }
@@ -138,7 +152,7 @@ internal sealed class SlotPlanner
             // block expressions whose tail is a lambda. These arguments live
             // on constructor symbols rather than in Program.Functions, so they
             // must participate in MethodDef planning explicitly.
-            if (type.BaseConstructorInitializer is { } primaryBaseInitializer)
+            if (!this.emitCtx.Program.Initializers.ContainsKey((type, false)) && type.BaseConstructorInitializer is { } primaryBaseInitializer)
             {
                 foreach (var argument in primaryBaseInitializer.Arguments)
                 {
@@ -148,7 +162,8 @@ internal sealed class SlotPlanner
 
             foreach (var constructor in type.ExplicitConstructors)
             {
-                if (constructor.BaseInitializer is not { } baseInitializer)
+                if (this.emitCtx.Program.Initializers.ContainsKey((constructor.Function, false))
+                    || constructor.BaseInitializer is not { } baseInitializer)
                 {
                     continue;
                 }
@@ -166,7 +181,7 @@ internal sealed class SlotPlanner
         {
             foreach (var field in type.StaticFields)
             {
-                if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))
+                if (!this.emitCtx.Program.Initializers.ContainsKey((type, true)) && type.StaticFieldInitializers.TryGetValue(field, out var initializer))
                 {
                     collector.Visit(initializer);
                 }

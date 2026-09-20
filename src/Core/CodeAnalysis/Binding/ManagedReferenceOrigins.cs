@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -55,15 +56,23 @@ internal static class ManagedReferenceOrigins
     // Classify the value being retained, not every input evaluated to produce
     // it. A null assertion preserves handle identity; reading its pointee does not.
     internal static bool IsScopedHandle(BoundExpression expression)
+        => IsScopedResult(expression, ImmutableDictionary<VariableSymbol, bool>.Empty);
+
+    internal static bool IsScopedResult(BoundExpression expression, ImmutableDictionary<VariableSymbol, bool> captures)
         => expression switch
         {
-            BoundVariableExpression variable => IsScopedHandle(variable.Variable),
-            BoundConversionExpression conversion => IsScopedHandle(conversion.Expression),
-            BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion => IsScopedHandle(assertion.Operand),
-            BoundBlockExpression block => IsScopedHandle(block.Expression),
-            BoundConditionalExpression conditional => IsScopedHandle(conditional.WhenTrue) || IsScopedHandle(conditional.WhenFalse),
-            BoundTupleLiteralExpression tuple => tuple.Elements.Any(element => IsScopedHandle(element)),
-            BoundImportedInstanceCallExpression call when ManagedReferenceTypes.TryGetElement(call.Type, out _, out _) => IsScopedHandle(call.Receiver),
+            BoundVariableExpression variable => captures.TryGetValue(variable.Variable, out var scoped) ? scoped : IsScopedHandle(variable.Variable),
+            BoundConversionExpression conversion => IsScopedResult(conversion.Expression, captures),
+            BoundAsExpression conversion => IsScopedResult(conversion.Expression, captures),
+            BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion => IsScopedResult(assertion.Operand, captures),
+            BoundBinaryExpression { Op.Kind: BoundBinaryOperatorKind.NullCoalesce } coalesce => IsScopedResult(coalesce.Left, captures) || IsScopedResult(coalesce.Right, captures),
+            BoundBlockExpression block => IsScopedResult(block.Expression, captures),
+            BoundConditionalExpression conditional => IsScopedResult(conditional.WhenTrue, captures) || IsScopedResult(conditional.WhenFalse, captures),
+            BoundSwitchExpression selection => selection.Arms.Any(arm => IsScopedResult(arm.Result, captures)),
+            BoundTupleLiteralExpression tuple => tuple.Elements.Any(element => IsScopedResult(element, captures)),
+            BoundNullConditionalAccessExpression access => IsScopedResult(
+                access.WhenNotNull, captures.SetItem(access.Capture, IsScopedResult(access.Receiver, captures))),
+            BoundImportedInstanceCallExpression call when ManagedReferenceTypes.TryGetElement(call.Type, out _, out _) => IsScopedResult(call.Receiver, captures),
             _ => false,
         };
 

@@ -42,6 +42,13 @@ Implementation:
   By-value parameters retain G#'s existing readonly binding permission:
   `readonlyManaged(parameter)` retains their independent entry copy; an
   explicit mutable local copy is required for a writable handle.
+- Constructor and type-initializer expressions use emit-local initialization
+  plans under their actual owning type/function. Base arguments, primary
+  parameter stores, field-initializer locals and constructor bodies share one
+  cell plan. Only parameter-cell setup precedes the existing base-call boundary;
+  user field initializers retain their ordinary after-base ordering. Cached
+  declaration initializer dictionaries are not replaced by managed-reference
+  lowering, so repeated implementation/reference emission recreates its helpers.
 - Known borrowed aliases save a descriptor at their original selection site.
   A nested persistent request captures that descriptor, not a raw byref.
   Stable `let` pointer aliases are also tracked. Unknown/merged mutable
@@ -50,6 +57,9 @@ Implementation:
   array elements and native writable/readonly slice elements retain their
   selected owners. Reference-valued traversal snapshots a new object root;
   replacing a value root continues to update the same slot.
+  Wide CLR-array indices keep their bound native width through the compiler-facing
+  `FromArrayNative(T[], nint)` factory, which checks bounds before narrowing to
+  the stored absolute index. The existing `FromArray(T[], int)` ABI remains.
 - Generated ordinary typed classes implement `Borrow` using field addresses
   and parent borrows. Array factories use typed array element addresses.
   The canonical key is owner reference identity, absolute array index and a

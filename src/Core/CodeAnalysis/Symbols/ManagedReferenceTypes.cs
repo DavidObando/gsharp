@@ -160,6 +160,7 @@ internal static class ManagedReferenceTypes
         var borrow = UniqueMethod(type, "Borrow");
         var getLocation = UniqueMethod(type, "GetLocation");
         var fromArray = UniqueMethod(type, "FromArray");
+        var fromNativeArray = UniqueMethod(type, "FromArrayNative");
         if (!IsConstruction(type.BaseType, location, element)
             || borrow == null || borrow.IsStatic || !borrow.IsAbstract || !borrow.IsVirtual || borrow.IsFinal || !IsOrdinaryMethod(borrow)
             || !ClrTypeUtilities.AreSame(borrow.DeclaringType, type) || !ParametersMatch(borrow)
@@ -168,7 +169,9 @@ internal static class ManagedReferenceTypes
             || getLocation == null || !getLocation.IsAbstract || !getLocation.IsVirtual || getLocation.IsFinal
             || !IsConstruction(getLocation.DeclaringType, location, element) || !Matches(getLocation, false, key)
             || fromArray == null || !fromArray.IsStatic || !IsOrdinaryMethod(fromArray) || fromArray.IsAbstract || !HasUnmodifiedReturn(fromArray)
-            || !ParametersMatch(fromArray, element.MakeArrayType(), typeof(int)) || !IsConstruction(fromArray.ReturnType, type, element))
+            || !ParametersMatch(fromArray, element.MakeArrayType(), typeof(int)) || !IsConstruction(fromArray.ReturnType, type, element)
+            || fromNativeArray == null || !fromNativeArray.IsStatic || !IsOrdinaryMethod(fromNativeArray) || !HasUnmodifiedReturn(fromNativeArray)
+            || !ParametersMatch(fromNativeArray, element.MakeArrayType(), typeof(IntPtr)) || !IsConstruction(fromNativeArray.ReturnType, type, element))
         {
             return false;
         }

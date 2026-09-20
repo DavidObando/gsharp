@@ -22,9 +22,12 @@ public abstract class ReadOnlyManagedRef<T> : ManagedLocation<T>
     public sealed override int GetHashCode() => base.GetHashCode();
 
     public static ReadOnlyManagedRef<T> FromArray(T[] array, int index)
+        => FromArrayNative(array, index);
+
+    public static ReadOnlyManagedRef<T> FromArrayNative(T[] array, nint index)
     {
         ManagedRef<T>.CheckArray(array, index);
-        return new ArrayLocation(array, index);
+        return new ArrayLocation(array, (int)index);
     }
 
     private sealed class ArrayLocation(T[] owner, int index) : ReadOnlyManagedRef<T>

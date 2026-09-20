@@ -90,10 +90,24 @@ public sealed class ManagedReferencePhaseTests
 
             foreach (var type in program.Structs)
             {
-                foreach (var initializer in type.InstanceFieldInitializers.Values.Concat(type.StaticFieldInitializers.Values))
+                foreach (var initializer in (program.Initializers.ContainsKey((type, false))
+                    ? Enumerable.Empty<BoundExpression>() : type.InstanceFieldInitializers.Values)
+                    .Concat(program.Initializers.ContainsKey((type, true))
+                        ? Enumerable.Empty<BoundExpression>() : type.StaticFieldInitializers.Values))
                 {
                     this.VisitExpression(initializer);
                 }
+            }
+
+            foreach (var plan in program.Initializers.Values)
+            {
+                this.Visit(plan.Prologue);
+                foreach (var argument in plan.Arguments)
+                {
+                    this.VisitExpression(argument);
+                }
+
+                this.Visit(plan.Body);
             }
         }
 

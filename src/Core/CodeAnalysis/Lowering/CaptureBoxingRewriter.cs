@@ -84,6 +84,7 @@ internal static class CaptureBoxingRewriter
     /// <returns>The lowered program (or the original when nothing changed).</returns>
     public static BoundProgram Lower(BoundProgram program, Func<Type, Type>? mapClrType = null)
     {
+        program = InitializationPlanner.Prepare(program);
         var counter = 0;
         var newStructs = new List<StructSymbol>();
         var newFunctions = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
@@ -93,7 +94,13 @@ internal static class CaptureBoxingRewriter
         foreach (var pair in program.Functions)
         {
             var prepared = ManagedAliasPlanner.Prepare(pair.Value);
-            var (newBody, lambdaUpdates) = RewriteFunctionBody(pair.Key, prepared, program, newStructs, ref counter, mapClrType);
+            var (newBody, lambdaUpdates) = RewriteFunctionBody(
+                pair.Key, prepared, program, newStructs, ref counter, mapClrType, ImmutableArray<BoundExpression>.Empty, out _, out var prologue);
+            if (!prologue.IsEmpty)
+            {
+                newBody = new BoundBlockStatement(newBody.Syntax, prologue.AddRange(newBody.Statements));
+            }
+
             newFunctions[pair.Key] = newBody;
             if (!ReferenceEquals(newBody, pair.Value))
             {
@@ -103,6 +110,23 @@ internal static class CaptureBoxingRewriter
             foreach (var kv in lambdaUpdates)
             {
                 allLambdaUpdates[kv.Key] = kv.Value;
+            }
+        }
+
+        var initializers = program.Initializers.ToBuilder();
+        foreach (var pair in program.Initializers)
+        {
+            var plan = pair.Value;
+            var prepared = ManagedAliasPlanner.Prepare(plan.Body);
+            var arguments = plan.Arguments.Select(ManagedAliasPlanner.Prepare).ToImmutableArray();
+            var (body, updates) = RewriteFunctionBody(
+                plan.Function, prepared, program, newStructs, ref counter, mapClrType, arguments, out var rewrittenArguments, out var prologue);
+            initializers[pair.Key] = new BoundInitializationPlan(
+                plan.Function, rewrittenArguments, new BoundBlockStatement(null, prologue), body);
+            changed = true;
+            foreach (var update in updates)
+            {
+                allLambdaUpdates[update.Key] = update.Value;
             }
         }
 
@@ -161,6 +185,7 @@ internal static class CaptureBoxingRewriter
             program.Globals,
             program.Delegates)
         {
+            Initializers = initializers.ToImmutable(),
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,
@@ -184,8 +209,13 @@ internal static class CaptureBoxingRewriter
         BoundProgram program,
         List<StructSymbol> newStructs,
         ref int counter,
-        Func<Type, Type>? mapClrType)
+        Func<Type, Type>? mapClrType,
+        ImmutableArray<BoundExpression> arguments,
+        out ImmutableArray<BoundExpression> rewrittenArguments,
+        out ImmutableArray<BoundStatement> parameterPrologue)
     {
+        rewrittenArguments = arguments;
+        parameterPrologue = ImmutableArray<BoundStatement>.Empty;
         var emptyUpdates = new Dictionary<FunctionSymbol, BoundBlockStatement>();
 
         // Step 1: collect every captured variable touched by any function
@@ -197,6 +227,10 @@ internal static class CaptureBoxingRewriter
         var nestedParameters = new HashSet<ParameterSymbol>();
         var persistentRoots = new HashSet<VariableSymbol>();
         CaptureWalker.Collect(body, capturedSet, nestedParameters, persistentRoots);
+        foreach (var argument in arguments)
+        {
+            CaptureWalker.Collect(new BoundExpressionStatement(argument.Syntax, argument), capturedSet, nestedParameters, persistentRoots);
+        }
 
         if (capturedSet.Count == 0)
         {
@@ -275,6 +309,7 @@ internal static class CaptureBoxingRewriter
 
         // Step 3: rewrite the body — locals, reads, writes, and lambdas.
         var rewriter = new BoxingRewriter(boxInfo, dropFromCapture);
+        rewrittenArguments = arguments.Select(rewriter.RewriteInitializer).ToImmutableArray();
         var rewritten = (BoundBlockStatement)rewriter.RewriteStatement(body);
 
         // Step 4: prepend per-parameter box allocation + seed.
@@ -313,8 +348,7 @@ internal static class CaptureBoxingRewriter
                         new BoundVariableExpression(null, bi.Original))));
             }
 
-            prologue.AddRange(rewritten.Statements);
-            rewritten = new BoundBlockStatement(null, prologue.ToImmutable());
+            parameterPrologue = prologue.ToImmutable();
         }
 
         return (rewritten, rewriter.RewrittenLambdaBodies);
@@ -557,6 +591,8 @@ internal static class CaptureBoxingRewriter
         /// </summary>
         public Dictionary<FunctionSymbol, BoundBlockStatement> RewrittenLambdaBodies { get; }
             = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+
+        internal BoundExpression RewriteInitializer(BoundExpression expression) => RewriteExpression(expression);
 
         protected override BoundExpression RewriteIsExpression(BoundIsExpression node)
         {

@@ -24,12 +24,15 @@ public abstract class ManagedRef<T> : ManagedLocation<T>
     public sealed override int GetHashCode() => base.GetHashCode();
 
     public static ManagedRef<T> FromArray(T[] array, int index)
+        => FromArrayNative(array, index);
+
+    public static ManagedRef<T> FromArrayNative(T[] array, nint index)
     {
         CheckArray(array, index);
-        return new ArrayLocation(array, index);
+        return new ArrayLocation(array, (int)index);
     }
 
-    internal static void CheckArray(T[] array, int index)
+    internal static void CheckArray(T[] array, nint index)
     {
         ArgumentNullException.ThrowIfNull(array);
         if (!array.GetType().Equals(typeof(T[])))
@@ -37,7 +40,7 @@ public abstract class ManagedRef<T> : ManagedLocation<T>
             throw new ArrayTypeMismatchException();
         }
 
-        if ((uint)index >= (uint)array.Length)
+        if ((nuint)index >= (nuint)array.Length)
         {
             throw new IndexOutOfRangeException();
         }

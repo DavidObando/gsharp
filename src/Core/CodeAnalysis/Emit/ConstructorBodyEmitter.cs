@@ -76,6 +76,11 @@ internal sealed class ConstructorBodyEmitter
     /// </summary>
     internal int EmitStaticConstructorBodyBytes(StructSymbol typeSym)
     {
+        if (TryEmitInitialization(typeSym, isStatic: true, default, default, out var planned))
+        {
+            return planned;
+        }
+
         // Build a synthetic body: for each field with an initializer,
         // emit the expression + stsfld.
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
@@ -217,6 +222,11 @@ internal sealed class ConstructorBodyEmitter
     /// <returns>The resulting method body offset.</returns>
     private int EmitInterfaceStaticConstructorBodyBytes(InterfaceSymbol ifaceSym)
     {
+        if (TryEmitInitialization(ifaceSym, isStatic: true, default, default, out var planned))
+        {
+            return planned;
+        }
+
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         foreach (var field in ifaceSym.ConstFields)
         {
@@ -290,6 +300,11 @@ internal sealed class ConstructorBodyEmitter
     /// </summary>
     internal int EmitClassDefaultConstructorBodyBytes(StructSymbol classSym, EntityHandle baseCtorToken)
     {
+        if (!classSym.HasPrimaryConstructor && TryEmitInitialization(classSym, false, baseCtorToken, default, out var planned))
+        {
+            return planned;
+        }
+
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", classSym);
 
@@ -341,6 +356,11 @@ internal sealed class ConstructorBodyEmitter
     /// </summary>
     internal int EmitClassPrimaryConstructorBodyBytes(StructSymbol classSym, EntityHandle baseCtorToken)
     {
+        if (TryEmitInitialization(classSym, false, baseCtorToken, default, out var planned))
+        {
+            return planned;
+        }
+
         var parameters = classSym.PrimaryConstructorParameters;
 
         // Synthesize a `this` parameter for the field-initializer receiver.
@@ -439,6 +459,11 @@ internal sealed class ConstructorBodyEmitter
     /// <returns>The method-body stream offset.</returns>
     internal int EmitValueStructDefaultConstructorBodyBytes(StructSymbol structSym)
     {
+        if (TryEmitInitialization(structSym, false, default, default, out var planned))
+        {
+            return planned;
+        }
+
         // Synthesize a `this` parameter for the field-initializer receiver.
         var thisParam = new ParameterSymbol("this", structSym);
 
@@ -516,6 +541,11 @@ internal sealed class ConstructorBodyEmitter
         BaseConstructorInitializer init,
         EntityHandle baseCtorToken)
     {
+        if (TryEmitInitialization(classSym, false, baseCtorToken, init.ArgumentRefKinds, out var planned))
+        {
+            return planned;
+        }
+
         var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
 
         // Synthesize a `this` parameter for the field-initializer receiver.
@@ -618,6 +648,11 @@ internal sealed class ConstructorBodyEmitter
         BaseConstructorInitializer? init,
         EntityHandle baseCtorToken)
     {
+        if (TryEmitInitialization(ctor.Function, false, baseCtorToken, init?.ArgumentRefKinds ?? default, out var planned, ctor.IsConvenience))
+        {
+            return planned;
+        }
+
         var function = ctor.Function;
         var body = this.emitCtx.Program.Functions[function];
 
@@ -735,6 +770,85 @@ internal sealed class ConstructorBodyEmitter
         }
 
         return this.AddCompletedMethodBody(il, emitter, localsSignature);
+    }
+
+    private bool TryEmitInitialization(
+        Symbol owner,
+        bool isStatic,
+        EntityHandle baseConstructor,
+        ImmutableArray<RefKind> argumentRefKinds,
+        out int offset,
+        bool convenience = false)
+    {
+        offset = -1;
+        if (!this.emitCtx.Program.Initializers.TryGetValue((owner, isStatic), out var plan))
+        {
+            return false;
+        }
+
+        var il = new InstructionEncoder(new BlobBuilder(), new ControlFlowBuilder());
+        var session = new ReflectionMetadataEmitter.MethodBodyEmitSession(this.outer, il);
+        session.CollectConstValues(plan.Prologue);
+        session.CollectConstValues(plan.Body);
+        session.Plan(plan.Prologue, plan.Function);
+        foreach (var argument in plan.Arguments)
+        {
+            var argumentBody = new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundExpressionStatement(null, argument)));
+            session.CollectConstValues(argumentBody);
+            session.Plan(argumentBody);
+        }
+
+        session.Plan(plan.Body, plan.Function);
+        var slots = new Dictionary<ParameterSymbol, int>();
+        var receiver = plan.Function.ThisParameter;
+        var aggregate = plan.Function.ReceiverType as StructSymbol;
+        if (receiver != null)
+        {
+            slots[receiver] = 0;
+        }
+
+        for (var i = 0; i < plan.Function.Parameters.Length; i++)
+        {
+            slots[plan.Function.Parameters[i]] = i + (isStatic ? 0 : 1);
+        }
+
+        var signature = session.BuildLocalsSignature();
+        var emitter = session.CreateEmitter(slots, structThisParameter: aggregate?.IsClass == false ? receiver : null);
+        var previousOwner = this.emitCtx.CurrentStaticConstructorOwner;
+        if (isStatic)
+        {
+            this.emitCtx.CurrentStaticConstructorOwner = owner;
+        }
+
+        try
+        {
+            // Only parameter cells run before the existing base-call boundary.
+            // User field initializers and primary stores still run after base.
+            emitter.EmitBlock(plan.Prologue);
+            if (!isStatic && !convenience)
+            {
+                il.LoadArgument(0);
+                if (aggregate?.IsClass == true)
+                {
+                    emitter.EmitBaseConstructorArguments(plan.Arguments, argumentRefKinds);
+                    il.OpCode(ILOpCode.Call);
+                    il.Token(baseConstructor);
+                }
+                else
+                {
+                    il.OpCode(ILOpCode.Initobj);
+                    il.Token(this.outer.userTokens.ResolveUserTypeToken(Invariant.Required(aggregate, "instance initialization has an aggregate owner")));
+                }
+            }
+
+            emitter.EmitBlock(plan.Body);
+            offset = this.AddCompletedMethodBody(il, emitter, signature);
+            return true;
+        }
+        finally
+        {
+            this.emitCtx.CurrentStaticConstructorOwner = previousOwner;
+        }
     }
 
     // ADR-0068 / issue #698: emits the body of the synthesized `Finalize`

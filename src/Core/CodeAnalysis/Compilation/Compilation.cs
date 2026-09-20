@@ -427,6 +427,7 @@ public class Compilation
         // after interpolated-string lowering and before the async /
         // iterator state machine rewriters so the spilled temps
         // participate in hoist-set computation.
+        program = Lowering.InitializationPlanner.Prepare(program);
         program = Lowering.SideEffectSpiller.Lower(program);
 
         // Issue #523: hoist captured locals/parameters into per-variable
@@ -582,6 +583,7 @@ public class Compilation
         // after interpolated-string lowering and before the async /
         // iterator state machine rewriters so the spilled temps
         // participate in hoist-set computation.
+        program = Lowering.InitializationPlanner.Prepare(program);
         program = Lowering.SideEffectSpiller.Lower(program);
 
         // Issue #523: hoist captured locals/parameters into per-variable

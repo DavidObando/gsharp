@@ -97,6 +97,12 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
 
         var statement = (BoundBlockStatement)spiller.RewriteStatement(program.Statement);
         changed |= statement != program.Statement;
+        var initializers = program.Initializers.ToBuilder();
+        foreach (var pair in program.Initializers)
+        {
+            initializers[pair.Key] = pair.Value.Rewrite(spiller.RewriteExpression, spiller.RewriteStatement);
+            changed |= initializers[pair.Key] != pair.Value;
+        }
 
         if (!changed)
         {
@@ -116,6 +122,7 @@ internal sealed class SideEffectSpiller : NestedFunctionBodyRewriter
             program.Globals,
             program.Delegates)
         {
+            Initializers = initializers.ToImmutable(),
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,

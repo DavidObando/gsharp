@@ -2183,7 +2183,8 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(NativeSliceTypes.TryGetElement(owner, out _, out _) || ManagedReferenceTypes.TryGetElement(owner, out _, out _)
+        this.il.Token((NativeSliceTypes.IsDefinition(method.DeclaringType, out _) && NativeSliceTypes.TryGetElement(owner, out _, out _))
+            || (ManagedReferenceTypes.IsDefinition(method.DeclaringType, out _) && ManagedReferenceTypes.TryGetElement(owner, out _, out _))
             ? this.outer.memberRefs.GetMethodEntityHandle(method, owner)
             : this.outer.memberRefs.GetMethodReference(method));
     }

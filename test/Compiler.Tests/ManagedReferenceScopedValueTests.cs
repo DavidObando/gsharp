@@ -22,6 +22,8 @@ public sealed class ManagedReferenceScopedValueTests
     [InlineData("managed[int32]?", "let values = []int32{*(location!!)}\nreturn (values[0], 7)")]
     [InlineData("managed[int32]?", "let holder = Holder{Number: *(location!!)}\nreturn (holder.Number, 7)")]
     [InlineData("managed[int32]?", "let copied = *(location!!)\nlet read = func () int32 { return copied }\nreturn (read(), 7)")]
+    [InlineData("managed[int32]?", "let value = location?.Borrow() ?? 0\nreturn (value, 7)")]
+    [InlineData("managed[int32]", "return (switch *location { case 42: *location default: 0 }, 7)")]
     public void CopiedResultsDoNotRetainScopedHandle(string parameterType, string body)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
@@ -64,6 +66,11 @@ public sealed class ManagedReferenceScopedValueTests
     [InlineData("(managed[int32], int32)", "return (location!!, 7)")]
     [InlineData("(int32, (managed[int32], int32))", "return (7, (location!!, 9))")]
     [InlineData("object", "let erased object = location!!\nreturn erased")]
+    [InlineData("object?", "return location as object")]
+    [InlineData("managed[int32]", "var local = 0\nlet fallback = managed(local)\nreturn location ?? fallback")]
+    [InlineData("managed[int32]", "let fallback managed[int32]? = nil\nreturn fallback ?? location!!")]
+    [InlineData("managed[int32]?", "return switch true { case true: location default: nil }")]
+    [InlineData("readonlyManaged[int32]?", "return location?.AsReadOnly()")]
     public void RefinementDoesNotPermitRealEscapes(string returnType, string body)
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

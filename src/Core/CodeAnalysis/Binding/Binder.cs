@@ -2601,7 +2601,7 @@ public sealed class Binder
         // is about the receiver's declaration rather than the call.
         RendezvousBatchAnalyzer.Run(functionBodies, diagnostics);
         var managedReferenceDiagnostics = new DiagnosticBag();
-        ManagedReferenceSafetyAnalyzer.Analyze(functionBodies, allStructs, managedReferenceDiagnostics);
+        ManagedReferenceSafetyAnalyzer.Analyze(functionBodies, allStructs, globalScope.Interfaces, managedReferenceDiagnostics);
         diagnostics.AddRange(managedReferenceDiagnostics.ToImmutableArray());
         if (entryBodyWasTheStatementBlock && functionBodies.TryGetValue(globalScope.EntryPoint!, out var inferredEntryBody))
         {

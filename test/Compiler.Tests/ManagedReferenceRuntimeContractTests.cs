@@ -24,7 +24,7 @@ public sealed class ManagedReferenceRuntimeContractTests
             "borrow", "readonly-permission", "writable-permission", "location",
             "factory", "view", "key-type", "key-object", "key-field",
             "key-field-signature", "factory-overload", "equality", "constraint", "constructor",
-            "same-location", "slice-capture",
+            "same-location", "slice-capture", "native-factory",
         })
         {
             yield return new object[] { mutation, false };
@@ -133,6 +133,7 @@ public sealed class ManagedReferenceRuntimeContractTests
                 "same-location" => text.Replace("SameLocation", "MissingSameLocation", StringComparison.Ordinal),
                 "slice-capture" => text.Replace("GetManagedReference", "MissingManagedReference", StringComparison.Ordinal),
                 "factory" => text.Replace("FromArray", "MissingFactory", StringComparison.Ordinal),
+                "native-factory" => text.Replace("FromArrayNative", "MissingNativeFactory", StringComparison.Ordinal),
                 "view" => text.Replace("AsReadOnly", "MissingView", StringComparison.Ordinal),
                 "key-type" => text.Replace("ManagedLocationKey", "MissingLocationKey", StringComparison.Ordinal),
                 "key-object" => text.Replace("ManagedLocationKey Object(", "ManagedLocationKey MissingObject(", StringComparison.Ordinal),
