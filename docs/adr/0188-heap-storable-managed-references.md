@@ -77,6 +77,9 @@ Implementation:
   user field initializers retain their ordinary after-base ordering. Cached
   declaration initializer dictionaries are not replaced by managed-reference
   lowering, so repeated implementation/reference emission recreates its helpers.
+  Lambda and `go` discovery covers every plan prologue, argument and body.
+  Declaration initializer discovery is suppressed only when every constructor
+  path that emits those initializers has a plan.
 - Known borrowed aliases save a descriptor at their original selection site.
   A nested persistent request captures that descriptor, not a raw byref.
   Stable `let` pointer aliases are also tracked. Unknown/merged mutable
@@ -99,13 +102,25 @@ Implementation:
   Implementation and `/refout` are tested with a C# producer/consumer.
   Async, iterator and channel state retain ordinary handles/cells only;
   temporary borrows still obey execution-segment liveness.
+- Primary-constructor parameters are instance storage and therefore cannot be
+  scoped managed handles. Explicit constructor calls and convenience chaining
+  honor the selected same-compilation constructor's scoped parameter contract;
+  primary-constructor arguments remain stores. Imported constructors and
+  operators conservatively reject scoped handle arguments because this
+  by-value lifetime contract is not preserved in their CLR metadata.
+  Same-compilation operators/conversions honor scoped parameters, while the
+  compiler-known handle equality and permission APIs retain their category
+  semantics.
 - Non-null handle locals participate in definite assignment. Explicit
   non-null defaults, missing aggregate fields, incomplete source constructors
   and compiler-created arrays with unsupplied non-null handle elements are
-  diagnosed. Nullable defaults are nil. Generic/foreign CLR zero-initialization
-  remains an explicit boundary: annotations cannot prevent foreign nulls,
-  `default(T)`, or a foreign/generic factory from supplying null. Such a null
-  throws on dereference/Borrow; no fake target is allocated.
+  diagnosed. Every source primary, designated and compiler-synthesized/default
+  constructor path is checked at the declaration, even when the current
+  compilation contains no construction expression. Nullable defaults are nil.
+  Generic/foreign CLR zero-initialization remains an explicit boundary:
+  annotations cannot prevent foreign nulls, `default(T)`, or a foreign/generic
+  factory from supplying null. Such a null throws on dereference/Borrow; no fake
+  target is allocated.
 - GS0604 diagnoses unsupported provenance, permissions, initialization and
   suspended borrowed operations. Imported unknown ref returns, caller/scoped
   storage, borrowed struct `this`, ref-like/native storage, property-value

@@ -35,6 +35,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
         foreach (var type in types)
         {
+            analyzer.CheckPrimaryConstructorParameters(type);
             analyzer.CheckBaseInitializer(type.BaseConstructorInitializer);
             foreach (var constructor in type.ExplicitConstructors)
             {
@@ -52,14 +53,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 continue;
             }
 
-            foreach (var constructor in type.ExplicitConstructors)
-            {
-                if (functions.TryGetValue(constructor.Function, out var body))
-                {
-                    var projection = new ConstructorAssignmentProjection(type, constructor, fields, analyzer);
-                    DefiniteAssignmentAnalyzer.Analyze(projection.Project(body), constructor.Function, diagnostics);
-                }
-            }
+            analyzer.CheckRequiredConstructorPaths(type, fields, functions);
         }
 
         foreach (var type in interfaces)
@@ -109,11 +103,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 break;
             case BoundConstructorCallExpression call:
                 this.CheckConstruction(call.StructType, call, Enumerable.Empty<FieldSymbol?>(), call.SelectedConstructor != null);
-                foreach (var argument in call.Arguments)
-                {
-                    this.CheckScopedStore(argument);
-                }
+                this.CheckConstructorArguments(call.Arguments, call.SelectedConstructor);
 
+                break;
+            case BoundConstructorChainingExpression chaining:
+                this.CheckConstructorArguments(chaining.Arguments, chaining.SelectedConstructor);
                 break;
             case BoundArrayCreationExpression array:
                 if (this.RequiredHandle(array.ElementType) != null
@@ -159,10 +153,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 this.CheckSuspendingLocation(index.TargetExpression ?? VariableReceiver(index.Target), index.Value);
                 break;
             case BoundClrConstructorCallExpression constructor:
-                foreach (var argument in constructor.Arguments)
-                {
-                    this.CheckScopedStore(argument);
-                }
+                this.CheckConstructorArguments(constructor.Arguments, constructor: null);
 
                 break;
             case BoundAssignmentExpression globalAssignment when globalAssignment.Variable is not LocalVariableSymbol { RefKind: RefKind.None }:
@@ -179,6 +170,19 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 break;
             case BoundClrIndexExpression index:
                 this.CheckArguments(index.Arguments, receiver: index.Target);
+                break;
+            case BoundClrBinaryOperatorExpression binary when !IsManagedReferenceEquality(binary):
+                this.CheckArguments(
+                    ImmutableArray.Create(binary.Left, binary.Right),
+                    binary.Function);
+                break;
+            case BoundClrUnaryOperatorExpression unary:
+                this.CheckArguments(ImmutableArray.Create(unary.Operand));
+                break;
+            case BoundClrConversionCallExpression conversion:
+                this.CheckArguments(
+                    ImmutableArray.Create(conversion.Source),
+                    conversion.Function);
                 break;
         }
 
@@ -263,12 +267,94 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             return;
         }
 
-        this.CheckArguments(initializer.Arguments, initializer.GSharpConstructor?.Function);
+        this.CheckConstructorArguments(initializer.Arguments, initializer.GSharpConstructor);
         foreach (var argument in initializer.Arguments)
         {
             this.VisitExpression(argument);
         }
     }
+
+    private void CheckConstructorArguments(ImmutableArray<BoundExpression> arguments, ConstructorSymbol? constructor)
+    {
+        if (constructor is { IsSynthesizedFromPrimaryConstructor: false })
+        {
+            this.CheckArguments(arguments, constructor.Function);
+            return;
+        }
+
+        foreach (var argument in arguments)
+        {
+            this.CheckScopedStore(argument);
+        }
+    }
+
+    private void CheckPrimaryConstructorParameters(StructSymbol type)
+    {
+        foreach (var parameter in type.PrimaryConstructorParameters)
+        {
+            if (!ManagedReferenceOrigins.IsScopedHandle(parameter))
+            {
+                continue;
+            }
+
+            this.diagnostics.ReportManagedReference(
+                Invariant.Required(parameter.DeclaringSyntax ?? type.Declaration, "source primary parameters have a declaration").Location,
+                "a scoped managed-reference primary-constructor parameter would be stored in an instance field");
+        }
+    }
+
+    private void CheckRequiredConstructorPaths(
+        StructSymbol type,
+        ImmutableArray<FieldSymbol> fields,
+        ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functions)
+    {
+        foreach (var constructor in type.ExplicitConstructors)
+        {
+            if (constructor.IsConvenience)
+            {
+                continue;
+            }
+
+            if (constructor.IsSynthesizedFromPrimaryConstructor)
+            {
+                this.CheckImplicitConstructorPath(type, fields);
+            }
+            else if (functions.TryGetValue(constructor.Function, out var body))
+            {
+                var projection = new ConstructorAssignmentProjection(type, constructor, fields, this);
+                DefiniteAssignmentAnalyzer.Analyze(projection.Project(body), constructor.Function, this.diagnostics);
+            }
+        }
+
+        if ((type.ExplicitConstructors.IsDefaultOrEmpty && type.IsClass)
+            || type.NeedsSynthesizedValueStructDefaultCtor)
+        {
+            this.CheckImplicitConstructorPath(type, fields);
+        }
+    }
+
+    private void CheckImplicitConstructorPath(StructSymbol type, ImmutableArray<FieldSymbol> fields)
+    {
+        var initialized = type.InstanceFieldInitializers.Keys.Select(field => field.Name)
+            .Concat(type.PrimaryConstructorParameters.Select(parameter => parameter.Name))
+            .ToHashSet();
+        foreach (var field in fields)
+        {
+            if (initialized.Contains(field.Name))
+            {
+                continue;
+            }
+
+            this.diagnostics.ReportManagedReference(
+                Invariant.Required(field.Declaration ?? type.Declaration, "source fields have a declaration").Location,
+                $"field '{field.Name}' must be initialized by every compiler-owned constructor path");
+        }
+    }
+
+    private static bool IsManagedReferenceEquality(BoundClrBinaryOperatorExpression binary)
+        => binary.OperatorKind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+            && binary.Method is { Name: "op_Equality" or "op_Inequality", DeclaringType: { } declaringType }
+            && ManagedReferenceTypes.IsDefinition(declaringType, out _);
 
     private void CheckSuspendingLocation(BoundExpression? receiver, BoundExpression value)
     {

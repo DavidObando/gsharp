@@ -314,9 +314,20 @@ Hashes use owner identity and a canonical typed path, never mutable contents.
 A non-null handle must be initialized (or definitely assigned before local
 use); `default` is permitted for `managed[T]?` / `readonly managed[T]?` and is
 nil. Compiler-owned aggregate initialization cannot silently invent null
-non-null handle fields. Foreign and unconstrained generic initialization can
-still supply null despite annotations; dereference/Borrow then throws
-`NullReferenceException`, never allocates a substitute location.
+non-null handle fields. Every source primary, designated and synthesized/default
+constructor path is checked even when the declaring library constructs no
+instance itself. A primary-constructor parameter becomes a field and therefore
+cannot be a scoped handle. Explicit constructor calls and convenience chaining
+honor same-compilation scoped parameters; imported constructor/operator metadata
+does not preserve this by-value contract and is treated conservatively.
+Foreign and unconstrained generic initialization can still supply null despite
+annotations; dereference/Borrow then throws `NullReferenceException`, never
+allocates a substitute location.
+
+User operators and conversion operators apply the same scoped-argument rule as
+ordinary calls. Compiler-known managed-handle equality and writable-to-readonly
+permission APIs remain allowed; values copied from a scoped referent are
+ordinary scalar/value results and may be passed normally.
 
 Handles may cross `await`, `yield` and channel suspension. Temporary borrows
 may not: retain the handle and borrow again in the next execution segment.
