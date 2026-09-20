@@ -433,6 +433,9 @@ body {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.theme-doc-markdown td > strong > code {
+  color: var(--gs-text);
+}
 .theme-doc-breadcrumbs {
   margin-bottom: 1.4rem;
 }

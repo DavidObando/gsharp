@@ -427,6 +427,7 @@ public class Compilation
         // after interpolated-string lowering and before the async /
         // iterator state machine rewriters so the spilled temps
         // participate in hoist-set computation.
+        program = Lowering.InitializationPlanner.Prepare(program);
         program = Lowering.SideEffectSpiller.Lower(program);
 
         // Issue #523: hoist captured locals/parameters into per-variable
@@ -438,6 +439,7 @@ public class Compilation
         // box classes hoisting an imported constructed generic over an
         // enclosing type parameter don't erase it under cs2gs.
         program = Lowering.CaptureBoxingRewriter.Lower(program, (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
+        program = Lowering.ManagedReferenceLowerer.Lower(program, References ?? Symbols.ReferenceResolver.Default());
 
         // Issue #2130: after capture-boxing has introduced the closure cells
         // expression trees must reference, rewrite lambda-to-expression-tree
@@ -581,6 +583,7 @@ public class Compilation
         // after interpolated-string lowering and before the async /
         // iterator state machine rewriters so the spilled temps
         // participate in hoist-set computation.
+        program = Lowering.InitializationPlanner.Prepare(program);
         program = Lowering.SideEffectSpiller.Lower(program);
 
         // Issue #523: hoist captured locals/parameters into per-variable
@@ -592,6 +595,7 @@ public class Compilation
         // box classes hoisting an imported constructed generic over an
         // enclosing type parameter don't erase it under cs2gs.
         program = Lowering.CaptureBoxingRewriter.Lower(program, (References ?? Symbols.ReferenceResolver.Default()).MapClrTypeToReferences);
+        program = Lowering.ManagedReferenceLowerer.Lower(program, References ?? Symbols.ReferenceResolver.Default());
 
         // Issue #2130: after capture-boxing has introduced the closure cells
         // expression trees must reference, rewrite lambda-to-expression-tree

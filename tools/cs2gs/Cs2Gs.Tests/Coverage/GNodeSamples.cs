@@ -70,6 +70,7 @@ public static class GNodeSamples
                     body: Block(new ReturnStatement(new ThisExpression())))))),
             [typeof(MemberAccessExpression)] = () => Expr(new MemberAccessExpression(Id("a"), "B")),
             [typeof(InvocationExpression)] = () => Expr(new InvocationExpression(Id("f"), List<GExpression>(Id("v")))),
+            [typeof(ManagedReferenceExpression)] = () => Expr(new ManagedReferenceExpression(Id("v"), isReadOnly: true)),
             [typeof(NamedArgumentExpression)] = () => Expr(new InvocationExpression(
                 Id("f"),
                 List<GExpression>(new NamedArgumentExpression("value", Int("1"))))),
@@ -270,6 +271,7 @@ public static class GNodeSamples
             [typeof(NamedTypeReference)] = () => Field(new NamedTypeReference("List", List<GTypeReference>(Type("int32")))),
             [typeof(ArrayTypeReference)] = () => Field(new ArrayTypeReference(Type("int32"))),
             [typeof(NativeSliceTypeReference)] = () => Field(new NativeSliceTypeReference(Type("int32"), isReadOnly: true)),
+            [typeof(ManagedReferenceTypeReference)] = () => Field(new ManagedReferenceTypeReference(Type("int32"), isReadOnly: true)),
             [typeof(TupleTypeReference)] = () => Field(new TupleTypeReference(List<GTypeReference>(Type("int32"), Type("string")))),
             [typeof(PointerTypeReference)] = () => Field(new PointerTypeReference(Type("uint8"))),
             [typeof(ArrowTypeReference)] = () => Field(new ArrowTypeReference(

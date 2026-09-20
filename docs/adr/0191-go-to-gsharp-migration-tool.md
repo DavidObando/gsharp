@@ -405,7 +405,7 @@ but read-only permission is not immutable backing storage. The Go string
 contract must own/copy data when writable siblings could otherwise change it.
 
 **References: ADR-0188 / #4330.** Reuse `managed[T]` /
-`readonlyManaged[T]`, nominally `Gsharp.Values.ManagedRef<T>` /
+`readonly managed[T]`, nominally `Gsharp.Values.ManagedRef<T>` /
 `ReadOnlyManagedRef<T>` in `Gsharp.Runtime.Values`. Go mutable pointers
 normally need the nullable writable form; never infer readonly merely because
 one function does not mutate. Existing borrowed `ref` remains useful inside

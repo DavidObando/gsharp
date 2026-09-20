@@ -408,20 +408,25 @@ internal sealed class BinderContext
             || !TypeMemberModel.GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty;
 
     public bool CanUseNativeBufferAlias(BoundScope scope, SyntaxToken identifier, FunctionSymbol? currentFunction, bool expression = false)
+        => identifier.Text is "slice" or "array" && CanUseIntrinsicAlias(scope, identifier, currentFunction, expression);
+
+    public bool CanUseIntrinsicAlias(BoundScope scope, SyntaxToken identifier, FunctionSymbol? currentFunction, bool expression = false)
     {
-        if (identifier.Text is not ("slice" or "array")
-            || TryLookupSourceType(scope, identifier.ValueText, -1, currentFunction, out _, out var ambiguous)
+        if (TryLookupSourceType(scope, identifier.ValueText, -1, currentFunction, out _, out var ambiguous)
             || ambiguous
             || scope.HasImportedTypeName(identifier.ValueText))
         {
             return false;
         }
 
-        return !expression || (scope.TryLookupSymbol(identifier.ValueText) == null
-            && scope.TryLookupFunctions(identifier.ValueText).IsDefaultOrEmpty
-            && !GetStaticImportTypes().Any(type => ImportedTypeExposesStaticMember(type, identifier.ValueText))
-            && !scope.EnumerateStaticImportClrTypes().Any(type => ClrTypeExposesStaticMember(type, identifier.ValueText)));
+        return !expression || !HasValueName(scope, identifier.ValueText);
     }
+
+    public bool HasValueName(BoundScope scope, string name)
+        => scope.TryLookupSymbol(name) != null
+            || !scope.TryLookupFunctions(name).IsDefaultOrEmpty
+            || GetStaticImportTypes().Any(type => ImportedTypeExposesStaticMember(type, name))
+            || scope.EnumerateStaticImportClrTypes().Any(type => ClrTypeExposesStaticMember(type, name));
 
     /// <summary>
     /// Resolves a source type at the current binding site. Lexically visible

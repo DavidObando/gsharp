@@ -229,7 +229,7 @@ public sealed class Conversion
         bool allowStructuralProjection,
         bool allowExplicitReference = true)
     {
-        if (NativeSliceTypes.HaveIncompatibleElements(from, to))
+        if (NativeSliceTypes.HaveIncompatibleElements(from, to) || ManagedReferenceTypes.HaveIncompatibleElements(from, to))
         {
             return None;
         }

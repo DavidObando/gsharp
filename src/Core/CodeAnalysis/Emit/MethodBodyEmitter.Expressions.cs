@@ -178,10 +178,19 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundClrStaticCallExpression staticCall:
                 this.EmitImportedCallArguments(staticCall.Arguments, staticCall.ArgumentRefKinds);
-                this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method));
-                this.EmitErasedObjectReturnWidening(
-                    TypeSymbol.FromClrType(staticCall.Method.ReturnType),
-                    staticCall.Type);
+                if (ManagedReferenceTypes.IsDefinition(staticCall.Method.DeclaringType, out _)
+                    && ManagedReferenceTypes.TryGetElement(staticCall.Type, out _, out _))
+                {
+                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method, staticCall.Type));
+                }
+                else
+                {
+                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method));
+                    this.EmitErasedObjectReturnWidening(
+                        TypeSymbol.FromClrType(staticCall.Method.ReturnType),
+                        staticCall.Type);
+                }
+
                 break;
             case BoundImportedInstanceCallExpression instCall:
                 {
@@ -305,6 +314,9 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundAddressOfExpression addressOf:
                 this.EmitAddressOf(addressOf);
+                break;
+            case BoundManagedFieldKeyExpression key:
+                this.EmitManagedFieldKey(key);
                 break;
             case BoundConditionalAddressExpression conditionalAddress:
                 // ADR-0061: conditional address-of (`cond ? &a : &b`).
@@ -1257,8 +1269,7 @@ internal sealed partial class MethodBodyEmitter
                 }
                 else
                 {
-                    throw new InvalidOperationException(
-                        $"Class field '{initField.Name}' has no emitted FieldDef.");
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField);
                 }
 
                 this.il.OpCode(ILOpCode.Dup);

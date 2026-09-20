@@ -254,6 +254,125 @@ Slices are backed by CLR arrays. `len` and `cap` observe array length, and `appe
 
 Array and slice element access (`a[i]`, read or write) accepts **any** integer-typed index, matching C#'s element-access rule: `int8`, `uint8`, `int16`, `uint16`, `char`, `int32`, `uint32`, `int64`, `uint64`, `nint`, and `nuint`. The narrower kinds that implicitly widen to `int32` are converted to `int32`; the wider kinds (`uint32`, `int64`, `uint64`, `nint`, `nuint`) are converted to the native index type `nint`, which the underlying CIL `ldelem`/`stelem`/`ldelema` accept as the index operand. Rectangular indices use CLR `Get`/`Set`/`Address` pseudo-methods and therefore convert every integer index to `int32`. A non-integer index (`float32`/`float64`/`bool`/`string`/`decimal`/a user type) is rejected (`GS0156`). `string` char-indexing (`s[i]`) likewise accepts any integer index, converting to the `int32` the `get_Chars` accessor takes.
 
+### Persistent managed references
+
+`managed[T]` and `readonly managed[T]` name the invariant reference types
+`Gsharp.Values.ManagedRef<T>` and `ReadOnlyManagedRef<T>`, supplied by
+`Gsharp.Runtime.Values`. They are **heap-storable location handles**, not CLR
+`T&`. Existing `*T`, `&x`, `ref`, `in`, `out` and `scoped` keep their borrowed
+contracts. Ordinary names and `$` escapes take precedence over the contextual
+handle spellings.
+
+```gsharp
+func Counter() managed[int32] {
+    var x = 1
+    let ref early = x
+    let p = managed(x)
+    early = 2
+    x += 3
+    return p
+}
+let p = Counter()
+*p += 1
+let readonlyView = p.AsReadOnly()
+let sameReadonlyView = readonly managed(*p)
+let ref readonly observed = readonlyView.Borrow()
+```
+
+`readonly managed(location)` is the readonly address intrinsic, not an
+operator on arbitrary values. `readonly` and `managed` remain contextual
+identifiers; the former joined spelling `readonlyManaged` has no intrinsic
+meaning. A shadowing ordinary type or callable keeps normal lookup; use the
+qualified `Gsharp.Values.ReadOnlyManagedRef[T]` type/API when necessary.
+The modifier binds before nullability: `readonly managed[T]?` and
+`(readonly managed[T])?` are nullable handles, whereas `readonly managed[T?]`
+has a nullable referent. In `ref readonly managed[T]`, the first `readonly`
+modifies the borrowed return of a writable handle slot. A readonly borrow of
+a readonly handle slot is `ref readonly readonly managed[T]`.
+
+All accesses to an addressed local use one planned closure-compatible cell,
+including borrowed aliases formed before the persistent request. Copies of
+struct values and by-value parameters remain independent; parameters keep
+their existing readonly binding permission. Copying a handle copies its
+location identity, while `var value = *p` copies the referent normally.
+
+Factories admit compiler-owned storage, known borrowed aliases, existing
+persistent dereferences, accessible instance fields, nested value fields,
+exact one-dimensional CLR array elements, and native slice elements. Owners
+and indices are evaluated once. Rebinding an object/array/slice variable or
+growing a slice cannot retarget an existing handle. Replacing a struct in its
+promoted slot does update the value seen by that slot's field handles.
+
+`.Borrow()` returns `ref T` or `ref readonly T`. Readonly permission is shallow:
+the slot cannot be replaced, but an object reached through it is not deeply
+immutable. There is no writable upgrade. Ordinary readonly struct calls
+retain defensive-copy behavior. `==` compares locations of the same invariant
+handle type; `.SameLocation(other)` compares writable and readonly views.
+Hashes use owner identity and a canonical typed path, never mutable contents.
+`ReferenceEquals` observes wrapper identity instead.
+
+A non-null handle must be initialized (or definitely assigned before local
+use); `default` is permitted for `managed[T]?` / `readonly managed[T]?` and is
+nil. Compiler-owned aggregate initialization cannot silently invent null
+non-null handle fields. Every source primary, designated and synthesized/default
+constructor path is checked even when the declaring library constructs no
+instance itself. Required shared/static fields and static auto-property backing
+fields on classes and structs are checked across direct initializers and every
+path through `shared { init { ... } }`; nullable static storage may remain nil.
+A primary-constructor parameter becomes a field and therefore cannot be a
+scoped handle. Explicit constructor calls and convenience chaining honor
+same-compilation scoped parameters; imported constructor/operator metadata does
+not preserve this by-value contract and is treated conservatively.
+Foreign and unconstrained generic initialization can still supply null despite
+annotations; dereference/Borrow then throws `NullReferenceException`, never
+allocates a substitute location.
+
+User operators and conversion operators apply the same scoped-argument rule as
+ordinary calls. Compiler-known managed-handle equality and writable-to-readonly
+permission APIs remain allowed; values copied from a scoped referent are
+ordinary scalar/value results and may be passed normally.
+
+Converting a source or imported instance method group to a function/delegate
+captures its receiver as the delegate target. A scoped managed handle therefore
+cannot be that receiver, whether the resulting group is returned, stored, or
+passed immediately to another call. Static method groups do not capture a
+receiver and remain valid, as do groups formed over scalar/value copies and
+ordinary non-scoped handles. A direct instance call is not a method-group
+capture and continues to use the ordinary call contract.
+
+Managed and unmanaged function-pointer signatures carry no G# `scoped`
+parameter contract. Invoking either pointer kind is therefore an unknown call
+for lifetime purposes: a scoped managed handle cannot be passed in any argument
+position, regardless of whether the pointer came from a local, parameter,
+field, property, or index expression. Ordinary non-scoped handles and scalar
+or value copies remain valid arguments, and a function pointer may return an
+ordinary handle according to its declared ABI.
+
+Ordinary handles may cross `await`, `yield` and channel suspension. A
+`scoped` handle cannot be a parameter or scope-preserving local of an async,
+suspending, iterator, or async-iterator function: the current state-machine
+lowering retains every parameter and declared local in generated fields, even
+when a particular use appears before the first suspension. Copy the referent
+to an ordinary value before entering the state machine, or pass an ordinary
+non-scoped handle whose lifetime may extend beyond the call. Temporary borrows
+also may not cross suspension: retain an ordinary handle and borrow again in
+the next execution segment.
+An earlier borrowed argument followed by a suspending argument is diagnosed;
+evaluate the suspending value first. This includes array elements, imported
+ref-return indexers and imported ref-return properties selected through a
+managed handle. A scalar or by-value property copied before suspension is not a
+borrow and remains valid.
+
+GS0604 rejects incoming/scoped caller storage, unknown or merged borrowed
+provenance, borrowed struct `this`, spans/ref-struct/native memory, ordinary
+property values and temporaries, map/string elements, statics/thread-statics,
+multidimensional arrays and explicit-layout fields. Explicitly copying a value
+to a new local is allowed, but that local is not an alias to the old storage.
+A scoped handle cannot be stored as an instance/static field initializer,
+top-level global initializer, or assignment in a `shared` initializer block.
+Handles provide GC reachability, not exclusivity, synchronization, native
+ownership or race freedom. Existing atomic APIs can consume lawful borrows.
+
 ### Native shared-storage slices
 
 `slice[T]` is a heap-storable immutable descriptor over an exact managed array,

@@ -131,6 +131,16 @@ for (const colorScheme of ['light', 'dark'] as const) {
         'color',
         colorScheme === 'dark' ? 'rgb(242, 237, 232)' : 'rgb(36, 33, 38)',
       );
+      if (route === 'docs/ref/diagnostics') {
+        const emphasizedCode = page.locator('article td > strong > code').filter({
+          hasText: /^unsafe$/,
+        });
+        await expect(emphasizedCode).toHaveCount(1);
+        await expect(emphasizedCode).toHaveCSS(
+          'color',
+          colorScheme === 'dark' ? 'rgb(242, 237, 232)' : 'rgb(36, 33, 38)',
+        );
+      }
       const results = await new AxeBuilder({page})
         .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
         .analyze();

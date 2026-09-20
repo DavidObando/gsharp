@@ -2176,8 +2176,15 @@ internal sealed partial class MethodBodyEmitter
             op.Method,
             "this is the imported-CLR-operator branch; the same-compilation form (issue #2388) carries Function instead and is handled above");
         var owner = op.Left.Type is NullableTypeSymbol nullableOwner ? nullableOwner.UnderlyingType : op.Left.Type;
+        var rightOwner = op.Right.Type is NullableTypeSymbol nullableRight ? nullableRight.UnderlyingType : op.Right.Type;
+        if (!ManagedReferenceTypes.TryGetElement(owner, out _, out _) && ManagedReferenceTypes.TryGetElement(rightOwner, out _, out _))
+        {
+            owner = rightOwner;
+        }
+
         this.il.OpCode(ILOpCode.Call);
-        this.il.Token(NativeSliceTypes.TryGetElement(owner, out _, out _)
+        this.il.Token((NativeSliceTypes.IsDefinition(method.DeclaringType, out _) && NativeSliceTypes.TryGetElement(owner, out _, out _))
+            || (ManagedReferenceTypes.IsDefinition(method.DeclaringType, out _) && ManagedReferenceTypes.TryGetElement(owner, out _, out _))
             ? this.outer.memberRefs.GetMethodEntityHandle(method, owner)
             : this.outer.memberRefs.GetMethodReference(method));
     }

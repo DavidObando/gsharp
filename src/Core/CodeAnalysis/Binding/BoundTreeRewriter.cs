@@ -435,6 +435,13 @@ public abstract class BoundTreeRewriter
                 return RewriteSwitchExpression((BoundSwitchExpression)node);
             case BoundNodeKind.AddressOfExpression:
                 return RewriteAddressOfExpression((BoundAddressOfExpression)node);
+            case BoundNodeKind.ManagedReferenceExpression:
+                return RewriteManagedReferenceExpression((BoundManagedReferenceExpression)node);
+            case BoundNodeKind.ManagedFieldKeyExpression:
+                var key = (BoundManagedFieldKeyExpression)node;
+                var keyParent = RewriteExpression(key.Parent);
+                var keyField = RewriteExpression(key.Field);
+                return keyParent == key.Parent && keyField == key.Field ? key : new BoundManagedFieldKeyExpression(keyParent, keyField);
             case BoundNodeKind.ConditionalAddressExpression:
                 return RewriteConditionalAddressExpression((BoundConditionalAddressExpression)node);
             case BoundNodeKind.ConditionalExpression:
@@ -989,6 +996,15 @@ public abstract class BoundTreeRewriter
     /// </summary>
     /// <param name="node">The address-of expression to rewrite.</param>
     /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteManagedReferenceExpression(BoundManagedReferenceExpression node)
+    {
+        var location = RewriteExpression(node.Location);
+        return location == node.Location ? node : new BoundManagedReferenceExpression(node.Syntax, location, node.Type, node.IsReadOnly);
+    }
+
+    /// <summary>Rewrites a borrowed address without changing its permissions.</summary>
+    /// <param name="node">The borrowed address.</param>
+    /// <returns>The rewritten address.</returns>
     protected virtual BoundExpression RewriteAddressOfExpression(BoundAddressOfExpression node)
     {
         var operand = RewriteExpression(node.Operand);

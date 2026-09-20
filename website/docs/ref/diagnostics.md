@@ -12,6 +12,12 @@ This page mirrors the authoritative diagnostic catalogue in [`docs/diagnostics.m
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Persistent managed references (ADR-0188)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0604 | Error | Invalid persistent-reference type, origin, permission, initialization, scoped escape, or suspension of a temporary borrow. | Use an admitted GC-owned location and compatible runtime; initialize non-null handles on every path, weaken permissions explicitly, and evaluate suspending values before borrowing. Unknown borrowed storage is never copied into a replacement location. |
+
 ## Severity levels
 
 | Level | Meaning |

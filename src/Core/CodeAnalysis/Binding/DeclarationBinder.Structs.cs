@@ -560,7 +560,7 @@ internal sealed partial class DeclarationBinder
                 // compilation has its fields set.
                 pendingZeroValueInstanceFields.Add((fieldSymbol, fieldSyntax));
             }
-            else if (MagicCollectionZeroValue.RequiresExplicitInitializer(fieldType))
+            else if (fieldType is ChannelTypeSymbol)
             {
                 // Issue #3310 / ADR-0159 channel carve-out: a bare `chan T`
                 // field has no usable default and no auto-created instance.
@@ -2408,7 +2408,10 @@ internal sealed partial class DeclarationBinder
                 {
                     // Issue #3310 / ADR-0159 channel carve-out: a bare
                     // `chan T` static field has no usable default.
-                    Diagnostics.ReportChannelRequiresInitializer(fieldSyntax.Identifier.Location, fieldName, fieldType.Name);
+                    if (!ManagedReferenceTypes.TryGetElement(fieldType, out _, out _))
+                    {
+                        Diagnostics.ReportChannelRequiresInitializer(fieldSyntax.Identifier.Location, fieldName, fieldType.Name);
+                    }
                 }
 
                 staticFieldsBuilder.Add(fieldSymbol);

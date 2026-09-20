@@ -10,6 +10,7 @@ internal static class DiagnosticDescriptors
     internal const string NonVoidFallthroughGuardMessage = "Compiler-generated guard reached: non-void function fell through without returning a value.";
     internal const string ObsoleteUseDetailMessageFormat = ": '{0}'";
 
+    internal static readonly DiagnosticDescriptor ManagedReference = new("GS0604", DiagnosticSeverity.Error, "Invalid persistent managed reference: {0}.");
     internal static readonly DiagnosticDescriptor NativeSliceRuntime = new("GS0600", DiagnosticSeverity.Error, "Native slices require .NET 10 and compatible Gsharp.Runtime.Values runtime support. Reference the runtime shipped with the G# SDK.");
     internal static readonly DiagnosticDescriptor NativeSliceType = new("GS0601", DiagnosticSeverity.Error, "Invalid native buffer type or operation: {0}.");
     internal static readonly DiagnosticDescriptor NativeSliceSuspendingWrite = new("GS0602", DiagnosticSeverity.Error, "A native slice element write cannot suspend while its location is borrowed. Evaluate the suspending value before selecting the element.");

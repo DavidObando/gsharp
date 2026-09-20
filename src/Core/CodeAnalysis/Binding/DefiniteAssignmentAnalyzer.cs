@@ -871,10 +871,17 @@ internal static class DefiniteAssignmentAnalyzer
             return;
         }
 
-        diagnostics.ReportChannelLocalUsedBeforeAssignment(
-            read.Syntax?.Location ?? default(TextLocation),
-            read.Variable.Name,
-            read.Variable.Type.Name);
+        if (ManagedReferenceTypes.TryGetElement(read.Variable.Type, out _, out _))
+        {
+            diagnostics.ReportManagedReference(read.Syntax?.Location ?? default(TextLocation), $"'{read.Variable.Name}' must be assigned on every path before use");
+        }
+        else
+        {
+            diagnostics.ReportChannelLocalUsedBeforeAssignment(
+                read.Syntax?.Location ?? default(TextLocation),
+                read.Variable.Name,
+                read.Variable.Type.Name);
+        }
     }
 
     private static void ProcessExpression(

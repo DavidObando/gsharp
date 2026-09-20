@@ -151,6 +151,9 @@ public sealed class CallExpressionSyntax : ExpressionSyntax
         CloseParenthesisToken = closeParenthesisToken;
     }
 
+    /// <summary>Gets the contextual readonly modifier of a persistent address intrinsic.</summary>
+    public SyntaxToken? ReadOnlyManagedModifier { get; internal set; }
+
     /// <summary>Gets the callee expression for an indirect invocation (issue #2185), or
     /// <see langword="null"/> for the ordinary identifier / member-access call forms. When
     /// non-<see langword="null"/> the call target is the value produced by evaluating this

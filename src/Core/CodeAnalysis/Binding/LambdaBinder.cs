@@ -3409,6 +3409,11 @@ internal sealed class LambdaBinder
         protected override BoundStatement RewriteVariableDeclaration(BoundVariableDeclaration node)
         {
             this.declared.Add(node.Variable);
+            if (node.Variable is LocalVariableSymbol { ManagedReferenceStorage: { } storage })
+            {
+                this.declared.Add(storage);
+            }
+
             return base.RewriteVariableDeclaration(node);
         }
 

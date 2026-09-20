@@ -18,6 +18,11 @@ public partial class Parser
             && Peek(offset + 1).Kind == SyntaxKind.IdentifierToken && Peek(offset + 1).Text == "slice"
             && Peek(offset + 2).Kind == SyntaxKind.OpenSquareBracketToken;
 
+    private bool IsReadOnlyManagedHead(int offset = 0, bool address = false)
+        => Peek(offset).Kind == SyntaxKind.IdentifierToken && Peek(offset).Text == "readonly"
+            && Peek(offset + 1).Kind == SyntaxKind.IdentifierToken && Peek(offset + 1).Text == "managed"
+            && Peek(offset + 2).Kind == (address ? SyntaxKind.OpenParenthesisToken : SyntaxKind.OpenSquareBracketToken);
+
     // Issue #1602: depth-guarded wrapper — type clauses self-nest through
     // pointers (`*T`), arrays (`[]T`), tuples, function types, and generic
     // type-argument lists (`List[List[…]]`).
@@ -37,6 +42,14 @@ public partial class Parser
 
     private TypeClauseSyntax ParseTypeClauseCore()
     {
+        if (IsReadOnlyManagedHead())
+        {
+            var modifier = NextToken();
+            var type = ParseTypeClause();
+            type.ReadOnlyManagedModifier = modifier;
+            return type;
+        }
+
         if (IsReadOnlySliceHead())
         {
             var modifier = NextToken();
@@ -194,7 +207,7 @@ public partial class Parser
             // identifier: `in`/`out` are contextual, so `[]in chan[T]` would
             // otherwise take the flat path and read `in` as the element's type
             // name.
-            if (Current.Kind != SyntaxKind.IdentifierToken || IsChannelDirectionHead() || IsReadOnlySliceHead())
+            if (Current.Kind != SyntaxKind.IdentifierToken || IsChannelDirectionHead() || IsReadOnlySliceHead() || IsReadOnlyManagedHead())
             {
                 var nestedElement = ParseTypeClause();
                 var nestedQuestion = Current.Kind == SyntaxKind.QuestionToken ? MatchToken(SyntaxKind.QuestionToken) : null;
@@ -474,7 +487,7 @@ public partial class Parser
     /// </summary>
     private bool LooksLikeTupleElementName()
     {
-        if (IsReadOnlySliceHead())
+        if (IsReadOnlySliceHead() || IsReadOnlyManagedHead())
         {
             return false;
         }

@@ -18,6 +18,23 @@ internal sealed partial class ExpressionBinder
 {
     private BoundExpression BindBufferAwareCallExpression(CallExpressionSyntax syntax)
     {
+        if (syntax.Identifier.Text == "managed"
+            && binderCtx.CanUseIntrinsicAlias(scope, syntax.Identifier, getCurrentFunction(), expression: true))
+        {
+            return BindManagedReference(syntax);
+        }
+
+        if (syntax.ReadOnlyManagedModifier != null)
+        {
+            var ordinary = overloads.BindCallExpression(syntax);
+            if (ordinary is not BoundErrorExpression)
+            {
+                Diagnostics.ReportManagedReference(syntax.ReadOnlyManagedModifier.Location, "readonly managed(location) requires the address intrinsic, not an ordinary same-named callable");
+            }
+
+            return new BoundErrorExpression(syntax);
+        }
+
         if (syntax.ConversionTypeClause is { IsArray: false, HasQualifier: false, HasTypeArguments: true, ReadOnlySliceModifier: null, Identifier: { } identifier } type
             && identifier.Text is "slice" or "array"
             && !binderCtx.CanUseNativeBufferAlias(scope, identifier, getCurrentFunction(), expression: true))

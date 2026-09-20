@@ -27,6 +27,7 @@ InterpolatedStringExpression
 InvocationExpression
 LambdaExpression
 LiteralExpression
+ManagedReferenceExpression
 MemberAccessExpression
 NamedArgumentExpression
 NonNullAssertionExpression
@@ -109,6 +110,7 @@ VarPattern
 ArrayTypeReference
 ArrowTypeReference
 FunctionPointerTypeReference
+ManagedReferenceTypeReference
 NamedTypeReference
 NativeSliceTypeReference
 PointerTypeReference

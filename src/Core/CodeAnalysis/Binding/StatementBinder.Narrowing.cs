@@ -1726,7 +1726,14 @@ internal sealed partial class StatementBinder
         // model, and Go's declare-then-assign shape becomes legal.
         if (channelSlotWithoutInitializer && variable is not LocalVariableSymbol)
         {
-            Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.ValueText, variableType.Name);
+            if (ManagedReferenceTypes.TryGetElement(variableType, out _, out _))
+            {
+                Diagnostics.ReportManagedReference(syntax.Identifier.Location, "a non-null managed-reference global requires initialization");
+            }
+            else
+            {
+                Diagnostics.ReportChannelRequiresInitializer(syntax.Identifier.Location, syntax.Identifier.ValueText, variableType.Name);
+            }
         }
 
         // Issue #3324 (ADR-0008): a bare `var s string` / `let s string`
@@ -1762,6 +1769,15 @@ internal sealed partial class StatementBinder
         // or infer function-local escape scope from the initializer (STE data-flow propagation).
         if (variable is LocalVariableSymbol localVar)
         {
+            localVar.HoldsScopedManagedReference |= ManagedReferenceOrigins.IsScopedHandle(convertedInitializer);
+            localVar.IsScoped |= localVar.HoldsScopedManagedReference;
+            if (localVar.IsReadOnly && variableType is ByRefTypeSymbol)
+            {
+                localVar.ManagedReferenceOrigin = convertedInitializer is BoundAddressOfExpression address
+                    ? address.Operand
+                    : new BoundDereferenceExpression(convertedInitializer.Syntax, convertedInitializer);
+            }
+
             if (syntax.IsScoped)
             {
                 localVar.IsScoped = true;
@@ -1985,6 +2001,7 @@ internal sealed partial class StatementBinder
         {
             localVar.RefKind = isReadOnly ? RefKind.RefReadOnly : RefKind.Ref;
             localVar.IsScoped = syntax.ScopedModifier != null || HasFunctionLocalRefScope(initializer);
+            localVar.ManagedReferenceOrigin = rhsValid ? initializer : null;
         }
 
         // Annotations attach to the symbol unchanged (e.g. @Obsolete on a top-level

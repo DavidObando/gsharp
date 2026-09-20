@@ -804,7 +804,8 @@ internal sealed class MethodBodyPlanner
             if (!locals.ContainsKey(variable))
             {
                 locals[variable] = localTypes.Count;
-                localTypes.Add(variable.Type);
+                localTypes.Add(variable is LocalVariableSymbol { RefKind: not RefKind.None } alias
+                    ? ByRefTypeSymbol.Get(alias.Type) : variable.Type);
             }
         }
     }
