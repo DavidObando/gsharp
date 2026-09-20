@@ -65,17 +65,26 @@ public class Issue4341GoClosureAccessEmitTests
                 }
             }
 
+            interface InterfaceWorker[T] {
+                private func work() { Console.WriteLine("interface") }
+                func run() { scope { go work() } }
+            }
+
+            class StringInterfaceWorker : InterfaceWorker[string] {}
+
             InstanceWorker().run()
             SharedWorker[string].run()
             DerivedWorker().run()
             StructWorker{}.run()
             PropertyWorker().run()
             Console.WriteLine(AsyncLetWorker().run())
+            let interfaceWorker InterfaceWorker[string] = StringInterfaceWorker()
+            interfaceWorker.run()
             """;
 
         var output = CompileVerifyAndRun(source);
         Assert.Equal(
-            $"1{Environment.NewLine}shared{Environment.NewLine}protected{Environment.NewLine}struct{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}",
+            $"1{Environment.NewLine}shared{Environment.NewLine}protected{Environment.NewLine}struct{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}interface{Environment.NewLine}",
             output);
     }
 
@@ -130,9 +139,26 @@ public class Issue4341GoClosureAccessEmitTests
             });
 
             Assert.NotNull(process);
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-            Assert.True(process.WaitForExit(30_000), "dotnet exec timed out");
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            var exited = process.WaitForExit(30_000);
+            if (!exited)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // The process exited between the timeout and the kill.
+                }
+
+                process.WaitForExit();
+            }
+
+            var output = outputTask.GetAwaiter().GetResult();
+            var error = errorTask.GetAwaiter().GetResult();
+            Assert.True(exited, $"dotnet exec timed out\nstdout:\n{output}\nstderr:\n{error}");
             Assert.True(process.ExitCode == 0, $"exited {process.ExitCode}\nstdout:\n{output}\nstderr:\n{error}");
             return output.ReplaceLineEndings(Environment.NewLine);
         }
