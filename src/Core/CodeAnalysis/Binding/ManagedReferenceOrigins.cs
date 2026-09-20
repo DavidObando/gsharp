@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -44,15 +45,23 @@ internal static class ManagedReferenceOrigins
     internal static bool IsHandleBorrow(BoundImportedInstanceCallExpression call)
         => call.Method.Name == "Borrow" && ManagedReferenceTypes.TryGetElement(call.Receiver.Type, out _, out _);
 
+    internal static bool IsScopedHandle(VariableSymbol variable)
+        => variable is LocalVariableSymbol local
+            && (local.HoldsScopedManagedReference
+                || (local.IsScoped && ManagedReferenceTypes.TryGetElement(
+                    local.Type is NullableTypeSymbol nullable ? nullable.UnderlyingType : local.Type, out _, out _)));
+
+    // Classify the value being retained, not every input evaluated to produce
+    // it. A null assertion preserves handle identity; reading its pointee does not.
     internal static bool IsScopedHandle(BoundExpression expression)
         => expression switch
         {
-            BoundVariableExpression { Variable: LocalVariableSymbol { HoldsScopedManagedReference: true } } => true,
-            BoundVariableExpression { Variable: LocalVariableSymbol { IsScoped: true } } =>
-                ManagedReferenceTypes.TryGetElement(expression.Type is NullableTypeSymbol nullable ? nullable.UnderlyingType : expression.Type, out _, out _),
+            BoundVariableExpression variable => IsScopedHandle(variable.Variable),
             BoundConversionExpression conversion => IsScopedHandle(conversion.Expression),
+            BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion => IsScopedHandle(assertion.Operand),
             BoundBlockExpression block => IsScopedHandle(block.Expression),
             BoundConditionalExpression conditional => IsScopedHandle(conditional.WhenTrue) || IsScopedHandle(conditional.WhenFalse),
+            BoundTupleLiteralExpression tuple => tuple.Elements.Any(element => IsScopedHandle(element)),
             BoundImportedInstanceCallExpression call when ManagedReferenceTypes.TryGetElement(call.Type, out _, out _) => IsScopedHandle(call.Receiver),
             _ => false,
         };

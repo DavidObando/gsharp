@@ -132,7 +132,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
                 var argument = operation.Arguments[i];
                 if (ManagedReferenceOrigins.IsScopedHandle(argument)
                     && !(operation.CalledFunction is FunctionSymbol target && i < target.Parameters.Length
-                        && target.Parameters[i].IsScoped && ManagedReferenceTypes.TryGetElement(target.Parameters[i].Type, out _, out _)))
+                        && ManagedReferenceOrigins.IsScopedHandle(target.Parameters[i])))
                 {
                     this.Report(argument, "a scoped managed-reference value requires a scoped parameter");
                 }
@@ -152,14 +152,9 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             this.Report(assignment, "a borrowed write cannot survive suspension; evaluate the value before selecting the borrow");
         }
 
-        if (node?.Type is TupleTypeSymbol)
+        if (node?.Type is TupleTypeSymbol && ManagedReferenceOrigins.IsScopedHandle(node))
         {
-            var scoped = new ScopedValueFinder();
-            scoped.VisitExpression(node);
-            if (scoped.Found)
-            {
-                this.Report(node, "a scoped managed-reference value cannot be stored in an aggregate");
-            }
+            this.Report(node, "a scoped managed-reference value cannot be stored in an aggregate");
         }
 
         base.VisitExpression(node);
@@ -273,17 +268,6 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         {
             this.Found |= ManagedReferenceOrigins.IsHandleBorrow(node);
             base.VisitImportedInstanceCallExpression(node);
-        }
-    }
-
-    private sealed class ScopedValueFinder : BoundTreeWalker
-    {
-        internal bool Found { get; private set; }
-
-        public override void VisitExpression(BoundExpression? node)
-        {
-            this.Found |= node != null && ManagedReferenceOrigins.IsScopedHandle(node);
-            base.VisitExpression(node);
         }
     }
 

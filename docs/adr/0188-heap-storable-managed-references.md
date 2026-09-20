@@ -13,12 +13,12 @@
   [ADR-0181](0181-readonly-managed-reference-contracts.md),
   [ADR-0100](0100-default-expression.md),
   [upstream ADR-0184](https://github.com/DavidObando/gsharp/blob/b96dff29c4d18f5a29f9b7e372ce31953cb52a74/docs/adr/0184-unscoped-ref-definition-side.md)
-- **Effect if accepted**: Add a separate persistent category to ADR-0039's
-  model, not reinterpret existing byrefs. Extend lifetime/capture classification
+- **Effect**: Adds a separate persistent category to ADR-0039's
+  model without reinterpreting existing byrefs. Extends lifetime/capture classification
   in ADR-0058 while retaining ADR-0060/0181 borrowed ABI and ADR-0184's
-  definition-side work. Add an initialization restriction for the new
-  non-null handle type alongside ADR-0100. Existing ADRs remain unchanged
-  while this proposal is under review.
+  definition-side work. Adds an initialization restriction for the new
+  non-null handle type alongside ADR-0100. The existing borrowed-reference
+  contracts remain unchanged.
 
 ## Acceptance and implementation amendment — September 20, 2026 (UTC)
 
