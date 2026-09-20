@@ -153,6 +153,14 @@ Implementation:
   is likewise guarded by bound-node compiler tests rather than a Roslyn
   analyzer; only the G# bound tree reliably distinguishes a direct call from
   the source/CLR method-group forms and carries scoped-handle provenance.
+- Function-pointer invocation follows the existing unknown-call rule.
+  `BoundFunctionPointerInvocationExpression` now routes every argument through
+  the same conservative scoped-handle check as indirect calls because managed
+  and unmanaged pointer signatures have no scoped metadata. The disposition is
+  independent of the pointer expression shape (local, parameter, field,
+  property, or index) and argument position. Scalar/value copies and ordinary
+  handles remain valid. A Roslyn analyzer would only duplicate individual G#
+  behavior here; focused bound-node tests are the stronger guard.
 
 The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
 completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,

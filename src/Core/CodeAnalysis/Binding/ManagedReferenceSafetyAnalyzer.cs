@@ -170,6 +170,9 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             case BoundIndirectCallExpression indirect:
                 this.CheckArguments(indirect.Arguments);
                 break;
+            case BoundFunctionPointerInvocationExpression pointer:
+                this.CheckArguments(pointer.Arguments);
+                break;
             case BoundMethodGroupExpression { Receiver: { } receiver }:
                 this.CheckDelegateTarget(receiver);
                 break;

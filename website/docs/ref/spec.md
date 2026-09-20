@@ -337,6 +337,14 @@ receiver and remain valid, as do groups formed over scalar/value copies and
 ordinary non-scoped handles. A direct instance call is not a method-group
 capture and continues to use the ordinary call contract.
 
+Managed and unmanaged function-pointer signatures carry no G# `scoped`
+parameter contract. Invoking either pointer kind is therefore an unknown call
+for lifetime purposes: a scoped managed handle cannot be passed in any argument
+position, regardless of whether the pointer came from a local, parameter,
+field, property, or index expression. Ordinary non-scoped handles and scalar
+or value copies remain valid arguments, and a function pointer may return an
+ordinary handle according to its declared ABI.
+
 Ordinary handles may cross `await`, `yield` and channel suspension. A
 `scoped` handle cannot be a parameter or scope-preserving local of an async,
 suspending, iterator, or async-iterator function: the current state-machine
