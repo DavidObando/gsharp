@@ -163,6 +163,39 @@ public sealed class InterfaceAdaptationReviewTests
             executable: true);
         IlVerifier.Verify(dll);
         Assert.Equal("owner\n2\nnested\n3\nTrue\n4\nshadow\n", fixture.Run(dll));
+
+        var reference = Path.Combine(fixture.Directory, "RichGenericApi.ref.dll");
+        var library = fixture.Compile(
+            """
+            package RichGenericApi
+            public interface Pair[A, B] { func First() A; func Second() B; }
+            public class Owner[T class] {
+                public func Make[U struct](first T, second U) Pair[T, U] {
+                    return object : Pair[T, U] {
+                        func First() T -> first
+                        func Second() U -> second
+                    }
+                }
+            }
+            """,
+            "RichGenericApi",
+            executable: false,
+            "/refout:" + reference);
+        IlVerifier.Verify(library);
+        var consumer = fixture.Compile(
+            """
+            package RichGenericApiConsumer
+            import System
+            import RichGenericApi
+            let pair = Owner[string]().Make[int32]("refout", 5)
+            Console.WriteLine(pair.First())
+            Console.WriteLine(pair.Second())
+            """,
+            "RichGenericApiConsumer",
+            executable: true,
+            "/r:" + reference);
+        IlVerifier.Verify(consumer, new[] { library });
+        Assert.Equal("refout\n5\n", fixture.Run(consumer));
     }
 
     [Fact]
@@ -291,6 +324,8 @@ public sealed class InterfaceAdaptationReviewTests
             public sealed class OneBound { public T Echo<T>(T value) where T : IFoo => value; }
             public interface IMixedBound { T Echo<T>(T value) where T : class, IFoo, new(); }
             public sealed class MixedBound { public T Echo<T>(T value) where T : class, IFoo, new() => value; }
+            public interface IValueBound { T Echo<T>(T value) where T : struct, IFoo; }
+            public sealed class ValueBound { public T Echo<T>(T value) where T : struct, IFoo => value; }
             public interface ITwoBounds { T Echo<T>(T value) where T : IFoo, IBar; }
             public sealed class TwoBounds { public T Echo<T>(T value) where T : IFoo, IBar => value; }
             """,
@@ -305,6 +340,7 @@ public sealed class InterfaceAdaptationReviewTests
             public func Nested() INested { return adapt[INested](NestedExact()) }
             public func One() IOneBound { return adapt[IOneBound](OneBound()) }
             public func Mixed() IMixedBound { return adapt[IMixedBound](MixedBound()) }
+            public func Value() IValueBound { return adapt[IValueBound](ValueBound()) }
             """,
             "GenericAdapterApi",
             executable: false,
@@ -364,6 +400,36 @@ public sealed class InterfaceAdaptationReviewTests
             Assert.True(code != 0, $"init-only case {i} unexpectedly compiled: {output}");
             Assert.Contains("error GS0606:", output);
         }
+
+        var imported = fixture.CompileCSharp(
+            """
+            namespace ImportedInitContracts;
+            public interface IInit { int Value { get; init; } }
+            public sealed class InitExact { public int Value { get; init; } }
+            public sealed class SetMismatch { public int Value { get; set; } }
+            """,
+            "ImportedInitContracts");
+        var importedExact = fixture.Compile(
+            """
+            package ImportedInitConsumer
+            import ImportedInitContracts
+            func Main() { let value = adapt[IInit](InitExact()) }
+            """,
+            "imported-init-exact",
+            executable: true,
+            "/r:" + imported);
+        IlVerifier.Verify(importedExact, new[] { imported });
+        var (importedCode, importedOutput) = fixture.TryCompile(
+            """
+            package InvalidImportedInitConsumer
+            import ImportedInitContracts
+            func Bad() { let value = adapt[IInit](SetMismatch()) }
+            """,
+            "imported-init-mismatch",
+            executable: false,
+            "/r:" + imported);
+        Assert.NotEqual(0, importedCode);
+        Assert.Contains("error GS0606:", importedOutput);
     }
 
     [Fact]
@@ -376,7 +442,12 @@ public sealed class InterfaceAdaptationReviewTests
             public interface IOperator
             {
                 static abstract IOperator operator +(IOperator left, IOperator right);
+                static virtual IOperator operator -(IOperator left, IOperator right) => left;
                 int Read();
+            }
+            public interface IOperatorOnly
+            {
+                static abstract IOperatorOnly operator +(IOperatorOnly left, IOperatorOnly right);
             }
             public sealed class Source { public int Read() => 1; }
             """,
@@ -385,13 +456,16 @@ public sealed class InterfaceAdaptationReviewTests
             """
             package StaticOperatorConsumer
             import StaticOperatorContracts
-            func Bad() { let value = adapt[IOperator](Source()) }
+            func Bad() {
+                let mixed = adapt[IOperator](Source())
+                let only = adapt[IOperatorOnly](Source())
+            }
             """,
             "static-operator-consumer",
             executable: false,
             "/r:" + contracts);
         Assert.NotEqual(0, code);
-        Assert.Contains("error GS0606:", output);
+        Assert.True(output.Split("error GS0606:").Length - 1 >= 2, output);
         Assert.Contains("op_Addition", output);
     }
 

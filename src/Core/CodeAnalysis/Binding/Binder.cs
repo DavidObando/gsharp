@@ -5323,6 +5323,14 @@ public sealed class Binder
         }
 
         var expectedFlags = GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Build(annotatedType);
+        if (mapped is TypeParameterSymbol)
+        {
+            return expectedFlags.Length > 0
+                && expectedFlags[0] == GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Annotated
+                    ? NullableTypeSymbol.Get(mapped)
+                    : mapped;
+        }
+
         var mappedFlags = GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Build(mapped);
         return expectedFlags.SequenceEqual(mappedFlags)
             ? mapped
