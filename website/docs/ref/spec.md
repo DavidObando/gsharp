@@ -329,8 +329,15 @@ ordinary calls. Compiler-known managed-handle equality and writable-to-readonly
 permission APIs remain allowed; values copied from a scoped referent are
 ordinary scalar/value results and may be passed normally.
 
-Handles may cross `await`, `yield` and channel suspension. Temporary borrows
-may not: retain the handle and borrow again in the next execution segment.
+Ordinary handles may cross `await`, `yield` and channel suspension. A
+`scoped` handle cannot be a parameter or scope-preserving local of an async,
+suspending, iterator, or async-iterator function: the current state-machine
+lowering retains every parameter and declared local in generated fields, even
+when a particular use appears before the first suspension. Copy the referent
+to an ordinary value before entering the state machine, or pass an ordinary
+non-scoped handle whose lifetime may extend beyond the call. Temporary borrows
+also may not cross suspension: retain an ordinary handle and borrow again in
+the next execution segment.
 An earlier borrowed argument followed by a suspending argument is diagnosed;
 evaluate the suspending value first. This includes array elements, imported
 ref-return indexers and imported ref-return properties selected through a

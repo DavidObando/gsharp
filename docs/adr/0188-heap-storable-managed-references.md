@@ -132,6 +132,18 @@ Implementation:
   indexers and imported ref-return properties reached through a managed handle
   remain borrowed locations and cannot be selected before a later suspension;
   scalar and by-value property copies remain ordinary values.
+- State-machine entry is a storage boundary. Scoped managed-reference
+  parameters and scope-preserving locals are rejected in async, declared or
+  inferred suspending, iterator, and async-iterator functions because the
+  current lowering conservatively hoists every parameter and declared local
+  into generated fields. This applies even to uses before the first
+  suspension; ordinary non-scoped handles and scalar/value copies remain
+  valid. The rule is enforced in the shared managed-reference semantic pass,
+  before lowering. A Roslyn analyzer is intentionally not used here: the
+  decision depends on G# bound provenance, suspension inference, and iterator
+  detection that C# syntax analysis cannot recover without duplicating the
+  compiler. Focused compiler, reimport, reference-assembly, repeated-emit, and
+  ILVerify tests are the durable guard.
 
 The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
 completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,

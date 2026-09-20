@@ -18,6 +18,8 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     private readonly DiagnosticBag diagnostics;
     private readonly Dictionary<TypeSymbol, TypeSymbol?> required = new();
     private readonly HashSet<VariableSymbol> managedLocations = new();
+    private readonly HashSet<FunctionSymbol> analyzedFunctions = new();
+    private bool analyzingStateMachine;
 
     private ManagedReferenceSafetyAnalyzer(DiagnosticBag diagnostics) => this.diagnostics = diagnostics;
 
@@ -28,9 +30,9 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         DiagnosticBag diagnostics)
     {
         var analyzer = new ManagedReferenceSafetyAnalyzer(diagnostics);
-        foreach (var body in functions.Values)
+        foreach (var (function, body) in functions)
         {
-            analyzer.Visit(body);
+            analyzer.AnalyzeFunction(function, body);
         }
 
         foreach (var type in types)
@@ -83,7 +85,7 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
         switch (node)
         {
             case BoundFunctionLiteralExpression literal:
-                this.Visit(literal.Body);
+                this.AnalyzeFunction(literal.Function, literal.Body);
                 return;
             case BoundDefaultExpression value when this.RequiredHandle(value.Type) != null:
                 this.Report(value, "default would synthesize a null non-null managed-reference slot; use a nullable handle or initialize the aggregate");
@@ -217,6 +219,11 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
 
     protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
     {
+        if (this.analyzingStateMachine && ManagedReferenceOrigins.IsScopedHandle(node.Variable))
+        {
+            this.Report(node, "a scoped managed-reference local cannot be retained by a state machine");
+        }
+
         if (node.Initializer != null && node.Variable is GlobalVariableSymbol)
         {
             this.CheckScopedStore(node.Initializer, node);
@@ -244,6 +251,32 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
     {
         this.CheckScopedStore(node.Expression);
         base.VisitYieldStatement(node);
+    }
+
+    private void AnalyzeFunction(FunctionSymbol function, BoundBlockStatement body)
+    {
+        if (!this.analyzedFunctions.Add(function))
+        {
+            return;
+        }
+
+        var previous = this.analyzingStateMachine;
+        this.analyzingStateMachine = function.IsAsyncOrSuspending || IteratorDetection.ContainsYield(body);
+        if (this.analyzingStateMachine)
+        {
+            foreach (var parameter in function.Parameters)
+            {
+                if (ManagedReferenceOrigins.IsScopedHandle(parameter))
+                {
+                    this.diagnostics.ReportManagedReference(
+                        Invariant.Required(parameter.DeclaringSyntax ?? function.Declaration, "source parameters have a declaration").Location,
+                        "a scoped managed-reference parameter cannot be retained by a state machine");
+                }
+            }
+        }
+
+        this.Visit(body);
+        this.analyzingStateMachine = previous;
     }
 
     private void CheckArguments(ImmutableArray<BoundExpression> arguments, FunctionSymbol? target = null, BoundExpression? receiver = null)

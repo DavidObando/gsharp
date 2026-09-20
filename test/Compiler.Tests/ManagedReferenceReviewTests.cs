@@ -104,7 +104,6 @@ public sealed class ManagedReferenceReviewTests
                 items[*p] = 7
                 return items
             }
-            func Values(scoped p managed[int32]) sequence[int32] { yield *p }
             func Indirect(scoped p managed[int32]) int32 {
                 let action = func (value int32) int32 { return value }
                 return action(*p)
@@ -115,14 +114,13 @@ public sealed class ManagedReferenceReviewTests
                 var copied = 0
                 let items = Copy(p, out copied)
                 Console.WriteLine(items[42])
-                for item in Values(p) { Console.WriteLine(item) }
                 Console.WriteLine(Indirect(p))
                 value = 99
                 Console.WriteLine(copied)
             }
             """, "ManagedSinkCopies", executable: true);
         IlVerifier.Verify(dll);
-        Assert.Equal("7\n42\n42\n42\n", fixture.Run(dll));
+        Assert.Equal("7\n42\n42\n", fixture.Run(dll));
     }
 
     [Theory]
