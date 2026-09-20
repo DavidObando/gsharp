@@ -170,6 +170,12 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             case BoundIndirectCallExpression indirect:
                 this.CheckArguments(indirect.Arguments);
                 break;
+            case BoundMethodGroupExpression { Receiver: { } receiver }:
+                this.CheckDelegateTarget(receiver);
+                break;
+            case BoundClrMethodGroupExpression { Receiver: { } receiver }:
+                this.CheckDelegateTarget(receiver);
+                break;
             case BoundBaseClassCallExpression baseCall:
                 this.CheckArguments(baseCall.Arguments, baseCall.Method, baseCall.Receiver);
                 break;
@@ -298,6 +304,14 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             }
 
             borrowed |= argument.Type is ByRefTypeSymbol && this.IsManagedLocation(argument);
+        }
+    }
+
+    private void CheckDelegateTarget(BoundExpression receiver)
+    {
+        if (ManagedReferenceOrigins.IsScopedHandle(receiver))
+        {
+            this.Report(receiver, "a scoped managed-reference receiver cannot be captured as a delegate target");
         }
     }
 

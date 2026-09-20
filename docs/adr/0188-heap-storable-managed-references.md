@@ -144,6 +144,15 @@ Implementation:
   detection that C# syntax analysis cannot recover without duplicating the
   compiler. Focused compiler, reimport, reference-assembly, repeated-emit, and
   ILVerify tests are the durable guard.
+- Instance method-group conversion is also a capture boundary: both source and
+  imported groups place a non-null receiver into the generated delegate's
+  `Target`. The shared managed-reference safety pass therefore rejects a scoped
+  handle receiver at the method-group node, independently of whether the
+  delegate is returned, stored, or passed. Static groups, scalar/value-copy
+  receivers, ordinary non-scoped handles, and direct calls remain valid. This
+  is likewise guarded by bound-node compiler tests rather than a Roslyn
+  analyzer; only the G# bound tree reliably distinguishes a direct call from
+  the source/CLR method-group forms and carries scoped-handle provenance.
 
 The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
 completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,

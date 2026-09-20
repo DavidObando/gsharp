@@ -329,6 +329,14 @@ ordinary calls. Compiler-known managed-handle equality and writable-to-readonly
 permission APIs remain allowed; values copied from a scoped referent are
 ordinary scalar/value results and may be passed normally.
 
+Converting a source or imported instance method group to a function/delegate
+captures its receiver as the delegate target. A scoped managed handle therefore
+cannot be that receiver, whether the resulting group is returned, stored, or
+passed immediately to another call. Static method groups do not capture a
+receiver and remain valid, as do groups formed over scalar/value copies and
+ordinary non-scoped handles. A direct instance call is not a method-group
+capture and continues to use the ordinary call contract.
+
 Ordinary handles may cross `await`, `yield` and channel suspension. A
 `scoped` handle cannot be a parameter or scope-preserving local of an async,
 suspending, iterator, or async-iterator function: the current state-machine
