@@ -713,6 +713,15 @@ public sealed class InterfaceAdaptationReviewTests
                     }
                 }
             }
+            interface VariantOwner[out T] {
+                func Get() T;
+                private func Make[T struct]() Marker[T] {
+                    return object : Marker[T] {
+                        let Outer = this.Get()
+                        func Value() int32 -> 1
+                    }
+                }
+            }
 
             class Owner[T class] {
                 func PairWith[U struct](first T, second U) Pair[T, U] {
@@ -748,10 +757,24 @@ public sealed class InterfaceAdaptationReviewTests
                     Console.WriteLine(value.OuterValue())
                 }
 
+                func PrintIterator[T struct](inner T) {
+                    for value in MakeIterator[T](inner).Values() {
+                        Console.WriteLine(value)
+                    }
+                }
+
                 private func MakeInferred[T struct](inner T) -> object {
                     let Outer = this.Value
                     func Inner() T -> inner
                     func OuterValue() object -> Outer
+                }
+
+                private func MakeIterator[T struct](inner T) -> object {
+                    let Outer = this.Value
+                    func Values() sequence[object] {
+                        yield inner
+                        yield Outer
+                    }
                 }
             }
 
@@ -768,12 +791,14 @@ public sealed class InterfaceAdaptationReviewTests
                 Console.WriteLine(mixed.Inner())
                 Console.WriteLine(mixed.Outer())
                 Shadow[string]("inferred").PrintInferred[int32](5)
+                Shadow[string]("iterator").PrintIterator[int32](6)
+
             }
             """,
             "rich-generic-shells",
             executable: true);
         IlVerifier.Verify(dll);
-        Assert.Equal("owner\n2\nnested\n3\nTrue\n4\nshadow\n5\ninferred\n", fixture.Run(dll));
+        Assert.Equal("owner\n2\nnested\n3\nTrue\n4\nshadow\n5\ninferred\n6\niterator\n", fixture.Run(dll));
 
         var reference = Path.Combine(fixture.Directory, "RichGenericApi.ref.dll");
         var library = fixture.Compile(

@@ -2147,6 +2147,7 @@ public sealed class Binder
             scope = scope.Previous;
         }
 
+        // BindProgram requires a global scope; the earlier null-tolerant rehydration checks make flow analysis conservative.
         foreach (var structSym in globalScope!.Structs)
         {
             foreach (var method in structSym.Methods)

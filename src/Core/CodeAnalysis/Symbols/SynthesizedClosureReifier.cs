@@ -257,7 +257,11 @@ internal static class SynthesizedClosureReifier
             }
         }
 
-        var clones = CloneWithRemappedConstraints(origTPs, offset, existingSubstitution);
+        var clones = CloneWithRemappedConstraints(
+            origTPs,
+            offset,
+            existingSubstitution,
+            preserveVariance: false);
         definition.SetTypeParameters(definition.TypeParameters.AddRange(clones));
         definition.SetReifiedFromTypeParameters(origTPs, offset);
 
