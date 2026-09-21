@@ -679,6 +679,14 @@ public sealed class InterfaceAdaptationReviewTests
             interface Pair[A, B] { func First() A; func Second() B; }
             interface Triple[A, B, C] { func First() A; func Second() B; func Third() C; }
             interface Mixed[T] { func Inner() T; func Outer() object; }
+            interface Marker[T] { }
+            interface DefaultFactory[T] {
+                func MakeDefault() Marker[T] {
+                    return object : Marker[T] {
+                        func Value() int32 -> 0
+                    }
+                }
+            }
 
             class Owner[T class] {
                 func PairWith[U struct](first T, second U) Pair[T, U] {
@@ -708,16 +716,16 @@ public sealed class InterfaceAdaptationReviewTests
                     }
                 }
 
-                private func MakeInferred[T struct](inner T) -> object {
-                    let Outer = this.Value
-                    func Inner() T -> inner
-                    func OuterValue() object -> Outer
-                }
-
                 func PrintInferred[T struct](inner T) {
                     let value = MakeInferred[T](inner)
                     Console.WriteLine(value.Inner())
                     Console.WriteLine(value.OuterValue())
+                }
+
+                private func MakeInferred[T struct](inner T) -> object {
+                    let Outer = this.Value
+                    func Inner() T -> inner
+                    func OuterValue() object -> Outer
                 }
             }
 
@@ -773,6 +781,46 @@ public sealed class InterfaceAdaptationReviewTests
             "/r:" + reference);
         IlVerifier.Verify(consumer, new[] { library });
         Assert.Equal("refout\n5\n", fixture.Run(consumer));
+    }
+
+    [Fact]
+    public void RichFieldInferenceRejectsNilAndUntypedCyclesButAcceptsExplicitTypes()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = fixture.TryCompile(
+            """
+            package RichFieldInference
+            func BadNil() object {
+                return object {
+                    let Value = nil
+                    func Touch() { }
+                }
+            }
+            func BadCycle() object {
+                return object {
+                    let Value = Value
+                    func Touch() { }
+                }
+            }
+            """,
+            "rich-field-inference-invalid",
+            executable: false);
+        Assert.NotEqual(0, code);
+        Assert.True(output.Split("error GS0605:").Length - 1 >= 2, output);
+
+        var valid = fixture.Compile(
+            """
+            package RichFieldInferenceControl
+            func Make() object {
+                return object {
+                    let Value object? = nil
+                    func Touch() { }
+                }
+            }
+            """,
+            "rich-field-inference-control",
+            executable: false);
+        IlVerifier.Verify(valid);
     }
 
     [Fact]

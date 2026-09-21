@@ -2128,11 +2128,74 @@ public sealed class Binder
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
 
         var scope = globalScope;
+        while (scope != null)
+        {
+            foreach (var function in scope.Functions)
+            {
+                if (HasInferredRichAnonymousReturn(function, parentScope))
+                {
+                    functionBodies[function] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        function,
+                        owner: null,
+                        diagnostics);
+                }
+            }
+
+            scope = scope.Previous;
+        }
+
+        foreach (var structSym in globalScope!.Structs)
+        {
+            foreach (var method in structSym.Methods)
+            {
+                if (HasInferredRichAnonymousReturn(method, parentScope))
+                {
+                    functionBodies[method] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        method,
+                        structSym,
+                        diagnostics);
+                }
+            }
+        }
+
+        foreach (var ifaceSym in globalScope.Interfaces)
+        {
+            foreach (var method in ifaceSym.Methods
+                         .Concat(ifaceSym.StaticMethods)
+                         .Concat(ifaceSym.PrivateMethods)
+                         .Concat(ifaceSym.StaticPrivateMethods))
+            {
+                if (method?.Declaration?.Body != null
+                    && HasInferredRichAnonymousReturn(method, parentScope))
+                {
+                    functionBodies[method] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        method,
+                        owner: null,
+                        diagnostics);
+                }
+            }
+        }
+
+        scope = globalScope;
 
         while (scope != null)
         {
             foreach (var function in scope.Functions)
             {
+                if (functionBodies.ContainsKey(function))
+                {
+                    continue;
+                }
+
                 // ADR-0086 / issue #727: P/Invoke functions have no managed
                 // body — the binder skips body binding and the emitter writes
                 // a PinvokeImpl method with an ImplMap row instead. We still
@@ -2145,33 +2208,15 @@ public sealed class Binder
                     continue;
                 }
 
-                var (functionDeclaration, functionBody) = RequireDeclaredBody(function);
-                var loweredBody = BindBodyWithPackage(
-                    parentScope,
-                    function.Package?.Name,
-                    functionBody.SyntaxTree,
-                    () =>
-                    {
-                        return BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
-                        {
-                            var binder = new Binder(parentScope, function);
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(functionBody);
-                            var body = binder.statements.BindBlockStatement(functionBody);
-                            binder.statements.FinalizeUserLabels();
-                            var lowered = Lowerer.Lower(body);
-
-                            if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
-                            {
-                                binder.Diagnostics.ReportAllPathsMustReturn(functionDeclaration.Identifier.Location);
-                            }
-
-                            AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
-
-                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                        });
-                    });
-
-                functionBodies.Add(function, loweredBody);
+                functionBodies.Add(
+                    function,
+                    BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        function,
+                        owner: null,
+                        diagnostics));
             }
 
             scope = scope.Previous;
@@ -2190,6 +2235,11 @@ public sealed class Binder
 
             foreach (var method in structSym.Methods)
             {
+                if (functionBodies.ContainsKey(method))
+                {
+                    continue;
+                }
+
                 if (parentScope.GetLatestRichAnonymousObjectPlans().TryGetValue(structSym, out var richPlan)
                     && richPlan.MethodBodies.TryGetValue(method, out var richBody))
                 {
@@ -2209,33 +2259,15 @@ public sealed class Binder
                     continue;
                 }
 
-                var (methodDeclaration, methodBody) = RequireDeclaredBody(method);
-                var loweredBody = BindBodyWithPackage(
-                    parentScope,
-                    structSym.PackageName,
-                    methodBody.SyntaxTree,
-                    () =>
-                    {
-                        return BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
-                        {
-                            var binder = new Binder(parentScope, method);
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(methodBody);
-                            var body = binder.statements.BindBlockStatement(methodBody);
-                            binder.statements.FinalizeUserLabels();
-                            var lowered = Lowerer.Lower(body, structSym);
-
-                            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
-                            {
-                                binder.Diagnostics.ReportAllPathsMustReturn(methodDeclaration.Identifier.Location);
-                            }
-
-                            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
-
-                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                        });
-                    });
-
-                functionBodies.Add(method, loweredBody);
+                functionBodies.Add(
+                    method,
+                    BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        method,
+                        structSym,
+                        diagnostics));
             }
         }
 
@@ -2260,6 +2292,11 @@ public sealed class Binder
                     continue;
                 }
 
+                if (functionBodies.ContainsKey(method))
+                {
+                    continue;
+                }
+
                 BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
             }
         }
@@ -2278,6 +2315,11 @@ public sealed class Binder
             foreach (var method in ifaceSym.StaticMethods)
             {
                 if (method?.Declaration?.Body == null)
+                {
+                    continue;
+                }
+
+                if (functionBodies.ContainsKey(method))
                 {
                     continue;
                 }
@@ -2330,6 +2372,11 @@ public sealed class Binder
                         continue;
                     }
 
+                    if (functionBodies.ContainsKey(method))
+                    {
+                        continue;
+                    }
+
                     BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
                 }
             }
@@ -2339,6 +2386,11 @@ public sealed class Binder
                 foreach (var method in ifaceSym.StaticPrivateMethods)
                 {
                     if (method?.Declaration?.Body == null)
+                    {
+                        continue;
+                    }
+
+                    if (functionBodies.ContainsKey(method))
                     {
                         continue;
                     }
@@ -2869,33 +2921,61 @@ public sealed class Binder
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var (interfaceMethodDeclaration, interfaceMethodBody) = RequireDeclaredBody(method);
-        var loweredBody = BindBodyWithPackage(
+        functionBodies.Add(
+            method,
+            BindDeclaredFunctionBody(
+                cache,
+                dirtyTrees,
+                parentScope,
+                method,
+                owner: null,
+                diagnostics));
+    }
+
+    private static bool HasInferredRichAnonymousReturn(
+        FunctionSymbol function,
+        BoundScope parentScope)
+        => function.Declaration is { Type: null, Body.Statements.Length: 1 } declaration
+            && declaration.Body.Statements[0] is ReturnStatementSyntax { Expression: AnonymousClassExpressionSyntax anonymous }
+            && parentScope.GetRichAnonymousClassMap().ContainsKey(anonymous);
+
+    private static BoundBlockStatement BindDeclaredFunctionBody(
+        BoundBodyCache? cache,
+        ImmutableHashSet<SyntaxTree>? dirtyTrees,
+        BoundScope parentScope,
+        FunctionSymbol function,
+        StructSymbol? owner,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        var (declaration, bodySyntax) = RequireDeclaredBody(function);
+        return BindBodyWithPackage(
             parentScope,
-            method.Package?.Name,
-            interfaceMethodBody.SyntaxTree,
+            owner?.PackageName ?? function.Package?.Name,
+            bodySyntax.SyntaxTree,
             () =>
             {
-                return BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
+                return BindBodyWithCache(cache, dirtyTrees, function, bodySyntax, diagnostics, () =>
                 {
-                    var binder = new Binder(parentScope, method);
-                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(interfaceMethodBody);
-                    var body = binder.statements.BindBlockStatement(interfaceMethodBody);
+                    var binder = new Binder(parentScope, function);
+                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax);
+                    var body = binder.statements.BindBlockStatement(bodySyntax);
                     binder.statements.FinalizeUserLabels();
-                    var lowered = Lowerer.Lower(body);
+                    var lowered = owner == null
+                        ? Lowerer.Lower(body)
+                        : Lowerer.Lower(body, owner);
 
-                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    if (function.Type != TypeSymbol.Void
+                        && !IsIteratorReturnType(function.Type)
+                        && !ControlFlowGraph.AllPathsReturn(lowered))
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(interfaceMethodDeclaration.Identifier.Location);
+                        binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location);
                     }
 
-                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                    AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
 
                     return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 });
             });
-
-        functionBodies.Add(method, loweredBody);
     }
 
     /// <summary>
@@ -3246,7 +3326,7 @@ public sealed class Binder
                 : Expressions.BindExpression(member.Value, declaredType);
             if (value is BoundErrorExpression || value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Void)
             {
-                if (value is not BoundErrorExpression)
+                if (declaredType == null)
                 {
                     Diagnostics.ReportRichAnonymousFieldInference(member.Identifier.Location, member.Identifier.ValueText);
                 }
@@ -3630,7 +3710,8 @@ public sealed class Binder
         BuildRichTypeParameterMaps(StructSymbol classSymbol)
     {
         var outer = new List<TypeParameterSymbol>();
-        if (function?.ReceiverType is StructSymbol receiver)
+        var owner = function?.ReceiverType ?? function?.StaticOwnerType;
+        if (owner is StructSymbol receiver)
         {
             if (!receiver.EnclosingTypeArguments.IsDefaultOrEmpty)
             {
@@ -3648,6 +3729,18 @@ public sealed class Binder
             else
             {
                 outer.AddRange(receiver.TypeParameters);
+            }
+        }
+        else if (owner is InterfaceSymbol iface)
+        {
+            outer.AddRange(StructSymbol.CollectEnclosingTypeParameters(iface));
+            if (!iface.TypeArguments.IsDefaultOrEmpty)
+            {
+                outer.AddRange(iface.TypeArguments.OfType<TypeParameterSymbol>());
+            }
+            else
+            {
+                outer.AddRange((iface.Definition ?? iface).TypeParameters);
             }
         }
 
