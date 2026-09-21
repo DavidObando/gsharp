@@ -11,6 +11,8 @@ internal static class DiagnosticDescriptors
     internal const string ObsoleteUseDetailMessageFormat = ": '{0}'";
 
     internal static readonly DiagnosticDescriptor ManagedReference = new("GS0604", DiagnosticSeverity.Error, "Invalid persistent managed reference: {0}.");
+    internal static readonly DiagnosticDescriptor RichAnonymousFieldInference = new("GS0605", DiagnosticSeverity.Error, "Cannot infer a heap-storable type for rich anonymous field '{0}'; add an explicit type.");
+    internal static readonly DiagnosticDescriptor StructuralAdaptation = new("GS0606", DiagnosticSeverity.Error, "Cannot adapt '{0}' to '{1}': {2}.");
     internal static readonly DiagnosticDescriptor NativeSliceRuntime = new("GS0600", DiagnosticSeverity.Error, "Native slices require .NET 10 and compatible Gsharp.Runtime.Values runtime support. Reference the runtime shipped with the G# SDK.");
     internal static readonly DiagnosticDescriptor NativeSliceType = new("GS0601", DiagnosticSeverity.Error, "Invalid native buffer type or operation: {0}.");
     internal static readonly DiagnosticDescriptor NativeSliceSuspendingWrite = new("GS0602", DiagnosticSeverity.Error, "A native slice element write cannot suspend while its location is borrowed. Evaluate the suspending value before selecting the element.");

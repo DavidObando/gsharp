@@ -536,11 +536,14 @@ internal sealed class ReflectionMetadataEmitter
         // its clone occupies. Real user receivers have an empty reified list,
         // so this is a no-op there.
         var reifiedFrom = receiverDef?.ReifiedFromTypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
-        if (!reifiedFrom.IsDefaultOrEmpty && reifiedFrom.Length == classTPs.Length)
+        var reifiedOffset = receiverDef?.ReifiedTypeParameterOrdinalOffset ?? 0;
+        if (!reifiedFrom.IsDefaultOrEmpty
+            && reifiedOffset >= 0
+            && reifiedOffset + reifiedFrom.Length <= classTPs.Length)
         {
             for (var i = 0; i < reifiedFrom.Length; i++)
             {
-                remap[reifiedFrom[i]] = i;
+                remap[reifiedFrom[i]] = reifiedOffset + i;
             }
         }
 
@@ -739,9 +742,10 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var remap = new Dictionary<TypeParameterSymbol, int>(origTPs.Length);
+            var offset = s.ReifiedTypeParameterOrdinalOffset;
             for (var i = 0; i < origTPs.Length; i++)
             {
-                remap[origTPs[i]] = i;
+                remap[origTPs[i]] = offset + i;
             }
 
             this.remaps.RegisterClassRemap(s, remap);
@@ -2805,9 +2809,8 @@ internal sealed class ReflectionMetadataEmitter
                 var gpRowStart = this.emitCtx.PendingGenericParameters.Count;
                 this.typeDefEmitter.EmitStructTypeDef(c, structFirstFieldRow[c], classCtorRows[c]);
                 this.PreResolveReifiedGenericConstraints(gpRowStart);
+                EmitInterfaceImplRows(c);
             }
-
-            EmitInterfaceImplRows(c);
         }
 
         // Issue #976: emit the InterfaceImpl metadata rows for an aggregate
@@ -2879,6 +2882,7 @@ internal sealed class ReflectionMetadataEmitter
             if (!c.Methods.IsDefaultOrEmpty)
             {
                 System.Collections.Generic.HashSet<System.Type>? bridgeInterfaces = null;
+                System.Collections.Generic.HashSet<string>? symbolicBridgeInterfaces = null;
                 foreach (var method in c.Methods)
                 {
                     var declaringIface = method.ExplicitInterfaceSlot?.DeclaringType;
@@ -2896,10 +2900,43 @@ internal sealed class ReflectionMetadataEmitter
                             alreadyDeclared = true;
                             break;
                         }
+
+                        if (implemented != null
+                            && MemberLookup.TryGetSymbolicClrGenericInterface(
+                                implemented,
+                                out var openImplemented,
+                                out _)
+                            && openImplemented != null
+                            && ClrTypeUtilities.AreSame(openImplemented, declaringIface))
+                        {
+                            alreadyDeclared = true;
+                            break;
+                        }
                     }
 
                     if (alreadyDeclared)
                     {
+                        continue;
+                    }
+
+                    if (method.ExplicitInterfaceSlotContainingType is { } symbolicDeclaring
+                        && MemberLookup.TryGetSymbolicClrGenericInterface(
+                            symbolicDeclaring,
+                            out var openDeclaring,
+                            out _)
+                        && openDeclaring != null
+                        && ClrTypeUtilities.AreSame(openDeclaring, declaringIface))
+                    {
+                        symbolicBridgeInterfaces ??= new System.Collections.Generic.HashSet<string>(
+                            System.StringComparer.Ordinal);
+                        if (symbolicBridgeInterfaces.Add(
+                                symbolicDeclaring.ToDisplayString(DisplayFormat.FullyQualified)))
+                        {
+                            this.emitCtx.Metadata.AddInterfaceImplementation(
+                                this.cache.StructTypeDefs[c],
+                                this.memberRefs.GetElementTypeToken(symbolicDeclaring));
+                        }
+
                         continue;
                     }
 

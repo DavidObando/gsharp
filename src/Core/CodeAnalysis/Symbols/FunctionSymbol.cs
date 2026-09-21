@@ -211,7 +211,7 @@ public sealed class FunctionSymbol : Symbol
     /// <summary>
     /// Gets the type of the function.
     /// </summary>
-    public TypeSymbol Type { get; }
+    public TypeSymbol Type { get; private set; }
 
     /// <summary>
     /// Gets the declaration of the function.
@@ -674,6 +674,11 @@ public sealed class FunctionSymbol : Symbol
         }
 
         return null;
+    }
+
+    internal void SetRichAnonymousReturnType(TypeSymbol type)
+    {
+        Type = type;
     }
 
     /// <summary>

@@ -265,7 +265,7 @@ internal sealed class StateMachineEmitter
             StructSymbol classSym,
             ImmutableArray<TypeParameterSymbol> sourceTypeParameters,
             ImmutableArray<TypeParameterSymbol> classTypeParameters)
-            : this(plan, classSym, sourceTypeParameters, classTypeParameters, ImmutableArray<TypeParameterSymbol>.Empty)
+            : this(plan, classSym, sourceTypeParameters, classTypeParameters, ImmutableArray<TypeParameterSymbol>.Empty, 0)
         {
         }
 
@@ -274,13 +274,15 @@ internal sealed class StateMachineEmitter
             StructSymbol classSym,
             ImmutableArray<TypeParameterSymbol> sourceTypeParameters,
             ImmutableArray<TypeParameterSymbol> classTypeParameters,
-            ImmutableArray<TypeParameterSymbol> sourceTypeParameterOrigins)
+            ImmutableArray<TypeParameterSymbol> sourceTypeParameterOrigins,
+            int sourceTypeParameterOriginOffset)
         {
             this.Plan = plan;
             this.ClassSym = classSym;
             this.SourceTypeParameters = sourceTypeParameters;
             this.ClassTypeParameters = classTypeParameters;
             this.SourceTypeParameterOrigins = sourceTypeParameterOrigins;
+            this.SourceTypeParameterOriginOffset = sourceTypeParameterOriginOffset;
         }
 
         public IteratorStateMachinePlan Plan { get; }
@@ -319,6 +321,12 @@ internal sealed class StateMachineEmitter
         public ImmutableArray<TypeParameterSymbol> SourceTypeParameterOrigins { get; }
 
         /// <summary>
+        /// Gets the first state-machine slot occupied by
+        /// <see cref="SourceTypeParameterOrigins"/>.
+        /// </summary>
+        public int SourceTypeParameterOriginOffset { get; }
+
+        /// <summary>
         /// Issue #810 + #1465 + #2951: returns the emit-time remap from each
         /// original receiver/method type parameter to its corresponding
         /// class-type-parameter ordinal on the synthesized state machine, or
@@ -343,7 +351,7 @@ internal sealed class StateMachineEmitter
             // SourceTypeParameterOrigins for why the body names the originals.
             for (var i = 0; i < this.SourceTypeParameterOrigins.Length; i++)
             {
-                map[this.SourceTypeParameterOrigins[i]] = i;
+                map[this.SourceTypeParameterOrigins[i]] = this.SourceTypeParameterOriginOffset + i;
             }
 
             return map;
@@ -585,6 +593,14 @@ internal sealed class StateMachineEmitter
             ?? function.StaticOwnerType as StructSymbol;
         var definition = containingType == null ? null : containingType.Definition ?? containingType;
         return definition?.ReifiedFromTypeParameters ?? ImmutableArray<TypeParameterSymbol>.Empty;
+    }
+
+    private static int GetIteratorSourceTypeParameterOriginOffset(FunctionSymbol function)
+    {
+        var containingType = function.ReceiverType as StructSymbol
+            ?? function.StaticOwnerType as StructSymbol;
+        var definition = containingType == null ? null : containingType.Definition ?? containingType;
+        return definition?.ReifiedTypeParameterOrdinalOffset ?? 0;
     }
 
     #region Iterator state-machine synthesis
@@ -906,7 +922,8 @@ internal sealed class StateMachineEmitter
                 smClass,
                 scopeTPs,
                 classTPs,
-                GetIteratorSourceTypeParameterOrigins(plan.Function));
+                GetIteratorSourceTypeParameterOrigins(plan.Function),
+                GetIteratorSourceTypeParameterOriginOffset(plan.Function));
 
             // Issue #2907: closure materialization inside the SYNC MoveNext body is
             // emitter-owned and bypasses IteratorMoveNextBodyBuilder's variable->field

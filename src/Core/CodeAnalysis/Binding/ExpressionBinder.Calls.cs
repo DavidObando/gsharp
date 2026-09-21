@@ -1263,6 +1263,12 @@ internal sealed partial class ExpressionBinder
         var name = syntax.Identifier.ValueText;
         switch (name)
         {
+            case "adapt" when syntax.Identifier.Text == "adapt":
+            {
+                result = bindStructuralAdaptation(syntax);
+                return true;
+            }
+
             case "cast":
             {
                 if (syntax.TypeArgumentList == null

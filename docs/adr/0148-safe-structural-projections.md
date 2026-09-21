@@ -299,7 +299,10 @@ let listener MouseListener = object : MouseListener {
 }
 ```
 
-Structural interface adapters may be proposed separately with explicit syntax.
+ADR-0189, accepted and implemented on 2026-09-20, supplies that separate
+explicit operation as `adapt[I](source)` (plus persistent value-type location
+mode `adapt[I](ref handle)`). It does not change this ADR's concrete projection
+rules or add an implicit interface conversion.
 
 ## Consequences
 

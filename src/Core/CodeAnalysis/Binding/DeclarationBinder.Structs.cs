@@ -879,7 +879,10 @@ internal sealed partial class DeclarationBinder
         // Issue #306: bind and resolve an explicit base-constructor initializer
         // (`: Base(args)`). The arguments are bound in a scope that exposes the
         // primary-constructor parameters so they can be forwarded to the base.
-        BindBaseConstructorInitializer(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
+        if (!syntax.IsSynthesizedRichAnonymousObject)
+        {
+            BindBaseConstructorInitializer(syntax, structSymbol, baseClassSymbol, importedBaseType, primaryCtorParameters);
+        }
 
         // Issue #640 / issue #1070: the deferred instance-field initializer
         // expressions, const-field foldings, and `shared`-block initializers are

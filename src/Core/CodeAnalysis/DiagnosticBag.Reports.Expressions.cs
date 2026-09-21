@@ -1200,6 +1200,24 @@ public sealed partial class DiagnosticBag
     public void ReportInferredFieldTypeNotAllowedInRichAnonymousObject(TextLocation location, string fieldName)
     => Report(location, DiagnosticDescriptors.InferredFieldTypeNotAllowedInRichAnonymousObject, fieldName);
 
+    /// <summary>Reports that an omitted rich anonymous field type cannot be inferred safely.</summary>
+    /// <param name="location">The field identifier location.</param>
+    /// <param name="fieldName">The field name.</param>
+    public void ReportRichAnonymousFieldInference(TextLocation location, string fieldName)
+    => Report(location, DiagnosticDescriptors.RichAnonymousFieldInference, fieldName);
+
+    /// <summary>Reports a compile-time structural adaptation failure.</summary>
+    /// <param name="location">The adaptation expression location.</param>
+    /// <param name="sourceType">The source type display.</param>
+    /// <param name="targetType">The target interface display.</param>
+    /// <param name="reason">The exact unsupported or mismatched contract.</param>
+    public void ReportStructuralAdaptation(
+        TextLocation location,
+        string sourceType,
+        string targetType,
+        string reason)
+    => Report(location, DiagnosticDescriptors.StructuralAdaptation, sourceType, targetType, reason);
+
     /// <summary>
     /// Issue #987: GS0386 — an attempt to construct (instantiate) an abstract
     /// class. A class is abstract when it declares (or inherits without

@@ -84,6 +84,9 @@ public sealed class BoundScope
     private AsyncLocal<string?> qualifiedConstructionPackageHint = new AsyncLocal<string?>();
 
     private Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>? richAnonymousClassMap;
+    private Dictionary<RichAnonymousObjectBindingKey, RichAnonymousObjectPlan>? richAnonymousObjectPlans;
+    private Dictionary<StructSymbol, RichAnonymousObjectPlan>? latestRichAnonymousObjectPlans;
+    private StructuralAdapterRegistry? structuralAdapterRegistry;
 
     // Issues #4089/#4090: the declaration-phase queue of G#-declared generic
     // TYPE-CLAUSE constraint checks, and the latch that says a check must be
@@ -1934,6 +1937,15 @@ public sealed class BoundScope
     /// <returns>The shared rich-anonymous-object map for this scope's chain.</returns>
     internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> GetRichAnonymousClassMap()
         => Parent != null ? Parent.GetRichAnonymousClassMap() : richAnonymousClassMap ??= new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
+
+    internal Dictionary<RichAnonymousObjectBindingKey, RichAnonymousObjectPlan> GetRichAnonymousObjectPlans()
+        => Parent != null ? Parent.GetRichAnonymousObjectPlans() : richAnonymousObjectPlans ??= new Dictionary<RichAnonymousObjectBindingKey, RichAnonymousObjectPlan>();
+
+    internal Dictionary<StructSymbol, RichAnonymousObjectPlan> GetLatestRichAnonymousObjectPlans()
+        => Parent != null ? Parent.GetLatestRichAnonymousObjectPlans() : latestRichAnonymousObjectPlans ??= new Dictionary<StructSymbol, RichAnonymousObjectPlan>();
+
+    internal StructuralAdapterRegistry GetStructuralAdapterRegistry()
+        => Parent != null ? Parent.GetStructuralAdapterRegistry() : structuralAdapterRegistry ??= new StructuralAdapterRegistry();
 
     /// <summary>
     /// Issues #4089/#4090: gets the queue of G#-declared generic TYPE-CLAUSE

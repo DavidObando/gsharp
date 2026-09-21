@@ -1912,14 +1912,13 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindRichAnonymousClassExpression(AnonymousClassExpressionSyntax syntax)
     {
-        // The desugaring pass records the synthesized backing class for each
-        // rich anonymous-object literal keyed by syntax-node identity. The
-        // literal simply constructs it with no arguments — base-constructor
-        // arguments (spliced verbatim into the synthesized `: Base(args)`
-        // clause) and field initializers execute inside the synthesized ctor.
+        // The declaration pre-pass records a stable synthesized class shell
+        // for each rich literal. The Binder callback completes the literal-site
+        // inference/capture/base-constructor plan and returns its exact
+        // constructor call.
         if (scope.GetRichAnonymousClassMap().TryGetValue(syntax, out var classSymbol) && classSymbol != null)
         {
-            return new BoundConstructorCallExpression(syntax, classSymbol, ImmutableArray<BoundExpression>.Empty);
+            return bindRichAnonymousObject(syntax, classSymbol);
         }
 
         // Defensive: if the desugaring pass produced no symbol (it reported a

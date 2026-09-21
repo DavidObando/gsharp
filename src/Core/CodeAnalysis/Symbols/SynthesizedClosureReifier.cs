@@ -97,6 +97,10 @@ internal static class SynthesizedClosureReifier
     /// the clones must occupy CLR generic-parameter slots past the function's
     /// own, not restart at 0 and collide with them.
     /// </param>
+    /// <param name="additionalSubstitution">
+    /// Existing original-to-shell parameter mappings that appended constraints
+    /// may reference.
+    /// </param>
     /// <param name="preserveVariance">
     /// Whether to copy declaration-site variance. Synthesized classes and
     /// methods must pass <see langword="false"/> because CLR variance is valid
@@ -106,6 +110,7 @@ internal static class SynthesizedClosureReifier
     public static ImmutableArray<TypeParameterSymbol> CloneWithRemappedConstraints(
         ImmutableArray<TypeParameterSymbol> origTPs,
         int ordinalOffset = 0,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? additionalSubstitution = null,
         bool preserveVariance = true)
     {
         if (origTPs.IsDefaultOrEmpty)
@@ -135,6 +140,14 @@ internal static class SynthesizedClosureReifier
                 IsMethodTypeParameter = false,
             };
             subst[src] = clones[i];
+        }
+
+        if (additionalSubstitution != null)
+        {
+            foreach (var pair in additionalSubstitution)
+            {
+                subst.TryAdd(pair.Key, pair.Value);
+            }
         }
 
         for (var i = 0; i < origTPs.Length; i++)
@@ -216,5 +229,51 @@ internal static class SynthesizedClosureReifier
         return mapClrType is null
             ? StructSymbol.Construct(definition, typeArguments)
             : StructSymbol.Construct(definition, typeArguments, mapClrType);
+    }
+
+    /// <summary>
+    /// Appends cloned enclosing parameters after generic parameters already
+    /// declared by a synthesized shell, then constructs the combined type over
+    /// the shell arguments followed by the appended enclosing arguments.
+    /// </summary>
+    /// <param name="definition">The synthesized shell definition to extend.</param>
+    /// <param name="existingArguments">Arguments corresponding to the shell's existing parameters.</param>
+    /// <param name="origTPs">Additional enclosing parameters referenced by late-bound members.</param>
+    /// <param name="mapClrType">Optional CLR type projector for constructed generic arguments.</param>
+    /// <returns>The constructed shell over existing and appended arguments.</returns>
+    public static StructSymbol ReifyAppending(
+        StructSymbol definition,
+        ImmutableArray<TypeSymbol> existingArguments,
+        ImmutableArray<TypeParameterSymbol> origTPs,
+        System.Func<System.Type, System.Type>? mapClrType = null)
+    {
+        var offset = definition.TypeParameters.Length;
+        var existingSubstitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < existingArguments.Length && i < definition.TypeParameters.Length; i++)
+        {
+            if (existingArguments[i] is TypeParameterSymbol original)
+            {
+                existingSubstitution[original] = definition.TypeParameters[i];
+            }
+        }
+
+        var clones = CloneWithRemappedConstraints(
+            origTPs,
+            offset,
+            existingSubstitution,
+            preserveVariance: false);
+        definition.SetTypeParameters(definition.TypeParameters.AddRange(clones));
+        definition.SetReifiedFromTypeParameters(origTPs, offset);
+
+        var argumentBuilder = existingArguments.ToBuilder();
+        foreach (var parameter in origTPs)
+        {
+            argumentBuilder.Add(parameter);
+        }
+
+        var arguments = argumentBuilder.ToImmutable();
+        return mapClrType is null
+            ? StructSymbol.Construct(definition, arguments)
+            : StructSymbol.Construct(definition, arguments, mapClrType);
     }
 }
