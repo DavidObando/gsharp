@@ -142,6 +142,190 @@ public class Issue3402ShortCircuitPatternBinderTranslationTests
     }
 
     [Fact]
+    public void TypeOrPattern_PreservesNonNullNarrowing()
+    {
+        const string source = """
+            #nullable enable
+            namespace Demo
+            {
+                public class Base { }
+                public class A : Base { }
+                public class B : Base { }
+
+                public static class C
+                {
+                    private static void Use(Base value) { }
+
+                    public static void Read(Base? value)
+                    {
+                        if (value is A or B)
+                        {
+                            Use(value);
+                        }
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("if (value is A or B) {", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("value is A || value is B", rendered, StringComparison.Ordinal);
+        Assert.Contains("Use(value!!)", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void NonTypeOrPatterns_RetainGSharpFlowNarrowing()
+    {
+        const string source = """
+            #nullable enable
+            namespace Demo
+            {
+                public class Base { }
+                public class A : Base
+                {
+                    public string Name = "";
+                }
+
+                public static class C
+                {
+                    private static void UseBase(Base value) { }
+                    private static void UseString(string value) { }
+
+                    public static void ReadBase(Base? value)
+                    {
+                        if (value is A { Name: "x" or "y" })
+                        {
+                            UseBase(value);
+                        }
+                    }
+
+                    public static void ReadString(string? value)
+                    {
+                        if (value is "a" or "b")
+                        {
+                            UseString(value);
+                        }
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("UseBase(value)", rendered, StringComparison.Ordinal);
+        Assert.Contains("UseString(value)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("UseBase(value!!)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("UseString(value!!)", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void NonConstantOrPatterns_AddRequiredNullAssertion()
+    {
+        const string source = """
+            #nullable enable
+            namespace Demo
+            {
+                public class A { }
+
+                public static class C
+                {
+                    private static void UseObject(object value) { }
+
+                    public static void ReadObject(object? value)
+                    {
+                        if (value is A or 5)
+                        {
+                            UseObject(value);
+                        }
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains("UseObject(value!!)", rendered, StringComparison.Ordinal);
+        Assert.Contains("value is A or 5", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
+    public void NegatedTypeOrPattern_AddsNullAssertionAfterGuard()
+    {
+        const string source = """
+            #nullable enable
+            namespace Demo
+            {
+                public class Base { }
+                public class A : Base { }
+                public class B : Base { }
+
+                public static class C
+                {
+                    private static void Use(Base value) { }
+
+                    public static void Read(Base? value)
+                    {
+                        if (value is not (A or B))
+                        {
+                            return;
+                        }
+
+                        Use(value);
+                    }
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string rendered = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("Use(value!!)", rendered, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(rendered);
+    }
+
+    [Fact]
     public void InferredGenericEnumTryParse_RendersExplicitTypeArgument()
     {
         const string source = """

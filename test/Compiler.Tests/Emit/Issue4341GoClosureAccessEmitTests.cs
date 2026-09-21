@@ -70,7 +70,13 @@ public class Issue4341GoClosureAccessEmitTests
                 func run() { scope { go work() } }
             }
 
+            interface VariantInterfaceWorker[out T] {
+                private func work() { Console.WriteLine("variant interface") }
+                func run() { scope { go work() } }
+            }
+
             class StringInterfaceWorker : InterfaceWorker[string] {}
+            class StringVariantInterfaceWorker : VariantInterfaceWorker[string] {}
 
             InstanceWorker().run()
             SharedWorker[string].run()
@@ -80,11 +86,13 @@ public class Issue4341GoClosureAccessEmitTests
             Console.WriteLine(AsyncLetWorker().run())
             let interfaceWorker InterfaceWorker[string] = StringInterfaceWorker()
             interfaceWorker.run()
+            let variantInterfaceWorker VariantInterfaceWorker[string] = StringVariantInterfaceWorker()
+            variantInterfaceWorker.run()
             """;
 
         var output = CompileVerifyAndRun(source);
         Assert.Equal(
-            $"1{Environment.NewLine}shared{Environment.NewLine}protected{Environment.NewLine}struct{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}interface{Environment.NewLine}",
+            $"1{Environment.NewLine}shared{Environment.NewLine}protected{Environment.NewLine}struct{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}interface{Environment.NewLine}variant interface{Environment.NewLine}",
             output);
     }
 
