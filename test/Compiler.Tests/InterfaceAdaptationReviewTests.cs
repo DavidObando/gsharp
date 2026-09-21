@@ -179,6 +179,40 @@ public sealed class InterfaceAdaptationReviewTests
     }
 
     [Fact]
+    public void ScopedManagedHandlesCannotEnterRichStoredState()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var invalid = new[]
+        {
+            """
+            interface Reader { func Read() int32; }
+            func Bad(scoped handle managed[int32]) object {
+                return object : Reader {
+                    let Snapshot = handle
+                    func Read() int32 -> *Snapshot
+                }
+            }
+            """,
+            """
+            open class Base(Value managed[int32]) { }
+            func Bad(scoped handle managed[int32]) object {
+                return object : Base(handle) { }
+            }
+            """,
+        };
+        for (var i = 0; i < invalid.Length; i++)
+        {
+            var (code, output) = fixture.TryCompile(
+                "package ScopedRichStorage\n" + invalid[i],
+                "scoped-rich-storage-" + i,
+                executable: false);
+            Assert.NotEqual(0, code);
+            Assert.Contains("error GS0604:", output);
+            Assert.Contains("scoped managed handle", output);
+        }
+    }
+
+    [Fact]
     public void MixedOriginAdaptersForwardBothDirectionsAndImportedBaseSlots()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
@@ -837,6 +871,37 @@ public sealed class InterfaceAdaptationReviewTests
             Assert.NotEqual(0, code);
             Assert.Contains("error GS0606:", output);
         }
+
+    }
+
+    [Fact]
+    public void UnsupportedAccessorCustomModifiersRejectBeforeMethodImplEmission()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = Path.Combine(fixture.Directory, "UnsupportedAdapterModifiers.dll");
+        BuildUnsupportedModifierContractLibrary(contracts);
+        var (code, output) = fixture.TryCompile(
+            """
+            package UnsupportedModifierConsumer
+            import UnsupportedAdapterModifiers
+            func Bad() { let adapted = adapt[ITarget](Source()) }
+            """,
+            "unsupported-modifier-consumer",
+            executable: false,
+            "/r:" + contracts);
+        Assert.NotEqual(0, code);
+        Assert.Contains("error GS0606:", output);
+
+        var control = fixture.Compile(
+            """
+            package SupportedModifierControl
+            import UnsupportedAdapterModifiers
+            func Main() { let adapted = adapt[IControl](ControlSource()) }
+            """,
+            "supported-modifier-control",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(control, new[] { contracts });
     }
 
     [Fact]
@@ -959,6 +1024,66 @@ public sealed class InterfaceAdaptationReviewTests
             first,
             second);
         assembly.Save(path);
+    }
+
+    private static void BuildUnsupportedModifierContractLibrary(string path)
+    {
+        var assembly = new PersistedAssemblyBuilder(
+            new AssemblyName("UnsupportedAdapterModifiers"),
+            typeof(object).Assembly);
+        var module = assembly.DefineDynamicModule("UnsupportedAdapterModifiers");
+        DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.ITarget", isInterface: true, useModifier: true);
+        DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.Source", isInterface: false, useModifier: true);
+        DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.IControl", isInterface: true, useModifier: false);
+        DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.ControlSource", isInterface: false, useModifier: false);
+        assembly.Save(path);
+    }
+
+    private static void DefineModifierPropertyType(
+        ModuleBuilder module,
+        string name,
+        bool isInterface,
+        bool useModifier)
+    {
+        var attributes = TypeAttributes.Public
+            | (isInterface
+                ? TypeAttributes.Interface | TypeAttributes.Abstract
+                : TypeAttributes.Class);
+        var type = module.DefineType(name, attributes);
+        if (!isInterface)
+        {
+            type.DefineDefaultConstructor(MethodAttributes.Public);
+        }
+
+        var methodAttributes = MethodAttributes.Public
+            | MethodAttributes.HideBySig
+            | MethodAttributes.SpecialName;
+        if (isInterface)
+        {
+            methodAttributes |= MethodAttributes.Virtual
+                | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot;
+        }
+
+        var getter = type.DefineMethod("get_Value", methodAttributes);
+        getter.SetSignature(
+            typeof(int),
+            returnTypeRequiredCustomModifiers: null,
+            returnTypeOptionalCustomModifiers: useModifier
+                ? new[] { typeof(System.Runtime.CompilerServices.IsVolatile) }
+                : null,
+            parameterTypes: Type.EmptyTypes,
+            parameterTypeRequiredCustomModifiers: null,
+            parameterTypeOptionalCustomModifiers: null);
+        if (!isInterface)
+        {
+            getter.GetILGenerator().Emit(OpCodes.Ldc_I4_1);
+            getter.GetILGenerator().Emit(OpCodes.Ret);
+        }
+
+        var property = type.DefineProperty("Value", PropertyAttributes.None, typeof(int), Type.EmptyTypes);
+        property.SetGetMethod(getter);
+        type.CreateType();
     }
 
     private static Type DefineEventInterface(

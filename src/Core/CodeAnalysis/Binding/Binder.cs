@@ -3254,6 +3254,14 @@ public sealed class Binder
                 return new BoundErrorExpression(syntax);
             }
 
+            if (ManagedReferenceOrigins.IsScopedHandle(value))
+            {
+                Diagnostics.ReportManagedReference(
+                    member.Value.Location,
+                    $"a scoped managed handle cannot be stored in rich anonymous field '{member.Identifier.ValueText}'");
+                return new BoundErrorExpression(syntax);
+            }
+
             if (value is BoundVariableExpression receiverValue
                 && receiverValue.Variable is ParameterSymbol { IsReceiverParameter: true }
                 && value.Type.IsValueType)
@@ -3298,6 +3306,14 @@ public sealed class Binder
         foreach (var argument in syntax.BaseConstructorArguments)
         {
             var boundArgument = Expressions.BindExpression(argument);
+            if (ManagedReferenceOrigins.IsScopedHandle(boundArgument))
+            {
+                Diagnostics.ReportManagedReference(
+                    argument.Location,
+                    "a scoped managed handle cannot be retained as a rich-object base argument");
+                return new BoundErrorExpression(syntax);
+            }
+
             if (boundArgument is BoundVariableExpression receiverArgument
                 && receiverArgument.Variable is ParameterSymbol { IsReceiverParameter: true }
                 && boundArgument.Type.IsValueType)
@@ -7374,7 +7390,9 @@ public sealed class Binder
     }
 
     private static bool AdapterParameterMetadataMatches(ParameterInfo target, ParameterInfo source)
-        => AdapterModifierSequenceMatches(
+        => AdapterParameterMetadataSupported(target)
+            && AdapterParameterMetadataSupported(source)
+            && AdapterModifierSequenceMatches(
                 target.GetRequiredCustomModifiers(),
                 source.GetRequiredCustomModifiers())
             && AdapterModifierSequenceMatches(
