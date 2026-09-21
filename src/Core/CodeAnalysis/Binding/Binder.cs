@@ -5025,7 +5025,9 @@ public sealed class Binder
                 adapterTypeParameters,
                 scope.References.MapClrTypeToReferences);
         registry.Types.Add(adapter);
-        if (!handleMode && IsReferenceTypeForConstraint(sourceMemberType))
+        if (!handleMode
+            && (IsReferenceTypeForConstraint(sourceMemberType)
+                || sourceMemberType is TypeParameterSymbol { HasValueTypeConstraint: false }))
         {
             var saved = new LocalVariableSymbol($"<>adaptSource{registry.Counter}", isReadOnly: true, source.Type);
             var read = new BoundVariableExpression(syntax, saved);
@@ -5429,6 +5431,17 @@ public sealed class Binder
                                 sourceMemberType.Name,
                                 target.Name,
                                 $"missing public event '{slot.Name}' with exact add/remove contract");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (readOnlyHandle)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"readonly managed-handle adaptation cannot forward event '{slot.Name}'");
                             failed = true;
                             continue;
                         }

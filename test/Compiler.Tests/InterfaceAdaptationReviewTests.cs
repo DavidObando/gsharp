@@ -66,6 +66,32 @@ public sealed class InterfaceAdaptationReviewTests
     }
 
     [Fact]
+    public void UnconstrainedGenericAdaptersCheckReferenceInstantiationsForNull()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package GenericAdapterNulls
+            import System
+            interface DefaultOnly { func Read() int32 { return 1 } }
+            func Adapt[T](source T) DefaultOnly -> adapt[DefaultOnly](source)
+            func Main() {
+                try {
+                    let value = Adapt[string?](nil)
+                    Console.WriteLine("missed")
+                } catch (ArgumentNullException) {
+                    Console.WriteLine("null")
+                }
+                Console.WriteLine(Adapt[int32](7).Read())
+            }
+            """,
+            "generic-adapter-nulls",
+            executable: true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("null\n1\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void UserTargetsRespectReadonlyImportedHandleMembers()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
@@ -900,16 +926,43 @@ public sealed class InterfaceAdaptationReviewTests
             """
             package DefaultEventConsumer
             import DefaultEvents
+            interface Target : IDefault { }
             func Main() {
                 var value = 1
                 let location = readonly managed(value)
-                let adapted = adapt[IDefault](ref location)
+                let adapted = adapt[Target](ref location)
             }
             """,
             "default-event-consumer",
             executable: true,
             "/r:" + contracts);
         IlVerifier.Verify(valid, new[] { contracts });
+
+        var eventSource = fixture.CompileCSharp(
+            """
+            using System;
+            namespace InheritedImportedEvent;
+            public interface IBase { event Action? Changed; }
+            public struct Source { public event Action? Changed; }
+            """,
+            "InheritedImportedEvent");
+        var (readonlyCode, readonlyOutput) = fixture.TryCompile(
+            """
+            package InvalidReadonlyInheritedEvent
+            import InheritedImportedEvent
+            interface Target : IBase { }
+            func Bad() {
+                var source = Source{}
+                let location = readonly managed(source)
+                let adapted = adapt[Target](ref location)
+            }
+            """,
+            "invalid-readonly-inherited-event",
+            executable: false,
+            "/r:" + eventSource);
+        Assert.NotEqual(0, readonlyCode);
+        Assert.Contains("error GS0606:", readonlyOutput);
+        Assert.Contains("readonly managed-handle adaptation cannot forward event 'Changed'", readonlyOutput);
 
         foreach (var target in new[] { "IPartial", "IConflict" })
         {
