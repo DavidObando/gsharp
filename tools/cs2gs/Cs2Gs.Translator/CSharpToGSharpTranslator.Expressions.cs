@@ -1992,6 +1992,7 @@ public sealed partial class CSharpToGSharpTranslator
                     || !this.BindsToGuardSymbol(isPattern.Expression, symbol)
                     || !IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true)
                     || !TryGetPatternNonNullPolarity(isPattern.Pattern, out bool whenTrue)
+                    || !this.GSharpPatternPreservesNonNullNarrowing(isPattern, whenTrue)
                     || (PatternUsesNativeVariableSyntax(isPattern.Pattern)
                         && !this.ConditionUsesNativePatternVariables(GetConditionRoot(isPattern)))
                     || !ComputePatternFlowRegions(

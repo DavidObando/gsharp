@@ -1965,7 +1965,15 @@ internal sealed partial class MethodBodyEmitter
                     $"Closure invoke method '{genericLocal.Info.InvokeMethod.Name}' has no emitted MethodDef.");
             }
 
-            EntityHandle invokeToken = invokeHandle;
+            // Issue #4341 follow-up: when the closure class was reified over
+            // its GENERIC lexical encloser's own type parameters (nested to
+            // preserve private/protected access), the open MethodDef is not
+            // a valid call target — a MemberRef parented at the constructed
+            // closure TypeSpec is required first, matching
+            // ResolveUserInstanceMethodToken's ADR-0087 §3 R3 handling.
+            EntityHandle invokeToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(genericLocal.Info.ConstructedClassSym)
+                ? this.outer.userTokens.ResolveUserInstanceMethodToken(genericLocal.Info.ConstructedClassSym, genericLocal.Info.InvokeMethod, invokeHandle)
+                : invokeHandle;
             if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
             {
                 invokeToken = nullableLift != null
