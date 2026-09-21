@@ -933,7 +933,7 @@ public abstract class BoundTreeRewriter
         // The go statement's syntax is its stable identity: the emitter finds
         // the closure synthesized for it by that syntax when a state-machine
         // rewrite has rebuilt the node (ADR-0174 D4 makes that the common case).
-        return new BoundGoStatement(node.Syntax, expression, sink, resultCell, node.ResultType);
+        return new BoundGoStatement(node.Syntax, expression, sink, resultCell, node.ResultType, node.LexicalEnclosingType);
     }
 
     /// <summary>

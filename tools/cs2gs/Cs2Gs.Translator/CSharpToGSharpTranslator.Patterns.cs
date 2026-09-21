@@ -876,9 +876,12 @@ public sealed partial class CSharpToGSharpTranslator
             // CAE-mentioning pattern must be refused here too and fall through
             // to the final legacy boolean lowering (TranslatePatternTest),
             // where BuildTypeTestExpression's leaf hook handles it soundly.
+            bool requiresNativeDisjunctiveNarrowing =
+                this.RequiresNativeDisjunctiveNarrowing(isPattern);
             if (!PatternIntroducesBinding(isPattern.Pattern)
                 && !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _)
-                && ((!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
+                && (requiresNativeDisjunctiveNarrowing
+                    || (!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
                         && !this.IsSmartCastableScrutinee(isPattern.Expression))
                     || PatternRequiresNestedTypeNarrowing(isPattern.Pattern)))
             {

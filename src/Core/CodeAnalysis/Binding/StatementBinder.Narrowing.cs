@@ -1469,7 +1469,8 @@ internal sealed partial class StatementBinder
                     expression,
                     new BoundVariableExpression(null, cell),
                     new BoundVariableExpression(null, cell),
-                    resultType)));
+                    resultType,
+                    function?.ReceiverType ?? function?.StaticOwnerType ?? function?.LexicalEnclosingType)));
     }
 
     private BoundStatement BindVariableDeclaration(VariableDeclarationSyntax syntax)

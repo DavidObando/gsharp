@@ -767,6 +767,17 @@ internal sealed partial class MethodBodyEmitter
         BoundFunctionLiteralExpression literal,
         ClosureEmitter.ClosureInfo closure)
     {
+        // Issue #4341 follow-up: a direct-call generic local function whose
+        // closure class was nested inside a GENERIC lexical encloser (and so
+        // reified over the encloser's own type parameters, see
+        // ClosureEmitter.CollectOwnerTypeParameters) is itself a generic
+        // type. A bare MethodDef/FieldDef of a member on a generic type is
+        // an illegal ctor/field token (TypeLoadException at load), so route
+        // through the constructed-TypeSpec token machinery — mirroring the
+        // capture-bearing delegate path in EmitFunctionLiteral above.
+        var constructedClosure = closure.ConstructedClassSym;
+        var closureIsGeneric = ReflectionMetadataEmitter.IsUserGenericTypeReference(constructedClosure);
+
         if (!this.outer.cache.ClassCtorHandles.TryGetValue(closure.ClassSym, out var ctorHandle))
         {
             throw new InvalidOperationException(
@@ -774,14 +785,30 @@ internal sealed partial class MethodBodyEmitter
         }
 
         this.il.OpCode(ILOpCode.Newobj);
-        this.il.Token(ctorHandle);
+        this.il.Token(closureIsGeneric
+            ? this.outer.userTokens.ResolveUserCtorTokenForDefault(constructedClosure)
+            : ctorHandle);
         foreach (var captured in literal.CapturedVariables)
         {
-            if (!closure.CaptureFields.TryGetValue(captured, out var field)
-                || !this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldHandle))
+            if (!closure.CaptureFields.TryGetValue(captured, out var field))
             {
                 throw new InvalidOperationException(
-                    $"Closure for '{literal.Function.Name}' has no emitted field for captured '{captured.Name}'.");
+                    $"Closure for '{literal.Function.Name}' has no field mapping for captured '{captured.Name}'.");
+            }
+
+            EntityHandle fieldHandle;
+            if (closureIsGeneric)
+            {
+                fieldHandle = this.outer.userTokens.ResolveFieldToken(constructedClosure, field);
+            }
+            else if (!this.outer.cache.StructFieldDefs.TryGetValue(field, out var fieldDefHandle))
+            {
+                throw new InvalidOperationException(
+                    $"Closure for '{literal.Function.Name}' has no emitted FieldDef for captured '{captured.Name}'.");
+            }
+            else
+            {
+                fieldHandle = fieldDefHandle;
             }
 
             this.il.OpCode(ILOpCode.Dup);

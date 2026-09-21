@@ -76,7 +76,7 @@ internal static class SynthesizedClosureReifier
     /// parameters whose constraint reference types are remapped from the
     /// originals onto the freshly cloned set. Uses a TWO-PASS approach:
     /// (1) create every clone (name / ordinal / kind / reference-, value- and
-    /// default-constructor-constraint flags / variance) and build the
+    /// default-constructor-constraint flags / optional variance) and build the
     /// <c>original → clone</c> substitution map; (2) for each clone substitute
     /// that map into the original's <see cref="TypeParameterSymbol.InterfaceConstraint"/>,
     /// <see cref="TypeParameterSymbol.ClrInterfaceConstraint"/> and
@@ -101,11 +101,17 @@ internal static class SynthesizedClosureReifier
     /// Existing original-to-shell parameter mappings that appended constraints
     /// may reference.
     /// </param>
+    /// <param name="preserveVariance">
+    /// Whether to copy declaration-site variance. Synthesized classes and
+    /// methods must pass <see langword="false"/> because CLR variance is valid
+    /// only on interface and delegate type parameters.
+    /// </param>
     /// <returns>The cloned type parameters with remapped constraints.</returns>
     public static ImmutableArray<TypeParameterSymbol> CloneWithRemappedConstraints(
         ImmutableArray<TypeParameterSymbol> origTPs,
         int ordinalOffset = 0,
-        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? additionalSubstitution = null)
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? additionalSubstitution = null,
+        bool preserveVariance = true)
     {
         if (origTPs.IsDefaultOrEmpty)
         {
@@ -125,7 +131,7 @@ internal static class SynthesizedClosureReifier
                 src.Name,
                 ordinalOffset + i,
                 src.Constraint,
-                src.Variance)
+                preserveVariance ? src.Variance : TypeParameterVariance.None)
             {
                 HasReferenceTypeConstraint = src.HasReferenceTypeConstraint,
                 HasValueTypeConstraint = src.HasValueTypeConstraint,
@@ -208,7 +214,7 @@ internal static class SynthesizedClosureReifier
         ImmutableArray<TypeParameterSymbol> origTPs,
         System.Func<System.Type, System.Type>? mapClrType = null)
     {
-        var clones = CloneWithRemappedConstraints(origTPs);
+        var clones = CloneWithRemappedConstraints(origTPs, preserveVariance: false);
 
         definition.SetTypeParameters(clones);
         definition.SetReifiedFromTypeParameters(origTPs);

@@ -37,13 +37,21 @@ public sealed class BoundGoStatement : BoundStatement
     /// <param name="sink">The child's cell, which is also its completion sink.</param>
     /// <param name="resultCell">A read of the <c>AsyncLetCell[R]</c> the child's value is deposited into (ADR-0174 D15), or <see langword="null"/> for an ordinary <c>go</c>.</param>
     /// <param name="resultType">The binding's type <c>R</c>, carried alongside the cell because a same-compilation type travels symbolically and the cell's CLR type closes over <c>object</c>.</param>
-    public BoundGoStatement(SyntaxNode? syntax, BoundExpression expression, BoundExpression? sink, BoundExpression? resultCell, TypeSymbol? resultType)
+    /// <param name="lexicalEnclosingType">The user-defined type whose member-access domain the synthesized goroutine helper must retain.</param>
+    public BoundGoStatement(
+        SyntaxNode? syntax,
+        BoundExpression expression,
+        BoundExpression? sink,
+        BoundExpression? resultCell,
+        TypeSymbol? resultType,
+        TypeSymbol? lexicalEnclosingType = null)
         : base(syntax)
     {
         Expression = expression;
         Sink = sink;
         ResultCell = resultCell;
         ResultType = resultType;
+        LexicalEnclosingType = lexicalEnclosingType;
     }
 
     /// <inheritdoc/>
@@ -67,4 +75,10 @@ public sealed class BoundGoStatement : BoundStatement
 
     /// <summary>Gets the <c>async let</c> binding's type, or <see langword="null"/> for an ordinary <c>go</c>.</summary>
     public TypeSymbol? ResultType { get; }
+
+    /// <summary>
+    /// Gets the nearest enclosing user-defined type whose accessibility domain
+    /// the synthesized goroutine helper must retain.
+    /// </summary>
+    public TypeSymbol? LexicalEnclosingType { get; }
 }

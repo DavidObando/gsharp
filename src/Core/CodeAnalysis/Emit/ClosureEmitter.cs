@@ -315,14 +315,12 @@ internal sealed class ClosureEmitter
                 // (GS0586) when that owner is itself generic.
                 if (literal.Function.IsGeneric
                     || literal.Function.LexicalEnclosingType is not { } zeroCaptureEnclosing
-                    || zeroCaptureEnclosing is not (StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }))
+                    || zeroCaptureEnclosing is not (StructSymbol or InterfaceSymbol))
                 {
                     continue;
                 }
 
-                var requiredTypeParameters = zeroCaptureEnclosing is StructSymbol enclosingStruct
-                    ? enclosingStruct.TypeParameters
-                    : ImmutableArray<TypeParameterSymbol>.Empty;
+                var requiredTypeParameters = CollectOwnerTypeParameters(zeroCaptureEnclosing);
                 var hostName = "<lambda_host_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
                 var hostInfo = this.SynthesizeDisplayClass(
                     hostName,
@@ -359,6 +357,9 @@ internal sealed class ClosureEmitter
             if (literal.Function.LocalDeclaration != null && literal.CapturedVariables.Length > 0)
             {
                 var genericClosureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+                var requiredTypeParameters = literal.Function.LexicalEnclosingType is { } genericOwner
+                    ? CollectOwnerTypeParameters(genericOwner)
+                    : ImmutableArray<TypeParameterSymbol>.Empty;
                 var genericInfo = this.SynthesizeDisplayClass(
                     genericClosureName,
                     literal.CapturedVariables,
@@ -367,6 +368,7 @@ internal sealed class ClosureEmitter
                     literal.Body,
                     hostPackage,
                     invokeName: "Invoke",
+                    requiredTypeParameters: requiredTypeParameters,
                     excludedTypeParameters: literal.Function.TypeParameters);
 
                 // Transfer the generic local's type parameters to the Invoke method
@@ -377,7 +379,7 @@ internal sealed class ClosureEmitter
 
                 // Nest inside enclosing type if accessible
                 if (literal.Function.LexicalEnclosingType is { } genericEnclosing
-                    && genericEnclosing is StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }
+                    && genericEnclosing is StructSymbol or InterfaceSymbol
                     && genericInfo.ClassSym.ContainingType == null)
                 {
                     genericInfo.ClassSym.SetContainingType(genericEnclosing);
@@ -387,6 +389,9 @@ internal sealed class ClosureEmitter
             }
 
             var closureName = "<closure_" + literal.Function.Name + "_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+            var requiredClosureTypeParameters = literal.Function.LexicalEnclosingType is { } owner
+                ? CollectOwnerTypeParameters(owner)
+                : ImmutableArray<TypeParameterSymbol>.Empty;
             var info = this.SynthesizeDisplayClass(
                 closureName,
                 literal.CapturedVariables,
@@ -394,7 +399,8 @@ internal sealed class ClosureEmitter
                 literal.Function.Type,
                 literal.Body,
                 hostPackage,
-                invokeName: "Invoke");
+                invokeName: "Invoke",
+                requiredTypeParameters: requiredClosureTypeParameters);
 
             this.ClosureInfos[literal] = info;
 
@@ -417,7 +423,7 @@ internal sealed class ClosureEmitter
             // top-level type and its Invoke could not read the generic encloser's
             // private captured field ("Field is not visible").
             if (literal.Function.LexicalEnclosingType is { } enclosing
-                && enclosing is StructSymbol or InterfaceSymbol { TypeParameters.IsEmpty: true }
+                && enclosing is StructSymbol or InterfaceSymbol
                 && info.ClassSym.ContainingType == null)
             {
                 info.ClassSym.SetContainingType(enclosing);
@@ -475,6 +481,10 @@ internal sealed class ClosureEmitter
                     new BoundReturnStatement(null, new BoundDefaultExpression(null, valueTaskType))));
 
             var closureName = "<go_" + System.Threading.Interlocked.Increment(ref this.Counter).ToString(System.Globalization.CultureInfo.InvariantCulture) + ">";
+            var enclosingType = go.LexicalEnclosingType;
+            var requiredTypeParameters = enclosingType is { } owner
+                ? CollectOwnerTypeParameters(owner)
+                : ImmutableArray<TypeParameterSymbol>.Empty;
             var info = this.SynthesizeDisplayClass(
                 closureName,
                 captured,
@@ -482,7 +492,16 @@ internal sealed class ClosureEmitter
                 returnType,
                 body,
                 hostPackage,
-                invokeName: "InvokeAction");
+                invokeName: "InvokeAction",
+                requiredTypeParameters: requiredTypeParameters);
+
+            // A go operand was bound with the access rights of its lexical
+            // member. Keep those rights after lowering by placing its helper in
+            // the same CLR accessibility domain, as ordinary lambda hosts do.
+            if (enclosingType is StructSymbol or InterfaceSymbol)
+            {
+                info.ClassSym.SetContainingType(enclosingType);
+            }
 
             this.GoClosureInfos[go] = info;
             if (go.Syntax != null)
@@ -669,6 +688,14 @@ internal sealed class ClosureEmitter
 
         return false;
     }
+
+    private static ImmutableArray<TypeParameterSymbol> CollectOwnerTypeParameters(TypeSymbol owner) =>
+        StructSymbol.CollectEnclosingTypeParameters(owner).AddRange(owner switch
+        {
+            StructSymbol enclosingStruct => (enclosingStruct.Definition ?? enclosingStruct).TypeParameters,
+            InterfaceSymbol enclosingInterface => enclosingInterface.Definition.TypeParameters,
+            _ => ImmutableArray<TypeParameterSymbol>.Empty,
+        });
 
     /// <summary>
     /// Captured-variable metadata for a single synthesized display class.

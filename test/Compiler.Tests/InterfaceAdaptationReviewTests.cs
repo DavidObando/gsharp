@@ -707,6 +707,18 @@ public sealed class InterfaceAdaptationReviewTests
                         func Outer() object -> outer
                     }
                 }
+
+                private func MakeInferred[T struct](inner T) -> object {
+                    let Outer = this.Value
+                    func Inner() T -> inner
+                    func OuterValue() object -> Outer
+                }
+
+                func PrintInferred[T struct](inner T) {
+                    let value = MakeInferred[T](inner)
+                    Console.WriteLine(value.Inner())
+                    Console.WriteLine(value.OuterValue())
+                }
             }
 
             func Main() {
@@ -721,12 +733,13 @@ public sealed class InterfaceAdaptationReviewTests
                 let mixed = Shadow[string]("shadow").Make[int32](4)
                 Console.WriteLine(mixed.Inner())
                 Console.WriteLine(mixed.Outer())
+                Shadow[string]("inferred").PrintInferred[int32](5)
             }
             """,
             "rich-generic-shells",
             executable: true);
         IlVerifier.Verify(dll);
-        Assert.Equal("owner\n2\nnested\n3\nTrue\n4\nshadow\n", fixture.Run(dll));
+        Assert.Equal("owner\n2\nnested\n3\nTrue\n4\nshadow\n5\ninferred\n", fixture.Run(dll));
 
         var reference = Path.Combine(fixture.Directory, "RichGenericApi.ref.dll");
         var library = fixture.Compile(

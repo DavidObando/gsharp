@@ -3583,6 +3583,16 @@ public sealed class Binder
                     scope.References.MapClrTypeToReferences);
         }
 
+        if (function?.Type is StructSymbol inferredReturn
+            && (ReferenceEquals(inferredReturn, classSymbol)
+                || ReferenceEquals(inferredReturn.Definition, classSymbol))
+            && function.Declaration is { Type: null, Body.Statements.Length: 1 } declaration
+            && declaration.Body.Statements[0] is ReturnStatementSyntax { Expression: var returned }
+            && ReferenceEquals(returned, syntax))
+        {
+            function.SetRichAnonymousReturnType(constructedType);
+        }
+
         var plan = new RichAnonymousObjectPlan(constructedType, arguments, methodBodies);
         plans[planKey] = plan;
         scope.GetLatestRichAnonymousObjectPlans()[classSymbol] = plan;
