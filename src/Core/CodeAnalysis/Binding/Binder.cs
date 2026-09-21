@@ -3951,8 +3951,13 @@ public sealed class Binder
                     failed = true;
                 }
 
-                foreach (var slot in iface.Events)
+                var eventSlots = iface.Definition != null
+                    && !ReferenceEquals(iface.Definition, iface)
+                    ? iface.Definition.Events
+                    : iface.Events;
+                foreach (var slot in eventSlots)
                 {
+                    var contract = GetUserAdapterEventContract(iface, slot);
                     if (sourceMemberType.ClrType is Type importedSource)
                     {
                         if (readOnlyHandle)
@@ -3970,7 +3975,7 @@ public sealed class Binder
                             .Where(candidate => candidate.Name == slot.Name
                                 && ImportedEventMetadataSupported(candidate)
                                 && EventContractsMatch(
-                                    slot,
+                                    contract,
                                     CreateImportedAdapterContractEvent(candidate, sourceMemberType)))
                             .ToArray();
                         if (importedCandidates.Length == 0)
@@ -4000,8 +4005,9 @@ public sealed class Binder
                             sourceField,
                             sourceMemberType,
                             handleMode,
-                            slot,
+                            contract,
                             iface,
+                            slot,
                             importedCandidates[0]);
                         events.Add(importedGenerated.Event);
                         foreach (var body in importedGenerated.Bodies)
@@ -4018,7 +4024,7 @@ public sealed class Binder
                         .OfType<EventSymbol>()
                         .Where(candidate => candidate.Name == slot.Name
                             && candidate.Accessibility == Accessibility.Public
-                            && EventContractsMatch(slot, candidate))
+                            && EventContractsMatch(contract, candidate))
                         .ToImmutableArray();
                     if (candidates.Length == 0)
                     {
@@ -4047,8 +4053,9 @@ public sealed class Binder
                         sourceField,
                         sourceMemberType,
                         handleMode,
-                        slot,
+                        contract,
                         iface,
+                        slot,
                         candidates[0]);
                     events.Add(generated.Event);
                     foreach (var body in generated.Bodies)
@@ -4057,19 +4064,24 @@ public sealed class Binder
                     }
                 }
 
-                foreach (var slot in iface.Properties)
+                var propertySlots = iface.Definition != null
+                    && !ReferenceEquals(iface.Definition, iface)
+                    ? iface.Definition.Properties
+                    : iface.Properties;
+                foreach (var slot in propertySlots)
                 {
+                    var contract = GetUserAdapterPropertyContract(iface, slot);
                     if (sourceMemberType.ClrType is Type importedSource)
                     {
                         var importedCandidates = GetImportedSourceProperties(importedSource)
                             .Where(candidate => candidate.Name == slot.Name
                                 && ImportedPropertyMetadataSupported(candidate)
                                 && (!readOnlyHandle
-                                    || (!slot.HasSetter
+                                    || (!contract.HasSetter
                                         && candidate.GetMethod != null
                                         && RefCapabilities.IsReadOnlyMethod(candidate.GetMethod)))
                                 && PropertyContractsMatch(
-                                    slot,
+                                    contract,
                                     CreateImportedAdapterContractProperty(candidate, sourceMemberType)))
                             .ToArray();
                         if (importedCandidates.Length == 0)
@@ -4107,8 +4119,9 @@ public sealed class Binder
                             sourceField,
                             sourceMemberType,
                             handleMode,
-                            slot,
+                            contract,
                             iface,
+                            slot,
                             importedCandidates[0]);
                         properties.Add(importedGenerated.Property);
                         foreach (var body in importedGenerated.Bodies)
@@ -4125,7 +4138,7 @@ public sealed class Binder
                         .OfType<PropertySymbol>()
                         .Where(candidate => candidate.Name == slot.Name
                             && candidate.Accessibility == Accessibility.Public
-                            && PropertyContractsMatch(slot, candidate))
+                            && PropertyContractsMatch(contract, candidate))
                         .ToImmutableArray();
                     if (candidates.Length == 0)
                     {
@@ -4162,8 +4175,9 @@ public sealed class Binder
                         sourceField,
                         sourceMemberType,
                         handleMode,
-                        slot,
+                        contract,
                         iface,
+                        slot,
                         candidates[0]);
                     properties.Add(generated.Property);
                     foreach (var body in generated.Bodies)
@@ -5853,6 +5867,7 @@ public sealed class Binder
         bool handleMode,
         PropertySymbol slot,
         InterfaceSymbol slotOwner,
+        PropertySymbol interfaceSlot,
         PropertySymbol sourceProperty)
     {
         var indexParameters = slot.Parameters.Select(parameter => new ParameterSymbol(
@@ -5875,7 +5890,7 @@ public sealed class Binder
             IsIndexer = slot.IsIndexer,
             Parameters = indexParameters,
             ReturnRefKind = slot.ReturnRefKind,
-            ExplicitInterfaceMember = slot,
+            ExplicitInterfaceMember = interfaceSlot,
             ExplicitInterfaceClauseTarget = slotOwner,
         };
         var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
@@ -5967,6 +5982,7 @@ public sealed class Binder
         bool handleMode,
         PropertySymbol slot,
         InterfaceSymbol slotOwner,
+        PropertySymbol interfaceSlot,
         PropertyInfo sourceProperty)
     {
         var indexParameters = slot.Parameters.Select(parameter => new ParameterSymbol(
@@ -5989,7 +6005,7 @@ public sealed class Binder
             IsIndexer = slot.IsIndexer,
             Parameters = indexParameters,
             ReturnRefKind = slot.ReturnRefKind,
-            ExplicitInterfaceMember = slot,
+            ExplicitInterfaceMember = interfaceSlot,
             ExplicitInterfaceClauseTarget = slotOwner,
         };
         var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
@@ -6295,6 +6311,7 @@ public sealed class Binder
         bool handleMode,
         EventSymbol slot,
         InterfaceSymbol slotOwner,
+        EventSymbol interfaceSlot,
         EventSymbol sourceEvent)
     {
         var eventSymbol = new EventSymbol(
@@ -6305,7 +6322,7 @@ public sealed class Binder
             isVirtual: false,
             isOverride: false)
         {
-            ExplicitInterfaceMember = slot,
+            ExplicitInterfaceMember = interfaceSlot,
             ExplicitInterfaceClauseTarget = slotOwner,
         };
         var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
@@ -6371,6 +6388,7 @@ public sealed class Binder
         bool handleMode,
         EventSymbol slot,
         InterfaceSymbol slotOwner,
+        EventSymbol interfaceSlot,
         EventInfo sourceEvent)
     {
         var eventSymbol = new EventSymbol(
@@ -6381,7 +6399,7 @@ public sealed class Binder
             isVirtual: false,
             isOverride: false)
         {
-            ExplicitInterfaceMember = slot,
+            ExplicitInterfaceMember = interfaceSlot,
             ExplicitInterfaceClauseTarget = slotOwner,
         };
         var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
@@ -7260,6 +7278,122 @@ public sealed class Binder
         }
 
         return true;
+    }
+
+    private static PropertySymbol GetUserAdapterPropertyContract(
+        InterfaceSymbol owner,
+        PropertySymbol slot)
+    {
+        var propertyType = owner.SubstituteMemberType(slot.Type);
+        var parameterBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(slot.Parameters.Length);
+        var parametersChanged = false;
+        foreach (var parameter in slot.Parameters)
+        {
+            var parameterType = owner.SubstituteMemberType(parameter.Type);
+            parametersChanged |= !ReferenceEquals(parameterType, parameter.Type);
+            parameterBuilder.Add(new ParameterSymbol(
+                parameter.Name,
+                parameterType,
+                parameter.IsVariadic,
+                isScoped: parameter.IsScoped,
+                refKind: parameter.RefKind));
+        }
+
+        var parameters = parameterBuilder.MoveToImmutable();
+        if (ReferenceEquals(propertyType, slot.Type)
+            && !parametersChanged)
+        {
+            return slot;
+        }
+
+        var contract = new PropertySymbol(
+            slot.Name,
+            propertyType,
+            slot.Accessibility,
+            slot.HasGetter,
+            slot.HasSetter,
+            slot.IsAutoProperty,
+            slot.IsVirtual,
+            slot.IsOverride,
+            slot.SetterParameterName,
+            slot.IsStatic,
+            slot.Declaration,
+            slot.IsInitOnly,
+            slot.GetterAccessibility,
+            slot.SetterAccessibility,
+            slot.MetadataIsAbstract)
+        {
+            IsIndexer = slot.IsIndexer,
+            Parameters = parameters,
+            ReturnRefKind = slot.ReturnRefKind,
+        };
+        if (slot.GetterSymbol != null)
+        {
+            contract.GetterSymbol = CloneUserAdapterAccessor(owner, slot.GetterSymbol);
+        }
+
+        if (slot.SetterSymbol != null)
+        {
+            contract.SetterSymbol = CloneUserAdapterAccessor(owner, slot.SetterSymbol);
+        }
+
+        return contract;
+    }
+
+    private static EventSymbol GetUserAdapterEventContract(
+        InterfaceSymbol owner,
+        EventSymbol slot)
+    {
+        var eventType = owner.SubstituteMemberType(slot.Type);
+        if (ReferenceEquals(eventType, slot.Type))
+        {
+            return slot;
+        }
+
+        return new EventSymbol(
+            slot.Name,
+            eventType,
+            slot.Accessibility,
+            slot.IsFieldLike,
+            slot.IsVirtual,
+            slot.IsOverride,
+            slot.IsStatic,
+            slot.Declaration)
+        {
+            AddMethodSymbol = slot.AddMethodSymbol,
+            RemoveMethodSymbol = slot.RemoveMethodSymbol,
+            RaiseMethodSymbol = slot.RaiseMethodSymbol,
+        };
+    }
+
+    private static FunctionSymbol CloneUserAdapterAccessor(
+        InterfaceSymbol owner,
+        FunctionSymbol accessor)
+    {
+        var parameters = accessor.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            owner.SubstituteMemberType(parameter.Type),
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var clone = new FunctionSymbol(
+            accessor.Name,
+            parameters,
+            owner.SubstituteMemberType(accessor.Type),
+            declaration: null,
+            accessor.Package,
+            accessor.Accessibility)
+        {
+            IsSpecialName = accessor.IsSpecialName,
+            IsInitOnlySetter = accessor.IsInitOnlySetter,
+            ReturnRefKind = accessor.ReturnRefKind,
+        };
+        if (accessor.HasUnscopedRef)
+        {
+            clone.MarkUnscopedRef();
+        }
+
+        return clone;
     }
 
     private static PropertyInfo[] GetImportedSourceProperties(Type source)

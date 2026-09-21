@@ -281,6 +281,148 @@ public sealed class InterfaceAdaptationReviewTests
     }
 
     [Fact]
+    public void PairwiseMatrix_LocalValueCopyForwardsImportedInheritedMembers()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            using System;
+            namespace PairwiseValueContracts;
+            public interface IBase<T> { T Echo(T value); }
+            public interface IComposite<T> : IBase<T>
+            {
+                T Value { get; set; }
+                T this[int index] { get; set; }
+                event Action<T> Changed;
+                void Raise(T value);
+            }
+            """,
+            "PairwiseValueContracts");
+        var dll = fixture.Compile(
+            """
+            package PairwiseValueConsumer
+            import System
+            import PairwiseValueContracts
+
+            struct LocalSource {
+                var stored int32
+                var indexed int32
+                event Changed (int32) -> void
+                func Echo(value int32) int32 -> value
+                prop Value int32 {
+                    get -> stored
+                    set -> this.stored = value
+                }
+                prop this[index int32] int32 {
+                    get -> indexed
+                    set -> this.indexed = value
+                }
+                func Raise(value int32) { Changed?.Invoke(value) }
+            }
+
+            func Main() {
+                var original = LocalSource{stored: 1, indexed: 2}
+                let adapted = adapt[IComposite[int32]](original)
+                var observed = 0
+                let handler = (value int32) -> { observed = value }
+                adapted.Changed += handler
+                adapted.Value = 51
+                adapted[0] = 52
+                adapted.Raise(53)
+                adapted.Changed -= handler
+                Console.WriteLine(adapted.Echo(50))
+                Console.WriteLine(adapted.Value)
+                Console.WriteLine(adapted[0])
+                Console.WriteLine(observed)
+                Console.WriteLine(original.stored)
+                Console.WriteLine(original.indexed)
+            }
+            """,
+            "pairwise-value-consumer",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(dll, new[] { contracts });
+        Assert.Equal("50\n51\n52\n53\n1\n2\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void PairwiseMatrix_ReadonlyHandleForwardsLocalInheritedGenericView()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            namespace PairwiseReadonlySources;
+            public struct Source<T>
+            {
+                private T value;
+                public Source(T value) => this.value = value;
+                public readonly T Read() => value;
+                public T Value { readonly get => value; set => this.value = value; }
+                public T this[int index] { readonly get => value; set => this.value = value; }
+            }
+            public sealed class Notifier<T>
+            {
+                public event System.Action<T>? Changed;
+                public void Raise(T value) => Changed?.Invoke(value);
+            }
+            """,
+            "PairwiseReadonlySources");
+        var dll = fixture.Compile(
+            """
+            package PairwiseReadonlyConsumer
+            import System
+            import PairwiseReadonlySources
+
+            interface BaseView[T] { func Read() T; }
+            interface View[T] : BaseView[T] {
+                prop Value T { get; }
+                prop this[index int32] T { get; }
+            }
+            interface EventView[T] {
+                event Changed (T) -> void
+                func Raise(value T);
+            }
+
+            func Main() {
+                var source = Source[string]("readonly")
+                let location = readonly managed(source)
+                let adapted = adapt[View[string]](ref location)
+                Console.WriteLine(adapted.Read())
+                Console.WriteLine(adapted.Value)
+                Console.WriteLine(adapted[0])
+
+                let notifier = Notifier[string]()
+                let events = adapt[EventView[string]](notifier)
+            }
+            """,
+            "pairwise-readonly-consumer",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(dll, new[] { contracts });
+        Assert.Equal("readonly\nreadonly\nreadonly\n", fixture.Run(dll));
+
+        var (code, output) = fixture.TryCompile(
+            """
+            package PairwiseReadonlyReject
+            import PairwiseReadonlySources
+            interface MutableView[T] {
+                prop Value T { get; set; }
+                prop this[index int32] T { get; set; }
+            }
+            func Bad() {
+                var source = Source[int32](1)
+                let location = readonly managed(source)
+                let adapted = adapt[MutableView[int32]](ref location)
+            }
+            """,
+            "pairwise-readonly-reject",
+            executable: false,
+            "/r:" + contracts);
+        Assert.NotEqual(0, code);
+        Assert.Contains("error GS0606:", output);
+    }
+
+    [Fact]
     public void SymbolicImportedGenericAdaptersPreserveEnclosingTypeParameters()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
