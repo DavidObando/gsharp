@@ -339,7 +339,10 @@ public sealed class BoundGlobalScope
     internal Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol> RichAnonymousClassMap { get; set; }
         = new Dictionary<GSharp.Core.CodeAnalysis.Syntax.AnonymousClassExpressionSyntax, StructSymbol>();
 
-    internal Dictionary<StructSymbol, RichAnonymousObjectPlan> RichAnonymousObjectPlans { get; set; }
+    internal Dictionary<RichAnonymousObjectBindingKey, RichAnonymousObjectPlan> RichAnonymousObjectPlans { get; set; }
+        = new Dictionary<RichAnonymousObjectBindingKey, RichAnonymousObjectPlan>();
+
+    internal Dictionary<StructSymbol, RichAnonymousObjectPlan> LatestRichAnonymousObjectPlans { get; set; }
         = new Dictionary<StructSymbol, RichAnonymousObjectPlan>();
 
     internal StructuralAdapterRegistry StructuralAdapters { get; set; } = new StructuralAdapterRegistry();

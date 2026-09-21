@@ -6,7 +6,6 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Runtime.Loader;
 using GSharp.Tests;
 using Xunit;
 
@@ -14,6 +13,126 @@ namespace GSharp.Compiler.Tests;
 
 public sealed class InterfaceAdaptationReviewTests
 {
+    [Fact]
+    public void RichPlansRemainBindingSpecificAcrossNullableSequenceSpecializations()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package RichNullableSequenceSpecializations
+            import System
+            interface Reader[T] { func Read() T; }
+            func values[T](value T) sequence[T?] {
+                let reader = object : Reader[T] {
+                    func Read() T -> value
+                }
+                yield reader.Read()
+                yield nil
+            }
+            func Main() {
+                for value in values[int32](46) {
+                    if value != nil { Console.WriteLine(value) }
+                }
+                for value in values[string]("specialized") {
+                    if value != nil { Console.WriteLine(value) }
+                }
+            }
+            """,
+            "rich-nullable-sequence-specializations",
+            executable: true);
+        IlVerifier.Verify(dll);
+        Assert.Equal("46\nspecialized\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void NullLiteralCannotBeAdaptedEvenToDefaultOnlyInterface()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = fixture.TryCompile(
+            """
+            package NullLiteralAdapter
+            interface Empty { }
+            interface DefaultOnly { func Read() int32 { return 1 } }
+            func Bad() {
+                let empty = adapt[Empty](nil)
+                let defaulted = adapt[DefaultOnly](nil)
+            }
+            """,
+            "null-literal-adapter",
+            executable: false);
+        Assert.NotEqual(0, code);
+        Assert.Equal(2, output.Split("error GS0606:").Length - 1);
+        Assert.Contains("null literal cannot be adapted", output);
+    }
+
+    [Fact]
+    public void UserTargetsRespectReadonlyImportedHandleMembers()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            using System;
+            namespace ReadonlyUserTargetAdapters;
+            public struct Source
+            {
+                private int value;
+                public Source(int value) => this.value = value;
+                public readonly int Read() => value;
+                public readonly int Value => value;
+                public int Mutable { get => value; set => this.value = value; }
+                public event Action? Changed;
+            }
+            """,
+            "ReadonlyUserTargetAdapters");
+        var valid = fixture.Compile(
+            """
+            package ReadonlyUserTargetControl
+            import System
+            import ReadonlyUserTargetAdapters
+            interface Reader {
+                func Read() int32;
+                prop Value int32 { get; }
+            }
+            func Main() {
+                var source = Source(47)
+                let location = readonly managed(source)
+                let adapted = adapt[Reader](ref location)
+                Console.WriteLine(adapted.Read())
+                Console.WriteLine(adapted.Value)
+            }
+            """,
+            "readonly-user-target-control",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(valid, new[] { contracts });
+        Assert.Equal("47\n47\n", fixture.Run(valid));
+
+        var invalid = new[]
+        {
+            "interface Target { prop Mutable int32 { get; set; } }",
+            "interface Target { event Changed () -> void }",
+        };
+        for (var i = 0; i < invalid.Length; i++)
+        {
+            var (code, output) = fixture.TryCompile(
+                $$"""
+                package InvalidReadonlyUserTarget
+                import ReadonlyUserTargetAdapters
+                {{invalid[i]}}
+                func Bad() {
+                    var source = Source(1)
+                    let location = readonly managed(source)
+                    let adapted = adapt[Target](ref location)
+                }
+                """,
+                "invalid-readonly-user-target-" + i,
+                executable: false,
+                "/r:" + contracts);
+            Assert.NotEqual(0, code);
+            Assert.Contains("error GS0606:", output);
+        }
+    }
+
     [Fact]
     public void RichBaseArgumentsRejectBorrowedAndRefLikeStorage()
     {
@@ -188,15 +307,22 @@ public sealed class InterfaceAdaptationReviewTests
         using var fixture = new NativeSliceLanguageTests.Fixture();
         var contracts = fixture.CompileCSharp(
             """
+            using System;
             namespace StaticAdapterProperties;
             public interface ITarget
             {
                 static int Helper => 1;
+                static event Action Changed { add { } remove { } }
                 int Read();
+            }
+            public interface IStaticRequired
+            {
+                static abstract event Action Changed;
             }
             public sealed class Source
             {
                 public int Helper => 2;
+                public event Action? Changed;
                 public int Read() => 45;
             }
             """,
@@ -216,6 +342,18 @@ public sealed class InterfaceAdaptationReviewTests
             "/r:" + contracts);
         IlVerifier.Verify(dll, new[] { contracts });
         Assert.Equal("45\n", fixture.Run(dll));
+
+        var (code, output) = fixture.TryCompile(
+            """
+            package InvalidStaticAdapterEvent
+            import StaticAdapterProperties
+            func Bad() { let adapted = adapt[IStaticRequired](Source()) }
+            """,
+            "invalid-static-adapter-event",
+            executable: false,
+            "/r:" + contracts);
+        Assert.NotEqual(0, code);
+        Assert.Contains("error GS0606:", output);
     }
 
     [Fact]
@@ -615,8 +753,8 @@ public sealed class InterfaceAdaptationReviewTests
         IlVerifier.Verify(dll, new[] { contracts });
         Assert.True(File.Exists(reference));
 
-        AssemblyLoadContext.Default.LoadFromAssemblyPath(contracts);
-        var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(dll);
+        var assemblies = EmittedFixture.LoadTogether(contracts, dll);
+        var assembly = assemblies[1];
         var adapter = Assert.Single(
             assembly.GetTypes(),
             type => type.Name.StartsWith("<>Adapter", StringComparison.Ordinal));

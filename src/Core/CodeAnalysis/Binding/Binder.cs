@@ -1805,6 +1805,7 @@ public sealed class Binder
         // bind literals appearing inside those bodies.
         result.RichAnonymousClassMap = binder.scope.GetRichAnonymousClassMap();
         result.RichAnonymousObjectPlans = binder.scope.GetRichAnonymousObjectPlans();
+        result.LatestRichAnonymousObjectPlans = binder.scope.GetLatestRichAnonymousObjectPlans();
         result.StructuralAdapters = binder.scope.GetStructuralAdapterRegistry();
 
         // Issue #3501 A2: carry the ref-kind delegate cache itself (not just
@@ -1851,6 +1852,7 @@ public sealed class Binder
                 AnonymousTypes = result.AnonymousTypes,
                 RichAnonymousClassMap = result.RichAnonymousClassMap,
                 RichAnonymousObjectPlans = result.RichAnonymousObjectPlans,
+                LatestRichAnonymousObjectPlans = result.LatestRichAnonymousObjectPlans,
                 StructuralAdapters = result.StructuralAdapters,
                 RefDelegateCache = result.RefDelegateCache,
             };
@@ -2101,6 +2103,16 @@ public sealed class Binder
             }
         }
 
+        if (globalScope?.LatestRichAnonymousObjectPlans != null
+            && globalScope.LatestRichAnonymousObjectPlans.Count > 0)
+        {
+            var latestRichPlans = parentScope.GetLatestRichAnonymousObjectPlans();
+            foreach (var kv in globalScope.LatestRichAnonymousObjectPlans)
+            {
+                latestRichPlans[kv.Key] = kv.Value;
+            }
+        }
+
         if (globalScope?.StructuralAdapters != null)
         {
             var adapters = parentScope.GetStructuralAdapterRegistry();
@@ -2178,7 +2190,7 @@ public sealed class Binder
 
             foreach (var method in structSym.Methods)
             {
-                if (parentScope.GetRichAnonymousObjectPlans().TryGetValue(structSym, out var richPlan)
+                if (parentScope.GetLatestRichAnonymousObjectPlans().TryGetValue(structSym, out var richPlan)
                     && richPlan.MethodBodies.TryGetValue(method, out var richBody))
                 {
                     functionBodies[method] = richBody;
@@ -3215,7 +3227,8 @@ public sealed class Binder
         StructSymbol classSymbol)
     {
         var plans = scope.GetRichAnonymousObjectPlans();
-        if (plans.TryGetValue(classSymbol, out var existing))
+        var planKey = new RichAnonymousObjectBindingKey(classSymbol, function);
+        if (plans.TryGetValue(planKey, out var existing))
         {
             return new BoundConstructorCallExpression(syntax, existing.ConstructedType, existing.Arguments);
         }
@@ -3555,7 +3568,8 @@ public sealed class Binder
         }
 
         var plan = new RichAnonymousObjectPlan(constructedType, arguments, methodBodies);
-        plans[classSymbol] = plan;
+        plans[planKey] = plan;
+        scope.GetLatestRichAnonymousObjectPlans()[classSymbol] = plan;
         return new BoundConstructorCallExpression(syntax, constructedType, arguments);
     }
 
@@ -3829,6 +3843,16 @@ public sealed class Binder
             return source;
         }
 
+        if (sourceMemberType == TypeSymbol.Null)
+        {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "the null literal cannot be adapted to a non-null interface");
+            return new BoundErrorExpression(syntax);
+        }
+
         if (sourceMemberType is NullableTypeSymbol)
         {
             Diagnostics.ReportStructuralAdaptation(
@@ -3915,6 +3939,17 @@ public sealed class Binder
                 {
                     if (sourceMemberType.ClrType is Type importedSource)
                     {
+                        if (readOnlyHandle)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"readonly managed-handle adaptation cannot forward event '{slot.Name}'");
+                            failed = true;
+                            continue;
+                        }
+
                         var importedCandidates = GetImportedSourceEvents(importedSource)
                             .Where(candidate => candidate.Name == slot.Name
                                 && EventContractsMatch(
@@ -4011,6 +4046,10 @@ public sealed class Binder
                     {
                         var importedCandidates = GetImportedSourceProperties(importedSource)
                             .Where(candidate => candidate.Name == slot.Name
+                                && (!readOnlyHandle
+                                    || (!slot.HasSetter
+                                        && candidate.GetMethod != null
+                                        && RefCapabilities.IsReadOnlyMethod(candidate.GetMethod)))
                                 && PropertyContractsMatch(
                                     slot,
                                     CreateImportedAdapterContractProperty(candidate, sourceMemberType)))
@@ -4562,6 +4601,11 @@ public sealed class Binder
 
                 foreach (var slot in targetInterface.GetEvents())
                 {
+                    if (slot.AddMethod?.IsStatic == true || slot.RemoveMethod?.IsStatic == true)
+                    {
+                        continue;
+                    }
+
                     var slotOwner = ClrTypeUtilities.AreSame(targetInterface, targetClr)
                         ? target
                         : MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot);
@@ -5130,6 +5174,11 @@ public sealed class Binder
 
                 foreach (var slot in targetInterface.GetEvents())
                 {
+                    if (slot.AddMethod?.IsStatic == true || slot.RemoveMethod?.IsStatic == true)
+                    {
+                        continue;
+                    }
+
                     var slotOwner = ClrTypeUtilities.AreSame(targetInterface, rootClr)
                         ? root
                         : MemberLookup.GetClrMemberDeclaringTypeSymbol(root, slot);
