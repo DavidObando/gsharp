@@ -98,6 +98,17 @@ public sealed class InterfaceAdaptationReviewTests
     }
 
     [Fact]
+    public void UserPropertyContractRequiresMatchingUnscopedRefMetadata()
+    {
+        var target = CreateRefProperty(unscoped: true);
+        var source = CreateRefProperty(unscoped: false);
+        Assert.False(GSharp.Core.CodeAnalysis.Binding.Binder.PropertyContractsMatch(target, source));
+
+        source.GetterSymbol?.MarkUnscopedRef();
+        Assert.True(GSharp.Core.CodeAnalysis.Binding.Binder.PropertyContractsMatch(target, source));
+    }
+
+    [Fact]
     public void AdapterNamesRemainUniqueAcrossBindingPhasesFilesPackagesAndRepeatedEmit()
     {
         var trees = new[]
@@ -164,6 +175,40 @@ public sealed class InterfaceAdaptationReviewTests
         {
             Assert.True(program.Functions.ContainsKey(method), method.Name);
         }
+    }
+
+    private static PropertySymbol CreateRefProperty(bool unscoped)
+    {
+        var property = new PropertySymbol(
+            "Value",
+            TypeSymbol.Int32,
+            Accessibility.Public,
+            hasGetter: true,
+            hasSetter: false,
+            isAutoProperty: false,
+            isVirtual: false,
+            isOverride: false)
+        {
+            ReturnRefKind = RefKind.Ref,
+        };
+        var getter = new FunctionSymbol(
+            "get_Value",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Int32,
+            declaration: null,
+            package: null,
+            Accessibility.Public)
+        {
+            IsSpecialName = true,
+            ReturnRefKind = RefKind.Ref,
+        };
+        if (unscoped)
+        {
+            getter.MarkUnscopedRef();
+        }
+
+        property.GetterSymbol = getter;
+        return property;
     }
 
     private sealed class RefConstructorBase

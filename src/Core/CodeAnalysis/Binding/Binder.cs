@@ -4071,6 +4071,24 @@ public sealed class Binder
                 foreach (var slot in propertySlots)
                 {
                     var contract = GetUserAdapterPropertyContract(iface, slot);
+                    if (slot.IsStatic)
+                    {
+                        if (slot.GetterSymbol?.IsAbstract == true
+                            || slot.SetterSymbol?.IsAbstract == true
+                            || slot.IsVirtual
+                            || !iface.IsSealed)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"static interface property requirement '{slot.Name}' is unsupported");
+                            failed = true;
+                        }
+
+                        continue;
+                    }
+
                     if (sourceMemberType.ClrType is Type importedSource)
                     {
                         var importedCandidates = GetImportedSourceProperties(importedSource)
@@ -7254,13 +7272,16 @@ public sealed class Binder
         }
     }
 
-    private static bool PropertyContractsMatch(PropertySymbol target, PropertySymbol source)
+    internal static bool PropertyContractsMatch(PropertySymbol target, PropertySymbol source)
     {
         if (target.IsIndexer != source.IsIndexer
             || target.Parameters.Length != source.Parameters.Length
             || target.ReturnRefKind != source.ReturnRefKind
             || (target.HasSetter && target.IsInitOnly != source.IsInitOnly)
             || (target.HasGetter && (!source.HasGetter || source.GetterAccessibility != Accessibility.Public))
+            || (target.HasGetter
+                && (target.GetterSymbol?.HasUnscopedRef == true)
+                    != (source.GetterSymbol?.HasUnscopedRef == true))
             || (target.HasSetter && (!source.HasSetter || source.SetterAccessibility != Accessibility.Public))
             || !AdapterTypesMatch(target.Type, source.Type))
         {

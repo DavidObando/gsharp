@@ -134,6 +134,28 @@ public sealed class InterfaceAdaptationReviewTests
     }
 
     [Fact]
+    public void UserStaticVirtualPropertiesAreNotInstanceAdapterSlots()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = fixture.TryCompile(
+            """
+            package InvalidUserStaticAdapterProperty
+            interface Target {
+                shared {
+                    prop Helper int32 { get { return 1 } }
+                }
+            }
+            class Source { prop Helper int32 -> 2 }
+            func Bad() { let adapted = adapt[Target](Source()) }
+            """,
+            "invalid-user-static-adapter-property",
+            executable: false);
+        Assert.NotEqual(0, code);
+        Assert.Contains("error GS0606:", output);
+        Assert.Contains("static interface property requirement", output);
+    }
+
+    [Fact]
     public void RichBaseArgumentsRejectBorrowedAndRefLikeStorage()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();
