@@ -880,17 +880,28 @@ public sealed class InterfaceAdaptationReviewTests
         using var fixture = new NativeSliceLanguageTests.Fixture();
         var contracts = Path.Combine(fixture.Directory, "UnsupportedAdapterModifiers.dll");
         BuildUnsupportedModifierContractLibrary(contracts);
-        var (code, output) = fixture.TryCompile(
-            """
-            package UnsupportedModifierConsumer
-            import UnsupportedAdapterModifiers
-            func Bad() { let adapted = adapt[ITarget](Source()) }
-            """,
-            "unsupported-modifier-consumer",
-            executable: false,
-            "/r:" + contracts);
-        Assert.NotEqual(0, code);
-        Assert.Contains("error GS0606:", output);
+        var invalid = new[]
+        {
+            "func Bad() { let adapted = adapt[ITarget](Source()) }",
+            "interface LocalTarget { prop Value int32 { get; } }\nfunc Bad() { let adapted = adapt[LocalTarget](Source()) }",
+            "class LocalSource { prop Value int32 -> 1 }\nfunc Bad() { let adapted = adapt[ITarget](LocalSource()) }",
+            "func Bad() { let adapted = adapt[IEventTarget](EventSource()) }",
+            "interface LocalEventTarget { event Changed () -> void }\nfunc Bad() { let adapted = adapt[LocalEventTarget](EventSource()) }",
+            "class LocalEventSource { event Changed () -> void }\nfunc Bad() { let adapted = adapt[IEventTarget](LocalEventSource()) }",
+            "func Bad() { let adapted = adapt[IMethodTarget](MethodSource()) }",
+            "interface LocalMethodTarget { func Read() int32; }\nfunc Bad() { let adapted = adapt[LocalMethodTarget](MethodSource()) }",
+            "class LocalMethodSource { func Read() int32 -> 1 }\nfunc Bad() { let adapted = adapt[IMethodTarget](LocalMethodSource()) }",
+        };
+        for (var i = 0; i < invalid.Length; i++)
+        {
+            var (code, output) = fixture.TryCompile(
+                "package UnsupportedModifierConsumer\nimport UnsupportedAdapterModifiers\n" + invalid[i],
+                "unsupported-modifier-consumer-" + i,
+                executable: false,
+                "/r:" + contracts);
+            Assert.NotEqual(0, code);
+            Assert.Contains("error GS0606:", output);
+        }
 
         var control = fixture.Compile(
             """
@@ -902,6 +913,67 @@ public sealed class InterfaceAdaptationReviewTests
             executable: true,
             "/r:" + contracts);
         IlVerifier.Verify(control, new[] { contracts });
+    }
+
+    [Fact]
+    public void MixedOriginRefPropertyMetadataRemainsExact()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = Path.Combine(fixture.Directory, "RefPropertyAdapterContracts.dll");
+        BuildRefPropertyContractLibrary(contracts);
+        var contractAssembly = EmittedFixture.Load(contracts);
+        var importedGetter = contractAssembly
+            .GetType("RefPropertyAdapterContracts.IUnscopedRefTarget")
+            ?.GetProperty("RefValue")
+            ?.GetMethod;
+        Assert.NotNull(importedGetter);
+        Assert.Contains(
+            importedGetter.ReturnParameter.GetCustomAttributesData(),
+            attribute => attribute.AttributeType.FullName
+                == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute");
+        var reference = Path.Combine(fixture.Directory, "RefPropertyAdapterApi.ref.dll");
+        var valid = fixture.Compile(
+            """
+            package RefPropertyAdapterApi
+            import System.Diagnostics.CodeAnalysis
+            import RefPropertyAdapterContracts
+
+            struct LocalSource {
+                shared { var stored int32 }
+                prop RefValue ref int32 -> LocalSource.stored
+            }
+
+            public func LocalSourceToImportedTarget(source LocalSource) IRefTarget {
+                return adapt[IRefTarget](source)
+            }
+            """,
+            "RefPropertyAdapterApi",
+            executable: false,
+            "/r:" + contracts,
+            "/refout:" + reference);
+        IlVerifier.Verify(valid, new[] { contracts });
+        Assert.True(File.Exists(reference));
+
+        var invalid = new[]
+        {
+            """
+            struct LocalSource {
+                shared { var stored int32 }
+                prop RefValue ref int32 -> LocalSource.stored
+            }
+            func Bad() { let adapted = adapt[IUnscopedRefTarget](LocalSource{}) }
+            """,
+        };
+        for (var i = 0; i < invalid.Length; i++)
+        {
+            var (code, output) = fixture.TryCompile(
+                "package InvalidRefPropertyAdapter\nimport RefPropertyAdapterContracts\n" + invalid[i],
+                "invalid-ref-property-adapter-" + i,
+                executable: false,
+                "/r:" + contracts);
+            Assert.NotEqual(0, code);
+            Assert.True(output.Contains("error GS0606:", StringComparison.Ordinal), output);
+        }
     }
 
     [Fact]
@@ -1034,9 +1106,61 @@ public sealed class InterfaceAdaptationReviewTests
         var module = assembly.DefineDynamicModule("UnsupportedAdapterModifiers");
         DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.ITarget", isInterface: true, useModifier: true);
         DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.Source", isInterface: false, useModifier: true);
+        DefineModifierEventType(module, "UnsupportedAdapterModifiers.IEventTarget", isInterface: true);
+        DefineModifierEventType(module, "UnsupportedAdapterModifiers.EventSource", isInterface: false);
+        DefineModifierMethodType(module, "UnsupportedAdapterModifiers.IMethodTarget", isInterface: true);
+        DefineModifierMethodType(module, "UnsupportedAdapterModifiers.MethodSource", isInterface: false);
         DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.IControl", isInterface: true, useModifier: false);
         DefineModifierPropertyType(module, "UnsupportedAdapterModifiers.ControlSource", isInterface: false, useModifier: false);
         assembly.Save(path);
+    }
+
+    private static void BuildRefPropertyContractLibrary(string path)
+    {
+        var assembly = new PersistedAssemblyBuilder(
+            new AssemblyName("RefPropertyAdapterContracts"),
+            typeof(object).Assembly);
+        var module = assembly.DefineDynamicModule("RefPropertyAdapterContracts");
+        DefineRefPropertyInterface(module, "RefPropertyAdapterContracts.IRefTarget", unscoped: false);
+        DefineRefPropertyInterface(module, "RefPropertyAdapterContracts.IUnscopedRefTarget", unscoped: true);
+        assembly.Save(path);
+    }
+
+    private static void DefineRefPropertyInterface(
+        ModuleBuilder module,
+        string name,
+        bool unscoped)
+    {
+        var type = module.DefineType(
+            name,
+            TypeAttributes.Public | TypeAttributes.Interface | TypeAttributes.Abstract);
+        var methodAttributes = MethodAttributes.Public
+            | MethodAttributes.HideBySig
+            | MethodAttributes.SpecialName
+            | MethodAttributes.Virtual
+            | MethodAttributes.Abstract
+            | MethodAttributes.NewSlot;
+        var byRefInt = typeof(int).MakeByRefType();
+        var getter = type.DefineMethod("get_RefValue", methodAttributes);
+        getter.SetSignature(
+            byRefInt,
+            returnTypeRequiredCustomModifiers: null,
+            returnTypeOptionalCustomModifiers: null,
+            parameterTypes: Type.EmptyTypes,
+            parameterTypeRequiredCustomModifiers: null,
+            parameterTypeOptionalCustomModifiers: null);
+        if (unscoped)
+        {
+            var constructor = typeof(System.Diagnostics.CodeAnalysis.UnscopedRefAttribute)
+                .GetConstructor(Type.EmptyTypes);
+            Assert.NotNull(constructor);
+            getter.DefineParameter(0, ParameterAttributes.Retval, null)
+                .SetCustomAttribute(new CustomAttributeBuilder(constructor, Array.Empty<object>()));
+        }
+
+        var property = type.DefineProperty("RefValue", PropertyAttributes.None, byRefInt, Type.EmptyTypes);
+        property.SetGetMethod(getter);
+        type.CreateType();
     }
 
     private static void DefineModifierPropertyType(
@@ -1083,6 +1207,101 @@ public sealed class InterfaceAdaptationReviewTests
 
         var property = type.DefineProperty("Value", PropertyAttributes.None, typeof(int), Type.EmptyTypes);
         property.SetGetMethod(getter);
+        type.CreateType();
+    }
+
+    private static void DefineModifierMethodType(
+        ModuleBuilder module,
+        string name,
+        bool isInterface)
+    {
+        var attributes = TypeAttributes.Public
+            | (isInterface
+                ? TypeAttributes.Interface | TypeAttributes.Abstract
+                : TypeAttributes.Class);
+        var type = module.DefineType(name, attributes);
+        if (!isInterface)
+        {
+            type.DefineDefaultConstructor(MethodAttributes.Public);
+        }
+
+        var methodAttributes = MethodAttributes.Public | MethodAttributes.HideBySig;
+        if (isInterface)
+        {
+            methodAttributes |= MethodAttributes.Virtual
+                | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot;
+        }
+
+        var method = type.DefineMethod("Read", methodAttributes);
+        method.SetSignature(
+            typeof(int),
+            returnTypeRequiredCustomModifiers: null,
+            returnTypeOptionalCustomModifiers: new[]
+            {
+                typeof(System.Runtime.CompilerServices.IsVolatile),
+            },
+            parameterTypes: Type.EmptyTypes,
+            parameterTypeRequiredCustomModifiers: null,
+            parameterTypeOptionalCustomModifiers: null);
+        if (!isInterface)
+        {
+            method.GetILGenerator().Emit(OpCodes.Ldc_I4_1);
+            method.GetILGenerator().Emit(OpCodes.Ret);
+        }
+
+        type.CreateType();
+    }
+
+    private static void DefineModifierEventType(
+        ModuleBuilder module,
+        string name,
+        bool isInterface)
+    {
+        var attributes = TypeAttributes.Public
+            | (isInterface
+                ? TypeAttributes.Interface | TypeAttributes.Abstract
+                : TypeAttributes.Class);
+        var type = module.DefineType(name, attributes);
+        if (!isInterface)
+        {
+            type.DefineDefaultConstructor(MethodAttributes.Public);
+        }
+
+        var methodAttributes = MethodAttributes.Public
+            | MethodAttributes.HideBySig
+            | MethodAttributes.SpecialName;
+        if (isInterface)
+        {
+            methodAttributes |= MethodAttributes.Virtual
+                | MethodAttributes.Abstract
+                | MethodAttributes.NewSlot;
+        }
+
+        MethodBuilder Accessor(string prefix)
+        {
+            var method = type.DefineMethod(prefix + "_Changed", methodAttributes);
+            method.SetSignature(
+                typeof(void),
+                returnTypeRequiredCustomModifiers: null,
+                returnTypeOptionalCustomModifiers: null,
+                parameterTypes: new[] { typeof(Action) },
+                parameterTypeRequiredCustomModifiers: null,
+                parameterTypeOptionalCustomModifiers: new[]
+                {
+                    new[] { typeof(System.Runtime.CompilerServices.IsVolatile) },
+                });
+            if (!isInterface)
+            {
+                method.GetILGenerator().Emit(OpCodes.Ret);
+            }
+
+            return method;
+        }
+
+        var eventBuilder = type.DefineEvent("Changed", EventAttributes.None, typeof(Action));
+        eventBuilder.SetAddOnMethod(Accessor("add"));
+        eventBuilder.SetRemoveOnMethod(Accessor("remove"));
         type.CreateType();
     }
 

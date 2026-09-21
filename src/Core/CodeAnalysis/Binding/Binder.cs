@@ -3968,6 +3968,7 @@ public sealed class Binder
 
                         var importedCandidates = GetImportedSourceEvents(importedSource)
                             .Where(candidate => candidate.Name == slot.Name
+                                && ImportedEventMetadataSupported(candidate)
                                 && EventContractsMatch(
                                     slot,
                                     CreateImportedAdapterContractEvent(candidate, sourceMemberType)))
@@ -4062,6 +4063,7 @@ public sealed class Binder
                     {
                         var importedCandidates = GetImportedSourceProperties(importedSource)
                             .Where(candidate => candidate.Name == slot.Name
+                                && ImportedPropertyMetadataSupported(candidate)
                                 && (!readOnlyHandle
                                     || (!slot.HasSetter
                                         && candidate.GetMethod != null
@@ -4177,6 +4179,7 @@ public sealed class Binder
                         var importedCandidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedSource, slot.Name)
                             .Where(candidate => candidate.IsPublic
                                 && !candidate.IsStatic
+                                && ImportedMethodMetadataSupported(candidate)
                                 && (!readOnlyHandle || RefCapabilities.IsReadOnlyMethod(candidate))
                                 && MethodContractsMatch(
                                     slot,
@@ -4377,6 +4380,17 @@ public sealed class Binder
                         continue;
                     }
 
+                    if (!ImportedMethodMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"method '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
                     if (TryDescribeUnsupportedImportedAdapterConstraints(slot, out var constraintReason))
                     {
                         Diagnostics.ReportStructuralAdaptation(
@@ -4495,6 +4509,17 @@ public sealed class Binder
                         : MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot);
                     if (slot.GetMethod?.IsStatic == true || slot.SetMethod?.IsStatic == true)
                     {
+                        continue;
+                    }
+
+                    if (!ImportedPropertyMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"property/indexer '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
                         continue;
                     }
 
@@ -4619,6 +4644,17 @@ public sealed class Binder
                 {
                     if (slot.AddMethod?.IsStatic == true || slot.RemoveMethod?.IsStatic == true)
                     {
+                        continue;
+                    }
+
+                    if (!ImportedEventMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"event '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
                         continue;
                     }
 
@@ -4955,6 +4991,17 @@ public sealed class Binder
                         continue;
                     }
 
+                    if (!ImportedMethodMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"method '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
                     if (TryDescribeUnsupportedImportedAdapterConstraints(slot, out var constraintReason))
                     {
                         Diagnostics.ReportStructuralAdaptation(
@@ -4971,6 +5018,7 @@ public sealed class Binder
                         var candidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(sourceClr, slot.Name)
                             .Where(candidate => candidate.IsPublic
                                 && !candidate.IsStatic
+                                && ImportedMethodMetadataSupported(candidate)
                                 && (!readOnlyHandle || RefCapabilities.IsReadOnlyMethod(candidate))
                                 && ImportedMethodContractsMatch(
                                     slot,
@@ -5072,6 +5120,17 @@ public sealed class Binder
                         continue;
                     }
 
+                    if (!ImportedPropertyMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"property/indexer '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
                     var slotOwner = ClrTypeUtilities.AreSame(targetInterface, rootClr)
                         ? root
                         : MemberLookup.GetClrMemberDeclaringTypeSymbol(root, slot);
@@ -5081,6 +5140,7 @@ public sealed class Binder
                     {
                         var candidates = GetImportedSourceProperties(sourceClr)
                             .Where(candidate => candidate.Name == slot.Name
+                                && ImportedPropertyMetadataSupported(candidate)
                                 && (!readOnlyHandle
                                     || (!slot.CanWrite
                                         && candidate.GetMethod != null
@@ -5195,6 +5255,17 @@ public sealed class Binder
                         continue;
                     }
 
+                    if (!ImportedEventMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"event '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
                     var slotOwner = ClrTypeUtilities.AreSame(targetInterface, rootClr)
                         ? root
                         : MemberLookup.GetClrMemberDeclaringTypeSymbol(root, slot);
@@ -5202,6 +5273,7 @@ public sealed class Binder
                     {
                         var candidates = GetImportedSourceEvents(sourceClr)
                             .Where(candidate => candidate.Name == slot.Name
+                                && ImportedEventMetadataSupported(candidate)
                                 && ImportedEventContractsMatch(
                                     slot,
                                     slotOwner,
@@ -5694,7 +5766,7 @@ public sealed class Binder
         };
         if (property.GetMethod?.IsPublic == true)
         {
-            contract.GetterSymbol = new FunctionSymbol(
+            var getter = new FunctionSymbol(
                 $"get_{property.Name}",
                 indexParameters,
                 propertyType,
@@ -5705,6 +5777,7 @@ public sealed class Binder
                 IsSpecialName = true,
                 ReturnRefKind = contract.ReturnRefKind,
             };
+            contract.GetterSymbol = getter;
         }
 
         if (property.SetMethod?.IsPublic == true)
@@ -7398,7 +7471,29 @@ public sealed class Binder
             && AdapterModifierSequenceMatches(
                 target.GetOptionalCustomModifiers(),
                 source.GetOptionalCustomModifiers())
+            && IsAdapterScoped(target) == IsAdapterScoped(source)
             && HasAdapterUnscopedRef(target) == HasAdapterUnscopedRef(source);
+
+    private static bool ImportedMethodMetadataSupported(MethodInfo method)
+        => AdapterParameterMetadataSupported(method.ReturnParameter)
+            && method.GetParameters().All(AdapterParameterMetadataSupported);
+
+    private static bool ImportedPropertyMetadataSupported(PropertyInfo property)
+        => (property.GetMethod == null
+                || (ImportedMethodMetadataSupported(property.GetMethod)
+                    && !HasAdapterUnscopedRef(property.GetMethod.ReturnParameter)
+                    && !property.GetMethod.GetParameters().Any(IsAdapterScoped)))
+            && (property.SetMethod == null
+                || (ImportedMethodMetadataSupported(property.SetMethod)
+                    && !property.SetMethod.GetParameters().Any(IsAdapterScoped)));
+
+    private static bool ImportedEventMetadataSupported(EventInfo eventInfo)
+        => (eventInfo.AddMethod == null
+                || (ImportedMethodMetadataSupported(eventInfo.AddMethod)
+                    && !eventInfo.AddMethod.GetParameters().Any(IsAdapterScoped)))
+            && (eventInfo.RemoveMethod == null
+                || (ImportedMethodMetadataSupported(eventInfo.RemoveMethod)
+                    && !eventInfo.RemoveMethod.GetParameters().Any(IsAdapterScoped)));
 
     private static bool AdapterParameterMetadataSupported(ParameterInfo parameter)
         => parameter.GetOptionalCustomModifiers().Length == 0
