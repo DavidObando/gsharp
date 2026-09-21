@@ -15,6 +15,210 @@ namespace GSharp.Compiler.Tests;
 public sealed class InterfaceAdaptationReviewTests
 {
     [Fact]
+    public void RichBaseArgumentsRejectBorrowedAndRefLikeStorage()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            using System;
+            namespace RichBaseArguments;
+            public class RefBase { public RefBase(ref int value) { } }
+            public class SpanBase { public SpanBase(ReadOnlySpan<int> value) { } }
+            public class ScalarBase { public ScalarBase(int value) { } }
+            public static class Inputs
+            {
+                private static readonly int[] values = [1, 2];
+                public static ReadOnlySpan<int> Values => values;
+            }
+            """,
+            "RichBaseArguments");
+        var invalid = new[]
+        {
+            "func Bad() object { return object : SpanBase(Inputs.Values) { } }",
+        };
+        for (var i = 0; i < invalid.Length; i++)
+        {
+            var (code, output) = fixture.TryCompile(
+                "package InvalidRichBase\nimport RichBaseArguments\n" + invalid[i],
+                "invalid-rich-base-" + i,
+                executable: false,
+                "/r:" + contracts);
+            Assert.NotEqual(0, code);
+            Assert.True(output.Contains("cannot be retained", StringComparison.Ordinal), output);
+        }
+
+        var control = fixture.Compile(
+            """
+            package RichBaseControl
+            import RichBaseArguments
+            func Main() { let value = object : ScalarBase(7) { } }
+            """,
+            "rich-base-control",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(control, new[] { contracts });
+    }
+
+    [Fact]
+    public void MixedOriginAdaptersForwardBothDirectionsAndImportedBaseSlots()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            using System;
+            namespace MixedAdapterOrigins;
+            public interface IImported
+            {
+                int Read();
+                int Value { get; set; }
+                event Action<int> Changed;
+            }
+            public sealed class ImportedSource
+            {
+                public int Value { get; set; }
+                public int Read() => Value;
+                public event Action<int>? Changed;
+            }
+            public interface IGenericBase<T> { T Echo(T value); }
+            public sealed class ImportedGenericSource<T> { public T Echo(T value) => value; }
+            """,
+            "MixedAdapterOrigins");
+        var dll = fixture.Compile(
+            """
+            package MixedAdapterOriginConsumer
+            import System
+            import MixedAdapterOrigins
+
+            interface IUser {
+                func Read() int32;
+                prop Value int32 { get; set; }
+                event Changed (int32) -> void
+            }
+            interface IUserWithImportedBase[T] : IGenericBase[T] { }
+            class UserSource {
+                var stored int32
+                func Read() int32 -> stored
+                prop Value int32 {
+                    get -> stored
+                    set -> this.stored = value
+                }
+                event Changed (int32) -> void
+            }
+
+            func Main() {
+                let imported = ImportedSource()
+                let userTarget = adapt[IUser](imported)
+                userTarget.Value = 41
+                Console.WriteLine(userTarget.Read())
+
+                let user = UserSource()
+                let importedTarget = adapt[IImported](user)
+                importedTarget.Value = 42
+                Console.WriteLine(importedTarget.Read())
+
+                let inherited = adapt[IUserWithImportedBase[string]](ImportedGenericSource[string]())
+                Console.WriteLine(inherited.Echo("generic-base"))
+            }
+            """,
+            "mixed-adapter-origin-consumer",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(dll, new[] { contracts });
+        Assert.Equal("41\n42\ngeneric-base\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void SymbolicImportedGenericAdaptersPreserveEnclosingTypeParameters()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            using System;
+            namespace SymbolicImportedAdapters;
+            public interface IBase<T>
+            {
+                T Value { get; }
+                T this[int index] { get; }
+                event Action<T> Changed;
+            }
+            public interface IReader<T> : IBase<T> { T Read(); }
+            public sealed class Source<T>
+            {
+                private readonly T value;
+                public Source(T value) => this.value = value;
+                public T Value => value;
+                public T this[int index] => value;
+                public event Action<T>? Changed;
+                public T Read() => value;
+            }
+            """,
+            "SymbolicImportedAdapters");
+        var reference = Path.Combine(fixture.Directory, "SymbolicImportedAdapterApi.ref.dll");
+        var dll = fixture.Compile(
+            """
+            package SymbolicImportedAdapterApi
+            import System
+            import SymbolicImportedAdapters
+            public func Wrap[T](source Source[T]) IReader[T] {
+                return adapt[IReader[T]](source)
+            }
+            func Main() {
+                let text = Wrap[string](Source[string]("symbolic"))
+                Console.WriteLine(text.Read())
+                Console.WriteLine(text.Value)
+                Console.WriteLine(text[0])
+                let number = Wrap[int32](Source[int32](44))
+                Console.WriteLine(number.Read())
+                Console.WriteLine(number.Value)
+                Console.WriteLine(number[0])
+            }
+            """,
+            "SymbolicImportedAdapterApi",
+            executable: true,
+            "/r:" + contracts,
+            "/refout:" + reference);
+        IlVerifier.Verify(dll, new[] { contracts });
+        Assert.True(File.Exists(reference));
+        Assert.Equal("symbolic\nsymbolic\nsymbolic\n44\n44\n44\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void ConcreteStaticInterfacePropertiesAreNotAdapterSlots()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var contracts = fixture.CompileCSharp(
+            """
+            namespace StaticAdapterProperties;
+            public interface ITarget
+            {
+                static int Helper => 1;
+                int Read();
+            }
+            public sealed class Source
+            {
+                public int Helper => 2;
+                public int Read() => 45;
+            }
+            """,
+            "StaticAdapterProperties");
+        var dll = fixture.Compile(
+            """
+            package StaticAdapterPropertyConsumer
+            import System
+            import StaticAdapterProperties
+            func Main() {
+                let adapted = adapt[ITarget](Source())
+                Console.WriteLine(adapted.Read())
+            }
+            """,
+            "static-adapter-property-consumer",
+            executable: true,
+            "/r:" + contracts);
+        IlVerifier.Verify(dll, new[] { contracts });
+        Assert.Equal("45\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void GenericRichLiteralOmittedReturnUsesTheEnclosingConstruction()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

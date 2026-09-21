@@ -2882,6 +2882,7 @@ internal sealed class ReflectionMetadataEmitter
             if (!c.Methods.IsDefaultOrEmpty)
             {
                 System.Collections.Generic.HashSet<System.Type>? bridgeInterfaces = null;
+                System.Collections.Generic.HashSet<string>? symbolicBridgeInterfaces = null;
                 foreach (var method in c.Methods)
                 {
                     var declaringIface = method.ExplicitInterfaceSlot?.DeclaringType;
@@ -2899,10 +2900,43 @@ internal sealed class ReflectionMetadataEmitter
                             alreadyDeclared = true;
                             break;
                         }
+
+                        if (implemented != null
+                            && MemberLookup.TryGetSymbolicClrGenericInterface(
+                                implemented,
+                                out var openImplemented,
+                                out _)
+                            && openImplemented != null
+                            && ClrTypeUtilities.AreSame(openImplemented, declaringIface))
+                        {
+                            alreadyDeclared = true;
+                            break;
+                        }
                     }
 
                     if (alreadyDeclared)
                     {
+                        continue;
+                    }
+
+                    if (method.ExplicitInterfaceSlotContainingType is { } symbolicDeclaring
+                        && MemberLookup.TryGetSymbolicClrGenericInterface(
+                            symbolicDeclaring,
+                            out var openDeclaring,
+                            out _)
+                        && openDeclaring != null
+                        && ClrTypeUtilities.AreSame(openDeclaring, declaringIface))
+                    {
+                        symbolicBridgeInterfaces ??= new System.Collections.Generic.HashSet<string>(
+                            System.StringComparer.Ordinal);
+                        if (symbolicBridgeInterfaces.Add(
+                                symbolicDeclaring.ToDisplayString(DisplayFormat.FullyQualified)))
+                        {
+                            this.emitCtx.Metadata.AddInterfaceImplementation(
+                                this.cache.StructTypeDefs[c],
+                                this.memberRefs.GetElementTypeToken(symbolicDeclaring));
+                        }
+
                         continue;
                     }
 

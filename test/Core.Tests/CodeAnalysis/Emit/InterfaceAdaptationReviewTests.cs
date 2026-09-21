@@ -10,6 +10,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using Xunit;
@@ -18,6 +19,36 @@ namespace GSharp.Core.Tests.CodeAnalysis.Emit;
 
 public sealed class InterfaceAdaptationReviewTests
 {
+    [Fact]
+    public void RichBaseArgumentHeapRetentionRejectsRefAndRefLikeShapes()
+    {
+        var refConstructor = typeof(RefConstructorBase).GetConstructor(
+            new[] { typeof(int).MakeByRefType() });
+        Assert.NotNull(refConstructor);
+        var refInitializer = new BaseConstructorInitializer(
+            ImmutableArray<BoundExpression>.Empty,
+            refConstructor,
+            ImmutableArray.Create(RefKind.Ref));
+        Assert.True(GSharp.Core.CodeAnalysis.Binding.Binder.IsUnsupportedRichBaseArgument(
+            refInitializer,
+            argumentIndex: 0,
+            TypeSymbol.Int32));
+
+        var valueConstructor = typeof(ValueConstructorBase).GetConstructor(new[] { typeof(int) });
+        Assert.NotNull(valueConstructor);
+        var valueInitializer = new BaseConstructorInitializer(
+            ImmutableArray<BoundExpression>.Empty,
+            valueConstructor);
+        Assert.False(GSharp.Core.CodeAnalysis.Binding.Binder.IsUnsupportedRichBaseArgument(
+            valueInitializer,
+            argumentIndex: 0,
+            TypeSymbol.Int32));
+        Assert.True(GSharp.Core.CodeAnalysis.Binding.Binder.IsUnsupportedRichBaseArgument(
+            valueInitializer,
+            argumentIndex: 0,
+            TypeSymbol.FromClrType(typeof(ReadOnlySpan<int>))));
+    }
+
     [Fact]
     public void BodiesWithRichOrAdapterSynthesisBypassIncrementalBodyReuse()
     {
@@ -132,6 +163,20 @@ public sealed class InterfaceAdaptationReviewTests
         foreach (var method in syntheticTypes.SelectMany(type => type.Methods))
         {
             Assert.True(program.Functions.ContainsKey(method), method.Name);
+        }
+    }
+
+    private sealed class RefConstructorBase
+    {
+        public RefConstructorBase(ref int value)
+        {
+        }
+    }
+
+    private sealed class ValueConstructorBase
+    {
+        public ValueConstructorBase(int value)
+        {
         }
     }
 }
