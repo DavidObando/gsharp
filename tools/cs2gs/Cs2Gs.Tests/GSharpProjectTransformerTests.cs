@@ -137,6 +137,40 @@ public sealed class GSharpProjectTransformerTests
     }
 
     [Fact]
+    public void Transform_KeepsPassthroughProjectOutputAsCompileReference()
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "source", "App", "App.csproj");
+        string sourceRuntime = Path.Combine(scratch.Path, "source", "Runtime", "Runtime.csproj");
+        string destinationDirectory = Path.Combine(scratch.Path, "generated", "App");
+        string passthroughRuntime = Path.Combine(scratch.Path, "generated", "Runtime", "Runtime.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceProject));
+        Directory.CreateDirectory(destinationDirectory);
+        File.WriteAllText(
+            sourceProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <ProjectReference Include="..\Runtime\Runtime.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            destinationDirectory,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>
+            {
+                [Path.GetFullPath(sourceRuntime)] = passthroughRuntime,
+            });
+
+        XElement reference = SingleElement(transformed, "ProjectReference");
+        Assert.Equal("../Runtime/Runtime.csproj", reference.Attribute("Include")?.Value);
+        Assert.Null(reference.Attribute("ReferenceOutputAssembly"));
+    }
+
+    [Fact]
     public void Transform_UpgradesNerdbankGitVersioning()
     {
         using var scratch = new ScratchDirectory();

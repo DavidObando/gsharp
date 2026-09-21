@@ -158,7 +158,7 @@ public sealed class MigrationPipeline
         }
 
         string runDir = Path.Combine(outputRoot, runId);
-        this.options.GeneratedProjectPaths = apps.ToDictionary(
+        var generatedProjectPaths = apps.ToDictionary(
             app => Path.GetFullPath(app.ProjectPath),
             app => repositoryLayout
                 ? Path.Combine(
@@ -171,6 +171,18 @@ public sealed class MigrationPipeline
                     SanitizeAppId(app.Id),
                     Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
             StringComparer.OrdinalIgnoreCase);
+        if (repositoryLayout)
+        {
+            foreach (string passthroughProjectPath in this.options.PassthroughProjectPaths)
+            {
+                string fullPath = Path.GetFullPath(passthroughProjectPath);
+                generatedProjectPaths[fullPath] = Path.Combine(
+                    destinationRoot,
+                    Path.GetRelativePath(this.options.SourceRoot, fullPath));
+            }
+        }
+
+        this.options.GeneratedProjectPaths = generatedProjectPaths;
         IReadOnlyList<string> repositoryFiles = null;
         if (repositoryLayout)
         {
