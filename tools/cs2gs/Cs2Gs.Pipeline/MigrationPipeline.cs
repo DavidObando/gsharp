@@ -207,6 +207,9 @@ public sealed class MigrationPipeline
         RepositoryExcludedScope excludedScope = repositoryLayout
             ? RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
             : null;
+        RepositoryExcludedScope passthroughScope = repositoryLayout
+            ? RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.PassthroughProjectPaths)
+            : null;
         if (repositoryLayout)
         {
             string sdkMoniker = SdkCompileRunner.ResolveSdkMoniker(this.options.Config);
@@ -253,6 +256,16 @@ public sealed class MigrationPipeline
                 sdkMoniker))
             {
                 this.options.RepositoryAdditionalFiles.Add(mirroredProject);
+            }
+
+            foreach (string passthroughFile in RepositoryMirror.MirrorPassthroughProjects(
+                this.options.SourceRoot,
+                destinationRoot,
+                repositoryFiles,
+                passthroughScope,
+                this.options.GeneratedProjectPaths))
+            {
+                this.options.RepositoryAdditionalFiles.Add(passthroughFile);
             }
 
             // Issue #3862: the mirror must BE a repository before anything runs

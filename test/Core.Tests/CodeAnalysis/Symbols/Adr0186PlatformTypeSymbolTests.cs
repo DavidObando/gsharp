@@ -489,9 +489,9 @@ public class Adr0186PlatformTypeSymbolTests
     {
         var cases = new (TypeSymbol Emitted, byte Expected)[]
         {
-            (TypeSymbol.String, 1),
-            (NullableTypeSymbol.Get(TypeSymbol.String), 2),
-            (PlatformTypeSymbol.Get(TypeSymbol.String), 0),
+            (TypeSymbol.String, (byte)1),
+            (NullableTypeSymbol.Get(TypeSymbol.String), (byte)2),
+            (PlatformTypeSymbol.Get(TypeSymbol.String), (byte)0),
         };
 
         foreach (var (emitted, expectedByte) in cases)

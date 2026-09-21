@@ -21,9 +21,9 @@ name: cs2gs-selfmig-nightly
 #   validate — N shards, each downloading the migrated tree and running
 #              compile/ILVerify/test-parity for its own apps. These stages are
 #              independent per app, which is what makes them shardable. Shards
-#              are selected with `cs2gs validate --app`, NEVER with --exclude:
-#              excluding a project another app project-references breaks
-#              reference resolution and manufactures phantom cascades.
+#              are selected with `cs2gs validate --app`, never by changing the
+#              migrate pass's --exclude/--passthrough set: every shard must
+#              discover the same project graph.
 #   gate     — merges the shard results with the migrate pass's translate
 #              results, replays the shards' `!!` polish rewrites onto the
 #              migrated tree, re-measures the readability metrics and applies

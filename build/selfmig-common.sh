@@ -3,8 +3,8 @@
 # that BOTH the classic single-job path (build/run-cs2gs-selfmig.sh) and the
 # sharded path (run-cs2gs-selfmig-{migrate,validate,gate}.sh) must agree on:
 #
-#   - the --exclude set (it defines the DISCOVERED app set, so every stage of
-#     the sharded pipeline has to pass the identical list; see below),
+#   - the --exclude/--passthrough set (it defines the DISCOVERED app set, so
+#     every stage of the sharded pipeline has to pass the identical list),
 #   - the readability metric definitions,
 #   - the baseline threshold and per-app stage-floor evaluation and its output
 #     format.
@@ -31,19 +31,23 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cs2gs-counters.sh"
 # mirrored verbatim and four migrated projects — Extensions.Tests,
 # Compiler.Tests, Interpreter.Tests and Repl — project-reference it.
 #
-# INVARIANT (issue #3668): --exclude is NOT a sharding mechanism. Excluding a
-# project that another app project-references breaks reference resolution and
-# manufactures phantom cascades (dropping src/Core from a LanguageServer run
-# yielded ~794 bogus errors). Every job in the sharded pipeline therefore
-# passes this exact list; shards are selected with `cs2gs validate --shard`,
-# which narrows what is EXECUTED, never what is discovered.
-selfmig_excludes=(
+# INVARIANT (issue #3668): neither option is a sharding mechanism. Every job in
+# the sharded pipeline passes this exact list; shards are selected with
+# `cs2gs validate --shard`, which narrows what is EXECUTED, never what is
+# discovered. A kept app may reference a --passthrough project because its C#
+# project remains in the mirror; it must not reference a plain --exclude.
+selfmig_project_filters=(
   --exclude samples/ProjectRef/CSharpApp
   --exclude samples/PropertyRef/CSharpApp
   --exclude src/vs-gsharp/src/VsGsharp/VsGsharp.csproj
   --exclude src/vs-gsharp/src/VsGsharp.CodeLens/VsGsharp.CodeLens.csproj
   --exclude src/vs-gsharp/test/VsGsharp.UnitTests
   --exclude src/Sdk/Gsharp.Extensions
+  # Issue #4350: keep the native-runtime implementation as a verbatim C#
+  # dependency until ADR-0192's declaration-view and first-class Index/Range
+  # work makes the project itself fully self-migratable. Remove this
+  # passthrough only after a full corpus run banks the project green.
+  --passthrough src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.csproj
   --exclude tools/cs2gs/corpus/CompileGap-Library
   # ADR-0174 D11: the concurrency benchmark's C# and Go sides are measurement
   # apparatus, not migration targets. Translating the CLR baseline would

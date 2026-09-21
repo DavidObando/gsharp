@@ -138,6 +138,67 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
     }
 
     /// <summary>
+    /// A passthrough project remains buildable as C#, so retained migrated
+    /// consumers can continue to reference it.
+    /// </summary>
+    [Fact]
+    public void MirrorPassthroughProjects_CopiesProjectAndCSharpSources()
+    {
+        string source = Path.Combine(this.root, "source");
+        string destination = Path.Combine(this.root, "destination");
+        string runtimeDirectory = Path.Combine(source, "src", "Runtime");
+        string compilerDirectory = Path.Combine(source, "src", "Compiler");
+        Directory.CreateDirectory(runtimeDirectory);
+        Directory.CreateDirectory(compilerDirectory);
+        File.WriteAllText(Path.Combine(compilerDirectory, "Compiler.csproj"), "<Project />");
+        File.WriteAllText(
+            Path.Combine(runtimeDirectory, "Runtime.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <ProjectReference Include="..\Compiler\Compiler.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(runtimeDirectory, "Runtime.cs"), "class Runtime {}");
+
+        var scope = ExcludedScope(source, Path.Combine(runtimeDirectory, "Runtime.csproj"));
+        IReadOnlyList<string> written = RepositoryMirror.MirrorPassthroughProjects(
+            source,
+            destination,
+            new[]
+            {
+                "src/Compiler/Compiler.csproj",
+                "src/Runtime/Runtime.cs",
+                "src/Runtime/Runtime.csproj",
+            },
+            scope,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [Path.Combine(compilerDirectory, "Compiler.csproj")] =
+                    Path.Combine(destination, "src", "Compiler", "Compiler.gsproj"),
+            });
+
+        Assert.Equal(
+            new[]
+            {
+                Path.Combine("src", "Runtime", "Runtime.cs"),
+                Path.Combine("src", "Runtime", "Runtime.csproj"),
+            },
+            written.OrderBy(path => path, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            "class Runtime {}",
+            File.ReadAllText(Path.Combine(destination, "src", "Runtime", "Runtime.cs")));
+
+        XDocument project = XDocument.Load(
+            Path.Combine(destination, "src", "Runtime", "Runtime.csproj"));
+        Assert.Equal("Microsoft.NET.Sdk", project.Root.Attribute("Sdk").Value);
+        Assert.Equal(
+            "../Compiler/Compiler.gsproj",
+            project.Descendants("ProjectReference").Single().Attribute("Include").Value);
+    }
+
+    /// <summary>
     /// A legacy solution is mirrored under its own name — the file name the
     /// repository's own sources use to find the repository root — with its
     /// project paths retargeted, and the buildable `.slnx` lands beside it.

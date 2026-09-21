@@ -114,7 +114,8 @@ internal static class RepositoryMirror
         var written = new List<string>();
         foreach (string path in sourceFiles)
         {
-            if (!Path.GetExtension(path).Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+            string extension = Path.GetExtension(path);
+            if (!extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
                 || !excludedScope.IsExcluded(path)
                 || csharpSourceDirectories.Contains(DirectoryOf(path)))
             {
@@ -129,6 +130,62 @@ internal static class RepositoryMirror
             RetargetProjectReferences(project, source, destination, path, generatedProjectPaths);
             RebindToPinnedSdk(project, sdkMoniker);
             project.Save(target, SaveOptions.DisableFormatting);
+            written.Add(path.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        return written;
+    }
+
+    /// <summary>
+    /// Issue #4350: copies explicitly-passthrough C# projects and sources into
+    /// the migrated repository without translating them.
+    /// </summary>
+    /// <param name="sourceRoot">The repository source root.</param>
+    /// <param name="destinationRoot">The migrated repository root.</param>
+    /// <param name="sourceFiles">The repository inventory.</param>
+    /// <param name="passthroughScope">The projects and sources selected for passthrough.</param>
+    /// <param name="generatedProjectPaths">Source project path to generated project path.</param>
+    /// <returns>The mirror-relative project and source paths written.</returns>
+    internal static IReadOnlyList<string> MirrorPassthroughProjects(
+        string sourceRoot,
+        string destinationRoot,
+        IReadOnlyList<string> sourceFiles,
+        RepositoryExcludedScope passthroughScope,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        passthroughScope ??= RepositoryExcludedScope.None;
+        string source = Path.GetFullPath(sourceRoot);
+        string destination = Path.GetFullPath(destinationRoot);
+        var written = new List<string>();
+
+        foreach (string path in sourceFiles)
+        {
+            if (!passthroughScope.IsExcluded(path))
+            {
+                continue;
+            }
+
+            string extension = Path.GetExtension(path);
+            if (!extension.Equals(".cs", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            string sourcePath = Path.Combine(source, path.Replace('/', Path.DirectorySeparatorChar));
+            string targetPath = Path.Combine(destination, path.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
+            if (extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase))
+            {
+                XDocument project = XDocument.Load(sourcePath, LoadOptions.PreserveWhitespace);
+                RetargetProjectReferences(project, source, destination, path, generatedProjectPaths);
+                project.Save(targetPath, SaveOptions.DisableFormatting);
+            }
+            else
+            {
+                File.Copy(sourcePath, targetPath, overwrite: true);
+            }
+
             written.Add(path.Replace('/', Path.DirectorySeparatorChar));
         }
 

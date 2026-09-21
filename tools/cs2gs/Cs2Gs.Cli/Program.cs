@@ -298,20 +298,28 @@ internal static class Program
 
             options.ArtifactRoot ??= options.OutputRoot + ".cs2gs-runs";
             apps = RepositoryDiscovery.Discover(corpus);
-            if (options.ExcludeAppIdPrefixes.Count > 0)
+            if (options.ExcludeAppIdPrefixes.Count > 0
+                || options.PassthroughAppIdPrefixes.Count > 0)
             {
                 int before = apps.Count;
                 var kept = new List<CorpusApp>(apps.Count);
                 foreach (CorpusApp app in apps)
                 {
-                    if (options.ExcludeAppIdPrefixes.Any(prefix =>
-                        app.Id.StartsWith(prefix, StringComparison.Ordinal)))
+                    bool passthrough = options.PassthroughAppIdPrefixes.Any(prefix =>
+                        app.Id.StartsWith(prefix, StringComparison.Ordinal));
+                    bool excluded = passthrough || options.ExcludeAppIdPrefixes.Any(prefix =>
+                        app.Id.StartsWith(prefix, StringComparison.Ordinal));
+                    if (excluded)
                     {
                         // Issue #3580: the orphan-mirror step must know which
                         // projects left the run via --exclude — the sources
                         // they compile are out of scope, not repository
                         // orphans.
                         options.ExcludedProjectPaths.Add(app.ProjectPath);
+                        if (passthrough)
+                        {
+                            options.PassthroughProjectPaths.Add(app.ProjectPath);
+                        }
                     }
                     else
                     {
@@ -320,7 +328,8 @@ internal static class Program
                 }
 
                 apps = kept;
-                Console.WriteLine($"cs2gs: excluded {before - apps.Count} project(s) via --exclude.");
+                Console.WriteLine(
+                    $"cs2gs: excluded {before - apps.Count} project(s) via --exclude/--passthrough.");
             }
         }
         else if (appIds.Count > 0)
@@ -615,6 +624,10 @@ internal static class Program
                         options.ExcludeAppIdPrefixes.Add(
                             NextValue(args, ref i, arg).Replace('\\', '/').TrimEnd('/'));
                         break;
+                    case "--passthrough":
+                        options.PassthroughAppIdPrefixes.Add(
+                            NextValue(args, ref i, arg).Replace('\\', '/').TrimEnd('/'));
+                        break;
                     case "--baseline":
                         baselinePath = NextValue(args, ref i, arg);
                         break;
@@ -748,6 +761,8 @@ internal static class Program
         Console.WriteLine("  --config <name>   Build config used to find gsc (default: Release).");
         Console.WriteLine("  --exclude <path>  Repository migration only: exclude apps whose repo-relative id");
         Console.WriteLine("                    starts with <path> (repeatable; e2e fixtures, non-app projects).");
+        Console.WriteLine("  --passthrough <path>  Repository migration only: exclude matching apps from");
+        Console.WriteLine("                    translation but preserve their original C# project and sources.");
         Console.WriteLine("  --baseline <file> Gate on the gap ledger (tools/cs2gs/triage/gaps.json): fail only on");
         Console.WriteLine("                    NEW or REGRESSED fingerprints; known-open gaps are tolerated.");
         Console.WriteLine("  --baseline-strict Also fail on STALE ledger entries (nightly mode).");

@@ -73,6 +73,12 @@ public sealed class PipelineOptions
     public List<string> ExcludeAppIdPrefixes { get; } = new List<string>();
 
     /// <summary>
+    /// Gets repository-relative app-id prefixes excluded from translation but
+    /// preserved as their original C# projects in a repository mirror.
+    /// </summary>
+    public List<string> PassthroughAppIdPrefixes { get; } = new List<string>();
+
+    /// <summary>
     /// Gets the absolute <c>.csproj</c> paths of the apps that
     /// <see cref="ExcludeAppIdPrefixes"/> filtered out of this run (issue
     /// #3580). The orphan-mirror step skips checked-in sources these projects
@@ -82,6 +88,12 @@ public sealed class PipelineOptions
     /// translation of them is not meaningful.
     /// </summary>
     public List<string> ExcludedProjectPaths { get; } = new List<string>();
+
+    /// <summary>
+    /// Gets the absolute <c>.csproj</c> paths excluded from translation but
+    /// copied into the mirror with their checked-in C# sources.
+    /// </summary>
+    public List<string> PassthroughProjectPaths { get; } = new List<string>();
 
     /// <summary>
     /// Gets or sets the build configuration used to locate the default compiler

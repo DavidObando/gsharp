@@ -51,7 +51,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" migrate \
   --out "$migrated_dir" \
   --artifacts "$runs_dir" \
   --config Release \
-  "${selfmig_excludes[@]}" \
+  "${selfmig_project_filters[@]}" \
   | tee "$work_root/migrate.log"
 migrate_exit=${PIPESTATUS[0]}
 set -e
