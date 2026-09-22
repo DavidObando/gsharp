@@ -119,16 +119,19 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
                 return new BoundBlockExpression(block.Syntax, block.Statements, this.CapturePointer(block.Expression, type, readOnly));
             case BoundAddressOfExpression address:
                 return this.Capture(address.Operand, type, readOnly);
+            case BoundClrIndexExpression index:
+                var name = readOnly ? "GetReadOnlyManagedReference" : "GetManagedReference";
+                var runtimeType = Invariant.Required(
+                    index.Indexer.DeclaringType,
+                    "a CLR indexer has a runtime declaring type");
+                var method = runtimeType.GetMethods().Single(m => m.Name == name
+                    && ParametersMatch(m.GetParameters(), index.Indexer.GetIndexParameters()));
+                return new BoundImportedInstanceCallExpression(pointer.Syntax, index.Target, method, type, index.Arguments);
             case BoundImportedInstanceCallExpression call when ManagedReferenceOrigins.IsHandleBorrow(call):
                 ManagedReferenceTypes.TryGetElement(call.Receiver.Type, out _, out var sourceReadOnly);
                 return readOnly && !sourceReadOnly
                     ? Call(call.Receiver, "AsReadOnly", type)
                     : call.Receiver;
-            case BoundClrIndexExpression index when NativeSliceTypes.TryGetElement(index.Target.Type, out _, out _):
-                var name = readOnly ? "GetReadOnlyManagedReference" : "GetManagedReference";
-                var method = RequiredClr(index.Target.Type).GetMethods().Single(m => m.Name == name
-                    && ParametersMatch(m.GetParameters(), index.Indexer.GetIndexParameters()));
-                return new BoundImportedInstanceCallExpression(pointer.Syntax, index.Target, method, type, index.Arguments);
             default:
                 throw new InvalidOperationException($"Unplanned persistent pointer origin: {pointer.Kind}.");
         }

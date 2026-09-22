@@ -110,8 +110,7 @@ public sealed class NativeSliceRuntimeTests
         Assert.NotEqual(empty, Slice<string>.FromArray(new string[0]));
         Slice<string>? absent = null;
         Assert.False(absent.HasValue);
-        Slice<string>? present = empty;
-        Assert.True(present.HasValue);
+        Assert.True(((Slice<string>?)empty).HasValue);
         var values = Slice<string>.Create(1, 3);
         Assert.Null(values[0]);
         var before = values.GetHashCode();

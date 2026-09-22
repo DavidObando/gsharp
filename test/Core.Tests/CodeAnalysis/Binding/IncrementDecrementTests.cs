@@ -7,6 +7,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -43,6 +44,24 @@ public class IncrementDecrementTests
     {
         // Since issue #1027, `let y = x++` parses and binds: x++ yields x's old value.
         Assert.Empty(Bind("func F() {\n var x = 1\n let y = x++\n }\n"));
+    }
+
+    [Fact]
+    public void FloatingPointMemberIncrement_WidensSyntheticOne_AndVoidizesLambda()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter { var Value float64 }
+            func Apply(action () -> void) { action() }
+            func Run() float64 {
+                var counter = Counter{}
+                Apply(() -> counter.Value++)
+                counter.Value++
+                return counter.Value
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2.0, result.ReadGlobals()["answer"]);
     }
 
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)

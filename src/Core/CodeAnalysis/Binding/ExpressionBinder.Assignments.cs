@@ -2017,12 +2017,11 @@ internal sealed partial class ExpressionBinder
             return assignment == null ? null : new BoundBlockExpression(syntax, prefix, assignment);
         }
 
-        var boundRhs = BindExpression(syntax.Value);
-
         // ADR-0112 A3: this-first base-chain instance field walk, using the
         // declaring struct as the owner for both the read access and assignment.
         if (TypeMemberModel.TryGetFieldIncludingInherited(structSym, memberName, MemberQuery.Instance(MemberKinds.Field), out var field, out var declaringType))
         {
+            var boundRhs = BindExpression(syntax.Value);
             if (field.IsReadOnly
                 && !IsReadOnlyFieldAssignmentAllowed(field, declaringType, ReceiverExpressionIsThis(boundReceiver)))
             {
@@ -2079,6 +2078,7 @@ internal sealed partial class ExpressionBinder
         // ADR-0051: check properties.
         if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType))
         {
+            var boundRhs = BindExpression(syntax.Value);
             propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
 
             // Issue #2834: a user-defined compound-assignment operator mutates

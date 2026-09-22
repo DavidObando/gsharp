@@ -94,16 +94,6 @@ internal static class AssignmentTargetSyntaxFacts
             return true;
         }
 
-        if (IsCallResult(target))
-        {
-            assignment = new IndirectAssignmentExpressionSyntax(
-                target.SyntaxTree,
-                target,
-                equalsToken,
-                value);
-            return true;
-        }
-
         if (target is BaseInterfaceCallExpressionSyntax baseProperty
             && baseProperty.IsPropertyAccess
             && !baseProperty.IsPropertyWrite)
@@ -131,6 +121,8 @@ internal static class AssignmentTargetSyntaxFacts
         {
             CallExpressionSyntax => true,
             AccessorExpressionSyntax { RightPart: CallExpressionSyntax } => true,
+            BaseClassCallExpressionSyntax => true,
+            BaseInterfaceCallExpressionSyntax { IsPropertyAccess: false } => true,
             ParenthesizedExpressionSyntax parenthesized => IsCallResult(parenthesized.Expression),
             _ => false,
         };

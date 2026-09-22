@@ -30,6 +30,8 @@ public sealed class Issue4350RefReturningCallAssignmentTranslationTests
                     var handle = ManagedRef<int>.FromArray(values, 0);
                     handle.Borrow() = 17;
                     handle.Borrow()++;
+                    ManagedRef<int> nil = null;
+                    if (nil != null) return 0;
                     return values[0];
                 }
             }
@@ -48,6 +50,7 @@ public sealed class Issue4350RefReturningCallAssignmentTranslationTests
         Assert.Empty(context.Diagnostics);
         Assert.Contains("handle.Borrow() = 17", printed, StringComparison.Ordinal);
         Assert.Contains("handle.Borrow()++", printed, StringComparison.Ordinal);
+        Assert.Contains("nil_ managed[int32]? = nil", printed, StringComparison.Ordinal);
         Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
 
         var result = EmittedOracle.Evaluate(

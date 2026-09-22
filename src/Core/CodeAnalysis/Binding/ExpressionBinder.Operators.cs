@@ -2884,6 +2884,29 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        // Issue #4350: ordinary numeric widening is not integer-only. C# permits
+        // `double += 1`, `float + int`, and the `++` desugaring over a floating
+        // target. Widen the operand whose numeric type implicitly converts to
+        // the other, then bind the homogeneous operator.
+        if (boundOperator == null
+            && IsNumericPrimitiveType(boundLeft.Type)
+            && IsNumericPrimitiveType(boundRight.Type)
+            && (IsFloatingOrDecimalType(boundLeft.Type)
+                || IsFloatingOrDecimalType(boundRight.Type))
+            && boundLeft.Type != boundRight.Type)
+        {
+            if (Conversion.Classify(boundRight.Type, boundLeft.Type).IsImplicit)
+            {
+                boundRight = conversions.BindConversion(rightLocation, boundRight, boundLeft.Type);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+            else if (Conversion.Classify(boundLeft.Type, boundRight.Type).IsImplicit)
+            {
+                boundLeft = conversions.BindConversion(leftLocation, boundLeft, boundRight.Type);
+                boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
+            }
+        }
+
         // Issue #1232: shift-count widening. C# allows the shift COUNT (the RHS
         // of `<<` / `>>` / `<<=` / `>>=`) to be any integer that implicitly
         // converts to `int` (sbyte/byte/short/ushort/char), promoting it to
@@ -3052,6 +3075,15 @@ internal sealed partial class ExpressionBinder
 
         return boundOperator;
     }
+
+    private static bool IsNumericPrimitiveType(TypeSymbol type)
+        => type?.ClrType?.FullName is string fullName
+            && NumericWideningLattice.IsNumericPrimitive(fullName);
+
+    private static bool IsFloatingOrDecimalType(TypeSymbol type)
+        => type == TypeSymbol.Float32
+            || type == TypeSymbol.Float64
+            || type == TypeSymbol.Decimal;
 
     private bool TryBindDelegateCombinationOperator(
         SyntaxKind operatorKind,

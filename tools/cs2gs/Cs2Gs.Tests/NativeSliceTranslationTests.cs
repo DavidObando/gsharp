@@ -125,4 +125,35 @@ public sealed class NativeSliceTranslationTests
         Assert.Empty(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(text).Diagnostics);
         Assert.True(TranslationTestValidation.AssertBinds(text).Success);
     }
+
+    [Fact]
+    public void NullableNativeSliceCastUsesUnambiguousConversion()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace NativeTranslation;
+            public class Probe {
+                public static bool Run() {
+                    Slice<string> empty = default;
+                    return ((Slice<string>?)empty).HasValue;
+                }
+                public static Slice<string> RejectNullOwner() => Slice<string>.FromArray(null);
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.Slice<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("Probe.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("cast[slice[string]?](empty)", printed, StringComparison.Ordinal);
+        Assert.Contains("slice[string].FromArray(default([]string))", printed, StringComparison.Ordinal);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+    }
 }

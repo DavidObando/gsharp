@@ -32,6 +32,10 @@ internal static class RefCapabilities
             BoundCallExpression { IsConditionalElided: true } => false,
             BoundCallExpression call => call.Function.ReturnRefKind != RefKind.None,
             BoundUserInstanceCallExpression uic => uic.Method.ReturnRefKind != RefKind.None,
+            BoundBaseInterfaceCallExpression baseInterface =>
+                baseInterface.Method.ReturnRefKind != RefKind.None,
+            BoundBaseClassCallExpression { Method: { } method } =>
+                method.ReturnRefKind != RefKind.None,
 
             // A flow-narrowed read (issue #1180) inserts a cast after the
             // getter call; the raw managed pointer from the getter would not
@@ -90,6 +94,24 @@ internal static class RefCapabilities
                 receiver = prop.Receiver;
                 byRefArguments = ImmutableArray<BoundExpression>.Empty;
                 byValueByRefLikeArguments = ImmutableArray<BoundExpression>.Empty;
+                return true;
+            case BoundBaseInterfaceCallExpression baseInterface
+                when baseInterface.Method.ReturnRefKind != RefKind.None:
+                receiver = baseInterface.Receiver;
+                SelectEscapeArguments(
+                    baseInterface.Method.Parameters,
+                    baseInterface.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundBaseClassCallExpression { Method: { } method } baseClass
+                when method.ReturnRefKind != RefKind.None:
+                receiver = baseClass.Receiver;
+                SelectEscapeArguments(
+                    method.Parameters,
+                    baseClass.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
                 return true;
             default:
                 receiver = null;

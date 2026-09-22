@@ -158,31 +158,13 @@ public sealed class MigrationPipeline
         }
 
         string runDir = Path.Combine(outputRoot, runId);
-        var generatedProjectPaths = apps.ToDictionary(
-            app => Path.GetFullPath(app.ProjectPath),
-            app => repositoryLayout
-                ? Path.Combine(
-                    destinationRoot,
-                    Path.ChangeExtension(
-                        app.RelativeProjectPath ?? Path.GetRelativePath(this.options.SourceRoot, app.ProjectPath),
-                        ".gsproj"))
-                : Path.Combine(
-                    runDir,
-                    SanitizeAppId(app.Id),
-                    Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
-            StringComparer.OrdinalIgnoreCase);
-        if (repositoryLayout)
-        {
-            foreach (string passthroughProjectPath in this.options.PassthroughProjectPaths)
-            {
-                string fullPath = Path.GetFullPath(passthroughProjectPath);
-                generatedProjectPaths[fullPath] = Path.Combine(
-                    destinationRoot,
-                    Path.GetRelativePath(this.options.SourceRoot, fullPath));
-            }
-        }
-
-        this.options.GeneratedProjectPaths = generatedProjectPaths;
+        this.options.GeneratedProjectPaths = BuildGeneratedProjectPaths(
+            apps,
+            this.options.PassthroughProjectPaths,
+            this.options.SourceRoot,
+            destinationRoot,
+            runDir,
+            repositoryLayout);
         IReadOnlyList<string> repositoryFiles = null;
         if (repositoryLayout)
         {
@@ -488,14 +470,13 @@ public sealed class MigrationPipeline
         // The mirrored-project map is repository-wide by construction: it is
         // the same map the migrate pass built, computed from the full app list
         // and the migrated tree root.
-        this.options.GeneratedProjectPaths = allApps.ToDictionary(
-            app => Path.GetFullPath(app.ProjectPath),
-            app => Path.Combine(
-                migratedRoot,
-                Path.ChangeExtension(
-                    app.RelativeProjectPath ?? Path.GetRelativePath(this.options.SourceRoot, app.ProjectPath),
-                    ".gsproj")),
-            StringComparer.OrdinalIgnoreCase);
+        this.options.GeneratedProjectPaths = BuildGeneratedProjectPaths(
+            allApps,
+            this.options.PassthroughProjectPaths,
+            this.options.SourceRoot,
+            migratedRoot,
+            runDir,
+            repositoryLayout: true);
         IReadOnlyDictionary<string, IReadOnlyList<string>> evaluatedProjectReferences =
             await this.LoadEvaluatedProjectReferencesAsync(
                 allApps,
@@ -570,6 +551,54 @@ public sealed class MigrationPipeline
             JsonSerializer.Serialize(runResult, TriageSerialization.Options));
 
         return runResult;
+    }
+
+    /// <summary>
+    /// Builds the source-project to mirrored-project map shared by migration
+    /// and validation. Passthrough projects retain their <c>.csproj</c>
+    /// extension; translated apps map to <c>.gsproj</c>.
+    /// </summary>
+    /// <param name="apps">The translated app set.</param>
+    /// <param name="passthroughProjectPaths">Absolute C# project paths preserved without translation.</param>
+    /// <param name="sourceRoot">The original repository root.</param>
+    /// <param name="destinationRoot">The migrated repository root.</param>
+    /// <param name="runDir">The diagnostic-layout run directory.</param>
+    /// <param name="repositoryLayout">Whether repository mirroring is active.</param>
+    /// <returns>The canonical project path map.</returns>
+    internal static IReadOnlyDictionary<string, string> BuildGeneratedProjectPaths(
+        IReadOnlyList<CorpusApp> apps,
+        IReadOnlyCollection<string> passthroughProjectPaths,
+        string sourceRoot,
+        string destinationRoot,
+        string runDir,
+        bool repositoryLayout)
+    {
+        var paths = apps.ToDictionary(
+            app => Path.GetFullPath(app.ProjectPath),
+            app => repositoryLayout
+                ? Path.Combine(
+                    destinationRoot,
+                    Path.ChangeExtension(
+                        app.RelativeProjectPath ?? Path.GetRelativePath(sourceRoot, app.ProjectPath),
+                        ".gsproj"))
+                : Path.Combine(
+                    runDir,
+                    SanitizeAppId(app.Id),
+                    Path.GetFileNameWithoutExtension(app.ProjectPath) + ".gsproj"),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (repositoryLayout && passthroughProjectPaths != null)
+        {
+            foreach (string passthroughProjectPath in passthroughProjectPaths)
+            {
+                string fullPath = Path.GetFullPath(passthroughProjectPath);
+                paths[fullPath] = Path.Combine(
+                    destinationRoot,
+                    Path.GetRelativePath(sourceRoot, fullPath));
+            }
+        }
+
+        return paths;
     }
 
     internal IReadOnlyList<CorpusApp> OrderForSdkBuild(

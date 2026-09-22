@@ -222,6 +222,48 @@ public class Issue4224RefReturningCallStorageTests
     }
 
     [Fact]
+    public void BaseClassRefReturningCall_AssignmentAndIncrementMutateBaseStorage()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base {
+                var values []int32 = []int32{10}
+                open func At(index int32) ref int32 { return ref values[index] }
+            }
+            class Derived : Base {
+                func Run() int32 {
+                    base.At(0) = 20
+                    base.At(0)++
+                    return base.At(0)
+                }
+            }
+            var answer = Derived{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(21, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void BaseInterfaceRefReturningCall_AssignmentAndIncrementMutateArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            interface IRef {
+                func First(values []int32) ref int32 { return ref values[0] }
+            }
+            class Holder : IRef {
+                func Run() int32 {
+                    var values = []int32{10}
+                    base[IRef].First(values) = 20
+                    base[IRef].First(values)++
+                    return values[0]
+                }
+            }
+            var answer = Holder{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(21, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void AliasFromImportedRefIndexer_StillMutatesOriginalArrayElement()
     {
         // Not a new code path — ConversionClassifier.AutoDereferenceRefReturn

@@ -753,6 +753,25 @@ internal sealed class ConversionClassifier
             return new BoundLiteralExpression(expression.Syntax, adaptedConstant, type);
         }
 
+        // Issue #4350: a tuple literal can be contextually convertible even
+        // when its natural tuple TYPE is not. Preserve the literal elements so
+        // per-element binding can apply implicit constant narrowing before a
+        // general tuple conversion would spill them into non-constant ItemN
+        // reads. Identity tuple conversions (including label warnings) have
+        // already returned above.
+        if (!conversion.Exists
+            && expression is BoundTupleLiteralExpression sourceTupleLiteral
+            && type is TupleTypeSymbol targetTupleLiteral
+            && sourceTupleLiteral.Elements.Length == targetTupleLiteral.Arity)
+        {
+            return BindTupleConversion(
+                diagnosticLocation,
+                expression,
+                sourceTupleLiteral.TupleType,
+                targetTupleLiteral,
+                allowExplicit);
+        }
+
         if (!conversion.Exists)
         {
             // Issue #3907: the target parameter is annotated `@AllowNull`, so
