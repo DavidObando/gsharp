@@ -1147,6 +1147,18 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.False(GsConversion.IsPlatformArgumentIllegal(platform, nilable));
         Assert.False(GsConversion.IsPlatformArgumentIllegal(platform, platform));
         Assert.False(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, nilable));
+
+        // An UNRELATED pair is neither: rule 3 speaks only about two
+        // positions that are the same underlying type differing in reference
+        // nullability, and `Illegal` means "no conversion exists" rather than
+        // "this arm cannot decide". Both directions, because the guard
+        // existed on one arm and not the other — a Copilot review finding on
+        // this PR, in each direction in turn.
+        var platformObject = PlatformTypeSymbol.Get(TypeSymbol.Object);
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platformObject, TypeSymbol.String));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platformObject, nilable));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, platformObject));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(platformObject, nilable));
     }
 
     /// <summary>

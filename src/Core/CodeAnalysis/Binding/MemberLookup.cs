@@ -6017,23 +6017,6 @@ internal sealed class MemberLookup
                     && Binder.IsReferenceTypeForConstraint(targetImported.TypeArguments[i])
                     && ClassifySymbolicIndexerConversion(targetImported.TypeArguments[i], sourceArguments[i]).IsImplicit,
 
-                // ADR-0186 §3: an invariant argument position is identical,
-                // OR it is rule 2's one permitted widening `C[T!] -> C[T?]`.
-                //
-                // `SameTypeSymbol` deliberately answers `false` for a
-                // platform wrapper against anything else (see the arm there),
-                // and this caller uses its answer as the COMPLETE
-                // compatibility verdict — it returns before the general
-                // classifier runs. Treating non-identity as final
-                // incompatibility therefore made an indexer taking
-                // `List[string?]` inapplicable to a `List[string!]` argument,
-                // which is the single conversion the ADR explicitly permits.
-                // Copilot review finding on the flip PR, and correct.
-                //
-                // Delegated to `Conversion` rather than re-stated here: the
-                // per-argument relation is one rule with one implementation,
-                // and a second copy is how ADR-0136's carve-out predicates
-                // began.
                 // ADR-0186 §3, at an invariant argument position: rule 3's
                 // illegal relations are out, rule 2's one widening is in, and
                 // everything else is the ordinary same-type question.

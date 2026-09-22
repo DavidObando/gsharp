@@ -3705,19 +3705,37 @@ public sealed class Conversion
             // the destination view has type `T?` and must be narrowed before
             // non-null use, so no view of the object can produce an unchecked
             // non-null read.
-            if (b is not NullableTypeSymbol nilableTarget
-                || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            if (b is NullableTypeSymbol nilableTarget
+                && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     sourcePlatform.UnderlyingType,
                     nilableTarget.UnderlyingType))
             {
-                return PlatformArgumentRelation.Illegal;
+                return RelateNestedPlatformArguments(
+                        sourcePlatform.UnderlyingType,
+                        nilableTarget.UnderlyingType) == PlatformArgumentRelation.Illegal
+                    ? PlatformArgumentRelation.Illegal
+                    : PlatformArgumentRelation.Widening;
             }
 
-            return RelateNestedPlatformArguments(
-                    sourcePlatform.UnderlyingType,
-                    nilableTarget.UnderlyingType) == PlatformArgumentRelation.Illegal
+            // Rule 3's `C[T!] -> C[T]` — but only when the two positions
+            // really are the same underlying type differing in reference
+            // nullability, which is the only thing rule 3 is about.
+            //
+            // The sibling arm below already had this guard; this one did not,
+            // and the asymmetry was a second Copilot review finding on the
+            // flip PR. Without it, an UNRELATED pair such as
+            // `List[object!] -> List[Payload]` (where a same-compilation
+            // `Payload` erases to `object`) was rejected outright, though
+            // rule 3 has no opinion on it and the reverse direction already
+            // declined correctly. `Unrelated` means "this arm cannot decide"
+            // and hands the pair back to the ordinary rules; `Illegal` means
+            // "no conversion exists", and only the genuinely
+            // nullability-differing pair earns that.
+            return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                sourcePlatform.UnderlyingType,
+                UnwrapPlatformAndNullable(b) ?? b!)
                 ? PlatformArgumentRelation.Illegal
-                : PlatformArgumentRelation.Widening;
+                : PlatformArgumentRelation.Unrelated;
         }
 
         if (targetPlatform != null && sourcePlatform == null)
