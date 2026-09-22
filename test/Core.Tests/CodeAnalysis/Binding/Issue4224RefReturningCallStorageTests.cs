@@ -251,6 +251,31 @@ public class Issue4224RefReturningCallStorageTests
     }
 
     [Fact]
+    public void WritableRefReturningProperty_CompoundSuspendingRhsIsRejected()
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System.Threading.Tasks
+            class Holder {
+                var values []int32
+                prop Value ref int32 { get { return ref values[0] } }
+                func Init() { values = []int32{0} }
+            }
+            async func Bad() int32 {
+                var holder = Holder{}
+                holder.Init()
+                holder.Value += await Task.FromResult(1)
+                return holder.Value
+            }
+            """);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id == "GS0604"
+                && diagnostic.Message.Contains(
+                    "cannot survive suspension",
+                    System.StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ImportedWritableRefReturningCall_AssignmentAndIncrementMutateReferent()
     {
         var result = EmittedOracle.Evaluate("""

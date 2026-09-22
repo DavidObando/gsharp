@@ -2645,7 +2645,7 @@ internal sealed partial class ExpressionBinder
             return value;
         }
 
-        if (AssignmentTargetSyntaxFacts.IsCallResult(syntax.Target)
+        if (pointer is BoundAddressOfExpression
             && AsyncBoundTreeQueries.HasAwait(value))
         {
             Diagnostics.ReportManagedReference(
@@ -2722,7 +2722,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (AssignmentTargetSyntaxFacts.IsCallResult(syntax.Target)
+        if (pointer is BoundAddressOfExpression
             && AsyncBoundTreeQueries.HasAwait(rhsBound))
         {
             Diagnostics.ReportManagedReference(
