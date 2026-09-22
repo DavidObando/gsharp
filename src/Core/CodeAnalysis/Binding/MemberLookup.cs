@@ -5995,7 +5995,44 @@ internal sealed class MemberLookup
             return (platformImplicit, false);
         }
 
-        if (SameTypeSymbol(source, target))
+        // …and the question that entry deliberately does NOT answer: a
+        // NILABLE source reaching a non-null destination.
+        //
+        // `TryClassifyPlatformTypeArgumentMismatch` declines such a pair on
+        // purpose — its own comment says so — so that the ordinary
+        // outer-nullability rule can reject it, and
+        // `TheContainerRule_Does_Not_Decide_OuterNullability` pins that. But
+        // "declined" and "unrelated" arrive here as the same `false`, and the
+        // fast path below strips a top-level reference `?` from EITHER side
+        // (it answers the runtime-signature question, which is why). So
+        // `List[string!]?` against a `List[string?]` parameter came back
+        // IDENTICAL — the best possible match — and a nilable container was
+        // preferred where a non-null one was required.
+        //
+        // Copilot review finding on the flip PR, and real. Measured with a
+        // legal `this[object?]` competitor present, which is what makes a
+        // wrong *identity* verdict observable rather than merely wrong: the
+        // mis-ranked candidate won the ranking and the whole access then
+        // failed with GS0156, rather than `this[object?]` binding.
+        //
+        // <b>Not platform-specific, and not new here.</b> The identical
+        // mis-selection reproduces under `--nullability=enabled` with no
+        // platform type anywhere in the program — the fast path has always
+        // erased outer reference nullability. It is fixed rather than filed
+        // because this method is the one now being asked the question, and
+        // because a rule that holds in `Conversion` but not at applicability
+        // is exactly the drift this ADR's §5a exists to prevent.
+        //
+        // Only the FAST PATH is skipped, not the whole method: the pair falls
+        // through to the constructed-generic arm and then to the general
+        // classifier, which already answer it correctly. Value-type nullables
+        // are excluded exactly as they are in `SameTypeSymbol` — `int?` is a
+        // different type, not a nullability annotation on `int`.
+        var outerNilabilityDiffers = source is NullableTypeSymbol sourceNilable
+            && !NullableLifting.IsAnyValueTypeNullable(sourceNilable)
+            && target is not NullableTypeSymbol;
+
+        if (!outerNilabilityDiffers && SameTypeSymbol(source, target))
         {
             return (true, true);
         }

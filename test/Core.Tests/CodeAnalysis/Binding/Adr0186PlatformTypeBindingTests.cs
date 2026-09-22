@@ -178,6 +178,15 @@ public sealed class Adr0186PlatformTypeBindingTests
         // steps, and only SELECTION can tell them apart: an over-accepted
         // `List[string]` candidate wins the ranking and takes the whole access
         // down with it, where rejecting it correctly leaves `object` to bind.
+        public class NilableOrObjectKeys
+        {
+            public string this[List<string?> keys] => "nilable";
+
+            public string this[object? any] => "object";
+
+            public int this[int slot] { set { } }
+        }
+
         public class OverloadedKeys
         {
             public string this[List<string> keys] => "exact";
@@ -1206,6 +1215,97 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.False(GsConversion.IsPlatformArgumentIllegal(platformObject, nilable));
         Assert.False(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, platformObject));
         Assert.False(GsConversion.IsPlatformArgumentWidening(platformObject, nilable));
+
+        // …and the reason the symbolic-indexer check asks
+        // `TryRelatePlatformContainer` rather than either of these two.
+        //
+        // They answer about a single ARGUMENT position whose container has
+        // ALREADY been matched. Asked about the containers themselves they
+        // have no shape guard: `[]string! -> object` is an ordinary upcast
+        // whose two sides have no corresponding argument positions at all, so
+        // `RelateNestedPlatformArguments` cannot pair them and reports
+        // `Illegal` — which, used as an applicability verdict, would stop an
+        // indexer taking `object` from accepting an oblivious string array.
+        // Measured here rather than argued, because the claim is the whole
+        // justification for the shape of that call.
+        var platformSlice = SliceTypeSymbol.Get(platform);
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(platformSlice, TypeSymbol.Object));
+        Assert.False(GsConversion.TryRelatePlatformContainer(platformSlice, TypeSymbol.Object, out _));
+    }
+
+    /// <summary>
+    /// The symbolic-indexer counterpart of
+    /// <c>TheContainerRule_Does_Not_Decide_OuterNullability</c>: a
+    /// <b>nilable</b> container must not be accepted — still less
+    /// <em>preferred</em> — where a non-null one is required.
+    /// <para>
+    /// <c>TryClassifyPlatformTypeArgumentMismatch</c> declines
+    /// <c>C[T!]? -&gt; C[T?]</c> on purpose, so that the ordinary
+    /// outer-nullability rule can reject the nilable container. But
+    /// "declined" and "this pair is unrelated" reach
+    /// <c>ClassifySymbolicIndexerConversion</c> as the same <c>false</c>, and
+    /// its same-type fast path strips a top-level reference <c>?</c> from
+    /// either side — so the pair came back <em>identical</em>, the best match
+    /// a candidate can be. Copilot review finding on the flip PR.
+    /// </para>
+    /// <para>
+    /// <b>The competitor is what makes it observable.</b> On its own the
+    /// over-accepted candidate is still caught, one step later, by the
+    /// argument conversion — GS0156 <em>"Cannot convert type
+    /// 'List[string]?' to 'List[string?]'"</em>. With a legal
+    /// <c>this[object?]</c> present, the mis-ranked candidate wins the ranking
+    /// outright and takes the whole access down with it, where rejecting it
+    /// leaves <c>object?</c> to bind.
+    /// </para>
+    /// <para>
+    /// <b>Measured as NOT platform-specific</b>, which is why the fix is the
+    /// fast path rather than the platform arm: the third case runs the same
+    /// program under <c>--nullability=enabled</c>, where no platform type
+    /// exists anywhere, and it mis-selected identically before the fix. The
+    /// fast path has always erased outer reference nullability; ADR-0186 is
+    /// only what made someone look.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_ANilableContainer_Is_Not_Identical_To_ANonNullOne()
+    {
+        using var world = new World();
+
+        // `AsNilable` is how the probe gets a genuine nilable OVER a platform
+        // container — an inferred `let` cannot, because `T!` already admits
+        // nil and a `nil` branch merges into it without adding a `?`.
+        const string decls = """
+            func AsNilable[T](x T) T? {
+                return x
+            }
+            """;
+
+        const string alone = """
+                let k = AsNilable(Ob.Strings())
+                Console.WriteLine(NilableKeys()[k])
+            """;
+
+        var rejected = world.Compile(alone, NullabilityMode.PlatformTypes, decls);
+        Assert.False(rejected.Success, Describe(rejected));
+
+        // The witness: with a legal competitor, the nilable container must
+        // lose rather than win-and-fail. Mutating out the outer-nullability
+        // guard reddens this with GS0156.
+        const string competing = """
+                let k = AsNilable(Ob.Strings())
+                Console.WriteLine(NilableOrObjectKeys()[k])
+            """;
+
+        Assert.Equal(
+            "object",
+            world.Run(competing, NullabilityMode.PlatformTypes, decls).Trim());
+
+        // …and the same program with no platform type anywhere, which is what
+        // establishes the defect as pre-existing rather than introduced by
+        // the flip.
+        Assert.Equal(
+            "object",
+            world.Run(competing, NullabilityMode.Enabled, decls).Trim());
     }
 
     /// <summary>
