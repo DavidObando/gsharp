@@ -117,7 +117,7 @@ public sealed class GSharpProjectTransformerTests
             "Gsharp.NET.Sdk/1.0.0",
             new Dictionary<string, string>
             {
-                [Path.Combine(scratch.Path, "source", "Other.csproj")] =
+                [Path.Combine(scratch.Path, "Other", "Other.csproj")] =
                     Path.Combine(scratch.Path, "generated", "Other.gsproj"),
             });
 
@@ -131,7 +131,7 @@ public sealed class GSharpProjectTransformerTests
             "@(SharedProjects->'%(RootDir)%(Directory)%(Filename).gsproj')",
             references[2].Attribute("Include")?.Value);
         Assert.Equal(
-            "@(GeneratedProjects->'%(RootDir)%(Directory)%(Filename).gsproj'); ../Other/Other.gsproj",
+            "@(GeneratedProjects->'%(RootDir)%(Directory)%(Filename).gsproj'); Other.gsproj",
             references[3].Attribute("Include")?.Value);
         Assert.Equal("Gsharp.NET.Sdk/1.0.0", transformed.Root?.Attribute("Sdk")?.Value);
     }
@@ -161,6 +161,7 @@ public sealed class GSharpProjectTransformerTests
                 <ProjectReference Include="..\Runtime\Runtime.csproj; ..\Compiler\Compiler.csproj" />
                 <ProjectReference Include="$(DependencyProjects)" />
                 <ProjectReference Include="@(DependencyProjects)" />
+                <ProjectReference Include="..\External\One.csproj; ..\External\Two.csproj" />
               </ItemGroup>
             </Project>
             """);
@@ -191,7 +192,11 @@ public sealed class GSharpProjectTransformerTests
             references[1].Attribute("Include")?.Value);
         Assert.Equal("$(DependencyProjects)", references[2].Attribute("Include")?.Value);
         Assert.Equal("@(DependencyProjects)", references[3].Attribute("Include")?.Value);
-        Assert.All(references, reference => Assert.Null(reference.Attribute("ReferenceOutputAssembly")));
+        Assert.Equal(
+            @"..\External\One.csproj; ..\External\Two.csproj",
+            references[4].Attribute("Include")?.Value);
+        Assert.Equal("false", references[4].Attribute("ReferenceOutputAssembly")?.Value);
+        Assert.All(references.Take(4), reference => Assert.Null(reference.Attribute("ReferenceOutputAssembly")));
     }
 
     [Fact]

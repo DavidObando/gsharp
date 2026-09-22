@@ -228,6 +228,17 @@ internal static class GSharpProjectTransformer
         return changed;
     }
 
+    internal static void RewriteNestedProjectPathsForMirror(
+        XDocument document,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths) =>
+        RewriteNestedProjectPaths(
+            document,
+            sourceProjectDirectory,
+            destinationProjectDirectory,
+            generatedProjectPaths);
+
     private static IReadOnlySet<string> FindRepositoryRootExpressions(
         XDocument document,
         string sourceFileDirectory,
@@ -916,9 +927,13 @@ internal static class GSharpProjectTransformer
                 continue;
             }
 
-            string rewritten = RewriteExpressionSpec(specs[i]);
-            handled |= !string.Equals(specs[i], rewritten, StringComparison.Ordinal);
-            specs[i] = rewritten;
+            if (specs[i].Contains("$(", StringComparison.Ordinal)
+                || specs[i].Contains("@(", StringComparison.Ordinal))
+            {
+                string rewritten = RewriteExpressionSpec(specs[i]);
+                handled |= !string.Equals(specs[i], rewritten, StringComparison.Ordinal);
+                specs[i] = rewritten;
+            }
         }
 
         if (handled)

@@ -341,6 +341,11 @@ internal static class RepositoryMirror
             sourceDirectory,
             destinationDirectory,
             generatedProjectPaths);
+        GSharpProjectTransformer.RewriteNestedProjectPathsForMirror(
+            project,
+            sourceDirectory,
+            destinationDirectory,
+            generatedProjectPaths);
 
         foreach (XElement reference in project.Descendants()
             .Where(element => element.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase))

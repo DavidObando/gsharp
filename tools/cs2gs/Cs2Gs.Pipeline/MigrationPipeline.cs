@@ -201,8 +201,27 @@ public sealed class MigrationPipeline
         RepositoryExcludedScope excludedScope = repositoryLayout
             ? RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.ExcludedProjectPaths)
             : null;
+        IReadOnlyDictionary<string, IReadOnlyList<string>> passthroughCompileSources = null;
+        if (repositoryLayout && this.options.PassthroughProjectPaths.Count > 0)
+        {
+            var sources = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (string projectPath in this.options.PassthroughProjectPaths)
+            {
+                LoadedCSharpProject project =
+                    await CSharpProjectLoader.LoadProjectAsync(projectPath, cancellationToken)
+                        .ConfigureAwait(false);
+                sources[Path.GetFullPath(projectPath)] =
+                    project.Documents.Select(document => document.FilePath).ToList();
+            }
+
+            passthroughCompileSources = sources;
+        }
+
         RepositoryExcludedScope passthroughScope = repositoryLayout
-            ? RepositoryExcludedScope.Compute(this.options.SourceRoot, this.options.PassthroughProjectPaths)
+            ? RepositoryExcludedScope.Compute(
+                this.options.SourceRoot,
+                this.options.PassthroughProjectPaths,
+                passthroughCompileSources)
             : null;
         if (repositoryLayout)
         {

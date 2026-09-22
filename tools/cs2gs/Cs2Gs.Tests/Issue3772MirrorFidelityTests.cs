@@ -168,6 +168,9 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
                 <ProjectReference Include="@(DependencyProjects)" />
                 <ProjectReference Include="@(GsharpCore)" />
               </ItemGroup>
+              <Target Name="BuildCompiler">
+                <MSBuild Projects="..\Compiler\Compiler.csproj" />
+              </Target>
             </Project>
             """);
         File.WriteAllText(Path.Combine(runtimeDirectory, "Runtime.cs"), "class Runtime {}");
@@ -224,6 +227,46 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             project.Descendants("ProjectReference")
                 .Select(reference => reference.Attribute("Include").Value)
                 .ToArray());
+        Assert.Equal(
+            "../Compiler/Compiler.gsproj",
+            project.Descendants("MSBuild").Single().Attribute("Projects").Value);
+    }
+
+    [Fact]
+    public void MirrorPassthroughProjects_CopiesRootProjectAndEvaluatedSources()
+    {
+        string source = Path.Combine(this.root, "source");
+        string destination = Path.Combine(this.root, "destination");
+        string projectPath = Path.Combine(source, "Root.csproj");
+        string rootSource = Path.Combine(source, "Root.cs");
+        string linkedSource = Path.Combine(source, "Shared", "Linked.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(linkedSource));
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(rootSource, "class Root {}");
+        File.WriteAllText(linkedSource, "class Linked {}");
+        File.WriteAllText(Path.Combine(source, "Other.cs"), "class Other {}");
+
+        RepositoryExcludedScope scope = RepositoryExcludedScope.Compute(
+            source,
+            new[] { projectPath },
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [projectPath] = new[] { rootSource, linkedSource },
+            });
+        IReadOnlyList<string> written = RepositoryMirror.MirrorPassthroughProjects(
+            source,
+            destination,
+            new[] { "Root.csproj", "Root.cs", "Shared/Linked.cs", "Other.cs" },
+            scope,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [projectPath] = Path.Combine(destination, "Root.csproj"),
+            });
+
+        Assert.Equal(
+            new[] { "Root.cs", "Root.csproj", Path.Combine("Shared", "Linked.cs") },
+            written.OrderBy(path => path, StringComparer.Ordinal).ToArray());
+        Assert.False(File.Exists(Path.Combine(destination, "Other.cs")));
     }
 
     /// <summary>
