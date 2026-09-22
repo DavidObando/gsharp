@@ -443,9 +443,139 @@ public class ClrNullabilityTests
         Assert.Equal(1, ClrNullability.CountNullabilityBytes(typeof(int[,,])));
     }
 
+    /// <summary>
+    /// ADR-0186 §2's open-type-parameter carve-out, and the distinction the
+    /// projection path has to make to honour it: <b>an explicit byte at an
+    /// open slot is not obliviousness.</b>
+    /// <para>
+    /// Two declarations reach <c>ProjectNullableFlags</c> with byte <c>0</c>
+    /// at an open type-parameter slot and they mean opposite things.
+    /// <c>Enumerable.Cast&lt;TResult&gt;</c>, in the fully ANNOTATED BCL,
+    /// carries an <em>explicit</em> <c>0</c> there — csc's encoding for an
+    /// unconstrained parameter that may be a value type. §2 says the
+    /// argument wins, so <c>Cast[MethodBase]()</c> must be
+    /// <c>IEnumerable[MethodBase]</c> and not
+    /// <c>IEnumerable[MethodBase!]</c>.
+    /// </para>
+    /// <para>
+    /// Reading it as the latter is what made an ordinary two-armed
+    /// conditional stop compiling under the flip, with a diagnostic that
+    /// named one type twice because a nested argument's <c>!</c> does not
+    /// reach the display — and it is what took the self-migration guard from
+    /// 8/8 to 2/8. The absent case (a declaration with no nullable metadata
+    /// at all, where <c>0</c> IS obliviousness and the answer IS <c>T!</c>)
+    /// is pinned by <c>Issue4044NilTupleInferenceTests</c>; collapsing the
+    /// two re-breaks issue #4322.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Adr0186_AnOpenSlot_TakesItsNullabilityFromTheArgument()
+    {
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
+
+        var cast = typeof(System.Linq.Enumerable)
+            .GetMethods()
+            .Single(m => m.Name == "Cast" && m.IsGenericMethodDefinition)
+            .MakeGenericMethod(typeof(System.Reflection.MethodBase));
+
+        var returned = ClrNullability.GetReturnTypeSymbol(cast);
+
+        // Neither the container nor its element is platform-typed: the
+        // container is an annotated non-null `IEnumerable`, and the element
+        // is whatever the caller supplied — here G#'s non-null `MethodBase`.
+        Assert.IsNotType<PlatformTypeSymbol>(returned);
+        Assert.IsNotType<NullableTypeSymbol>(returned);
+        Assert.DoesNotContain("!", returned.Name, StringComparison.Ordinal);
+
+        if (returned is NullabilityAnnotatedTypeSymbol annotated)
+        {
+            Assert.IsNotType<PlatformTypeSymbol>(annotated.GetTypeArgumentSymbol(0));
+        }
+    }
+
+    /// <summary>
+    /// ADR-0186 step 3: the same five readers, under the new default.
+    /// <para>
+    /// The five ADR-0136 tests around this one are scoped to
+    /// <c>enabled</c> and keep asserting <c>T?</c> for an oblivious position,
+    /// which is what that mode means. This is their companion under
+    /// <c>platform-types</c>, gathered into one place so the change is
+    /// visible as a set rather than scattered as five renamed expectations:
+    /// every oblivious reading becomes <c>T!</c>, and nothing else moves.
+    /// </para>
+    /// <para>
+    /// The last row is the one worth reading twice. Re-emitting a
+    /// <em>nullable</em> wrapper over an annotated <c>List&lt;string&gt;</c>
+    /// whose inner metadata is EMPTY produces <c>[2, 0]</c> rather than
+    /// <c>[2]</c>: the scalar form would say the element is nullable, and
+    /// under ADR-0186 an absent inner byte says the element is oblivious.
+    /// The longer array is the more honest encoding, and it round-trips to
+    /// "nullable container of platform elements" rather than to "nullable
+    /// container of nullable elements".
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Adr0186_TheSameReaders_Under_ThePlatformTypesDefault()
+    {
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
+
+        // `!` on both lookups: `ObliviousContainer` is a fixture type declared
+        // in this file and `nameof` is checked by the compiler, so a null here
+        // would mean the fixture itself had been deleted — a broken test, not
+        // a runtime condition worth branching on.
+        var obliviousReturn = ClrNullability.GetReturnTypeSymbol(
+            typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetString))!);
+        Assert.Same(
+            TypeSymbol.String,
+            Assert.IsType<PlatformTypeSymbol>(obliviousReturn).UnderlyingType);
+
+        // `!` for the same reason as `GetString` above: a fixture method that
+        // `nameof` resolved cannot be absent at run time.
+        var obliviousList = ClrNullability.GetReturnTypeSymbol(
+            typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetList))!);
+        Assert.IsType<PlatformTypeSymbol>(obliviousList);
+
+        Assert.Same(
+            TypeSymbol.String,
+            Assert.IsType<PlatformTypeSymbol>(
+                ClrNullability.SymbolFromFlagsOffset(
+                    typeof(string), ImmutableArray<byte>.Empty, 0)).UnderlyingType);
+
+        var platformArray = Assert.IsType<PlatformTypeSymbol>(
+            ClrNullability.SymbolFromFlagsOffset(
+                typeof(string[]), ImmutableArray<byte>.Empty, 0));
+        var annotatedArray = Assert.IsType<NullabilityAnnotatedTypeSymbol>(platformArray.UnderlyingType);
+        Assert.Same(
+            TypeSymbol.String,
+            Assert.IsType<PlatformTypeSymbol>(
+                annotatedArray.GetTypeArgumentSymbolForClrType(typeof(string))).UnderlyingType);
+
+        // An EXPLICIT scalar `2` still means nullable in either mode — the
+        // negative control that keeps this a change to the absent reading
+        // only.
+        Assert.IsType<NullableTypeSymbol>(
+            ClrNullability.SymbolFromFlagsOffset(
+                typeof(string), ImmutableArray.Create<byte>(2), 0));
+
+        var reemitted = NullableFlagsBuilder.Build(
+            NullableTypeSymbol.Get(
+                new NullabilityAnnotatedTypeSymbol(
+                    TypeSymbol.FromClrType(typeof(List<string>)),
+                    ImmutableArray<byte>.Empty)));
+        Assert.Equal(new byte[] { 2, 0 }, reemitted.ToArray());
+    }
+
     [Fact]
     public void Oblivious_Reference_NoAnnotation_SurfacesAsNullable()
     {
+        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
+        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
+        // the default — relying on an ambient default to assert what a
+        // non-default mode does was the weaker form of the test anyway. The
+        // platform-types answer for these same five readers is asserted
+        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled);
+
         // Issue #1354: a genuinely oblivious (pre-nullable, `#nullable disable`)
         // imported reference type carries no [Nullable]/[NullableContext] anywhere.
         // Post-#1354 the Kotlin "unannotated/platform type is nullable" rule makes
@@ -460,6 +590,14 @@ public class ClrNullabilityTests
     [Fact]
     public void Oblivious_List_NoInnerFlags_SurfacesAsNullable()
     {
+        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
+        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
+        // the default — relying on an ambient default to assert what a
+        // non-default mode does was the weaker form of the test anyway. The
+        // platform-types answer for these same five readers is asserted
+        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled);
+
         // A method with no nullable annotation and no NullableContext at all.
         // Post-#1354 the outer List<string> reference position is nullable.
         // There are no inner per-position bytes, so the symbol is a plain
@@ -568,6 +706,14 @@ public class ClrNullabilityTests
     [Fact]
     public void SymbolFromFlagsOffset_EmptyFlags_RefType_IsNullable()
     {
+        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
+        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
+        // the default — relying on an ambient default to assert what a
+        // non-default mode does was the weaker form of the test anyway. The
+        // platform-types answer for these same five readers is asserted
+        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled);
+
         var sym = ClrNullability.SymbolFromFlagsOffset(typeof(string), ImmutableArray<byte>.Empty, 0);
         var nullable = Assert.IsType<NullableTypeSymbol>(sym);
         Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
@@ -578,6 +724,14 @@ public class ClrNullabilityTests
     [InlineData((byte)2)]
     public void SzArray_NullableScalarOrAbsentFlags_PropagateToElement(byte? scalar)
     {
+        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
+        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
+        // the default — relying on an ambient default to assert what a
+        // non-default mode does was the weaker form of the test anyway. The
+        // platform-types answer for these same five readers is asserted
+        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled);
+
         var flags = scalar.HasValue
             ? ImmutableArray.Create(scalar.Value)
             : ImmutableArray<byte>.Empty;
@@ -610,6 +764,14 @@ public class ClrNullabilityTests
     [Fact]
     public void NullableOuterAnnotatedArrayAndGeneric_ReemitInnerFlags()
     {
+        // ADR-0186 step 3 scoped this to `enabled` explicitly. It asserts
+        // ADR-0136's reading of an OBLIVIOUS position, and that is no longer
+        // the default — relying on an ambient default to assert what a
+        // non-default mode does was the weaker form of the test anyway. The
+        // platform-types answer for these same five readers is asserted
+        // together in `Adr0186_TheSameReaders_Under_ThePlatformTypesDefault`.
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.Enabled);
+
         Assert.Equal(
             new byte[] { 2, 1 },
             ReemitNullableOuter(typeof(string[]), ImmutableArray.Create<byte>(1, 1)).ToArray());

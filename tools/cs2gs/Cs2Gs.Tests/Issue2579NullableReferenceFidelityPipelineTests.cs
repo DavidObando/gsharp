@@ -104,9 +104,24 @@ public sealed class Issue2579NullableReferenceFidelityPipelineTests
         Assert.Contains("return value!!", emitted, StringComparison.Ordinal);
         Assert.Contains("let _requiredPath string = Factory.GetKey()!!", emitted, StringComparison.Ordinal);
         Assert.Contains("prop RequiredPath string", emitted, StringComparison.Ordinal);
-        Assert.Contains("return (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);
+        // ADR-0186 step 3: these two lost their `!!`, and that is the pivot's
+        // headline rather than a regression. `NullAssertionPolishPass` strips
+        // an assertion gsc no longer needs, and §6 makes the RESULT of `??`
+        // non-null — "that is the whole point of supplying a fallback" — so
+        // `(value ?? Factory.GetKey())` is already `string` and the assertion
+        // is dead weight. Under ADR-0136 the oblivious `GetKey()` made the
+        // coalesce `string?` and the `!!` load-bearing.
+        //
+        // The surrounding rows are the control, and they are why this is an
+        // amendment rather than a weakening: every assertion on a value that
+        // genuinely still needs one — `Factory.GetItem()!!.Next!!.Name`,
+        // `Factory.GetMap()!![Factory.GetKey()!!]!!.Name`, `yield line!!`,
+        // `return value!!`, `Path.GetDirectoryName(probe)!!` — is untouched.
+        Assert.Contains("return (value ?? Factory.GetKey())", emitted, StringComparison.Ordinal);
+        Assert.DoesNotContain("return (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);
         Assert.Contains("probe = Path.GetDirectoryName(probe)!!", emitted, StringComparison.Ordinal);
-        Assert.Contains("Value: (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);
+        Assert.Contains("Value: (value ?? Factory.GetKey())", emitted, StringComparison.Ordinal);
+        Assert.DoesNotContain("Value: (value ?? Factory.GetKey())!!", emitted, StringComparison.Ordinal);
         Assert.Contains("return number", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("number!!", emitted, StringComparison.Ordinal);
         Assert.True(

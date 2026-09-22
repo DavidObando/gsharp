@@ -14,6 +14,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Text;
+using GsConversion = GSharp.Core.CodeAnalysis.Binding.Conversion;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
 using Microsoft.CodeAnalysis;
@@ -66,6 +67,10 @@ public sealed class Adr0186PlatformTypeBindingTests
             public static List<int> NilNumbers() => null;
 
             public static List<string> NilStrings() => null;
+
+            // A non-nil `List<string>`, for probes about the CONTAINER's
+            // element nullability rather than about the container being nil.
+            public static List<string> Strings() => new List<string> { "a", null };
 
             public static Nested NilNest() => null;
 
@@ -137,6 +142,58 @@ public sealed class Adr0186PlatformTypeBindingTests
                 a = "a";
                 b = "b";
             }
+        }
+
+        #nullable enable
+
+        // ADR-0186 §3 at an indexer PARAMETER. Annotated on purpose: an
+        // oblivious `List<string>` parameter would project to the same
+        // `List[string!]!` the argument already has, and a rule about two
+        // DIFFERENT nullabilities cannot be witnessed by a pair that agrees.
+        //
+        // The set-only `int` indexer is the load-bearing part. Index
+        // resolution only takes the symbolic path when some argument has no
+        // `ClrType` or when the type has a set-only indexer, and a
+        // `List[string!]!` argument always has a `ClrType` — so without this
+        // member the access is resolved by reflection against the erased CLR
+        // shape, where `List<string>` is `List<string>` and neither rule is
+        // consulted at all. It is also what makes an empty applicable set
+        // final rather than a fallback to that erased retry.
+        public class ExactKeys
+        {
+            public string this[List<string> keys] => "exact";
+
+            public int this[int slot] { set { } }
+        }
+
+        public class NilableKeys
+        {
+            public string this[List<string?> keys] => "nilable";
+
+            public int this[int slot] { set { } }
+        }
+
+        // The same `List<string>` parameter, but now with a legal competitor.
+        // Applicability and the later argument conversion are two different
+        // steps, and only SELECTION can tell them apart: an over-accepted
+        // `List[string]` candidate wins the ranking and takes the whole access
+        // down with it, where rejecting it correctly leaves `object` to bind.
+        public class NilableOrObjectKeys
+        {
+            public string this[List<string?> keys] => "nilable";
+
+            public string this[object? any] => "object";
+
+            public int this[int slot] { set { } }
+        }
+
+        public class OverloadedKeys
+        {
+            public string this[List<string> keys] => "exact";
+
+            public string this[object any] => "object";
+
+            public int this[int slot] { set { } }
         }
         """;
 
@@ -386,39 +443,118 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
-    /// ADR-0186 §4 inside an expression-tree lambda: rejected, not silently
-    /// dropped.
+    /// ADR-0186 §4 inside an expression-tree lambda: a <b>receiver</b> check
+    /// is elided, and every other platform coercion is still rejected.
     /// <para>
-    /// <c>ExpressionTreeLowerer</c> erases every <c>NullAssertion</c> node,
-    /// on the reasoning that over a reference type <c>!!</c> is pure static
-    /// annotation with nothing to emit. That is true of a real <c>T?</c> and
-    /// false of a platform operand, whose assertion lowers to an actual
-    /// <c>dup; brtrue; pop; newobj; throw</c> — so a <c>T! -&gt; T</c>
-    /// boundary crossed inside such a lambda produced no check, no message
-    /// and no diagnostic.
+    /// §4 names the elision itself: "The CLR's own check on a
+    /// <c>callvirt</c>/<c>ldfld</c> receiver makes the inserted check
+    /// redundant where it fires, which is a reason to <b>elide</b> it as an
+    /// optimization." Inside an expression-tree lambda gsc emits no IL — the
+    /// access becomes <c>Expression.Property</c> or a call node — and
+    /// <c>System.Linq.Expressions</c> dereferences the instance when the tree
+    /// is evaluated, throwing at the same point. The failure survives; only
+    /// G#'s message is lost, which is the residual tracked as <b>#4352</b>.
     /// </para>
     /// <para>
-    /// Rejected rather than represented, following the precedent of the
-    /// nullable value-type case in the same validator:
-    /// <c>System.Linq.Expressions</c> has no throw-on-nil-and-yield form that
-    /// preserves G#'s contract.
+    /// <b>This is the narrow half of a change review was right to push back
+    /// on.</b> Step 3 first removed the rejection outright, which silently
+    /// dropped checks §4 and the release note both promise. What forced the
+    /// question is that rejecting <em>receivers</em> is a build break on
+    /// ordinary code: any oblivious reference member touched inside a
+    /// LINQ-to-<c>IQueryable</c> lambda inserts one, so
+    /// <c>Issue2661ExpressionTreeNullablePipelineTests</c>' <c>.Where(b -&gt;
+    /// b.Conversion.AccountId == id)</c> stopped compiling the moment the
+    /// default flipped. Eliding a receiver check is also not a regression:
+    /// under ADR-0136 that receiver is <c>T?</c>, cs2gs writes an explicit
+    /// <c>!!</c>, and the same lowering erases it.
     /// </para>
     /// </summary>
-    [Fact]
-    public void Section4_APlatformCoercion_InsideAnExpressionTreeLambda_Is_Rejected()
+    /// <param name="body">The probe body.</param>
+    [Theory]
+
+    // A member-access receiver: elided, because the tree dereferences it.
+    // The member read is `int32` on purpose — a `string!` result would be a
+    // second, NON-receiver coercion at the lambda's return, and this row is
+    // about the receiver alone.
+    [InlineData("    let e Expression[Func[int32]] = () -> Ob.Nest2().Num\n    Console.WriteLine(e)")]
+
+    // The same receiver whose member read IS platform-typed, bound into a
+    // nilable result so the read needs no coercion of its own.
+    [InlineData("    let e Expression[Func[string?]] = () -> Ob.Nest2().Prop\n    Console.WriteLine(e)")]
+
+    // A call receiver, the same shape one node over.
+    [InlineData("    let e Expression[Func[int32]] = () -> Ob.WrapList(\"a\").Count\n    Console.WriteLine(e)")]
+    public void Section4_APlatformReceiverCheck_InsideAnExpressionTreeLambda_Is_Elided(string body)
     {
         using var world = new World();
 
-        var compiled = world.Compile(
-            "    let e Expression[Func[string]] = () -> Ob.Value()!!\n    Console.WriteLine(e)",
-            NullabilityMode.PlatformTypes,
-            extraDeclarations: string.Empty);
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes, extraDeclarations: string.Empty);
 
-        Assert.False(compiled.Success, Describe(compiled));
+        Assert.True(compiled.Success, Describe(compiled));
+        Assert.DoesNotContain(compiled.Diagnostics, d => d.Id == "GS0473");
+    }
+
+    /// <summary>
+    /// The other half, and the control that keeps the elision above honest: a
+    /// platform coercion inside an expression-tree lambda that is <b>not</b> a
+    /// receiver is still <c>GS0473</c>.
+    /// <para>
+    /// Nothing dereferences a lambda's own result, so erasing the check there
+    /// would lose the failure entirely rather than merely its message —
+    /// exactly what §4 forbids and what review objected to.
+    /// <c>System.Linq.Expressions</c> has no throw-on-nil-and-yield form that
+    /// preserves G#'s contract <em>and</em> survives translation by a real
+    /// <c>IQueryable</c> provider, so rejection remains the honest answer
+    /// until #4352 chooses one.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="site">What the row covers.</param>
+    [Theory]
+
+    // The lambda's own result, coerced to a non-null `string`.
+    [InlineData(
+        "    let e Expression[Func[string]] = () -> Ob.Value()!!\n    Console.WriteLine(e)",
+        "an explicit '!!' on the result")]
+
+    // An argument position inside the tree.
+    [InlineData(
+        "    let e Expression[Func[int32]] = () -> Ob.Value().Length\n    let f Expression[Func[string]] = () -> string.Concat(Ob.Value()!!, \"x\")\n    Console.WriteLine(f)",
+        "an argument to a non-null parameter")]
+    public void Section4_ANonReceiverPlatformCoercion_InAnExpressionTreeLambda_Is_Rejected(
+        string body,
+        string site)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes, extraDeclarations: string.Empty);
+
+        Assert.False(compiled.Success, site + ": " + Describe(compiled));
         Assert.Contains(
             compiled.Diagnostics,
             d => d.Id == "GS0473"
                 && d.Message.Contains("nullability-oblivious", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The second control: the validator's <em>other</em> rejection — a
+    /// <c>!!</c> stripping a nullable VALUE type (issue #3349) — is untouched.
+    /// <c>T? → T</c> over a value type is a real CLR conversion with no
+    /// <c>System.Linq.Expressions</c> counterpart preserving G#'s
+    /// throw-on-nil contract, and ADR-0186 §2 excludes value types entirely.
+    /// </summary>
+    [Fact]
+    public void Section4_ANullableValueTypeAssertion_InAnExpressionTreeLambda_Is_Still_Rejected()
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(
+            "    let n int32? = 1\n    let e Expression[Func[int32]] = () -> n!!\n    Console.WriteLine(e)",
+            NullabilityMode.PlatformTypes,
+            extraDeclarations: string.Empty);
+
+        Assert.False(compiled.Success, Describe(compiled));
+        Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0473");
     }
 
     /// <summary>
@@ -1002,6 +1138,341 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.True(compiled.Success, Describe(compiled));
 
         Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// ADR-0186 §3 rule 2 at an <b>indexer parameter</b>: a
+    /// <c>C[T!]</c> argument stays applicable to a <c>C[T?]</c> parameter.
+    /// <para>
+    /// Rule 2 is the single conversion a constructed type permits, and
+    /// symbolic indexer applicability has to honour it.
+    /// <c>TryClassifyConstructedGenericConversion</c>'s invariant arm uses
+    /// <c>SameTypeSymbol</c> as its <em>complete</em> verdict and returns
+    /// before the general classifier runs, so once that helper correctly
+    /// stopped calling <c>string!</c> and <c>string?</c> the same type, a
+    /// non-identical pair would have been read as final incompatibility —
+    /// Copilot review finding on the flip PR. The arm now also asks
+    /// <c>Conversion.IsPlatformArgumentWidening</c>, which is the same
+    /// implementation the classifier uses rather than a second copy of the
+    /// rule.
+    /// </para>
+    /// <para>
+    /// <b>Asserted at the relation, not end to end, and that is a
+    /// limitation worth stating.</b> The symbolic-indexer path this guards is
+    /// only entered when some argument has no <c>ClrType</c> — a
+    /// same-compilation user type — and a <c>C[T!]</c> argument always has
+    /// one, so an end-to-end probe goes through CLR resolution instead and
+    /// passes with or without the fix (measured: it does not discriminate).
+    /// The production change is therefore <em>defensive</em>: correct
+    /// wherever the relation is asked, but with no constructed repro. What
+    /// this test pins is the rule itself, which does discriminate — removing
+    /// the <c>Widening</c> arm from <c>RelatePlatformArguments</c> reddens
+    /// it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_RuleTwoWidening_Is_The_OnlyPermitted_ArgumentRelation()
+    {
+        var platform = PlatformTypeSymbol.Get(TypeSymbol.String);
+        var nilable = NullableTypeSymbol.Get(TypeSymbol.String);
+
+        // Rule 2: `T! -> T?` is the one permitted widening.
+        Assert.True(GsConversion.IsPlatformArgumentWidening(platform, nilable));
+
+        // Rule 3's three illegal directions, and the identity case, are all
+        // NOT widenings — so the applicability arm that consults this cannot
+        // reopen the aliasing hole it was added beside.
+        Assert.False(GsConversion.IsPlatformArgumentWidening(platform, TypeSymbol.String));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(TypeSymbol.String, platform));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(nilable, platform));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(platform, platform));
+
+        // A platform-free pair is not this relation's business at all.
+        Assert.False(GsConversion.IsPlatformArgumentWidening(TypeSymbol.String, nilable));
+
+        // …and its companion, which is what keeps rule 3 closed at an
+        // applicability check whose same-type helper deliberately looks
+        // THROUGH the platform wrapper. `SameTypeSymbol` has to unwrap —
+        // member hiding needs `T!` and `T` to be one signature, and making
+        // them distinct there collapsed `Issue2525`'s interface diamond into
+        // GS0266 "ambiguous between multiple overloads". So the two
+        // questions are asked separately rather than folded into one helper.
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(platform, TypeSymbol.String));
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, platform));
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(nilable, platform));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platform, nilable));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platform, platform));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, nilable));
+
+        // An UNRELATED pair is neither: rule 3 speaks only about two
+        // positions that are the same underlying type differing in reference
+        // nullability, and `Illegal` means "no conversion exists" rather than
+        // "this arm cannot decide". Both directions, because the guard
+        // existed on one arm and not the other — a Copilot review finding on
+        // this PR, in each direction in turn.
+        var platformObject = PlatformTypeSymbol.Get(TypeSymbol.Object);
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platformObject, TypeSymbol.String));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platformObject, nilable));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, platformObject));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(platformObject, nilable));
+
+        // …and the reason the symbolic-indexer check asks
+        // `TryRelatePlatformContainer` rather than either of these two.
+        //
+        // They answer about a single ARGUMENT position whose container has
+        // ALREADY been matched. Asked about the containers themselves they
+        // have no shape guard: `[]string! -> object` is an ordinary upcast
+        // whose two sides have no corresponding argument positions at all, so
+        // `RelateNestedPlatformArguments` cannot pair them and reports
+        // `Illegal` — which, used as an applicability verdict, would stop an
+        // indexer taking `object` from accepting an oblivious string array.
+        // Measured here rather than argued, because the claim is the whole
+        // justification for the shape of that call.
+        var platformSlice = SliceTypeSymbol.Get(platform);
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(platformSlice, TypeSymbol.Object));
+        Assert.False(GsConversion.TryRelatePlatformContainer(platformSlice, TypeSymbol.Object, out _));
+    }
+
+    /// <summary>
+    /// The symbolic-indexer counterpart of
+    /// <c>TheContainerRule_Does_Not_Decide_OuterNullability</c>: a
+    /// <b>nilable</b> container must not be accepted — still less
+    /// <em>preferred</em> — where a non-null one is required.
+    /// <para>
+    /// <c>TryClassifyPlatformTypeArgumentMismatch</c> declines
+    /// <c>C[T!]? -&gt; C[T?]</c> on purpose, so that the ordinary
+    /// outer-nullability rule can reject the nilable container. But
+    /// "declined" and "this pair is unrelated" reach
+    /// <c>ClassifySymbolicIndexerConversion</c> as the same <c>false</c>, and
+    /// its same-type fast path strips a top-level reference <c>?</c> from
+    /// either side — so the pair came back <em>identical</em>, the best match
+    /// a candidate can be. Copilot review finding on the flip PR.
+    /// </para>
+    /// <para>
+    /// <b>The competitor is what makes it observable.</b> On its own the
+    /// over-accepted candidate is still caught, one step later, by the
+    /// argument conversion — GS0156 <em>"Cannot convert type
+    /// 'List[string]?' to 'List[string?]'"</em>. With a legal
+    /// <c>this[object?]</c> present, the mis-ranked candidate wins the ranking
+    /// outright and takes the whole access down with it, where rejecting it
+    /// leaves <c>object?</c> to bind.
+    /// </para>
+    /// <para>
+    /// <b>Measured as NOT platform-specific</b>, which is why the fix is the
+    /// fast path rather than the platform arm: the third case runs the same
+    /// program under <c>--nullability=enabled</c>, where no platform type
+    /// exists anywhere, and it mis-selected identically before the fix. The
+    /// fast path has always erased outer reference nullability; ADR-0186 is
+    /// only what made someone look.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_ANilableContainer_Is_Not_Identical_To_ANonNullOne()
+    {
+        using var world = new World();
+
+        // `AsNilable` is how the probe gets a genuine nilable OVER a platform
+        // container — an inferred `let` cannot, because `T!` already admits
+        // nil and a `nil` branch merges into it without adding a `?`.
+        const string decls = """
+            func AsNilable[T](x T) T? {
+                return x
+            }
+            """;
+
+        const string alone = """
+                let k = AsNilable(Ob.Strings())
+                Console.WriteLine(NilableKeys()[k])
+            """;
+
+        var rejected = world.Compile(alone, NullabilityMode.PlatformTypes, decls);
+        Assert.False(rejected.Success, Describe(rejected));
+
+        // The witness: with a legal competitor, the nilable container must
+        // lose rather than win-and-fail. Mutating out the outer-nullability
+        // guard reddens this with GS0156.
+        const string competing = """
+                let k = AsNilable(Ob.Strings())
+                Console.WriteLine(NilableOrObjectKeys()[k])
+            """;
+
+        Assert.Equal(
+            "object",
+            world.Run(competing, NullabilityMode.PlatformTypes, decls).Trim());
+
+        // …and the same program with no platform type anywhere, which is what
+        // establishes the defect as pre-existing rather than introduced by
+        // the flip.
+        Assert.Equal(
+            "object",
+            world.Run(competing, NullabilityMode.Enabled, decls).Trim());
+    }
+
+    /// <summary>
+    /// ADR-0186 §3 at a symbolic indexer parameter, <b>end to end</b> — and
+    /// the fast path it has to be asked before.
+    /// <para>
+    /// <c>ClassifySymbolicIndexerConversion</c> opened with
+    /// <c>SameTypeSymbol</c>, which looks through a platform wrapper by design
+    /// (member hiding needs <c>T!</c> and <c>T</c> to be one CLR signature —
+    /// making them distinct there collapsed <c>Issue2525</c>'s interface
+    /// diamond into GS0266). So it answered <em>identity</em> for
+    /// <c>List[string!]</c> against <c>List[string]</c> and returned before
+    /// the rule-3 guard below it ever ran: the aliasing conversion the guard
+    /// exists to reject stayed applicable, and rule 2's
+    /// <c>List[string!] -&gt; List[string?]</c> — a permitted
+    /// <em>non-identity</em> widening — was mis-ranked as identity, which the
+    /// candidate ranker prefers. Copilot review finding on the flip PR.
+    /// </para>
+    /// <para>
+    /// The question is now asked through
+    /// <c>Conversion.TryRelatePlatformContainer</c>, the same guarded entry
+    /// the general classifier on the last line of that method already uses —
+    /// so this is a hoist above the fast path, not a new rule — and
+    /// deliberately not through the per-<em>argument</em> predicates one
+    /// method down, which assume a container that has already been matched
+    /// and would answer <c>Illegal</c> for an ordinary upcast such as
+    /// <c>[]string! -&gt; object</c>.
+    /// </para>
+    /// <para>
+    /// <b>Why this fixture and not a simpler one.</b> The symbolic path is
+    /// entered only when an argument has no <c>ClrType</c> or the receiver
+    /// type has a set-only indexer, and a <c>List[string!]</c> argument always
+    /// has a <c>ClrType</c> — an earlier attempt at this test went through
+    /// reflection against the erased CLR shape instead and passed with the fix
+    /// mutated out. Hence <c>ExactKeys</c>/<c>NilableKeys</c>' set-only
+    /// <c>int</c> member, which also makes an empty applicable set final
+    /// rather than a fallback to that erased retry. Mutation witness:
+    /// removing the hoist compiles the second probe, which is the aliasing
+    /// hole.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_SymbolicIndexerApplicability_Asks_TheRule_Before_TheSameTypeFastPath()
+    {
+        using var world = new World();
+
+        // Rule 2: `List[string!]! -> List[string?]` is the one container
+        // conversion the ADR permits, and it must stay applicable — a guard
+        // that rejected everything platform-shaped would redden here.
+        const string permitted = """
+                let keys = Ob.Strings()
+                Console.WriteLine(NilableKeys()[keys])
+            """;
+        Assert.Equal("nilable", world.Run(permitted, NullabilityMode.PlatformTypes).Trim());
+
+        // Rule 3: `List[string!]! -> List[string]` hands a container that
+        // demonstrably holds a nil (`Strings()`' second element) to a
+        // parameter annotated never to. No check can be inserted — the nil is
+        // inside the container, not the reference being converted — so the
+        // only sound answer is that the indexer is not applicable.
+        const string illegal = """
+                let keys = Ob.Strings()
+                Console.WriteLine(ExactKeys()[keys])
+            """;
+        var rejected = world.Compile(illegal, NullabilityMode.PlatformTypes);
+        Assert.False(rejected.Success, "rule 3 must reject C[T!] -> C[T]: " + Describe(rejected));
+
+        // …and the discriminator, because the two probes above pass either
+        // way. Applicability and the later argument conversion are separate
+        // steps, and the conversion step applies rule 3 too — so an
+        // over-accepted candidate is still caught, just one step further on
+        // and with the whole access lost. What only SELECTION can show is a
+        // legal competitor: with the rule asked first, the `List[string]`
+        // indexer is out of the running and `this[object]` binds; with the
+        // same-type fast path first, `List[string]` is reported IDENTICAL —
+        // the best possible match — wins the ranking, and the access then
+        // fails at conversion with GS0155 *"Cannot convert type
+        // 'List[string]!' to 'List[string]'"*, naming one type twice.
+        const string competing = """
+                let keys = Ob.Strings()
+                Console.WriteLine(OverloadedKeys()[keys])
+            """;
+        Assert.Equal("object", world.Run(competing, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// ADR-0186 §4: the receiver check elided inside an expression-tree
+    /// lambda is <b>redundant, not missing</b> — the tree still throws.
+    /// <para>
+    /// Review objected that <c>Expression.Call</c> on a non-virtual method
+    /// may emit <c>call</c>, which does not reject a null <c>this</c>, so a
+    /// member that never touches its receiver could complete on a nil and
+    /// lose the failure entirely rather than merely its message. That is
+    /// exactly the kind of claim ADR-0186 says is worth only as much as the
+    /// enumeration behind it — its own §4 receiver exemption was falsified
+    /// that way — so it is measured here rather than argued.
+    /// </para>
+    /// <para>
+    /// Measured directly against <c>System.Linq.Expressions</c> (sealed
+    /// class, field and property receivers, auto-property and a getter that
+    /// provably never reads <c>this</c>): <b>all four throw
+    /// <c>NullReferenceException</c></b>. The expression compiler emits the
+    /// dereferencing form for instance member access regardless of
+    /// virtuality, exactly as <c>csc</c> does. This test keeps that a live
+    /// assertion through G#'s own pipeline: what is lost by the elision is
+    /// G#'s message (#4352), never the failure.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section4_AnElidedReceiverCheck_Still_Throws_When_TheTreeRuns()
+    {
+        using var world = new World();
+
+        var output = world.Run(
+            """
+                let n = Ob.NilNest()
+                let e Expression[Func[string?]] = () -> n.Prop
+                let c = e.Compile()
+                try {
+                    Console.WriteLine(c())
+                } catch (NullReferenceException) {
+                    Console.WriteLine("threw")
+                }
+            """,
+            NullabilityMode.PlatformTypes);
+
+        Assert.Equal("threw", output.Trim());
+    }
+
+    /// <summary>
+    /// ADR-0186 §6: reference <b>equality</b> with a platform operand takes
+    /// no §4 check, because comparing two references is not a use of either
+    /// as non-null.
+    /// <para>
+    /// §4's sites are a store, an argument, a return, a
+    /// <c>throw</c>/<c>lock</c>/<c>for … in</c> subject and a receiver.
+    /// <c>==</c> is none of them: it never dereferences. §6 already makes
+    /// <c>x == nil</c> free on a <c>T!</c>, and comparing against a non-nil
+    /// <c>string</c> is the same operation with a different right-hand side.
+    /// </para>
+    /// <para>
+    /// Without the operator arm, the <c>supportedOperators</c> lookup missed
+    /// (it is an exact type match and cannot see through a wrapper),
+    /// resolution fell through to the CLR <c>op_Equality</c>, and the
+    /// platform operand became an <em>argument</em> to a non-null
+    /// parameter — so a check was inserted on a comparison. That spurious
+    /// check is what made
+    /// <c>Issue2661ExpressionTreeNullablePipelineTests</c>' <c>.Where(b -&gt;
+    /// b.Conversion.AccountId == id)</c> report GS0473, since a non-receiver
+    /// coercion inside an expression-tree lambda is (correctly) rejected.
+    /// </para>
+    /// <para>
+    /// Asserted by <b>counting the synthesized checks</b>, which is the only
+    /// observable that moves — the comparison compiles either way.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    [Theory]
+    [InlineData("    let x = Ob.Value() == \"v\"\n    Console.WriteLine(x)")]
+    [InlineData("    let x = \"v\" == Ob.Value()\n    Console.WriteLine(x)")]
+    [InlineData("    let x = Ob.Value() != Ob.Suffix()\n    Console.WriteLine(x)")]
+    public void Section6_ReferenceEquality_With_APlatformOperand_Inserts_NoCheck(string body)
+    {
+        using var world = new World();
+
+        Assert.Equal(0, world.CountPlatformChecks(body));
+        Assert.True(world.Compile(body, NullabilityMode.PlatformTypes).Success);
     }
 
     /// <summary>

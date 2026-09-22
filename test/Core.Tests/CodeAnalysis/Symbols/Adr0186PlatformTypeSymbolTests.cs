@@ -151,18 +151,27 @@ public class Adr0186PlatformTypeSymbolTests
     }
 
     /// <summary>
-    /// The mode-off half of ADR-0186 step 1's central claim: an oblivious
-    /// position still produces exactly what it produces today, <c>T?</c> via
+    /// The <c>enabled</c> half of ADR-0186's central claim: under ADR-0136's
+    /// reading an oblivious position produces <c>T?</c> via
     /// <see cref="NullableTypeSymbol"/>, indistinguishable from an explicitly
     /// annotated one.
+    /// <para>
+    /// <b>Step 3 made the scope explicit.</b> This used to rely on the
+    /// ambient default being <see cref="NullabilityMode.Enabled"/>, which is
+    /// no longer true — and relying on an ambient default to assert what a
+    /// non-default mode does was always the weaker form of the test. Entering
+    /// the mode says what is being asserted.
+    /// </para>
     /// </summary>
     /// <param name="state">The declaration's state, as a <c>ClrNullabilityState</c> ordinal.</param>
     [Theory]
     [InlineData((int)ClrNullabilityState.Oblivious)]
     [InlineData((int)ClrNullabilityState.Annotated)]
-    public void SymbolForState_Yields_Nullable_For_Both_NonNonNull_States_When_The_Mode_Is_Off(
+    public void SymbolForState_Yields_Nullable_For_Both_NonNonNull_States_Under_TheEnabledMode(
         int state)
     {
+        using var scope = NullabilityOptions.Enter(NullabilityMode.Enabled);
+
         var symbol = ClrNullability.SymbolForState(TypeSymbol.String, (ClrNullabilityState)state);
         Assert.IsType<NullableTypeSymbol>(symbol);
         Assert.Same(NullableTypeSymbol.Get(TypeSymbol.String), symbol);
@@ -194,20 +203,30 @@ public class Adr0186PlatformTypeSymbolTests
 
     /// <summary>
     /// The mode is scoped, not global: leaving the scope restores the previous
-    /// reading. Without this, one test turning the mode on would silently
+    /// reading. Without this, one test changing the mode would silently
     /// change what every later test in the same process imports.
+    /// <para>
+    /// Written against the <c>enabled</c> mode since step 3, because that is
+    /// now the non-default one — a restore test whose inner and outer modes
+    /// are both the default asserts nothing. It also covers the shape step 3
+    /// had to fix in <c>NullabilityOptions</c>: an unset ambient value must
+    /// resolve to <c>DefaultMode</c>, not to the enum's zero value, or a
+    /// restored "nothing" would silently mean <c>enabled</c> forever after.
+    /// </para>
     /// </summary>
     [Fact]
     public void The_Mode_Is_Restored_When_Its_Scope_Ends()
     {
-        Assert.False(NullabilityOptions.PlatformTypesEnabled);
-        using (NullabilityOptions.Enter(NullabilityMode.PlatformTypes))
+        Assert.True(NullabilityOptions.PlatformTypesEnabled);
+        using (NullabilityOptions.Enter(NullabilityMode.Enabled))
         {
-            Assert.True(NullabilityOptions.PlatformTypesEnabled);
+            Assert.False(NullabilityOptions.PlatformTypesEnabled);
+            Assert.IsType<NullableTypeSymbol>(
+                ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious));
         }
 
-        Assert.False(NullabilityOptions.PlatformTypesEnabled);
-        Assert.IsType<NullableTypeSymbol>(
+        Assert.True(NullabilityOptions.PlatformTypesEnabled);
+        Assert.IsType<PlatformTypeSymbol>(
             ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious));
     }
 
@@ -516,11 +535,16 @@ public class Adr0186PlatformTypeSymbolTests
                 ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious));
         }
 
-        // Mode off: the very same emitted byte still reads as "not non-null",
-        // which is ADR-0136's answer. The encoding is forward-compatible in
-        // both directions rather than a private convention.
-        Assert.IsType<NullableTypeSymbol>(
-            ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious));
+        // Under `enabled`: the very same emitted byte still reads as "not
+        // non-null", which is ADR-0136's answer. The encoding is
+        // forward-compatible in both directions rather than a private
+        // convention, which is what makes an assembly emitted by a
+        // platform-types compilation still readable by an `enabled` one.
+        using (NullabilityOptions.Enter(NullabilityMode.Enabled))
+        {
+            Assert.IsType<NullableTypeSymbol>(
+                ClrNullability.SymbolForState(TypeSymbol.String, ClrNullabilityState.Oblivious));
+        }
     }
 
     /// <summary>

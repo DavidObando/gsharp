@@ -5956,7 +5956,83 @@ internal sealed class MemberLookup
         TypeSymbol source,
         TypeSymbol target)
     {
-        if (SameTypeSymbol(source, target))
+        // ADR-0186 §3, asked BEFORE the same-type fast path, because that
+        // path is what the rule has to override.
+        //
+        // `SameTypeSymbol` unwraps a platform wrapper recursively — it answers
+        // the runtime-SIGNATURE question, which member hiding needs (see its
+        // own comment) — so it reports plain identity for
+        // `List[string!]` against `List[string]`. Left first, it therefore
+        // returned `(implicit, identity)` and the rule-3 guard further down in
+        // `TryClassifyConstructedGenericConversion` was never reached at all;
+        // it also ranked `List[string!] -> List[string?]` as identity, when
+        // rule 2 makes that a permitted NON-identity widening and the
+        // overload ranker prefers identity over implicit.
+        //
+        // Copilot review finding on the flip PR, and the third time this pair
+        // of questions has had to be pulled apart: the fix is always to ask
+        // the platform relation FIRST and let the same-type helper keep its
+        // own meaning, never to change what it means.
+        //
+        // Asked through `TryRelatePlatformContainer` — the same guarded entry
+        // `ClassifyNonStructural` uses on the fall-through below — and NOT
+        // through the per-argument `IsPlatformArgumentIllegal` /
+        // `IsPlatformArgumentWidening` pair used one method down. Those two
+        // answer about a single ARGUMENT position whose container has already
+        // been matched; asked about the containers themselves they have no
+        // shape guard, so `[]string! -> object` (an ordinary upcast, where the
+        // two sides have no corresponding argument positions at all) comes
+        // back `Illegal` and an indexer taking `object` stops accepting an
+        // oblivious string array. The container entry declines for such a
+        // pair instead, and speaks only for rule 3's three illegal directions
+        // and rule 2's one permitted widening.
+        //
+        // So this is a hoist, not a new rule: the same question the classifier
+        // on the last line already asks, moved above the fast path that was
+        // pre-empting it.
+        if (Conversion.TryRelatePlatformContainer(source, target, out var platformImplicit))
+        {
+            return (platformImplicit, false);
+        }
+
+        // …and the question that entry deliberately does NOT answer: a
+        // NILABLE source reaching a non-null destination.
+        //
+        // `TryClassifyPlatformTypeArgumentMismatch` declines such a pair on
+        // purpose — its own comment says so — so that the ordinary
+        // outer-nullability rule can reject it, and
+        // `TheContainerRule_Does_Not_Decide_OuterNullability` pins that. But
+        // "declined" and "unrelated" arrive here as the same `false`, and the
+        // fast path below strips a top-level reference `?` from EITHER side
+        // (it answers the runtime-signature question, which is why). So
+        // `List[string!]?` against a `List[string?]` parameter came back
+        // IDENTICAL — the best possible match — and a nilable container was
+        // preferred where a non-null one was required.
+        //
+        // Copilot review finding on the flip PR, and real. Measured with a
+        // legal `this[object?]` competitor present, which is what makes a
+        // wrong *identity* verdict observable rather than merely wrong: the
+        // mis-ranked candidate won the ranking and the whole access then
+        // failed with GS0156, rather than `this[object?]` binding.
+        //
+        // <b>Not platform-specific, and not new here.</b> The identical
+        // mis-selection reproduces under `--nullability=enabled` with no
+        // platform type anywhere in the program — the fast path has always
+        // erased outer reference nullability. It is fixed rather than filed
+        // because this method is the one now being asked the question, and
+        // because a rule that holds in `Conversion` but not at applicability
+        // is exactly the drift this ADR's §5a exists to prevent.
+        //
+        // Only the FAST PATH is skipped, not the whole method: the pair falls
+        // through to the constructed-generic arm and then to the general
+        // classifier, which already answer it correctly. Value-type nullables
+        // are excluded exactly as they are in `SameTypeSymbol` — `int?` is a
+        // different type, not a nullability annotation on `int`.
+        var outerNilabilityDiffers = source is NullableTypeSymbol sourceNilable
+            && !NullableLifting.IsAnyValueTypeNullable(sourceNilable)
+            && target is not NullableTypeSymbol;
+
+        if (!outerNilabilityDiffers && SameTypeSymbol(source, target))
         {
             return (true, true);
         }
@@ -6016,7 +6092,31 @@ internal sealed class MemberLookup
                     Binder.IsReferenceTypeForConstraint(sourceArguments[i])
                     && Binder.IsReferenceTypeForConstraint(targetImported.TypeArguments[i])
                     && ClassifySymbolicIndexerConversion(targetImported.TypeArguments[i], sourceArguments[i]).IsImplicit,
-                _ => SameTypeSymbol(sourceArguments[i], targetImported.TypeArguments[i]),
+
+                // ADR-0186 §3, at an invariant argument position: rule 3's
+                // illegal relations are out, rule 2's one widening is in, and
+                // everything else is the ordinary same-type question.
+                //
+                // Both halves are review findings. Asking only
+                // `SameTypeSymbol` let `C[T!] -> C[T]` stay applicable
+                // (`SameTypeSymbol` unwraps the platform wrapper, by design —
+                // see its own comment), which is the aliasing conversion rule
+                // 3 exists to reject. Answering only "not the same type" for a
+                // mixed pair then made rule 2's `C[T!] -> C[T?]` — the ONE
+                // conversion the ADR permits — inapplicable, because this
+                // caller uses its verdict as the complete result and returns
+                // before the general classifier runs.
+                //
+                // The relation itself stays in `Conversion`, which owns it; a
+                // second copy here is how ADR-0136's carve-out predicates
+                // began.
+                _ => !Conversion.IsPlatformArgumentIllegal(
+                        sourceArguments[i],
+                        targetImported.TypeArguments[i])
+                    && (SameTypeSymbol(sourceArguments[i], targetImported.TypeArguments[i])
+                        || Conversion.IsPlatformArgumentWidening(
+                            sourceArguments[i],
+                            targetImported.TypeArguments[i])),
             };
             if (!compatible)
             {
@@ -6703,6 +6803,57 @@ internal sealed class MemberLookup
             && !NullableLifting.IsAnyValueTypeNullable(nullableReferenceB))
         {
             return SameTypeSymbol(a, nullableReferenceB.UnderlyingType);
+        }
+
+        // ADR-0186 §1: `T!` and `T` are ONE runtime type, so this helper —
+        // which answers "is this the same TYPE?" — sees through the platform
+        // wrapper exactly as the reference-`T?` arms above do. §2 excludes
+        // value types, so there is no `IsAnyValueTypeNullable`-style guard to
+        // mirror.
+        //
+        // <b>This helper answers a runtime-signature question, and that is
+        // why it unwraps.</b> It is also consulted for member HIDING, where a
+        // `new string this[string key]` in a derived interface must be
+        // recognised as covering the base slot whether the base's parameter
+        // was read as `string` or `string!` — they are one CLR signature.
+        // Making a mixed pair simply "not the same type" broke exactly that:
+        // `Issue2525ImportedIndexerHidingEmitTests`' diamond stopped
+        // collapsing and every access reported GS0266 "ambiguous between
+        // multiple overloads".
+        //
+        // The conversion side needs the OPPOSITE answer — §3 rule 3 rejects
+        // `C[T!] -> C[T]`, so an invariant type-argument position must NOT
+        // treat them as interchangeable. That is a different question and it
+        // is asked separately, at the one caller that needs it:
+        // `TryClassifyConstructedGenericConversion` pairs this test with
+        // `Conversion.IsPlatformArgumentIllegal` /
+        // `IsPlatformArgumentWidening`. Overloading this helper with both
+        // meanings is what produced two review rounds of finding-and-
+        // counter-finding; splitting them is the fix.
+        //
+        // Measured for the case the arm was added for: without any platform
+        // arm at all, `SameTypeSymbol(Payload2471, object!)` fell through to
+        // the `ClrType` probe at the bottom — where a same-compilation
+        // `Payload2471` erases to `System.Object`, which is the platform
+        // wrapper's own relayed `ClrType` — and answered YES, so
+        // `NestedKeyBox[T]`'s `this[List[object]]` beat `this[IEnumerable[T]]`
+        // (`Issue2471DictionaryIndexerSameCompilationTypeTests`). With the
+        // unwrap it answers `SameTypeSymbol(Payload2471, object)`, which is
+        // `false` — the same answer `--nullability=enabled` gives through its
+        // own `T?` unwrap one arm up.
+        if (a is PlatformTypeSymbol platformA && b is PlatformTypeSymbol platformB)
+        {
+            return SameTypeSymbol(platformA.UnderlyingType, platformB.UnderlyingType);
+        }
+
+        if (a is PlatformTypeSymbol platformReferenceA)
+        {
+            return SameTypeSymbol(platformReferenceA.UnderlyingType, b);
+        }
+
+        if (b is PlatformTypeSymbol platformReferenceB)
+        {
+            return SameTypeSymbol(a, platformReferenceB.UnderlyingType);
         }
 
         // Constructed user generics are interned (StructSymbol.Construct uses a

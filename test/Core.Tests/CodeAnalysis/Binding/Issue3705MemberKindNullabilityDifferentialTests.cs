@@ -379,7 +379,22 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
         {
             foreach (var state in States)
             {
-                yield return new object[] { kind, state, state == "NonNull" };
+                // ADR-0186 step 3 — "its expected column changes in the
+                // oblivious row and nowhere else", which is the ADR's own
+                // precise, mechanical statement of its entire
+                // metadata-reading change, and this line is that statement
+                // in code.
+                //
+                // Both oblivious states now bind to a NON-NULL local, because
+                // the position is `T!` and `T! -> T` is an implicit
+                // conversion carrying §4's runtime check rather than a
+                // compile error. The `NonNull` and `Nullable` rows are
+                // untouched, and they are the controls that keep this an
+                // amendment to one cell rather than a weakening of the gate:
+                // an annotated-nullable position still must not bind to a
+                // non-null local.
+                var bindsNonNull = state == "NonNull" || state.StartsWith("Oblivious", StringComparison.Ordinal);
+                yield return new object[] { kind, state, bindsNonNull };
             }
         }
     }
@@ -398,10 +413,28 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
     /// through <c>ClrNullability</c> must not widen an explicitly non-null
     /// declaration.
     /// </para>
+    /// <para>
+    /// <b>ADR-0186 step 3 changed the oblivious rows and nothing else.</b>
+    /// Both <c>Oblivious*</c> states now bind to a non-null local, because
+    /// the position reads as <c>T!</c> and <c>T! → T</c> is an implicit
+    /// conversion carrying §4's runtime check rather than a compile error.
+    /// The ADR names this fixture's expected column as the precise,
+    /// mechanical statement of its whole metadata-reading change; the
+    /// <c>NonNull</c> and <c>Nullable</c> rows are unchanged and are what
+    /// keeps that an amendment to one cell rather than a weakening of the
+    /// gate. The <em>runtime marker</em> column did not move at all: an
+    /// oblivious position still holds a non-null value, and a
+    /// <c>Nullable</c> one still holds nil.
+    /// </para>
+    /// <para>
+    /// The uniformity claim is unchanged and is the point: every one of the
+    /// thirteen signature positions must give the <em>same</em> answer for a
+    /// given annotation state. The kind never appears on the right-hand side.
+    /// </para>
     /// </summary>
     /// <param name="kind">The signature-position kind.</param>
     /// <param name="state">The declaration's annotation state.</param>
-    /// <param name="expectedNonNull">Whether the position must bind non-null.</param>
+    /// <param name="expectedNonNull">Whether the position must bind into a non-null local.</param>
     [Theory]
     [MemberData(nameof(Matrix))]
     public void SignaturePositions_Agree_On_DeclarationNullability(
@@ -729,10 +762,29 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             // Annotated non-null is the only one of the four that is not
             // nullable — if this ever collapses, every non-`NonNull` row above
             // becomes vacuous.
+            //
+            // ADR-0186 step 3: the "three nullable states" claim is a
+            // statement about ADR-0136's reading, so it is asserted under
+            // `enabled` explicitly now that that is not the default. Under
+            // `platform-types` the two oblivious states read as `T!`
+            // instead, which is the flip and is asserted immediately below —
+            // the anti-vacuity property this method exists for is that the
+            // four states are DISTINCT, and they are distinct in both modes.
+            using (NullabilityOptions.Enter(NullabilityMode.Enabled))
+            {
+                Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nonNullField));
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nullableField));
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(absentField));
+                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(zeroField));
+            }
+
+            // The default reading: annotated non-null stays `T`, annotated
+            // nullable stays `T?`, and both oblivious shapes are `T!`.
             Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nonNullField));
+            Assert.IsNotType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nonNullField));
             Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(nullableField));
-            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(absentField));
-            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(zeroField));
+            Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(absentField));
+            Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(zeroField));
 
             // …and the three nullable states must not be nullable for the SAME
             // reason. `ObliviousZero` in particular must be a NON-empty `[0]`:
@@ -850,12 +902,17 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
                         0));
             }
 
-            // Mode OFF — today's answers, unchanged. This is step 1's
-            // load-bearing claim, asserted on the same four real declarations.
-            Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[0].Field));
-            foreach (var (state, field, _) in fields[1..])
+            // The `enabled` mode — ADR-0136's answers, asserted on the same
+            // four real declarations. ADR-0186 step 3 made the scope
+            // explicit: this is no longer the default, and a claim about a
+            // specific mode should say which mode it is about.
+            using (NullabilityOptions.Enter(NullabilityMode.Enabled))
             {
-                Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(field));
+                Assert.IsNotType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[0].Field));
+                foreach (var (state, field, _) in fields[1..])
+                {
+                    Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(field));
+                }
             }
 
             // Mode ON — the third column.
@@ -913,8 +970,12 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
                     ClrNullability.ReadNullableFlags(concreteAbsent, absent)));
             }
 
-            // …and the mode is scoped, so the rest of the suite is unaffected.
-            Assert.IsType<NullableTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[2].Field));
+            // …and the mode is scoped, so the rest of the suite is
+            // unaffected. Shown the other way round since step 3: leaving
+            // the `platform-types` scope must restore the DEFAULT, which is
+            // now `platform-types` itself, not the enum's zero value. The
+            // `enabled` reading is asserted inside its own scope above.
+            Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(fields[2].Field));
         }
         finally
         {
@@ -966,8 +1027,11 @@ public sealed class Issue3705MemberKindNullabilityDifferentialTests
             Assert.IsType<PlatformTypeSymbol>(platform);
             Assert.Equal("string!", platform.Name);
 
-            // …and the mode is scoped to the compilation that asked for it.
-            Assert.False(NullabilityOptions.PlatformTypesEnabled);
+            // …and the mode is scoped to the compilation that asked for it,
+            // which is now shown the other way round: the `enabled`
+            // compilation above must not have left `enabled` installed
+            // ambiently, so the default reading is back in force here.
+            Assert.True(NullabilityOptions.PlatformTypesEnabled);
         }
         finally
         {

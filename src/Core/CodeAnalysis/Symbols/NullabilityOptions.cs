@@ -33,15 +33,39 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// value that is uniform for the whole compilation.
 /// </para>
 /// <para>
-/// <b>This type is scaffolding.</b> ADR-0186 step 3 flips
-/// <see cref="NullabilityMode.PlatformTypes"/> on unconditionally, at which
-/// point the mode stops being a choice and this class should be deleted rather
-/// than left as a permanent global.
+/// <b>Step 1 said this type was scaffolding to delete at step 3. It is
+/// kept, deliberately.</b> Step 3 flipped the default to
+/// <see cref="NullabilityMode.PlatformTypes"/>, but the mode does not stop
+/// being a choice there: <see cref="NullabilityMode.Enabled"/> has to stay
+/// selectable for two concrete reasons. ADR-0136's
+/// <c>Issue3705MemberKindNullabilityDifferentialTests</c> asserts <em>both</em>
+/// columns off one piece of real csc-emitted metadata — that differential is
+/// the standing uniformity gate, and it cannot express "the other reading"
+/// without a switch. And step 4 deletes the old carve-out, which wants the old
+/// reading still reachable for bisection while that lands. Retiring the mode
+/// belongs after step 4, not here.
 /// </para>
 /// </summary>
 internal static class NullabilityOptions
 {
-    private static readonly AsyncLocal<NullabilityMode> Current = new();
+    /// <summary>
+    /// The mode installed for the current logical call, or <see langword="null"/>
+    /// when nothing installed one.
+    /// <para>
+    /// <b>Nullable, not a bare enum, and that is load-bearing at step 3.</b>
+    /// Step 1 relied on <see cref="NullabilityMode.Enabled"/> being the enum's
+    /// zero value so an unset <see cref="AsyncLocal{T}"/> already answered the
+    /// default. The flip makes that reasoning silently wrong in the dangerous
+    /// direction: every reader that never entered a scope — and there are
+    /// some, because <c>ClrNullability</c> is a static leaf reachable from the
+    /// importer — would keep reading ADR-0136's answer while the compilation
+    /// around it reads ADR-0186's. "Two readers disagreeing about one
+    /// declaration" is the #3705 family-2 defect this whole design is
+    /// careful about. Storing "unset" distinctly and resolving it to
+    /// <see cref="DefaultMode"/> makes the default a single fact.
+    /// </para>
+    /// </summary>
+    private static readonly AsyncLocal<NullabilityMode?> Current = new();
 
     /// <summary>
     /// ADR-0186 §4: whether the coercion check is inserted at each
@@ -53,53 +77,48 @@ internal static class NullabilityOptions
     private static readonly AsyncLocal<bool> ChecksSuppressed = new();
 
     /// <summary>
-    /// Gets the mode in effect for the current logical call. Defaults to
-    /// <see cref="NullabilityMode.Enabled"/> — ADR-0136's reading — which is
-    /// what makes every caller that never sets it behave exactly as it does
-    /// today. <see cref="NullabilityMode.Enabled"/> is deliberately the enum's
-    /// zero value so that the unset <see cref="AsyncLocal{T}"/> already answers
-    /// correctly.
+    /// Gets the mode in effect for the current logical call, falling back to
+    /// <see cref="DefaultMode"/> — ADR-0186's <see cref="NullabilityMode.PlatformTypes"/>
+    /// since step 3 — when nothing installed one.
     /// </summary>
-    internal static NullabilityMode Mode => Current.Value;
+    internal static NullabilityMode Mode => Current.Value ?? DefaultMode;
 
     /// <summary>
     /// Gets the mode a <c>Compilation</c> starts at when its embedder does
-    /// not say — ADR-0186 step 2 verification scaffolding.
+    /// not say. <b>ADR-0186 step 3 flipped this to
+    /// <see cref="NullabilityMode.PlatformTypes"/>.</b>
     /// <para>
-    /// <b>Why this exists.</b> ADR-0186's sequencing makes every step before
-    /// the default flip claim "no behaviour change with the flag off", and
-    /// step 2's other half of that claim is the opposite one: that the full
-    /// suite is <em>runnable</em> with the flag on, so the failures it
-    /// produces can be triaged into "a test asserting ADR-0136's old reading"
-    /// (expected, and the count is the measurement) versus "an emit or bind
-    /// crash" (a bug in this step). Step 1 gave each <c>Compilation</c> its
-    /// own mode, which is the right shape and cannot express "run the whole
-    /// suite the other way".
+    /// <c>GSHARP_NULLABILITY</c> still selects, and its polarity is inverted
+    /// with the default: it now recognises <c>enabled</c> and leaves
+    /// <c>platform-types</c> as the no-op it names. That is not symmetry for
+    /// its own sake — it is how the "before" half of a before/after
+    /// measurement stays runnable on a branch that has already flipped, which
+    /// is exactly the use the variable was introduced for in step 2. An
+    /// unrecognised value selects the default rather than failing, because
+    /// this is a measurement affordance and not a supported product switch;
+    /// <c>/nullability:</c> is the supported one and it rejects an unknown
+    /// mode by name.
     /// </para>
     /// <para>
-    /// The environment variable is read <b>once</b>, and only a compilation
-    /// that never sets <c>Nullability</c> observes it — an explicit
-    /// assignment always wins, so the differential fixtures that assert both
-    /// columns keep asserting both columns under either setting.
-    /// </para>
-    /// <para>
-    /// <b>Delete this with the rest of the class at step 3</b>, when the
-    /// platform-types reading stops being a choice.
+    /// The variable is read <b>once</b>, and only a compilation that never
+    /// sets <c>Nullability</c> observes it — an explicit assignment always
+    /// wins, so the differential fixtures that assert both columns keep
+    /// asserting both columns under either setting.
     /// </para>
     /// </summary>
     internal static NullabilityMode DefaultMode { get; } =
         string.Equals(
             Environment.GetEnvironmentVariable("GSHARP_NULLABILITY")?.Replace("-", string.Empty, StringComparison.Ordinal),
-            "platformtypes",
+            "enabled",
             StringComparison.OrdinalIgnoreCase)
-            ? NullabilityMode.PlatformTypes
-            : NullabilityMode.Enabled;
+            ? NullabilityMode.Enabled
+            : NullabilityMode.PlatformTypes;
 
     /// <summary>
     /// Gets a value indicating whether oblivious imported reference positions
     /// read as the platform type <c>T!</c> rather than as <c>T?</c>.
     /// </summary>
-    internal static bool PlatformTypesEnabled => Current.Value == NullabilityMode.PlatformTypes;
+    internal static bool PlatformTypesEnabled => Mode == NullabilityMode.PlatformTypes;
 
     /// <summary>
     /// Gets a value indicating whether ADR-0186 §4's runtime nil check is
@@ -129,7 +148,7 @@ internal static class NullabilityOptions
     /// <returns>A scope that restores the previous mode on disposal.</returns>
     internal static Scope Enter(NullabilityMode mode, bool platformNilChecks = true)
     {
-        var previous = Current.Value;
+        NullabilityMode? previous = Current.Value;
         var previousSuppressed = ChecksSuppressed.Value;
         Current.Value = mode;
         ChecksSuppressed.Value = !platformNilChecks;
@@ -143,10 +162,10 @@ internal static class NullabilityOptions
     /// </summary>
     internal readonly struct Scope : IDisposable
     {
-        private readonly NullabilityMode previous;
+        private readonly NullabilityMode? previous;
         private readonly bool previousChecksSuppressed;
 
-        internal Scope(NullabilityMode previous, bool previousChecksSuppressed)
+        internal Scope(NullabilityMode? previous, bool previousChecksSuppressed)
         {
             this.previous = previous;
             this.previousChecksSuppressed = previousChecksSuppressed;

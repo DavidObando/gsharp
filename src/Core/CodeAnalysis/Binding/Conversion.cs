@@ -208,6 +208,94 @@ public sealed class Conversion
         => ClassifyCore(from, to, allowStructuralProjection: true);
 
     /// <summary>
+    /// ADR-0186 §3 rule 3, asked about a single ARGUMENT position: is
+    /// <paramref name="source"/> to <paramref name="target"/> one of the
+    /// relations a constructed type must <b>not</b> permit — <c>C[T!]
+    /// -&gt; C[T]</c>, <c>C[T] -&gt; C[T!]</c> or <c>C[T?] -&gt; C[T!]</c>.
+    /// <para>
+    /// The companion of <see cref="IsPlatformArgumentWidening"/>, and exposed
+    /// for the same reason: <c>MemberLookup</c>'s symbolic-indexer
+    /// applicability check has to reject what rule 3 rejects, and its own
+    /// same-type helper deliberately looks through the platform wrapper
+    /// (which is the right answer for member hiding and the wrong one here).
+    /// </para>
+    /// </summary>
+    /// <param name="source">The source argument position.</param>
+    /// <param name="target">The target argument position.</param>
+    /// <returns><see langword="true"/> for a relation rule 3 forbids.</returns>
+    internal static bool IsPlatformArgumentIllegal(TypeSymbol? source, TypeSymbol? target)
+        => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Illegal;
+
+    /// <summary>
+    /// ADR-0186 §3 rule 2, asked about a single ARGUMENT position: is
+    /// <paramref name="source"/> to <paramref name="target"/> the one
+    /// widening a constructed type permits, <c>C[T!] -&gt; C[T?]</c>.
+    /// <para>
+    /// Exposed so that <c>MemberLookup</c>'s symbolic-indexer applicability
+    /// check can ask the same question the conversion classifier asks,
+    /// instead of restating the rule. It is deliberately NOT
+    /// <c>Conversion.Classify</c>: at the top level <c>T! -&gt; T</c> is an
+    /// implicit (checked) conversion, and admitting that INSIDE an invariant
+    /// type argument is precisely the aliasing unsoundness rule 3 exists to
+    /// reject.
+    /// </para>
+    /// </summary>
+    /// <param name="source">The source argument position.</param>
+    /// <param name="target">The target argument position.</param>
+    /// <returns><see langword="true"/> for rule 2's permitted widening.</returns>
+    internal static bool IsPlatformArgumentWidening(TypeSymbol? source, TypeSymbol? target)
+        => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Widening;
+
+    /// <summary>
+    /// ADR-0186 §3, asked about a whole <b>container pair</b> rather than a
+    /// single argument position: does the rule speak to
+    /// <paramref name="source"/> to <paramref name="target"/> at all, and if
+    /// so does it admit the conversion.
+    /// <para>
+    /// This is the guarded entry <see cref="ClassifyCore"/> itself uses, and
+    /// it is the one an outside caller wants. The two per-argument
+    /// predicates above assume their container has <b>already</b> been matched
+    /// — asked about the containers themselves they have no shape guard, so an
+    /// ordinary upcast such as <c>[]string! -&gt; object</c>, whose two sides
+    /// have no corresponding argument positions to compare, comes back
+    /// <c>Illegal</c>. This entry declines for such a pair, and for a function
+    /// shape, a value-type container and a pair whose platform-ness already
+    /// agrees; it answers only for rule 3's three illegal directions and rule
+    /// 2's one permitted widening.
+    /// </para>
+    /// <para>
+    /// Exposed for <c>MemberLookup</c>'s symbolic-indexer applicability check,
+    /// which has to ask it <b>before</b> its own same-type fast path — that
+    /// helper looks through the platform wrapper by design, which is the right
+    /// answer for member hiding and would otherwise pre-empt this rule with
+    /// <em>identity</em>.
+    /// </para>
+    /// </summary>
+    /// <param name="source">The source type.</param>
+    /// <param name="target">The target type.</param>
+    /// <param name="isImplicit">
+    /// When this returns <see langword="true"/>: whether the conversion is
+    /// admitted (rule 2's widening) rather than rejected (rule 3).
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when ADR-0186 §3 decides this pair.
+    /// </returns>
+    internal static bool TryRelatePlatformContainer(
+        TypeSymbol? source,
+        TypeSymbol? target,
+        out bool isImplicit)
+    {
+        if (TryClassifyPlatformTypeArgumentMismatch(source, target, out var conversion))
+        {
+            isImplicit = conversion.IsImplicit;
+            return true;
+        }
+
+        isImplicit = false;
+        return false;
+    }
+
+    /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
     /// to keep member conversion non-recursive.
     /// </summary>
@@ -3666,19 +3754,37 @@ public sealed class Conversion
             // the destination view has type `T?` and must be narrowed before
             // non-null use, so no view of the object can produce an unchecked
             // non-null read.
-            if (b is not NullableTypeSymbol nilableTarget
-                || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            if (b is NullableTypeSymbol nilableTarget
+                && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                     sourcePlatform.UnderlyingType,
                     nilableTarget.UnderlyingType))
             {
-                return PlatformArgumentRelation.Illegal;
+                return RelateNestedPlatformArguments(
+                        sourcePlatform.UnderlyingType,
+                        nilableTarget.UnderlyingType) == PlatformArgumentRelation.Illegal
+                    ? PlatformArgumentRelation.Illegal
+                    : PlatformArgumentRelation.Widening;
             }
 
-            return RelateNestedPlatformArguments(
-                    sourcePlatform.UnderlyingType,
-                    nilableTarget.UnderlyingType) == PlatformArgumentRelation.Illegal
+            // Rule 3's `C[T!] -> C[T]` — but only when the two positions
+            // really are the same underlying type differing in reference
+            // nullability, which is the only thing rule 3 is about.
+            //
+            // The sibling arm below already had this guard; this one did not,
+            // and the asymmetry was a second Copilot review finding on the
+            // flip PR. Without it, an UNRELATED pair such as
+            // `List[object!] -> List[Payload]` (where a same-compilation
+            // `Payload` erases to `object`) was rejected outright, though
+            // rule 3 has no opinion on it and the reverse direction already
+            // declined correctly. `Unrelated` means "this arm cannot decide"
+            // and hands the pair back to the ordinary rules; `Illegal` means
+            // "no conversion exists", and only the genuinely
+            // nullability-differing pair earns that.
+            return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                sourcePlatform.UnderlyingType,
+                UnwrapPlatformAndNullable(b) ?? b!)
                 ? PlatformArgumentRelation.Illegal
-                : PlatformArgumentRelation.Widening;
+                : PlatformArgumentRelation.Unrelated;
         }
 
         if (targetPlatform != null && sourcePlatform == null)
@@ -3686,7 +3792,28 @@ public sealed class Conversion
             // `C[T] -> C[T!]` and `C[T?] -> C[T!]`: both would let §3's
             // `nil -> T!` row deposit a nil into a container another holder
             // reads as non-null.
-            return PlatformArgumentRelation.Illegal;
+            //
+            // But ONLY when the two positions are the same underlying type
+            // differing in reference nullability — which is the only thing
+            // rule 3 is about. Without the equivalence test this arm answered
+            // "illegal" for any pair whose target happened to be
+            // platform-wrapped, including pairs it has no opinion on at all,
+            // and the sibling arm above already tests exactly this before
+            // admitting the legal direction. The asymmetry was the defect.
+            //
+            // Measured: `Issue2471DictionaryIndexerSameCompilationTypeTests`
+            // reported *"Cannot convert type 'List[Payload2471]' to
+            // 'List[object!]!'"*. `Payload2471` is a SAME-COMPILATION type,
+            // so its closed generic erases to `List<object>` and the
+            // conversion is the ordinary erased-identity one the rest of
+            // `ClassifyCore` already admits; `Payload2471` and `object` are
+            // simply different types, which is `Unrelated` — "this arm cannot
+            // decide" — not `Illegal`.
+            return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                UnwrapPlatformAndNullable(a) ?? a!,
+                targetPlatform.UnderlyingType)
+                ? PlatformArgumentRelation.Illegal
+                : PlatformArgumentRelation.Unrelated;
         }
 
         return RelateNestedPlatformArguments(

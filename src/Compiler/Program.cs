@@ -886,7 +886,7 @@ public class Program
           /lib:<path>                   Accepted for csc compatibility (currently a no-op).
           /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
-          /nullability:<mode>           How oblivious imported reference positions are read: enabled (default) or platform-types (ADR-0186).
+          /nullability:<mode>           How oblivious imported reference positions are read: platform-types (default, ADR-0186) or enabled (ADR-0136).
           /platform-nil-checks:<on|off> Insert the ADR-0186 nil check where a platform value is coerced to a non-null type (default: on; off is an escape hatch, not a supported mode).
           /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
           /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
@@ -1100,8 +1100,14 @@ public class Program
 
                     case "nullability":
                         // ADR-0186: how an oblivious imported reference
-                        // position is read. `enabled` is ADR-0136's `T?` and is
-                        // the default; `platform-types` reads it as `T!`.
+                        // position is read. `platform-types` reads it as the
+                        // platform type `T!` and is the DEFAULT since step 3
+                        // flipped it; `enabled` selects ADR-0136's older `T?`
+                        // reading. The default lives on
+                        // `CommandLineArgs.Nullability`, not here — this
+                        // switch only overrides it — and the two statements
+                        // have to agree, which is why `/help`'s wording is
+                        // asserted by `Adr0186NullabilitySwitchTests`.
                         result.Nullability = value.ToLowerInvariant() switch
                         {
                             "enabled" => NullabilityMode.Enabled,
@@ -1490,11 +1496,22 @@ public class Program
 
         /// <summary>
         /// Gets or sets how oblivious imported reference positions are read
-        /// (from /nullability:&lt;mode&gt;, ADR-0186). Defaults to
-        /// <see cref="NullabilityMode.Enabled"/>, which is ADR-0136's reading
-        /// and therefore no change from today.
+        /// (from /nullability:&lt;mode&gt;, ADR-0186). <b>ADR-0186 step 3
+        /// flipped the default to
+        /// <see cref="NullabilityMode.PlatformTypes"/></b>: an oblivious
+        /// imported reference position is the platform type <c>T!</c>.
+        /// <c>/nullability:enabled</c> selects ADR-0136's older reading, in
+        /// which such a position is <c>T?</c>.
+        /// <para>
+        /// This property, not <c>NullabilityOptions.DefaultMode</c>, is what
+        /// governs <c>gsc</c> — <c>Program</c> assigns it to
+        /// <c>Compilation.Nullability</c> unconditionally, so the ambient
+        /// default is only ever observed by an embedder that constructs a
+        /// <c>Compilation</c> directly (the language server, the REPL, and
+        /// the test suite). Both had to move for the flip to be complete.
+        /// </para>
         /// </summary>
-        public NullabilityMode Nullability { get; set; } = NullabilityMode.Enabled;
+        public NullabilityMode Nullability { get; set; } = NullabilityMode.PlatformTypes;
 
         /// <summary>
         /// Gets or sets a value indicating whether ADR-0186 §4's runtime nil

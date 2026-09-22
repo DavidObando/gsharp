@@ -111,6 +111,85 @@ internal static class ExpressionTreeRestrictionValidator
         }
     }
 
+    /// <summary>
+    /// ADR-0186 §4: validates a RECEIVER, eliding the platform nil check the
+    /// binder inserted on it.
+    /// <para>
+    /// §4 says the inserted check is <em>redundant where the runtime's own
+    /// check fires</em>, and names that as a reason to <b>elide</b> it: "The
+    /// CLR's own check on a <c>callvirt</c>/<c>ldfld</c> receiver makes the
+    /// inserted check redundant where it fires, which is a reason to elide it
+    /// as an optimization." Inside an expression-tree lambda gsc emits no IL
+    /// at all — the access becomes <c>Expression.Property</c>/<c>Field</c>/a
+    /// call node — and <c>System.Linq.Expressions</c> dereferences the
+    /// instance when the tree is evaluated, throwing
+    /// <c>NullReferenceException</c> at exactly the same point. The failure
+    /// is preserved; only G#'s message is lost.
+    /// </para>
+    /// <para>
+    /// This is the narrow half of a change Copilot review on the flip PR was
+    /// right to push back on. Removing the rejection wholesale would drop
+    /// checks §4 genuinely requires — an argument, a store, a return, or a
+    /// lambda result inside the tree has nothing dereferencing it, and those
+    /// still report <c>GS0473</c>. What forced the question is that rejecting
+    /// <em>receivers</em> is a build break on ordinary code: any oblivious
+    /// reference member touched inside a LINQ-to-<c>IQueryable</c> lambda
+    /// inserts a receiver check, so <c>.Where(b -&gt; b.Conversion.AccountId
+    /// == id)</c> stopped compiling the moment the default flipped
+    /// (<c>Issue2661ExpressionTreeNullablePipelineTests</c>). It is also not
+    /// a regression: under ADR-0136 that receiver is <c>T?</c>, cs2gs writes
+    /// an explicit <c>!!</c>, and the same lowering erases it.
+    /// </para>
+    /// <para>
+    /// <b>"The tree dereferences it" is measured, not assumed.</b> Review
+    /// objected that <c>Expression.Call</c> on a non-virtual method may emit
+    /// <c>call</c>, which does not reject a null <c>this</c>, so a member
+    /// that never touches its receiver could complete on a nil — losing the
+    /// failure entirely rather than merely its message. That is exactly the
+    /// enumeration ADR-0186 §4 demands (its own receiver exemption was
+    /// falsified by one), so it was run rather than argued. A compiled tree
+    /// over a <b>sealed</b> class, through both a field receiver and a
+    /// property receiver, into both an auto-property and a getter that
+    /// provably never reads <c>this</c>:
+    /// </para>
+    /// <list type="table">
+    /// <listheader><term>shape</term><description>result</description></listheader>
+    /// <item><term>property receiver → auto-property</term><description><c>NullReferenceException</c></description></item>
+    /// <item><term>property receiver → <c>this</c>-free getter</term><description><c>NullReferenceException</c></description></item>
+    /// <item><term>field receiver → auto-property</term><description><c>NullReferenceException</c></description></item>
+    /// <item><term>field receiver → <c>this</c>-free getter</term><description><c>NullReferenceException</c></description></item>
+    /// </list>
+    /// <para>
+    /// All four throw: <c>System.Linq.Expressions</c>' compiler emits the
+    /// dereferencing form for instance member access regardless of
+    /// virtuality, exactly as <c>csc</c> does and for the same reason. The
+    /// objection is well-posed and empirically false for
+    /// <c>Expression.Compile()</c>; for an <c>IQueryable</c> provider that
+    /// never compiles the tree, the receiver has no runtime existence at all
+    /// and no check could be meaningful either way.
+    /// <c>Adr0186PlatformTypeBindingTests.Section4_AnElidedReceiverCheck_Still_Throws_When_TheTreeRuns</c>
+    /// keeps that a live assertion rather than a comment.
+    /// </para>
+    /// <para>
+    /// The residual — a receiver failing with the runtime's unattributed
+    /// message instead of G#'s — is tracked as <b>#4352</b>.
+    /// </para>
+    /// </summary>
+    /// <param name="receiver">The receiver expression, possibly <see langword="null"/>.</param>
+    /// <param name="diagnostics">The bag to report into.</param>
+    private static void ValidateReceiver(BoundExpression? receiver, DiagnosticBag diagnostics)
+    {
+        if (receiver is BoundUnaryExpression check
+            && check.Op.Kind == BoundUnaryOperatorKind.NullAssertion
+            && check.Operand.Type is PlatformTypeSymbol)
+        {
+            ValidateExpression(check.Operand, diagnostics);
+            return;
+        }
+
+        ValidateExpression(receiver, diagnostics);
+    }
+
     private static void ValidateExpression(BoundExpression? expression, DiagnosticBag diagnostics)
     {
         if (expression == null)
@@ -166,8 +245,7 @@ internal static class ExpressionTreeRestrictionValidator
                     // ADR-0186 §4: a null assertion over a PLATFORM operand is
                     // the one reference-typed `!!` that is not pure static
                     // annotation. It lowers to a real
-                    // `dup; brtrue; pop; newobj; throw`, whether the author
-                    // wrote it or §4 inserted it at a `T! -> T` coercion, and
+                    // `dup; brtrue; pop; newobj; throw`, and
                     // `ExpressionTreeLowerer.BuildUnaryExpression` erases every
                     // `NullAssertion` node on the reasoning directly below —
                     // correct for a real `T?`, wrong here. Erased, the boundary
@@ -176,8 +254,22 @@ internal static class ExpressionTreeRestrictionValidator
                     //
                     // Rejected rather than represented. `System.Linq.Expressions`
                     // has no throw-on-nil-and-yield-the-value form that
-                    // preserves G#'s contract, which is exactly why the nullable
-                    // value-type case below is rejected too rather than lowered.
+                    // preserves G#'s contract AND survives translation by an
+                    // `IQueryable` provider, which is why the nullable
+                    // value-type case below is rejected too rather than
+                    // lowered.
+                    //
+                    // REACHED ONLY FOR A NON-RECEIVER COERCION. A platform
+                    // check sitting on the RECEIVER of a member access, call
+                    // or index is elided by `ValidateReceiver` before it gets
+                    // here — see the reasoning there. Step 3 briefly removed
+                    // this rejection outright, which was wrong: Copilot review
+                    // pointed out that it silently drops a check §4 and the
+                    // release note both promise, and that open question 13
+                    // covers signature relations rather than expression-level
+                    // conversions. The receiver elision is the narrow,
+                    // ADR-sanctioned part of that change; this rejection is
+                    // the part that had to come back.
                     diagnostics.ReportExpressionTreeUnsupported(
                         LocationOf(unary.Syntax),
                         "a nullability-oblivious value used where a non-null type is required");
@@ -225,19 +317,19 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundFieldAccessExpression field:
-                ValidateExpression(field.Receiver, diagnostics);
+                ValidateReceiver(field.Receiver, diagnostics);
                 return;
 
             case BoundPropertyAccessExpression property:
-                ValidateExpression(property.Receiver, diagnostics);
+                ValidateReceiver(property.Receiver, diagnostics);
                 return;
 
             case BoundClrPropertyAccessExpression clrProperty:
-                ValidateExpression(clrProperty.Receiver, diagnostics);
+                ValidateReceiver(clrProperty.Receiver, diagnostics);
                 return;
 
             case BoundIndexExpression index:
-                ValidateExpression(index.Target, diagnostics);
+                ValidateReceiver(index.Target, diagnostics);
                 foreach (var indexExpression in index.Indices)
                 {
                     ValidateExpression(indexExpression, diagnostics);
@@ -246,7 +338,7 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundClrIndexExpression clrIndex:
-                ValidateExpression(clrIndex.Target, diagnostics);
+                ValidateReceiver(clrIndex.Target, diagnostics);
                 foreach (var argument in clrIndex.Arguments)
                 {
                     ValidateExpression(argument, diagnostics);
@@ -308,7 +400,7 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundUserInstanceCallExpression userCall:
-                ValidateExpression(userCall.Receiver, diagnostics);
+                ValidateReceiver(userCall.Receiver, diagnostics);
                 ValidateArguments(userCall.Arguments, userCall.Method.Parameters, diagnostics);
                 return;
 
@@ -317,7 +409,7 @@ internal static class ExpressionTreeRestrictionValidator
                 return;
 
             case BoundImportedInstanceCallExpression importedInstanceCall:
-                ValidateExpression(importedInstanceCall.Receiver, diagnostics);
+                ValidateReceiver(importedInstanceCall.Receiver, diagnostics);
                 ValidateClrArguments(importedInstanceCall.Arguments, importedInstanceCall.ArgumentRefKinds, importedInstanceCall.Method, diagnostics);
                 return;
 

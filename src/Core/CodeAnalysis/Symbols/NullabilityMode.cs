@@ -18,22 +18,35 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 public enum NullabilityMode
 {
     /// <summary>
-    /// ADR-0136's reading, and the <b>default</b>: an oblivious imported
-    /// reference position is <c>T?</c>, indistinguishable from a position the
-    /// declarer explicitly annotated nullable.
+    /// ADR-0136's reading: an oblivious imported reference position is
+    /// <c>T?</c>, indistinguishable from a position the declarer explicitly
+    /// annotated nullable. <b>No longer the default</b> — ADR-0186 step 3
+    /// moved that to <see cref="PlatformTypes"/> — but still selectable with
+    /// <c>/nullability:enabled</c>.
+    /// <para>
+    /// This is deliberately still the enum's <b>zero</b> value even though it
+    /// is no longer the default, because the two facts are unrelated and
+    /// coupling them is what would go wrong quietly: the ambient scope stores
+    /// a <em>nullable</em> mode and resolves "unset" to
+    /// <c>NullabilityOptions.DefaultMode</c>, so nothing reads the zero value
+    /// as an answer. Renumbering would change a persisted/serialised meaning
+    /// for no gain.
+    /// </para>
     /// </summary>
     Enabled,
 
     /// <summary>
-    /// ADR-0186's reading: an oblivious imported reference position is the
-    /// platform type <c>T!</c> (<see cref="PlatformTypeSymbol"/>), distinct
-    /// from both <c>T</c> and <c>T?</c>.
+    /// ADR-0186's reading, and the <b>default</b> since step 3: an oblivious
+    /// imported reference position is the platform type <c>T!</c>
+    /// (<see cref="PlatformTypeSymbol"/>), distinct from both <c>T</c> and
+    /// <c>T?</c>.
     /// <para>
-    /// ADR-0186's sequencing lands this behind an off-by-default flag first
-    /// (step 1), teaches conversions, lookup and the coercion check about it
-    /// (step 2), and only then flips the default (step 3) — in that order,
-    /// never the reverse, because deleting the old carve-out while the flag is
-    /// still off would transiently reinstate failure mode 1.
+    /// ADR-0186's sequencing landed this behind an off-by-default flag first
+    /// (step 1), taught conversions, lookup and the coercion check about it
+    /// (step 2), and only then flipped the default (step 3) — in that order,
+    /// never the reverse, because deleting the old carve-out while the flag
+    /// was still off would transiently reinstate failure mode 1. Step 4
+    /// deletes that carve-out now that this reading is load-bearing.
     /// </para>
     /// </summary>
     PlatformTypes,
