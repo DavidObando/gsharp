@@ -141,6 +141,36 @@ internal static class ExpressionTreeRestrictionValidator
     /// an explicit <c>!!</c>, and the same lowering erases it.
     /// </para>
     /// <para>
+    /// <b>"The tree dereferences it" is measured, not assumed.</b> Review
+    /// objected that <c>Expression.Call</c> on a non-virtual method may emit
+    /// <c>call</c>, which does not reject a null <c>this</c>, so a member
+    /// that never touches its receiver could complete on a nil — losing the
+    /// failure entirely rather than merely its message. That is exactly the
+    /// enumeration ADR-0186 §4 demands (its own receiver exemption was
+    /// falsified by one), so it was run rather than argued. A compiled tree
+    /// over a <b>sealed</b> class, through both a field receiver and a
+    /// property receiver, into both an auto-property and a getter that
+    /// provably never reads <c>this</c>:
+    /// </para>
+    /// <list type="table">
+    /// <listheader><term>shape</term><description>result</description></listheader>
+    /// <item><term>property receiver → auto-property</term><description><c>NullReferenceException</c></description></item>
+    /// <item><term>property receiver → <c>this</c>-free getter</term><description><c>NullReferenceException</c></description></item>
+    /// <item><term>field receiver → auto-property</term><description><c>NullReferenceException</c></description></item>
+    /// <item><term>field receiver → <c>this</c>-free getter</term><description><c>NullReferenceException</c></description></item>
+    /// </list>
+    /// <para>
+    /// All four throw: <c>System.Linq.Expressions</c>' compiler emits the
+    /// dereferencing form for instance member access regardless of
+    /// virtuality, exactly as <c>csc</c> does and for the same reason. The
+    /// objection is well-posed and empirically false for
+    /// <c>Expression.Compile()</c>; for an <c>IQueryable</c> provider that
+    /// never compiles the tree, the receiver has no runtime existence at all
+    /// and no check could be meaningful either way.
+    /// <c>Adr0186PlatformTypeBindingTests.Section4_AnElidedReceiverCheck_Still_Throws_When_TheTreeRuns</c>
+    /// keeps that a live assertion rather than a comment.
+    /// </para>
+    /// <para>
     /// The residual — a receiver failing with the runtime's unattributed
     /// message instead of G#'s — is tracked as <b>#4352</b>.
     /// </para>

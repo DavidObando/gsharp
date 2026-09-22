@@ -208,6 +208,26 @@ public sealed class Conversion
         => ClassifyCore(from, to, allowStructuralProjection: true);
 
     /// <summary>
+    /// ADR-0186 §3 rule 2, asked about a single ARGUMENT position: is
+    /// <paramref name="source"/> to <paramref name="target"/> the one
+    /// widening a constructed type permits, <c>C[T!] -&gt; C[T?]</c>.
+    /// <para>
+    /// Exposed so that <c>MemberLookup</c>'s symbolic-indexer applicability
+    /// check can ask the same question the conversion classifier asks,
+    /// instead of restating the rule. It is deliberately NOT
+    /// <c>Conversion.Classify</c>: at the top level <c>T! -&gt; T</c> is an
+    /// implicit (checked) conversion, and admitting that INSIDE an invariant
+    /// type argument is precisely the aliasing unsoundness rule 3 exists to
+    /// reject.
+    /// </para>
+    /// </summary>
+    /// <param name="source">The source argument position.</param>
+    /// <param name="target">The target argument position.</param>
+    /// <returns><see langword="true"/> for rule 2's permitted widening.</returns>
+    internal static bool IsPlatformArgumentWidening(TypeSymbol? source, TypeSymbol? target)
+        => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Widening;
+
+    /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
     /// to keep member conversion non-recursive.
     /// </summary>

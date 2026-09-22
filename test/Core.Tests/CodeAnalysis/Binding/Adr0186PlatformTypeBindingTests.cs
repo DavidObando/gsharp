@@ -14,6 +14,7 @@ using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Text;
+using GsConversion = GSharp.Core.CodeAnalysis.Binding.Conversion;
 using GsCompilation = GSharp.Core.CodeAnalysis.Compilation.Compilation;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
 using Microsoft.CodeAnalysis;
@@ -1081,6 +1082,101 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.True(compiled.Success, Describe(compiled));
 
         Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// ADR-0186 §3 rule 2 at an <b>indexer parameter</b>: a
+    /// <c>C[T!]</c> argument stays applicable to a <c>C[T?]</c> parameter.
+    /// <para>
+    /// Rule 2 is the single conversion a constructed type permits, and
+    /// symbolic indexer applicability has to honour it.
+    /// <c>TryClassifyConstructedGenericConversion</c>'s invariant arm uses
+    /// <c>SameTypeSymbol</c> as its <em>complete</em> verdict and returns
+    /// before the general classifier runs, so once that helper correctly
+    /// stopped calling <c>string!</c> and <c>string?</c> the same type, a
+    /// non-identical pair would have been read as final incompatibility —
+    /// Copilot review finding on the flip PR. The arm now also asks
+    /// <c>Conversion.IsPlatformArgumentWidening</c>, which is the same
+    /// implementation the classifier uses rather than a second copy of the
+    /// rule.
+    /// </para>
+    /// <para>
+    /// <b>Asserted at the relation, not end to end, and that is a
+    /// limitation worth stating.</b> The symbolic-indexer path this guards is
+    /// only entered when some argument has no <c>ClrType</c> — a
+    /// same-compilation user type — and a <c>C[T!]</c> argument always has
+    /// one, so an end-to-end probe goes through CLR resolution instead and
+    /// passes with or without the fix (measured: it does not discriminate).
+    /// The production change is therefore <em>defensive</em>: correct
+    /// wherever the relation is asked, but with no constructed repro. What
+    /// this test pins is the rule itself, which does discriminate — removing
+    /// the <c>Widening</c> arm from <c>RelatePlatformArguments</c> reddens
+    /// it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_RuleTwoWidening_Is_The_OnlyPermitted_ArgumentRelation()
+    {
+        var platform = PlatformTypeSymbol.Get(TypeSymbol.String);
+        var nilable = NullableTypeSymbol.Get(TypeSymbol.String);
+
+        // Rule 2: `T! -> T?` is the one permitted widening.
+        Assert.True(GsConversion.IsPlatformArgumentWidening(platform, nilable));
+
+        // Rule 3's three illegal directions, and the identity case, are all
+        // NOT widenings — so the applicability arm that consults this cannot
+        // reopen the aliasing hole it was added beside.
+        Assert.False(GsConversion.IsPlatformArgumentWidening(platform, TypeSymbol.String));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(TypeSymbol.String, platform));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(nilable, platform));
+        Assert.False(GsConversion.IsPlatformArgumentWidening(platform, platform));
+
+        // A platform-free pair is not this relation's business at all.
+        Assert.False(GsConversion.IsPlatformArgumentWidening(TypeSymbol.String, nilable));
+    }
+
+    /// <summary>
+    /// ADR-0186 §4: the receiver check elided inside an expression-tree
+    /// lambda is <b>redundant, not missing</b> — the tree still throws.
+    /// <para>
+    /// Review objected that <c>Expression.Call</c> on a non-virtual method
+    /// may emit <c>call</c>, which does not reject a null <c>this</c>, so a
+    /// member that never touches its receiver could complete on a nil and
+    /// lose the failure entirely rather than merely its message. That is
+    /// exactly the kind of claim ADR-0186 says is worth only as much as the
+    /// enumeration behind it — its own §4 receiver exemption was falsified
+    /// that way — so it is measured here rather than argued.
+    /// </para>
+    /// <para>
+    /// Measured directly against <c>System.Linq.Expressions</c> (sealed
+    /// class, field and property receivers, auto-property and a getter that
+    /// provably never reads <c>this</c>): <b>all four throw
+    /// <c>NullReferenceException</c></b>. The expression compiler emits the
+    /// dereferencing form for instance member access regardless of
+    /// virtuality, exactly as <c>csc</c> does. This test keeps that a live
+    /// assertion through G#'s own pipeline: what is lost by the elision is
+    /// G#'s message (#4352), never the failure.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section4_AnElidedReceiverCheck_Still_Throws_When_TheTreeRuns()
+    {
+        using var world = new World();
+
+        var output = world.Run(
+            """
+                let n = Ob.NilNest()
+                let e Expression[Func[string?]] = () -> n.Prop
+                let c = e.Compile()
+                try {
+                    Console.WriteLine(c())
+                } catch (NullReferenceException) {
+                    Console.WriteLine("threw")
+                }
+            """,
+            NullabilityMode.PlatformTypes);
+
+        Assert.Equal("threw", output.Trim());
     }
 
     /// <summary>
