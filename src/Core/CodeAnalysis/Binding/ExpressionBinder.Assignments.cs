@@ -2407,23 +2407,11 @@ internal sealed partial class ExpressionBinder
         var declaration = new BoundVariableDeclaration(syntax, tempVar, pointer);
         var tempRef = new BoundVariableExpression(null, tempVar);
         BoundExpression indirectRead = new BoundDereferenceExpression(null, tempRef);
-        BoundVariableDeclaration? previousValueDeclaration = null;
-        LocalVariableSymbol? previousValue = null;
-        if (syntax.ReturnsPreviousValue)
-        {
-            var previousName =
-                $"<postfix{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
-            previousValue = new LocalVariableSymbol(previousName, isReadOnly: true, pointeeType);
-            if (!scope.TryDeclareVariable(previousValue))
-            {
-                throw new System.InvalidOperationException(
-                    $"Failed to declare synthesized postfix value local '{previousName}'.");
-            }
-
-            previousValueDeclaration =
-                new BoundVariableDeclaration(syntax, previousValue, indirectRead);
-            indirectRead = new BoundVariableExpression(null, previousValue);
-        }
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref indirectRead,
+            out var previousValueDeclaration);
 
         var rhsBound = BindExpression(syntax.Value);
         if (rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error)
@@ -2464,11 +2452,9 @@ internal sealed partial class ExpressionBinder
                         previousValueDeclaration,
                         "postfix increment/decrement captures its previous value"),
                     new BoundExpressionStatement(syntax, assignment)),
-                new BoundVariableExpression(
-                    syntax,
-                    Invariant.Required(
-                        previousValue,
-                        "postfix increment/decrement declares its previous value")));
+                Invariant.Required(
+                    previousValue,
+                    "postfix increment/decrement declares its previous value"));
         }
 
         return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);

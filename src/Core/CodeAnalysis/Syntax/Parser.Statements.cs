@@ -447,11 +447,6 @@ public partial class Parser
             return operand;
         }
 
-        if (isPrefix)
-        {
-            return write;
-        }
-
         return write;
     }
 
