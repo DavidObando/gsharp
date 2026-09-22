@@ -2540,7 +2540,13 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindIndirectCompoundAssignmentExpression(IndirectCompoundAssignmentExpressionSyntax syntax)
     {
-        var pointer = BindIndirectAssignmentPointer(syntax.Target, out var pointeeType);
+        string? incrementOperatorText = syntax.IsIncrementDecrement
+            ? syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken ? "++" : "--"
+            : null;
+        var pointer = BindIndirectAssignmentPointer(
+            syntax.Target,
+            out var pointeeType,
+            incrementOperatorText);
         if (pointer is BoundErrorExpression)
         {
             return pointer;
@@ -2623,7 +2629,8 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindIndirectAssignmentPointer(
         ExpressionSyntax target,
-        out TypeSymbol pointeeType)
+        out TypeSymbol pointeeType,
+        string? incrementOperatorText = null)
     {
         pointeeType = TypeSymbol.Error;
         if (target is UnaryExpressionSyntax dereference
@@ -2682,7 +2689,15 @@ internal sealed partial class ExpressionBinder
 
         if (!IsLvalue(storage))
         {
-            Diagnostics.ReportCannotTakeAddressOfNonLvalue(target.Location, target.ToString());
+            if (incrementOperatorText != null && AssignmentTargetSyntaxFacts.IsCallResult(target))
+            {
+                Diagnostics.ReportInvalidIncrementDecrementTarget(target.Location, incrementOperatorText);
+            }
+            else
+            {
+                Diagnostics.ReportCannotTakeAddressOfNonLvalue(target.Location, target.ToString());
+            }
+
             return new BoundErrorExpression(target);
         }
 

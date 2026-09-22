@@ -23,6 +23,20 @@ public sealed class NativeSliceLanguageTests
         yield return new object[]
         {
             """
+            package NativePostfix
+            import System
+            func Main() {
+                let values = slice[int32]{10}
+                let previous = values[0]++
+                Console.WriteLine(previous)
+                Console.WriteLine(values[0])
+            }
+            """,
+            "10\n11\n",
+        };
+        yield return new object[]
+        {
+            """
             package NativeRawArrayConversions
             import System
             class array { var Value int32 }

@@ -24,18 +24,21 @@ public sealed class IndirectCompoundAssignmentExpressionSyntax : ExpressionSynta
     /// Whether this node represents postfix increment/decrement and therefore
     /// yields the value read before the write.
     /// </param>
+    /// <param name="isIncrementDecrement">Whether this node originated from a <c>++</c> or <c>--</c> expression.</param>
     public IndirectCompoundAssignmentExpressionSyntax(
         SyntaxTree syntaxTree,
         ExpressionSyntax target,
         SyntaxToken operatorToken,
         ExpressionSyntax value,
-        bool returnsPreviousValue = false)
+        bool returnsPreviousValue = false,
+        bool isIncrementDecrement = false)
         : base(syntaxTree)
     {
         Target = target;
         OperatorToken = operatorToken;
         Value = value;
         ReturnsPreviousValue = returnsPreviousValue;
+        IsIncrementDecrement = isIncrementDecrement;
     }
 
     /// <inheritdoc/>
@@ -52,4 +55,7 @@ public sealed class IndirectCompoundAssignmentExpressionSyntax : ExpressionSynta
 
     /// <summary>Gets a value indicating whether this expression yields the pre-write value.</summary>
     public bool ReturnsPreviousValue { get; }
+
+    /// <summary>Gets a value indicating whether this expression originated from increment/decrement syntax.</summary>
+    public bool IsIncrementDecrement { get; }
 }

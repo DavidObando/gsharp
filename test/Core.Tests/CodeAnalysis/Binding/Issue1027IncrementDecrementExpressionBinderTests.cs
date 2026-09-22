@@ -134,6 +134,22 @@ func F() int32 {
     }
 
     [Fact]
+    public void IncrementOfByValueCallResult_ReportsGS0402()
+    {
+        const string source = @"
+package p
+func Value() int32 { return 5 }
+func F() int32 {
+  var j = Value()++
+  return j
+}
+";
+        var diagnostics = GetDiagnostics(source).ToList();
+        Assert.Contains(diagnostics, d => d.Id == "GS0402");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS9001");
+    }
+
+    [Fact]
     public void StatementForm_StillBinds_NoRegression()
     {
         const string source = @"

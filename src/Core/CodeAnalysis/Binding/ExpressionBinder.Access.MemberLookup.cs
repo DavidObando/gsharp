@@ -1863,7 +1863,12 @@ internal sealed partial class ExpressionBinder
         if (NativeSliceTypes.TryGetElement(boundReceiver.Type, out _, out _)
             && compoundOperatorToken != null && compoundRhsSyntax != null)
         {
-            return BindNativeSliceCompoundAssignment(boundReceiver, indexSyntax, compoundOperatorToken, compoundRhsSyntax);
+            return BindNativeSliceCompoundAssignment(
+                boundReceiver,
+                indexSyntax,
+                compoundOperatorToken,
+                compoundRhsSyntax,
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true });
         }
 
         var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";

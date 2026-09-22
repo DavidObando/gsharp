@@ -415,7 +415,8 @@ public partial class Parser
                 operand,
                 compoundToken,
                 OneLiteral(),
-                returnsPreviousValue: !isPrefix);
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
         }
 
         if (operand is NameExpressionSyntax)

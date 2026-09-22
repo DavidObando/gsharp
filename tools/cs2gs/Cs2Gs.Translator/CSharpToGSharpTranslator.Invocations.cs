@@ -4014,7 +4014,8 @@ public sealed partial class CSharpToGSharpTranslator
             // explicit nullable value conversion.
             bool unambiguous = this.CastUsesCheckedReferenceConversion(cast)
                 || targetSymbol is INamedTypeSymbol { IsTupleType: true }
-                || conversionTargetType is NativeSliceTypeReference;
+                || conversionTargetType is NativeSliceTypeReference
+                || conversionTargetType is ManagedReferenceTypeReference;
 
             return new ConversionExpression(
                 conversionTargetType,
