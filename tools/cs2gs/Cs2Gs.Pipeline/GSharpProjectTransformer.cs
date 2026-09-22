@@ -292,6 +292,12 @@ internal static class GSharpProjectTransformer
             return;
         }
 
+        HashSet<string> mappedExpressions = RewriteDeclaredProjectPathExpressions(
+            document,
+            sourceProjectDirectory,
+            destinationProjectDirectory,
+            generatedProjectPaths);
+
         foreach (XElement projectReference in ElementsNamed(document, "ProjectReference"))
         {
             XAttribute include = AttributeNamed(projectReference, "Include");
@@ -301,7 +307,7 @@ internal static class GSharpProjectTransformer
                 continue;
             }
 
-            if (TryRewriteExpression(include))
+            if (TryRewriteExpression(include, mappedExpressions))
             {
                 continue;
             }
@@ -742,7 +748,85 @@ internal static class GSharpProjectTransformer
     private static string RewriteCSharpSpecs(string value) =>
         CSharpSpecSuffix.Replace(value, ".gs");
 
-    private static bool TryRewriteExpression(XAttribute include)
+    private static HashSet<string> RewriteDeclaredProjectPathExpressions(
+        XDocument document,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        var mappedExpressions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (XElement element in document.Descendants())
+        {
+            if (element.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!element.HasElements
+                && TryRewriteDeclaredProjectPath(
+                    element.Value,
+                    sourceProjectDirectory,
+                    destinationProjectDirectory,
+                    generatedProjectPaths,
+                    out string propertyValue))
+            {
+                element.Value = propertyValue;
+                mappedExpressions.Add($"$({element.Name.LocalName})");
+            }
+
+            XAttribute itemInclude = AttributeNamed(element, "Include");
+            if (itemInclude is not null
+                && TryRewriteDeclaredProjectPath(
+                    itemInclude.Value,
+                    sourceProjectDirectory,
+                    destinationProjectDirectory,
+                    generatedProjectPaths,
+                    out string itemValue))
+            {
+                itemInclude.Value = itemValue;
+                mappedExpressions.Add($"@({element.Name.LocalName})");
+            }
+        }
+
+        return mappedExpressions;
+    }
+
+    private static bool TryRewriteDeclaredProjectPath(
+        string value,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        out string rewritten)
+    {
+        rewritten = value;
+        string trimmed = value.Trim();
+        if (trimmed.Length == 0
+            || trimmed.Contains("$(", StringComparison.Ordinal)
+            || trimmed.Contains("@(", StringComparison.Ordinal)
+            || trimmed.Contains(';'))
+        {
+            return false;
+        }
+
+        string sourcePath = Path.GetFullPath(
+            Path.Combine(sourceProjectDirectory, NormalizeDirectorySeparators(trimmed)));
+        if (!generatedProjectPaths.TryGetValue(sourcePath, out string generatedPath))
+        {
+            return false;
+        }
+
+        string relative = Path.GetRelativePath(
+                destinationProjectDirectory,
+                Path.GetFullPath(generatedPath))
+            .Replace('\\', '/');
+        int start = value.IndexOf(trimmed, StringComparison.Ordinal);
+        rewritten = value.Substring(0, start) + relative + value.Substring(start + trimmed.Length);
+        return true;
+    }
+
+    private static bool TryRewriteExpression(
+        XAttribute include,
+        IReadOnlySet<string> mappedExpressions)
     {
         string value = include.Value;
         if (!value.Contains("$(", StringComparison.Ordinal) &&
@@ -753,20 +837,26 @@ internal static class GSharpProjectTransformer
         }
 
         string[] specs = value.Split(';');
-        bool changed = false;
+        bool handled = false;
         for (int i = 0; i < specs.Length; i++)
         {
+            if (mappedExpressions.Contains(specs[i].Trim()))
+            {
+                handled = true;
+                continue;
+            }
+
             string rewritten = RewriteExpressionSpec(specs[i]);
-            changed |= !string.Equals(specs[i], rewritten, StringComparison.Ordinal);
+            handled |= !string.Equals(specs[i], rewritten, StringComparison.Ordinal);
             specs[i] = rewritten;
         }
 
-        if (changed)
+        if (handled)
         {
             include.Value = string.Join(";", specs);
         }
 
-        return changed;
+        return handled;
     }
 
     private static string RewriteExpressionSpec(string spec)

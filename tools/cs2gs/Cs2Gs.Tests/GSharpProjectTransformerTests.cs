@@ -150,8 +150,14 @@ public sealed class GSharpProjectTransformerTests
             sourceProject,
             """
             <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <RuntimeProject>..\Runtime\Runtime.csproj</RuntimeProject>
+              </PropertyGroup>
               <ItemGroup>
+                <RuntimeProjects Include="..\Runtime\Runtime.csproj" />
                 <ProjectReference Include="..\Runtime\Runtime.csproj" />
+                <ProjectReference Include="$(RuntimeProject)" />
+                <ProjectReference Include="@(RuntimeProjects)" />
               </ItemGroup>
             </Project>
             """);
@@ -165,9 +171,16 @@ public sealed class GSharpProjectTransformerTests
                 [Path.GetFullPath(sourceRuntime)] = passthroughRuntime,
             });
 
-        XElement reference = SingleElement(transformed, "ProjectReference");
-        Assert.Equal("../Runtime/Runtime.csproj", reference.Attribute("Include")?.Value);
-        Assert.Null(reference.Attribute("ReferenceOutputAssembly"));
+        Assert.Equal("../Runtime/Runtime.csproj", SingleElement(transformed, "RuntimeProject").Value);
+        Assert.Equal(
+            "../Runtime/Runtime.csproj",
+            SingleElement(transformed, "RuntimeProjects").Attribute("Include")?.Value);
+
+        XElement[] references = ElementsNamed(transformed, "ProjectReference").ToArray();
+        Assert.Equal("../Runtime/Runtime.csproj", references[0].Attribute("Include")?.Value);
+        Assert.Equal("$(RuntimeProject)", references[1].Attribute("Include")?.Value);
+        Assert.Equal("@(RuntimeProjects)", references[2].Attribute("Include")?.Value);
+        Assert.All(references, reference => Assert.Null(reference.Attribute("ReferenceOutputAssembly")));
     }
 
     [Fact]
