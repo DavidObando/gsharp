@@ -1666,11 +1666,18 @@ public sealed class Adr0186PlatformTypeBindingTests
     /// member now arrives as <c>T!</c> and never takes the nullable arm at
     /// all. The carve-out could not tell the two apart, so it waved through a
     /// member the library author explicitly declared may be nil, and
-    /// <c>a.MaybeText.Length</c> bound with no diagnostic. It is now reported,
-    /// which is what the release note already promises: <c>GS0158</c>/
-    /// <c>GS0159</c> fire "for a source-declared <c>T?</c>, an
-    /// annotated-nullable imported member, a tuple element or an <c>as</c>
-    /// result".
+    /// <c>a.MaybeText.Length</c> bound with no diagnostic. The member
+    /// <em>read</em> now reports <c>GS0158</c>, exactly as it does on a
+    /// source-declared <c>T?</c>.
+    /// </para>
+    /// <para>
+    /// This is a statement about member lookup only. An instance
+    /// <em>call</em> through the same receiver (<c>a.MaybeText.ToUpper()</c>)
+    /// resolves through a different path and still binds with no diagnostic,
+    /// on an annotated-nullable imported receiver as on a source-declared one
+    /// — #4287's still-open call-path half (see
+    /// <see cref="Step4_ASourceDeclaredNilableFieldReceiver_Still_Reports"/>),
+    /// which this step neither closes nor widens.
     /// </para>
     /// </summary>
     [Fact]

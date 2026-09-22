@@ -779,10 +779,13 @@ internal sealed partial class ExpressionBinder
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
                     // `kvp.Key`). Static members are reached through
-                    // ImportedClassSymbol; this path covers instances. Permit a
-                    // chained CLR member whose oblivious metadata made its
-                    // result nullable, while explicit nullable variables still
-                    // require narrowing or `?.`. Issue #3311: an open-generic
+                    // ImportedClassSymbol; this path covers instances. A
+                    // receiver typed `T?` — source-declared, or an
+                    // annotated-nullable imported member — never reaches this
+                    // arm (see CanBindClrInstanceMember) and still requires
+                    // narrowing or `?.`; an oblivious imported result arrives
+                    // as a platform type `T!` under the default mode (ADR-0186)
+                    // and does reach it. Issue #3311: an open-generic
                     // `map[K, V]` receiver (null ClrType) is normalized to its
                     // symbolic Dictionary view so `.Keys`/`.Count`/… resolve
                     // over the erased closed shape with symbolic [K, V]
@@ -1036,7 +1039,8 @@ internal sealed partial class ExpressionBinder
     /// Step 3 made <c>--nullability=platform-types</c> the default, and an
     /// oblivious position now arrives as <see cref="PlatformTypeSymbol"/>
     /// (<c>T!</c>) rather than <see cref="NullableTypeSymbol"/> — a type that
-    /// is not nullable, reaches this test as an ordinary receiver, and carries
+    /// still admits nil but is not a <see cref="NullableTypeSymbol"/>, so it
+    /// reaches this test as an ordinary receiver and carries
     /// its safety question to §4's coercion check instead. The carve-out's
     /// whole population therefore no longer takes the nullable arm at all, and
     /// what it still reached was exactly the annotated-nullable member it
