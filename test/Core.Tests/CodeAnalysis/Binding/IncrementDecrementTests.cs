@@ -297,6 +297,33 @@ public class IncrementDecrementTests
     }
 
     [Fact]
+    public void ValueReturningIndexedIncrementWritesStructBack()
+    {
+        var result = EmittedOracle.Evaluate("""
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) { Total = Total + amount }
+            }
+            class Store {
+                var values []Meter
+                prop this[index int32] Meter {
+                    get { return values[index] }
+                    set { values[index] = value }
+                }
+                func Init() { values = []Meter{Meter{}} }
+            }
+            var mapped = map[string, Meter]{"x": Meter{}}
+            mapped["x"]++
+            var store = Store{}
+            store.Init()
+            store[0]++
+            var answer = mapped["x"].Total * 10 + store[0].Total
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void IncrementPrefersDerivedValueMemberOverInheritedEvent()
     {
         var result = EmittedOracle.Evaluate("""

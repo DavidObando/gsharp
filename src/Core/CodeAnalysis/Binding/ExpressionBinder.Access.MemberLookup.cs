@@ -1943,11 +1943,6 @@ internal sealed partial class ExpressionBinder
             }
 
             var compoundTarget = indexRead;
-            previousValue = CapturePostfixCompoundValue(
-                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
-                outerSyntax,
-                ref indexRead,
-                out previousDeclaration);
 
             if (compoundRhsSyntax is not { } resolvedCompoundRhsSyntax)
             {
@@ -1960,23 +1955,83 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
+            BoundExpression userCompoundTarget = compoundTarget;
             var userCompound = TryBindUserCompoundAssignmentOperator(
                 compoundOperatorToken.Kind,
-                compoundTarget,
+                userCompoundTarget,
                 rhsBound,
                 resolvedCompoundRhsSyntax.Location);
             if (userCompound != null)
             {
+                var needsWriteBack =
+                    GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(compoundTarget.Type)
+                    && compoundTarget is not BoundDereferenceExpression
+                    && compoundTarget is not BoundIndexExpression { IsArrayBackedElementAccess: true };
+                LocalVariableSymbol? valueTemp = null;
+                if (needsWriteBack)
+                {
+                    var valueTempName =
+                        $"<idxCompound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+                    valueTemp = new LocalVariableSymbol(valueTempName, isReadOnly: false, compoundTarget.Type);
+                    scope.TryDeclareVariable(valueTemp);
+                    statements.Add(new BoundVariableDeclaration(outerSyntax, valueTemp, compoundTarget));
+                    userCompoundTarget = new BoundVariableExpression(null, valueTemp);
+                    userCompound = Invariant.Required(
+                        TryBindUserCompoundAssignmentOperator(
+                            compoundOperatorToken.Kind,
+                            userCompoundTarget,
+                            rhsBound,
+                            resolvedCompoundRhsSyntax.Location),
+                        "an indexed user compound operator remains applicable to its value temp");
+                }
+
+                BoundExpression previousRead = userCompoundTarget;
+                previousValue = CapturePostfixCompoundValue(
+                    outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                    outerSyntax,
+                    ref previousRead,
+                    out previousDeclaration);
+
+                if (valueTemp != null)
+                {
+                    if (previousDeclaration != null)
+                    {
+                        statements.Add(previousDeclaration);
+                    }
+
+                    statements.Add(new BoundExpressionStatement(outerSyntax, userCompound));
+                    var writeBack = BindIndexedAssignmentToVariableWithBoundValue(
+                        tempVar,
+                        indexSyntax,
+                        userCompoundTarget,
+                        diagnosticLocation,
+                        sharedIndex,
+                        boundReceiver);
+                    if (previousValue != null)
+                    {
+                        statements.Add(new BoundExpressionStatement(outerSyntax, writeBack));
+                        return new BoundBlockExpression(outerSyntax, statements.ToImmutable(), previousValue);
+                    }
+
+                    return new BoundBlockExpression(outerSyntax, statements.ToImmutable(), writeBack);
+                }
+
                 return FinishUserCompoundIncrement(
                     outerSyntax,
                     outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
                     outerSyntax is CompoundIndexAssignmentExpressionSyntax { IsIncrementDecrement: true },
-                    compoundTarget,
+                    userCompoundTarget,
                     userCompound,
                     previousDeclaration,
                     previousValue,
                     statements);
             }
+
+            previousValue = CapturePostfixCompoundValue(
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                outerSyntax,
+                ref indexRead,
+                out previousDeclaration);
 
             // issue #1226 / #1246: the right operand of a compound element/indexer
             // assignment (`data[i] op= v`, including the synthetic `1` for
