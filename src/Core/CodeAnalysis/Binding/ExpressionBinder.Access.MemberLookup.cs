@@ -1868,7 +1868,8 @@ internal sealed partial class ExpressionBinder
                 indexSyntax,
                 compoundOperatorToken,
                 compoundRhsSyntax,
-                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true });
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { IsIncrementDecrement: true });
         }
 
         var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
@@ -1941,6 +1942,7 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            var compoundTarget = indexRead;
             previousValue = CapturePostfixCompoundValue(
                 outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
                 outerSyntax,
@@ -1956,6 +1958,24 @@ internal sealed partial class ExpressionBinder
             if (rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error)
             {
                 return new BoundErrorExpression(null);
+            }
+
+            var userCompound = TryBindUserCompoundAssignmentOperator(
+                compoundOperatorToken.Kind,
+                compoundTarget,
+                rhsBound,
+                resolvedCompoundRhsSyntax.Location);
+            if (userCompound != null)
+            {
+                return FinishUserCompoundIncrement(
+                    outerSyntax,
+                    outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                    outerSyntax is CompoundIndexAssignmentExpressionSyntax { IsIncrementDecrement: true },
+                    compoundTarget,
+                    userCompound,
+                    previousDeclaration,
+                    previousValue,
+                    statements);
             }
 
             // issue #1226 / #1246: the right operand of a compound element/indexer

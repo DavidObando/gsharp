@@ -263,6 +263,40 @@ public class IncrementDecrementTests
     }
 
     [Fact]
+    public void IndexedIncrementUsesUserCompoundOperator()
+    {
+        var result = EmittedOracle.Evaluate("""
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) { Total = Total + amount }
+            }
+            var values = []Meter{Meter{}}
+            let previous = values[0]++
+            let updated = ++values[0]
+            var answer = previous.Total * 100 + updated.Total * 10 + values[0].Total
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(22, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void NativeSliceIncrementUsesUserCompoundOperator()
+    {
+        var result = EmittedOracle.Evaluate("""
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) { Total = Total + amount }
+            }
+            let values = Gsharp.Values.Slice[Meter].Create(1, 1)
+            let previous = values[0]++
+            let updated = ++values[0]
+            var answer = previous.Total * 100 + updated.Total * 10 + values[0].Total
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(22, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void IncrementPrefersDerivedValueMemberOverInheritedEvent()
     {
         var result = EmittedOracle.Evaluate("""
@@ -286,6 +320,41 @@ public class IncrementDecrementTests
                 func Run() int32 {
                     Value++
                     this.Value++
+                    return Value
+                }
+            }
+            var answer = FieldDerived{}.Run() + PropertyDerived{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void IncrementPrefersDerivedStaticValueMemberOverInheritedStaticEvent()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base {
+                shared { event Value () -> void }
+            }
+            class FieldDerived : Base {
+                shared { var Value int32 }
+                func Run() int32 {
+                    Value++
+                    FieldDerived.Value++
+                    return Value
+                }
+            }
+            class PropertyDerived : Base {
+                shared {
+                    var backing int32
+                    prop Value int32 {
+                        get { return backing }
+                        set { backing = value }
+                    }
+                }
+                func Run() int32 {
+                    Value++
+                    PropertyDerived.Value++
                     return Value
                 }
             }

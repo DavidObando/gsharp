@@ -1484,6 +1484,7 @@ internal sealed partial class ExpressionBinder
         // a conversion error) identical on the static path.
         if (isEventOperator
             && (function?.StaticOwnerType as StructSymbol ?? function?.ReceiverType as StructSymbol) is StructSymbol staticOwner
+            && !SourceStaticValueMemberPrecedesInheritedEvent(staticOwner, name)
             && TypeMemberModel.TryGetStaticEventIncludingInherited(staticOwner, name, out var staticEv, out var staticEventOwner))
         {
             var staticEventType = staticEventOwner.SubstituteMemberType(staticEv.Type);
@@ -1761,6 +1762,25 @@ internal sealed partial class ExpressionBinder
 
             if (level.TryGetField(name, out _)
                 || level.Properties.Any(candidate => !candidate.IsIndexer && candidate.Name == name))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SourceStaticValueMemberPrecedesInheritedEvent(StructSymbol type, string name)
+    {
+        foreach (var level in type.GetHierarchy())
+        {
+            if (TypeMemberModel.TryGetStaticEvent(level, name, out _))
+            {
+                return false;
+            }
+
+            if (level.TryGetStaticField(name, out _)
+                || TypeMemberModel.TryGetStaticProperty(level, name, out _))
             {
                 return true;
             }
@@ -3888,11 +3908,30 @@ internal sealed partial class ExpressionBinder
             targetReference,
             capturedIndices,
             rectangular.ElementType);
+        var compoundTarget = read;
         var previousValue = CapturePostfixCompoundValue(syntax.ReturnsPreviousValue, syntax, ref read, out var previousDeclaration);
         var rhs = BindExpression(syntax.Value);
         if (rhs is BoundErrorExpression || rhs.Type == TypeSymbol.Error)
         {
             return new BoundErrorExpression(syntax);
+        }
+
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind,
+            compoundTarget,
+            rhs,
+            syntax.Value.Location);
+        if (userCompound != null)
+        {
+            return FinishUserCompoundIncrement(
+                syntax,
+                syntax.ReturnsPreviousValue,
+                syntax.IsIncrementDecrement,
+                compoundTarget,
+                userCompound,
+                previousDeclaration,
+                previousValue,
+                statements);
         }
 
         var combined = TryBindCompoundBinaryOperation(baseOperator, read, rhs, syntax.Value.Location);
@@ -3980,13 +4019,15 @@ internal sealed partial class ExpressionBinder
     }
 
     private static BoundExpression FinishUserCompoundIncrement(
-        EventSubscriptionExpressionSyntax syntax,
+        SyntaxNode syntax,
+        bool returnsPreviousValue,
+        bool isIncrementDecrement,
         BoundExpression target,
         BoundExpression userCompound,
         BoundVariableDeclaration? previousDeclaration,
         BoundVariableExpression? previousValue)
     {
-        if (syntax.ReturnsPreviousValue)
+        if (returnsPreviousValue)
         {
             return FinishPostfixCompoundAssignment(
                 syntax,
@@ -3995,7 +4036,7 @@ internal sealed partial class ExpressionBinder
                 userCompound);
         }
 
-        if (!syntax.IsIncrementDecrement)
+        if (!isIncrementDecrement)
         {
             return userCompound;
         }
@@ -4006,6 +4047,50 @@ internal sealed partial class ExpressionBinder
                 new BoundExpressionStatement(syntax, userCompound)),
             target);
     }
+
+    private static BoundExpression FinishUserCompoundIncrement(
+        SyntaxNode syntax,
+        bool returnsPreviousValue,
+        bool isIncrementDecrement,
+        BoundExpression target,
+        BoundExpression userCompound,
+        BoundVariableDeclaration? previousDeclaration,
+        BoundVariableExpression? previousValue,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        if (returnsPreviousValue)
+        {
+            return FinishPostfixCompoundAssignment(
+                syntax,
+                statements,
+                previousDeclaration,
+                previousValue,
+                userCompound);
+        }
+
+        if (!isIncrementDecrement)
+        {
+            return new BoundBlockExpression(syntax, statements.ToImmutable(), userCompound);
+        }
+
+        statements.Add(new BoundExpressionStatement(syntax, userCompound));
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), target);
+    }
+
+    private static BoundExpression FinishUserCompoundIncrement(
+        EventSubscriptionExpressionSyntax syntax,
+        BoundExpression target,
+        BoundExpression userCompound,
+        BoundVariableDeclaration? previousDeclaration,
+        BoundVariableExpression? previousValue)
+        => FinishUserCompoundIncrement(
+            syntax,
+            syntax.ReturnsPreviousValue,
+            syntax.IsIncrementDecrement,
+            target,
+            userCompound,
+            previousDeclaration,
+            previousValue);
 
     private BoundVariableExpression? CapturePostfixCompoundValue(
         bool returnsPreviousValue,

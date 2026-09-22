@@ -431,7 +431,8 @@ public partial class Parser
                 indexed,
                 compoundToken,
                 OneLiteral(),
-                returnsPreviousValue: !isPrefix);
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
         }
         else if (AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
             unwrappedOperand,

@@ -128,6 +128,7 @@ internal sealed partial class ExpressionBinder
             // operators (issue #2154) can never be an event, so skip straight
             // to the compound-assignment fallback.
             if (isEventCapableOperator
+                && !SourceStaticValueMemberPrecedesInheritedEvent(staticStruct, eventName)
                 && TypeMemberModel.TryGetStaticEventIncludingInherited(staticStruct, eventName, out var ev, out var eventOwner))
             {
                 if (!AccessibilityChecker.IsAccessible(ev.Accessibility, eventOwner, function))
@@ -203,6 +204,7 @@ internal sealed partial class ExpressionBinder
             // carried construction drives per-construction emit/storage.
             if (ctorStruct != null
                 && isEventCapableOperator
+                && !SourceStaticValueMemberPrecedesInheritedEvent(ctorStruct, eventName)
                 && TypeMemberModel.TryGetStaticEventIncludingInherited(ctorStruct, eventName, out var ctorEvent, out var ctorEventOwner))
             {
                 if (!AccessibilityChecker.IsAccessible(ctorEvent.Accessibility, ctorEventOwner, function))

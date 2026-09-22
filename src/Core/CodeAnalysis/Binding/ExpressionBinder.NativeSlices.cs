@@ -245,7 +245,8 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax indexSyntax,
         SyntaxToken operation,
         ExpressionSyntax valueSyntax,
-        bool returnsPreviousValue)
+        bool returnsPreviousValue,
+        bool isIncrementDecrement)
     {
         NativeSliceTypes.TryGetElement(target.Type, out _, out var readOnly);
         if (readOnly)
@@ -272,11 +273,30 @@ internal sealed partial class ExpressionBinder
         var addressRef = new BoundVariableExpression(null, address);
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(operation.Kind, out var binaryKind);
         BoundExpression read = new BoundDereferenceExpression(null, addressRef);
+        var compoundTarget = read;
         var previousValue = CapturePostfixCompoundValue(
             returnsPreviousValue,
             indexSyntax,
             ref read,
             out var previousDeclaration);
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            operation.Kind,
+            compoundTarget,
+            value,
+            valueSyntax.Location);
+        if (userCompound != null)
+        {
+            return FinishUserCompoundIncrement(
+                indexSyntax,
+                returnsPreviousValue,
+                isIncrementDecrement,
+                compoundTarget,
+                userCompound,
+                previousDeclaration,
+                previousValue,
+                statements);
+        }
+
         var result = TryBindCompoundBinaryOperation(binaryKind, read, value, valueSyntax.Location);
         if (result == null)
         {
