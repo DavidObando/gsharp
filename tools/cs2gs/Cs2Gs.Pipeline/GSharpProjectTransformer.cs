@@ -332,8 +332,14 @@ internal static class GSharpProjectTransformer
             sourceProjectDirectory,
             destinationProjectDirectory,
             generatedProjectPaths);
+        SplitMixedProjectReferences(
+            document,
+            mappedExpressions,
+            sourceProjectDirectory,
+            destinationProjectDirectory,
+            generatedProjectPaths);
 
-        foreach (XElement projectReference in ElementsNamed(document, "ProjectReference"))
+        foreach (XElement projectReference in ElementsNamed(document, "ProjectReference").ToList())
         {
             XAttribute include = AttributeNamed(projectReference, "Include");
             if (include is null ||
@@ -373,6 +379,64 @@ internal static class GSharpProjectTransformer
                     destinationProjectDirectory,
                     Path.GetFullPath(generatedProjectPath))
                 .Replace('\\', '/');
+        }
+    }
+
+    private static void SplitMixedProjectReferences(
+        XDocument document,
+        IReadOnlySet<string> mappedExpressions,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+    {
+        foreach (XElement reference in ElementsNamed(document, "ProjectReference").ToList())
+        {
+            XAttribute include = AttributeNamed(reference, "Include");
+            string[] specs = include?.Value.Split(';') ?? Array.Empty<string>();
+            if (specs.Length < 2)
+            {
+                continue;
+            }
+
+            bool hasHandled = false;
+            bool hasUnmappedLiteral = false;
+            foreach (string spec in specs)
+            {
+                bool expression = spec.Contains("$(", StringComparison.Ordinal)
+                    || spec.Contains("@(", StringComparison.Ordinal);
+                bool mapped = mappedExpressions.Contains(spec.Trim())
+                    || TryRewriteDeclaredProjectPathSpec(
+                        spec,
+                        sourceProjectDirectory,
+                        destinationProjectDirectory,
+                        generatedProjectPaths,
+                        out _)
+                    || TryMapProjectPathSpec(
+                        spec,
+                        sourceProjectDirectory,
+                        destinationProjectDirectory,
+                        generatedProjectPaths,
+                        sourceRoot: null,
+                        destinationRoot: null,
+                        repositoryRootExpressions: null,
+                        out _);
+                hasHandled |= expression || mapped;
+                hasUnmappedLiteral |= !expression && !mapped;
+            }
+
+            if (!hasHandled || !hasUnmappedLiteral)
+            {
+                continue;
+            }
+
+            foreach (string spec in specs)
+            {
+                var split = new XElement(reference);
+                split.SetAttributeValue("Include", spec.Trim());
+                reference.AddBeforeSelf(split);
+            }
+
+            reference.Remove();
         }
     }
 
@@ -911,6 +975,21 @@ internal static class GSharpProjectTransformer
         {
             if (mappedExpressions.Contains(specs[i].Trim()))
             {
+                handled = true;
+                continue;
+            }
+
+            if (TryMapProjectPathSpec(
+                specs[i],
+                sourceProjectDirectory,
+                destinationProjectDirectory,
+                generatedProjectPaths,
+                sourceRoot: null,
+                destinationRoot: null,
+                repositoryRootExpressions: null,
+                out string anchored))
+            {
+                specs[i] = anchored;
                 handled = true;
                 continue;
             }

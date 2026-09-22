@@ -200,6 +200,47 @@ public sealed class GSharpProjectTransformerTests
     }
 
     [Fact]
+    public void Transform_ResolvesAnchoredPathsAndSplitsMixedLiteralReferences()
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "source", "App", "App.csproj");
+        string sourceRuntime = Path.Combine(scratch.Path, "source", "Runtime", "Runtime.csproj");
+        string destinationDirectory = Path.Combine(scratch.Path, "generated", "App");
+        string generatedRuntime = Path.Combine(scratch.Path, "generated", "Runtime", "Runtime.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceProject));
+        Directory.CreateDirectory(destinationDirectory);
+        File.WriteAllText(
+            sourceProject,
+            """
+            <Project>
+              <ItemGroup>
+                <ProjectReference Include="$(MSBuildProjectDirectory)\..\Runtime\Runtime.csproj" />
+                <ProjectReference Include="..\Runtime\Runtime.csproj;..\External\External.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            destinationDirectory,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>
+            {
+                [Path.GetFullPath(sourceRuntime)] = generatedRuntime,
+            });
+
+        XElement[] references = ElementsNamed(transformed, "ProjectReference").ToArray();
+        Assert.Equal(3, references.Length);
+        Assert.Equal(
+            "$(MSBuildProjectDirectory)/../Runtime/Runtime.csproj",
+            references[0].Attribute("Include")?.Value);
+        Assert.Equal("../Runtime/Runtime.csproj", references[1].Attribute("Include")?.Value);
+        Assert.Null(references[1].Attribute("ReferenceOutputAssembly"));
+        Assert.Equal(@"..\External\External.csproj", references[2].Attribute("Include")?.Value);
+        Assert.Equal("false", references[2].Attribute("ReferenceOutputAssembly")?.Value);
+    }
+
+    [Fact]
     public void Transform_UpgradesNerdbankGitVersioning()
     {
         using var scratch = new ScratchDirectory();
