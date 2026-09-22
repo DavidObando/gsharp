@@ -421,7 +421,8 @@ public partial class Parser
                 operand,
                 compoundToken,
                 OneLiteral(),
-                returnsPreviousValue: !isPrefix);
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
         }
         else if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out var indexed))
         {
@@ -443,7 +444,8 @@ public partial class Parser
                 operand,
                 compoundToken,
                 OneLiteral(),
-                returnsPreviousValue: !isPrefix);
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
         }
         else
         {

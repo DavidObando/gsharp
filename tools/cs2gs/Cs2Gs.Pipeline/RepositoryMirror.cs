@@ -348,7 +348,12 @@ internal static class RepositoryMirror
         {
             XAttribute include = reference.Attribute("Include");
             if (include is null
-                || GSharpProjectTransformer.TryRewriteExpression(include, mappedExpressions))
+                || GSharpProjectTransformer.TryRewriteExpression(
+                    include,
+                    mappedExpressions,
+                    sourceDirectory,
+                    destinationDirectory,
+                    generatedProjectPaths))
             {
                 continue;
             }

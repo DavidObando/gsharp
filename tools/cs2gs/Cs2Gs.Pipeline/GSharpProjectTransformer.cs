@@ -123,8 +123,16 @@ internal static class GSharpProjectTransformer
 
     internal static bool TryRewriteExpression(
         XAttribute include,
-        IReadOnlySet<string> mappedExpressions)
-        => TryRewriteExpressionCore(include, mappedExpressions);
+        IReadOnlySet<string> mappedExpressions,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        => TryRewriteExpressionCore(
+            include,
+            mappedExpressions,
+            sourceProjectDirectory,
+            destinationProjectDirectory,
+            generatedProjectPaths);
 
     /// <summary>
     /// Resolves a transformed project's compiler-hosted <c>Reference</c>
@@ -323,7 +331,12 @@ internal static class GSharpProjectTransformer
                 continue;
             }
 
-            if (TryRewriteExpression(include, mappedExpressions))
+            if (TryRewriteExpression(
+                include,
+                mappedExpressions,
+                sourceProjectDirectory,
+                destinationProjectDirectory,
+                generatedProjectPaths))
             {
                 continue;
             }
@@ -814,12 +827,38 @@ internal static class GSharpProjectTransformer
         IReadOnlyDictionary<string, string> generatedProjectPaths,
         out string rewritten)
     {
+        string[] specs = value.Split(';');
+        bool changed = false;
+        for (int i = 0; i < specs.Length; i++)
+        {
+            if (TryRewriteDeclaredProjectPathSpec(
+                specs[i],
+                sourceProjectDirectory,
+                destinationProjectDirectory,
+                generatedProjectPaths,
+                out string rewrittenSpec))
+            {
+                specs[i] = rewrittenSpec;
+                changed = true;
+            }
+        }
+
+        rewritten = changed ? string.Join(";", specs) : value;
+        return changed;
+    }
+
+    private static bool TryRewriteDeclaredProjectPathSpec(
+        string value,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths,
+        out string rewritten)
+    {
         rewritten = value;
         string trimmed = value.Trim();
         if (trimmed.Length == 0
             || trimmed.Contains("$(", StringComparison.Ordinal)
-            || trimmed.Contains("@(", StringComparison.Ordinal)
-            || trimmed.Contains(';'))
+            || trimmed.Contains("@(", StringComparison.Ordinal))
         {
             return false;
         }
@@ -842,7 +881,10 @@ internal static class GSharpProjectTransformer
 
     private static bool TryRewriteExpressionCore(
         XAttribute include,
-        IReadOnlySet<string> mappedExpressions)
+        IReadOnlySet<string> mappedExpressions,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
     {
         string value = include.Value;
         if (!value.Contains("$(", StringComparison.Ordinal) &&
@@ -858,6 +900,18 @@ internal static class GSharpProjectTransformer
         {
             if (mappedExpressions.Contains(specs[i].Trim()))
             {
+                handled = true;
+                continue;
+            }
+
+            if (TryRewriteDeclaredProjectPathSpec(
+                specs[i],
+                sourceProjectDirectory,
+                destinationProjectDirectory,
+                generatedProjectPaths,
+                out string mapped))
+            {
+                specs[i] = mapped;
                 handled = true;
                 continue;
             }

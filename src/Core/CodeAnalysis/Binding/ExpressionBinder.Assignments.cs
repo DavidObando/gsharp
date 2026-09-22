@@ -1569,10 +1569,10 @@ internal sealed partial class ExpressionBinder
             syntax.OperatorToken.Kind, compoundTarget, boundRhs, syntax.Value.Location);
         if (userCompound != null)
         {
-            if (syntax.ReturnsPreviousValue
+            if (syntax.IsIncrementDecrement
                 && variable is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol)
             {
-                return BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs);
+                return BindPropertyUserCompoundIncrement(syntax, compoundTarget, boundRhs);
             }
 
             BoundExpression previousRead = compoundTarget;
@@ -1581,11 +1581,12 @@ internal sealed partial class ExpressionBinder
                 syntax,
                 ref previousRead,
                 out var userPreviousDeclaration);
-            return FinishPostfixCompoundAssignment(
+            return FinishUserCompoundIncrement(
                 syntax,
+                compoundTarget,
+                userCompound,
                 userPreviousDeclaration,
-                userPreviousValue,
-                userCompound);
+                userPreviousValue);
         }
 
         BoundExpression leftExpr = compoundTarget;
@@ -1804,11 +1805,12 @@ internal sealed partial class ExpressionBinder
                 syntax.OperatorToken.Kind, compoundTarget, boundRhs, syntax.Value.Location);
             if (userCompound != null)
             {
-                result = FinishPostfixCompoundAssignment(
+                result = FinishUserCompoundIncrement(
                     syntax,
+                    compoundTarget,
+                    userCompound,
                     previousDeclaration,
-                    previousValue,
-                    userCompound);
+                    previousValue);
                 return true;
             }
 
@@ -1867,8 +1869,8 @@ internal sealed partial class ExpressionBinder
                 syntax.OperatorToken.Kind, compoundTarget, boundRhs, syntax.Value.Location);
             if (userCompound != null)
             {
-                result = syntax.ReturnsPreviousValue
-                    ? BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs)
+                result = syntax.IsIncrementDecrement
+                    ? BindPropertyUserCompoundIncrement(syntax, compoundTarget, boundRhs)
                     : userCompound;
                 return true;
             }
@@ -2047,8 +2049,8 @@ internal sealed partial class ExpressionBinder
             syntax.Value.Location);
         if (userCompound != null)
         {
-            return syntax.ReturnsPreviousValue
-                ? BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs)
+            return syntax.IsIncrementDecrement
+                ? BindPropertyUserCompoundIncrement(syntax, compoundTarget, boundRhs)
                 : userCompound;
         }
 
@@ -2231,11 +2233,12 @@ internal sealed partial class ExpressionBinder
                 syntax.OperatorToken.Kind, compoundTarget, boundRhs, syntax.Value.Location);
             if (userCompound != null)
             {
-                return FinishPostfixCompoundAssignment(
+                return FinishUserCompoundIncrement(
                     syntax,
+                    compoundTarget,
+                    userCompound,
                     previousDeclaration,
-                    previousValue,
-                    userCompound);
+                    previousValue);
             }
 
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
@@ -2280,8 +2283,8 @@ internal sealed partial class ExpressionBinder
                     syntax.Value.Location);
                 if (userPropCompound != null)
                 {
-                    return syntax.ReturnsPreviousValue
-                        ? BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs)
+                    return syntax.IsIncrementDecrement
+                        ? BindPropertyUserCompoundIncrement(syntax, compoundTarget, boundRhs)
                         : userPropCompound;
                 }
             }
@@ -3832,7 +3835,7 @@ internal sealed partial class ExpressionBinder
         return FinishPostfixCompoundAssignment(syntax, statements, previousDeclaration, previousValue, assignment);
     }
 
-    private BoundExpression BindPostfixPropertyUserCompoundAssignment(
+    private BoundExpression BindPropertyUserCompoundIncrement(
         EventSubscriptionExpressionSyntax syntax,
         BoundExpression propertyTarget,
         BoundExpression boundRhs)
@@ -3842,7 +3845,7 @@ internal sealed partial class ExpressionBinder
         if (IsLvalue(propertyTarget) && !RefCapabilities.IsReadOnlyReference(propertyTarget))
         {
             var pointer = new BoundAddressOfExpression(propertyTarget.Syntax, propertyTarget);
-            var address = DeclareRangeTemp("postfixPropertyAddress", pointer.Type, pointer, statements);
+            var address = DeclareRangeTemp("incrementPropertyAddress", pointer.Type, pointer, statements);
             stableTarget = new BoundDereferenceExpression(
                 propertyTarget.Syntax,
                 new BoundVariableExpression(null, address));
@@ -3850,37 +3853,77 @@ internal sealed partial class ExpressionBinder
         else
         {
             var name =
-                $"<postfixTarget{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+                $"<incrementTarget{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
             var target = new LocalVariableSymbol(name, isReadOnly: false, propertyTarget.Type);
             if (!scope.TryDeclareVariable(target))
             {
                 throw new System.InvalidOperationException(
-                    $"Failed to declare synthesized postfix target local '{name}'.");
+                    $"Failed to declare synthesized increment target local '{name}'.");
             }
 
             statements.Add(new BoundVariableDeclaration(syntax, target, propertyTarget));
             stableTarget = new BoundVariableExpression(null, target);
         }
 
-        BoundExpression previousRead = stableTarget;
-        var previousValue = CapturePostfixCompoundValue(
-            returnsPreviousValue: true,
-            syntax,
-            ref previousRead,
-            out var previousDeclaration);
+        BoundVariableExpression? previousValue = null;
+        BoundVariableDeclaration? previousDeclaration = null;
+        if (syntax.ReturnsPreviousValue)
+        {
+            BoundExpression previousRead = stableTarget;
+            previousValue = CapturePostfixCompoundValue(
+                returnsPreviousValue: true,
+                syntax,
+                ref previousRead,
+                out previousDeclaration);
+        }
+
         var userCompound = Invariant.Required(
             TryBindUserCompoundAssignmentOperator(
                 syntax.OperatorToken.Kind,
                 stableTarget,
                 boundRhs,
                 syntax.Value.Location),
-            "a property compound operator resolved before postfix target capture");
-        return FinishPostfixCompoundAssignment(
+            "a property compound operator resolved before increment target capture");
+        if (syntax.ReturnsPreviousValue)
+        {
+            return FinishPostfixCompoundAssignment(
+                syntax,
+                statements,
+                previousDeclaration,
+                previousValue,
+                userCompound);
+        }
+
+        statements.Add(new BoundExpressionStatement(syntax, userCompound));
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), stableTarget);
+    }
+
+    private static BoundExpression FinishUserCompoundIncrement(
+        EventSubscriptionExpressionSyntax syntax,
+        BoundExpression target,
+        BoundExpression userCompound,
+        BoundVariableDeclaration? previousDeclaration,
+        BoundVariableExpression? previousValue)
+    {
+        if (syntax.ReturnsPreviousValue)
+        {
+            return FinishPostfixCompoundAssignment(
+                syntax,
+                previousDeclaration,
+                previousValue,
+                userCompound);
+        }
+
+        if (!syntax.IsIncrementDecrement)
+        {
+            return userCompound;
+        }
+
+        return new BoundBlockExpression(
             syntax,
-            statements,
-            previousDeclaration,
-            previousValue,
-            userCompound);
+            ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(syntax, userCompound)),
+            target);
     }
 
     private BoundVariableExpression? CapturePostfixCompoundValue(
@@ -3917,7 +3960,7 @@ internal sealed partial class ExpressionBinder
     {
         savedReceiver = receiver;
         prefix = ImmutableArray<BoundStatement>.Empty;
-        if (!syntax.ReturnsPreviousValue
+        if (!syntax.IsIncrementDecrement
             || receiver is BoundVariableExpression
             || receiver is BoundDereferenceExpression { Operand: BoundVariableExpression })
         {
@@ -4097,11 +4140,12 @@ internal sealed partial class ExpressionBinder
             syntax.OperatorToken.Kind, compoundTarget, boundRhs, syntax.Value.Location);
         if (userCompound != null)
         {
-            result = FinishPostfixCompoundAssignment(
+            result = FinishUserCompoundIncrement(
                 syntax,
+                compoundTarget,
+                userCompound,
                 previousDeclaration,
-                previousValue,
-                userCompound);
+                previousValue);
             return true;
         }
 

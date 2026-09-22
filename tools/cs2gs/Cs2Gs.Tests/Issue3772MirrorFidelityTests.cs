@@ -148,21 +148,24 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
         string destination = Path.Combine(this.root, "destination");
         string runtimeDirectory = Path.Combine(source, "src", "Runtime");
         string compilerDirectory = Path.Combine(source, "src", "Compiler");
+        string supportDirectory = Path.Combine(source, "src", "Support");
         Directory.CreateDirectory(runtimeDirectory);
         Directory.CreateDirectory(compilerDirectory);
+        Directory.CreateDirectory(supportDirectory);
         File.WriteAllText(Path.Combine(compilerDirectory, "Compiler.csproj"), "<Project />");
         File.WriteAllText(
             Path.Combine(runtimeDirectory, "Runtime.csproj"),
             """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <CompilerProject>..\Compiler\Compiler.csproj</CompilerProject>
+                <DependencyProjects>..\Compiler\Compiler.csproj; ..\Support\Support.csproj</DependencyProjects>
               </PropertyGroup>
               <ItemGroup>
-                <CompilerProjects Include="..\Compiler\Compiler.csproj" />
+                <DependencyProjects Include="..\Compiler\Compiler.csproj; ..\Support\Support.csproj" />
                 <ProjectReference Include="..\Compiler\Compiler.csproj" />
-                <ProjectReference Include="$(CompilerProject)" />
-                <ProjectReference Include="@(CompilerProjects)" />
+                <ProjectReference Include="..\Compiler\Compiler.csproj; ..\Support\Support.csproj" />
+                <ProjectReference Include="$(DependencyProjects)" />
+                <ProjectReference Include="@(DependencyProjects)" />
                 <ProjectReference Include="@(GsharpCore)" />
               </ItemGroup>
             </Project>
@@ -184,6 +187,8 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             {
                 [Path.Combine(compilerDirectory, "Compiler.csproj")] =
                     Path.Combine(destination, "src", "Compiler", "Compiler.gsproj"),
+                [Path.Combine(supportDirectory, "Support.csproj")] =
+                    Path.Combine(destination, "src", "Support", "Support.csproj"),
             });
 
         Assert.Equal(
@@ -201,17 +206,19 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             Path.Combine(destination, "src", "Runtime", "Runtime.csproj"));
         Assert.Equal("Microsoft.NET.Sdk", project.Root.Attribute("Sdk").Value);
         Assert.Equal(
-            "../Compiler/Compiler.gsproj",
-            project.Descendants("CompilerProject").Single().Value);
+            "../Compiler/Compiler.gsproj; ../Support/Support.csproj",
+            project.Descendants("DependencyProjects").Single(element => element.Attribute("Include") is null).Value);
         Assert.Equal(
-            "../Compiler/Compiler.gsproj",
-            project.Descendants("CompilerProjects").Single().Attribute("Include").Value);
+            "../Compiler/Compiler.gsproj; ../Support/Support.csproj",
+            project.Descendants("DependencyProjects").Single(element => element.Attribute("Include") is not null)
+                .Attribute("Include").Value);
         Assert.Equal(
             new[]
             {
                 "../Compiler/Compiler.gsproj",
-                "$(CompilerProject)",
-                "@(CompilerProjects)",
+                "../Compiler/Compiler.gsproj; ../Support/Support.csproj",
+                "$(DependencyProjects)",
+                "@(DependencyProjects)",
                 "@(GsharpCore->'%(RootDir)%(Directory)%(Filename).gsproj')",
             },
             project.Descendants("ProjectReference")

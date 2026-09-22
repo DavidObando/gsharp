@@ -152,7 +152,7 @@ public class IncrementDecrementTests
     }
 
     [Fact]
-    public void PostfixUserCompoundOnProperty_EvaluatesGetterOnce()
+    public void UserCompoundIncrementOnProperty_EvaluatesGetterOnce()
     {
         var result = EmittedOracle.Evaluate("""
             class Bag {
@@ -186,10 +186,16 @@ public class IncrementDecrementTests
                     let previous = this.Next++
                     return calls * 100 + first.Total * 10 + second.Total
                 }
+                func ScorePrefix() int32 {
+                    Reset()
+                    let updated = ++Next
+                    return calls * 100 + first.Total * 10 + second.Total + updated.Total
+                }
             }
             var holder = Holder()
             var answer = holder.ScoreBare() == 110 &&
-                holder.ScoreQualified() == 110
+                holder.ScoreQualified() == 110 &&
+                holder.ScorePrefix() == 111
             """);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(true, result.ReadGlobals()["answer"]);
@@ -213,6 +219,26 @@ public class IncrementDecrementTests
             """);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void PrefixExpressionUsesUserCompoundOperatorAndReturnsUpdatedValue()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Bag {
+                var total int32
+                prop Total int32 { get { return total } }
+                func operator +=(amount int32) { total = total + amount }
+            }
+            func Run() int32 {
+                var bag = Bag()
+                let updated = ++bag
+                return updated.Total * 10 + bag.Total
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.ReadGlobals()["answer"]);
     }
 
     [Fact]
