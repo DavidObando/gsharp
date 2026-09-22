@@ -46,7 +46,7 @@ public enum NullabilityMode
     /// (step 2), and only then flipped the default (step 3) — in that order,
     /// never the reverse, because deleting the old carve-out while the flag
     /// was still off would transiently reinstate failure mode 1. Step 4
-    /// deletes that carve-out now that this reading is load-bearing.
+    /// deleted that carve-out once this reading became load-bearing.
     /// </para>
     /// </summary>
     PlatformTypes,

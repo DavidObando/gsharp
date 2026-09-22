@@ -195,6 +195,20 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             public int this[int slot] { set { } }
         }
+
+        // ADR-0186 step 4's discriminating fixture: an ANNOTATED-nullable
+        // property, i.e. a member the author explicitly declared may be nil.
+        // This is the population `CanBindClrInstanceMember`'s
+        // `BoundClrPropertyAccessExpression` carve-out used to wave through,
+        // and the only population whose behaviour the carve-out's deletion
+        // moves — the oblivious members above arrive as `T!` in the default
+        // mode and never reach the nullable arm at all.
+        public class Annotated
+        {
+            public List<int>? MaybeNumbers { get; set; } = new List<int> { 1, 2, 3 };
+
+            public string? MaybeText { get; set; } = "v";
+        }
         """;
 
     /// <summary>
@@ -1548,6 +1562,199 @@ public sealed class Adr0186PlatformTypeBindingTests
         using var world = new World();
 
         Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// <b>ADR-0186 step 4 — deleting the carve-out must not un-report a
+    /// receiver the author declared nilable.</b>
+    /// <para>
+    /// Issue #4287's shape: a G#-declared <c>var name string?</c> field,
+    /// dereferenced with no guard. The carve-out step 4 deletes
+    /// (<c>|| receiver is BoundClrPropertyAccessExpression</c> in
+    /// <c>CanBindClrInstanceMember</c>) never applied here — a field read on a
+    /// G#-declared class is not a CLR property access — so the deletion must
+    /// leave this reporting exactly as it did. This is the "one condition, not
+    /// one block" trap the ADR names: it is the easiest way to reintroduce
+    /// #4287's defect while believing the work is cleanup.
+    /// </para>
+    /// <para>
+    /// The <b>read</b> is what is asserted, not a call. Member lookup is what
+    /// <c>CanBindClrInstanceMember</c> gates; an instance <em>call</em> on a
+    /// nilable receiver resolves through a different path that still reports
+    /// nothing on <c>main</c> — #4287's own fix was never merged (PR #4308 was
+    /// closed when this work pivoted to platform types), so that half is an
+    /// open gap this step neither closes nor widens, and pinning it here would
+    /// pin a defect rather than a guarantee.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Step4_ASourceDeclaredNilableFieldReceiver_Still_Reports()
+    {
+        const string holder = """
+            class Holder {
+                var name string?
+
+                func Len() int32 {
+                    return this.name.Length
+                }
+            }
+            """;
+
+        using var world = new World();
+
+        foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
+        {
+            var compiled = world.Compile("    Console.WriteLine(\"unused\")", mode, extraDeclarations: holder);
+
+            Assert.False(compiled.Success, Describe(compiled));
+            Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0158");
+        }
+    }
+
+    /// <summary>
+    /// <b>ADR-0186 step 4 — a source-declared nilable container still selects
+    /// the instance member, not the shadowing extension.</b>
+    /// <para>
+    /// §5a's <c>ListReverse</c> witness aimed at a G#-declared
+    /// <c>List[int32]?</c> rather than at an oblivious receiver.
+    /// <c>import System.Linq</c> is load-bearing exactly as it is there:
+    /// without <c>Enumerable</c> in scope there is no competing extension and
+    /// the probe witnesses nothing. The failure guarded against is not a
+    /// diagnostic changing shape but <c>xs.Reverse()</c> quietly becoming
+    /// <c>Enumerable.Reverse</c> — lazy, copying, result discarded — on a
+    /// receiver whose only difference from the baseline is its declared
+    /// nullability.
+    /// </para>
+    /// <para>
+    /// <c>SelectedReverseDeclaringType</c> binds and so also requires the probe
+    /// to be error-free, which is incidental here and <b>not</b> an assertion
+    /// that a nilable receiver <em>should</em> call an instance method with no
+    /// diagnostic. That it does is #4287's still-open call-path half (see
+    /// <see cref="Step4_ASourceDeclaredNilableFieldReceiver_Still_Reports"/>);
+    /// this test's subject is <em>which</em> method, not whether the access is
+    /// reported.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Step4_ASourceDeclaredNilableContainer_Selects_TheInstanceMember()
+    {
+        const string nilable = """
+                let xs List[int32]? = List[int32]()
+                xs.Reverse()
+            """;
+        const string baseline = """
+                let xs = List[int32]()
+                xs.Reverse()
+            """;
+
+        using var world = new World();
+
+        foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
+        {
+            Assert.Equal(
+                world.SelectedReverseDeclaringType(baseline, mode),
+                world.SelectedReverseDeclaringType(nilable, mode));
+        }
+    }
+
+    /// <summary>
+    /// <b>ADR-0186 step 4 — the population the deletion actually moves.</b>
+    /// <para>
+    /// An <em>annotated</em>-nullable CLR property (<c>string?</c> under
+    /// <c>#nullable enable</c>) is the only receiver shape the deleted
+    /// carve-out still reached once step 3 flipped the default: an oblivious
+    /// member now arrives as <c>T!</c> and never takes the nullable arm at
+    /// all. The carve-out could not tell the two apart, so it waved through a
+    /// member the library author explicitly declared may be nil, and
+    /// <c>a.MaybeText.Length</c> bound with no diagnostic. It is now reported,
+    /// which is what the release note already promises: <c>GS0158</c>/
+    /// <c>GS0159</c> fire "for a source-declared <c>T?</c>, an
+    /// annotated-nullable imported member, a tuple element or an <c>as</c>
+    /// result".
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Step4_AnAnnotatedNullableClrPropertyReceiver_Is_Reported()
+    {
+        const string body = """
+                let a = Annotated()
+                Console.WriteLine(a.MaybeText.Length)
+            """;
+
+        // The same shape in the BCL rather than in a purpose-built fixture.
+        // `Exception.InnerException` is declared `Exception?`, so this is what
+        // the change actually costs a reader of ordinary code — and it is the
+        // reason the claim is worth pinning against a real annotated assembly
+        // and not only against the library this file emits.
+        const string bcl = """
+                let e = Exception("m")
+                Console.WriteLine(e.InnerException.Message)
+            """;
+        const string guarded = """
+                let e = Exception("m")
+                Console.WriteLine(e.InnerException!!.Message)
+            """;
+
+        using var world = new World();
+
+        foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
+        {
+            var compiled = world.Compile(body, mode);
+
+            Assert.False(compiled.Success, Describe(compiled));
+            Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0158");
+
+            var bclCompiled = world.Compile(bcl, mode);
+
+            Assert.False(bclCompiled.Success, Describe(bclCompiled));
+            Assert.Contains(bclCompiled.Diagnostics, d => d.Id == "GS0158");
+
+            // And the remedy is the ordinary one, so the tightening asks for a
+            // proof rather than closing the door.
+            var guardedCompiled = world.Compile(guarded, mode);
+
+            Assert.True(guardedCompiled.Success, Describe(guardedCompiled));
+        }
+    }
+
+    /// <summary>
+    /// <b>ADR-0186 step 4 — why the carve-out is dead code rather than a
+    /// safety net.</b>
+    /// <para>
+    /// The exact shape the carve-out existed for: <c>Ob.ArrField</c> is an
+    /// imported <em>field read</em> — a <c>BoundClrPropertyAccessExpression</c>
+    /// with no receiver of its own — over a nullability-oblivious
+    /// <c>string[]</c>. That is the only receiver kind the deleted disjunct
+    /// admitted, and it is deliberately not a local: a variable receiver never
+    /// reached the disjunct at all, so a probe written with one would pass
+    /// while witnessing nothing.
+    /// </para>
+    /// <para>
+    /// Under the default mode the field is <c>string[]!</c>, so the read binds
+    /// and runs with no diagnostic and no carve-out. Under
+    /// <c>--nullability=enabled</c> the very same field is still ADR-0136's
+    /// <c>string[]?</c>, so with the disjunct gone the read <em>is</em>
+    /// reported. Both halves together are the ADR's sequencing claim made
+    /// checkable — step 3 had to land first, or this deletion would have
+    /// reinstated failure mode 1 — and the Enabled half is deliberate:
+    /// <c>--nullability=enabled</c> is the compatibility mode for the flip, not
+    /// a supported way to keep the old member-lookup behaviour.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Step4_AnObliviousFieldReadReceiver_Still_Binds_Under_TheDefaultMode()
+    {
+        const string body = """
+                Console.WriteLine(Ob.ArrField.Length)
+            """;
+
+        using var world = new World();
+
+        Assert.Equal("1", world.Run(body, NullabilityMode.PlatformTypes).Trim());
+
+        var underAdr0136 = world.Compile(body, NullabilityMode.Enabled);
+        Assert.False(underAdr0136.Success, Describe(underAdr0136));
+        Assert.Contains(underAdr0136.Diagnostics, d => d.Id == "GS0158");
     }
 
     /// <summary>Unwraps the reflection/target-invocation wrappers a run adds.</summary>

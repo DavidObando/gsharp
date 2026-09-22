@@ -45,10 +45,12 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </para>
 /// </summary>
 /// <remarks>
-/// ADR-0186 step 1 builds the symbol and its read path behind
-/// <c>--nullability=platform-types</c>, which defaults <b>off</b>
-/// (<see cref="NullabilityOptions"/>). With the flag off nothing constructs one
-/// during a real compilation, so every existing behaviour is unchanged.
+/// ADR-0186 step 1 built the symbol and its read path behind
+/// <c>--nullability=platform-types</c>; step 3 made that mode the <b>default</b>
+/// (<see cref="NullabilityOptions"/>), so an ordinary compilation constructs
+/// these wrappers for every oblivious imported reference position.
+/// <c>--nullability=enabled</c> restores ADR-0136's reading, and under it
+/// nothing constructs one.
 /// </remarks>
 public sealed class PlatformTypeSymbol : TypeSymbol
 {

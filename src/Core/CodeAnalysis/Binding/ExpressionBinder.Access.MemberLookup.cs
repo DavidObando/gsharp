@@ -1013,15 +1013,40 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Returns whether CLR instance lookup may continue through a receiver.
-    /// Imported fields and properties can carry oblivious reference metadata as
-    /// a nullable type, but remain valid intermediate receivers in a member chain.
+    /// Returns whether CLR instance lookup may continue through a receiver:
+    /// the receiver has a loadable <see cref="TypeSymbol.ClrType"/> and its
+    /// type is not a <see cref="NullableTypeSymbol"/> — that is, nobody has
+    /// declared it <c>T?</c>. A <see cref="PlatformTypeSymbol"/> receiver
+    /// passes: <c>T!</c> does admit nil, but nothing has been <em>stated</em>
+    /// about it, and ADR-0186 §4 answers that question at the coercion point
+    /// rather than at lookup.
+    /// <para>
+    /// <b>ADR-0186 step 4.</b> Before this step the test carried a second
+    /// disjunct — <c>|| receiver is BoundClrPropertyAccessExpression</c> —
+    /// which let lookup continue through a <em>nullable</em> receiver as long
+    /// as the receiver was an imported field or property read. That carve-out
+    /// existed because ADR-0136 imported every nullability-<em>oblivious</em>
+    /// reference position as <c>T?</c>, so a read like
+    /// <c>Environment.Version.Major</c> would otherwise have dead-ended on a
+    /// receiver nobody had ever said could be nil. It could not distinguish
+    /// that case from an <em>annotated</em>-nullable member, which the library
+    /// author explicitly declared may be nil, so it waved both through.
+    /// </para>
+    /// <para>
+    /// Step 3 made <c>--nullability=platform-types</c> the default, and an
+    /// oblivious position now arrives as <see cref="PlatformTypeSymbol"/>
+    /// (<c>T!</c>) rather than <see cref="NullableTypeSymbol"/> — a type that
+    /// is not nullable, reaches this test as an ordinary receiver, and carries
+    /// its safety question to §4's coercion check instead. The carve-out's
+    /// whole population therefore no longer takes the nullable arm at all, and
+    /// what it still reached was exactly the annotated-nullable member it
+    /// should never have admitted.
+    /// </para>
     /// </summary>
     private static bool CanBindClrInstanceMember(BoundExpression? receiver)
     {
         return receiver?.Type?.ClrType != null
-            && (receiver.Type is not NullableTypeSymbol
-                || receiver is BoundClrPropertyAccessExpression);
+            && receiver.Type is not NullableTypeSymbol;
     }
 
     private static bool TryGetUserInstanceMemberReceiverType(

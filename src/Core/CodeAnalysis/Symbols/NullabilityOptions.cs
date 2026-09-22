@@ -41,9 +41,11 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <c>Issue3705MemberKindNullabilityDifferentialTests</c> asserts <em>both</em>
 /// columns off one piece of real csc-emitted metadata — that differential is
 /// the standing uniformity gate, and it cannot express "the other reading"
-/// without a switch. And step 4 deletes the old carve-out, which wants the old
-/// reading still reachable for bisection while that lands. Retiring the mode
-/// belongs after step 4, not here.
+/// without a switch. And <c>--nullability=enabled</c> is the escape hatch the
+/// release note points at for source the flip breaks. Step 4 has since deleted
+/// the old carve-out, so <see cref="NullabilityMode.Enabled"/> now reports on
+/// an oblivious receiver exactly as ADR-0136 always said it should; retiring
+/// the mode is a separate decision, not a consequence of that deletion.
 /// </para>
 /// </summary>
 internal static class NullabilityOptions
