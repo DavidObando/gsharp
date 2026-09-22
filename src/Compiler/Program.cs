@@ -1096,8 +1096,14 @@ public class Program
 
                     case "nullability":
                         // ADR-0186: how an oblivious imported reference
-                        // position is read. `enabled` is ADR-0136's `T?` and is
-                        // the default; `platform-types` reads it as `T!`.
+                        // position is read. `platform-types` reads it as the
+                        // platform type `T!` and is the DEFAULT since step 3
+                        // flipped it; `enabled` selects ADR-0136's older `T?`
+                        // reading. The default lives on
+                        // `CommandLineArgs.Nullability`, not here — this
+                        // switch only overrides it — and the two statements
+                        // have to agree, which is why `/help`'s wording is
+                        // asserted by `Adr0186NullabilitySwitchTests`.
                         result.Nullability = value.ToLowerInvariant() switch
                         {
                             "enabled" => NullabilityMode.Enabled,

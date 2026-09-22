@@ -444,27 +444,6 @@ public class ClrNullabilityTests
     }
 
     /// <summary>
-    /// ADR-0186 step 3: the same five readers, under the new default.
-    /// <para>
-    /// The five ADR-0136 tests around this one are scoped to
-    /// <c>enabled</c> and keep asserting <c>T?</c> for an oblivious position,
-    /// which is what that mode means. This is their companion under
-    /// <c>platform-types</c>, gathered into one place so the change is
-    /// visible as a set rather than scattered as five renamed expectations:
-    /// every oblivious reading becomes <c>T!</c>, and nothing else moves.
-    /// </para>
-    /// <para>
-    /// The last row is the one worth reading twice. Re-emitting a
-    /// <em>nullable</em> wrapper over an annotated <c>List&lt;string&gt;</c>
-    /// whose inner metadata is EMPTY produces <c>[2, 0]</c> rather than
-    /// <c>[2]</c>: the scalar form would say the element is nullable, and
-    /// under ADR-0186 an absent inner byte says the element is oblivious.
-    /// The longer array is the more honest encoding, and it round-trips to
-    /// "nullable container of platform elements" rather than to "nullable
-    /// container of nullable elements".
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// ADR-0186 §2's open-type-parameter carve-out, and the distinction the
     /// projection path has to make to honour it: <b>an explicit byte at an
     /// open slot is not obliviousness.</b>
@@ -514,17 +493,44 @@ public class ClrNullabilityTests
         }
     }
 
+    /// <summary>
+    /// ADR-0186 step 3: the same five readers, under the new default.
+    /// <para>
+    /// The five ADR-0136 tests around this one are scoped to
+    /// <c>enabled</c> and keep asserting <c>T?</c> for an oblivious position,
+    /// which is what that mode means. This is their companion under
+    /// <c>platform-types</c>, gathered into one place so the change is
+    /// visible as a set rather than scattered as five renamed expectations:
+    /// every oblivious reading becomes <c>T!</c>, and nothing else moves.
+    /// </para>
+    /// <para>
+    /// The last row is the one worth reading twice. Re-emitting a
+    /// <em>nullable</em> wrapper over an annotated <c>List&lt;string&gt;</c>
+    /// whose inner metadata is EMPTY produces <c>[2, 0]</c> rather than
+    /// <c>[2]</c>: the scalar form would say the element is nullable, and
+    /// under ADR-0186 an absent inner byte says the element is oblivious.
+    /// The longer array is the more honest encoding, and it round-trips to
+    /// "nullable container of platform elements" rather than to "nullable
+    /// container of nullable elements".
+    /// </para>
+    /// </summary>
     [Fact]
     public void Adr0186_TheSameReaders_Under_ThePlatformTypesDefault()
     {
         using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
 
+        // `!` on both lookups: `ObliviousContainer` is a fixture type declared
+        // in this file and `nameof` is checked by the compiler, so a null here
+        // would mean the fixture itself had been deleted — a broken test, not
+        // a runtime condition worth branching on.
         var obliviousReturn = ClrNullability.GetReturnTypeSymbol(
             typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetString))!);
         Assert.Same(
             TypeSymbol.String,
             Assert.IsType<PlatformTypeSymbol>(obliviousReturn).UnderlyingType);
 
+        // `!` for the same reason as `GetString` above: a fixture method that
+        // `nameof` resolved cannot be absent at run time.
         var obliviousList = ClrNullability.GetReturnTypeSymbol(
             typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetList))!);
         Assert.IsType<PlatformTypeSymbol>(obliviousList);
