@@ -2053,7 +2053,12 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(syntax);
             }
 
-            var leftRead = new BoundFieldAccessExpression(null, boundReceiver, declaringType, field);
+            BoundExpression leftRead = new BoundFieldAccessExpression(null, boundReceiver, declaringType, field);
+            var previousValue = CapturePostfixCompoundValue(
+                syntax.ReturnsPreviousValue,
+                syntax,
+                ref leftRead,
+                out var previousDeclaration);
 
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the target in place, replacing the read/binary/write rewrite.
@@ -2072,7 +2077,13 @@ internal sealed partial class ExpressionBinder
             }
 
             var converted = conversions.BindConversion(syntax.Value.Location, binary, field.Type);
-            return BoundFieldAssignmentExpression.WithExpressionReceiver(null, boundReceiver, declaringType, field, converted);
+            var assignment = BoundFieldAssignmentExpression.WithExpressionReceiver(
+                null,
+                boundReceiver,
+                declaringType,
+                field,
+                converted);
+            return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment);
         }
 
         // ADR-0051: check properties.
@@ -2118,7 +2129,12 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
-            var leftRead = new BoundPropertyAccessExpression(null, boundReceiver, structSym, prop);
+            BoundExpression leftRead = new BoundPropertyAccessExpression(null, boundReceiver, structSym, prop);
+            var previousValue = CapturePostfixCompoundValue(
+                syntax.ReturnsPreviousValue,
+                syntax,
+                ref leftRead,
+                out var previousDeclaration);
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -2128,7 +2144,8 @@ internal sealed partial class ExpressionBinder
 
             var converted = conversions.BindConversion(syntax.Value.Location, binary, prop.Type);
             EnforceInitOnlyAssignment(prop, boundReceiver, syntax.OperatorToken.Location);
-            return new BoundPropertyAssignmentExpression(null, boundReceiver, structSym, prop, converted);
+            var assignment = new BoundPropertyAssignmentExpression(null, boundReceiver, structSym, prop, converted);
+            return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment);
         }
 
         // Inherited CLR base member fallback (issue #1582: resolve through the
@@ -2209,7 +2226,12 @@ internal sealed partial class ExpressionBinder
         }
 
         var boundRhs = BindExpression(syntax.Value);
-        var leftRead = new BoundClrPropertyAccessExpression(null, boundReceiver, instanceMember, targetSymbol);
+        BoundExpression leftRead = new BoundClrPropertyAccessExpression(null, boundReceiver, instanceMember, targetSymbol);
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref leftRead,
+            out var previousDeclaration);
         var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
         if (binary == null)
         {
@@ -2218,7 +2240,14 @@ internal sealed partial class ExpressionBinder
         }
 
         var converted = conversions.BindConversion(syntax.Value.Location, binary, targetSymbol);
-        return new BoundClrPropertyAssignmentExpression(null, boundReceiver, instanceMember, converted, targetSymbol, staticContainerType: null);
+        var assignment = new BoundClrPropertyAssignmentExpression(
+            null,
+            boundReceiver,
+            instanceMember,
+            converted,
+            targetSymbol,
+            staticContainerType: null);
+        return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment);
     }
 
     /// <summary>
@@ -2269,12 +2298,17 @@ internal sealed partial class ExpressionBinder
         // Issue #4056: the compound READ is a `ldsfld` / `call get_X` of its own,
         // so it needs the symbolic container just as much as the write below. A
         // write-only repair still emits an erased TypeSpec for the read half.
-        var leftRead = new BoundClrPropertyAccessExpression(
+        BoundExpression leftRead = new BoundClrPropertyAccessExpression(
             null,
             receiver: null,
             staticMember,
             targetSymbol,
             staticContainerType: symbolicContainerType);
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref leftRead,
+            out var previousDeclaration);
         var binary = TryBindCompoundBinaryOperation(
             baseOpSyntaxKind,
             leftRead,
@@ -2294,13 +2328,14 @@ internal sealed partial class ExpressionBinder
             syntax.Value.Location,
             binary,
             targetSymbol);
-        return new BoundClrPropertyAssignmentExpression(
+        var assignment = new BoundClrPropertyAssignmentExpression(
             null,
             receiver: null,
             staticMember,
             converted,
             targetSymbol,
             staticContainerType: symbolicContainerType);
+        return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment);
     }
 
     /// <summary>
@@ -3537,6 +3572,7 @@ internal sealed partial class ExpressionBinder
             targetReference,
             capturedIndices,
             rectangular.ElementType);
+        var previousValue = CapturePostfixCompoundValue(syntax.ReturnsPreviousValue, syntax, ref read, out var previousDeclaration);
         var rhs = BindExpression(syntax.Value);
         if (rhs is BoundErrorExpression || rhs.Type == TypeSymbol.Error)
         {
@@ -3561,7 +3597,69 @@ internal sealed partial class ExpressionBinder
             capturedIndices,
             converted,
             rectangular.ElementType);
-        return new BoundBlockExpression(syntax, statements.ToImmutable(), assignment);
+        return FinishPostfixCompoundAssignment(syntax, statements, previousDeclaration, previousValue, assignment);
+    }
+
+    private BoundVariableExpression? CapturePostfixCompoundValue(
+        bool returnsPreviousValue,
+        SyntaxNode syntax,
+        ref BoundExpression read,
+        out BoundVariableDeclaration? declaration)
+    {
+        declaration = null;
+        if (!returnsPreviousValue)
+        {
+            return null;
+        }
+
+        var name = $"<postfix{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var variable = new LocalVariableSymbol(name, isReadOnly: true, read.Type);
+        if (!scope.TryDeclareVariable(variable))
+        {
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized postfix value local '{name}'.");
+        }
+
+        declaration = new BoundVariableDeclaration(syntax, variable, read);
+        var captured = new BoundVariableExpression(null, variable);
+        read = captured;
+        return captured;
+    }
+
+    private static BoundExpression FinishPostfixCompoundAssignment(
+        SyntaxNode syntax,
+        ImmutableArray<BoundStatement>.Builder statements,
+        BoundVariableDeclaration? previousDeclaration,
+        BoundVariableExpression? previousValue,
+        BoundExpression assignment)
+    {
+        if (previousDeclaration == null || previousValue == null)
+        {
+            return new BoundBlockExpression(syntax, statements.ToImmutable(), assignment);
+        }
+
+        statements.Add(previousDeclaration);
+        statements.Add(new BoundExpressionStatement(syntax, assignment));
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), previousValue);
+    }
+
+    private static BoundExpression FinishPostfixCompoundAssignment(
+        SyntaxNode syntax,
+        BoundVariableDeclaration? previousDeclaration,
+        BoundVariableExpression? previousValue,
+        BoundExpression assignment)
+    {
+        if (previousDeclaration == null || previousValue == null)
+        {
+            return assignment;
+        }
+
+        return new BoundBlockExpression(
+            syntax,
+            ImmutableArray.Create<BoundStatement>(
+                previousDeclaration,
+                new BoundExpressionStatement(syntax, assignment)),
+            previousValue);
     }
 
     /// <summary>

@@ -24,12 +24,14 @@ public sealed class EventSubscriptionExpressionSyntax : ExpressionSyntax
         SyntaxTree syntaxTree,
         ExpressionSyntax leftHandSide,
         SyntaxToken operatorToken,
-        ExpressionSyntax value)
+        ExpressionSyntax value,
+        bool returnsPreviousValue = false)
         : base(syntaxTree)
     {
         LeftHandSide = leftHandSide;
         OperatorToken = operatorToken;
         Value = value;
+        ReturnsPreviousValue = returnsPreviousValue;
     }
 
     /// <inheritdoc/>
@@ -43,4 +45,7 @@ public sealed class EventSubscriptionExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the handler expression on the right-hand side.</summary>
     public ExpressionSyntax Value { get; }
+
+    /// <summary>Gets a value indicating whether this expression yields the pre-write value.</summary>
+    public bool ReturnsPreviousValue { get; }
 }

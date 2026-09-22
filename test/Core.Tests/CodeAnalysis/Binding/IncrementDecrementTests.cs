@@ -80,6 +80,23 @@ public class IncrementDecrementTests
         Assert.Equal(true, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void FloatingPointPropertyPostfixIncrement_ReturnsExactPreviousBoundaryValue()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter { var Value float64 }
+            func Run() bool {
+                var counter = Counter{ Value: 9007199254740992.0 }
+                let previous = counter.Value++
+                return previous == 9007199254740992.0 &&
+                    counter.Value == 9007199254740992.0
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.ReadGlobals()["answer"]);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

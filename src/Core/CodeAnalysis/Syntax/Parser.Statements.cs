@@ -389,7 +389,6 @@ public partial class Parser
     private ExpressionSyntax BuildIncrementDecrementExpression(ExpressionSyntax operand, SyntaxToken op, bool isPrefix)
     {
         var isIncrement = op.Kind == SyntaxKind.PlusPlusToken;
-        var inverseOpKind = isIncrement ? SyntaxKind.MinusToken : SyntaxKind.PlusToken;
         var compoundOpKind = isIncrement ? SyntaxKind.PlusEqualsToken : SyntaxKind.MinusEqualsToken;
         var pos = op.Position;
 
@@ -426,7 +425,8 @@ public partial class Parser
                 syntaxTree,
                 indexed,
                 compoundToken,
-                OneLiteral());
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix);
         }
         else if (AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
             operand,
@@ -438,7 +438,8 @@ public partial class Parser
                 syntaxTree,
                 operand,
                 compoundToken,
-                OneLiteral());
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix);
         }
         else
         {
@@ -451,17 +452,7 @@ public partial class Parser
             return write;
         }
 
-        var inverseToken = new SyntaxToken(
-            syntaxTree,
-            inverseOpKind,
-            pos,
-            SyntaxFacts.GetTextOrEmpty(inverseOpKind),
-            null);
-        return new BinaryExpressionSyntax(
-            syntaxTree,
-            write,
-            inverseToken,
-            OneLiteral());
+        return write;
     }
 
     private bool LooksLikeMultiAssignment()

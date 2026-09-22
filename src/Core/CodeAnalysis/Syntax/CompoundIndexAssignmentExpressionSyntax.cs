@@ -28,12 +28,14 @@ public sealed class CompoundIndexAssignmentExpressionSyntax : ExpressionSyntax
         SyntaxTree syntaxTree,
         IndexExpressionSyntax target,
         SyntaxToken operatorToken,
-        ExpressionSyntax value)
+        ExpressionSyntax value,
+        bool returnsPreviousValue = false)
         : base(syntaxTree)
     {
         Target = target;
         OperatorToken = operatorToken;
         Value = value;
+        ReturnsPreviousValue = returnsPreviousValue;
     }
 
     /// <inheritdoc/>
@@ -47,4 +49,7 @@ public sealed class CompoundIndexAssignmentExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the value expression on the right of the operator.</summary>
     public ExpressionSyntax Value { get; }
+
+    /// <summary>Gets a value indicating whether this expression yields the pre-write value.</summary>
+    public bool ReturnsPreviousValue { get; }
 }

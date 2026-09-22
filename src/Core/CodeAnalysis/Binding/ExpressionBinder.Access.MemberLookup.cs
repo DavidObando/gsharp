@@ -1882,6 +1882,8 @@ internal sealed partial class ExpressionBinder
         statements.Add(new BoundVariableDeclaration(outerSyntax, tempVar, boundReceiver));
 
         BoundExpression assignment;
+        BoundVariableDeclaration? previousDeclaration = null;
+        BoundVariableExpression? previousValue = null;
         if (compoundOperatorToken != null)
         {
             if (!SyntaxFacts.TryGetCompoundAssignmentBaseOperator(compoundOperatorToken.Kind, out var baseOpKind))
@@ -1933,6 +1935,12 @@ internal sealed partial class ExpressionBinder
                     return indexRead;
                 }
             }
+
+            previousValue = CapturePostfixCompoundValue(
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                outerSyntax,
+                ref indexRead,
+                out previousDeclaration);
 
             if (compoundRhsSyntax is not { } resolvedCompoundRhsSyntax)
             {
@@ -1988,7 +1996,12 @@ internal sealed partial class ExpressionBinder
             return assignment;
         }
 
-        return new BoundBlockExpression(outerSyntax, statements.ToImmutable(), assignment);
+        return FinishPostfixCompoundAssignment(
+            outerSyntax,
+            statements,
+            previousDeclaration,
+            previousValue,
+            assignment);
     }
 
     private bool TryCaptureCompoundIndexArgument(
