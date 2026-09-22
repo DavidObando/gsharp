@@ -402,29 +402,29 @@ public partial class Parser
         ExpressionSyntax write;
         var unwrappedOperand = AssignmentTargetSyntaxFacts.UnwrapParentheses(operand);
         var exactPostfix = unwrappedOperand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
-            || AssignmentTargetSyntaxFacts.IsCallResult(operand);
+            || AssignmentTargetSyntaxFacts.IsCallResult(unwrappedOperand);
         if (exactPostfix)
         {
             return new IndirectCompoundAssignmentExpressionSyntax(
                 syntaxTree,
-                operand,
+                unwrappedOperand,
                 compoundToken,
                 OneLiteral(),
                 returnsPreviousValue: !isPrefix,
                 isIncrementDecrement: true);
         }
 
-        if (operand is NameExpressionSyntax)
+        if (unwrappedOperand is NameExpressionSyntax)
         {
             write = new EventSubscriptionExpressionSyntax(
                 syntaxTree,
-                operand,
+                unwrappedOperand,
                 compoundToken,
                 OneLiteral(),
                 returnsPreviousValue: !isPrefix,
                 isIncrementDecrement: true);
         }
-        else if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out var indexed))
+        else if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(unwrappedOperand, out var indexed))
         {
             write = new CompoundIndexAssignmentExpressionSyntax(
                 syntaxTree,
@@ -434,14 +434,14 @@ public partial class Parser
                 returnsPreviousValue: !isPrefix);
         }
         else if (AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
-            operand,
+            unwrappedOperand,
             out _,
             out _,
             out _))
         {
             write = new EventSubscriptionExpressionSyntax(
                 syntaxTree,
-                operand,
+                unwrappedOperand,
                 compoundToken,
                 OneLiteral(),
                 returnsPreviousValue: !isPrefix,

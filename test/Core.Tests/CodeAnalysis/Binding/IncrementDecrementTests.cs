@@ -290,6 +290,26 @@ public class IncrementDecrementTests
         Assert.Equal(1011, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void ParenthesizedWritableTargetsRemainIncrementable()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter { var Value int32 }
+            func Run() int32 {
+                var value = 1
+                let previous = (value)++
+                var counter = Counter{ Value: 1 }
+                (counter.Value)++
+                var items = []int32{1}
+                (items[0])++
+                return previous * 1000 + value * 100 + counter.Value * 10 + items[0]
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1222, result.ReadGlobals()["answer"]);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
