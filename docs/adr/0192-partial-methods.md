@@ -321,10 +321,17 @@ with counts, rather than spending a code on each. `GS0609` gets its own code
 because the zero-implementation rule (§B) is the one a user is most likely to
 hit and most likely to want to key tooling on.
 
-**Why the block starts at GS0607, not GS0593.** `main`'s highest code is
-GS0592, but the in-flight PR #4326 has already claimed GS0593–GS0596 on its own
-branch. Allocating "the next number" would have produced a merge-time
-collision. The gap is deliberate and leaves headroom.
+**Why the block starts at GS0607, not GS0593 or GS0600.** Originally allocated
+at GS0600–GS0604: `main`'s highest code was GS0592, but the in-flight PR #4326
+had already claimed GS0593–GS0596 on its own branch, so allocating "the next
+number" would have produced a merge-time collision, and the gap past it was
+deliberate headroom. Renumbered a second time, to GS0607–GS0611, after this
+branch was rebased onto `main` — which had independently landed the native-
+slice/managed-reference diagnostics (ADR-0189/0190) at GS0600–GS0604 in the
+meantime, an additive collision git's rebase did not flag because the two
+sets of descriptors were added at different lines in the same file. See
+`DiagnosticDescriptors.cs`'s comment on `PartialModifierNotValidHere` for the
+same history.
 
 `GS0608` is reported by the merger rather than the parser because the parser
 cannot know: the aggregate's own `partial` token is attached only *after* its

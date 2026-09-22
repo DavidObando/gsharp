@@ -292,6 +292,29 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     [SyntaxChildIgnore]
     public FunctionDeclarationSyntax? DeclaringPart { get; set; }
 
+    /// <summary>
+    /// Gets or sets the original declaring/implementing part counts of a
+    /// malformed partial-method group (GS0610) whose sibling parts error
+    /// recovery already dropped from the type's member list, leaving this
+    /// node as the sole survivor (ADR-0192). Non-<see langword="null"/> only
+    /// on that survivor.
+    /// <para>
+    /// Recovery drops every other part to suppress the GS0102
+    /// duplicate-member cascade — but that means a SECOND bind of the same
+    /// syntax tree (the LSP rebinds; ADR-0144's <c>PartialTypeMerger</c>
+    /// returns the SAME node when a type has exactly one syntactic part)
+    /// sees only this one survivor. Without this marker, <c>PartialMethodMerger</c>
+    /// would misread it as a freshly-encountered lone part — a declaring
+    /// part with no implementation reports GS0609 instead of the original
+    /// GS0610; an implementing part reports GS0610 again but with the WRONG
+    /// counts (0 declaring, 1 implementing) since its sibling declaring
+    /// parts are gone. Copilot review round 5 caught the former. Recording
+    /// the original counts here lets a later bind re-report the SAME GS0610
+    /// instead, reaching a genuine fixed point after the first bind.
+    /// </para>
+    /// </summary>
+    public (int DeclaringCount, int ImplementingCount)? RecoveredPartCountMismatch { get; set; }
+
     /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
     public SyntaxToken? ReceiverOpenParenthesisToken { get; }
 

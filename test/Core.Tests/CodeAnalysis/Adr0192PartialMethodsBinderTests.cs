@@ -736,6 +736,49 @@ partial class A {
     }
 
     [Fact]
+    public void PartsWithDifferentStringLiteralDefaultValues_ReportGS0611()
+    {
+        // Copilot review round 5: NormalizeNodeText used to strip ALL
+        // whitespace from the raw source slice before comparing, including
+        // whitespace INSIDE a literal's own text — so `"a b"` and `"ab"`
+        // compared equal and the mismatch was silently accepted (the
+        // implementing part's default value would have won). The fix
+        // compares each leaf token's own exact text instead of raw
+        // whitespace-stripped source, so the difference inside the literal
+        // is no longer erased.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func F(s string = ""a b"") int32;
+}
+
+partial class A {
+    partial func F(s string = ""ab"") int32 { return 1 }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
+    }
+
+    [Fact]
+    public void PartsWithSameStringLiteralDefaultValue_DoNotReportGS0611()
+    {
+        // Complement: whitespace BETWEEN tokens (here, around `=`) must still
+        // be ignored — only whitespace INSIDE a literal's own text is
+        // significant.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func F(s string =    ""a b"") int32;
+}
+
+partial class A {
+    partial func F(s string=""a b"") int32 { return 1 }
+}
+");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0611");
+    }
+
+    [Fact]
     public void PartsWithDifferentParameterNames_ReportGS0611()
     {
         // Stricter than C#, which only warns (CS8826): a G# caller may pass the
@@ -901,6 +944,59 @@ partial class A {
         var second = EmitDiagnostics(tree);
         Assert.DoesNotContain(first, d => d.IsError);
         Assert.DoesNotContain(second, d => d.IsError);
+    }
+
+    [Fact]
+    public void BindingTheSameSyntaxTreeTwice_TwoDeclaringParts_ReportsTheSameGS0610BothTimes()
+    {
+        // Copilot review round 5: recovery from a part-count mismatch (two
+        // declaring parts, zero implementing) keeps ONE survivor and drops
+        // the other to suppress a GS0102 cascade. Without the
+        // RecoveredPartCountMismatch marker, the SECOND bind of this same
+        // tree — a single `partial class A { }` block, so PartialTypeMerger
+        // hands back the SAME node both times (`group.Count == 1`) — would
+        // see only the lone survivor and misread it as a fresh "no
+        // implementation" shape, flipping GS0610 to GS0609.
+        var tree = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class A {
+    partial func F() int32;
+    partial func F() int32;
+}
+",
+            "Test.gs"));
+
+        var first = EmitDiagnostics(tree);
+        var second = EmitDiagnostics(tree);
+        Assert.Contains(first, d => d.Id == "GS0610");
+        Assert.DoesNotContain(first, d => d.Id == "GS0609");
+        Assert.Contains(second, d => d.Id == "GS0610");
+        Assert.DoesNotContain(second, d => d.Id == "GS0609");
+    }
+
+    [Fact]
+    public void BindingTheSameSyntaxTreeTwice_TwoImplementingParts_ReportsTheSameGS0610CountsBothTimes()
+    {
+        // The mirror shape: the survivor here is an IMPLEMENTING part (has a
+        // body), so without the marker the second bind would see a lone
+        // implementing part with no declaring sibling and re-report GS0610
+        // with the WRONG counts (0 declaring, 1 implementing) instead of the
+        // true original (0 declaring, 2 implementing).
+        var tree = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class A {
+    partial func F() int32 { return 1 }
+    partial func F() int32 { return 2 }
+}
+",
+            "Test.gs"));
+
+        var first = EmitDiagnostics(tree);
+        var second = EmitDiagnostics(tree);
+        Assert.Contains(first, d => d.Id == "GS0610" && d.Message.Contains("0 declaring part(s) and 2 implementing part(s)"));
+        Assert.Contains(second, d => d.Id == "GS0610" && d.Message.Contains("0 declaring part(s) and 2 implementing part(s)"));
     }
 
     [Fact]

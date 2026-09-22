@@ -109,6 +109,28 @@ internal static class PartialMethodMerger
         var groupByKey = new Dictionary<MethodKey, List<FunctionDeclarationSyntax>>();
         foreach (var method in methods)
         {
+            // Copilot review round 5: a survivor of a PREVIOUS bind's
+            // part-count-mismatch recovery (see RecoveredPartCountMismatch's
+            // doc comment) — its sibling parts are already gone from this
+            // type's member list, so re-grouping it fresh would misread its
+            // shape. Re-report the ORIGINAL counts directly and pass it
+            // through unchanged, reaching a fixed point instead of drifting
+            // to a different diagnostic on every subsequent bind.
+            if (method.RecoveredPartCountMismatch is { } recovered)
+            {
+                if (!enclosingTypeIsPartial)
+                {
+                    diagnostics.ReportPartialMethodRequiresPartialType(method.Identifier.Location, method.Identifier.Text ?? string.Empty);
+                }
+
+                diagnostics.ReportPartialMethodPartCount(
+                    method.Identifier.Location,
+                    method.Identifier.Text ?? string.Empty,
+                    recovered.DeclaringCount,
+                    recovered.ImplementingCount);
+                continue;
+            }
+
             // Already-merged nodes (DeclaringPart set) are complete methods, not
             // parts awaiting a partner — never re-group them.
             if (!method.IsPartial || method.DeclaringPart != null)
@@ -177,6 +199,8 @@ internal static class PartialMethodMerger
                 continue;
             }
 
+            var survivor = implementingParts.Count > 0 ? implementingParts[0] : declaringParts[0];
+
             if (declaringParts.Count == 1 && implementingParts.Count == 0)
             {
                 // The headline G# divergence from C#: an unimplemented partial
@@ -184,6 +208,11 @@ internal static class PartialMethodMerger
                 // Narrowed to the well-formed-but-unimplemented shape — a group
                 // with TWO declaring parts is a part-count problem (GS0610), and
                 // reporting "no implementation" twice would hide that.
+                //
+                // group.Count == 1 here (the only part IS the survivor), so
+                // nothing is dropped below and this shape is already
+                // idempotent across rebinds without any marker — unlike the
+                // `else` branch just below.
                 diagnostics.ReportPartialMethodHasNoImplementation(declaringParts[0].Identifier.Location, name);
             }
             else
@@ -196,13 +225,19 @@ internal static class PartialMethodMerger
                         declaringParts.Count,
                         implementingParts.Count);
                 }
+
+                // Copilot review round 5: record the shape being dropped so a
+                // later bind of the same tree (only the survivor remains by
+                // then, per the "error recovery" comment below) can
+                // re-report this SAME diagnostic instead of misreading the
+                // survivor as a freshly-encountered, differently-shaped part.
+                survivor.RecoveredPartCountMismatch = (declaringParts.Count, implementingParts.Count);
             }
 
             // Error recovery: keep ONE part so callers of the method still bind
             // (no "no such member" cascade on top of the real diagnostic) and
             // drop the rest so the duplicate-overload check does not also fire.
             // Prefer an implementing part — it is the one that can be emitted.
-            var survivor = implementingParts.Count > 0 ? implementingParts[0] : declaringParts[0];
             foreach (var part in group)
             {
                 replacementByPart[part] = ReferenceEquals(part, survivor) ? part : null;
@@ -419,29 +454,52 @@ internal static class PartialMethodMerger
     }
 
     /// <summary>
-    /// Renders a node as its source text with all whitespace removed — the same
-    /// textual-comparison convention <c>PartialTypeMerger</c> uses for base
-    /// clauses and type-parameter lists, so partial methods and partial types
-    /// judge "the same" identically.
+    /// Renders a node as the concatenation of its leaf tokens' own kinds and
+    /// exact text, ignoring only the layout BETWEEN tokens (whitespace,
+    /// comments — never modeled as syntax children, so a recursive
+    /// <see cref="SyntaxNode.GetChildren"/> walk never sees them).
+    /// <para>
+    /// Deliberately NOT <c>PartialTypeMerger</c>'s raw-text-minus-whitespace
+    /// convention: stripping every whitespace character from the source slice
+    /// also strips whitespace INSIDE a literal token's own text, so
+    /// <c>x string = "a b"</c> and <c>x string = "ab"</c> compared equal — a
+    /// real default-value mismatch silently accepted (Copilot review round
+    /// 5). A partial method's parameters can carry a default-value literal;
+    /// a partial type's base-clause/type-parameter list cannot, which is why
+    /// that convention has stayed safe for <c>PartialTypeMerger</c>'s narrower
+    /// use so far and is left alone here.
+    /// </para>
     /// </summary>
     private static string NormalizeNodeText(SyntaxNode? node)
     {
-        if (node?.SyntaxTree?.Text == null)
+        if (node == null)
         {
             return string.Empty;
         }
 
-        var text = node.SyntaxTree.Text.ToString(node.Span);
-        var normalized = new System.Text.StringBuilder(text.Length);
-        foreach (var character in text)
+        var builder = new System.Text.StringBuilder();
+        AppendTokenSignature(node, builder);
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Recursively appends each leaf <see cref="SyntaxToken"/>'s kind and
+    /// exact text to <paramref name="builder"/>, delimited so that no
+    /// concatenation of two tokens' text can be mistaken for a different
+    /// pair (e.g. <c>["a", "b"]</c> vs <c>["ab"]</c>).
+    /// </summary>
+    private static void AppendTokenSignature(SyntaxNode node, System.Text.StringBuilder builder)
+    {
+        if (node is SyntaxToken token)
         {
-            if (!char.IsWhiteSpace(character))
-            {
-                normalized.Append(character);
-            }
+            builder.Append((int)token.Kind).Append('').Append(token.Text).Append('');
+            return;
         }
 
-        return normalized.ToString();
+        foreach (var child in node.GetChildren())
+        {
+            AppendTokenSignature(child, builder);
+        }
     }
 
     /// <summary>
