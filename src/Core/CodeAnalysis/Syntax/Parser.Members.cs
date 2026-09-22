@@ -166,7 +166,7 @@ public partial class Parser
     /// actually follows it. Without this, <c>public partial prop P …</c> left
     /// <c>public</c> unconsumed — the lookahead stopped on <c>partial</c>,
     /// matched nothing, and the misplaced-modifier rejection path that issues
-    /// GS0600 was never reached, so the user got a field-declaration cascade
+    /// GS0607 was never reached, so the user got a field-declaration cascade
     /// instead of the one intended diagnostic.
     /// <para>
     /// Deliberately returns <paramref name="offset"/> UNCHANGED when the run
@@ -217,7 +217,7 @@ public partial class Parser
     /// ADR-0192 / issue #4301: consumes a <c>partial</c> token that sits at
     /// member position but heads neither a <c>func</c> (ADR-0192) nor an
     /// aggregate declaration (ADR-0144) — for example <c>partial prop</c>,
-    /// <c>partial event</c>, or <c>partial var</c> — and reports GS0600. Doing
+    /// <c>partial event</c>, or <c>partial var</c> — and reports GS0607. Doing
     /// this here keeps the token out of <c>ParseFieldDeclaration</c>, which
     /// would otherwise surface a misleading "expected type clause" cascade.
     /// </summary>
@@ -380,7 +380,7 @@ public partial class Parser
                 // ADR-0192: skip a `partial`-bearing modifier run so the
                 // member keyword after it decides whether `public` is a member
                 // modifier — `public partial func …` inside `shared { }`, and
-                // `public partial prop …`, whose GS0600 rejection path only
+                // `public partial prop …`, whose GS0607 rejection path only
                 // runs once the accessibility token has been consumed.
                 ahead = SkipPartialBearingModifierRun(ahead);
 
@@ -426,7 +426,7 @@ public partial class Parser
             }
 
             // ADR-0192: `partial` on a shared-block member that is not a `func`
-            // (`partial prop`, `partial var`, `partial init { }`) is GS0600.
+            // (`partial prop`, `partial var`, `partial init { }`) is GS0607.
             TryRejectMisplacedPartialModifier();
 
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init"
@@ -575,7 +575,7 @@ public partial class Parser
             // feature. An interface method signature is already body-less and
             // already expects an implementation elsewhere, so splitting it into
             // a declaring and an implementing part has no meaning — `partial`
-            // on an interface member is GS0600. (A `partial interface` TYPE, per
+            // on an interface member is GS0607. (A `partial interface` TYPE, per
             // ADR-0144, remains legal; only its MEMBERS cannot be partial.)
             if (TryConsumePartialFuncModifier(out var interfacePartialModifier) && interfacePartialModifier != null)
             {

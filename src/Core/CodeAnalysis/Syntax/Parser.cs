@@ -387,7 +387,7 @@ public partial class Parser
         // ADR-0174 D4: consume the whole `partial`/`unsafe`/colour modifier run
         // in ONE order-independent pass. `partial` is never valid on a
         // TOP-LEVEL `func` — a partial method is a member of a `partial class`
-        // or `partial struct` — but the recovery promise is a SINGLE GS0600, so
+        // or `partial struct` — but the recovery promise is a SINGLE GS0607, so
         // the rest of the run must be consumed too or the `func` after it fails
         // to parse and one intended error becomes a cascade.
         SyntaxToken? unsafeModifier = null;

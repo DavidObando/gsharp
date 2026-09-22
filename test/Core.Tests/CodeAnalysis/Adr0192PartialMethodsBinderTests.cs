@@ -374,7 +374,7 @@ Console.WriteLine(a.F(""z""))
         // parameter's TYPE CLAUSE text alone, so `F(x int32)` and
         // `F(ref x int32)` hashed identically and were merged into one
         // 2-declaring/2-implementing group that then reported a spurious
-        // GS0603. Ref-kind is part of overload identity — `BoundScope.
+        // GS0610. Ref-kind is part of overload identity — `BoundScope.
         // FunctionSignaturesEqual` treats it so — and must be part of the key.
         // Asserted on diagnostics + emitted metadata rather than by calling
         // both overloads: G# overload resolution independently treats a call
@@ -396,7 +396,7 @@ partial class A {
 }
 ";
         var diagnostics = Compile(source);
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0603");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0610");
         Assert.DoesNotContain(diagnostics, d => d.IsError);
 
         // Two parts in, two parts in — one merged method each, not one group.
@@ -519,11 +519,11 @@ Console.WriteLine(A().Echo(11))
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 2. The zero-implementation rule (GS0602) — G#'s deliberate divergence
+    // 2. The zero-implementation rule (GS0609) — G#'s deliberate divergence
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void UnimplementedVoidPartialMethod_ReportsGS0602_RatherThanBeingElided()
+    public void UnimplementedVoidPartialMethod_ReportsGS0609_RatherThanBeingElided()
     {
         // C# silently elides an unimplemented `void` partial method and every
         // call to it. G# does not: an unsatisfied body-less declaration is an
@@ -535,11 +535,11 @@ partial class A {
     partial func OnChanged();
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0602");
+        Assert.Contains(diagnostics, d => d.Id == "GS0609");
     }
 
     [Fact]
-    public void UnimplementedNonVoidPartialMethod_ReportsGS0602()
+    public void UnimplementedNonVoidPartialMethod_ReportsGS0609()
     {
         var diagnostics = Compile(@"package App
 
@@ -547,7 +547,7 @@ partial class A {
     partial func F() int32;
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0602");
+        Assert.Contains(diagnostics, d => d.Id == "GS0609");
     }
 
     [Fact]
@@ -556,14 +556,14 @@ partial class A {
         // Anti-cascade. A body-less `func` is otherwise either a P/Invoke stub
         // (GS0325 when it is not) or an abstract member (GS0388 when the class
         // is not `open`). Neither is the user's actual mistake here, and a
-        // partial declaring part must not collect them on top of GS0602.
+        // partial declaring part must not collect them on top of GS0609.
         var instanceDiagnostics = Compile(@"package App
 
 partial class A {
     partial func F() int32;
 }
 ");
-        Assert.Contains(instanceDiagnostics, d => d.Id == "GS0602");
+        Assert.Contains(instanceDiagnostics, d => d.Id == "GS0609");
         Assert.DoesNotContain(instanceDiagnostics, d => d.Id == "GS0325");
         Assert.DoesNotContain(instanceDiagnostics, d => d.Id == "GS0388");
 
@@ -575,7 +575,7 @@ partial class A {
     }
 }
 ");
-        Assert.Contains(staticDiagnostics, d => d.Id == "GS0602");
+        Assert.Contains(staticDiagnostics, d => d.Id == "GS0609");
         Assert.DoesNotContain(staticDiagnostics, d => d.Id == "GS0325");
     }
 
@@ -600,11 +600,11 @@ partial class A {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 3. Part-shape and placement diagnostics (GS0601, GS0603)
+    // 3. Part-shape and placement diagnostics (GS0608, GS0610)
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PartialMethodInANonPartialType_ReportsGS0601()
+    public void PartialMethodInANonPartialType_ReportsGS0608()
     {
         var diagnostics = Compile(@"package App
 
@@ -613,11 +613,11 @@ class A {
     partial func F() int32 { return 1 }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0601");
+        Assert.Contains(diagnostics, d => d.Id == "GS0608");
     }
 
     [Fact]
-    public void TwoImplementingParts_ReportGS0603()
+    public void TwoImplementingParts_ReportGS0610()
     {
         var diagnostics = Compile(@"package App
 
@@ -629,7 +629,7 @@ partial class A {
     partial func F() int32 { return 2 }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0603");
+        Assert.Contains(diagnostics, d => d.Id == "GS0610");
     }
 
     [Fact]
@@ -637,7 +637,7 @@ partial class A {
     {
         // Anti-cascade: the merger keeps ONE surviving part so the existing
         // duplicate-overload check (GS0264) does not fire a second, less
-        // informative error on top of GS0603. GS0603 itself is reported at
+        // informative error on top of GS0610. GS0610 itself is reported at
         // each offending part, so the user sees both locations.
         var diagnostics = Compile(@"package App
 
@@ -649,12 +649,12 @@ partial class A {
     partial func F() int32 { return 2 }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0603");
+        Assert.Contains(diagnostics, d => d.Id == "GS0610");
         Assert.DoesNotContain(diagnostics, d => d.Id == "GS0264");
     }
 
     [Fact]
-    public void TwoDeclaringParts_ReportGS0603()
+    public void TwoDeclaringParts_ReportGS0610()
     {
         var diagnostics = Compile(@"package App
 
@@ -666,11 +666,11 @@ partial class A {
     partial func F() int32;
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0603");
+        Assert.Contains(diagnostics, d => d.Id == "GS0610");
     }
 
     [Fact]
-    public void ImplementingPartWithNoDeclaringPart_ReportsGS0603()
+    public void ImplementingPartWithNoDeclaringPart_ReportsGS0610()
     {
         // A lone `partial func` with a body is not a complete partial method:
         // G# requires the declaring/implementing pair (C# CS0759's analogue).
@@ -680,15 +680,15 @@ partial class A {
     partial func F() int32 { return 1 }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0603");
+        Assert.Contains(diagnostics, d => d.Id == "GS0610");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 4. Signature-consistency diagnostics (GS0604)
+    // 4. Signature-consistency diagnostics (GS0611)
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PartsWithDifferentReturnTypes_ReportGS0604()
+    public void PartsWithDifferentReturnTypes_ReportGS0611()
     {
         var diagnostics = Compile(@"package App
 
@@ -700,11 +700,11 @@ partial class A {
     partial func F() string { return """" }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0604");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
     }
 
     [Fact]
-    public void PartsWithDifferentParameterNames_ReportGS0604()
+    public void PartsWithDifferentParameterNames_ReportGS0611()
     {
         // Stricter than C#, which only warns (CS8826): a G# caller may pass the
         // argument by name, so the two parts would disagree about the method's
@@ -719,11 +719,11 @@ partial class A {
     partial func F(y int32) int32 { return y }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0604");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
     }
 
     [Fact]
-    public void PartsWithDifferentAsyncColor_ReportGS0604()
+    public void PartsWithDifferentAsyncColor_ReportGS0611()
     {
         // G# diverges from C# here: `async` changes the return type callers
         // see (ADR-0023), so it is part of the signature both parts must state.
@@ -738,11 +738,11 @@ partial class A {
     partial async func F() int32 { return 1 }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0604");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
     }
 
     [Fact]
-    public void PartsWithConflictingStatedAccessibility_ReportGS0604()
+    public void PartsWithConflictingStatedAccessibility_ReportGS0611()
     {
         var diagnostics = Compile(@"package App
 
@@ -754,11 +754,11 @@ partial class A {
     private partial func F() int32 { return 1 }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0604");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
     }
 
     [Fact]
-    public void PartsWhereOnlyOneStatesAccessibility_DoNotReportGS0604()
+    public void PartsWhereOnlyOneStatesAccessibility_DoNotReportGS0611()
     {
         // The complement: "agree where stated" must not degenerate into
         // "must both state".
@@ -772,11 +772,11 @@ partial class A {
     partial func F() int32 { return 1 }
 }
 ");
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0604");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0611");
     }
 
     [Fact]
-    public void ParameterAnnotationOnOnlyOnePart_ReportsGS0604()
+    public void ParameterAnnotationOnOnlyOnePart_ReportsGS0611()
     {
         // ADR-0192 §D: a parameter's annotations are part of what both parts
         // must state, because the merged node takes the implementing part's
@@ -796,11 +796,11 @@ partial class A {
     partial func F(x string) int32 { return 1 }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0604");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
     }
 
     [Fact]
-    public void ParameterAnnotationOnBothParts_DoesNotReportGS0604()
+    public void ParameterAnnotationOnBothParts_DoesNotReportGS0611()
     {
         // The complement: restating the annotation on both parts is accepted,
         // so the rule above is "must match", not "must be absent".
@@ -816,9 +816,9 @@ partial class A {
 }
 ");
 
-        // Asserted as "no errors at all", not merely "no GS0604": if `@AllowNull`
+        // Asserted as "no errors at all", not merely "no GS0611": if `@AllowNull`
         // on a parameter did not bind (wrong import, unsupported target), a
-        // GS0604-free result would be vacuously true and this test would prove
+        // GS0611-free result would be vacuously true and this test would prove
         // nothing about the rule it claims to pin.
         Assert.DoesNotContain(
             diagnostics,
@@ -826,7 +826,7 @@ partial class A {
     }
 
     [Fact]
-    public void PartsWithDifferentTypeParameterNames_ReportGS0604()
+    public void PartsWithDifferentTypeParameterNames_ReportGS0611()
     {
         var diagnostics = Compile(@"package App
 
@@ -838,7 +838,7 @@ partial class A {
     partial func Echo[U any](value U) U { return value }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0604");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -851,7 +851,7 @@ partial class A {
         // PartialMethodMerger normalizes a declaration in place, so the second
         // bind of the same tree sees an already-merged method. Without the
         // DeclaringPart idempotency guard that method would look like a lone
-        // implementing part and report a spurious GS0603.
+        // implementing part and report a spurious GS0610.
         var tree = SyntaxTree.Parse(SourceText.From(
             @"package App
 
@@ -886,7 +886,7 @@ partial class A {
         // times, and the second bind sees the ALREADY-MERGED method from the
         // first call. Without the DeclaringPart guard, that already-merged
         // node would look like a lone implementing part on the second pass and
-        // report a spurious GS0603 ("found 0 declaring part(s) and 1
+        // report a spurious GS0610 ("found 0 declaring part(s) and 1
         // implementing part(s)") — confirmed empirically by temporarily
         // removing the guard and observing exactly that failure here.
         var tree = SyntaxTree.Parse(SourceText.From(

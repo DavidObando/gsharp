@@ -72,7 +72,7 @@ internal static class PartialTypeMerger
         // `partial func` are two entries in the same member list — collapse
         // them into one. Runs over EVERY declaration, not just merged ones: a
         // lone `partial class` may carry both parts of a method itself, and a
-        // NON-partial type carrying a `partial func` is the GS0601 case the
+        // NON-partial type carrying a `partial func` is the GS0608 case the
         // parser cannot detect (the aggregate's own `partial` token is attached
         // only after its member list has been parsed).
         foreach (var declaration in result)

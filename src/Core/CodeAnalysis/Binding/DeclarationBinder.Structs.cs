@@ -1333,7 +1333,7 @@ internal sealed partial class DeclarationBinder
                         // carries `partial` is the DECLARING part of a partial
                         // method that PartialMethodMerger could not pair with an
                         // implementing part — it has already been reported with
-                        // GS0602 (or GS0603). It reaches here only as error
+                        // GS0609 (or GS0610). It reaches here only as error
                         // recovery, so the symbol stays abstract (the body
                         // binder must still skip the absent body) but GS0388 is
                         // suppressed: the user's mistake is the missing
@@ -2607,7 +2607,7 @@ internal sealed partial class DeclarationBinder
                     // body-less `partial func` inside `shared { }` is the
                     // DECLARING part of a partial method, whose body legitimately
                     // lives in another part. If no implementing part was found,
-                    // PartialMethodMerger has already reported GS0602/GS0603;
+                    // PartialMethodMerger has already reported GS0609/GS0610;
                     // GS0325 ("only @DllImport functions may use a ';' body
                     // marker") would be a misleading second error.
                     var isStaticPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(methodSymbol, methodSyntax, Diagnostics);

@@ -157,10 +157,10 @@ before `func`.
 | `func` member of a `partial class` / `partial struct` | **yes** | The feature. |
 | `func` inside that type's `shared { }` block | **yes** | The motivating scenario is static. |
 | `func` member of a nested `partial` type | **yes** | Handled by the same recursion. |
-| `func` member of a **non-partial** type | no — `GS0601` | C# CS0751's analogue. |
-| Top-level `func` | no — `GS0600` | There is no type to be a part of. |
-| Interface method signature or interface `shared { }` slot | no — `GS0600` | See §F. |
-| `prop`, `event`, `init`, `deinit`, field | no — `GS0600` | See §F. |
+| `func` member of a **non-partial** type | no — `GS0608` | C# CS0751's analogue. |
+| Top-level `func` | no — `GS0607` | There is no type to be a part of. |
+| Interface method signature or interface `shared { }` slot | no — `GS0607` | See §F. |
+| `prop`, `event`, `init`, `deinit`, field | no — `GS0607` | See §F. |
 
 Parser touch points: a `PartialModifier` settable token + `IsPartial` on
 `FunctionDeclarationSyntax` (the existing `UnsafeModifier` pattern, with
@@ -187,7 +187,7 @@ This is the ADR's most consequential choice.
 - Anything else (a return type, accessibility, `out` params) is a **compile
   error**, because there is nothing to return.
 
-**G#'s rule: an unimplemented partial method is always an error (`GS0602`).**
+**G#'s rule: an unimplemented partial method is always an error (`GS0609`).**
 
 The reasoning is consistency with G#'s existing treatment of body-less
 declarations, not novelty. Every other way to write a body-less `func` in G#
@@ -221,7 +221,7 @@ Consequences of requiring an implementation:
   an **opt-in** spelling without breaking any code this rule admits — whereas
   starting with silent elision and tightening later would be a breaking change.
 
-`GS0602` is anti-cascade: the surviving declaring part is still handed to the
+`GS0609` is anti-cascade: the surviving declaring part is still handed to the
 binder, so callers of the method bind normally, and both `GS0325` and `GS0388`
 are suppressed on a `partial` body-less declaration so the user sees the one
 error that is actually theirs.
@@ -276,7 +276,7 @@ differs from C#:
 | Annotations | Union, declaring part first | §C. |
 | Explicit-interface qualifier, receiver clause | Identical | Prevents silent divergence; see §F for why neither is a supported partial shape. |
 
-All mismatches report `GS0604` with a short description of the aspect, at the
+All mismatches report `GS0611` with a short description of the aspect, at the
 implementing part's identifier.
 
 **Which method is which.** The grouping key is `(name, generic arity,
@@ -286,7 +286,7 @@ unmatched part — keying on the name alone would pair them and then report a
 signature conflict the user never wrote. Within the key, a declaration's own
 type-parameter names are substituted positionally (`!0`, `!1`, …) so
 `Echo[T](value T)` and `Echo[U](value U)` group together and their differing
-spellings surface as the precise `GS0604` type-parameter-list error rather
+spellings surface as the precise `GS0611` type-parameter-list error rather
 than as two unmatched parts.
 
 **Part ordering and metadata stability.** The merged method takes the
@@ -299,24 +299,24 @@ MSBuild may vary — the same concern ADR-0144 §D addresses for type parts.
 
 | ID | Message |
 |---|---|
-| `GS0600` | `'partial' is not valid here; only a 'func' member of a 'partial class' or 'partial struct' may be partial.` |
-| `GS0601` | `Partial method '{0}' must be declared inside a 'partial class' or 'partial struct'.` |
-| `GS0602` | `Partial method '{0}' has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body.` |
-| `GS0603` | `Partial method '{0}' must have exactly one signature-only declaring part and one implementing part with a body, but found {1} declaring part(s) and {2} implementing part(s).` |
-| `GS0604` | `Partial declarations of method '{0}' disagree on {1}.` |
+| `GS0607` | `'partial' is not valid here; only a 'func' member of a 'partial class' or 'partial struct' may be partial.` |
+| `GS0608` | `Partial method '{0}' must be declared inside a 'partial class' or 'partial struct'.` |
+| `GS0609` | `Partial method '{0}' has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body.` |
+| `GS0610` | `Partial method '{0}' must have exactly one signature-only declaring part and one implementing part with a body, but found {1} declaring part(s) and {2} implementing part(s).` |
+| `GS0611` | `Partial declarations of method '{0}' disagree on {1}.` |
 
-`GS0603` covers every other malformed part shape — two bodies, two signature-only
+`GS0610` covers every other malformed part shape — two bodies, two signature-only
 parts, an implementing part with no declaring part (C# CS0759's analogue) —
-with counts, rather than spending a code on each. `GS0602` gets its own code
+with counts, rather than spending a code on each. `GS0609` gets its own code
 because the zero-implementation rule (§B) is the one a user is most likely to
 hit and most likely to want to key tooling on.
 
-**Why the block starts at GS0600, not GS0593.** `main`'s highest code is
+**Why the block starts at GS0607, not GS0593.** `main`'s highest code is
 GS0592, but the in-flight PR #4326 has already claimed GS0593–GS0596 on its own
 branch. Allocating "the next number" would have produced a merge-time
 collision. The gap is deliberate and leaves headroom.
 
-`GS0601` is reported by the merger rather than the parser because the parser
+`GS0608` is reported by the merger rather than the parser because the parser
 cannot know: the aggregate's own `partial` token is attached only *after* its
 member list has been parsed.
 
@@ -328,7 +328,7 @@ the merger's declaring/implementing pairing, consistency validation,
 annotation union, and part-count diagnostics are not method-specific — a
 partial property would need an accessor-shape consistency rule and the same
 collapse applied to `Properties` / `SharedBlock.Properties`. Until then
-`partial prop` is `GS0600`, not a confusing parse cascade.
+`partial prop` is `GS0607`, not a confusing parse cascade.
 
 **Partial methods on interfaces** are out of scope. C# permits them
 (partial interfaces since C# 8), but a G# interface method signature is
@@ -338,7 +338,7 @@ splitting it into a declaring and an implementing part has no meaning here.
 cannot be partial.
 
 **`partial` on `init` / `deinit` / events / fields** is out of scope and
-`GS0600`.
+`GS0607`.
 
 **Extension (receiver-clause) and explicit-interface-qualifier partial methods**
 are not a supported shape; the consistency check compares both clauses so the
@@ -360,7 +360,7 @@ it, over the declarations that pre-pass returns:
 - It runs over **every** returned declaration, not only merged ones — a lone
   `partial class` may carry both parts of a method itself (C# allows this and
   so does G#), and a **non**-partial type carrying a `partial func` is the
-  `GS0601` case.
+  `GS0608` case.
 - It recurses into `NestedTypes`, and covers both `Methods` and
   `SharedBlock.Methods`.
 - For each group it validates the part shape (§B/§D) and, on a well-formed
@@ -416,7 +416,7 @@ part's modifiers rather than silently defaulting.
   symbol. This is the member-level version of the gap ADR-0144 §G closed for
   types with `PartialPartLocations`, and the merged node already retains
   `DeclaringPart`, so closing it is a definition-computer change with no
-  binder work. Diagnostics are unaffected: `GS0602`/`GS0603` are reported at the
+  binder work. Diagnostics are unaffected: `GS0609`/`GS0610` are reported at the
   declaring part's own identifier location.
 - **Negative / deliberate**: the C# "optional generator hook"
   (`partial void OnFoo()` with no implementation) is not expressible in G#

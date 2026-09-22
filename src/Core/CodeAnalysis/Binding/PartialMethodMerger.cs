@@ -44,7 +44,7 @@ internal static class PartialMethodMerger
     /// idempotent: a method already merged is passed through untouched.
     /// </summary>
     /// <param name="declaration">The (possibly already type-merged) class/struct declaration.</param>
-    /// <param name="diagnostics">The bag that receives GS0601-GS0604.</param>
+    /// <param name="diagnostics">The bag that receives GS0608-GS0611.</param>
     public static void Normalize(StructDeclarationSyntax declaration, DiagnosticBag diagnostics)
     {
         if (!declaration.Methods.IsDefaultOrEmpty)
@@ -145,7 +145,7 @@ internal static class PartialMethodMerger
                 var declaring = declaringParts[0];
                 var implementing = implementingParts[0];
 
-                // GS0601: a `partial func` outside a `partial class`/`partial
+                // GS0608: a `partial func` outside a `partial class`/`partial
                 // struct` is otherwise well-formed here (exactly one declaring
                 // part, exactly one implementing part) — the ONLY thing wrong
                 // is the enclosing type. Reported once per METHOD (this
@@ -175,7 +175,7 @@ internal static class PartialMethodMerger
                 // The headline G# divergence from C#: an unimplemented partial
                 // method is an error, not a silently elided one (see ADR-0192).
                 // Narrowed to the well-formed-but-unimplemented shape — a group
-                // with TWO declaring parts is a part-count problem (GS0603), and
+                // with TWO declaring parts is a part-count problem (GS0610), and
                 // reporting "no implementation" twice would hide that.
                 diagnostics.ReportPartialMethodHasNoImplementation(declaringParts[0].Identifier.Location, name);
             }
@@ -230,7 +230,7 @@ internal static class PartialMethodMerger
 
     /// <summary>
     /// Validates that the declaring and implementing parts describe the same
-    /// method, reporting GS0604 for the first aspect they disagree on.
+    /// method, reporting GS0611 for the first aspect they disagree on.
     /// </summary>
     private static void ValidateConsistency(
         FunctionDeclarationSyntax declaring,
@@ -466,7 +466,7 @@ internal static class PartialMethodMerger
             // A generic method's own type parameters are positional, not
             // nominal, for the purpose of deciding WHICH method this is:
             // `Echo[T](value T)` and `Echo[U](value U)` are two parts of the
-            // same method, and their differing spellings are a GS0604
+            // same method, and their differing spellings are a GS0611
             // consistency error — not two unrelated declarations. Substituting
             // `!0`, `!1`, … for the declaration's own type-parameter names
             // before hashing lets them group so that diagnostic can fire.
@@ -484,7 +484,7 @@ internal static class PartialMethodMerger
             // two unrelated overloads hash together and land in one group that
             // then reports a part-count error the user never caused.
             // `scoped` is deliberately excluded: it constrains lifetime, not
-            // the signature, so it is a GS0604 consistency aspect (the whole
+            // the signature, so it is a GS0611 consistency aspect (the whole
             // parameter's text is compared there) rather than an identity one.
             var parameterTypes = string.Join(
                 ",",

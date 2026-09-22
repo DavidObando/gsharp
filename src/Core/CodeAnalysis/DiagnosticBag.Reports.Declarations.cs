@@ -890,7 +890,7 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.PartialNotValidOnKind, kind);
 
     /// <summary>
-    /// ADR-0192 / issue #4301: GS0600 — the <c>partial</c> contextual modifier
+    /// ADR-0192 / issue #4301: GS0607 — the <c>partial</c> contextual modifier
     /// appeared somewhere a partial member cannot be declared: on a top-level
     /// <c>func</c>, on an interface method signature, or on a <c>prop</c> /
     /// <c>event</c> / <c>init</c> member. Only a <c>func</c> inside a
@@ -901,7 +901,7 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.PartialModifierNotValidHere);
 
     /// <summary>
-    /// ADR-0192 / issue #4301: GS0601 — a <c>partial func</c> was declared in a
+    /// ADR-0192 / issue #4301: GS0608 — a <c>partial func</c> was declared in a
     /// type that is not itself <c>partial</c> (the analog of C# CS0751).
     /// Reported by <c>PartialMethodMerger</c> rather than the parser, because
     /// the enclosing declaration's <c>partial</c> modifier is only attached
@@ -913,7 +913,7 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.PartialMethodRequiresPartialType, name);
 
     /// <summary>
-    /// ADR-0192 / issue #4301: GS0602 — a partial method has a declaring part
+    /// ADR-0192 / issue #4301: GS0609 — a partial method has a declaring part
     /// but no implementing part. G# diverges from C# here: C# silently elides
     /// an unimplemented <c>void</c> partial method (and its call sites),
     /// whereas G# requires an implementation, matching how every other
@@ -926,7 +926,7 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.PartialMethodHasNoImplementation, name);
 
     /// <summary>
-    /// ADR-0192 / issue #4301: GS0603 — the parts of a partial method do not
+    /// ADR-0192 / issue #4301: GS0610 — the parts of a partial method do not
     /// form the required one-declaring/one-implementing pair (for example two
     /// bodies, two signature-only parts, or an implementing part with no
     /// declaring part).
@@ -939,7 +939,7 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.PartialMethodPartCount, name, declaringCount, implementingCount);
 
     /// <summary>
-    /// ADR-0192 / issue #4301: GS0604 — the declaring and implementing parts of
+    /// ADR-0192 / issue #4301: GS0611 — the declaring and implementing parts of
     /// a partial method disagree on some aspect of their signature or modifier
     /// set (return type, parameter names/modifiers, accessibility,
     /// <c>open</c>/<c>override</c>, <c>ref</c> return, generic parameters, …).

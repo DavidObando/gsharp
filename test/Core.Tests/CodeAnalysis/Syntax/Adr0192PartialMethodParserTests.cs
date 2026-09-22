@@ -15,7 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// modifier on a <c>func</c> member. These cover recognition of both parts (the
 /// <c>;</c>-bodied declaring part and the block-bodied implementing part), the
 /// modifier's composition with <c>async</c>/<c>suspend</c>/<c>unsafe</c> in
-/// either order, GS0600 for every position a partial member cannot occupy, and
+/// either order, GS0607 for every position a partial member cannot occupy, and
 /// — the load-bearing negative — that <c>partial</c> remains an ordinary
 /// identifier everywhere else.
 /// </summary>
@@ -153,7 +153,7 @@ partial class A {{
 
     [Theory]
     [MemberData(nameof(ModifierRunPermutations))]
-    public void EveryModifierRunPermutation_AtTopLevel_ReportsExactlyOneGS0600(string modifiers)
+    public void EveryModifierRunPermutation_AtTopLevel_ReportsExactlyOneGS0607(string modifiers)
     {
         // Copilot review round, finding 6. `partial` is invalid on a top-level
         // `func`, but the recovery promise is ONE diagnostic — the whole
@@ -165,8 +165,8 @@ partial class A {{
 {modifiers} func F() int32 {{ return 1 }}
 ";
         var diagnostics = ParseDiagnostics(source);
-        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0600"));
-        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0600");
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0607"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0607");
 
         var tree = Parse(source);
         var function = Assert.Single(tree.Root.Members.OfType<FunctionDeclarationSyntax>());
@@ -176,13 +176,13 @@ partial class A {{
     [Theory]
     [InlineData("prop P int32 { get { return 1 } }")]
     [InlineData("event E Action")]
-    public void AccessibilityBeforeAMisplacedPartial_StillReachesTheGS0600RecoveryPath(string member)
+    public void AccessibilityBeforeAMisplacedPartial_StillReachesTheGS0607RecoveryPath(string member)
     {
         // Copilot review round, findings 2 and 4. With `public partial prop …`
         // the accessibility lookahead stopped at `partial`, never matched
         // `prop`, and so left `public` unconsumed — which meant the misplaced-
         // `partial` rejection path never ran and the user got a field-declaration
-        // cascade instead of the intended GS0600.
+        // cascade instead of the intended GS0607.
         var diagnostics = ParseDiagnostics($@"package App
 import System
 
@@ -190,11 +190,11 @@ partial class A {{
     public partial {member}
 }}
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
-    public void AccessibilityBeforeAMisplacedPartialInASharedBlock_StillReachesTheGS0600RecoveryPath()
+    public void AccessibilityBeforeAMisplacedPartialInASharedBlock_StillReachesTheGS0607RecoveryPath()
     {
         var diagnostics = ParseDiagnostics(@"package App
 
@@ -204,7 +204,7 @@ partial class A {
     }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
@@ -256,7 +256,7 @@ import System
 let partial = 1
 Console.WriteLine(partial)
 ");
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0600");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
@@ -266,7 +266,7 @@ Console.WriteLine(partial)
 
 func partial() int32 { return 1 }
 ");
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0600");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
@@ -281,7 +281,7 @@ partial class A {
     var partial int32 = 1
 }
 ");
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0600");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
@@ -297,21 +297,21 @@ partial class Outer {
     }
 }
 ");
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0600");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0607");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 3. GS0600 — every position a partial member cannot occupy
+    // 3. GS0607 — every position a partial member cannot occupy
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PartialOnATopLevelFunction_ReportsGS0600()
+    public void PartialOnATopLevelFunction_ReportsGS0607()
     {
         var diagnostics = ParseDiagnostics(@"package App
 
 partial func F() int32 { return 1 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
@@ -329,7 +329,7 @@ partial func F() int32 { return 1 }
     }
 
     [Fact]
-    public void PartialOnAnInterfaceMethodSignature_ReportsGS0600()
+    public void PartialOnAnInterfaceMethodSignature_ReportsGS0607()
     {
         var diagnostics = ParseDiagnostics(@"package App
 
@@ -337,11 +337,11 @@ interface I {
     partial func F() int32;
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
-    public void PartialOnAnInterfaceStaticVirtualSlot_ReportsGS0600()
+    public void PartialOnAnInterfaceStaticVirtualSlot_ReportsGS0607()
     {
         var diagnostics = ParseDiagnostics(@"package App
 
@@ -351,7 +351,7 @@ interface I {
     }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
@@ -365,11 +365,11 @@ partial interface I {
     func F() int32;
 }
 ");
-        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0600");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
-    public void PartialOnAProperty_ReportsGS0600()
+    public void PartialOnAProperty_ReportsGS0607()
     {
         // Partial properties are a real C# 13 feature and a natural future
         // extension (ADR-0192 scope limitations), but they are not implemented:
@@ -381,11 +381,11 @@ partial class A {
     partial prop P int32 { get { return 1 } }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
-    public void PartialOnAnEvent_ReportsGS0600()
+    public void PartialOnAnEvent_ReportsGS0607()
     {
         var diagnostics = ParseDiagnostics(@"package App
 import System
@@ -394,11 +394,11 @@ partial class A {
     partial event E Action
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     [Fact]
-    public void PartialOnASharedBlockField_ReportsGS0600()
+    public void PartialOnASharedBlockField_ReportsGS0607()
     {
         var diagnostics = ParseDiagnostics(@"package App
 
@@ -408,7 +408,7 @@ partial class A {
     }
 }
 ");
-        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+        Assert.Contains(diagnostics, d => d.Id == "GS0607");
     }
 
     private static SyntaxTree Parse(string source) => SyntaxTree.Parse(SourceText.From(source, "Test.gs"));

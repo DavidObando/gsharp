@@ -587,7 +587,7 @@ public partial class Parser
             // feature. An interface method signature is already body-less and
             // already expects an implementation elsewhere, so splitting it into
             // a declaring and an implementing part has no meaning — `partial`
-            // on an interface member is GS0600. (A `partial interface` TYPE, per
+            // on an interface member is GS0607. (A `partial interface` TYPE, per
             // ADR-0144, remains legal; only its MEMBERS cannot be partial.)
             if (TryConsumePartialFuncModifier(out var interfacePartialModifier) && interfacePartialModifier != null)
             {
@@ -1363,7 +1363,7 @@ public partial class Parser
                 // keyword AFTER it decides whether this accessibility token is
                 // a member modifier. Covers both `public partial func …` (a
                 // real partial method) and `public partial prop …` (rejected
-                // with GS0600 — but the rejection path only runs if `public`
+                // with GS0607 — but the rejection path only runs if `public`
                 // was consumed first). A run without `partial` is left exactly
                 // where it was, so no pre-ADR-0192 decision changes.
                 ahead = SkipPartialBearingModifierRun(ahead);
@@ -1440,7 +1440,7 @@ public partial class Parser
 
             // ADR-0192: a `partial` that heads neither a `func` nor a nested
             // aggregate declaration (`partial prop`, `partial event`,
-            // `partial var`, …) is rejected with GS0600 here, so it never
+            // `partial var`, …) is rejected with GS0607 here, so it never
             // reaches ParseFieldDeclaration as a stray type-clause token.
             TryRejectMisplacedPartialModifier();
 
