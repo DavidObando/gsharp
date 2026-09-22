@@ -36,6 +36,37 @@ public partial class Parser
     }
 
     /// <summary>
+    /// ADR-0192 / issue #4301 (Copilot review round 4): an interface method
+    /// signature's only legal accessibility modifier is <c>private</c>
+    /// (ADR-0090), and it must be consumed before probing for a misplaced
+    /// <c>partial</c> — otherwise <c>private partial func F();</c> left
+    /// <c>private</c> for <see cref="IsInterfaceMethodSignatureStart"/>,
+    /// whose lookahead requires <c>func</c> immediately after
+    /// <c>private</c>. That lookahead fails with <c>partial</c> in between,
+    /// so the loop fell through to an "unexpected token" diagnostic for
+    /// <c>private</c> BEFORE the partial probe on the same member ever ran,
+    /// producing two diagnostics instead of the intended single GS0607.
+    /// Mirrors the class/struct member loop's own accessibility lookahead,
+    /// which already skips a partial-bearing run via
+    /// <see cref="SkipPartialBearingModifierRun"/> for the same reason.
+    /// </summary>
+    /// <returns>The consumed <c>private</c> token, or <see langword="null"/> when none is consumed.</returns>
+    private SyntaxToken? TryConsumeInterfacePrivateBeforePartial()
+    {
+        if (Current.Kind != SyntaxKind.PrivateKeyword)
+        {
+            return null;
+        }
+
+        if (Peek(SkipPartialBearingModifierRun(1)).Kind != SyntaxKind.FuncKeyword)
+        {
+            return null;
+        }
+
+        return NextToken();
+    }
+
+    /// <summary>
     /// ADR-0192: returns <see langword="true"/> when the current token is the
     /// contextual <c>partial</c> identifier and the modifier run it starts
     /// terminates in <c>func</c>. <c>unsafe</c> (ADR-0122) and the function
@@ -571,6 +602,14 @@ public partial class Parser
             // property / event / method signature that follows.
             var annotations = ParseAnnotations();
 
+            // ADR-0192 / issue #4301 (Copilot review round 4): the sole
+            // accessibility modifier an interface method signature accepts —
+            // `private` (ADR-0090) — must be consumed BEFORE the partial
+            // probe below, or a `partial` between them (`private partial
+            // func F();`) strands `private` for the "unexpected token" catch-
+            // all further down, doubling up on the intended GS0607.
+            var interfaceMemberAccessibility = TryConsumeInterfacePrivateBeforePartial();
+
             // ADR-0192 / issue #4301: partial methods are a `class`/`struct`
             // feature. An interface method signature is already body-less and
             // already expects an implementation elsewhere, so splitting it into
@@ -589,6 +628,10 @@ public partial class Parser
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
                 ParseInterfaceSharedBlock(methods, properties, staticFields, ref seenSharedBlock, identifier.Text);
+            }
+            else if (interfaceMemberAccessibility != null)
+            {
+                methods.Add((FunctionDeclarationSyntax)ParseInterfaceMethodSignatureCore(interfaceMemberAccessibility, staticModifier: null).WithAnnotations(annotations));
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
@@ -790,11 +833,12 @@ public partial class Parser
         {
             var startToken = Current;
 
-            SyntaxToken? accessibilityModifier = null;
-            if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
-            {
-                accessibilityModifier = NextToken();
-            }
+            // ADR-0192 / issue #4301 (Copilot review round 4): skip a
+            // partial-bearing run so `private partial func F();` is still
+            // recognized as `private`-led — the plain `Peek(1) ==
+            // FuncKeyword` check below only matched when nothing sat between
+            // `private` and `func`.
+            var accessibilityModifier = TryConsumeInterfacePrivateBeforePartial();
 
             // ADR-0192 / issue #4301: partial methods are out of scope for
             // interfaces (see the instance-member loop above) — that includes

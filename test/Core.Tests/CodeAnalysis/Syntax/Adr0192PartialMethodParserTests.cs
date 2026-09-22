@@ -355,6 +355,57 @@ interface I {
     }
 
     [Fact]
+    public void PrivatePartialOnAnInterfaceMethodSignature_ReportsExactlyOneGS0607()
+    {
+        // Copilot review round 4: `private` is the one accessibility modifier
+        // an interface method signature accepts (ADR-0090). The lookahead
+        // that recognizes it required `func` immediately after `private`, so
+        // `partial` in between stranded `private` for the "unexpected token"
+        // catch-all — doubling up on the intended single GS0607.
+        var diagnostics = ParseDiagnostics(@"package App
+
+interface I {
+    private partial func F() int32;
+}
+");
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0607"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0607");
+    }
+
+    [Fact]
+    public void PrivatePartialOnAnInterfaceStaticVirtualSlot_ReportsExactlyOneGS0607()
+    {
+        var diagnostics = ParseDiagnostics(@"package App
+
+interface I {
+    shared {
+        private partial func F() int32;
+    }
+}
+");
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0607"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0607");
+    }
+
+    [Fact]
+    public void PrivatePartialFuncOnAnInterface_IsStillParsedAsAPrivateInterfaceMethod_WhenTheEnclosingTypeIsPartial()
+    {
+        // Complement: `partial` on an interface MEMBER is always GS0607
+        // regardless of whether the interface TYPE is partial (ADR-0144 keeps
+        // `partial interface` legal; only its members cannot be partial). This
+        // exercises the same `private`-before-`partial` lookahead when the
+        // rejection path still needs to recover into a normal `private func`.
+        var diagnostics = ParseDiagnostics(@"package App
+
+partial interface I {
+    private partial func F() int32;
+}
+");
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0607"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0607");
+    }
+
+    [Fact]
     public void PartialInterfaceType_IsStillLegal_OnlyItsMembersAreNot()
     {
         // ADR-0144 keeps `partial interface` as a legal TYPE; ADR-0192 scopes

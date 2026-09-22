@@ -140,25 +140,32 @@ internal static class PartialMethodMerger
             var implementingParts = group.Where(HasImplementation).ToList();
             var name = group[0].Identifier.Text ?? string.Empty;
 
+            // GS0608: a `partial func` outside a `partial class`/`partial
+            // struct` is invalid regardless of its part shape — the ADR's
+            // table makes this unconditional, not contingent on the pair
+            // being otherwise well-formed. Checked once per METHOD (this
+            // branch runs once per group, not once per part), BEFORE the
+            // part-count branching below, so a lone declaring part or a
+            // part-count mismatch in a non-partial type still gets GS0608
+            // alongside GS0609/GS0610 rather than losing it to whichever
+            // branch happens to run. Anchored at the declaring part when one
+            // exists (matching the well-formed case's original anchor),
+            // falling back to the group's first part otherwise (e.g. two
+            // implementing parts and no declaring part at all).
+            if (!enclosingTypeIsPartial)
+            {
+                var anchor = declaringParts.Count > 0 ? declaringParts[0] : group[0];
+                diagnostics.ReportPartialMethodRequiresPartialType(anchor.Identifier.Location, name);
+            }
+
             if (declaringParts.Count == 1 && implementingParts.Count == 1)
             {
                 var declaring = declaringParts[0];
                 var implementing = implementingParts[0];
 
-                // GS0608: a `partial func` outside a `partial class`/`partial
-                // struct` is otherwise well-formed here (exactly one declaring
-                // part, exactly one implementing part) — the ONLY thing wrong
-                // is the enclosing type. Reported once per METHOD (this
-                // branch runs once per group, not once per part), at the
-                // declaring part, matching ReportPartialMethodHasNoImplementation's
-                // convention just below. Still merges afterward rather than
-                // bailing out, so a single mistake does not also cascade into
-                // GS0102 (duplicate member name) from the two unmerged parts.
-                if (!enclosingTypeIsPartial)
-                {
-                    diagnostics.ReportPartialMethodRequiresPartialType(declaring.Identifier.Location, name);
-                }
-
+                // Still merges afterward rather than bailing out, so a single
+                // mistake does not also cascade into GS0102 (duplicate member
+                // name) from the two unmerged parts.
                 ValidateConsistency(declaring, implementing, name, diagnostics);
 
                 var merged = BuildMergedMethod(declaring, implementing);

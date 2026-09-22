@@ -583,6 +583,14 @@ public partial class Parser
             // threads annotations onto class members.
             var annotations = ParseAnnotations();
 
+            // ADR-0192 / issue #4301 (Copilot review round 4): the sole
+            // accessibility modifier an interface method signature accepts —
+            // `private` (ADR-0090) — must be consumed BEFORE the partial
+            // probe below, or a `partial` between them (`private partial
+            // func F();`) strands `private` for the "unexpected token" catch-
+            // all further down, doubling up on the intended GS0607.
+            var interfaceMemberAccessibility = TryConsumeInterfacePrivateBeforePartial();
+
             // ADR-0192 / issue #4301: partial methods are a `class`/`struct`
             // feature. An interface method signature is already body-less and
             // already expects an implementation elsewhere, so splitting it into
@@ -603,6 +611,10 @@ public partial class Parser
                 // Issue #865 revision: static-virtual members live in a
                 // `shared { … }` block (ADR-0089), consistent with classes/structs.
                 ParseInterfaceSharedBlock(methods, properties, staticFields, ref seenSharedBlock, identifier.Text);
+            }
+            else if (interfaceMemberAccessibility != null)
+            {
+                methods.Add((FunctionDeclarationSyntax)ParseInterfaceMethodSignatureCore(interfaceMemberAccessibility, staticModifier: null).WithAnnotations(annotations));
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {

@@ -617,6 +617,38 @@ class A {
     }
 
     [Fact]
+    public void UnimplementedPartialMethodInANonPartialType_ReportsBothGS0608AndGS0609()
+    {
+        // Copilot review round 4: GS0608 was only checked inside the
+        // well-formed-pair branch, so a lone declaring part in a non-partial
+        // type reported GS0609 alone — even though the ADR's table says ANY
+        // partial method in a non-partial type gets GS0608, regardless of how
+        // many parts it has.
+        var diagnostics = Compile(@"package App
+
+class A {
+    partial func F() int32;
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0608");
+        Assert.Contains(diagnostics, d => d.Id == "GS0609");
+    }
+
+    [Fact]
+    public void PartCountMismatchInANonPartialType_ReportsBothGS0608AndGS0610()
+    {
+        var diagnostics = Compile(@"package App
+
+class A {
+    partial func F() int32;
+    partial func F() int32;
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0608");
+        Assert.Contains(diagnostics, d => d.Id == "GS0610");
+    }
+
+    [Fact]
     public void TwoImplementingParts_ReportGS0610()
     {
         var diagnostics = Compile(@"package App
