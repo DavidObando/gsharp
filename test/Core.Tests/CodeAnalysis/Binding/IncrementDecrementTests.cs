@@ -484,7 +484,8 @@ public class IncrementDecrementTests
             }
             """);
 
-        Assert.Single(diagnostics);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("'int64' to 'int32'", diagnostic.Message, System.StringComparison.Ordinal);
     }
 
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
