@@ -1359,14 +1359,16 @@ public partial class Parser
                     ahead++;
                 }
 
-                // ADR-0192: `public partial func …` — the accessibility token is
-                // still a member modifier when a `partial`/`unsafe`/colour
-                // modifier run separates it from `func`.
-                if (FunctionModifierRunEndsInFunc(ahead))
-                {
-                    memberAccessibility = NextToken();
-                }
-                else if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                // ADR-0192: skip a `partial`-bearing modifier run so the member
+                // keyword AFTER it decides whether this accessibility token is
+                // a member modifier. Covers both `public partial func …` (a
+                // real partial method) and `public partial prop …` (rejected
+                // with GS0600 — but the rejection path only runs if `public`
+                // was consumed first). A run without `partial` is left exactly
+                // where it was, so no pre-ADR-0192 decision changes.
+                ahead = SkipPartialBearingModifierRun(ahead);
+
+                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "init" && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken) ||
@@ -1402,48 +1404,38 @@ public partial class Parser
                 }
             }
 
-            // ADR-0192 / issue #4301: an optional `partial` contextual modifier
-            // may precede `func` on a class/struct instance method, in either
-            // order relative to `async`/`suspend` and `unsafe`. It is probed
-            // both before and after those two so all of `partial async func`,
-            // `async partial func`, `partial unsafe func` and `unsafe partial
-            // func` are accepted (the parser has always collected modifiers
-            // order-independently — ADR-0144 §A). Whether the enclosing type is
-            // itself `partial` is checked later, by PartialMethodMerger: the
-            // aggregate's own `partial` token is not attached until after its
-            // member list has been parsed.
+            // ADR-0192 / issue #4301: `partial` (ADR-0192), `unsafe` (ADR-0122)
+            // and one colour modifier — `async`/`suspend` (ADR-0023 /
+            // ADR-0174 D4) — may precede `func` on a class/struct instance
+            // method in ANY order. All three are consumed by ONE shared,
+            // order-independent loop: probing them in a fixed sequence cannot
+            // match an ordering that puts `partial` between the colour modifier
+            // and `unsafe`, which left a stray token where `func` was expected.
+            // Whether the enclosing type is itself `partial` is checked later,
+            // by PartialMethodMerger — the aggregate's own `partial` token is
+            // not attached until after its member list has been parsed.
             SyntaxToken? memberPartialModifier = null;
-            TryConsumePartialFuncModifier(out memberPartialModifier);
-
-            // Issue #502 / ADR-0023: an optional `async` modifier may precede
-            // `func` on a class instance method, mirroring the top-level path
-            // in ParseMember. The modifier is consumed only when immediately
-            // followed by `func`; otherwise it is left for ParseFieldDeclaration
-            // (or another fallback) to surface a diagnostic.
             SyntaxToken? memberAsyncModifier = null;
-            if (IsFunctionColorModifier(Current.Kind) && FunctionModifierRunEndsInFunc(1))
-            {
-                memberAsyncModifier = NextToken();
-            }
-
-            // ADR-0122 / issue #1014: optional `unsafe` contextual modifier on
-            // an in-body `func` method. Consumed only when immediately followed
-            // by `func` (or `async func`).
             SyntaxToken? memberUnsafeModifier = null;
-            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-                && (FunctionModifierRunEndsInFunc(1) || IsFunctionColorModifier(Peek(1).Kind)))
+            if (!TryConsumeFunctionModifierRun(ref memberPartialModifier, ref memberUnsafeModifier, ref memberAsyncModifier))
             {
-                memberUnsafeModifier = NextToken();
-                if (memberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && FunctionModifierRunEndsInFunc(1))
+                // The run does not end in `func`. Fall back to the exact
+                // pre-ADR-0192 probes so malformed input (`unsafe async var x`)
+                // still recovers with the diagnostics it always produced.
+                if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
                 {
                     memberAsyncModifier = NextToken();
                 }
-            }
 
-            // ADR-0192: second probe — `unsafe partial func` / `async partial func`.
-            if (memberPartialModifier == null)
-            {
-                TryConsumePartialFuncModifier(out memberPartialModifier);
+                if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
+                    && (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)))
+                {
+                    memberUnsafeModifier = NextToken();
+                    if (memberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                    {
+                        memberAsyncModifier = NextToken();
+                    }
+                }
             }
 
             // ADR-0192: a `partial` that heads neither a `func` nor a nested

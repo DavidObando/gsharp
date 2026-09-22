@@ -73,6 +73,137 @@ System.Console.WriteLine(g.Greet(""world""))
         Assert.Contains("hello, world", output);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // 1b. Cross-file import scope — declaring/implementing parts bind against
+    // their OWN file's imports, not each other's (ADR-0192 §C/§G)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void DeclaringPartAnnotation_BindsAgainstTheDeclaringFilesOwnImports()
+    {
+        // Positive case: the declaring file imports System.Diagnostics and
+        // uses it in the ANNOTATION on the declaring part; the implementing
+        // file imports System.Text and uses it, unqualified, in the BODY. The
+        // two files' import sets are genuinely disjoint (neither imports the
+        // other's namespace), so this only compiles if the merger truly kept
+        // each half bound to its own tree rather than merging into one shared
+        // scope.
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System.Diagnostics
+
+partial class Widget {
+    @Conditional(""DEBUG"")
+    partial func Describe() string;
+}
+",
+            "Widget.gs"));
+
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System.Text
+
+partial class Widget {
+    partial func Describe() string {
+        let sb = StringBuilder()
+        sb.Append(""built"")
+        return sb.ToString()
+    }
+}
+
+let t = typeof(Widget)
+let m = t.GetMethod(""Describe"")
+System.Console.WriteLine(m.GetCustomAttributes(typeof(System.Diagnostics.ConditionalAttribute), false).Length)
+
+let w = Widget()
+System.Console.WriteLine(w.Describe())
+",
+            "Widget.g.gs"));
+
+        var output = CompileLoadInvokeCaptureStdout(
+            new[] { declaringFile, implementingFile },
+            "Adr0192-CrossFileImports");
+        Assert.Contains("1", output);
+        Assert.Contains("built", output);
+    }
+
+    [Fact]
+    public void DeclaringPartAnnotation_DoesNotLeakTheImplementingFilesImports()
+    {
+        // Negative ("no leak") twin: the SAME annotation shape as above, but
+        // System.Diagnostics is now imported ONLY by the implementing file —
+        // the declaring file that actually carries `@Conditional(...)` has no
+        // matching import. If the merger's tree-retention were broken and the
+        // declaring part's annotation bound against the (wrong) implementing
+        // file's imports instead of its own, this would incorrectly compile.
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class Widget {
+    @Conditional(""DEBUG"")
+    partial func Describe() string;
+}
+",
+            "Widget.gs"));
+
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System.Diagnostics
+
+partial class Widget {
+    partial func Describe() string {
+        return ""built""
+    }
+}
+",
+            "Widget.g.gs"));
+
+        using var peStream = new MemoryStream();
+        var diagnostics = new Compilation(declaringFile, implementingFile) { IsLibrary = true }
+            .Emit(peStream)
+            .Diagnostics;
+        Assert.Contains(diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void ImplementingPartBody_DoesNotLeakTheDeclaringFilesImports()
+    {
+        // Negative ("no leak") twin for the BODY side: System.Text is now
+        // imported ONLY by the declaring file — the implementing file whose
+        // BODY actually reads `StringBuilder` unqualified has no matching
+        // import. If the merged node's body bound against the (wrong)
+        // declaring file's imports instead of its own implementing file's,
+        // this would incorrectly compile.
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System.Text
+
+partial class Widget {
+    partial func Describe() string;
+}
+",
+            "Widget.gs"));
+
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class Widget {
+    partial func Describe() string {
+        let sb = StringBuilder()
+        sb.Append(""built"")
+        return sb.ToString()
+    }
+}
+",
+            "Widget.g.gs"));
+
+        using var peStream = new MemoryStream();
+        var diagnostics = new Compilation(declaringFile, implementingFile) { IsLibrary = true }
+            .Emit(peStream)
+            .Diagnostics;
+        Assert.Contains(diagnostics, d => d.IsError);
+    }
+
     [Fact]
     public void StaticPartialMethodInSharedBlock_MergesAndRuns()
     {
@@ -234,6 +365,70 @@ Console.WriteLine(a.F(""z""))
         var output = CompileLoadInvokeCaptureStdout(source, "Adr0192-Overloads");
         var lines = NonEmptyLines(output);
         Assert.Equal(new[] { "2", "z!" }, lines);
+    }
+
+    [Fact]
+    public void PartialOverloadsDifferingOnlyByRefKind_AreNotPairedWithEachOther()
+    {
+        // Copilot review round, finding 1. The grouping key was built from the
+        // parameter's TYPE CLAUSE text alone, so `F(x int32)` and
+        // `F(ref x int32)` hashed identically and were merged into one
+        // 2-declaring/2-implementing group that then reported a spurious
+        // GS0603. Ref-kind is part of overload identity — `BoundScope.
+        // FunctionSignaturesEqual` treats it so — and must be part of the key.
+        // Asserted on diagnostics + emitted metadata rather than by calling
+        // both overloads: G# overload resolution independently treats a call
+        // like `a.F(1)` as ambiguous between `F(int32)` and `F(ref int32)`,
+        // which is a pre-existing trait of overload resolution and not what
+        // this test is about. What matters here is that the two declarations
+        // stay SEPARATE partial methods — each correctly paired with its own
+        // implementing part — and that two distinct methods reach metadata.
+        var source = @"package App
+
+partial class A {
+    partial func F(x int32) int32;
+    partial func F(ref x int32) int32;
+}
+
+partial class A {
+    partial func F(x int32) int32 { return x + 1 }
+    partial func F(ref x int32) int32 { return x + 2 }
+}
+";
+        var diagnostics = Compile(source);
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0603");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+
+        // Two parts in, two parts in — one merged method each, not one group.
+        Assert.Equal(2, EmittedMethodNames(source, "A").Count(n => n == "F"));
+    }
+
+    [Fact]
+    public void PartialOverloadsDifferingOnlyByVariadicMarker_AreNotPairedWithEachOther()
+    {
+        // Same defect class as the ref-kind case: a variadic `...int32`
+        // parameter binds to a different effective type than a scalar `int32`,
+        // but its type-clause text is identical, so the ellipsis marker must
+        // also be part of the grouping key.
+        var source = @"package App
+import System
+
+partial class A {
+    partial func F(x int32) int32;
+    partial func F(xs ...int32) int32;
+}
+
+partial class A {
+    partial func F(x int32) int32 { return x + 1 }
+    partial func F(xs ...int32) int32 { return xs.Length + 100 }
+}
+
+let a = A()
+Console.WriteLine(a.F(1))
+Console.WriteLine(a.F(7, 8, 9))
+";
+        var output = CompileLoadInvokeCaptureStdout(source, "Adr0192-VariadicOverloads");
+        Assert.Equal(new[] { "2", "103" }, NonEmptyLines(output));
     }
 
     [Fact]
@@ -665,6 +860,40 @@ partial class A {
 }
 
 partial class A {
+    partial func F() int32 { return 1 }
+}
+",
+            "Test.gs"));
+
+        var first = EmitDiagnostics(tree);
+        var second = EmitDiagnostics(tree);
+        Assert.DoesNotContain(first, d => d.IsError);
+        Assert.DoesNotContain(second, d => d.IsError);
+    }
+
+    [Fact]
+    public void BindingTheSameSyntaxTreeTwice_SingleDeclarationBothParts_ProducesTheSameResult()
+    {
+        // Second review round: the test above uses TWO SEPARATE `partial class
+        // A { }` blocks, but PartialTypeMerger.MergeStructs only returns the
+        // SAME instance unchanged when a type has exactly ONE syntactic part
+        // (`group.Count == 1`) — a multi-part group always builds a BRAND-NEW
+        // node from the still-unmutated originals, so the guard above is never
+        // actually exercised by that shape: each bind starts fresh regardless.
+        // This shape — one `partial class A` containing BOTH the declaring and
+        // implementing parts of F in the same block — IS the `group.Count ==
+        // 1` case, so PartialTypeMerger hands back the SAME instance both
+        // times, and the second bind sees the ALREADY-MERGED method from the
+        // first call. Without the DeclaringPart guard, that already-merged
+        // node would look like a lone implementing part on the second pass and
+        // report a spurious GS0603 ("found 0 declaring part(s) and 1
+        // implementing part(s)") — confirmed empirically by temporarily
+        // removing the guard and observing exactly that failure here.
+        var tree = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class A {
+    partial func F() int32;
     partial func F() int32 { return 1 }
 }
 ",

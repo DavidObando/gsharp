@@ -116,13 +116,6 @@ internal static class PartialMethodMerger
                 continue;
             }
 
-            if (!enclosingTypeIsPartial)
-            {
-                diagnostics.ReportPartialMethodRequiresPartialType(
-                    method.Identifier.Location,
-                    method.Identifier.Text ?? string.Empty);
-            }
-
             var key = MethodKey.For(method);
             if (!groupByKey.TryGetValue(key, out var group))
             {
@@ -151,6 +144,21 @@ internal static class PartialMethodMerger
             {
                 var declaring = declaringParts[0];
                 var implementing = implementingParts[0];
+
+                // GS0601: a `partial func` outside a `partial class`/`partial
+                // struct` is otherwise well-formed here (exactly one declaring
+                // part, exactly one implementing part) — the ONLY thing wrong
+                // is the enclosing type. Reported once per METHOD (this
+                // branch runs once per group, not once per part), at the
+                // declaring part, matching ReportPartialMethodHasNoImplementation's
+                // convention just below. Still merges afterward rather than
+                // bailing out, so a single mistake does not also cascade into
+                // GS0102 (duplicate member name) from the two unmerged parts.
+                if (!enclosingTypeIsPartial)
+                {
+                    diagnostics.ReportPartialMethodRequiresPartialType(declaring.Identifier.Location, name);
+                }
+
                 ValidateConsistency(declaring, implementing, name, diagnostics);
 
                 var merged = BuildMergedMethod(declaring, implementing);
@@ -467,10 +475,26 @@ internal static class PartialMethodMerger
                 .Where(text => text.Length > 0)
                 .ToList();
 
+            // The type clause alone is NOT the parameter's overload identity.
+            // `F(x int32)` and `F(ref x int32)` are distinct overloads —
+            // BoundScope.FunctionSignaturesEqual treats ref-kind as part of a
+            // signature — and a variadic `xs ...int32` binds to a different
+            // effective type (`[]int32`) than a scalar `int32` while sharing
+            // the same type-clause text. Both must therefore join the key, or
+            // two unrelated overloads hash together and land in one group that
+            // then reports a part-count error the user never caused.
+            // `scoped` is deliberately excluded: it constrains lifetime, not
+            // the signature, so it is a GS0604 consistency aspect (the whole
+            // parameter's text is compared there) rather than an identity one.
             var parameterTypes = string.Join(
                 ",",
                 method.Parameters.Select(parameter =>
-                    SubstituteTypeParameters(NormalizeNodeText(parameter.Type), typeParameterNames)));
+                {
+                    var refKind = parameter.RefKindModifier?.Text ?? string.Empty;
+                    var variadic = parameter.IsVariadic ? "..." : string.Empty;
+                    var type = SubstituteTypeParameters(NormalizeNodeText(parameter.Type), typeParameterNames);
+                    return $"{refKind} {variadic}{type}";
+                }));
 
             return new MethodKey(
                 method.Identifier.Text ?? string.Empty,

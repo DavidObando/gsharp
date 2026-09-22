@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Linq;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
@@ -83,6 +84,144 @@ partial class A {{
 }}
 ");
         Assert.True(method.IsPartial);
+    }
+
+    /// <summary>
+    /// Gets all six orderings of the <c>partial</c> / colour / <c>unsafe</c>
+    /// modifier run. ADR-0192 §A advertises every one as legal, so every one is
+    /// tested at every call site rather than the two or three a review happened
+    /// to name.
+    /// </summary>
+    /// <returns>The permutation data.</returns>
+    public static IEnumerable<object[]> ModifierRunPermutations()
+    {
+        yield return new object[] { "partial async unsafe" };
+        yield return new object[] { "partial unsafe async" };
+        yield return new object[] { "async partial unsafe" };
+        yield return new object[] { "async unsafe partial" };
+        yield return new object[] { "unsafe partial async" };
+        yield return new object[] { "unsafe async partial" };
+    }
+
+    [Theory]
+    [MemberData(nameof(ModifierRunPermutations))]
+    public void EveryModifierRunPermutation_ParsesAsAPartialInstanceMethod(string modifiers)
+    {
+        // Copilot review round, findings 3. Before the shared modifier-run
+        // consumer, `async partial unsafe` and `unsafe partial async` — the two
+        // orderings that put `partial` BETWEEN the colour modifier and
+        // `unsafe` — left a stray token where `func` was expected and cascaded
+        // into a dozen recovery diagnostics.
+        var source = $@"package App
+partial class A {{
+    {modifiers} func F() int32 {{ return 1 }}
+}}
+";
+        var diagnostics = ParseDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+
+        var method = SingleMethod(source);
+        Assert.True(method.IsPartial);
+        Assert.True(method.IsUnsafe);
+        Assert.True(method.IsAsync);
+    }
+
+    [Theory]
+    [MemberData(nameof(ModifierRunPermutations))]
+    public void EveryModifierRunPermutation_ParsesAsAPartialStaticMethodInASharedBlock(string modifiers)
+    {
+        // Copilot review round, finding 5 — the same root cause inside
+        // `shared { }`, which is the path the motivating static
+        // `[GeneratedRegex]` shape actually takes.
+        var source = $@"package App
+partial class A {{
+    shared {{
+        {modifiers} func F() int32 {{ return 1 }}
+    }}
+}}
+";
+        var diagnostics = ParseDiagnostics(source);
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+
+        var tree = Parse(source);
+        var type = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var method = type.SharedBlock!.Methods.Single();
+        Assert.True(method.IsPartial);
+        Assert.True(method.IsUnsafe);
+        Assert.True(method.IsAsync);
+    }
+
+    [Theory]
+    [MemberData(nameof(ModifierRunPermutations))]
+    public void EveryModifierRunPermutation_AtTopLevel_ReportsExactlyOneGS0600(string modifiers)
+    {
+        // Copilot review round, finding 6. `partial` is invalid on a top-level
+        // `func`, but the recovery promise is ONE diagnostic — the whole
+        // modifier run must be consumed so the `func` after it still parses.
+        // Previously `async partial unsafe func` diagnosed `partial` and then
+        // left `unsafe` behind, cascading.
+        var source = $@"package App
+
+{modifiers} func F() int32 {{ return 1 }}
+";
+        var diagnostics = ParseDiagnostics(source);
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0600"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0600");
+
+        var tree = Parse(source);
+        var function = Assert.Single(tree.Root.Members.OfType<FunctionDeclarationSyntax>());
+        Assert.Equal("F", function.Identifier.Text);
+    }
+
+    [Theory]
+    [InlineData("prop P int32 { get { return 1 } }")]
+    [InlineData("event E Action")]
+    public void AccessibilityBeforeAMisplacedPartial_StillReachesTheGS0600RecoveryPath(string member)
+    {
+        // Copilot review round, findings 2 and 4. With `public partial prop …`
+        // the accessibility lookahead stopped at `partial`, never matched
+        // `prop`, and so left `public` unconsumed — which meant the misplaced-
+        // `partial` rejection path never ran and the user got a field-declaration
+        // cascade instead of the intended GS0600.
+        var diagnostics = ParseDiagnostics($@"package App
+import System
+
+partial class A {{
+    public partial {member}
+}}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+    }
+
+    [Fact]
+    public void AccessibilityBeforeAMisplacedPartialInASharedBlock_StillReachesTheGS0600RecoveryPath()
+    {
+        var diagnostics = ParseDiagnostics(@"package App
+
+partial class A {
+    shared {
+        public partial prop P int32 { get { return 1 } }
+    }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0600");
+    }
+
+    [Fact]
+    public void AccessibilityBeforeAPartialFuncInASharedBlock_IsConsumedAsAMemberModifier()
+    {
+        var tree = Parse(@"package App
+
+partial class A {
+    shared {
+        public partial func F() int32;
+    }
+}
+");
+        var type = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var method = type.SharedBlock!.Methods.Single();
+        Assert.True(method.IsPartial);
+        Assert.NotNull(method.AccessibilityModifier);
     }
 
     [Fact]
