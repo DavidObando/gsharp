@@ -1556,6 +1556,18 @@ internal sealed partial class ExpressionBinder
             return BindExpression(syntax.Value);
         }
 
+        bool writableRefProperty =
+            (variable is ImplicitPropertyVariableSymbol implicitProperty
+                && implicitProperty.Property.ReturnRefKind == RefKind.Ref
+                && !implicitProperty.Property.HasSetter)
+            || (variable is ImplicitStaticPropertyVariableSymbol implicitStaticProperty
+                && implicitStaticProperty.Property.ReturnRefKind == RefKind.Ref
+                && !implicitStaticProperty.Property.HasSetter);
+        if (writableRefProperty)
+        {
+            return BindRefGetterCompoundAssignment(syntax);
+        }
+
         var boundRhs = BindExpression(syntax.Value);
 
         // Synthesize the binary expression: variable op rhs.
@@ -1845,6 +1857,21 @@ internal sealed partial class ExpressionBinder
 
         if (TypeMemberModel.TryGetStaticPropertyIncludingInherited(staticStruct, memberName, out var prop, out var propertyOwner))
         {
+            if (prop.ReturnRefKind == RefKind.Ref && !prop.HasSetter)
+            {
+                if (!AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propertyOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(
+                        memberNameSyntax.Location,
+                        prop.Name,
+                        propertyOwner.Name,
+                        prop.GetterAccessibility);
+                }
+
+                result = BindRefGetterCompoundAssignment(syntax);
+                return true;
+            }
+
             if (!AccessibilityChecker.IsAccessible(prop.SetterAccessibility, propertyOwner, function))
             {
                 Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.SetterAccessibility);
@@ -2004,15 +2031,32 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
+        var effectiveInterface = Invariant.Required(
+            propertyOwner as InterfaceSymbol,
+            "an interface property has an effective interface owner");
+        if (property.ReturnRefKind == RefKind.Ref && !property.HasSetter)
+        {
+            if (!AccessibilityChecker.IsAccessible(
+                property.GetterAccessibility,
+                effectiveInterface,
+                this.function))
+            {
+                Diagnostics.ReportMemberInaccessible(
+                    memberNameSyntax.IdentifierToken.Location,
+                    property.Name,
+                    effectiveInterface.Name,
+                    property.GetterAccessibility);
+            }
+
+            return BindRefGetterCompoundAssignment(syntax);
+        }
+
         if (!property.HasGetter || !property.HasSetter)
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             return new BoundErrorExpression(null);
         }
 
-        var effectiveInterface = Invariant.Required(
-            propertyOwner as InterfaceSymbol,
-            "an interface property has an effective interface owner");
         if (!AccessibilityChecker.IsAccessible(
             property.GetterAccessibility,
             effectiveInterface,
@@ -2261,8 +2305,35 @@ internal sealed partial class ExpressionBinder
         // ADR-0051: check properties.
         if (TypeMemberModel.TryGetProperty(structSym, memberName, out var prop, out var propDeclaringType))
         {
-            var boundRhs = BindExpression(syntax.Value);
             propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
+
+            if (prop.ReturnRefKind == RefKind.Ref && !prop.HasSetter)
+            {
+                if (!structSym.IsClass && !IsWritableStructFieldReceiver(boundReceiver))
+                {
+                    Diagnostics.ReportFieldAssignmentThroughStructTemporary(
+                        syntax.OperatorToken.Location,
+                        prop.Name,
+                        structSym);
+                    return new BoundErrorExpression(syntax);
+                }
+
+                if (!AccessibilityChecker.IsAccessible(
+                    prop.GetterAccessibility,
+                    propDeclaringType,
+                    this.function))
+                {
+                    Diagnostics.ReportMemberInaccessible(
+                        memberNameSyntax.IdentifierToken.Location,
+                        prop.Name,
+                        propDeclaringType.Name,
+                        prop.GetterAccessibility);
+                }
+
+                return BindRefGetterCompoundAssignment(syntax);
+            }
+
+            var boundRhs = BindExpression(syntax.Value);
 
             BoundExpression compoundTarget = new BoundPropertyAccessExpression(
                 null,
@@ -2338,6 +2409,16 @@ internal sealed partial class ExpressionBinder
 
         return null;
     }
+
+    private BoundExpression BindRefGetterCompoundAssignment(EventSubscriptionExpressionSyntax syntax)
+        => BindIndirectCompoundAssignmentExpression(
+            new IndirectCompoundAssignmentExpressionSyntax(
+                syntax.SyntaxTree,
+                syntax.LeftHandSide,
+                syntax.OperatorToken,
+                syntax.Value,
+                syntax.ReturnsPreviousValue,
+                syntax.IsIncrementDecrement));
 
     /// <summary>
     /// Issue #648 (generalized by issue #2154): compound assignment fallback

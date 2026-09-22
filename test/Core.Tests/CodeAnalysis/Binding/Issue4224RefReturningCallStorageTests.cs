@@ -400,6 +400,36 @@ public class Issue4224RefReturningCallStorageTests
     }
 
     [Fact]
+    public void WritableRefGetter_IncrementAndDecrementWriteThroughBareAndQualifiedTargets()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Holder {
+                var slot int32 = 10
+                var calls int32
+                prop Value ref int32 {
+                    get {
+                        calls++
+                        return ref slot
+                    }
+                }
+                func Run() bool {
+                    let barePrevious = Value++
+                    let qualifiedPrevious = this.Value--
+                    let updated = ++Value
+                    return barePrevious == 10 &&
+                        qualifiedPrevious == 11 &&
+                        updated == 11 &&
+                        slot == 11 &&
+                        calls == 3
+                }
+            }
+            var answer = Holder{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void ReadOnlyRefGetter_StaysProtectedFromWrites()
     {
         var result = EmittedOracle.Evaluate("""
