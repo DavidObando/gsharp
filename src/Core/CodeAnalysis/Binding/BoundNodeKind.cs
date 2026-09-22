@@ -80,6 +80,8 @@ public enum BoundNodeKind
     SwitchExpressionArm,
     BlockExpression,
     AddressOfExpression,
+    ManagedReferenceExpression,
+    ManagedFieldKeyExpression,
     DereferenceExpression,
     StateMachineAwaitOnCompleted,
     StateMachineBuilderMoveNext,

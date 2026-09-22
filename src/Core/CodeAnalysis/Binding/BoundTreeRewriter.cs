@@ -435,6 +435,13 @@ public abstract class BoundTreeRewriter
                 return RewriteSwitchExpression((BoundSwitchExpression)node);
             case BoundNodeKind.AddressOfExpression:
                 return RewriteAddressOfExpression((BoundAddressOfExpression)node);
+            case BoundNodeKind.ManagedReferenceExpression:
+                return RewriteManagedReferenceExpression((BoundManagedReferenceExpression)node);
+            case BoundNodeKind.ManagedFieldKeyExpression:
+                var key = (BoundManagedFieldKeyExpression)node;
+                var keyParent = RewriteExpression(key.Parent);
+                var keyField = RewriteExpression(key.Field);
+                return keyParent == key.Parent && keyField == key.Field ? key : new BoundManagedFieldKeyExpression(keyParent, keyField);
             case BoundNodeKind.ConditionalAddressExpression:
                 return RewriteConditionalAddressExpression((BoundConditionalAddressExpression)node);
             case BoundNodeKind.ConditionalExpression:
@@ -881,7 +888,7 @@ public abstract class BoundTreeRewriter
                     elementsBuilder?.Add(element);
                 }
 
-                return elementsBuilder == null ? node : new BoundListPattern(node.Syntax, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType);
+                return elementsBuilder == null ? node : new BoundListPattern(node.Syntax, node.Type, elementsBuilder.MoveToImmutable(), list.ElementType, list.LengthProperty, list.IndexerProperty, list.InputVariable);
             case BoundNodeKind.SlicePattern:
                 var slice = (BoundSlicePattern)node;
                 var newSliceInner = slice.Pattern == null ? null : RewritePattern(slice.Pattern);
@@ -926,7 +933,7 @@ public abstract class BoundTreeRewriter
         // The go statement's syntax is its stable identity: the emitter finds
         // the closure synthesized for it by that syntax when a state-machine
         // rewrite has rebuilt the node (ADR-0174 D4 makes that the common case).
-        return new BoundGoStatement(node.Syntax, expression, sink, resultCell, node.ResultType);
+        return new BoundGoStatement(node.Syntax, expression, sink, resultCell, node.ResultType, node.LexicalEnclosingType);
     }
 
     /// <summary>
@@ -989,6 +996,15 @@ public abstract class BoundTreeRewriter
     /// </summary>
     /// <param name="node">The address-of expression to rewrite.</param>
     /// <returns>The rewritten expression.</returns>
+    protected virtual BoundExpression RewriteManagedReferenceExpression(BoundManagedReferenceExpression node)
+    {
+        var location = RewriteExpression(node.Location);
+        return location == node.Location ? node : new BoundManagedReferenceExpression(node.Syntax, location, node.Type, node.IsReadOnly);
+    }
+
+    /// <summary>Rewrites a borrowed address without changing its permissions.</summary>
+    /// <param name="node">The borrowed address.</param>
+    /// <returns>The rewritten address.</returns>
     protected virtual BoundExpression RewriteAddressOfExpression(BoundAddressOfExpression node)
     {
         var operand = RewriteExpression(node.Operand);

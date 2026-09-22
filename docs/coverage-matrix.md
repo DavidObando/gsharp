@@ -352,6 +352,8 @@ LenExpression
 ListPattern
 LiteralExpression
 LocalFunctionDeclaration
+ManagedFieldKeyExpression
+ManagedReferenceExpression
 MapLiteralExpression
 MethodGroupExpression
 NotPattern

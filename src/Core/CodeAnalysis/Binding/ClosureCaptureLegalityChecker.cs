@@ -47,7 +47,11 @@ internal static class ClosureCaptureLegalityChecker
     {
         foreach (var capturedVariable in captured)
         {
-            if (TypeSymbol.IsByRefLike(capturedVariable.Type))
+            if (ManagedReferenceOrigins.IsScopedHandle(capturedVariable))
+            {
+                diagnostics.ReportManagedReference(location, "a scoped managed-reference value cannot be captured");
+            }
+            else if (TypeSymbol.IsByRefLike(capturedVariable.Type))
             {
                 diagnostics.ReportByRefLikeEscape(location, capturedVariable.Type, $"be captured by a closure (variable '{capturedVariable.Name}')");
             }

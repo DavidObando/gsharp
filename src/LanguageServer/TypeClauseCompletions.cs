@@ -90,6 +90,11 @@ internal static class TypeClauseCompletions
 
         AddSnippet(items, seen, AsyncFuncLabel, BuildAsyncFuncSnippet(), AsyncFuncDocumentation, "01");
         AddSnippet(items, seen, AsyncSequenceLabel, BuildAsyncSequenceSnippet(), AsyncSequenceDocumentation, "02");
+        AddSnippet(items, seen, "slice[T]", "slice[${1:T}]", "Shared managed-array view with independent length and capacity.", "03");
+        AddSnippet(items, seen, "managed[T]", "managed[${1:T}]", "Writable heap-storable managed location.", "03");
+        AddSnippet(items, seen, "readonly managed[T]", "readonly managed[${1:T}]", "Readonly heap-storable managed location.", "04");
+        AddSnippet(items, seen, "readonly slice[T]", "readonly slice[${1:T}]", "Shared native slice with readonly element access.", "04");
+        AddSnippet(items, seen, "array[T]", "array[${1:T}]", "Exact CLR array; identical to []T, including copying ranges.", "05");
         return true;
     }
 

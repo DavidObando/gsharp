@@ -2,6 +2,28 @@
 
 Every diagnostic emitted by `gsc` carries a stable `GS####` identifier, a severity level, a human-readable message, and a source location (file, line, column). This document enumerates all identifiers so that project files can suppress or promote them using standard MSBuild properties.
 
+## Native slices (ADR-0190)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0600 | Error | Native slices require compatible `Gsharp.Runtime.Values` support and the .NET 10 target. | Use the matching SDK runtime reference; no fallback to arrays occurs. |
+| GS0601 | Error | Invalid native-buffer type, element, sharing conversion or literal shape. | Supply one heap-storable element type, preserve element nullability when sharing, and use positional literal elements (`AppendRange` for ranges). |
+| GS0602 | Error | A selected native element/value-field write would suspend while its location is borrowed. | Evaluate the suspending value before selecting the element. Ordinary async slice values and segment-local borrows are supported. |
+| GS0603 | Error | A store requires writable elements but its descriptor is `readonly slice[T]`. | Use a writable alias or explicitly clone; readonly views are not deep immutable copies. |
+
+## Persistent managed references (ADR-0188)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0604 | Error | Invalid persistent-reference type, origin, permission, initialization, scoped escape, or suspension of a temporary borrow. | Use an admitted GC-owned location and compatible runtime; initialize non-null handles on every path, weaken permissions explicitly, and evaluate suspending values before borrowing. Unknown borrowed storage is never copied into a replacement location. |
+
+## Capturing rich objects and structural adaptation (ADR-0189)
+
+| Code | Severity | Meaning | Remedy |
+| --- | --- | --- | --- |
+| GS0605 | Error | A rich anonymous field with an omitted type has no unambiguous heap-storable inferred type. | Add an explicit field type; `nil`, untyped lambdas/method groups, cycles, and ref-like values are not widened to `object`. |
+| GS0606 | Error | `adapt[I](source)` cannot produce a complete exact forwarding plan. | Supply an interface target and a non-null admitted source whose accessible public instance members exactly match every required slot. Static abstract/virtual members and operators require a separate design. |
+
 ## Severity levels
 
 | Level | Meaning |

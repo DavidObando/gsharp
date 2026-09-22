@@ -37,6 +37,12 @@ public sealed class GenericNameExpressionSyntax : ExpressionSyntax
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.GenericNameExpression;
 
+    /// <summary>Gets the contextual readonly modifier for a native slice receiver.</summary>
+    public SyntaxToken? ReadOnlySliceModifier { get; internal set; }
+
+    /// <summary>Gets the contextual readonly modifier of a managed-reference type receiver.</summary>
+    public SyntaxToken? ReadOnlyManagedModifier { get; internal set; }
+
     /// <summary>Gets the generic type name.</summary>
     public SyntaxToken Identifier { get; }
 

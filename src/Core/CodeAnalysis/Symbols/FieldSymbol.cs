@@ -61,7 +61,7 @@ public sealed class FieldSymbol : Symbol
     };
 
     /// <summary>Gets the field type.</summary>
-    public TypeSymbol Type { get; }
+    public TypeSymbol Type { get; private set; }
 
     /// <summary>Gets the field accessibility.</summary>
     public Accessibility Accessibility { get; }
@@ -162,6 +162,16 @@ public sealed class FieldSymbol : Symbol
     internal void RepointDeclaration(SyntaxNode declaration)
     {
         Declaration = declaration;
+    }
+
+    /// <summary>
+    /// Replaces the placeholder type of a predeclared rich-anonymous field
+    /// after its literal-site initializer has been bound.
+    /// </summary>
+    /// <param name="type">The inferred or explicitly declared field type.</param>
+    internal void SetRichAnonymousType(TypeSymbol type)
+    {
+        Type = type;
     }
 
     /// <summary>

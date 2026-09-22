@@ -396,6 +396,12 @@ internal sealed class ConversionClassifier
         bool allowExplicit = false,
         ParameterSymbol? callParameter = null)
     {
+        if (NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) || ManagedReferenceTypes.HaveIncompatibleElements(expression.Type, type))
+        {
+            Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
+            return new BoundErrorExpression(expression.Syntax);
+        }
+
         // Issue #1238: a deferred target-typed conditional/if/switch argument
         // placeholder (a BoundErrorExpression retaining the branchy syntax,
         // produced when the branches could not unify without a target type).

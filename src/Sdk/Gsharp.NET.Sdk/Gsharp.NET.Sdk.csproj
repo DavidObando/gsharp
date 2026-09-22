@@ -50,6 +50,10 @@
                       Private="false"
                       ReferenceOutputAssembly="false"
                       SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="..\Gsharp.Runtime.Values\Gsharp.Runtime.Values.csproj"
+                      Private="false"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
 
   <ItemGroup>
@@ -221,6 +225,24 @@
             Pack="true"
             PackagePath="tools\channels\"
             Visible="false" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="PackGsharpValuesRuntime" BeforeTargets="_GetPackageFiles" DependsOnTargets="Build">
+    <PropertyGroup>
+      <_GsharpValuesRuntimeOutputDir>$(BaseOutputPath)\Gsharp.Runtime.Values\</_GsharpValuesRuntimeOutputDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_GsharpValuesRuntimePayload Include="$(_GsharpValuesRuntimeOutputDir)Gsharp.Runtime.Values.dll" />
+      <_GsharpValuesRuntimePayload Include="$(_GsharpValuesRuntimeOutputDir)Gsharp.Runtime.Values.pdb"
+                                  Condition="Exists('$(_GsharpValuesRuntimeOutputDir)Gsharp.Runtime.Values.pdb')" />
+      <_GsharpValuesRuntimePayload Include="$(_GsharpValuesRuntimeOutputDir)Gsharp.Runtime.Values.xml"
+                                  Condition="Exists('$(_GsharpValuesRuntimeOutputDir)Gsharp.Runtime.Values.xml')" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(_GsharpValuesRuntimeOutputDir)Gsharp.Runtime.Values.dll')"
+           Text="Expected Gsharp.Runtime.Values output not found under '$(_GsharpValuesRuntimeOutputDir)'." />
+    <ItemGroup>
+      <None Include="@(_GsharpValuesRuntimePayload)" Pack="true" PackagePath="tools\values\" Visible="false" />
     </ItemGroup>
   </Target>
 

@@ -178,10 +178,19 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundClrStaticCallExpression staticCall:
                 this.EmitImportedCallArguments(staticCall.Arguments, staticCall.ArgumentRefKinds);
-                this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method));
-                this.EmitErasedObjectReturnWidening(
-                    TypeSymbol.FromClrType(staticCall.Method.ReturnType),
-                    staticCall.Type);
+                if (ManagedReferenceTypes.IsDefinition(staticCall.Method.DeclaringType, out _)
+                    && ManagedReferenceTypes.TryGetElement(staticCall.Type, out _, out _))
+                {
+                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method, staticCall.Type));
+                }
+                else
+                {
+                    this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method));
+                    this.EmitErasedObjectReturnWidening(
+                        TypeSymbol.FromClrType(staticCall.Method.ReturnType),
+                        staticCall.Type);
+                }
+
                 break;
             case BoundImportedInstanceCallExpression instCall:
                 {
@@ -305,6 +314,9 @@ internal sealed partial class MethodBodyEmitter
                 break;
             case BoundAddressOfExpression addressOf:
                 this.EmitAddressOf(addressOf);
+                break;
+            case BoundManagedFieldKeyExpression key:
+                this.EmitManagedFieldKey(key);
                 break;
             case BoundConditionalAddressExpression conditionalAddress:
                 // ADR-0061: conditional address-of (`cond ? &a : &b`).
@@ -1257,8 +1269,7 @@ internal sealed partial class MethodBodyEmitter
                 }
                 else
                 {
-                    throw new InvalidOperationException(
-                        $"Class field '{initField.Name}' has no emitted FieldDef.");
+                    fieldHandle = this.outer.userTokens.ResolveFieldToken(literal.StructType, initField);
                 }
 
                 this.il.OpCode(ILOpCode.Dup);
@@ -1954,7 +1965,15 @@ internal sealed partial class MethodBodyEmitter
                     $"Closure invoke method '{genericLocal.Info.InvokeMethod.Name}' has no emitted MethodDef.");
             }
 
-            EntityHandle invokeToken = invokeHandle;
+            // Issue #4341 follow-up: when the closure class was reified over
+            // its GENERIC lexical encloser's own type parameters (nested to
+            // preserve private/protected access), the open MethodDef is not
+            // a valid call target — a MemberRef parented at the constructed
+            // closure TypeSpec is required first, matching
+            // ResolveUserInstanceMethodToken's ADR-0087 §3 R3 handling.
+            EntityHandle invokeToken = ReflectionMetadataEmitter.IsUserGenericTypeReference(genericLocal.Info.ConstructedClassSym)
+                ? this.outer.userTokens.ResolveUserInstanceMethodToken(genericLocal.Info.ConstructedClassSym, genericLocal.Info.InvokeMethod, invokeHandle)
+                : invokeHandle;
             if (call.Function.IsGeneric && !call.Function.TypeParameters.IsDefaultOrEmpty)
             {
                 invokeToken = nullableLift != null

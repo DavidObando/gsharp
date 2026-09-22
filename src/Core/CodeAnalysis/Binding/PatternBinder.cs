@@ -1203,7 +1203,13 @@ internal sealed class PatternBinder
                     && p.GetGetMethod(nonPublic: false) != null);
             if (length != null && indexer != null)
             {
-                elementType = ExpressionBinder.MapErasedIndexerElementType(importedIndexable, indexer);
+                elementType = NativeSliceTypes.TryGetElement(discriminantType, out var nativeElement, out _)
+                    ? nativeElement : ExpressionBinder.MapErasedIndexerElementType(importedIndexable, indexer);
+                if (elementType is ByRefTypeSymbol byRefElement)
+                {
+                    elementType = byRefElement.PointeeType;
+                }
+
                 lengthProperty = length;
                 indexerProperty = indexer;
                 var inputName = "$list_input" + System.Threading.Interlocked
@@ -1215,7 +1221,8 @@ internal sealed class PatternBinder
                 foreach (var elementSyntax in syntax.Elements)
                 {
                     if (elementSyntax is SlicePatternSyntax sliceSyntax
-                        && (sliceSyntax.Pattern != null || sliceSyntax.CaptureIdentifier != null))
+                        && (sliceSyntax.Pattern != null || sliceSyntax.CaptureIdentifier != null)
+                        && !NativeSliceTypes.TryGetElement(discriminantType, out _, out _))
                     {
                         Diagnostics.ReportListPatternRequiresArrayOrSlice(
                             sliceSyntax.DotDotToken.Location, discriminantType);
@@ -1294,7 +1301,7 @@ internal sealed class PatternBinder
     {
         var sliceType = elementType == TypeSymbol.Error
             ? (TypeSymbol)TypeSymbol.Error
-            : SliceTypeSymbol.Get(elementType);
+            : NativeSliceTypes.TryGetElement(discriminantType, out _, out _) ? discriminantType : SliceTypeSymbol.Get(elementType);
 
         BoundPattern? subPattern = null;
         if (syntax.Pattern != null)

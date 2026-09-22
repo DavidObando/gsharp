@@ -331,6 +331,7 @@ public partial class Parser
         if (Current.Kind != SyntaxKind.IdentifierToken
             || Peek(1).Kind == SyntaxKind.OpenSquareBracketToken
             || Peek(1).Kind == SyntaxKind.DotToken
+            || IsReadOnlyManagedHead()
             || IsChannelDirectionHead())
         {
             var nestedElementType = ParseTypeClause();
@@ -681,7 +682,17 @@ public partial class Parser
         bool allowContextualOperators = true)
     {
         ExpressionSyntax current;
-        if (allowContextualOperators
+        if (IsReadOnlyManagedHead() || IsReadOnlyManagedHead(address: true))
+        {
+            current = ParseReadOnlyManagedExpression();
+        }
+        else if (IsReadOnlySliceHead()
+            || (Current.Kind == SyntaxKind.IdentifierToken && Current.Text is "slice" or "array"
+                && Peek(1).Kind == SyntaxKind.OpenSquareBracketToken && LooksLikeGenericCallSite(1)))
+        {
+            current = ParseNativeBufferExpression();
+        }
+        else if (allowContextualOperators
             && Current.Kind == SyntaxKind.IdentifierToken
             && Current.Text == "make"
             && Peek(1).Kind == SyntaxKind.OpenParenthesisToken
@@ -768,6 +779,79 @@ public partial class Parser
         }
 
         return ParsePostfixChain(current, stopBeforeIndirectInvocation);
+    }
+
+    private ExpressionSyntax ParseReadOnlyManagedExpression()
+    {
+        var modifier = NextToken();
+        if (Peek(1).Kind == SyntaxKind.OpenParenthesisToken)
+        {
+            var call = ParseCallExpression();
+            call.ReadOnlyManagedModifier = modifier;
+            return call;
+        }
+
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var arguments = ParseTypeArgumentList();
+        if (Current.Kind == SyntaxKind.DotToken)
+        {
+            return new GenericNameExpressionSyntax(syntaxTree, identifier, arguments)
+            {
+                ReadOnlyManagedModifier = modifier,
+            };
+        }
+
+        var question = Current.Kind == SyntaxKind.QuestionToken ? NextToken() : null;
+        var type = new TypeClauseSyntax(syntaxTree, null, null, null, identifier, arguments.OpenBracketToken, arguments.Arguments, arguments.CloseBracketToken, question)
+        {
+            ReadOnlyManagedModifier = modifier,
+        };
+        var open = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var values = ParseArguments();
+        var close = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new CallExpressionSyntax(syntaxTree, type, open, values, close);
+    }
+
+    private ExpressionSyntax ParseNativeBufferExpression()
+    {
+        var modifier = IsReadOnlySliceHead() ? NextToken() : null;
+        var identifier = MatchToken(SyntaxKind.IdentifierToken);
+        var arguments = ParseTypeArgumentList();
+        if (Current.Kind == SyntaxKind.DotToken)
+        {
+            return new GenericNameExpressionSyntax(syntaxTree, identifier, arguments)
+            {
+                ReadOnlySliceModifier = modifier,
+            };
+        }
+
+        var question = Current.Kind == SyntaxKind.QuestionToken ? NextToken() : null;
+        var type = new TypeClauseSyntax(syntaxTree, null, null, null, identifier, arguments.OpenBracketToken, arguments.Arguments, arguments.CloseBracketToken, question)
+        {
+            ReadOnlySliceModifier = modifier,
+        };
+        if (Current.Kind == SyntaxKind.OpenBraceToken)
+        {
+            if (modifier == null && !BraceLooksLikeGenericCollectionInitializer())
+            {
+                var openBrace = MatchToken(SyntaxKind.OpenBraceToken);
+                var (spreadToken, spreadExpression, spreadSeparator, elements) = ParseStructLiteralInitializers();
+                var closeBrace = MatchToken(SyntaxKind.CloseBraceToken);
+                return new StructLiteralExpressionSyntax(syntaxTree, identifier, openBrace, spreadToken, spreadExpression, spreadSeparator, elements, closeBrace)
+                {
+                    TypeArgumentList = arguments,
+                };
+            }
+
+            var literal = (CollectionInitializerExpressionSyntax)ParseCollectionInitializerExpression(null);
+            literal.BufferType = type;
+            return literal;
+        }
+
+        var open = MatchToken(SyntaxKind.OpenParenthesisToken);
+        var values = ParseArguments();
+        var close = MatchToken(SyntaxKind.CloseParenthesisToken);
+        return new CallExpressionSyntax(syntaxTree, type, open, values, close);
     }
 
     // Phase 4.1 / ADR-0020: bounded-lookahead disambiguation between
@@ -1023,6 +1107,12 @@ public partial class Parser
             {
                 pos++;
             }
+        }
+
+        if (IsReadOnlySliceHead(pos) || IsReadOnlyManagedHead(pos))
+        {
+            pos++;
+            isComplex = true;
         }
 
         if (!CanStartTypeClause(Peek(pos)))

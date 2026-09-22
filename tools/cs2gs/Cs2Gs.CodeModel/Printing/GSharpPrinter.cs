@@ -158,6 +158,12 @@ public static class GSharpPrinter
     {
         switch (type)
         {
+            case NativeSliceTypeReference slice:
+                return $"{(slice.IsReadOnly ? "readonly " : string.Empty)}slice[{RenderType(slice.ElementType)}]";
+
+            case ManagedReferenceTypeReference reference:
+                return $"{(reference.IsReadOnly ? "readonly " : string.Empty)}managed[{RenderType(reference.ElementType)}]";
+
             case NamedTypeReference named:
                 var name = named.ContainingType == null
                     ? named.Name
@@ -625,6 +631,9 @@ public static class GSharpPrinter
 
             case IdentifierExpression identifier:
                 return identifier.Name;
+
+            case ManagedReferenceExpression reference:
+                return $"{(reference.IsReadOnly ? "readonly " : string.Empty)}managed({RenderExpression(reference.Location, indent)})";
 
             case ThisExpression _:
                 return "this";

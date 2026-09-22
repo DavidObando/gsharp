@@ -389,6 +389,45 @@ internal sealed class BinderContext
 
     public SyntaxTree? CachedImportedExtensionSyntaxTree { get; set; }
 
+    public static bool ClrTypeExposesStaticMember(Type? type, string name)
+    {
+        if (type == null)
+        {
+            return false;
+        }
+
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public;
+        return ClrTypeUtilities.SafeGetMethods(type, flags).Any(member => ClrTypeUtilities.EmittedMemberNameMatches(member, name))
+            || ClrTypeUtilities.SafeGetProperties(type, flags).Any(member => ClrTypeUtilities.EmittedMemberNameMatches(member, name))
+            || ClrTypeUtilities.SafeGetFields(type, flags).Any(member => ClrTypeUtilities.EmittedMemberNameMatches(member, name));
+    }
+
+    public static bool ImportedTypeExposesStaticMember(StructSymbol type, string name)
+        => TypeMemberModel.TryGetStaticFieldIncludingInherited(type, name, out _, out _)
+            || TypeMemberModel.TryGetStaticPropertyIncludingInherited(type, name, out _, out _)
+            || !TypeMemberModel.GetMethods(type, name, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty;
+
+    public bool CanUseNativeBufferAlias(BoundScope scope, SyntaxToken identifier, FunctionSymbol? currentFunction, bool expression = false)
+        => identifier.Text is "slice" or "array" && CanUseIntrinsicAlias(scope, identifier, currentFunction, expression);
+
+    public bool CanUseIntrinsicAlias(BoundScope scope, SyntaxToken identifier, FunctionSymbol? currentFunction, bool expression = false)
+    {
+        if (TryLookupSourceType(scope, identifier.ValueText, -1, currentFunction, out _, out var ambiguous)
+            || ambiguous
+            || scope.HasImportedTypeName(identifier.ValueText))
+        {
+            return false;
+        }
+
+        return !expression || !HasValueName(scope, identifier.ValueText);
+    }
+
+    public bool HasValueName(BoundScope scope, string name)
+        => scope.TryLookupSymbol(name) != null
+            || !scope.TryLookupFunctions(name).IsDefaultOrEmpty
+            || GetStaticImportTypes().Any(type => ImportedTypeExposesStaticMember(type, name))
+            || scope.EnumerateStaticImportClrTypes().Any(type => ClrTypeExposesStaticMember(type, name));
+
     /// <summary>
     /// Resolves a source type at the current binding site. Lexically visible
     /// nested types on the containing type or an accessible base type are

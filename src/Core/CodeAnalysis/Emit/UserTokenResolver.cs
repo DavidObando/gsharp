@@ -1449,7 +1449,25 @@ internal sealed class UserTokenResolver
             }
         }
 
-        return this.cache.StructFieldDefs[field];
+        if (this.cache.StructFieldDefs.TryGetValue(field, out fieldHandle))
+        {
+            return fieldHandle;
+        }
+
+        // Interface initializers are emitted before later aggregate FieldDefs.
+        // Their source-declared fields can be referenced through the reserved
+        // TypeDef without changing field-row order or visibility.
+        if (containingType.ClrType == null && containingType.Fields.Contains(field))
+        {
+            var signature = new BlobBuilder();
+            this.signatures.EncodeTypeSymbol(new BlobEncoder(signature).FieldSignature(), field.Type);
+            return this.emitCtx.Metadata.AddMemberReference(
+                this.ResolveUserTypeToken(containingType),
+                this.emitCtx.Metadata.GetOrAddString(field.Name),
+                this.emitCtx.Metadata.GetOrAddBlob(signature));
+        }
+
+        throw new InvalidOperationException($"Field '{containingType.Name}.{field.Name}' has no declared or emitted field token.");
     }
 
     /// <summary>
@@ -2155,18 +2173,22 @@ internal sealed class UserTokenResolver
         var def = structType.Definition ?? structType;
         var defParams = def.PrimaryConstructorParameters;
         var sigBlob = new BlobBuilder();
-        new BlobEncoder(sigBlob)
-            .MethodSignature(isInstanceMethod: true)
-            .Parameters(
-                defParams.Length,
-                r => r.Void(),
-                ps =>
-                {
-                    foreach (var p in defParams)
+        using (this.remaps.PushSmRemap(def))
+        {
+            new BlobEncoder(sigBlob)
+                .MethodSignature(isInstanceMethod: true)
+                .Parameters(
+                    defParams.Length,
+                    r => r.Void(),
+                    ps =>
                     {
-                        this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
-                    }
-                });
+                        foreach (var p in defParams)
+                        {
+                            this.signatures.EncodeTypeSymbol(ps.AddParameter().Type(isByRef: p.RefKind != RefKind.None), p.Type);
+                        }
+                    });
+        }
+
         return this.GetUserStructMethodRef(structType, primaryDef, ".ctor", sigBlob);
     }
 

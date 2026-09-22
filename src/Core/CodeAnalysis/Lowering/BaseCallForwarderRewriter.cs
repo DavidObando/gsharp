@@ -126,6 +126,7 @@ public static class BaseCallForwarderRewriter
             program.Globals,
             program.Delegates)
         {
+            Initializers = program.Initializers,
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,

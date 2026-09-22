@@ -1202,7 +1202,7 @@ internal sealed partial class ExpressionBinder
             FieldInfo f => f.FieldType,
             _ => null,
         };
-        if (memberClrType == null || !ClrTypeUtilities.IsDelegateType(memberClrType))
+        if (memberClrType == null)
         {
             return false;
         }
@@ -1216,6 +1216,21 @@ internal sealed partial class ExpressionBinder
 
         BoundExpression delegateLoad = ApplyMemberNarrowing(
             new BoundClrPropertyAccessExpression(null, null, member, memberTypeSymbol));
+        if (!ClrTypeUtilities.IsDelegateType(memberClrType))
+        {
+            // Static imports have the same Member[index](args) ambiguity as
+            // instance members; reuse their index recovery before Invoke.
+            if (!TryBindAmbiguousBracketAsIndex(ce, delegateLoad, out var indexedValue)
+                || indexedValue.Type?.ClrType is not { } indexedClrType
+                || !ClrTypeUtilities.IsDelegateType(indexedClrType))
+            {
+                return false;
+            }
+
+            delegateLoad = indexedValue;
+            memberClrType = indexedClrType;
+        }
+
         var effectiveMemberType = delegateLoad.Type;
 
         if (ce.NullableQuestionToken == null

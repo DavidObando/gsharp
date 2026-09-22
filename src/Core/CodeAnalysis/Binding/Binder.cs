@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -19,6 +20,8 @@ using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
+
+#pragma warning disable SA1201 // Rich anonymous-object helper types stay next to their binding entry point.
 
 /// <summary>
 /// Binder.
@@ -457,7 +460,9 @@ public sealed class Binder
             isAsyncIteratorReturnType: IsAsyncIteratorReturnType,
             getCurrentFunction: () => this.function,
             bindStatementList: (syntax, trailing) => Statements.BindStatementList(syntax, trailingStatement: trailing),
-            bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type));
+            bindLocalVariable: (identifier, isReadOnly, type) => Declarations.BindVariableDeclaration(identifier, isReadOnly, type),
+            bindRichAnonymousObject: BindRichAnonymousObject,
+            bindStructuralAdaptation: BindStructuralAdaptation);
 
         // statements/declarations still reference this.expressions through
         // the callbacks above; expressions is wired last so its constructor
@@ -1164,7 +1169,13 @@ public sealed class Binder
         var richAnonymousClasses = new List<(AnonymousClassExpressionSyntax Node, StructDeclarationSyntax Declaration)>();
         foreach (var tree in syntaxTrees)
         {
-            CollectRichAnonymousObjectDeclarations(tree.Root, tree, richAnonymousClasses, binder.Diagnostics, ref anonClassCounter);
+            CollectRichAnonymousObjectDeclarations(
+                tree.Root,
+                tree,
+                richAnonymousClasses,
+                binder.Diagnostics,
+                ref anonClassCounter,
+                enclosingTypeParameters: ImmutableArray<TypeParameterListSyntax>.Empty);
         }
 
         var structDeclarations = PartialTypeMerger.MergeStructs(
@@ -1793,6 +1804,9 @@ public sealed class Binder
         // bodies against a freshly-derived scope chain) can rehydrate it and
         // bind literals appearing inside those bodies.
         result.RichAnonymousClassMap = binder.scope.GetRichAnonymousClassMap();
+        result.RichAnonymousObjectPlans = binder.scope.GetRichAnonymousObjectPlans();
+        result.LatestRichAnonymousObjectPlans = binder.scope.GetLatestRichAnonymousObjectPlans();
+        result.StructuralAdapters = binder.scope.GetStructuralAdapterRegistry();
 
         // Issue #3501 A2: carry the ref-kind delegate cache itself (not just
         // a snapshot) so BindProgram can install it on its freshly-derived
@@ -1837,6 +1851,9 @@ public sealed class Binder
                 ModuleAttributes = result.ModuleAttributes,
                 AnonymousTypes = result.AnonymousTypes,
                 RichAnonymousClassMap = result.RichAnonymousClassMap,
+                RichAnonymousObjectPlans = result.RichAnonymousObjectPlans,
+                LatestRichAnonymousObjectPlans = result.LatestRichAnonymousObjectPlans,
+                StructuralAdapters = result.StructuralAdapters,
                 RefDelegateCache = result.RefDelegateCache,
             };
         }
@@ -2077,15 +2094,109 @@ public sealed class Binder
             }
         }
 
+        if (globalScope?.RichAnonymousObjectPlans != null && globalScope.RichAnonymousObjectPlans.Count > 0)
+        {
+            var richPlans = parentScope.GetRichAnonymousObjectPlans();
+            foreach (var kv in globalScope.RichAnonymousObjectPlans)
+            {
+                richPlans[kv.Key] = kv.Value;
+            }
+        }
+
+        if (globalScope?.LatestRichAnonymousObjectPlans != null
+            && globalScope.LatestRichAnonymousObjectPlans.Count > 0)
+        {
+            var latestRichPlans = parentScope.GetLatestRichAnonymousObjectPlans();
+            foreach (var kv in globalScope.LatestRichAnonymousObjectPlans)
+            {
+                latestRichPlans[kv.Key] = kv.Value;
+            }
+        }
+
+        if (globalScope?.StructuralAdapters != null)
+        {
+            var adapters = parentScope.GetStructuralAdapterRegistry();
+            adapters.Counter = Math.Max(adapters.Counter, globalScope.StructuralAdapters.Counter);
+            adapters.Types.AddRange(globalScope.StructuralAdapters.Types);
+            foreach (var pair in globalScope.StructuralAdapters.MethodBodies)
+            {
+                adapters.MethodBodies[pair.Key] = pair.Value;
+            }
+        }
+
         var functionBodies = ImmutableDictionary.CreateBuilder<FunctionSymbol, BoundBlockStatement>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
 
         var scope = globalScope;
+        while (scope != null)
+        {
+            foreach (var function in scope.Functions)
+            {
+                if (HasInferredRichAnonymousReturn(function, parentScope))
+                {
+                    functionBodies[function] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        function,
+                        owner: null,
+                        diagnostics);
+                }
+            }
+
+            scope = scope.Previous;
+        }
+
+        // BindProgram requires a global scope; the earlier null-tolerant rehydration checks make flow analysis conservative.
+        foreach (var structSym in globalScope!.Structs)
+        {
+            foreach (var method in structSym.Methods)
+            {
+                if (HasInferredRichAnonymousReturn(method, parentScope))
+                {
+                    functionBodies[method] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        method,
+                        structSym,
+                        diagnostics);
+                }
+            }
+        }
+
+        foreach (var ifaceSym in globalScope.Interfaces)
+        {
+            foreach (var method in ifaceSym.Methods
+                         .Concat(ifaceSym.StaticMethods)
+                         .Concat(ifaceSym.PrivateMethods)
+                         .Concat(ifaceSym.StaticPrivateMethods))
+            {
+                if (method?.Declaration?.Body != null
+                    && HasInferredRichAnonymousReturn(method, parentScope))
+                {
+                    functionBodies[method] = BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        method,
+                        owner: null,
+                        diagnostics);
+                }
+            }
+        }
+
+        scope = globalScope;
 
         while (scope != null)
         {
             foreach (var function in scope.Functions)
             {
+                if (functionBodies.ContainsKey(function))
+                {
+                    continue;
+                }
+
                 // ADR-0086 / issue #727: P/Invoke functions have no managed
                 // body — the binder skips body binding and the emitter writes
                 // a PinvokeImpl method with an ImplMap row instead. We still
@@ -2098,33 +2209,15 @@ public sealed class Binder
                     continue;
                 }
 
-                var (functionDeclaration, functionBody) = RequireDeclaredBody(function);
-                var loweredBody = BindBodyWithPackage(
-                    parentScope,
-                    function.Package?.Name,
-                    functionBody.SyntaxTree,
-                    () =>
-                    {
-                        return BindBodyWithCache(cache, dirtyTrees, function, functionBody, diagnostics, () =>
-                        {
-                            var binder = new Binder(parentScope, function);
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(functionBody);
-                            var body = binder.statements.BindBlockStatement(functionBody);
-                            binder.statements.FinalizeUserLabels();
-                            var lowered = Lowerer.Lower(body);
-
-                            if (function.Type != TypeSymbol.Void && !IsIteratorReturnType(function.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
-                            {
-                                binder.Diagnostics.ReportAllPathsMustReturn(functionDeclaration.Identifier.Location);
-                            }
-
-                            AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
-
-                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                        });
-                    });
-
-                functionBodies.Add(function, loweredBody);
+                functionBodies.Add(
+                    function,
+                    BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        function,
+                        owner: null,
+                        diagnostics));
             }
 
             scope = scope.Previous;
@@ -2143,6 +2236,18 @@ public sealed class Binder
 
             foreach (var method in structSym.Methods)
             {
+                if (functionBodies.ContainsKey(method))
+                {
+                    continue;
+                }
+
+                if (parentScope.GetLatestRichAnonymousObjectPlans().TryGetValue(structSym, out var richPlan)
+                    && richPlan.MethodBodies.TryGetValue(method, out var richBody))
+                {
+                    functionBodies[method] = richBody;
+                    continue;
+                }
+
                 // Issue #987: abstract methods (a no-body `open func F() R;`)
                 // have no managed body — register an empty synthetic block so
                 // the emitter still mints a MethodDef handle (it writes an
@@ -2155,33 +2260,15 @@ public sealed class Binder
                     continue;
                 }
 
-                var (methodDeclaration, methodBody) = RequireDeclaredBody(method);
-                var loweredBody = BindBodyWithPackage(
-                    parentScope,
-                    structSym.PackageName,
-                    methodBody.SyntaxTree,
-                    () =>
-                    {
-                        return BindBodyWithCache(cache, dirtyTrees, method, methodBody, diagnostics, () =>
-                        {
-                            var binder = new Binder(parentScope, method);
-                            binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(methodBody);
-                            var body = binder.statements.BindBlockStatement(methodBody);
-                            binder.statements.FinalizeUserLabels();
-                            var lowered = Lowerer.Lower(body, structSym);
-
-                            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
-                            {
-                                binder.Diagnostics.ReportAllPathsMustReturn(methodDeclaration.Identifier.Location);
-                            }
-
-                            AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
-
-                            return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
-                        });
-                    });
-
-                functionBodies.Add(method, loweredBody);
+                functionBodies.Add(
+                    method,
+                    BindDeclaredFunctionBody(
+                        cache,
+                        dirtyTrees,
+                        parentScope,
+                        method,
+                        structSym,
+                        diagnostics));
             }
         }
 
@@ -2206,6 +2293,11 @@ public sealed class Binder
                     continue;
                 }
 
+                if (functionBodies.ContainsKey(method))
+                {
+                    continue;
+                }
+
                 BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
             }
         }
@@ -2224,6 +2316,11 @@ public sealed class Binder
             foreach (var method in ifaceSym.StaticMethods)
             {
                 if (method?.Declaration?.Body == null)
+                {
+                    continue;
+                }
+
+                if (functionBodies.ContainsKey(method))
                 {
                     continue;
                 }
@@ -2276,6 +2373,11 @@ public sealed class Binder
                         continue;
                     }
 
+                    if (functionBodies.ContainsKey(method))
+                    {
+                        continue;
+                    }
+
                     BindInterfaceMethodBody(cache, dirtyTrees, parentScope, method, functionBodies, diagnostics);
                 }
             }
@@ -2285,6 +2387,11 @@ public sealed class Binder
                 foreach (var method in ifaceSym.StaticPrivateMethods)
                 {
                     if (method?.Declaration?.Body == null)
+                    {
+                        continue;
+                    }
+
+                    if (functionBodies.ContainsKey(method))
                     {
                         continue;
                     }
@@ -2553,6 +2660,11 @@ public sealed class Binder
             .Where(g => !g.Name.StartsWith("<>"))
             .ToImmutableArray();
 
+        foreach (var pair in parentScope.GetStructuralAdapterRegistry().MethodBodies)
+        {
+            functionBodies[pair.Key] = pair.Value;
+        }
+
         // Issue #2224: union the anonymous-class types synthesized while
         // binding top-level statements (globalScope.AnonymousTypes) with
         // those synthesized while binding function/method bodies just above
@@ -2565,7 +2677,8 @@ public sealed class Binder
         // a real CLR type.
         var allStructs = globalScope.Structs
             .AddRange(globalScope.AnonymousTypes)
-            .AddRange(parentScope.GetAnonymousTypeCache().Symbols);
+            .AddRange(parentScope.GetAnonymousTypeCache().Symbols)
+            .AddRange(parentScope.GetStructuralAdapterRegistry().Types);
 
         // ADR-0169: guarantee a syntax anchor on every dispatchable bound node
         // the program exposes. Construction sites and the bind dispatchers
@@ -2600,6 +2713,9 @@ public sealed class Binder
         // pointless. Reported here, over the bound bodies, because the question
         // is about the receiver's declaration rather than the call.
         RendezvousBatchAnalyzer.Run(functionBodies, diagnostics);
+        var managedReferenceDiagnostics = new DiagnosticBag();
+        ManagedReferenceSafetyAnalyzer.Analyze(functionBodies, allStructs, globalScope.Interfaces, managedReferenceDiagnostics);
+        diagnostics.AddRange(managedReferenceDiagnostics.ToImmutableArray());
         if (entryBodyWasTheStatementBlock && functionBodies.TryGetValue(globalScope.EntryPoint!, out var inferredEntryBody))
         {
             // The synthesized top-level block IS the entry point's body; a user
@@ -2675,12 +2791,13 @@ public sealed class Binder
         Func<BodyBindResult> bindAndLower)
     {
         var isDirty = dirtyTrees != null
-            && bodySyntax?.SyntaxTree != null
+            && bodySyntax.SyntaxTree != null
             && dirtyTrees.Contains(bodySyntax.SyntaxTree);
+        var cacheable = !ContainsSyntheticBodySideEffects(bodySyntax);
 
         if (!isDirty
+            && cacheable
             && cache != null
-            && bodySyntax != null
             && cache.TryReuse(member, bodySyntax, out var reusedBody, out var reusedDiagnostics))
         {
             AppendBodyDiagnostics(diagnostics, reusedDiagnostics, member);
@@ -2690,11 +2807,37 @@ public sealed class Binder
         var result = bindAndLower();
         AppendBodyDiagnostics(diagnostics, result.Diagnostics, member);
 
-        // bodySyntax is this method's own non-nullable parameter, never
-        // reassigned above (the `bodySyntax?.SyntaxTree` read a few lines up
-        // is a redundant null-conditional, not a narrowing of bodySyntax).
-        cache?.Store(member, bodySyntax!, result.Body, result.Diagnostics);
+        if (cacheable)
+        {
+            cache?.Store(member, bodySyntax, result.Body, result.Diagnostics);
+        }
+
         return result.Body;
+    }
+
+    private static bool ContainsSyntheticBodySideEffects(SyntaxNode node)
+    {
+        if (node is AnonymousClassExpressionSyntax anonymous
+            && IsRichAnonymousObject(anonymous))
+        {
+            return true;
+        }
+
+        if (node is CallExpressionSyntax call
+            && call.Identifier.Text == "adapt")
+        {
+            return true;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            if (ContainsSyntheticBodySideEffects(child))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void AppendBodyDiagnostics(
@@ -2779,33 +2922,61 @@ public sealed class Binder
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder functionBodies,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var (interfaceMethodDeclaration, interfaceMethodBody) = RequireDeclaredBody(method);
-        var loweredBody = BindBodyWithPackage(
+        functionBodies.Add(
+            method,
+            BindDeclaredFunctionBody(
+                cache,
+                dirtyTrees,
+                parentScope,
+                method,
+                owner: null,
+                diagnostics));
+    }
+
+    private static bool HasInferredRichAnonymousReturn(
+        FunctionSymbol function,
+        BoundScope parentScope)
+        => function.Declaration is { Type: null, Body.Statements.Length: 1 } declaration
+            && declaration.Body.Statements[0] is ReturnStatementSyntax { Expression: AnonymousClassExpressionSyntax anonymous }
+            && parentScope.GetRichAnonymousClassMap().ContainsKey(anonymous);
+
+    private static BoundBlockStatement BindDeclaredFunctionBody(
+        BoundBodyCache? cache,
+        ImmutableHashSet<SyntaxTree>? dirtyTrees,
+        BoundScope parentScope,
+        FunctionSymbol function,
+        StructSymbol? owner,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        var (declaration, bodySyntax) = RequireDeclaredBody(function);
+        return BindBodyWithPackage(
             parentScope,
-            method.Package?.Name,
-            interfaceMethodBody.SyntaxTree,
+            owner?.PackageName ?? function.Package?.Name,
+            bodySyntax.SyntaxTree,
             () =>
             {
-                return BindBodyWithCache(cache, dirtyTrees, method, interfaceMethodBody, diagnostics, () =>
+                return BindBodyWithCache(cache, dirtyTrees, function, bodySyntax, diagnostics, () =>
                 {
-                    var binder = new Binder(parentScope, method);
-                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(interfaceMethodBody);
-                    var body = binder.statements.BindBlockStatement(interfaceMethodBody);
+                    var binder = new Binder(parentScope, function);
+                    binder.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(bodySyntax);
+                    var body = binder.statements.BindBlockStatement(bodySyntax);
                     binder.statements.FinalizeUserLabels();
-                    var lowered = Lowerer.Lower(body);
+                    var lowered = owner == null
+                        ? Lowerer.Lower(body)
+                        : Lowerer.Lower(body, owner);
 
-                    if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+                    if (function.Type != TypeSymbol.Void
+                        && !IsIteratorReturnType(function.Type)
+                        && !ControlFlowGraph.AllPathsReturn(lowered))
                     {
-                        binder.Diagnostics.ReportAllPathsMustReturn(interfaceMethodDeclaration.Identifier.Location);
+                        binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location);
                     }
 
-                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                    AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
 
                     return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 });
             });
-
-        functionBodies.Add(method, loweredBody);
     }
 
     /// <summary>
@@ -2984,6 +3155,11 @@ public sealed class Binder
         var body = lowered.PreEmitAnalysisBody ?? lowered;
         MethodGroupDiagnostics.ReportUnresolved(body, diagnostics);
         DefiniteAssignmentAnalyzer.Analyze(body, function, diagnostics);
+        if (function.IsAsyncOrSuspending)
+        {
+            new NativeSliceSuspensionAnalyzer(diagnostics).Visit(body);
+        }
+
         RefStructAsyncLivenessAnalyzer.Analyze(body, function, diagnostics);
     }
 
@@ -3127,6 +3303,4633 @@ public sealed class Binder
         }
     }
 
+    private BoundExpression BindRichAnonymousObject(
+        AnonymousClassExpressionSyntax syntax,
+        StructSymbol classSymbol)
+    {
+        var plans = scope.GetRichAnonymousObjectPlans();
+        var planKey = new RichAnonymousObjectBindingKey(classSymbol, function);
+        if (plans.TryGetValue(planKey, out var existing))
+        {
+            return new BoundConstructorCallExpression(syntax, existing.ConstructedType, existing.Arguments);
+        }
+
+        var (outerToClassTypeParameters, classToOuterTypeParameters) =
+            BuildRichTypeParameterMaps(classSymbol);
+        var snapshotFields = ImmutableArray.CreateBuilder<FieldSymbol>();
+        var snapshotParameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+        var snapshotArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var member in syntax.Members.OfType<AnonymousClassMemberInitializerSyntax>())
+        {
+            var declaredType = member.TypeClause == null ? null : BindTypeClause(member.TypeClause);
+            var value = declaredType == null
+                ? Expressions.BindExpression(member.Value)
+                : Expressions.BindExpression(member.Value, declaredType);
+            if (value is BoundErrorExpression || value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Void)
+            {
+                if (declaredType == null)
+                {
+                    Diagnostics.ReportRichAnonymousFieldInference(member.Identifier.Location, member.Identifier.ValueText);
+                }
+
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (ManagedReferenceOrigins.IsScopedHandle(value))
+            {
+                Diagnostics.ReportManagedReference(
+                    member.Value.Location,
+                    $"a scoped managed handle cannot be stored in rich anonymous field '{member.Identifier.ValueText}'");
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (value is BoundVariableExpression receiverValue
+                && receiverValue.Variable is ParameterSymbol { IsReceiverParameter: true }
+                && value.Type.IsValueType)
+            {
+                Diagnostics.ReportManagedReference(
+                    member.Value.Location,
+                    "a borrowed struct receiver cannot be captured; copy it to an ordinary local before the rich object");
+                return new BoundErrorExpression(syntax);
+            }
+
+            var fieldType = declaredType ?? value.Type;
+            if (TypeSymbol.IsByRefLike(fieldType)
+                || fieldType is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol)
+            {
+                Diagnostics.ReportByRefLikeEscape(member.Identifier.Location, fieldType, $"be stored in rich anonymous field '{member.Identifier.ValueText}'");
+                return new BoundErrorExpression(syntax);
+            }
+
+            var definitionFieldType = SubstituteRichType(fieldType, outerToClassTypeParameters);
+            var field = classSymbol.Fields.FirstOrDefault(candidate =>
+                candidate.Name == member.Identifier.ValueText);
+            if (field == null)
+            {
+                field = new FieldSymbol(
+                    member.Identifier.ValueText,
+                    definitionFieldType,
+                    Accessibility.Public,
+                    isReadOnly: member.LetOrVarKeyword.Kind == SyntaxKind.LetKeyword,
+                    declaration: member);
+            }
+            else
+            {
+                field.SetRichAnonymousType(definitionFieldType);
+            }
+
+            snapshotFields.Add(field);
+            snapshotParameters.Add(new ParameterSymbol(field.Name, field.Type, declaringSyntax: member.Identifier));
+            snapshotArguments.Add(value);
+        }
+
+        var baseArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        foreach (var argument in syntax.BaseConstructorArguments)
+        {
+            var boundArgument = Expressions.BindExpression(argument);
+            if (ManagedReferenceOrigins.IsScopedHandle(boundArgument))
+            {
+                Diagnostics.ReportManagedReference(
+                    argument.Location,
+                    "a scoped managed handle cannot be retained as a rich-object base argument");
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (boundArgument is BoundVariableExpression receiverArgument
+                && receiverArgument.Variable is ParameterSymbol { IsReceiverParameter: true }
+                && boundArgument.Type.IsValueType)
+            {
+                Diagnostics.ReportManagedReference(
+                    argument.Location,
+                    "a borrowed struct receiver cannot be retained as a rich-object base argument; copy it first");
+                return new BoundErrorExpression(syntax);
+            }
+
+            baseArguments.Add(boundArgument);
+        }
+
+        BaseConstructorInitializer? baseInitializer = null;
+        if (syntax.HasBaseType)
+        {
+            baseInitializer = declarations.ResolveRichAnonymousBaseConstructor(
+                classSymbol,
+                baseArguments.ToImmutable(),
+                syntax.BaseConstructorOpenParenthesisToken?.Location ?? syntax.BaseTypeClause?.Location ?? syntax.Location);
+        }
+
+        var baseFields = ImmutableArray.CreateBuilder<FieldSymbol>();
+        var baseParameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+        if (baseInitializer != null)
+        {
+            var forwarded = ImmutableArray.CreateBuilder<BoundExpression>(baseInitializer.Arguments.Length);
+            for (var i = 0; i < baseInitializer.Arguments.Length; i++)
+            {
+                var argument = baseInitializer.Arguments[i];
+                if (IsUnsupportedRichBaseArgument(baseInitializer, i, argument.Type))
+                {
+                    Diagnostics.ReportManagedReference(
+                        i < syntax.BaseConstructorArguments.Count
+                            ? syntax.BaseConstructorArguments[i].Location
+                            : syntax.Location,
+                        "ref, pointer, and ref-like base-constructor arguments cannot be retained by a rich anonymous object");
+                    return new BoundErrorExpression(syntax);
+                }
+
+                var definitionArgumentType = SubstituteRichType(argument.Type, outerToClassTypeParameters);
+                var field = new FieldSymbol($"<>base{i}", definitionArgumentType, Accessibility.Private, isReadOnly: true);
+                var parameter = new ParameterSymbol(field.Name, definitionArgumentType);
+                baseFields.Add(field);
+                baseParameters.Add(parameter);
+                forwarded.Add(new BoundVariableExpression(syntax, parameter));
+            }
+
+            classSymbol.SetBaseConstructorInitializer(baseInitializer.WithArguments(forwarded.MoveToImmutable()));
+        }
+
+        classSymbol.SetInstanceFieldsAndPrimaryConstructorParameters(
+            baseFields.Concat(snapshotFields).ToImmutableArray(),
+            baseParameters.Concat(snapshotParameters).ToImmutableArray());
+
+        var methodBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        foreach (var method in classSymbol.Methods)
+        {
+            if (method.IsAbstract || method.Declaration?.Body == null)
+            {
+                continue;
+            }
+
+            var bindingMethod = CreateRichBindingMethod(
+                method,
+                classToOuterTypeParameters,
+                out var bindingParameterMap);
+            var child = new Binder(scope, bindingMethod);
+            child.binderCtx.FunctionContainsUserGotoOrLabel = StatementBinder.ContainsUserGotoOrLabel(method.Declaration.Body);
+            var body = child.statements.BindBlockStatement(method.Declaration.Body);
+            child.statements.FinalizeUserLabels();
+            var lowered = Lowerer.Lower(body, classSymbol);
+            if (bindingParameterMap.Count > 0)
+            {
+                lowered = (BoundBlockStatement)new RichBindingParameterRewriter(bindingParameterMap)
+                    .RewriteStatement(lowered);
+            }
+
+            if (method.Type != TypeSymbol.Void && !IsIteratorReturnType(method.Type) && !ControlFlowGraph.AllPathsReturn(lowered))
+            {
+                child.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
+            }
+
+            AnalyzeFunctionBody(lowered, method, child.Diagnostics);
+            Diagnostics.AddRange(child.Diagnostics.ToImmutableArray());
+            methodBodies[method] = lowered;
+        }
+
+        var captures = RichAnonymousCaptureCollector.Collect(methodBodies);
+        var captureFields = ImmutableArray.CreateBuilder<FieldSymbol>();
+        var captureParameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+        var captureArguments = ImmutableArray.CreateBuilder<BoundExpression>();
+        var captureMap = new Dictionary<VariableSymbol, RichAnonymousCapture>();
+        var captureIndex = 0;
+        foreach (var variable in captures)
+        {
+            if (variable is GlobalVariableSymbol)
+            {
+                continue;
+            }
+
+            var borrowedReason = variable switch
+            {
+                ParameterSymbol { IsReceiverParameter: true } receiver when receiver.Type.IsValueType =>
+                    "a borrowed struct receiver cannot be captured by a rich anonymous object; copy it first",
+                ParameterSymbol { RefKind: not RefKind.None } =>
+                    "ref, in, and out parameters cannot be captured by a rich anonymous object; copy a scalar value or retain an explicit managed handle",
+                LocalVariableSymbol { RefKind: not RefKind.None } =>
+                    "ref and ref readonly locals cannot be captured by a rich anonymous object; retain an explicit managed handle instead",
+                _ => null,
+            };
+            if (borrowedReason != null)
+            {
+                Diagnostics.ReportManagedReference(
+                    variable.DeclaringSyntax?.Location ?? syntax.Location,
+                    borrowedReason);
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (ManagedReferenceOrigins.IsScopedHandle(variable))
+            {
+                Diagnostics.ReportManagedReference(
+                    variable.DeclaringSyntax?.Location ?? syntax.Location,
+                    "a scoped managed handle cannot be captured by a rich anonymous object");
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (TypeSymbol.IsByRefLike(variable.Type)
+                || variable.Type is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol)
+            {
+                Diagnostics.ReportByRefLikeEscape(
+                    variable.DeclaringSyntax?.Location ?? syntax.Location,
+                    variable.Type,
+                    "be captured by a rich anonymous object");
+                return new BoundErrorExpression(syntax);
+            }
+
+            var mutable = !variable.IsReadOnly;
+            TypeSymbol storedType = SubstituteRichType(variable.Type, outerToClassTypeParameters);
+            BoundExpression argument = new BoundVariableExpression(syntax, variable);
+            if (mutable)
+            {
+                if (ManagedReferenceOrigins.Rejection(argument) is { } reason)
+                {
+                    Diagnostics.ReportManagedReference(variable.DeclaringSyntax?.Location ?? syntax.Location, reason);
+                    return new BoundErrorExpression(syntax);
+                }
+
+                if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, readOnly: false, out var definition))
+                {
+                    Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime");
+                    return new BoundErrorExpression(syntax);
+                }
+
+                storedType = ManagedReferenceTypes.Construct(definition, storedType, scope.References);
+                var argumentType = ManagedReferenceTypes.Construct(definition, variable.Type, scope.References);
+                argument = new BoundManagedReferenceExpression(
+                    syntax,
+                    ManagedReferenceOrigins.PrepareAliases(argument, scope.References),
+                    argumentType,
+                    readOnly: false);
+            }
+
+            var field = new FieldSymbol(
+                $"<>capture{captureIndex++}_{variable.Name}",
+                storedType,
+                Accessibility.Private,
+                isReadOnly: true);
+            var parameter = new ParameterSymbol(field.Name, storedType);
+            captureFields.Add(field);
+            captureParameters.Add(parameter);
+            captureArguments.Add(argument);
+            captureMap.Add(variable, new RichAnonymousCapture(field, mutable));
+        }
+
+        if (syntax.IsData && captureMap.Count > 0)
+        {
+            Diagnostics.ReportManagedReference(
+                syntax.Location,
+                "capturing rich data objects require a separate value/equality design; use a plain rich object");
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (captureMap.Count > 0)
+        {
+            foreach (var pair in methodBodies.ToArray())
+            {
+                methodBodies[pair.Key] = (BoundBlockStatement)new RichAnonymousCaptureRewriter(
+                    classSymbol,
+                    pair.Key,
+                    captureMap).RewriteStatement(pair.Value);
+            }
+        }
+
+        var fields = captureFields
+            .Concat(baseFields)
+            .Concat(snapshotFields)
+            .ToImmutableArray();
+        var parameters = captureParameters
+            .Concat(baseParameters)
+            .Concat(snapshotParameters)
+            .ToImmutableArray();
+        classSymbol.SetInstanceFieldsAndPrimaryConstructorParameters(fields, parameters);
+
+        var arguments = captureArguments
+            .Concat(baseInitializer?.Arguments ?? ImmutableArray<BoundExpression>.Empty)
+            .Concat(snapshotArguments)
+            .ToImmutableArray();
+        var referencedTypes = fields.Select(field => field.Type)
+            .Concat(parameters.Select(parameter => parameter.Type))
+            .Concat(classSymbol.Methods.SelectMany(method => method.Parameters.Select(parameter => parameter.Type).Append(method.Type)))
+            .Concat(classSymbol.Interfaces.Cast<TypeSymbol>());
+        var ownMethodTypeParameters = classSymbol.Methods
+            .SelectMany(method => method.TypeParameters)
+            .ToHashSet(ReferenceEqualityComparer.Instance);
+        var referencedTypeParameters = SynthesizedClosureReifier.CollectOrdered(referencedTypes)
+            .Where(parameter => !ownMethodTypeParameters.Contains(parameter))
+            .ToImmutableArray();
+        StructSymbol constructedType;
+        var shellTypeParameterCount = classSymbol.Declaration?.RichAnonymousShellTypeParameterCount
+            ?? classSymbol.TypeParameters.Length;
+        var shellTypeParameters = classSymbol.TypeParameters
+            .Take(shellTypeParameterCount)
+            .ToImmutableArray();
+        if (!shellTypeParameters.IsDefaultOrEmpty
+            && classToOuterTypeParameters.Count == shellTypeParameters.Length)
+        {
+            var argumentsForConstruction = shellTypeParameters
+                .Select(parameter => classToOuterTypeParameters[parameter])
+                .ToImmutableArray();
+            var shellParameters = shellTypeParameters
+                .ToHashSet(ReferenceEqualityComparer.Instance);
+            var appendedParameters = referencedTypeParameters
+                .Where(parameter => !shellParameters.Contains(parameter))
+                .ToImmutableArray();
+            if (!classSymbol.ReifiedFromTypeParameters.IsDefaultOrEmpty)
+            {
+                constructedType = StructSymbol.Construct(
+                    classSymbol,
+                    argumentsForConstruction.AddRange(
+                        classSymbol.ReifiedFromTypeParameters.Cast<TypeSymbol>()),
+                    scope.References.MapClrTypeToReferences);
+            }
+            else if (!appendedParameters.IsDefaultOrEmpty)
+            {
+                constructedType = SynthesizedClosureReifier.ReifyAppending(
+                    classSymbol,
+                    argumentsForConstruction,
+                    appendedParameters,
+                    scope.References.MapClrTypeToReferences);
+            }
+            else
+            {
+                constructedType = StructSymbol.Construct(
+                    classSymbol,
+                    argumentsForConstruction,
+                    scope.References.MapClrTypeToReferences);
+            }
+        }
+        else
+        {
+            constructedType = referencedTypeParameters.IsDefaultOrEmpty
+                ? classSymbol
+                : SynthesizedClosureReifier.Reify(
+                    classSymbol,
+                    referencedTypeParameters,
+                    scope.References.MapClrTypeToReferences);
+        }
+
+        if (function?.Type is StructSymbol inferredReturn
+            && (ReferenceEquals(inferredReturn, classSymbol)
+                || ReferenceEquals(inferredReturn.Definition, classSymbol))
+            && function.Declaration is { Type: null, Body.Statements.Length: 1 } declaration
+            && declaration.Body.Statements[0] is ReturnStatementSyntax { Expression: var returned }
+            && ReferenceEquals(returned, syntax))
+        {
+            function.SetRichAnonymousReturnType(constructedType);
+        }
+
+        var plan = new RichAnonymousObjectPlan(constructedType, arguments, methodBodies);
+        plans[planKey] = plan;
+        scope.GetLatestRichAnonymousObjectPlans()[classSymbol] = plan;
+        return new BoundConstructorCallExpression(syntax, constructedType, arguments);
+    }
+
+    internal static bool IsUnsupportedRichBaseArgument(
+        BaseConstructorInitializer initializer,
+        int argumentIndex,
+        TypeSymbol argumentType)
+        => GetRichBaseArgumentRefKind(initializer, argumentIndex) != RefKind.None
+            || argumentType is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol
+            || TypeSymbol.IsByRefLike(argumentType);
+
+    private static RefKind GetRichBaseArgumentRefKind(
+        BaseConstructorInitializer initializer,
+        int argumentIndex)
+    {
+        if (argumentIndex < initializer.ArgumentRefKinds.Length)
+        {
+            return initializer.ArgumentRefKinds[argumentIndex];
+        }
+
+        var parameters = initializer.GSharpConstructor?.Parameters
+            ?? initializer.GSharpBaseType?.PrimaryConstructorParameters
+            ?? ImmutableArray<ParameterSymbol>.Empty;
+        return argumentIndex < parameters.Length
+            ? parameters[argumentIndex].RefKind
+            : RefKind.None;
+    }
+
+    private (
+        Dictionary<TypeParameterSymbol, TypeSymbol> OuterToClass,
+        Dictionary<TypeParameterSymbol, TypeSymbol> ClassToOuter)
+        BuildRichTypeParameterMaps(StructSymbol classSymbol)
+    {
+        var outer = new List<TypeParameterSymbol>();
+        var owner = function?.ReceiverType ?? function?.StaticOwnerType;
+        if (owner is StructSymbol receiver)
+        {
+            if (!receiver.EnclosingTypeArguments.IsDefaultOrEmpty)
+            {
+                outer.AddRange(receiver.EnclosingTypeArguments.OfType<TypeParameterSymbol>());
+            }
+            else
+            {
+                outer.AddRange(StructSymbol.CollectEnclosingTypeParameters(receiver));
+            }
+
+            if (!receiver.TypeArguments.IsDefaultOrEmpty)
+            {
+                outer.AddRange(receiver.TypeArguments.OfType<TypeParameterSymbol>());
+            }
+            else
+            {
+                outer.AddRange(receiver.TypeParameters);
+            }
+        }
+        else if (owner is InterfaceSymbol iface)
+        {
+            outer.AddRange(StructSymbol.CollectEnclosingTypeParameters(iface));
+            if (!iface.TypeArguments.IsDefaultOrEmpty)
+            {
+                outer.AddRange(iface.TypeArguments.OfType<TypeParameterSymbol>());
+            }
+            else
+            {
+                outer.AddRange((iface.Definition ?? iface).TypeParameters);
+            }
+        }
+
+        if (function != null)
+        {
+            outer.AddRange(function.TypeParameters);
+        }
+
+        var outerToClass = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        var classToOuter = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        var shellParameterCount = classSymbol.Declaration?.RichAnonymousShellTypeParameterCount
+            ?? classSymbol.TypeParameters.Length;
+        foreach (var classParameter in classSymbol.TypeParameters.Take(shellParameterCount))
+        {
+            var match = outer.LastOrDefault(candidate =>
+                candidate.Name == classParameter.Name);
+            if (match == null)
+            {
+                continue;
+            }
+
+            outerToClass[match] = classParameter;
+            classToOuter[classParameter] = match;
+        }
+
+        return (outerToClass, classToOuter);
+    }
+
+    private TypeSymbol SubstituteRichType(
+        TypeSymbol type,
+        Dictionary<TypeParameterSymbol, TypeSymbol> substitutions)
+        => substitutions.Count == 0
+            ? type
+            : SubstituteType(type, substitutions, scope.References.MapClrTypeToReferences);
+
+    private static FunctionSymbol CreateRichBindingMethod(
+        FunctionSymbol method,
+        Dictionary<TypeParameterSymbol, TypeSymbol> classToOuterTypeParameters,
+        out Dictionary<VariableSymbol, VariableSymbol> parameterMap)
+    {
+        parameterMap = new Dictionary<VariableSymbol, VariableSymbol>();
+        if (classToOuterTypeParameters.Count == 0)
+        {
+            return method;
+        }
+
+        var parameters = method.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            StructSymbol.SubstituteTypeParameters(parameter.Type, classToOuterTypeParameters),
+            parameter.IsVariadic,
+            parameter.DeclaringSyntax,
+            parameter.IsScoped,
+            parameter.RefKind)).ToImmutableArray();
+        var binding = new FunctionSymbol(
+            method.Name,
+            parameters,
+            StructSymbol.SubstituteTypeParameters(method.Type, classToOuterTypeParameters),
+            method.Declaration,
+            method.Package,
+            method.Accessibility,
+            method.ReceiverType,
+            method.IsOpen,
+            method.IsOverride)
+        {
+            ReturnRefKind = method.ReturnRefKind,
+            IsAsync = method.IsAsync,
+        };
+        binding.TypeParameters = method.TypeParameters;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            parameterMap[parameters[i]] = method.Parameters[i];
+        }
+
+        if (binding.ThisParameter != null && method.ThisParameter != null)
+        {
+            parameterMap[binding.ThisParameter] = method.ThisParameter;
+        }
+
+        return binding;
+    }
+
+    private sealed class RichBindingParameterRewriter : BoundTreeRewriter
+    {
+        private readonly Dictionary<VariableSymbol, VariableSymbol> map;
+
+        internal RichBindingParameterRewriter(Dictionary<VariableSymbol, VariableSymbol> map)
+        {
+            this.map = map;
+        }
+
+        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+            => map.TryGetValue(node.Variable, out var replacement)
+                ? new BoundVariableExpression(node.Syntax, replacement, node.NarrowedType)
+                : node;
+
+        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+            => map.TryGetValue(node.Variable, out var replacement)
+                ? new BoundAssignmentExpression(
+                    node.Syntax,
+                    replacement,
+                    RewriteExpression(node.Expression),
+                    node.AssignedValueType)
+                : base.RewriteAssignmentExpression(node);
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            var body = (BoundBlockStatement)RewriteStatement(node.Body);
+            var captures = node.CapturedVariables
+                .Select(variable => map.TryGetValue(variable, out var replacement) ? replacement : variable)
+                .ToImmutableArray();
+            return body == node.Body && captures.SequenceEqual(node.CapturedVariables)
+                ? node
+                : new BoundFunctionLiteralExpression(
+                    node.Syntax,
+                    node.Function,
+                    node.FunctionType,
+                    body,
+                    captures);
+        }
+    }
+
+    private BoundExpression BindStructuralAdaptation(CallExpressionSyntax syntax)
+    {
+        if (syntax.TypeArgumentList == null || syntax.TypeArgumentList.Arguments.Count != 1)
+        {
+            Diagnostics.ReportWrongTypeArgumentCount(
+                syntax.TypeArgumentList?.Location ?? syntax.Identifier.Location,
+                "adapt",
+                expectedCount: 1,
+                actualCount: syntax.TypeArgumentList?.Arguments.Count ?? 0);
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (syntax.Arguments.Count != 1)
+        {
+            Diagnostics.ReportWrongArgumentCount(
+                syntax.Identifier.Location,
+                "adapt",
+                expectedCount: 1,
+                actualCount: syntax.Arguments.Count);
+            return new BoundErrorExpression(syntax);
+        }
+
+        var target = BindTypeClause(syntax.TypeArgumentList.Arguments[0]);
+        if (target == null)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        var userTarget = target as InterfaceSymbol;
+        var clrTarget = target.ClrType is { IsInterface: true } ? target : null;
+        if (userTarget == null && clrTarget == null)
+        {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                "<unknown>",
+                target.Name,
+                "the target must be an interface");
+            return new BoundErrorExpression(syntax);
+        }
+
+        var sourceSyntax = syntax.Arguments[0];
+        var handleMode = sourceSyntax is RefArgumentExpressionSyntax;
+        BoundExpression source;
+        TypeSymbol sourceMemberType;
+        var readOnlyHandle = false;
+        if (sourceSyntax is RefArgumentExpressionSyntax refArgument)
+        {
+            if (refArgument.RefKindModifier.Text != "ref" || refArgument.Expression == null)
+            {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    "<invalid>",
+                    target.Name,
+                    "persistent-location adaptation requires 'ref' followed by a managed handle");
+                return new BoundErrorExpression(syntax);
+            }
+
+            source = Expressions.BindExpression(refArgument.Expression);
+            if (!ManagedReferenceTypes.TryGetElement(source.Type, out var element, out readOnlyHandle))
+            {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    source.Type.Name,
+                    target.Name,
+                    "the 'ref' operand must have type managed[T] or readonly managed[T]");
+                return new BoundErrorExpression(syntax);
+            }
+
+            sourceMemberType = element;
+            if (!sourceMemberType.IsValueType)
+            {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    source.Type.Name,
+                    target.Name,
+                    "class-valued handles are ambiguous; adapt the explicit dereference instead");
+                return new BoundErrorExpression(syntax);
+            }
+
+            if (ManagedReferenceOrigins.IsScopedHandle(source))
+            {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    source.Type.Name,
+                    target.Name,
+                    "a scoped managed handle cannot be retained by an adapter");
+                return new BoundErrorExpression(syntax);
+            }
+        }
+        else
+        {
+            source = Expressions.BindExpression(sourceSyntax);
+            sourceMemberType = source.Type;
+        }
+
+        if (source is BoundErrorExpression)
+        {
+            return source;
+        }
+
+        if (sourceMemberType == TypeSymbol.Null)
+        {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "the null literal cannot be adapted to a non-null interface");
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (sourceMemberType is NullableTypeSymbol)
+        {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "nullable sources must be narrowed before adaptation");
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (sourceMemberType is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol
+            || TypeSymbol.IsByRefLike(sourceMemberType))
+        {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "borrowed and ref-like sources cannot be retained by a heap adapter");
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (readOnlyHandle && sourceMemberType.ClrType == null)
+        {
+            Diagnostics.ReportStructuralAdaptation(
+                syntax.Location,
+                sourceMemberType.Name,
+                target.Name,
+                "readonly managed-handle adaptation requires metadata-proven readonly source members");
+            return new BoundErrorExpression(syntax);
+        }
+
+        var registry = scope.GetStructuralAdapterRegistry();
+        var packageName = function?.Package?.Name ?? scope.GetCurrentDeclaringPackageName() ?? string.Empty;
+        var adapter = new StructSymbol(
+            $"<>Adapter{registry.Counter++}",
+            ImmutableArray<FieldSymbol>.Empty,
+            Accessibility.Internal,
+            declaration: null,
+            packageName,
+            isData: false,
+            isInline: false,
+            isClass: true);
+        if (userTarget != null)
+        {
+            adapter.SetInterfaces(userTarget.SelfAndAllBaseInterfaces().ToImmutableArray());
+        }
+        else
+        {
+            adapter.SetImplementedClrInterfaces(ImmutableArray.Create(target));
+        }
+
+        var sourceField = new FieldSymbol(
+            "<>source",
+            source.Type,
+            Accessibility.Private,
+            isReadOnly: !sourceMemberType.IsValueType || handleMode);
+        var sourceParameter = new ParameterSymbol(sourceField.Name, source.Type);
+        adapter.SetInstanceFieldsAndPrimaryConstructorParameters(
+            ImmutableArray.Create(sourceField),
+            ImmutableArray.Create(sourceParameter));
+
+        var methods = ImmutableArray.CreateBuilder<FunctionSymbol>();
+        var properties = ImmutableArray.CreateBuilder<PropertySymbol>();
+        var events = ImmutableArray.CreateBuilder<EventSymbol>();
+        var failed = false;
+        if (userTarget != null)
+        {
+            var unmatchedDefaults = new List<(InterfaceSymbol Owner, FunctionSymbol Slot)>();
+            var unmatchedDefaultProperties = new List<(InterfaceSymbol Owner, PropertySymbol Slot)>();
+            foreach (var iface in userTarget.SelfAndAllBaseInterfaces())
+            {
+                iface.EnsureMembersResolved();
+                if (!iface.StaticMethods.IsDefaultOrEmpty)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"interface '{iface.Name}' has static abstract/virtual requirements, which need a separate design");
+                    failed = true;
+                }
+
+                var eventSlots = iface.Definition != null
+                    && !ReferenceEquals(iface.Definition, iface)
+                    ? iface.Definition.Events
+                    : iface.Events;
+                foreach (var slot in eventSlots)
+                {
+                    var contract = GetUserAdapterEventContract(iface, slot);
+                    if (sourceMemberType.ClrType is Type importedSource)
+                    {
+                        if (readOnlyHandle)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"readonly managed-handle adaptation cannot forward event '{slot.Name}'");
+                            failed = true;
+                            continue;
+                        }
+
+                        var importedCandidates = GetImportedSourceEvents(importedSource)
+                            .Where(candidate => candidate.Name == slot.Name
+                                && ImportedEventMetadataSupported(candidate)
+                                && EventContractsMatch(
+                                    contract,
+                                    CreateImportedAdapterContractEvent(candidate, sourceMemberType)))
+                            .ToArray();
+                        if (importedCandidates.Length == 0)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public event '{slot.Name}' with exact add/remove contract");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (importedCandidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"event '{slot.Name}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var importedGenerated = CreateUserTargetImportedSourceAdapterEvent(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            contract,
+                            iface,
+                            slot,
+                            importedCandidates[0]);
+                        events.Add(importedGenerated.Event);
+                        foreach (var body in importedGenerated.Bodies)
+                        {
+                            registry.MethodBodies[body.Key] = body.Value;
+                        }
+
+                        continue;
+                    }
+
+                    var candidates = TypeMemberModel.EnumerateMembers(
+                            sourceMemberType,
+                            MemberQuery.Instance(MemberKinds.Event))
+                        .OfType<EventSymbol>()
+                        .Where(candidate => candidate.Name == slot.Name
+                            && candidate.Accessibility == Accessibility.Public
+                            && EventContractsMatch(contract, candidate))
+                        .ToImmutableArray();
+                    if (candidates.Length == 0)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public event '{slot.Name}' with exact add/remove contract");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (candidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"event '{slot.Name}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var generated = CreateUserAdapterEvent(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        contract,
+                        iface,
+                        slot,
+                        candidates[0]);
+                    events.Add(generated.Event);
+                    foreach (var body in generated.Bodies)
+                    {
+                        registry.MethodBodies[body.Key] = body.Value;
+                    }
+                }
+
+                var propertySlots = iface.Definition != null
+                    && !ReferenceEquals(iface.Definition, iface)
+                    ? iface.Definition.Properties
+                    : iface.Properties;
+                foreach (var slot in propertySlots)
+                {
+                    var contract = GetUserAdapterPropertyContract(iface, slot);
+                    if (slot.IsStatic)
+                    {
+                        if (slot.GetterSymbol?.IsAbstract == true
+                            || slot.SetterSymbol?.IsAbstract == true
+                            || slot.IsVirtual
+                            || !iface.IsSealed)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"static interface property requirement '{slot.Name}' is unsupported");
+                            failed = true;
+                        }
+
+                        continue;
+                    }
+
+                    if (sourceMemberType.ClrType is Type importedSource)
+                    {
+                        var importedCandidates = GetImportedSourceProperties(importedSource)
+                            .Where(candidate => candidate.Name == slot.Name
+                                && ImportedPropertyMetadataSupported(candidate)
+                                && (!readOnlyHandle
+                                    || (!contract.HasSetter
+                                        && candidate.GetMethod != null
+                                        && RefCapabilities.IsReadOnlyMethod(candidate.GetMethod)))
+                                && PropertyContractsMatch(
+                                    contract,
+                                    CreateImportedAdapterContractProperty(candidate, sourceMemberType)))
+                            .ToArray();
+                        if (importedCandidates.Length == 0)
+                        {
+                            var importedRequired = slot.GetterSymbol?.IsAbstract == true
+                                || slot.SetterSymbol?.IsAbstract == true;
+                            if (!importedRequired)
+                            {
+                                unmatchedDefaultProperties.Add((iface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public property/indexer '{slot.Name}' with the required accessor contract");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (importedCandidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"property/indexer '{slot.Name}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var importedGenerated = CreateUserTargetImportedSourceAdapterProperty(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            contract,
+                            iface,
+                            slot,
+                            importedCandidates[0]);
+                        properties.Add(importedGenerated.Property);
+                        foreach (var body in importedGenerated.Bodies)
+                        {
+                            registry.MethodBodies[body.Key] = body.Value;
+                        }
+
+                        continue;
+                    }
+
+                    var candidates = TypeMemberModel.EnumerateMembers(
+                            sourceMemberType,
+                            MemberQuery.Instance(MemberKinds.Property))
+                        .OfType<PropertySymbol>()
+                        .Where(candidate => candidate.Name == slot.Name
+                            && candidate.Accessibility == Accessibility.Public
+                            && PropertyContractsMatch(contract, candidate))
+                        .ToImmutableArray();
+                    if (candidates.Length == 0)
+                    {
+                        var required = slot.GetterSymbol?.IsAbstract == true
+                            || slot.SetterSymbol?.IsAbstract == true;
+                        if (!required)
+                        {
+                            unmatchedDefaultProperties.Add((iface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public property/indexer '{slot.Name}' with the required accessor contract");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (candidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"property/indexer '{slot.Name}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var generated = CreateUserAdapterProperty(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        contract,
+                        iface,
+                        slot,
+                        candidates[0]);
+                    properties.Add(generated.Property);
+                    foreach (var body in generated.Bodies)
+                    {
+                        registry.MethodBodies[body.Key] = body.Value;
+                    }
+                }
+
+                foreach (var slot in iface.Methods)
+                {
+                    if (sourceMemberType.ClrType is Type importedSource)
+                    {
+                        var importedCandidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(importedSource, slot.Name)
+                            .Where(candidate => candidate.IsPublic
+                                && !candidate.IsStatic
+                                && ImportedMethodMetadataSupported(candidate)
+                                && (!readOnlyHandle || RefCapabilities.IsReadOnlyMethod(candidate))
+                                && MethodContractsMatch(
+                                    slot,
+                                    CreateImportedAdapterContractMethod(candidate, sourceMemberType),
+                                    sourceMemberType))
+                            .ToArray();
+                        if (importedCandidates.Length == 0)
+                        {
+                            if (slot.Declaration?.Body != null)
+                            {
+                                unmatchedDefaults.Add((iface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public instance method '{FormatAdapterSlot(slot)}'");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (importedCandidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"method '{FormatAdapterSlot(slot)}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var importedGenerated = CreateUserTargetImportedSourceAdapterMethod(
+                            syntax,
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            slot,
+                            iface,
+                            importedCandidates[0]);
+                        methods.Add(importedGenerated.Method);
+                        registry.MethodBodies[importedGenerated.Method] = importedGenerated.Body;
+                        continue;
+                    }
+
+                    var candidates = TypeMemberModel
+                        .GetMethods(sourceMemberType, slot.Name, MemberQuery.Instance(MemberKinds.Method))
+                        .Where(candidate => candidate.Accessibility == Accessibility.Public
+                            && MethodContractsMatch(slot, candidate, sourceMemberType))
+                        .ToImmutableArray();
+                    if (candidates.Length == 0)
+                    {
+                        if (slot.Declaration?.Body != null)
+                        {
+                            unmatchedDefaults.Add((iface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public instance method '{FormatAdapterSlot(slot)}'");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (candidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"method '{FormatAdapterSlot(slot)}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var generated = CreateUserAdapterMethod(
+                        syntax,
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        slot,
+                        iface,
+                        candidates[0]);
+                    methods.Add(generated.Method);
+                    registry.MethodBodies[generated.Method] = generated.Body;
+                }
+            }
+
+            for (var i = 0; i < unmatchedDefaults.Count; i++)
+            {
+                var current = unmatchedDefaults[i];
+                var conflicts = unmatchedDefaults
+                    .Where(candidate => UserAdapterSlotsEquivalent(current.Slot, candidate.Slot))
+                    .ToArray();
+                if (conflicts.Length < 2
+                    || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+                {
+                    continue;
+                }
+
+                var mostSpecific = conflicts.Where(candidate =>
+                    conflicts.All(other => ReferenceEquals(candidate.Owner, other.Owner)
+                        || candidate.Owner.SelfAndAllBaseInterfaces().Contains(other.Owner))).ToArray();
+                if (mostSpecific.Length != 1)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"default interface method '{current.Slot.Name}' has no unique most-specific implementation");
+                    failed = true;
+                }
+            }
+
+            for (var i = 0; i < unmatchedDefaultProperties.Count; i++)
+            {
+                var current = unmatchedDefaultProperties[i];
+                var conflicts = unmatchedDefaultProperties
+                    .Where(candidate => UserAdapterPropertySlotsEquivalent(current.Slot, candidate.Slot))
+                    .ToArray();
+                if (conflicts.Length < 2
+                    || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+                {
+                    continue;
+                }
+
+                var mostSpecific = conflicts.Where(candidate =>
+                    conflicts.All(other => ReferenceEquals(candidate.Owner, other.Owner)
+                        || candidate.Owner.SelfAndAllBaseInterfaces().Contains(other.Owner))).ToArray();
+                if (mostSpecific.Length != 1)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"default interface property/indexer '{current.Slot.Name}' has no unique most-specific implementation");
+                    failed = true;
+                }
+            }
+
+            failed |= BindImportedAdapterInterfaceSlots(
+                syntax,
+                target,
+                userTarget.SelfAndAllBaseInterfaces()
+                    .SelectMany(candidate => candidate.BaseClrInterfaces),
+                sourceMemberType,
+                readOnlyHandle,
+                handleMode,
+                adapter,
+                sourceField,
+                registry,
+                methods,
+                properties,
+                events);
+        }
+        else
+        {
+            var targetClr = MemberLookup.TryGetSymbolicClrGenericInterface(
+                target,
+                out var openTarget,
+                out _)
+                ? Invariant.Required(openTarget, "a symbolic imported interface has an open definition")
+                : Invariant.Required(target.ClrType, "an imported interface has a CLR type");
+            var unmatchedDefaults = new List<(Type Owner, MethodInfo Slot)>();
+            var unmatchedDefaultProperties = new List<(Type Owner, PropertyInfo Slot)>();
+            var unmatchedDefaultEvents = new List<(Type Owner, EventInfo Slot)>();
+            foreach (var targetInterface in targetClr.GetInterfaces().Prepend(targetClr))
+            {
+                foreach (var slot in targetInterface.GetMethods())
+                {
+                    var slotOwner = ClrTypeUtilities.AreSame(targetInterface, targetClr)
+                        ? target
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot);
+                    if (slot.IsStatic)
+                    {
+                        if (slot.IsAbstract || slot.IsVirtual)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"static interface requirement '{slot.Name}' is unsupported");
+                            failed = true;
+                        }
+
+                        continue;
+                    }
+
+                    if (slot.IsSpecialName)
+                    {
+                        continue;
+                    }
+
+                    if (!ImportedMethodMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"method '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (TryDescribeUnsupportedImportedAdapterConstraints(slot, out var constraintReason))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            constraintReason);
+                        failed = true;
+                        continue;
+                    }
+
+                    var sourceClr = sourceMemberType.ClrType;
+                    if (sourceClr == null)
+                    {
+                        var contract = CreateImportedAdapterContractMethod(slot, slotOwner);
+                        var userCandidates = TypeMemberModel
+                            .GetMethods(sourceMemberType, slot.Name, MemberQuery.Instance(MemberKinds.Method))
+                            .Where(candidate => candidate.Accessibility == Accessibility.Public
+                                && MethodContractsMatch(contract, candidate, sourceMemberType))
+                            .ToImmutableArray();
+                        if (userCandidates.Length == 0)
+                        {
+                            if (!slot.IsAbstract)
+                            {
+                                unmatchedDefaults.Add((targetInterface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public instance method '{slot}'");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (userCandidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"method '{slot}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var userGenerated = CreateImportedTargetUserSourceAdapterMethod(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            slot,
+                            slotOwner,
+                            userCandidates[0]);
+                        methods.Add(userGenerated.Method);
+                        registry.MethodBodies[userGenerated.Method] = userGenerated.Body;
+                        continue;
+                    }
+
+                    var candidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(sourceClr, slot.Name)
+                        .Where(candidate => candidate.IsPublic
+                            && !candidate.IsStatic
+                            && (!readOnlyHandle || RefCapabilities.IsReadOnlyMethod(candidate))
+                            && ImportedMethodContractsMatch(
+                                slot,
+                                slotOwner,
+                                candidate,
+                                sourceMemberType))
+                        .ToArray();
+                    if (candidates.Length == 0)
+                    {
+                        if (!slot.IsAbstract)
+                        {
+                            unmatchedDefaults.Add((targetInterface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public instance method '{slot}'");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (candidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"method '{slot}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var generated = CreateImportedAdapterMethod(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        slot,
+                        slotOwner,
+                        candidates[0]);
+                    methods.Add(generated.Method);
+                    registry.MethodBodies[generated.Method] = generated.Body;
+                }
+
+                foreach (var slot in targetInterface.GetProperties())
+                {
+                    var slotOwner = ClrTypeUtilities.AreSame(targetInterface, targetClr)
+                        ? target
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot);
+                    if (slot.GetMethod?.IsStatic == true || slot.SetMethod?.IsStatic == true)
+                    {
+                        continue;
+                    }
+
+                    if (!ImportedPropertyMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"property/indexer '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
+                    var sourceClr = sourceMemberType.ClrType;
+                    if (sourceClr == null)
+                    {
+                        var contract = CreateImportedAdapterContractProperty(slot, slotOwner);
+                        var userCandidates = TypeMemberModel.EnumerateMembers(
+                                sourceMemberType,
+                                MemberQuery.Instance(MemberKinds.Property))
+                            .OfType<PropertySymbol>()
+                            .Where(candidate => candidate.Name == slot.Name
+                                && candidate.Accessibility == Accessibility.Public
+                                && PropertyContractsMatch(contract, candidate))
+                            .ToImmutableArray();
+                        var userRequired = (slot.GetMethod?.IsAbstract ?? false)
+                            || (slot.SetMethod?.IsAbstract ?? false);
+                        if (userCandidates.Length == 0)
+                        {
+                            if (!userRequired)
+                            {
+                                unmatchedDefaultProperties.Add((targetInterface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public property/indexer '{slot.Name}' with the required accessor contract");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (userCandidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"property/indexer '{slot.Name}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var userGenerated = CreateImportedTargetUserSourceAdapterProperty(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            slot,
+                            slotOwner,
+                            userCandidates[0]);
+                        properties.Add(userGenerated.Property);
+                        foreach (var body in userGenerated.Bodies)
+                        {
+                            registry.MethodBodies[body.Key] = body.Value;
+                        }
+
+                        continue;
+                    }
+
+                    var candidates = sourceClr == null
+                        ? Array.Empty<PropertyInfo>()
+                        : GetImportedSourceProperties(sourceClr)
+                            .Where(candidate => candidate.Name == slot.Name
+                                && (!readOnlyHandle
+                                    || (!slot.CanWrite
+                                        && candidate.GetMethod != null
+                                        && RefCapabilities.IsReadOnlyMethod(candidate.GetMethod)))
+                                && ImportedPropertyContractsMatch(
+                                    slot,
+                                    slotOwner,
+                                    candidate,
+                                    sourceMemberType))
+                            .ToArray();
+                    var required = (slot.GetMethod?.IsAbstract ?? false) || (slot.SetMethod?.IsAbstract ?? false);
+                    if (candidates.Length == 0)
+                    {
+                        if (!required)
+                        {
+                            unmatchedDefaultProperties.Add((targetInterface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public property/indexer '{slot.Name}' with the required accessor contract");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (candidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"property/indexer '{slot.Name}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var generated = CreateImportedAdapterProperty(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        slot,
+                        slotOwner,
+                        candidates[0]);
+                    properties.Add(generated.Property);
+                    foreach (var body in generated.Bodies)
+                    {
+                        registry.MethodBodies[body.Key] = body.Value;
+                    }
+                }
+
+                foreach (var slot in targetInterface.GetEvents())
+                {
+                    if (slot.AddMethod?.IsStatic == true || slot.RemoveMethod?.IsStatic == true)
+                    {
+                        continue;
+                    }
+
+                    if (!ImportedEventMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"event '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
+                    var slotOwner = ClrTypeUtilities.AreSame(targetInterface, targetClr)
+                        ? target
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(target, slot);
+                    var sourceClr = sourceMemberType.ClrType;
+                    if (sourceClr == null)
+                    {
+                        var contract = CreateImportedAdapterContractEvent(slot, slotOwner);
+                        var userCandidates = TypeMemberModel.EnumerateMembers(
+                                sourceMemberType,
+                                MemberQuery.Instance(MemberKinds.Event))
+                            .OfType<EventSymbol>()
+                            .Where(candidate => candidate.Name == slot.Name
+                                && candidate.Accessibility == Accessibility.Public
+                                && EventContractsMatch(contract, candidate))
+                            .ToImmutableArray();
+                        if (userCandidates.Length == 0)
+                        {
+                            if (slot.AddMethod is { IsAbstract: false }
+                                && slot.RemoveMethod is { IsAbstract: false })
+                            {
+                                unmatchedDefaultEvents.Add((targetInterface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public event '{slot.Name}' with exact add/remove contract");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (userCandidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"event '{slot.Name}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var userGenerated = CreateImportedTargetUserSourceAdapterEvent(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            slot,
+                            slotOwner,
+                            userCandidates[0]);
+                        events.Add(userGenerated.Event);
+                        foreach (var body in userGenerated.Bodies)
+                        {
+                            registry.MethodBodies[body.Key] = body.Value;
+                        }
+
+                        continue;
+                    }
+
+                    var candidates = sourceClr == null
+                        ? Array.Empty<EventInfo>()
+                        : GetImportedSourceEvents(sourceClr)
+                            .Where(candidate => candidate.Name == slot.Name
+                                && ImportedEventContractsMatch(
+                                    slot,
+                                    slotOwner,
+                                    candidate,
+                                    sourceMemberType))
+                            .ToArray();
+                    if (candidates.Length == 0)
+                    {
+                        if (slot.AddMethod is { IsAbstract: false }
+                            && slot.RemoveMethod is { IsAbstract: false })
+                        {
+                            unmatchedDefaultEvents.Add((targetInterface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public event '{slot.Name}' with exact add/remove contract");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (readOnlyHandle)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"readonly managed-handle adaptation cannot forward event '{slot.Name}'");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (candidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"event '{slot.Name}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var generated = CreateImportedAdapterEvent(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        slot,
+                        slotOwner,
+                        candidates[0]);
+                    events.Add(generated.Event);
+                    foreach (var body in generated.Bodies)
+                    {
+                        registry.MethodBodies[body.Key] = body.Value;
+                    }
+                }
+            }
+
+            for (var i = 0; i < unmatchedDefaults.Count; i++)
+            {
+                var current = unmatchedDefaults[i];
+                var conflicts = unmatchedDefaults
+                    .Where(candidate => current.Slot.Name == candidate.Slot.Name
+                        && ImportedMethodContractsMatch(current.Slot, candidate.Slot))
+                    .ToArray();
+                if (conflicts.Length < 2
+                    || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+                {
+                    continue;
+                }
+
+                var mostSpecific = conflicts.Where(candidate =>
+                    conflicts.All(other => ClrTypeUtilities.AreSame(candidate.Owner, other.Owner)
+                        || other.Owner.IsAssignableFrom(candidate.Owner))).ToArray();
+                if (mostSpecific.Length != 1)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"default interface method '{current.Slot.Name}' has no unique most-specific implementation");
+                    failed = true;
+                }
+            }
+
+            for (var i = 0; i < unmatchedDefaultEvents.Count; i++)
+            {
+                var current = unmatchedDefaultEvents[i];
+                var conflicts = unmatchedDefaultEvents
+                    .Where(candidate => ImportedEventSlotsEquivalent(current.Slot, candidate.Slot))
+                    .ToArray();
+                if (conflicts.Length < 2
+                    || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+                {
+                    continue;
+                }
+
+                var mostSpecific = conflicts.Where(candidate =>
+                    conflicts.All(other => ClrTypeUtilities.AreSame(candidate.Owner, other.Owner)
+                        || other.Owner.IsAssignableFrom(candidate.Owner))).ToArray();
+                if (mostSpecific.Length != 1)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"default interface event '{current.Slot.Name}' has no unique most-specific implementation");
+                    failed = true;
+                }
+            }
+
+            for (var i = 0; i < unmatchedDefaultProperties.Count; i++)
+            {
+                var current = unmatchedDefaultProperties[i];
+                var conflicts = unmatchedDefaultProperties
+                    .Where(candidate => ImportedPropertySlotsEquivalent(current.Slot, candidate.Slot))
+                    .ToArray();
+                if (conflicts.Length < 2
+                    || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+                {
+                    continue;
+                }
+
+                var mostSpecific = conflicts.Where(candidate =>
+                    conflicts.All(other => ClrTypeUtilities.AreSame(candidate.Owner, other.Owner)
+                        || other.Owner.IsAssignableFrom(candidate.Owner))).ToArray();
+                if (mostSpecific.Length != 1)
+                {
+                    Diagnostics.ReportStructuralAdaptation(
+                        syntax.Location,
+                        sourceMemberType.Name,
+                        target.Name,
+                        $"default interface property/indexer '{current.Slot.Name}' has no unique most-specific implementation");
+                    failed = true;
+                }
+            }
+        }
+
+        if (failed)
+        {
+            return new BoundErrorExpression(syntax);
+        }
+
+        adapter.SetMethods(methods.ToImmutable());
+        adapter.SetProperties(properties.ToImmutable());
+        adapter.SetEvents(events.ToImmutable());
+        var adapterReferencedTypes = adapter.Fields.Select(field => field.Type)
+            .Concat(adapter.Methods.SelectMany(method => method.Parameters.Select(parameter => parameter.Type).Append(method.Type)))
+            .Concat(adapter.Interfaces.Cast<TypeSymbol>())
+            .Concat(adapter.ImplementedClrInterfaces);
+        var adapterMethodTypeParameters = adapter.Methods
+            .SelectMany(method => method.TypeParameters)
+            .ToHashSet(ReferenceEqualityComparer.Instance);
+        var adapterTypeParameters = SynthesizedClosureReifier.CollectOrdered(adapterReferencedTypes)
+            .Where(parameter => !adapterMethodTypeParameters.Contains(parameter))
+            .ToImmutableArray();
+        var constructedAdapter = adapterTypeParameters.IsDefaultOrEmpty
+            ? adapter
+            : SynthesizedClosureReifier.Reify(
+                adapter,
+                adapterTypeParameters,
+                scope.References.MapClrTypeToReferences);
+        registry.Types.Add(adapter);
+        if (!handleMode
+            && (IsReferenceTypeForConstraint(sourceMemberType)
+                || sourceMemberType is TypeParameterSymbol { HasValueTypeConstraint: false }))
+        {
+            var saved = new LocalVariableSymbol($"<>adaptSource{registry.Counter}", isReadOnly: true, source.Type);
+            var read = new BoundVariableExpression(syntax, saved);
+            var throwIfNull = Invariant.Required(
+                typeof(ArgumentNullException).GetMethod(
+                    nameof(ArgumentNullException.ThrowIfNull),
+                    new[] { typeof(object), typeof(string) }),
+                "ArgumentNullException.ThrowIfNull(object, string) is available");
+            var check = new BoundClrStaticCallExpression(
+                syntax,
+                throwIfNull,
+                TypeSymbol.Void,
+                ImmutableArray.Create<BoundExpression>(
+                    new BoundConversionExpression(syntax, TypeSymbol.Object, read),
+                    new BoundLiteralExpression(syntax, "source")));
+            var construction = new BoundConstructorCallExpression(
+                syntax,
+                constructedAdapter,
+                ImmutableArray.Create<BoundExpression>(read));
+            return new BoundBlockExpression(
+                syntax,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundVariableDeclaration(syntax, saved, source),
+                    new BoundExpressionStatement(syntax, check)),
+                new BoundConversionExpression(syntax, target, construction));
+        }
+
+        return new BoundConversionExpression(
+            syntax,
+            target,
+            new BoundConstructorCallExpression(
+                syntax,
+                constructedAdapter,
+                ImmutableArray.Create(source)));
+    }
+
+    private bool BindImportedAdapterInterfaceSlots(
+        CallExpressionSyntax syntax,
+        TypeSymbol target,
+        IEnumerable<TypeSymbol> roots,
+        TypeSymbol sourceMemberType,
+        bool readOnlyHandle,
+        bool handleMode,
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        StructuralAdapterRegistry registry,
+        ImmutableArray<FunctionSymbol>.Builder methods,
+        ImmutableArray<PropertySymbol>.Builder properties,
+        ImmutableArray<EventSymbol>.Builder events)
+    {
+        var failed = false;
+        var unmatchedDefaults = new List<(Type Owner, MethodInfo Slot)>();
+        var unmatchedDefaultProperties = new List<(Type Owner, PropertyInfo Slot)>();
+        var unmatchedDefaultEvents = new List<(Type Owner, EventInfo Slot)>();
+        var seenRoots = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var root in roots)
+        {
+            if (!seenRoots.Add(root.ToDisplayString(DisplayFormat.FullyQualified)))
+            {
+                continue;
+            }
+
+            var rootClr = MemberLookup.TryGetSymbolicClrGenericInterface(
+                root,
+                out var openRoot,
+                out _)
+                ? Invariant.Required(openRoot, "a symbolic imported interface has an open definition")
+                : root.ClrType;
+            if (rootClr == null)
+            {
+                continue;
+            }
+
+            foreach (var targetInterface in rootClr.GetInterfaces().Prepend(rootClr))
+            {
+                foreach (var slot in targetInterface.GetMethods())
+                {
+                    var slotOwner = ClrTypeUtilities.AreSame(targetInterface, rootClr)
+                        ? root
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(root, slot);
+                    if (slot.IsStatic)
+                    {
+                        if (slot.IsAbstract || slot.IsVirtual)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"static interface requirement '{slot.Name}' is unsupported");
+                            failed = true;
+                        }
+
+                        continue;
+                    }
+
+                    if (slot.IsSpecialName)
+                    {
+                        continue;
+                    }
+
+                    if (!ImportedMethodMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"method '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (TryDescribeUnsupportedImportedAdapterConstraints(slot, out var constraintReason))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            constraintReason);
+                        failed = true;
+                        continue;
+                    }
+
+                    if (sourceMemberType.ClrType is Type sourceClr)
+                    {
+                        var candidates = MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(sourceClr, slot.Name)
+                            .Where(candidate => candidate.IsPublic
+                                && !candidate.IsStatic
+                                && ImportedMethodMetadataSupported(candidate)
+                                && (!readOnlyHandle || RefCapabilities.IsReadOnlyMethod(candidate))
+                                && ImportedMethodContractsMatch(
+                                    slot,
+                                    slotOwner,
+                                    candidate,
+                                    sourceMemberType))
+                            .ToArray();
+                        if (candidates.Length == 0)
+                        {
+                            if (!slot.IsAbstract)
+                            {
+                                unmatchedDefaults.Add((targetInterface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public instance method '{slot}'");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (candidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"method '{slot}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var generated = CreateImportedAdapterMethod(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            slot,
+                            slotOwner,
+                            candidates[0]);
+                        methods.Add(generated.Method);
+                        registry.MethodBodies[generated.Method] = generated.Body;
+                        continue;
+                    }
+
+                    var contract = CreateImportedAdapterContractMethod(slot, slotOwner);
+                    var userCandidates = TypeMemberModel
+                        .GetMethods(sourceMemberType, slot.Name, MemberQuery.Instance(MemberKinds.Method))
+                        .Where(candidate => candidate.Accessibility == Accessibility.Public
+                            && MethodContractsMatch(contract, candidate, sourceMemberType))
+                        .ToImmutableArray();
+                    if (userCandidates.Length == 0)
+                    {
+                        if (!slot.IsAbstract)
+                        {
+                            unmatchedDefaults.Add((targetInterface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public instance method '{slot}'");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (userCandidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"method '{slot}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var userGenerated = CreateImportedTargetUserSourceAdapterMethod(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        slot,
+                        slotOwner,
+                        userCandidates[0]);
+                    methods.Add(userGenerated.Method);
+                    registry.MethodBodies[userGenerated.Method] = userGenerated.Body;
+                }
+
+                foreach (var slot in targetInterface.GetProperties())
+                {
+                    if (slot.GetMethod?.IsStatic == true || slot.SetMethod?.IsStatic == true)
+                    {
+                        continue;
+                    }
+
+                    if (!ImportedPropertyMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"property/indexer '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
+                    var slotOwner = ClrTypeUtilities.AreSame(targetInterface, rootClr)
+                        ? root
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(root, slot);
+                    var required = (slot.GetMethod?.IsAbstract ?? false)
+                        || (slot.SetMethod?.IsAbstract ?? false);
+                    if (sourceMemberType.ClrType is Type sourceClr)
+                    {
+                        var candidates = GetImportedSourceProperties(sourceClr)
+                            .Where(candidate => candidate.Name == slot.Name
+                                && ImportedPropertyMetadataSupported(candidate)
+                                && (!readOnlyHandle
+                                    || (!slot.CanWrite
+                                        && candidate.GetMethod != null
+                                        && RefCapabilities.IsReadOnlyMethod(candidate.GetMethod)))
+                                && ImportedPropertyContractsMatch(
+                                    slot,
+                                    slotOwner,
+                                    candidate,
+                                    sourceMemberType))
+                            .ToArray();
+                        if (candidates.Length == 0)
+                        {
+                            if (!required)
+                            {
+                                unmatchedDefaultProperties.Add((targetInterface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public property/indexer '{slot.Name}' with the required accessor contract");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (candidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"property/indexer '{slot.Name}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var generated = CreateImportedAdapterProperty(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            slot,
+                            slotOwner,
+                            candidates[0]);
+                        properties.Add(generated.Property);
+                        foreach (var body in generated.Bodies)
+                        {
+                            registry.MethodBodies[body.Key] = body.Value;
+                        }
+
+                        continue;
+                    }
+
+                    var contract = CreateImportedAdapterContractProperty(slot, slotOwner);
+                    var userCandidates = TypeMemberModel.EnumerateMembers(
+                            sourceMemberType,
+                            MemberQuery.Instance(MemberKinds.Property))
+                        .OfType<PropertySymbol>()
+                        .Where(candidate => candidate.Name == slot.Name
+                            && candidate.Accessibility == Accessibility.Public
+                            && PropertyContractsMatch(contract, candidate))
+                        .ToImmutableArray();
+                    if (userCandidates.Length == 0)
+                    {
+                        if (!required)
+                        {
+                            unmatchedDefaultProperties.Add((targetInterface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public property/indexer '{slot.Name}' with the required accessor contract");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (userCandidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"property/indexer '{slot.Name}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var userGenerated = CreateImportedTargetUserSourceAdapterProperty(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        slot,
+                        slotOwner,
+                        userCandidates[0]);
+                    properties.Add(userGenerated.Property);
+                    foreach (var body in userGenerated.Bodies)
+                    {
+                        registry.MethodBodies[body.Key] = body.Value;
+                    }
+                }
+
+                foreach (var slot in targetInterface.GetEvents())
+                {
+                    if (slot.AddMethod?.IsStatic == true || slot.RemoveMethod?.IsStatic == true)
+                    {
+                        continue;
+                    }
+
+                    if (!ImportedEventMetadataSupported(slot))
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"event '{slot.Name}' has unsupported required/custom modifier metadata");
+                        failed = true;
+                        continue;
+                    }
+
+                    var slotOwner = ClrTypeUtilities.AreSame(targetInterface, rootClr)
+                        ? root
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(root, slot);
+                    if (sourceMemberType.ClrType is Type sourceClr)
+                    {
+                        var candidates = GetImportedSourceEvents(sourceClr)
+                            .Where(candidate => candidate.Name == slot.Name
+                                && ImportedEventMetadataSupported(candidate)
+                                && ImportedEventContractsMatch(
+                                    slot,
+                                    slotOwner,
+                                    candidate,
+                                    sourceMemberType))
+                            .ToArray();
+                        if (candidates.Length == 0)
+                        {
+                            if (slot.AddMethod is { IsAbstract: false }
+                                && slot.RemoveMethod is { IsAbstract: false })
+                            {
+                                unmatchedDefaultEvents.Add((targetInterface, slot));
+                                continue;
+                            }
+
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"missing public event '{slot.Name}' with exact add/remove contract");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (readOnlyHandle)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"readonly managed-handle adaptation cannot forward event '{slot.Name}'");
+                            failed = true;
+                            continue;
+                        }
+
+                        if (candidates.Length > 1)
+                        {
+                            Diagnostics.ReportStructuralAdaptation(
+                                syntax.Location,
+                                sourceMemberType.Name,
+                                target.Name,
+                                $"event '{slot.Name}' is ambiguous");
+                            failed = true;
+                            continue;
+                        }
+
+                        var generated = CreateImportedAdapterEvent(
+                            adapter,
+                            sourceField,
+                            sourceMemberType,
+                            handleMode,
+                            slot,
+                            slotOwner,
+                            candidates[0]);
+                        events.Add(generated.Event);
+                        foreach (var body in generated.Bodies)
+                        {
+                            registry.MethodBodies[body.Key] = body.Value;
+                        }
+
+                        continue;
+                    }
+
+                    var contract = CreateImportedAdapterContractEvent(slot, slotOwner);
+                    var userCandidates = TypeMemberModel.EnumerateMembers(
+                            sourceMemberType,
+                            MemberQuery.Instance(MemberKinds.Event))
+                        .OfType<EventSymbol>()
+                        .Where(candidate => candidate.Name == slot.Name
+                            && candidate.Accessibility == Accessibility.Public
+                            && EventContractsMatch(contract, candidate))
+                        .ToImmutableArray();
+                    if (userCandidates.Length == 0)
+                    {
+                        if (slot.AddMethod is { IsAbstract: false }
+                            && slot.RemoveMethod is { IsAbstract: false })
+                        {
+                            unmatchedDefaultEvents.Add((targetInterface, slot));
+                            continue;
+                        }
+
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"missing public event '{slot.Name}' with exact add/remove contract");
+                        failed = true;
+                        continue;
+                    }
+
+                    if (userCandidates.Length > 1)
+                    {
+                        Diagnostics.ReportStructuralAdaptation(
+                            syntax.Location,
+                            sourceMemberType.Name,
+                            target.Name,
+                            $"event '{slot.Name}' is ambiguous");
+                        failed = true;
+                        continue;
+                    }
+
+                    var userGenerated = CreateImportedTargetUserSourceAdapterEvent(
+                        adapter,
+                        sourceField,
+                        sourceMemberType,
+                        handleMode,
+                        slot,
+                        slotOwner,
+                        userCandidates[0]);
+                    events.Add(userGenerated.Event);
+                    foreach (var body in userGenerated.Bodies)
+                    {
+                        registry.MethodBodies[body.Key] = body.Value;
+                    }
+                }
+            }
+        }
+
+        foreach (var current in unmatchedDefaults)
+        {
+            var conflicts = unmatchedDefaults
+                .Where(candidate => current.Slot.Name == candidate.Slot.Name
+                    && ImportedMethodContractsMatch(current.Slot, candidate.Slot))
+                .ToArray();
+            if (conflicts.Length < 2 || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+            {
+                continue;
+            }
+
+            var mostSpecific = conflicts.Where(candidate =>
+                conflicts.All(other => ClrTypeUtilities.AreSame(candidate.Owner, other.Owner)
+                    || other.Owner.IsAssignableFrom(candidate.Owner))).ToArray();
+            if (mostSpecific.Length != 1)
+            {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    sourceMemberType.Name,
+                    target.Name,
+                    $"default interface method '{current.Slot.Name}' has no unique most-specific implementation");
+                failed = true;
+            }
+        }
+
+        foreach (var current in unmatchedDefaultProperties)
+        {
+            var conflicts = unmatchedDefaultProperties
+                .Where(candidate => ImportedPropertySlotsEquivalent(current.Slot, candidate.Slot))
+                .ToArray();
+            if (conflicts.Length < 2 || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+            {
+                continue;
+            }
+
+            var mostSpecific = conflicts.Where(candidate =>
+                conflicts.All(other => ClrTypeUtilities.AreSame(candidate.Owner, other.Owner)
+                    || other.Owner.IsAssignableFrom(candidate.Owner))).ToArray();
+            if (mostSpecific.Length != 1)
+            {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    sourceMemberType.Name,
+                    target.Name,
+                    $"default interface property/indexer '{current.Slot.Name}' has no unique most-specific implementation");
+                failed = true;
+            }
+        }
+
+        foreach (var current in unmatchedDefaultEvents)
+        {
+            var conflicts = unmatchedDefaultEvents
+                .Where(candidate => ImportedEventSlotsEquivalent(current.Slot, candidate.Slot))
+                .ToArray();
+            if (conflicts.Length < 2 || !ReferenceEquals(conflicts[0].Slot, current.Slot))
+            {
+                continue;
+            }
+
+            var mostSpecific = conflicts.Where(candidate =>
+                conflicts.All(other => ClrTypeUtilities.AreSame(candidate.Owner, other.Owner)
+                    || other.Owner.IsAssignableFrom(candidate.Owner))).ToArray();
+            if (mostSpecific.Length != 1)
+            {
+                Diagnostics.ReportStructuralAdaptation(
+                    syntax.Location,
+                    sourceMemberType.Name,
+                    target.Name,
+                    $"default interface event '{current.Slot.Name}' has no unique most-specific implementation");
+                failed = true;
+            }
+        }
+
+        return failed;
+    }
+
+    private static (FunctionSymbol Method, BoundBlockStatement Body) CreateUserAdapterMethod(
+        SyntaxNode syntax,
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        FunctionSymbol slot,
+        InterfaceSymbol slotOwner,
+        FunctionSymbol sourceMethod)
+    {
+        var parameters = slot.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            parameter.Type,
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var method = new FunctionSymbol(
+            slot.Name,
+            parameters,
+            slot.Type,
+            declaration: null,
+            slot.Package,
+            Accessibility.Private,
+            adapter)
+        {
+            ReturnRefKind = slot.ReturnRefKind,
+            ExplicitInterfaceMember = slot,
+            ExplicitInterfaceClauseTarget = slotOwner,
+        };
+        if (slot.HasUnscopedRef)
+        {
+            method.MarkUnscopedRef();
+        }
+
+        method.TypeParameters = slot.TypeParameters;
+        var receiver = AdapterSourceReceiver(adapter, method, sourceField, sourceMemberType, handleMode);
+        var arguments = parameters.Select(parameter => (BoundExpression)new BoundVariableExpression(syntax, parameter)).ToImmutableArray();
+        var call = new BoundUserInstanceCallExpression(syntax, receiver, sourceMethod, arguments, slot.Type)
+        {
+            MethodTypeArguments = slot.TypeParameters.Cast<TypeSymbol>().ToImmutableArray(),
+        };
+        return (method, AdapterMethodBody(call, slot.Type, slot.ReturnRefKind));
+    }
+
+    private static (FunctionSymbol Method, BoundBlockStatement Body) CreateUserTargetImportedSourceAdapterMethod(
+        SyntaxNode syntax,
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        FunctionSymbol slot,
+        InterfaceSymbol slotOwner,
+        MethodInfo sourceMethod)
+    {
+        var parameters = slot.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            parameter.Type,
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var method = new FunctionSymbol(
+            slot.Name,
+            parameters,
+            slot.Type,
+            declaration: null,
+            slot.Package,
+            Accessibility.Private,
+            adapter)
+        {
+            ReturnRefKind = slot.ReturnRefKind,
+            ExplicitInterfaceMember = slot,
+            ExplicitInterfaceClauseTarget = slotOwner,
+            TypeParameters = slot.TypeParameters,
+        };
+        if (slot.HasUnscopedRef)
+        {
+            method.MarkUnscopedRef();
+        }
+
+        var receiver = AdapterSourceReceiver(adapter, method, sourceField, sourceMemberType, handleMode);
+        var callableSourceMethod = sourceMethod.IsGenericMethodDefinition
+            ? sourceMethod.MakeGenericMethod(sourceMethod.GetGenericArguments())
+            : sourceMethod;
+        var call = new BoundImportedInstanceCallExpression(
+            syntax,
+            receiver,
+            callableSourceMethod,
+            slot.Type,
+            parameters.Select(parameter => (BoundExpression)new BoundVariableExpression(syntax, parameter)).ToImmutableArray(),
+            callableSourceMethod.GetParameters().Select(GetAdapterRefKind).ToImmutableArray(),
+            typeArgumentSymbols: slot.TypeParameters.Cast<TypeSymbol?>().ToImmutableArray());
+        return (method, AdapterMethodBody(call, slot.Type, slot.ReturnRefKind));
+    }
+
+    private (FunctionSymbol Method, BoundBlockStatement Body) CreateImportedTargetUserSourceAdapterMethod(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        MethodInfo slot,
+        TypeSymbol slotOwner,
+        FunctionSymbol sourceMethod)
+    {
+        var contract = CreateImportedAdapterContractMethod(slot, slotOwner);
+        var parameters = contract.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            parameter.Type,
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var method = new FunctionSymbol(
+            slot.Name,
+            parameters,
+            contract.Type,
+            declaration: null,
+            package: null,
+            Accessibility.Private,
+            adapter)
+        {
+            ReturnRefKind = contract.ReturnRefKind,
+            ExplicitInterfaceSlot = slot,
+            ExplicitInterfaceSlotContainingType = slotOwner,
+            TypeParameters = contract.TypeParameters,
+        };
+        if (contract.HasUnscopedRef)
+        {
+            method.MarkUnscopedRef();
+        }
+
+        var receiver = AdapterSourceReceiver(adapter, method, sourceField, sourceMemberType, handleMode);
+        var call = new BoundUserInstanceCallExpression(
+            null,
+            receiver,
+            sourceMethod,
+            parameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray(),
+            contract.Type)
+        {
+            MethodTypeArguments = method.TypeParameters.Cast<TypeSymbol>().ToImmutableArray(),
+        };
+        return (method, AdapterMethodBody(call, contract.Type, contract.ReturnRefKind));
+    }
+
+    private (FunctionSymbol Method, BoundBlockStatement Body) CreateImportedAdapterMethod(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        MethodInfo slot,
+        TypeSymbol slotOwner,
+        MethodInfo sourceMethod)
+    {
+        var slotParameters = slot.GetParameters();
+        var typeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+        if (slot.IsGenericMethodDefinition)
+        {
+            var builder = ImmutableArray.CreateBuilder<TypeParameterSymbol>();
+            foreach (var parameter in slot.GetGenericArguments())
+            {
+                var generated = new TypeParameterSymbol(
+                    parameter.Name,
+                    parameter.GenericParameterPosition,
+                    TypeParameterConstraint.Any,
+                    TypeParameterVariance.None);
+                builder.Add(generated);
+            }
+
+            typeParameters = builder.ToImmutable();
+            ApplyImportedGenericConstraints(
+                slot.GetGenericArguments(),
+                typeParameters,
+                CreateImportedMethodTypeParameterMap(
+                    slot.GetGenericArguments(),
+                    typeParameters));
+        }
+
+        var parameters = slotParameters.Select((parameter, index) =>
+            new ParameterSymbol(
+                parameter.Name ?? $"arg{parameter.Position}",
+                GetImportedAdapterMethodType(slotOwner, slot, index, typeParameters),
+                isScoped: IsAdapterScoped(parameter),
+                refKind: GetAdapterRefKind(parameter)))
+            .ToImmutableArray();
+        var returnType = GetImportedAdapterMethodType(
+            slotOwner,
+            slot,
+            parameterIndex: null,
+            typeParameters);
+
+        var method = new FunctionSymbol(
+            slot.Name,
+            parameters,
+            returnType,
+            declaration: null,
+            package: null,
+            Accessibility.Private,
+            adapter)
+        {
+            ReturnRefKind = RefCapabilities.GetReturnRefKind(slot),
+            ExplicitInterfaceSlot = slot,
+            ExplicitInterfaceSlotContainingType = slotOwner,
+        };
+        if (HasAdapterUnscopedRef(slot.ReturnParameter))
+        {
+            method.MarkUnscopedRef();
+        }
+
+        method.TypeParameters = typeParameters;
+        var receiver = AdapterSourceReceiver(adapter, method, sourceField, sourceMemberType, handleMode);
+        var arguments = parameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray();
+        var callableSourceMethod = sourceMethod.IsGenericMethodDefinition
+            ? sourceMethod.MakeGenericMethod(sourceMethod.GetGenericArguments())
+            : sourceMethod;
+        var call = new BoundImportedInstanceCallExpression(
+            null,
+            receiver,
+            callableSourceMethod,
+            returnType,
+            arguments,
+            callableSourceMethod.GetParameters().Select(GetAdapterRefKind).ToImmutableArray(),
+            typeArgumentSymbols: typeParameters.Cast<TypeSymbol?>().ToImmutableArray());
+        return (method, AdapterMethodBody(call, returnType, method.ReturnRefKind));
+    }
+
+    private FunctionSymbol CreateImportedAdapterContractMethod(
+        MethodInfo method,
+        TypeSymbol owner)
+    {
+        var typeParameters = method.GetGenericArguments()
+            .Select((parameter, index) => new TypeParameterSymbol(
+                parameter.Name,
+                index,
+                TypeParameterConstraint.Any,
+                TypeParameterVariance.None)
+            {
+                IsMethodTypeParameter = true,
+            })
+            .ToImmutableArray();
+        if (!typeParameters.IsDefaultOrEmpty)
+        {
+            ApplyImportedGenericConstraints(
+                method.GetGenericArguments(),
+                typeParameters,
+                CreateImportedMethodTypeParameterMap(
+                    method.GetGenericArguments(),
+                    typeParameters));
+        }
+
+        var parameters = method.GetParameters()
+            .Select((parameter, index) => new ParameterSymbol(
+                parameter.Name ?? $"arg{parameter.Position}",
+                GetImportedAdapterMethodType(owner, method, index, typeParameters),
+                isScoped: IsAdapterScoped(parameter),
+                refKind: GetAdapterRefKind(parameter)))
+            .ToImmutableArray();
+        var contract = new FunctionSymbol(
+            method.Name,
+            parameters,
+            GetImportedAdapterMethodType(owner, method, parameterIndex: null, typeParameters),
+            declaration: null,
+            package: null,
+            Accessibility.Public)
+        {
+            ReturnRefKind = RefCapabilities.GetReturnRefKind(method),
+            TypeParameters = typeParameters,
+        };
+        if (HasAdapterUnscopedRef(method.ReturnParameter))
+        {
+            contract.MarkUnscopedRef();
+        }
+
+        return contract;
+    }
+
+    private PropertySymbol CreateImportedAdapterContractProperty(
+        PropertyInfo property,
+        TypeSymbol owner)
+    {
+        var indexParameters = property.GetIndexParameters()
+            .Select((parameter, index) => new ParameterSymbol(
+                parameter.Name ?? $"arg{parameter.Position}",
+                MemberLookup.GetIndexerParameterTypeSymbol(owner, property, index),
+                isScoped: IsAdapterScoped(parameter),
+                refKind: GetAdapterRefKind(parameter)))
+            .ToImmutableArray();
+        var propertyType = MemberLookup.GetClrPropertyTypeSymbol(owner, property);
+        if (propertyType is ByRefTypeSymbol byRef)
+        {
+            propertyType = byRef.PointeeType;
+        }
+
+        var contract = new PropertySymbol(
+            property.Name,
+            propertyType,
+            Accessibility.Public,
+            property.GetMethod?.IsPublic == true,
+            property.SetMethod?.IsPublic == true,
+            isAutoProperty: false,
+            isVirtual: false,
+            isOverride: false,
+            isInitOnly: property.SetMethod?.IsPublic == true && IsAdapterInitOnly(property.SetMethod))
+        {
+            IsIndexer = indexParameters.Length > 0,
+            Parameters = indexParameters,
+            ReturnRefKind = property.GetMethod == null
+                ? RefKind.None
+                : RefCapabilities.GetReturnRefKind(property.GetMethod),
+        };
+        if (property.GetMethod?.IsPublic == true)
+        {
+            var getter = new FunctionSymbol(
+                $"get_{property.Name}",
+                indexParameters,
+                propertyType,
+                declaration: null,
+                package: null,
+                Accessibility.Public)
+            {
+                IsSpecialName = true,
+                ReturnRefKind = contract.ReturnRefKind,
+            };
+            contract.GetterSymbol = getter;
+        }
+
+        if (property.SetMethod?.IsPublic == true)
+        {
+            contract.SetterSymbol = new FunctionSymbol(
+                $"set_{property.Name}",
+                indexParameters.Add(new ParameterSymbol("value", propertyType)),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Public)
+            {
+                IsSpecialName = true,
+                IsInitOnlySetter = contract.IsInitOnly,
+            };
+        }
+
+        return contract;
+    }
+
+    private static EventSymbol CreateImportedAdapterContractEvent(
+        EventInfo eventInfo,
+        TypeSymbol owner)
+    {
+        var eventType = MemberLookup.GetClrEventHandlerTypeSymbol(owner, eventInfo);
+        if (MemberLookup.TryGetDelegateFunctionTypeFromSymbol(eventType, out var functionType))
+        {
+            eventType = functionType;
+        }
+
+        var contract = new EventSymbol(
+            eventInfo.Name,
+            eventType,
+            Accessibility.Public,
+            isFieldLike: false,
+            isVirtual: false,
+            isOverride: false);
+        if (eventInfo.AddMethod?.IsPublic == true)
+        {
+            contract.AddMethodSymbol = new FunctionSymbol(
+                $"add_{eventInfo.Name}",
+                ImmutableArray.Create(new ParameterSymbol("value", eventType)),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Public)
+            {
+                IsSpecialName = true,
+            };
+        }
+
+        if (eventInfo.RemoveMethod?.IsPublic == true)
+        {
+            contract.RemoveMethodSymbol = new FunctionSymbol(
+                $"remove_{eventInfo.Name}",
+                ImmutableArray.Create(new ParameterSymbol("value", eventType)),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Public)
+            {
+                IsSpecialName = true,
+            };
+        }
+
+        return contract;
+    }
+
+    private static (PropertySymbol Property, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateUserAdapterProperty(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        PropertySymbol slot,
+        InterfaceSymbol slotOwner,
+        PropertySymbol interfaceSlot,
+        PropertySymbol sourceProperty)
+    {
+        var indexParameters = slot.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            parameter.Type,
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var property = new PropertySymbol(
+            slot.Name,
+            slot.Type,
+            Accessibility.Private,
+            slot.HasGetter,
+            slot.HasSetter,
+            isAutoProperty: false,
+            isVirtual: false,
+            isOverride: false,
+            setterParameterName: slot.SetterParameterName)
+        {
+            IsIndexer = slot.IsIndexer,
+            Parameters = indexParameters,
+            ReturnRefKind = slot.ReturnRefKind,
+            ExplicitInterfaceMember = interfaceSlot,
+            ExplicitInterfaceClauseTarget = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (slot.HasGetter)
+        {
+            var getter = new FunctionSymbol(
+                $"get_{slot.Name}",
+                indexParameters,
+                slot.Type,
+                declaration: null,
+                slot.GetterSymbol?.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                ReturnRefKind = slot.ReturnRefKind,
+                IsSpecialName = true,
+            };
+            if (slot.GetterSymbol?.HasUnscopedRef == true)
+            {
+                getter.MarkUnscopedRef();
+            }
+
+            property.GetterSymbol = getter;
+            var receiver = AdapterSourceReceiver(adapter, getter, sourceField, sourceMemberType, handleMode);
+            BoundExpression access = slot.IsIndexer
+                ? new BoundUserInstanceCallExpression(
+                    null,
+                    receiver,
+                    Invariant.Required(sourceProperty.GetterSymbol, "a matched getter contract has a source getter"),
+                    indexParameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray(),
+                    slot.Type)
+                : new BoundPropertyAccessExpression(
+                    null,
+                    receiver,
+                    sourceMemberType as StructSymbol,
+                    sourceProperty,
+                    substitutedType: null,
+                    narrowedType: null,
+                    interfaceType: sourceMemberType as InterfaceSymbol);
+            bodies[getter] = AdapterMethodBody(access, slot.Type, slot.ReturnRefKind);
+        }
+
+        if (slot.HasSetter)
+        {
+            var value = new ParameterSymbol(slot.SetterParameterName, slot.Type);
+            var setterParameters = indexParameters.Add(value);
+            var setter = new FunctionSymbol(
+                $"set_{slot.Name}",
+                setterParameters,
+                TypeSymbol.Void,
+                declaration: null,
+                slot.SetterSymbol?.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+                IsInitOnlySetter = slot.IsInitOnly,
+            };
+            property.SetterSymbol = setter;
+            var receiver = AdapterSourceReceiver(adapter, setter, sourceField, sourceMemberType, handleMode);
+            BoundExpression assignment = slot.IsIndexer
+                ? new BoundUserInstanceCallExpression(
+                    null,
+                    receiver,
+                    Invariant.Required(sourceProperty.SetterSymbol, "a matched setter contract has a source setter"),
+                    indexParameters
+                        .Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter))
+                        .Append(new BoundVariableExpression(null, value))
+                        .ToImmutableArray(),
+                    TypeSymbol.Void)
+                : new BoundPropertyAssignmentExpression(
+                    null,
+                    receiver,
+                    sourceMemberType as StructSymbol,
+                    sourceProperty,
+                    new BoundVariableExpression(null, value),
+                    substitutedType: null,
+                    interfaceType: sourceMemberType as InterfaceSymbol);
+            bodies[setter] = AdapterMethodBody(assignment, TypeSymbol.Void);
+        }
+
+        return (property, bodies);
+    }
+
+    private static (PropertySymbol Property, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateUserTargetImportedSourceAdapterProperty(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        PropertySymbol slot,
+        InterfaceSymbol slotOwner,
+        PropertySymbol interfaceSlot,
+        PropertyInfo sourceProperty)
+    {
+        var indexParameters = slot.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            parameter.Type,
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var property = new PropertySymbol(
+            slot.Name,
+            slot.Type,
+            Accessibility.Private,
+            slot.HasGetter,
+            slot.HasSetter,
+            isAutoProperty: false,
+            isVirtual: false,
+            isOverride: false,
+            setterParameterName: slot.SetterParameterName)
+        {
+            IsIndexer = slot.IsIndexer,
+            Parameters = indexParameters,
+            ReturnRefKind = slot.ReturnRefKind,
+            ExplicitInterfaceMember = interfaceSlot,
+            ExplicitInterfaceClauseTarget = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (slot.HasGetter)
+        {
+            var getter = new FunctionSymbol(
+                $"get_{slot.Name}",
+                indexParameters,
+                slot.Type,
+                declaration: null,
+                slot.GetterSymbol?.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                ReturnRefKind = slot.ReturnRefKind,
+                IsSpecialName = true,
+            };
+            property.GetterSymbol = getter;
+            var receiver = AdapterSourceReceiver(adapter, getter, sourceField, sourceMemberType, handleMode);
+            BoundExpression access = slot.IsIndexer
+                ? new BoundClrIndexExpression(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    indexParameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray(),
+                    slot.Type)
+                : new BoundClrPropertyAccessExpression(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    slot.Type,
+                    staticContainerType: sourceMemberType);
+            bodies[getter] = AdapterMethodBody(access, slot.Type, slot.ReturnRefKind);
+        }
+
+        if (slot.HasSetter)
+        {
+            var value = new ParameterSymbol(slot.SetterParameterName, slot.Type);
+            var setter = new FunctionSymbol(
+                $"set_{slot.Name}",
+                indexParameters.Add(value),
+                TypeSymbol.Void,
+                declaration: null,
+                slot.SetterSymbol?.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+                IsInitOnlySetter = slot.IsInitOnly,
+            };
+            property.SetterSymbol = setter;
+            var receiver = AdapterSourceReceiver(adapter, setter, sourceField, sourceMemberType, handleMode);
+            BoundExpression assignment = slot.IsIndexer
+                ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    indexParameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray(),
+                    new BoundVariableExpression(null, value),
+                    slot.Type)
+                : new BoundClrPropertyAssignmentExpression(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    new BoundVariableExpression(null, value),
+                    slot.Type,
+                    staticContainerType: sourceMemberType);
+            bodies[setter] = AdapterMethodBody(assignment, TypeSymbol.Void);
+        }
+
+        return (property, bodies);
+    }
+
+    private (PropertySymbol Property, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateImportedTargetUserSourceAdapterProperty(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        PropertyInfo slot,
+        TypeSymbol slotOwner,
+        PropertySymbol sourceProperty)
+    {
+        var contract = CreateImportedAdapterContractProperty(slot, slotOwner);
+        var indexParameters = contract.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            parameter.Type,
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var property = new PropertySymbol(
+            slot.Name,
+            contract.Type,
+            Accessibility.Private,
+            contract.HasGetter,
+            contract.HasSetter,
+            isAutoProperty: false,
+            isVirtual: false,
+            isOverride: false,
+            isInitOnly: contract.IsInitOnly)
+        {
+            IsIndexer = contract.IsIndexer,
+            Parameters = indexParameters,
+            ReturnRefKind = contract.ReturnRefKind,
+            ExplicitInterfaceGetterSlot = slot.GetMethod,
+            ExplicitInterfaceSetterSlot = slot.SetMethod,
+            ExplicitInterfaceSlotContainingType = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (contract.HasGetter)
+        {
+            var getter = new FunctionSymbol(
+                $"get_{slot.Name}",
+                indexParameters,
+                contract.Type,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                ReturnRefKind = contract.ReturnRefKind,
+                IsSpecialName = true,
+            };
+            property.GetterSymbol = getter;
+            var receiver = AdapterSourceReceiver(adapter, getter, sourceField, sourceMemberType, handleMode);
+            BoundExpression access = contract.IsIndexer
+                ? new BoundUserInstanceCallExpression(
+                    null,
+                    receiver,
+                    Invariant.Required(sourceProperty.GetterSymbol, "a matched getter contract has a source getter"),
+                    indexParameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray(),
+                    contract.Type)
+                : new BoundPropertyAccessExpression(
+                    null,
+                    receiver,
+                    sourceMemberType as StructSymbol,
+                    sourceProperty,
+                    substitutedType: null,
+                    narrowedType: null,
+                    interfaceType: sourceMemberType as InterfaceSymbol);
+            bodies[getter] = AdapterMethodBody(access, contract.Type, contract.ReturnRefKind);
+        }
+
+        if (contract.HasSetter)
+        {
+            var value = new ParameterSymbol("value", contract.Type);
+            var setter = new FunctionSymbol(
+                $"set_{slot.Name}",
+                indexParameters.Add(value),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+                IsInitOnlySetter = contract.IsInitOnly,
+            };
+            property.SetterSymbol = setter;
+            var receiver = AdapterSourceReceiver(adapter, setter, sourceField, sourceMemberType, handleMode);
+            BoundExpression assignment = contract.IsIndexer
+                ? new BoundUserInstanceCallExpression(
+                    null,
+                    receiver,
+                    Invariant.Required(sourceProperty.SetterSymbol, "a matched setter contract has a source setter"),
+                    indexParameters
+                        .Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter))
+                        .Append(new BoundVariableExpression(null, value))
+                        .ToImmutableArray(),
+                    TypeSymbol.Void)
+                : new BoundPropertyAssignmentExpression(
+                    null,
+                    receiver,
+                    sourceMemberType as StructSymbol,
+                    sourceProperty,
+                    new BoundVariableExpression(null, value),
+                    substitutedType: null,
+                    interfaceType: sourceMemberType as InterfaceSymbol);
+            bodies[setter] = AdapterMethodBody(assignment, TypeSymbol.Void);
+        }
+
+        return (property, bodies);
+    }
+
+    private static (PropertySymbol Property, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateImportedAdapterProperty(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        PropertyInfo slot,
+        TypeSymbol slotOwner,
+        PropertyInfo sourceProperty)
+    {
+        var slotParameters = slot.GetIndexParameters();
+        var indexParameters = slotParameters.Select((parameter, index) => new ParameterSymbol(
+            parameter.Name ?? $"arg{parameter.Position}",
+            MemberLookup.GetIndexerParameterTypeSymbol(slotOwner, slot, index),
+            isScoped: IsAdapterScoped(parameter),
+            refKind: GetAdapterRefKind(parameter))).ToImmutableArray();
+        var propertyType = MemberLookup.GetClrPropertyTypeSymbol(slotOwner, slot);
+        if (propertyType is ByRefTypeSymbol byRefType)
+        {
+            propertyType = byRefType.PointeeType;
+        }
+
+        var property = new PropertySymbol(
+            slot.Name,
+            propertyType,
+            Accessibility.Private,
+            slot.CanRead,
+            slot.CanWrite,
+            isAutoProperty: false,
+            isVirtual: false,
+            isOverride: false,
+            isInitOnly: slot.SetMethod != null && IsAdapterInitOnly(slot.SetMethod))
+        {
+            IsIndexer = slotParameters.Length > 0,
+            Parameters = indexParameters,
+            ReturnRefKind = slot.GetMethod == null ? RefKind.None : RefCapabilities.GetReturnRefKind(slot.GetMethod),
+            ExplicitInterfaceGetterSlot = slot.GetMethod,
+            ExplicitInterfaceSetterSlot = slot.SetMethod,
+            ExplicitInterfaceSlotContainingType = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (slot.GetMethod != null)
+        {
+            var getter = new FunctionSymbol(
+                $"get_{slot.Name}",
+                indexParameters,
+                propertyType,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                ReturnRefKind = property.ReturnRefKind,
+                IsSpecialName = true,
+            };
+            if (HasAdapterUnscopedRef(slot.GetMethod.ReturnParameter))
+            {
+                getter.MarkUnscopedRef();
+            }
+
+            property.GetterSymbol = getter;
+            var receiver = AdapterSourceReceiver(adapter, getter, sourceField, sourceMemberType, handleMode);
+            BoundExpression access = property.IsIndexer
+                ? new BoundClrIndexExpression(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    indexParameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray(),
+                    propertyType)
+                : new BoundClrPropertyAccessExpression(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    propertyType,
+                    staticContainerType: sourceMemberType);
+            bodies[getter] = AdapterMethodBody(access, propertyType, property.ReturnRefKind);
+        }
+
+        if (slot.SetMethod != null)
+        {
+            var value = new ParameterSymbol("value", propertyType);
+            var setter = new FunctionSymbol(
+                $"set_{slot.Name}",
+                indexParameters.Add(value),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+                IsInitOnlySetter = property.IsInitOnly,
+            };
+            property.SetterSymbol = setter;
+            var receiver = AdapterSourceReceiver(adapter, setter, sourceField, sourceMemberType, handleMode);
+            BoundExpression assignment = property.IsIndexer
+                ? BoundClrIndexAssignmentExpression.WithExpressionTarget(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    indexParameters.Select(parameter => (BoundExpression)new BoundVariableExpression(null, parameter)).ToImmutableArray(),
+                    new BoundVariableExpression(null, value),
+                    propertyType)
+                : new BoundClrPropertyAssignmentExpression(
+                    null,
+                    receiver,
+                    sourceProperty,
+                    new BoundVariableExpression(null, value),
+                    propertyType,
+                    staticContainerType: sourceMemberType);
+            bodies[setter] = AdapterMethodBody(assignment, TypeSymbol.Void);
+        }
+
+        return (property, bodies);
+    }
+
+    private static (EventSymbol Event, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateUserAdapterEvent(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        EventSymbol slot,
+        InterfaceSymbol slotOwner,
+        EventSymbol interfaceSlot,
+        EventSymbol sourceEvent)
+    {
+        var eventSymbol = new EventSymbol(
+            slot.Name,
+            slot.Type,
+            Accessibility.Private,
+            isFieldLike: false,
+            isVirtual: false,
+            isOverride: false)
+        {
+            ExplicitInterfaceMember = interfaceSlot,
+            ExplicitInterfaceClauseTarget = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (slot.AddMethodSymbol != null && sourceEvent.AddMethodSymbol != null)
+        {
+            var parameter = new ParameterSymbol("value", slot.Type);
+            var add = new FunctionSymbol(
+                $"add_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                slot.AddMethodSymbol.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.AddMethodSymbol = add;
+            var receiver = AdapterSourceReceiver(adapter, add, sourceField, sourceMemberType, handleMode);
+            var call = new BoundEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceMemberType,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: true);
+            bodies[add] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        if (slot.RemoveMethodSymbol != null && sourceEvent.RemoveMethodSymbol != null)
+        {
+            var parameter = new ParameterSymbol("value", slot.Type);
+            var remove = new FunctionSymbol(
+                $"remove_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                slot.RemoveMethodSymbol.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.RemoveMethodSymbol = remove;
+            var receiver = AdapterSourceReceiver(adapter, remove, sourceField, sourceMemberType, handleMode);
+            var call = new BoundEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceMemberType,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: false);
+            bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        return (eventSymbol, bodies);
+    }
+
+    private static (EventSymbol Event, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateUserTargetImportedSourceAdapterEvent(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        EventSymbol slot,
+        InterfaceSymbol slotOwner,
+        EventSymbol interfaceSlot,
+        EventInfo sourceEvent)
+    {
+        var eventSymbol = new EventSymbol(
+            slot.Name,
+            slot.Type,
+            Accessibility.Private,
+            isFieldLike: false,
+            isVirtual: false,
+            isOverride: false)
+        {
+            ExplicitInterfaceMember = interfaceSlot,
+            ExplicitInterfaceClauseTarget = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (slot.AddMethodSymbol != null && sourceEvent.AddMethod != null)
+        {
+            var parameter = new ParameterSymbol("value", slot.Type);
+            var add = new FunctionSymbol(
+                $"add_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                slot.AddMethodSymbol.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.AddMethodSymbol = add;
+            var receiver = AdapterSourceReceiver(adapter, add, sourceField, sourceMemberType, handleMode);
+            var call = new BoundClrEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: true,
+                eventContainingType: sourceMemberType);
+            bodies[add] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        if (slot.RemoveMethodSymbol != null && sourceEvent.RemoveMethod != null)
+        {
+            var parameter = new ParameterSymbol("value", slot.Type);
+            var remove = new FunctionSymbol(
+                $"remove_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                slot.RemoveMethodSymbol.Package,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.RemoveMethodSymbol = remove;
+            var receiver = AdapterSourceReceiver(adapter, remove, sourceField, sourceMemberType, handleMode);
+            var call = new BoundClrEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: false,
+                eventContainingType: sourceMemberType);
+            bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        return (eventSymbol, bodies);
+    }
+
+    private (EventSymbol Event, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateImportedTargetUserSourceAdapterEvent(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        EventInfo slot,
+        TypeSymbol slotOwner,
+        EventSymbol sourceEvent)
+    {
+        var contract = CreateImportedAdapterContractEvent(slot, slotOwner);
+        var eventSymbol = new EventSymbol(
+            slot.Name,
+            contract.Type,
+            Accessibility.Private,
+            isFieldLike: false,
+            isVirtual: false,
+            isOverride: false)
+        {
+            ExplicitInterfaceAddSlot = slot.AddMethod,
+            ExplicitInterfaceRemoveSlot = slot.RemoveMethod,
+            ExplicitInterfaceSlotContainingType = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (slot.AddMethod != null && sourceEvent.AddMethodSymbol != null)
+        {
+            var parameter = new ParameterSymbol("value", contract.Type);
+            var add = new FunctionSymbol(
+                $"add_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.AddMethodSymbol = add;
+            var receiver = AdapterSourceReceiver(adapter, add, sourceField, sourceMemberType, handleMode);
+            var call = new BoundEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceMemberType,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: true);
+            bodies[add] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        if (slot.RemoveMethod != null && sourceEvent.RemoveMethodSymbol != null)
+        {
+            var parameter = new ParameterSymbol("value", contract.Type);
+            var remove = new FunctionSymbol(
+                $"remove_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.RemoveMethodSymbol = remove;
+            var receiver = AdapterSourceReceiver(adapter, remove, sourceField, sourceMemberType, handleMode);
+            var call = new BoundEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceMemberType,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: false);
+            bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        return (eventSymbol, bodies);
+    }
+
+    private static (EventSymbol Event, Dictionary<FunctionSymbol, BoundBlockStatement> Bodies) CreateImportedAdapterEvent(
+        StructSymbol adapter,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode,
+        EventInfo slot,
+        TypeSymbol slotOwner,
+        EventInfo sourceEvent)
+    {
+        var eventType = MemberLookup.GetClrEventHandlerTypeSymbol(slotOwner, slot);
+        var eventSymbol = new EventSymbol(
+            slot.Name,
+            eventType,
+            Accessibility.Private,
+            isFieldLike: false,
+            isVirtual: false,
+            isOverride: false)
+        {
+            ExplicitInterfaceAddSlot = slot.AddMethod,
+            ExplicitInterfaceRemoveSlot = slot.RemoveMethod,
+            ExplicitInterfaceSlotContainingType = slotOwner,
+        };
+        var bodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
+        if (slot.AddMethod != null && sourceEvent.AddMethod != null)
+        {
+            var parameter = new ParameterSymbol("value", eventType);
+            var add = new FunctionSymbol(
+                $"add_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.AddMethodSymbol = add;
+            var receiver = AdapterSourceReceiver(adapter, add, sourceField, sourceMemberType, handleMode);
+            var call = new BoundClrEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: true,
+                eventContainingType: sourceMemberType);
+            bodies[add] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        if (slot.RemoveMethod != null && sourceEvent.RemoveMethod != null)
+        {
+            var parameter = new ParameterSymbol("value", eventType);
+            var remove = new FunctionSymbol(
+                $"remove_{slot.Name}",
+                ImmutableArray.Create(parameter),
+                TypeSymbol.Void,
+                declaration: null,
+                package: null,
+                Accessibility.Private,
+                adapter)
+            {
+                IsSpecialName = true,
+            };
+            eventSymbol.RemoveMethodSymbol = remove;
+            var receiver = AdapterSourceReceiver(adapter, remove, sourceField, sourceMemberType, handleMode);
+            var call = new BoundClrEventSubscriptionExpression(
+                null,
+                receiver,
+                sourceEvent,
+                new BoundVariableExpression(null, parameter),
+                isAdd: false,
+                eventContainingType: sourceMemberType);
+            bodies[remove] = AdapterMethodBody(call, TypeSymbol.Void);
+        }
+
+        return (eventSymbol, bodies);
+    }
+
+    private static BoundExpression AdapterSourceReceiver(
+        StructSymbol adapter,
+        FunctionSymbol method,
+        FieldSymbol sourceField,
+        TypeSymbol sourceMemberType,
+        bool handleMode)
+    {
+        var field = new BoundFieldAccessExpression(
+            null,
+            new BoundVariableExpression(null, Invariant.Required(method.ThisParameter, "adapter methods have a receiver")),
+            adapter,
+            sourceField);
+        return handleMode
+            ? new BoundDereferenceExpression(null, ManagedReferenceTypes.Borrow(field))
+            : field;
+    }
+
+    private static BoundBlockStatement AdapterMethodBody(
+        BoundExpression call,
+        TypeSymbol returnType,
+        RefKind returnRefKind = RefKind.None)
+    {
+        if (returnRefKind != RefKind.None)
+        {
+            return new BoundBlockStatement(
+                null,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundReturnStatement(
+                        null,
+                        new BoundAddressOfExpression(
+                            null,
+                            call,
+                            unmanaged: false,
+                            isReadOnly: returnRefKind == RefKind.RefReadOnly),
+                        isRef: true)));
+        }
+
+        var statements = returnType == TypeSymbol.Void
+            ? ImmutableArray.Create<BoundStatement>(
+                new BoundExpressionStatement(null, call),
+                new BoundReturnStatement(null, null))
+            : ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(null, call));
+        return new BoundBlockStatement(null, statements);
+    }
+
+    private bool MethodContractsMatch(
+        FunctionSymbol target,
+        FunctionSymbol source,
+        TypeSymbol sourceContainingType)
+    {
+        if (target.TypeParameters.Length != source.TypeParameters.Length
+            || target.Parameters.Length != source.Parameters.Length
+            || target.ReturnRefKind != source.ReturnRefKind
+            || target.HasUnscopedRef != source.HasUnscopedRef)
+        {
+            return false;
+        }
+
+        var substitutions = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        if (sourceContainingType is StructSymbol sourceConstruction
+            && sourceConstruction.Definition is { } sourceDefinition
+            && !sourceConstruction.TypeArguments.IsDefaultOrEmpty)
+        {
+            for (var i = 0; i < sourceDefinition.TypeParameters.Length
+                && i < sourceConstruction.TypeArguments.Length; i++)
+            {
+                substitutions[sourceDefinition.TypeParameters[i]] = sourceConstruction.TypeArguments[i];
+            }
+        }
+
+        for (var i = 0; i < target.TypeParameters.Length; i++)
+        {
+            substitutions[source.TypeParameters[i]] = target.TypeParameters[i];
+        }
+
+        for (var i = 0; i < target.TypeParameters.Length; i++)
+        {
+            if (!AdapterGenericConstraintsMatch(target.TypeParameters[i], source.TypeParameters[i], substitutions))
+            {
+                return false;
+            }
+        }
+
+        if (!AdapterTypesMatch(
+                target.Type,
+                SubstituteType(source.Type, substitutions, scope.References.MapClrTypeToReferences)))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < target.Parameters.Length; i++)
+        {
+            if (target.Parameters[i].RefKind != source.Parameters[i].RefKind
+                || target.Parameters[i].IsScoped != source.Parameters[i].IsScoped
+                || !AdapterTypesMatch(
+                    target.Parameters[i].Type,
+                    SubstituteType(source.Parameters[i].Type, substitutions, scope.References.MapClrTypeToReferences)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool UserAdapterSlotsEquivalent(FunctionSymbol left, FunctionSymbol right)
+    {
+        if (left.Name != right.Name
+            || left.TypeParameters.Length != right.TypeParameters.Length
+            || left.Parameters.Length != right.Parameters.Length
+            || left.ReturnRefKind != right.ReturnRefKind
+            || left.HasUnscopedRef != right.HasUnscopedRef
+            || !AdapterTypesMatch(left.Type, right.Type))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Parameters.Length; i++)
+        {
+            if (left.Parameters[i].RefKind != right.Parameters[i].RefKind
+                || !AdapterTypesMatch(left.Parameters[i].Type, right.Parameters[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool UserAdapterPropertySlotsEquivalent(PropertySymbol left, PropertySymbol right)
+        => left.Name == right.Name
+            && AdapterTypesMatch(left.Type, right.Type)
+            && ((left.GetterSymbol == null && right.GetterSymbol == null)
+                || (left.GetterSymbol != null
+                    && right.GetterSymbol != null
+                    && UserAdapterSlotsEquivalent(left.GetterSymbol, right.GetterSymbol)))
+            && ((left.SetterSymbol == null && right.SetterSymbol == null)
+                || (left.SetterSymbol != null
+                    && right.SetterSymbol != null
+                    && UserAdapterSlotsEquivalent(left.SetterSymbol, right.SetterSymbol)));
+
+    private bool AdapterGenericConstraintsMatch(
+        TypeParameterSymbol target,
+        TypeParameterSymbol source,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> substitutions)
+    {
+        if (target.Constraint != source.Constraint
+            || target.HasReferenceTypeConstraint != source.HasReferenceTypeConstraint
+            || target.HasValueTypeConstraint != source.HasValueTypeConstraint
+            || target.HasDefaultConstructorConstraint != source.HasDefaultConstructorConstraint
+            || target.HasUnmanagedConstraint != source.HasUnmanagedConstraint)
+        {
+            return false;
+        }
+
+        var targetReference = target.ConstraintReferenceType;
+        var sourceReference = source.ConstraintReferenceType;
+        if (targetReference == null || sourceReference == null)
+        {
+            return targetReference == null && sourceReference == null;
+        }
+
+        return AdapterTypesMatch(
+            targetReference,
+            SubstituteType(
+                sourceReference,
+                new Dictionary<TypeParameterSymbol, TypeSymbol>(substitutions),
+                scope.References.MapClrTypeToReferences));
+    }
+
+    private bool ImportedMethodContractsMatch(
+        MethodInfo target,
+        TypeSymbol targetOwner,
+        MethodInfo source,
+        TypeSymbol sourceOwner)
+    {
+        if (target.IsGenericMethodDefinition != source.IsGenericMethodDefinition
+            || target.GetGenericArguments().Length != source.GetGenericArguments().Length
+            || RefCapabilities.GetReturnRefKind(target) != RefCapabilities.GetReturnRefKind(source)
+            || !AdapterParameterMetadataSupported(target.ReturnParameter)
+            || !AdapterParameterMetadataSupported(source.ReturnParameter)
+            || !AdapterParameterMetadataMatches(target.ReturnParameter, source.ReturnParameter)
+            || !ImportedGenericConstraintsMatch(target, source))
+        {
+            return false;
+        }
+
+        var methodTypeParameters = target.GetGenericArguments()
+            .Select((parameter, index) => new TypeParameterSymbol(
+                parameter.Name,
+                index,
+                TypeParameterConstraint.Any,
+                TypeParameterVariance.None)
+            {
+                IsMethodTypeParameter = true,
+            })
+            .ToImmutableArray();
+        if (!AdapterTypesMatch(
+                GetImportedAdapterMethodType(targetOwner, target, parameterIndex: null, methodTypeParameters),
+                GetImportedAdapterMethodType(sourceOwner, source, parameterIndex: null, methodTypeParameters)))
+        {
+            return false;
+        }
+
+        var targetParameters = target.GetParameters();
+        var sourceParameters = source.GetParameters();
+        if (targetParameters.Length != sourceParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParameters.Length; i++)
+        {
+            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
+                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+                || !AdapterParameterMetadataSupported(targetParameters[i])
+                || !AdapterParameterMetadataSupported(sourceParameters[i])
+                || !AdapterParameterMetadataMatches(targetParameters[i], sourceParameters[i])
+                || !AdapterTypesMatch(
+                    GetImportedAdapterMethodType(targetOwner, target, i, methodTypeParameters),
+                    GetImportedAdapterMethodType(sourceOwner, source, i, methodTypeParameters)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ImportedMethodContractsMatch(MethodInfo target, MethodInfo source)
+    {
+        if (target.IsGenericMethodDefinition != source.IsGenericMethodDefinition
+            || target.GetGenericArguments().Length != source.GetGenericArguments().Length
+            || RefCapabilities.GetReturnRefKind(target) != RefCapabilities.GetReturnRefKind(source)
+            || !AdapterParameterMetadataSupported(target.ReturnParameter)
+            || !AdapterParameterMetadataSupported(source.ReturnParameter)
+            || !AdapterParameterMetadataMatches(target.ReturnParameter, source.ReturnParameter)
+            || !ImportedAdapterTypesMatch(target.ReturnType, source.ReturnType)
+            || !ImportedMethodNullabilityMatches(target, source)
+            || !ImportedGenericConstraintsMatch(target, source))
+        {
+            return false;
+        }
+
+        var targetParameters = target.GetParameters();
+        var sourceParameters = source.GetParameters();
+        if (targetParameters.Length != sourceParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParameters.Length; i++)
+        {
+            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
+                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+                || !AdapterParameterMetadataSupported(targetParameters[i])
+                || !AdapterParameterMetadataSupported(sourceParameters[i])
+                || !AdapterParameterMetadataMatches(targetParameters[i], sourceParameters[i])
+                || !ImportedAdapterTypesMatch(
+                    targetParameters[i].ParameterType,
+                    sourceParameters[i].ParameterType))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ImportedGenericConstraintsMatch(MethodInfo target, MethodInfo source)
+    {
+        var targetParameters = target.GetGenericArguments();
+        var sourceParameters = source.GetGenericArguments();
+        for (var i = 0; i < targetParameters.Length; i++)
+        {
+            const GenericParameterAttributes specialMask = GenericParameterAttributes.SpecialConstraintMask;
+            if ((targetParameters[i].GenericParameterAttributes & specialMask)
+                != (sourceParameters[i].GenericParameterAttributes & specialMask))
+            {
+                return false;
+            }
+
+            if (HasAdapterUnmanagedConstraint(targetParameters[i])
+                != HasAdapterUnmanagedConstraint(sourceParameters[i]))
+            {
+                return false;
+            }
+
+            var targetConstraints = targetParameters[i].GetGenericParameterConstraints();
+            var sourceConstraints = sourceParameters[i].GetGenericParameterConstraints();
+            if (targetConstraints.Length != sourceConstraints.Length)
+            {
+                return false;
+            }
+
+            foreach (var targetConstraint in targetConstraints)
+            {
+                if (!sourceConstraints.Any(sourceConstraint => ImportedAdapterTypesMatch(targetConstraint, sourceConstraint)))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryDescribeUnsupportedImportedAdapterConstraints(
+        MethodInfo method,
+        [NotNullWhen(true)] out string? reason)
+    {
+        foreach (var parameter in method.GetGenericArguments())
+        {
+            var interfaceBounds = parameter.GetGenericParameterConstraints()
+                .Count(constraint => constraint.IsInterface);
+            if (interfaceBounds > 1)
+            {
+                reason =
+                    $"generic method '{method.Name}' type parameter '{parameter.Name}' has {interfaceBounds} interface bounds; exact adapter metadata currently supports at most one";
+                return true;
+            }
+        }
+
+        reason = null;
+        return false;
+    }
+
+    private static bool ImportedMethodNullabilityMatches(MethodInfo target, MethodInfo source)
+    {
+        var targetGenericParameters = target.GetGenericArguments();
+        var sourceGenericParameters = source.GetGenericArguments();
+        var canonical = ImmutableArray.CreateBuilder<TypeParameterSymbol>(targetGenericParameters.Length);
+        var targetMap = new Dictionary<Type, TypeSymbol>();
+        var sourceMap = new Dictionary<Type, TypeSymbol>();
+        for (var i = 0; i < targetGenericParameters.Length; i++)
+        {
+            var parameter = new TypeParameterSymbol(
+                targetGenericParameters[i].Name,
+                i,
+                TypeParameterConstraint.Any,
+                TypeParameterVariance.None)
+            {
+                IsMethodTypeParameter = true,
+            };
+            canonical.Add(parameter);
+            targetMap[targetGenericParameters[i]] = parameter;
+            sourceMap[sourceGenericParameters[i]] = parameter;
+        }
+
+        var targetReturn = ClrNullability.GetReturnTypeSymbol(target);
+        var sourceReturn = ClrNullability.GetReturnTypeSymbol(source);
+        var targetRawReturn = target.ReturnType.IsByRef
+            ? RequiredAdapterElementType(target.ReturnType)
+            : target.ReturnType;
+        var sourceRawReturn = source.ReturnType.IsByRef
+            ? RequiredAdapterElementType(source.ReturnType)
+            : source.ReturnType;
+        if (targetReturn is ByRefTypeSymbol targetByRef)
+        {
+            targetReturn = targetByRef.PointeeType;
+        }
+
+        if (sourceReturn is ByRefTypeSymbol sourceByRef)
+        {
+            sourceReturn = sourceByRef.PointeeType;
+        }
+
+        if (!AdapterTypesMatch(
+                MapAdapterMethodTypeWithNullability(targetRawReturn, targetReturn, targetMap),
+                MapAdapterMethodTypeWithNullability(sourceRawReturn, sourceReturn, sourceMap)))
+        {
+            return false;
+        }
+
+        var targetParameters = target.GetParameters();
+        var sourceParameters = source.GetParameters();
+        for (var i = 0; i < targetParameters.Length; i++)
+        {
+            var targetRaw = targetParameters[i].ParameterType.IsByRef
+                ? RequiredAdapterElementType(targetParameters[i].ParameterType)
+                : targetParameters[i].ParameterType;
+            var sourceRaw = sourceParameters[i].ParameterType.IsByRef
+                ? RequiredAdapterElementType(sourceParameters[i].ParameterType)
+                : sourceParameters[i].ParameterType;
+            var targetAnnotated = ClrNullability.GetParameterTypeSymbol(targetParameters[i]);
+            var sourceAnnotated = ClrNullability.GetParameterTypeSymbol(sourceParameters[i]);
+            if (targetAnnotated is ByRefTypeSymbol targetParameterByRef)
+            {
+                targetAnnotated = targetParameterByRef.PointeeType;
+            }
+
+            if (sourceAnnotated is ByRefTypeSymbol sourceParameterByRef)
+            {
+                sourceAnnotated = sourceParameterByRef.PointeeType;
+            }
+
+            if (!AdapterTypesMatch(
+                    MapAdapterMethodTypeWithNullability(targetRaw, targetAnnotated, targetMap),
+                    MapAdapterMethodTypeWithNullability(sourceRaw, sourceAnnotated, sourceMap)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ImportedAdapterTypesMatch(Type target, Type source)
+    {
+        if (target.IsByRef || source.IsByRef)
+        {
+            return target.IsByRef == source.IsByRef
+                && ImportedAdapterTypesMatch(
+                    RequiredAdapterElementType(target),
+                    RequiredAdapterElementType(source));
+        }
+
+        if (target.IsGenericParameter || source.IsGenericParameter)
+        {
+            return target.IsGenericParameter
+                && source.IsGenericParameter
+                && target.GenericParameterPosition == source.GenericParameterPosition
+                && (target.DeclaringMethod != null) == (source.DeclaringMethod != null);
+        }
+
+        if (target.IsArray || source.IsArray)
+        {
+            return target.IsArray
+                && source.IsArray
+                && target.GetArrayRank() == source.GetArrayRank()
+                && ImportedAdapterTypesMatch(
+                    RequiredAdapterElementType(target),
+                    RequiredAdapterElementType(source));
+        }
+
+        if (target.IsGenericType || source.IsGenericType)
+        {
+            if (!target.IsGenericType || !source.IsGenericType
+                || !ClrTypeUtilities.AreSame(target.GetGenericTypeDefinition(), source.GetGenericTypeDefinition()))
+            {
+                return false;
+            }
+
+            var targetArguments = target.GetGenericArguments();
+            var sourceArguments = source.GetGenericArguments();
+            return targetArguments.Length == sourceArguments.Length
+                && targetArguments.Zip(sourceArguments).All(pair => ImportedAdapterTypesMatch(pair.First, pair.Second));
+        }
+
+        return ClrTypeUtilities.AreSame(target, source);
+    }
+
+    private static TypeSymbol MapAdapterMethodType(Type type, IReadOnlyDictionary<Type, TypeSymbol> typeParameters)
+    {
+        if (type.IsGenericParameter && typeParameters.TryGetValue(type, out var parameter))
+        {
+            return parameter;
+        }
+
+        if (type.IsByRef)
+        {
+            return ByRefTypeSymbol.Get(
+                MapAdapterMethodType(RequiredAdapterElementType(type), typeParameters));
+        }
+
+        if (type.IsArray)
+        {
+            var element = MapAdapterMethodType(
+                RequiredAdapterElementType(type),
+                typeParameters);
+            return type.GetArrayRank() == 1
+                ? SliceTypeSymbol.Get(element)
+                : RectangularArrayTypeSymbol.Get(element, type.GetArrayRank());
+        }
+
+        if (NullableLifting.GetValueTypeNullableUnderlyingClr(type) is { } nullableUnderlying)
+        {
+            return NullableTypeSymbol.Get(
+                MapAdapterMethodType(nullableUnderlying, typeParameters));
+        }
+
+        if (type.IsGenericType)
+        {
+            var definition = type.GetGenericTypeDefinition();
+            var arguments = type.GetGenericArguments()
+                .Select(argument => MapAdapterMethodType(argument, typeParameters))
+                .ToImmutableArray();
+            return ImportedTypeSymbol.GetConstructed(type, definition, arguments);
+        }
+
+        return TypeSymbol.FromClrType(type);
+    }
+
+    private static TypeSymbol MapAdapterMethodTypeWithNullability(
+        Type rawType,
+        TypeSymbol annotatedType,
+        IReadOnlyDictionary<Type, TypeSymbol> typeParameters)
+    {
+        var mapped = MapAdapterMethodType(rawType, typeParameters);
+        if (annotatedType is NullableTypeSymbol && mapped is not NullableTypeSymbol)
+        {
+            return NullableTypeSymbol.Get(mapped);
+        }
+
+        var expectedFlags = GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Build(annotatedType);
+        if (mapped is TypeParameterSymbol)
+        {
+            return expectedFlags.Length > 0
+                && expectedFlags[0] == GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Annotated
+                    ? NullableTypeSymbol.Get(mapped)
+                    : mapped;
+        }
+
+        var mappedFlags = GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Build(mapped);
+        return expectedFlags.SequenceEqual(mappedFlags)
+            ? mapped
+            : new NullabilityAnnotatedTypeSymbol(mapped, expectedFlags);
+    }
+
+    private TypeSymbol GetImportedAdapterMethodType(
+        TypeSymbol owner,
+        MethodInfo method,
+        int? parameterIndex,
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters)
+    {
+        var type = parameterIndex is int index
+            ? MemberLookup.GetClrMethodParameterTypeSymbol(owner, method, index)
+            : MemberLookup.GetClrMethodReturnTypeSymbol(owner, method);
+        if (type is ByRefTypeSymbol byRef)
+        {
+            type = byRef.PointeeType;
+        }
+
+        return RemapImportedMethodTypeParameters(type, methodTypeParameters);
+    }
+
+    private TypeSymbol RemapImportedMethodTypeParameters(
+        TypeSymbol type,
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters)
+    {
+        if (methodTypeParameters.IsDefaultOrEmpty)
+        {
+            return type;
+        }
+
+        switch (type)
+        {
+            case TypeParameterSymbol parameter
+                when parameter.IsMethodTypeParameter
+                    && (uint)parameter.Ordinal < (uint)methodTypeParameters.Length:
+                return methodTypeParameters[parameter.Ordinal];
+            case ImportedTypeSymbol imported
+                when imported.Type.IsGenericParameter
+                    && imported.Type.DeclaringMethod != null
+                    && (uint)imported.Type.GenericParameterPosition < (uint)methodTypeParameters.Length:
+                return methodTypeParameters[imported.Type.GenericParameterPosition];
+            case NullableTypeSymbol nullable:
+                return NullableTypeSymbol.Get(
+                    RemapImportedMethodTypeParameters(nullable.UnderlyingType, methodTypeParameters));
+            case NullabilityAnnotatedTypeSymbol annotated:
+                return new NullabilityAnnotatedTypeSymbol(
+                    RemapImportedMethodTypeParameters(annotated.BaseType, methodTypeParameters),
+                    annotated.NullableFlags);
+            case ImportedTypeSymbol imported
+                when imported.OpenDefinition != null
+                    && !imported.TypeArguments.IsDefaultOrEmpty:
+                return ImportedTypeSymbol.GetConstructed(
+                    imported.Type,
+                    imported.OpenDefinition,
+                    imported.TypeArguments
+                        .Select(argument => RemapImportedMethodTypeParameters(argument, methodTypeParameters))
+                        .ToImmutableArray());
+            case SliceTypeSymbol slice:
+                return SliceTypeSymbol.Get(
+                    RemapImportedMethodTypeParameters(slice.ElementType, methodTypeParameters));
+            case RectangularArrayTypeSymbol array:
+                return RectangularArrayTypeSymbol.Get(
+                    RemapImportedMethodTypeParameters(array.ElementType, methodTypeParameters),
+                    array.Rank);
+            case ByRefTypeSymbol byRef:
+                return ByRefTypeSymbol.Get(
+                    RemapImportedMethodTypeParameters(byRef.PointeeType, methodTypeParameters));
+            default:
+                return type;
+        }
+    }
+
+    private static Type RequiredAdapterElementType(Type type)
+        => Invariant.Required(
+            type.GetElementType(),
+            "a byref or array reflection type has an element type");
+
+    private static Dictionary<Type, TypeSymbol> CreateImportedMethodTypeParameterMap(
+        Type[] source,
+        ImmutableArray<TypeParameterSymbol> target)
+    {
+        var map = new Dictionary<Type, TypeSymbol>();
+        for (var i = 0; i < source.Length && i < target.Length; i++)
+        {
+            map[source[i]] = target[i];
+        }
+
+        return map;
+    }
+
+    private static void ApplyImportedGenericConstraints(
+        Type[] source,
+        ImmutableArray<TypeParameterSymbol> target,
+        IReadOnlyDictionary<Type, TypeSymbol> map)
+    {
+        for (var i = 0; i < source.Length; i++)
+        {
+            var attributes = source[i].GenericParameterAttributes;
+            target[i].HasReferenceTypeConstraint =
+                (attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0;
+            target[i].HasValueTypeConstraint =
+                (attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0;
+            target[i].HasDefaultConstructorConstraint =
+                (attributes & GenericParameterAttributes.DefaultConstructorConstraint) != 0;
+            target[i].HasUnmanagedConstraint = HasAdapterUnmanagedConstraint(source[i]);
+
+            foreach (var constraint in source[i].GetGenericParameterConstraints())
+            {
+                var mapped = MapAdapterMethodType(constraint, map);
+                if (mapped is TypeParameterSymbol dependent)
+                {
+                    target[i].TypeParameterBound = dependent;
+                }
+                else if (constraint.IsInterface)
+                {
+                    target[i].ClrInterfaceConstraint = mapped;
+                }
+                else
+                {
+                    target[i].ClassConstraint = mapped;
+                }
+            }
+        }
+    }
+
+    internal static bool PropertyContractsMatch(PropertySymbol target, PropertySymbol source)
+    {
+        if (target.IsIndexer != source.IsIndexer
+            || target.Parameters.Length != source.Parameters.Length
+            || target.ReturnRefKind != source.ReturnRefKind
+            || (target.HasSetter && target.IsInitOnly != source.IsInitOnly)
+            || (target.HasGetter && (!source.HasGetter || source.GetterAccessibility != Accessibility.Public))
+            || (target.HasGetter
+                && (target.GetterSymbol?.HasUnscopedRef == true)
+                    != (source.GetterSymbol?.HasUnscopedRef == true))
+            || (target.HasSetter && (!source.HasSetter || source.SetterAccessibility != Accessibility.Public))
+            || !AdapterTypesMatch(target.Type, source.Type))
+        {
+            return false;
+        }
+
+        for (var i = 0; i < target.Parameters.Length; i++)
+        {
+            if (target.Parameters[i].RefKind != source.Parameters[i].RefKind
+                || target.Parameters[i].IsScoped != source.Parameters[i].IsScoped
+                || !AdapterTypesMatch(target.Parameters[i].Type, source.Parameters[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static PropertySymbol GetUserAdapterPropertyContract(
+        InterfaceSymbol owner,
+        PropertySymbol slot)
+    {
+        var propertyType = owner.SubstituteMemberType(slot.Type);
+        var parameterBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(slot.Parameters.Length);
+        var parametersChanged = false;
+        foreach (var parameter in slot.Parameters)
+        {
+            var parameterType = owner.SubstituteMemberType(parameter.Type);
+            parametersChanged |= !ReferenceEquals(parameterType, parameter.Type);
+            parameterBuilder.Add(new ParameterSymbol(
+                parameter.Name,
+                parameterType,
+                parameter.IsVariadic,
+                isScoped: parameter.IsScoped,
+                refKind: parameter.RefKind));
+        }
+
+        var parameters = parameterBuilder.MoveToImmutable();
+        if (ReferenceEquals(propertyType, slot.Type)
+            && !parametersChanged)
+        {
+            return slot;
+        }
+
+        var contract = new PropertySymbol(
+            slot.Name,
+            propertyType,
+            slot.Accessibility,
+            slot.HasGetter,
+            slot.HasSetter,
+            slot.IsAutoProperty,
+            slot.IsVirtual,
+            slot.IsOverride,
+            slot.SetterParameterName,
+            slot.IsStatic,
+            slot.Declaration,
+            slot.IsInitOnly,
+            slot.GetterAccessibility,
+            slot.SetterAccessibility,
+            slot.MetadataIsAbstract)
+        {
+            IsIndexer = slot.IsIndexer,
+            Parameters = parameters,
+            ReturnRefKind = slot.ReturnRefKind,
+        };
+        if (slot.GetterSymbol != null)
+        {
+            contract.GetterSymbol = CloneUserAdapterAccessor(owner, slot.GetterSymbol);
+        }
+
+        if (slot.SetterSymbol != null)
+        {
+            contract.SetterSymbol = CloneUserAdapterAccessor(owner, slot.SetterSymbol);
+        }
+
+        return contract;
+    }
+
+    private static EventSymbol GetUserAdapterEventContract(
+        InterfaceSymbol owner,
+        EventSymbol slot)
+    {
+        var eventType = owner.SubstituteMemberType(slot.Type);
+        if (ReferenceEquals(eventType, slot.Type))
+        {
+            return slot;
+        }
+
+        return new EventSymbol(
+            slot.Name,
+            eventType,
+            slot.Accessibility,
+            slot.IsFieldLike,
+            slot.IsVirtual,
+            slot.IsOverride,
+            slot.IsStatic,
+            slot.Declaration)
+        {
+            AddMethodSymbol = slot.AddMethodSymbol,
+            RemoveMethodSymbol = slot.RemoveMethodSymbol,
+            RaiseMethodSymbol = slot.RaiseMethodSymbol,
+        };
+    }
+
+    private static FunctionSymbol CloneUserAdapterAccessor(
+        InterfaceSymbol owner,
+        FunctionSymbol accessor)
+    {
+        var parameters = accessor.Parameters.Select(parameter => new ParameterSymbol(
+            parameter.Name,
+            owner.SubstituteMemberType(parameter.Type),
+            parameter.IsVariadic,
+            isScoped: parameter.IsScoped,
+            refKind: parameter.RefKind)).ToImmutableArray();
+        var clone = new FunctionSymbol(
+            accessor.Name,
+            parameters,
+            owner.SubstituteMemberType(accessor.Type),
+            declaration: null,
+            accessor.Package,
+            accessor.Accessibility)
+        {
+            IsSpecialName = accessor.IsSpecialName,
+            IsInitOnlySetter = accessor.IsInitOnlySetter,
+            ReturnRefKind = accessor.ReturnRefKind,
+        };
+        if (accessor.HasUnscopedRef)
+        {
+            clone.MarkUnscopedRef();
+        }
+
+        return clone;
+    }
+
+    private static PropertyInfo[] GetImportedSourceProperties(Type source)
+    {
+        var properties = new List<PropertyInfo>();
+        var containers = source.IsInterface
+            ? source.GetInterfaces().Prepend(source)
+            : new[] { source };
+        foreach (var container in containers)
+        {
+            foreach (var property in container.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!properties.Any(existing => SameImportedMember(existing, property)))
+                {
+                    properties.Add(property);
+                }
+            }
+        }
+
+        return properties.ToArray();
+    }
+
+    private static EventInfo[] GetImportedSourceEvents(Type source)
+    {
+        var events = new List<EventInfo>();
+        var containers = source.IsInterface
+            ? source.GetInterfaces().Prepend(source)
+            : new[] { source };
+        foreach (var container in containers)
+        {
+            foreach (var eventInfo in container.GetEvents(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!events.Any(existing => SameImportedMember(existing, eventInfo)))
+                {
+                    events.Add(eventInfo);
+                }
+            }
+        }
+
+        return events.ToArray();
+    }
+
+    private static bool SameImportedMember(MemberInfo left, MemberInfo right)
+        => left.MetadataToken == right.MetadataToken
+            && left.Module.ModuleVersionId == right.Module.ModuleVersionId
+            && ClrTypeUtilities.AreSame(
+                left.ReflectedType ?? left.DeclaringType,
+                right.ReflectedType ?? right.DeclaringType);
+
+    private static bool ImportedPropertyContractsMatch(
+        PropertyInfo target,
+        TypeSymbol targetOwner,
+        PropertyInfo source,
+        TypeSymbol sourceOwner)
+    {
+        if ((target.CanRead && source.GetMethod?.IsPublic != true)
+            || (target.CanWrite && source.SetMethod?.IsPublic != true)
+            || (target.GetMethod != null && source.GetMethod != null
+                && RefCapabilities.GetReturnRefKind(target.GetMethod) != RefCapabilities.GetReturnRefKind(source.GetMethod))
+            || (target.GetMethod != null && source.GetMethod != null
+                && !AdapterMethodMetadataMatches(target.GetMethod, source.GetMethod))
+            || (target.SetMethod != null && source.SetMethod != null
+                && !AdapterMethodMetadataMatches(target.SetMethod, source.SetMethod))
+            || !AdapterTypesMatch(
+                MemberLookup.GetClrPropertyTypeSymbol(targetOwner, target),
+                MemberLookup.GetClrPropertyTypeSymbol(sourceOwner, source)))
+        {
+            return false;
+        }
+
+        var targetParameters = target.GetIndexParameters();
+        var sourceParameters = source.GetIndexParameters();
+        if (targetParameters.Length != sourceParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParameters.Length; i++)
+        {
+            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
+                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+                || !AdapterTypesMatch(
+                    MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i),
+                    MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ImportedPropertyContractsMatch(PropertyInfo target, PropertyInfo source)
+    {
+        if ((target.CanRead && source.GetMethod?.IsPublic != true)
+            || (target.CanWrite && source.SetMethod?.IsPublic != true)
+            || (target.GetMethod != null && source.GetMethod != null
+                && RefCapabilities.GetReturnRefKind(target.GetMethod) != RefCapabilities.GetReturnRefKind(source.GetMethod))
+            || (target.GetMethod != null && source.GetMethod != null
+                && !AdapterMethodMetadataMatches(target.GetMethod, source.GetMethod))
+            || (target.SetMethod != null && source.SetMethod != null
+                && !AdapterMethodMetadataMatches(target.SetMethod, source.SetMethod))
+            || !AdapterTypesMatch(ClrNullability.GetPropertyTypeSymbol(target), ClrNullability.GetPropertyTypeSymbol(source)))
+        {
+            return false;
+        }
+
+        var targetParameters = target.GetIndexParameters();
+        var sourceParameters = source.GetIndexParameters();
+        if (targetParameters.Length != sourceParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < targetParameters.Length; i++)
+        {
+            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
+                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+                || !AdapterTypesMatch(
+                    ClrNullability.GetParameterTypeSymbol(targetParameters[i]),
+                    ClrNullability.GetParameterTypeSymbol(sourceParameters[i])))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool EventContractsMatch(EventSymbol target, EventSymbol source)
+        => source.AddMethodSymbol != null
+            && source.RemoveMethodSymbol != null
+            && AdapterTypesMatch(target.Type, source.Type);
+
+    private static bool ImportedEventContractsMatch(
+        EventInfo target,
+        TypeSymbol targetOwner,
+        EventInfo source,
+        TypeSymbol sourceOwner)
+        => source.AddMethod?.IsPublic == true
+            && source.RemoveMethod?.IsPublic == true
+            && target.AddMethod != null
+            && target.RemoveMethod != null
+            && AdapterMethodMetadataMatches(target.AddMethod, source.AddMethod)
+            && AdapterMethodMetadataMatches(target.RemoveMethod, source.RemoveMethod)
+            && AdapterTypesMatch(
+                MemberLookup.GetClrEventHandlerTypeSymbol(targetOwner, target),
+                MemberLookup.GetClrEventHandlerTypeSymbol(sourceOwner, source));
+
+    private static bool ImportedEventContractsMatch(EventInfo target, EventInfo source)
+        => source.AddMethod?.IsPublic == true
+            && source.RemoveMethod?.IsPublic == true
+            && target.AddMethod != null
+            && target.RemoveMethod != null
+            && AdapterMethodMetadataMatches(target.AddMethod, source.AddMethod)
+            && AdapterMethodMetadataMatches(target.RemoveMethod, source.RemoveMethod)
+            && target.EventHandlerType != null
+            && source.EventHandlerType != null
+            && AdapterTypesMatch(
+                TypeSymbol.FromClrType(target.EventHandlerType),
+                TypeSymbol.FromClrType(source.EventHandlerType));
+
+    private static bool ImportedEventSlotsEquivalent(EventInfo left, EventInfo right)
+        => left.Name == right.Name
+            && left.EventHandlerType != null
+            && right.EventHandlerType != null
+            && ImportedAdapterTypesMatch(left.EventHandlerType, right.EventHandlerType)
+            && left.AddMethod != null
+            && right.AddMethod != null
+            && left.RemoveMethod != null
+            && right.RemoveMethod != null
+            && AdapterMethodMetadataMatches(left.AddMethod, right.AddMethod)
+            && AdapterMethodMetadataMatches(left.RemoveMethod, right.RemoveMethod);
+
+    private static bool ImportedPropertySlotsEquivalent(PropertyInfo left, PropertyInfo right)
+        => left.Name == right.Name
+            && ImportedPropertyContractsMatch(left, right)
+            && ImportedPropertyContractsMatch(right, left);
+
+    private static bool AdapterTypesMatch(TypeSymbol left, TypeSymbol right)
+        => Conversion.ClassifyNonStructural(left, right).IsIdentity
+            && GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Build(left)
+                .SequenceEqual(GSharp.Core.CodeAnalysis.Emit.NullableFlagsBuilder.Build(right));
+
+    private static bool IsAdapterScoped(ParameterInfo parameter)
+        => parameter.GetCustomAttributesData().Any(attribute =>
+            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.ScopedRefAttribute");
+
+    private static bool AdapterMethodMetadataMatches(MethodInfo target, MethodInfo source)
+    {
+        if (!AdapterParameterMetadataMatches(target.ReturnParameter, source.ReturnParameter))
+        {
+            return false;
+        }
+
+        var targetParameters = target.GetParameters();
+        var sourceParameters = source.GetParameters();
+        return targetParameters.Length == sourceParameters.Length
+            && targetParameters.Zip(sourceParameters).All(pair =>
+                AdapterParameterMetadataMatches(pair.First, pair.Second));
+    }
+
+    private static bool AdapterParameterMetadataMatches(ParameterInfo target, ParameterInfo source)
+        => AdapterParameterMetadataSupported(target)
+            && AdapterParameterMetadataSupported(source)
+            && AdapterModifierSequenceMatches(
+                target.GetRequiredCustomModifiers(),
+                source.GetRequiredCustomModifiers())
+            && AdapterModifierSequenceMatches(
+                target.GetOptionalCustomModifiers(),
+                source.GetOptionalCustomModifiers())
+            && IsAdapterScoped(target) == IsAdapterScoped(source)
+            && HasAdapterUnscopedRef(target) == HasAdapterUnscopedRef(source);
+
+    private static bool ImportedMethodMetadataSupported(MethodInfo method)
+        => AdapterParameterMetadataSupported(method.ReturnParameter)
+            && method.GetParameters().All(AdapterParameterMetadataSupported);
+
+    private static bool ImportedPropertyMetadataSupported(PropertyInfo property)
+        => (property.GetMethod == null
+                || (ImportedMethodMetadataSupported(property.GetMethod)
+                    && !HasAdapterUnscopedRef(property.GetMethod.ReturnParameter)
+                    && !property.GetMethod.GetParameters().Any(IsAdapterScoped)))
+            && (property.SetMethod == null
+                || (ImportedMethodMetadataSupported(property.SetMethod)
+                    && !property.SetMethod.GetParameters().Any(IsAdapterScoped)));
+
+    private static bool ImportedEventMetadataSupported(EventInfo eventInfo)
+        => (eventInfo.AddMethod == null
+                || (ImportedMethodMetadataSupported(eventInfo.AddMethod)
+                    && !eventInfo.AddMethod.GetParameters().Any(IsAdapterScoped)))
+            && (eventInfo.RemoveMethod == null
+                || (ImportedMethodMetadataSupported(eventInfo.RemoveMethod)
+                    && !eventInfo.RemoveMethod.GetParameters().Any(IsAdapterScoped)));
+
+    private static bool AdapterParameterMetadataSupported(ParameterInfo parameter)
+        => parameter.GetOptionalCustomModifiers().Length == 0
+            && parameter.GetRequiredCustomModifiers().All(modifier =>
+                modifier.FullName is "System.Runtime.InteropServices.InAttribute"
+                    or "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                    or "System.Runtime.CompilerServices.IsExternalInit");
+
+    private static bool AdapterModifierSequenceMatches(Type[] target, Type[] source)
+        => target.Length == source.Length
+            && target.Zip(source).All(pair => ClrTypeUtilities.AreSame(pair.First, pair.Second));
+
+    private static bool HasAdapterUnscopedRef(ParameterInfo parameter)
+        => parameter.GetCustomAttributesData().Any(attribute =>
+            attribute.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute");
+
+    private static bool HasAdapterUnmanagedConstraint(Type parameter)
+        => parameter.GetCustomAttributesData().Any(attribute =>
+            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsUnmanagedAttribute");
+
+    private static bool IsAdapterInitOnly(MethodInfo setter)
+        => setter.ReturnParameter.GetRequiredCustomModifiers().Any(modifier =>
+            modifier.FullName == "System.Runtime.CompilerServices.IsExternalInit");
+
+    private static RefKind GetAdapterRefKind(ParameterInfo parameter)
+        => !parameter.ParameterType.IsByRef ? RefKind.None
+            : parameter.IsOut && !parameter.IsIn ? RefKind.Out
+            : parameter.IsIn && !parameter.IsOut ? RefKind.In
+            : RefKind.Ref;
+
+    private static string FormatAdapterSlot(FunctionSymbol slot)
+        => $"{slot.Name}({string.Join(", ", slot.Parameters.Select(parameter => parameter.Type.Name))}) {slot.Type.Name}";
+
+    private sealed record RichAnonymousCapture(FieldSymbol Field, bool IsMutable);
+
+    private sealed class RichAnonymousCaptureCollector : BoundTreeWalker
+    {
+        private readonly HashSet<VariableSymbol> declared = new();
+        private readonly HashSet<VariableSymbol> referenced = new();
+
+        internal static ImmutableArray<VariableSymbol> Collect(
+            Dictionary<FunctionSymbol, BoundBlockStatement> bodies)
+        {
+            var collector = new RichAnonymousCaptureCollector();
+            foreach (var (method, body) in bodies)
+            {
+                collector.declared.UnionWith(method.Parameters);
+                if (method.ThisParameter != null)
+                {
+                    collector.declared.Add(method.ThisParameter);
+                }
+
+                collector.Visit(body);
+            }
+
+            return collector.referenced
+                .Where(variable => !collector.declared.Contains(variable))
+                .OrderBy(variable => variable.DeclaringSyntax?.Span.Start ?? int.MaxValue)
+                .ThenBy(variable => variable.Name, StringComparer.Ordinal)
+                .ToImmutableArray();
+        }
+
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
+        {
+            declared.Add(node.Variable);
+            base.VisitVariableDeclaration(node);
+        }
+
+        public override void VisitExpression(BoundExpression? node)
+        {
+            if (node is BoundVariableExpression variable)
+            {
+                referenced.Add(variable.Variable);
+                return;
+            }
+
+            if (node is BoundFunctionLiteralExpression literal)
+            {
+                declared.UnionWith(literal.Function.Parameters);
+                Visit(literal.Body);
+                return;
+            }
+
+            base.VisitExpression(node);
+        }
+
+        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
+        {
+            referenced.Add(node.Variable);
+            base.VisitAssignmentExpression(node);
+        }
+    }
+
+    private sealed class RichAnonymousCaptureRewriter : BoundTreeRewriter
+    {
+        private readonly StructSymbol owner;
+        private readonly FunctionSymbol method;
+        private readonly Dictionary<VariableSymbol, RichAnonymousCapture> captures;
+
+        internal RichAnonymousCaptureRewriter(
+            StructSymbol owner,
+            FunctionSymbol method,
+            Dictionary<VariableSymbol, RichAnonymousCapture> captures)
+        {
+            this.owner = owner;
+            this.method = method;
+            this.captures = captures;
+        }
+
+        protected override BoundExpression RewriteVariableExpression(BoundVariableExpression node)
+            => captures.TryGetValue(node.Variable, out var capture)
+                ? ReadCapture(capture)
+                : node;
+
+        protected override BoundExpression RewriteAssignmentExpression(BoundAssignmentExpression node)
+        {
+            if (!captures.TryGetValue(node.Variable, out var capture) || !capture.IsMutable)
+            {
+                return base.RewriteAssignmentExpression(node);
+            }
+
+            return new BoundIndirectAssignmentExpression(
+                node.Syntax,
+                ManagedReferenceTypes.Borrow(ReadCaptureField(capture)),
+                RewriteExpression(node.Expression));
+        }
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            var body = (BoundBlockStatement)RewriteStatement(node.Body);
+            var captured = node.CapturedVariables.Where(variable => !captures.ContainsKey(variable)).ToImmutableArray().ToBuilder();
+            if (node.CapturedVariables.Any(variable => captures.ContainsKey(variable))
+                && method.ThisParameter != null
+                && !captured.Contains(method.ThisParameter))
+            {
+                captured.Add(method.ThisParameter);
+            }
+
+            return body == node.Body && captured.SequenceEqual(node.CapturedVariables)
+                ? node
+                : new BoundFunctionLiteralExpression(
+                    node.Syntax,
+                    node.Function,
+                    node.FunctionType,
+                    body,
+                    captured.ToImmutable());
+        }
+
+        private BoundExpression ReadCapture(RichAnonymousCapture capture)
+        {
+            var field = ReadCaptureField(capture);
+            return capture.IsMutable
+                ? new BoundDereferenceExpression(null, ManagedReferenceTypes.Borrow(field))
+                : field;
+        }
+
+        private BoundFieldAccessExpression ReadCaptureField(RichAnonymousCapture capture)
+            => new(
+                null,
+                new BoundVariableExpression(null, Invariant.Required(method.ThisParameter, "rich anonymous methods have a receiver")),
+                owner,
+                capture.Field);
+    }
+
     /// <summary>
     /// ADR-0146 / issue #2243: recursively walks a syntax subtree and, for
     /// every "rich" anonymous-object literal (one carrying a base/interface
@@ -3138,17 +7941,42 @@ public sealed class Binder
         SyntaxTree tree,
         List<(AnonymousClassExpressionSyntax Node, StructDeclarationSyntax Declaration)> results,
         DiagnosticBag diagnostics,
-        ref int counter)
+        ref int counter,
+        ImmutableArray<TypeParameterListSyntax> enclosingTypeParameters)
     {
+        var declaredTypeParameters = node switch
+        {
+            FunctionDeclarationSyntax { TypeParameterList: { } functionParameters } => functionParameters,
+            StructDeclarationSyntax { TypeParameterList: { } typeParameters } => typeParameters,
+            InterfaceDeclarationSyntax { TypeParameterList: { } interfaceParameters } => interfaceParameters,
+            VariableDeclarationSyntax { TypeParameterList: { } localFunctionParameters } => localFunctionParameters,
+            _ => null,
+        };
+        if (declaredTypeParameters != null)
+        {
+            enclosingTypeParameters = enclosingTypeParameters.Add(declaredTypeParameters);
+        }
+
         if (node is AnonymousClassExpressionSyntax anon && IsRichAnonymousObject(anon))
         {
-            var decl = SynthesizeAnonymousClassDeclaration(anon, tree, counter++, diagnostics);
+            var decl = SynthesizeAnonymousClassDeclaration(
+                anon,
+                tree,
+                counter++,
+                diagnostics,
+                enclosingTypeParameters);
             results.Add((anon, decl));
         }
 
         foreach (var child in node.GetChildren())
         {
-            CollectRichAnonymousObjectDeclarations(child, tree, results, diagnostics, ref counter);
+            CollectRichAnonymousObjectDeclarations(
+                child,
+                tree,
+                results,
+                diagnostics,
+                ref counter,
+                enclosingTypeParameters);
         }
     }
 
@@ -3177,19 +8005,19 @@ public sealed class Binder
 
     /// <summary>
     /// ADR-0146 / issue #2243: synthesizes a top-level <c>class</c> declaration
-    /// backing a rich anonymous-object literal. Field members become public
-    /// class fields (with their initializers), method and event members are
-    /// spliced verbatim, and the base/interface clause (with any
-    /// base-constructor arguments) is forwarded onto the synthesized class.
-    /// Field initializers and base-constructor arguments must be self-contained
-    /// (they cannot reference enclosing locals) — a documented limitation of
-    /// the rich path; the field-only path retains full capture/inference.
+    /// backing a rich anonymous-object literal. This declaration is a stable
+    /// predeclared shell: fields use their explicit type or an <c>object</c>
+    /// placeholder, methods/events and the base/interface type clauses retain
+    /// syntax identity, and literal-site binding later installs inferred field
+    /// types, constructor parameters, base arguments, captures, and bound
+    /// method bodies without relocating executable expressions.
     /// </summary>
     private static StructDeclarationSyntax SynthesizeAnonymousClassDeclaration(
         AnonymousClassExpressionSyntax syntax,
         SyntaxTree tree,
         int index,
-        DiagnosticBag diagnostics)
+        DiagnosticBag diagnostics,
+        ImmutableArray<TypeParameterListSyntax> enclosingTypeParameters)
     {
         var position = syntax.ObjectKeyword.Position;
         SyntaxToken Tok(SyntaxKind kind, string text) => new SyntaxToken(tree, kind, position, text, null);
@@ -3205,23 +8033,12 @@ public sealed class Binder
             switch (member)
             {
                 case AnonymousClassMemberInitializerSyntax field:
-                    if (field.TypeClause == null)
-                    {
-                        // The rich path materializes fields as ordinary class
-                        // fields, which require an explicit type. Inferred-type
-                        // fields are only supported on the field-only path.
-                        diagnostics.ReportInferredFieldTypeNotAllowedInRichAnonymousObject(field.Identifier.Location, field.Identifier.ValueText);
-                        continue;
-                    }
-
                     fields.Add(new FieldDeclarationSyntax(
                         tree,
                         Tok(SyntaxKind.PublicKeyword, "public"),
                         field.LetOrVarKeyword,
                         field.Identifier,
-                        field.TypeClause,
-                        field.EqualsToken,
-                        field.Value));
+                        field.TypeClause ?? new TypeClauseSyntax(tree, Tok(SyntaxKind.IdentifierToken, "object"))));
                     break;
 
                 case FunctionDeclarationSyntax method:
@@ -3291,11 +8108,74 @@ public sealed class Binder
             events.ToImmutable(),
             methods.ToImmutable(),
             syntax.CloseBraceToken);
+        decl.IsSynthesizedRichAnonymousObject = true;
+        var combinedTypeParameters = CombineRichTypeParameterLists(
+            tree,
+            position,
+            enclosingTypeParameters);
+        decl.TypeParameterList = combinedTypeParameters;
+        decl.RichAnonymousShellTypeParameterCount =
+            combinedTypeParameters?.Parameters.Count ?? 0;
         decl.BaseTypeClauses = baseTypeClauses;
-        decl.BaseConstructorOpenParenthesisToken = syntax.BaseConstructorOpenParenthesisToken;
-        decl.BaseConstructorArguments = syntax.BaseConstructorArguments;
-        decl.BaseConstructorCloseParenthesisToken = syntax.BaseConstructorCloseParenthesisToken;
         return decl;
+    }
+
+    private static TypeParameterListSyntax? CombineRichTypeParameterLists(
+        SyntaxTree tree,
+        int position,
+        ImmutableArray<TypeParameterListSyntax> lists)
+    {
+        if (lists.IsDefaultOrEmpty)
+        {
+            return null;
+        }
+
+        if (lists.Length == 1)
+        {
+            return lists[0];
+        }
+
+        var visible = new HashSet<TypeParameterSyntax>(ReferenceEqualityComparer.Instance);
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        for (var listIndex = lists.Length - 1; listIndex >= 0; listIndex--)
+        {
+            var parameters = lists[listIndex].Parameters;
+            for (var parameterIndex = parameters.Count - 1; parameterIndex >= 0; parameterIndex--)
+            {
+                var parameter = parameters[parameterIndex];
+                if (names.Add(parameter.Identifier.ValueText))
+                {
+                    visible.Add(parameter);
+                }
+            }
+        }
+
+        var nodes = ImmutableArray.CreateBuilder<SyntaxNode>();
+        foreach (var list in lists)
+        {
+            foreach (var parameter in list.Parameters)
+            {
+                if (!visible.Contains(parameter))
+                {
+                    continue;
+                }
+
+                if (nodes.Count > 0)
+                {
+                    nodes.Add(new SyntaxToken(tree, SyntaxKind.CommaToken, position, ",", null));
+                }
+
+                nodes.Add(parameter);
+            }
+        }
+
+        SyntaxToken Tok(SyntaxKind kind, string text) =>
+            new(tree, kind, position, text, null);
+        return new TypeParameterListSyntax(
+            tree,
+            Tok(SyntaxKind.OpenSquareBracketToken, "["),
+            new SeparatedSyntaxList<TypeParameterSyntax>(nodes.ToImmutable()),
+            Tok(SyntaxKind.CloseSquareBracketToken, "]"));
     }
 
     /// <summary>
@@ -3920,6 +8800,83 @@ public sealed class Binder
             return MapTypeSymbol.Get(keyType, valueType);
         }
 
+        if (!syntax.HasQualifier && syntax.HasTypeArguments
+            && syntax.Identifier is { Text: "managed" } managedName
+            && binderCtx.CanUseIntrinsicAlias(scope, managedName, function))
+        {
+            var arguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments establishes the argument list");
+            if (arguments.Count != 1)
+            {
+                Diagnostics.ReportManagedReference(syntax.Location, "managed[T] and readonly managed[T] require one referent type");
+                return null;
+            }
+
+            var managedElement = BindTypeClause(arguments[0]);
+            if (managedElement == null || managedElement == TypeSymbol.Error)
+            {
+                return null;
+            }
+
+            if (managedElement == TypeSymbol.Void || managedElement is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol
+                || TypeSymbol.IsByRefLike(managedElement))
+            {
+                Diagnostics.ReportManagedReference(arguments[0].Location, "the referent must be an ordinary heap-storable type");
+                return null;
+            }
+
+            if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, syntax.ReadOnlyManagedModifier != null, out var definition))
+            {
+                Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime");
+                return null;
+            }
+
+            var symbolic = false;
+            var clrElement = ProjectGenericArgument(managedElement, typeof(object), ref symbolic);
+            return ApplyArraySuffix(syntax, ImportedTypeSymbol.GetConstructed(
+                definition.MakeGenericType(clrElement), definition, ImmutableArray.Create(managedElement)));
+        }
+
+        if (!syntax.HasQualifier && syntax.HasTypeArguments
+            && syntax.Identifier is { } nativeName
+            && binderCtx.CanUseNativeBufferAlias(scope, nativeName, function))
+        {
+            var arguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments means the parser supplied a generic argument list");
+            if (arguments.Count != 1)
+            {
+                Diagnostics.ReportNativeSliceType(syntax.Location, "slice[T] and array[T] require exactly one element type");
+                return null;
+            }
+
+            var bufferElement = BindTypeClause(arguments[0]);
+            if (bufferElement == null || bufferElement == TypeSymbol.Error)
+            {
+                return null;
+            }
+
+            if (syntax.Identifier.ValueText == "array")
+            {
+                return ApplyArraySuffix(syntax, SliceTypeSymbol.Get(bufferElement));
+            }
+
+            if (bufferElement == TypeSymbol.Void || bufferElement is ByRefTypeSymbol or PointerTypeSymbol or FunctionPointerTypeSymbol
+                || TypeSymbol.IsByRefLike(bufferElement))
+            {
+                Diagnostics.ReportNativeSliceType(arguments[0].Location, "native slices require an ordinary heap-storable element type");
+                return null;
+            }
+
+            if (!NativeSliceTypes.TryResolveDefinition(scope.References, syntax.ReadOnlySliceModifier != null, out var definition))
+            {
+                Diagnostics.ReportNativeSliceRuntime(syntax.Location);
+                return null;
+            }
+
+            var symbolic = false;
+            var clrElement = ProjectGenericArgument(bufferElement, typeof(object), ref symbolic);
+            return ApplyArraySuffix(syntax, ImportedTypeSymbol.GetConstructed(
+                definition.MakeGenericType(clrElement), definition, ImmutableArray.Create(bufferElement)));
+        }
+
         if (syntax.IsChannel)
         {
             // ADR-0174 D2: `chan[T]` / `in chan[T]` / `out chan[T]`. The
@@ -4058,9 +9015,15 @@ public sealed class Binder
             : 0;
         if (!syntax.HasQualifier &&
             syntax.HasTypeArguments &&
-            scope.TryLookupImportedGenericClass(identifierToken.ValueText, topLevelTypeArgumentCount, out var clrOpenType) &&
+            scope.TryLookupImportedGenericClass(identifierToken.ValueText, topLevelTypeArgumentCount, out var clrOpenType, out var genericAmbiguity) &&
             ImportedGenericTypeHasPrecedence(identifierToken.ValueText, topLevelTypeArgumentCount, clrOpenType))
         {
+            if (genericAmbiguity != null)
+            {
+                Diagnostics.ReportAmbiguousImportedTypeReference(identifierToken.Location, identifierToken.ValueText, genericAmbiguity);
+                return null;
+            }
+
             var topLevelTypeArguments = Invariant.Required(syntax.TypeArguments, "HasTypeArguments implies the parser set TypeArguments");
             var clrArgs = new System.Type[topLevelTypeArguments.Count];
             var symbolicArgs = ImmutableArray.CreateBuilder<TypeSymbol>(topLevelTypeArguments.Count);
@@ -4106,7 +9069,7 @@ public sealed class Binder
             try
             {
                 var closed = clrOpenType.MakeGenericType(clrArgs);
-                if (hasSymbolicArg)
+                if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _))
                 {
                     // #313 / #671: keep the symbolic type arguments alongside
                     // the type-erased closed CLR shape so call-site inference,
@@ -4412,6 +9375,54 @@ public sealed class Binder
             if (bound == null)
             {
                 return null;
+            }
+
+            if (syntax.ReadOnlyManagedModifier != null)
+            {
+                if (!ManagedReferenceTypes.TryGetElement(bound, out var element, out var alreadyReadOnly))
+                {
+                    Diagnostics.ReportManagedReference(syntax.ReadOnlyManagedModifier.Location, "readonly requires the native managed-reference category; use Gsharp.Values.ReadOnlyManagedRef[T] explicitly when managed is shadowed");
+                    return null;
+                }
+
+                if (!alreadyReadOnly)
+                {
+                    if (!ManagedReferenceTypes.TryResolveDefinition(scope.References, true, out var definition))
+                    {
+                        Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime");
+                        return null;
+                    }
+
+                    var symbolic = false;
+                    bound = ImportedTypeSymbol.GetConstructed(
+                        definition.MakeGenericType(ProjectGenericArgument(element, typeof(object), ref symbolic)),
+                        definition,
+                        ImmutableArray.Create(element));
+                }
+            }
+
+            if (syntax.ReadOnlySliceModifier != null)
+            {
+                if (!NativeSliceTypes.TryGetElement(bound, out var nativeElement, out var alreadyReadOnly))
+                {
+                    Diagnostics.ReportNativeSliceType(syntax.ReadOnlySliceModifier.Location, "readonly requires the native slice category; use Gsharp.Values.ReadOnlySlice[T] explicitly when slice is shadowed");
+                    return null;
+                }
+
+                if (!alreadyReadOnly)
+                {
+                    if (!NativeSliceTypes.TryResolveDefinition(scope.References, true, out var readOnlyDefinition))
+                    {
+                        Diagnostics.ReportNativeSliceRuntime(syntax.Location);
+                        return null;
+                    }
+
+                    var symbolic = false;
+                    bound = ImportedTypeSymbol.GetConstructed(
+                        readOnlyDefinition.MakeGenericType(ProjectGenericArgument(nativeElement, typeof(object), ref symbolic)),
+                        readOnlyDefinition,
+                        ImmutableArray.Create(nativeElement));
+                }
             }
 
             // Issue #1212: for an array/slice clause the trailing `?` is consumed
@@ -5138,7 +10149,7 @@ public sealed class Binder
         try
         {
             var closed = clrType.MakeGenericType(clrArgs);
-            if (hasSymbolicArg)
+            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _))
             {
                 return ImportedTypeSymbol.GetConstructed(closed, clrType, symbolicArgs.MoveToImmutable());
             }
@@ -5403,7 +10414,7 @@ public sealed class Binder
         try
         {
             var closed = nestedDef.MakeGenericType(clrArgs);
-            if (hasSymbolicArg)
+            if (hasSymbolicArg || NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _))
             {
                 return ImportedTypeSymbol.GetConstructed(closed, nestedDef, symbolicArgs.MoveToImmutable());
             }

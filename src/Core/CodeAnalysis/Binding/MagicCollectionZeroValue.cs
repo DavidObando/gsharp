@@ -122,7 +122,7 @@ internal static class MagicCollectionZeroValue
     /// <param name="type">The declared slot type.</param>
     /// <returns>True for a bare (non-<c>?</c>) channel type.</returns>
     public static bool RequiresExplicitInitializer(TypeSymbol type)
-        => type is ChannelTypeSymbol;
+        => type is ChannelTypeSymbol || ManagedReferenceTypes.TryGetElement(type, out _, out _);
 
     /// <summary>
     /// Issue #3329: classifies a struct field's shape into the compact tag

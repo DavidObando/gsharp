@@ -107,15 +107,28 @@ internal sealed class SlotPlanner
             collector.Visit(kvp.Value);
         }
 
+        foreach (var plan in this.emitCtx.Program.Initializers.Values)
+        {
+            collector.Visit(plan.Prologue);
+            foreach (var argument in plan.Arguments)
+            {
+                collector.Visit(argument);
+            }
+
+            collector.Visit(plan.Body);
+        }
+
         foreach (var type in this.emitCtx.Program.Structs
             .OrderBy(s => s.Declaration?.Span.Start ?? int.MaxValue)
             .ThenBy(s => s.Name, StringComparer.Ordinal))
         {
             // Issue #2716: instance initializers are injected into constructors
             // after MethodDef planning, so discover their lambdas here.
+            var allInstanceInitializerPathsArePlanned = this.AllInstanceInitializerPathsArePlanned(type);
             foreach (var field in type.Fields)
             {
-                if (type.InstanceFieldInitializers.TryGetValue(field, out var initializer))
+                if (!allInstanceInitializerPathsArePlanned
+                    && type.InstanceFieldInitializers.TryGetValue(field, out var initializer))
                 {
                     collector.Visit(initializer);
                 }
@@ -123,13 +136,14 @@ internal sealed class SlotPlanner
 
             foreach (var field in type.StaticFields)
             {
-                if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))
+                if (!this.emitCtx.Program.Initializers.ContainsKey((type, true)) && type.StaticFieldInitializers.TryGetValue(field, out var initializer))
                 {
                     collector.Visit(initializer);
                 }
             }
 
-            foreach (var statement in type.StaticInitializerStatements)
+            foreach (var statement in this.emitCtx.Program.Initializers.ContainsKey((type, true))
+                ? ImmutableArray<BoundStatement>.Empty : type.StaticInitializerStatements)
             {
                 collector.Visit(statement);
             }
@@ -138,7 +152,7 @@ internal sealed class SlotPlanner
             // block expressions whose tail is a lambda. These arguments live
             // on constructor symbols rather than in Program.Functions, so they
             // must participate in MethodDef planning explicitly.
-            if (type.BaseConstructorInitializer is { } primaryBaseInitializer)
+            if (!this.emitCtx.Program.Initializers.ContainsKey((type, false)) && type.BaseConstructorInitializer is { } primaryBaseInitializer)
             {
                 foreach (var argument in primaryBaseInitializer.Arguments)
                 {
@@ -148,7 +162,8 @@ internal sealed class SlotPlanner
 
             foreach (var constructor in type.ExplicitConstructors)
             {
-                if (constructor.BaseInitializer is not { } baseInitializer)
+                if (this.emitCtx.Program.Initializers.ContainsKey((constructor.Function, false))
+                    || constructor.BaseInitializer is not { } baseInitializer)
                 {
                     continue;
                 }
@@ -166,7 +181,7 @@ internal sealed class SlotPlanner
         {
             foreach (var field in type.StaticFields)
             {
-                if (type.StaticFieldInitializers.TryGetValue(field, out var initializer))
+                if (!this.emitCtx.Program.Initializers.ContainsKey((type, true)) && type.StaticFieldInitializers.TryGetValue(field, out var initializer))
                 {
                     collector.Visit(initializer);
                 }
@@ -187,6 +202,17 @@ internal sealed class SlotPlanner
             .ThenBy(p => p.Key.Name ?? string.Empty, StringComparer.Ordinal))
         {
             collector.Visit(kvp.Value);
+        }
+
+        foreach (var plan in this.emitCtx.Program.Initializers.Values)
+        {
+            collector.Visit(plan.Prologue);
+            foreach (var argument in plan.Arguments)
+            {
+                collector.Visit(argument);
+            }
+
+            collector.Visit(plan.Body);
         }
 
         return sink;
@@ -269,6 +295,37 @@ internal sealed class SlotPlanner
             switchExpressionSlots,
             channelOpSlots);
         allocator.Visit(node);
+    }
+
+    private bool AllInstanceInitializerPathsArePlanned(StructSymbol type)
+    {
+        var hasPath = false;
+        foreach (var constructor in type.ExplicitConstructors)
+        {
+            if (constructor.IsConvenience)
+            {
+                continue;
+            }
+
+            hasPath = true;
+            var owner = constructor.IsSynthesizedFromPrimaryConstructor
+                ? (Symbol)type
+                : constructor.Function;
+            if (!this.emitCtx.Program.Initializers.ContainsKey((owner, false)))
+            {
+                return false;
+            }
+        }
+
+        if (!hasPath || type.NeedsSynthesizedValueStructDefaultCtor)
+        {
+            if (!this.emitCtx.Program.Initializers.ContainsKey((type, false)))
+            {
+                return false;
+            }
+        }
+
+        return hasPath;
     }
 
     // ─────────────────────────── collectors ───────────────────────────
@@ -659,6 +716,7 @@ internal sealed class SlotPlanner
     private sealed class LambdaCollector : BoundTreeWalker
     {
         private readonly List<BoundFunctionLiteralExpression> sink;
+        private readonly HashSet<BoundFunctionLiteralExpression> seen = new();
 
         public LambdaCollector(List<BoundFunctionLiteralExpression> sink)
         {
@@ -674,6 +732,11 @@ internal sealed class SlotPlanner
 
             if (node is BoundFunctionLiteralExpression lambda)
             {
+                if (!this.seen.Add(lambda))
+                {
+                    return;
+                }
+
                 this.sink.Add(lambda);
                 this.VisitStatement(lambda.Body);
                 return;
@@ -686,6 +749,7 @@ internal sealed class SlotPlanner
     private sealed class GoStatementCollector : BoundTreeWalker
     {
         private readonly List<BoundGoStatement> sink;
+        private readonly HashSet<BoundGoStatement> seen = new();
 
         public GoStatementCollector(List<BoundGoStatement> sink)
         {
@@ -713,7 +777,11 @@ internal sealed class SlotPlanner
 
         protected override void VisitGoStatement(BoundGoStatement node)
         {
-            this.sink.Add(node);
+            if (this.seen.Add(node))
+            {
+                this.sink.Add(node);
+            }
+
             base.VisitGoStatement(node);
         }
     }

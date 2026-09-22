@@ -435,6 +435,121 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        private bool RequiresNativeDisjunctiveNarrowing(IsPatternExpressionSyntax isPattern)
+        {
+            PatternSyntax pattern = isPattern.Pattern;
+            while (pattern is ParenthesizedPatternSyntax parenthesized)
+            {
+                pattern = parenthesized.Pattern;
+            }
+
+            ITypeSymbol declaredType = this.ResolveDeclaredReceiverType(
+                this.context.GetTypeInfo(isPattern.Expression).Type,
+                isPattern.Expression);
+            bool nullableScrutinee =
+                declaredType?.NullableAnnotation == NullableAnnotation.Annotated
+                || (declaredType is INamedTypeSymbol nullableValue
+                    && nullableValue.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T);
+
+            return nullableScrutinee
+                && this.IsSmartCastableScrutinee(isPattern.Expression)
+                && !PatternIntroducesBinding(isPattern.Pattern)
+                && !this.PatternMentionsConditionalAccessType(isPattern.Pattern, out _)
+                && this.IsNativelyExpressiblePattern(isPattern.Pattern, topLevel: true)
+                && pattern is BinaryPatternSyntax binary
+                && binary.IsKind(SyntaxKind.OrPattern)
+                && TryGetPatternNonNullPolarity(pattern, out bool whenTrue)
+                && whenTrue;
+        }
+
+        private bool GSharpPatternPreservesNonNullNarrowing(
+            IsPatternExpressionSyntax isPattern,
+            bool whenTrue)
+        {
+            ITypeSymbol declaredType = this.ResolveDeclaredReceiverType(
+                this.context.GetTypeInfo(isPattern.Expression).Type,
+                isPattern.Expression);
+            ITypeSymbol underlyingType = declaredType is INamedTypeSymbol nullableValue
+                && nullableValue.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T
+                    ? nullableValue.TypeArguments[0]
+                    : declaredType?.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
+            return this.GetGSharpPatternNarrowedType(
+                isPattern.Pattern,
+                underlyingType,
+                whenTrue) != null;
+        }
+
+        private ITypeSymbol GetGSharpPatternNarrowedType(
+            PatternSyntax pattern,
+            ITypeSymbol underlyingType,
+            bool whenTrue)
+        {
+            while (pattern is ParenthesizedPatternSyntax parenthesized)
+            {
+                pattern = parenthesized.Pattern;
+            }
+
+            if (pattern is UnaryPatternSyntax unary
+                && unary.IsKind(SyntaxKind.NotPattern))
+            {
+                return this.GetGSharpPatternNarrowedType(
+                    unary.Pattern,
+                    underlyingType,
+                    !whenTrue);
+            }
+
+            if (pattern is BinaryPatternSyntax binary)
+            {
+                bool conjunction = binary.IsKind(SyntaxKind.AndPattern);
+                ITypeSymbol left = this.GetGSharpPatternNarrowedType(
+                    binary.Left,
+                    underlyingType,
+                    whenTrue);
+                ITypeSymbol right = this.GetGSharpPatternNarrowedType(
+                    binary.Right,
+                    underlyingType,
+                    whenTrue);
+                bool merge = conjunction == whenTrue;
+                if (merge)
+                {
+                    return left ?? right;
+                }
+
+                return left != null
+                    && right != null
+                    && SymbolEqualityComparer.Default.Equals(left, right)
+                        ? left
+                        : null;
+            }
+
+            if (pattern is ConstantPatternSyntax constant)
+            {
+                if (this.context.GetSymbolInfo(constant.Expression).Symbol is ITypeSymbol constantType)
+                {
+                    return whenTrue ? constantType : null;
+                }
+
+                bool isNull = IsNullLiteral(constant.Expression);
+                return whenTrue != isNull ? underlyingType : null;
+            }
+
+            if (!whenTrue)
+            {
+                return null;
+            }
+
+            return pattern switch
+            {
+                TypePatternSyntax typePattern =>
+                    this.context.GetTypeInfo(typePattern.Type).Type,
+                DeclarationPatternSyntax declaration =>
+                    this.context.GetTypeInfo(declaration.Type).Type,
+                RecursivePatternSyntax { Type: not null } recursive =>
+                    this.context.GetTypeInfo(recursive.Type).Type,
+                _ => null,
+            };
+        }
+
         // Peels parentheses and top-level `not` layers off a pattern, reporting
         // whether an odd number of negations remained: designations under such a
         // `not` are assigned when the enclosing test evaluates to false.

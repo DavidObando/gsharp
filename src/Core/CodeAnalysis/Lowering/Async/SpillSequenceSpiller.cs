@@ -524,7 +524,13 @@ public static class SpillSequenceSpiller
 
             var spilled = SpillExpression(goStatement.Expression);
             FlushSideEffects(spilled, builder);
-            builder.Add(new BoundGoStatement(goStatement.Syntax, spilled.Value, goStatement.Sink, goStatement.ResultCell, goStatement.ResultType));
+            builder.Add(new BoundGoStatement(
+                goStatement.Syntax,
+                spilled.Value,
+                goStatement.Sink,
+                goStatement.ResultCell,
+                goStatement.ResultType,
+                goStatement.LexicalEnclosingType));
             return true;
         }
 
@@ -910,6 +916,12 @@ public static class SpillSequenceSpiller
 
                 case BoundFieldAccessExpression fieldAccess:
                     return SpillFieldAccess(fieldAccess);
+                case BoundManagedFieldKeyExpression fieldKey:
+                    // Field is a token descriptor, not an evaluated receiver.
+                    return SpillOneOperand(
+                        fieldKey,
+                        fieldKey.Parent,
+                        parent => new BoundManagedFieldKeyExpression(parent, fieldKey.Field));
                 case BoundPropertyAccessExpression propAccess:
                     if (propAccess.Receiver == null)
                     {
@@ -997,6 +1009,15 @@ public static class SpillSequenceSpiller
                         addressOf,
                         addressOf.Operand,
                         operand => new BoundAddressOfExpression(null, operand));
+                case BoundManagedReferenceExpression managedReference:
+                    // Lowerer lifts control-flow blocks before root promotion.
+                    // Keep the rewritten lvalue; do not spill its value into a
+                    // replacement slot or acquire a borrowed address here.
+                    return SpillOneOperand(
+                        managedReference,
+                        managedReference.Location,
+                        location => new BoundManagedReferenceExpression(
+                            managedReference.Syntax, location, managedReference.Type, managedReference.IsReadOnly));
                 case BoundDereferenceExpression dereference:
                     return SpillOneOperand(
                         dereference,

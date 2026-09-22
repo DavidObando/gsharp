@@ -425,6 +425,12 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (ManagedReferenceTypes.TryGetElement(operand.Type, out _, out _))
+        {
+            var borrow = BorrowManagedReference(operand, syntax);
+            return borrow is BoundErrorExpression ? borrow : new BoundDereferenceExpression(syntax, borrow);
+        }
+
         if (!TypeSymbol.TryGetPointeeType(operand.Type, out _))
         {
             Diagnostics.ReportUndefinedUnaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, operand.Type);
@@ -1848,6 +1854,59 @@ internal sealed partial class ExpressionBinder
             }
 
             return new BoundErrorExpression(null);
+        }
+
+        var nativeEqualityLeftType = boundLeft.Type is NullableTypeSymbol nullableNativeLeft ? nullableNativeLeft.UnderlyingType : boundLeft.Type;
+        var nativeEqualityRightType = boundRight.Type is NullableTypeSymbol nullableNativeRight ? nullableNativeRight.UnderlyingType : boundRight.Type;
+        if ((ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out _) && !ManagedReferenceTypes.IsCompatible(nativeEqualityLeftType.ClrType))
+            || (ManagedReferenceTypes.TryGetElement(nativeEqualityRightType, out _, out _) && !ManagedReferenceTypes.IsCompatible(nativeEqualityRightType.ClrType)))
+        {
+            Diagnostics.ReportManagedReference(syntax.Location, "reference the matching Gsharp.Runtime.Values runtime; the managed-reference ABI is incompatible");
+            return new BoundErrorExpression(syntax);
+        }
+
+        if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+            && ManagedReferenceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnlyManaged)
+            && ManagedReferenceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnlyManaged))
+        {
+            if (leftReadOnlyManaged != rightReadOnlyManaged || ManagedReferenceTypes.HaveIncompatibleElements(nativeEqualityLeftType, nativeEqualityRightType))
+            {
+                Diagnostics.ReportManagedReference(syntax.OperatorToken.Location, "location equality requires identical referent permissions and type; use SameLocation to compare permissions");
+                return new BoundErrorExpression(syntax);
+            }
+
+            var name = syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ? "op_Equality" : "op_Inequality";
+            var method = Invariant.Required(Invariant.Required(nativeEqualityLeftType.ClrType, "managed handles have a CLR type").GetMethod(name), "the runtime declares location equality");
+            return new BoundClrBinaryOperatorExpression(syntax, syntax.OperatorToken.Kind, boundLeft, boundRight, method, TypeSymbol.Bool);
+        }
+
+        if (syntax.OperatorToken.Kind is SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken
+            && NativeSliceTypes.TryGetElement(nativeEqualityLeftType, out _, out var leftReadOnly)
+            && NativeSliceTypes.TryGetElement(nativeEqualityRightType, out _, out var rightReadOnly))
+        {
+            if (leftReadOnly != rightReadOnly || NativeSliceTypes.HaveIncompatibleElements(nativeEqualityLeftType, nativeEqualityRightType))
+            {
+                Diagnostics.ReportUndefinedBinaryOperator(syntax.OperatorToken.Location, syntax.OperatorToken.Text, boundLeft.Type, boundRight.Type);
+                return new BoundErrorExpression(syntax);
+            }
+
+            var methodName = syntax.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken ? "op_Equality" : "op_Inequality";
+            var clrType = Invariant.Required(nativeEqualityLeftType.ClrType, "the enclosing TryGetElement success establishes the native CLR type");
+            var method = Invariant.Required(
+                clrType.GetMethod(methodName, BindingFlags.Public | BindingFlags.Static),
+                "TryGetElement selects the SDK Slice/ReadOnlySlice definition, whose ABI declares both equality operators");
+            TryLiftNullableClrOperatorOperands(
+                syntax.OperatorToken.Kind,
+                ref boundLeft,
+                ref boundRight,
+                syntax.Left.Location,
+                syntax.Right.Location,
+                nativeEqualityLeftType,
+                nativeEqualityLeftType,
+                TypeSymbol.Bool,
+                hasByRefSignature: false,
+                out _);
+            return new BoundClrBinaryOperatorExpression(syntax, syntax.OperatorToken.Kind, boundLeft, boundRight, method, TypeSymbol.Bool);
         }
 
         // ADR-0122 / issue #1014: pointer arithmetic (`p + i`, `i + p`, `p - i`)

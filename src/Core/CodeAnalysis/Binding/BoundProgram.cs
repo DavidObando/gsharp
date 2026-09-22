@@ -285,4 +285,7 @@ public sealed class BoundProgram
     /// one real <c>CustomAttribute</c> row on the module metadata row per entry.
     /// </summary>
     public ImmutableArray<BoundAttribute> ModuleAttributes { get; internal set; } = ImmutableArray<BoundAttribute>.Empty;
+
+    internal ImmutableDictionary<(Symbol Owner, bool Static), BoundInitializationPlan> Initializers { get; set; }
+        = ImmutableDictionary<(Symbol Owner, bool Static), BoundInitializationPlan>.Empty;
 }

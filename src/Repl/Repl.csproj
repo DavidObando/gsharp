@@ -42,6 +42,7 @@
     <ProjectReference Include="@(GsharpLanguageServer)" />
     <ProjectReference Include="..\Sdk\Gsharp.Extensions\Gsharp.Extensions.csproj" />
     <ProjectReference Include="..\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj" />
+    <ProjectReference Include="..\Sdk\Gsharp.Runtime.Values\Gsharp.Runtime.Values.csproj" />
   </ItemGroup>
 
   <ItemGroup>

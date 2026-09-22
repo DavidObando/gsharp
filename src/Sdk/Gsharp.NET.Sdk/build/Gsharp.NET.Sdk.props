@@ -50,6 +50,7 @@
          construct a channel, so it is auto-referenced like Gsharp.Extensions;
          it is only loaded by programs that actually use channels. -->
     <GsharpChannelsRuntimeAssemblyFullPath Condition=" '$(GsharpChannelsRuntimeAssemblyFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\channels\Gsharp.Runtime.Channels.dll</GsharpChannelsRuntimeAssemblyFullPath>
+    <GsharpValuesRuntimeAssemblyFullPath Condition=" '$(GsharpValuesRuntimeAssemblyFullPath)'=='' ">$(MSBuildThisFileDirectory)..\tools\values\Gsharp.Runtime.Values.dll</GsharpValuesRuntimeAssemblyFullPath>
 
     <!-- Pull in the gsharp language targets (CoreCompile override). -->
     <LanguageTargets>$(MSBuildThisFileDirectory)Gsharp.NET.Current.Sdk.targets</LanguageTargets>
@@ -68,6 +69,9 @@
   <!-- ADR-0174 D1: same channel for the channel runtime. -->
   <ItemGroup Condition=" '$(GsharpNoChannelsRuntime)' != 'true' and Exists('$(GsharpChannelsRuntimeAssemblyFullPath)') ">
     <_ExplicitReference Include="$(GsharpChannelsRuntimeAssemblyFullPath)" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(GsharpNoValuesRuntime)' != 'true' and Exists('$(GsharpValuesRuntimeAssemblyFullPath)') ">
+    <_ExplicitReference Include="$(GsharpValuesRuntimeAssemblyFullPath)" />
   </ItemGroup>
 
 </Project>

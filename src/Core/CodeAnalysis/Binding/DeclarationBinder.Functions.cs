@@ -1942,6 +1942,24 @@ internal sealed partial class DeclarationBinder
         var isRich = anon.HasBaseType || anon.Members.Any(m => m is FunctionDeclarationSyntax || m is EventDeclarationSyntax);
         if (isRich && scope.GetRichAnonymousClassMap().TryGetValue(anon, out var richType) && richType != null)
         {
+            if (richType.IsGenericDefinition
+                && binderCtx.CurrentTypeParameters != null)
+            {
+                var typeArguments = richType.TypeParameters
+                    .Select(parameter => binderCtx.CurrentTypeParameters.TryGetValue(parameter.Name, out var argument)
+                        ? (TypeSymbol)argument
+                        : parameter)
+                    .ToImmutableArray();
+                if (!typeArguments.Where((argument, index) =>
+                        ReferenceEquals(argument, richType.TypeParameters[index])).Any())
+                {
+                    return StructSymbol.Construct(
+                        richType,
+                        typeArguments,
+                        scope.References.MapClrTypeToReferences);
+                }
+            }
+
             return richType;
         }
 

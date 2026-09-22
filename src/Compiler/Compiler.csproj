@@ -15,6 +15,7 @@
     <!-- ADR-0174 D1: ship the channel runtime next to gsc so the driver probe
          (ReferenceResolver.ResolveDriverReferencePaths) finds it outside MSBuild. -->
     <ProjectReference Include="..\Sdk\Gsharp.Runtime.Channels\Gsharp.Runtime.Channels.csproj" />
+    <ProjectReference Include="..\Sdk\Gsharp.Runtime.Values\Gsharp.Runtime.Values.csproj" />
   </ItemGroup>
 
   <ItemGroup>

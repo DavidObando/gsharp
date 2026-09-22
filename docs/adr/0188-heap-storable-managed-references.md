@@ -1,8 +1,9 @@
 # ADR-0188: Heap-storable managed references alongside borrowed ref contracts
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-19
-- **Phase**: Language and runtime design; bounded storage origins first
+- **Implemented**: 2026-09-20 UTC (2026-09-19 PDT)
+- **Phase**: Bounded managed-reference language/runtime implementation
 - **Issue**: [#4330](https://github.com/DavidObando/gsharp/issues/4330)
 - **Related**: [ADR-0190](0190-native-slices-and-clr-array-interoperability.md),
   [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
@@ -12,12 +13,204 @@
   [ADR-0181](0181-readonly-managed-reference-contracts.md),
   [ADR-0100](0100-default-expression.md),
   [upstream ADR-0184](https://github.com/DavidObando/gsharp/blob/b96dff29c4d18f5a29f9b7e372ce31953cb52a74/docs/adr/0184-unscoped-ref-definition-side.md)
-- **Effect if accepted**: Add a separate persistent category to ADR-0039's
-  model, not reinterpret existing byrefs. Extend lifetime/capture classification
+- **Effect**: Adds a separate persistent category to ADR-0039's
+  model without reinterpreting existing byrefs. Extends lifetime/capture classification
   in ADR-0058 while retaining ADR-0060/0181 borrowed ABI and ADR-0184's
-  definition-side work. Add an initialization restriction for the new
-  non-null handle type alongside ADR-0100. Existing ADRs remain unchanged
-  while this proposal is under review.
+  definition-side work. Adds an initialization restriction for the new
+  non-null handle type alongside ADR-0100. The existing borrowed-reference
+  contracts remain unchanged.
+
+## Acceptance and implementation amendment — September 20, 2026 (UTC)
+
+### Readonly spelling amendment
+
+The maintainer approved **`readonly managed[T]`** and
+**`readonly managed(location)`** on **September 19, 2026 PDT / September 20,
+2026 UTC**, superseding the initial joined `readonlyManaged` intrinsic spelling
+before release. The joined spelling is no longer a compiler alias; ordinary
+user-defined types, functions and values named `readonlyManaged` still resolve
+normally. Neither `readonly` nor `managed` becomes a globally reserved word.
+
+The modifier is represented by a separate syntax token, as with `readonly
+slice[T]`. It binds to the managed category before a trailing nullable marker:
+`readonly managed[T]?` and `(readonly managed[T])?` are nullable handles;
+`readonly managed[T?]` has a nullable referent. Nested generic/tuple/array
+positions retain these distinctions. After `ref`, the first `readonly` remains
+the borrowed-return modifier: `ref readonly managed[T]` borrows a writable
+handle slot readonly; `ref readonly readonly managed[T]` borrows a readonly
+handle slot readonly.
+
+The expression modifier applies only to the address intrinsic and requires an
+admitted addressable location; it is not a readonly operator on arbitrary
+values. Visible ordinary names and escapes retain precedence. When shadowed,
+use the explicit `Gsharp.Values.ReadOnlyManagedRef[T]` CLR type/API rather than
+retargeting an ordinary callable. The CLR classes, `.AsReadOnly()`, location
+identity, permissions and lifetime contracts are unchanged. ADR-0189 and
+ADR-0191 remain Proposed.
+
+### Original design acceptance and delivered scope
+
+The maintainer approved this design on **2026-09-19**. Proposal PR #4332
+intentionally left its status Proposed; this implementation records acceptance
+alongside the feature, following native slices in #4338 / ADR-0190.
+ADR-0189 remains Proposed. Neither structural adaptation nor go2gs is
+implemented by this amendment.
+
+The implemented spelling is `managed[T]` / `readonly managed[T]`, including
+nullable handles, `managed(location)` / `readonly managed(location)`, and `*p`.
+Ordinary visible types, aliases, values, functions, static imports and escaped
+identifiers retain precedence. Explicit `Gsharp.Values` names remain available.
+The nominal classes ship in the existing `Gsharp.Runtime.Values` assembly.
+
+Implementation:
+
+- Whole-body discovery precedes address emission. Locals, containing value
+  roots, and by-value parameters reuse the existing closure-box plan, including
+  early borrows, nested literals, conditional requests and per-iteration cells.
+  By-value parameters retain G#'s existing readonly binding permission:
+  `readonly managed(parameter)` retains their independent entry copy; an
+  explicit mutable local copy is required for a writable handle.
+- Constructor and type-initializer expressions use emit-local initialization
+  plans under their actual owning type/function. Base arguments, primary
+  parameter stores, field-initializer locals and constructor bodies share one
+  cell plan. Only parameter-cell setup precedes the existing base-call boundary;
+  user field initializers retain their ordinary after-base ordering. Cached
+  declaration initializer dictionaries are not replaced by managed-reference
+  lowering, so repeated implementation/reference emission recreates its helpers.
+  Lambda and `go` discovery covers every plan prologue, argument and body.
+  Declaration initializer discovery is suppressed only when every constructor
+  path that emits those initializers has a plan.
+- Known borrowed aliases save a descriptor at their original selection site.
+  A nested persistent request captures that descriptor, not a raw byref.
+  Stable `let` pointer aliases are also tracked. Unknown/merged mutable
+  pointer provenance remains diagnosed, never repaired by copying a referent.
+- Ordinary accessible source/imported fields, nested value fields, exact CLR
+  array elements and native writable/readonly slice elements retain their
+  selected owners. Reference-valued traversal snapshots a new object root;
+  replacing a value root continues to update the same slot.
+  Wide CLR-array indices keep their bound native width through the compiler-facing
+  `FromArrayNative(T[], nint)` factory, which checks bounds before narrowing to
+  the stored absolute index. The existing `FromArray(T[], int)` ABI remains.
+- Generated ordinary typed classes implement `Borrow` using field addresses
+  and parent borrows. Array factories use typed array element addresses.
+  The canonical key is owner reference identity, absolute array index and a
+  flattened path of runtime field handles paired with constructed declaring
+  type handles. Equality is independent of helper site/assembly and referent
+  contents. `SameLocation` compares permission views; CLR wrapper identity
+  remains a separate observation.
+- Writable and readonly borrowed contracts use the existing metadata path.
+  Implementation and `/refout` are tested with a C# producer/consumer.
+  Async, iterator and channel state retain ordinary handles/cells only;
+  temporary borrows still obey execution-segment liveness.
+- Primary-constructor parameters are instance storage and therefore cannot be
+  scoped managed handles. Explicit constructor calls and convenience chaining
+  honor the selected same-compilation constructor's scoped parameter contract;
+  primary-constructor arguments remain stores. Imported constructors and
+  operators conservatively reject scoped handle arguments because this
+  by-value lifetime contract is not preserved in their CLR metadata.
+  Same-compilation operators/conversions honor scoped parameters, while the
+  compiler-known handle equality and permission APIs retain their category
+  semantics.
+- Non-null handle locals participate in definite assignment. Explicit
+  non-null defaults, missing aggregate fields, incomplete source constructors
+  and compiler-created arrays with unsupplied non-null handle elements are
+  diagnosed. Every source primary, designated and compiler-synthesized/default
+  constructor path is checked at the declaration, even when the current
+  compilation contains no construction expression. Nullable defaults are nil.
+  Generic/foreign CLR zero-initialization remains an explicit boundary:
+  annotations cannot prevent foreign nulls, `default(T)`, or a foreign/generic
+  factory from supplying null. Such a null throws on dereference/Borrow; no fake
+  target is allocated.
+- GS0604 diagnoses unsupported provenance, permissions, initialization and
+  suspended borrowed operations. Imported unknown ref returns, caller/scoped
+  storage, borrowed struct `this`, ref-like/native storage, property-value
+  copies, statics, multidimensional arrays and explicit-layout fields are not
+  turned into persistent aliases. A borrowed argument preceding a suspending
+  argument is diagnosed rather than hoisted or re-evaluated. Scoped handles
+  cannot become instance/static field or top-level global initializer results,
+  including stores in `shared { init { ... } }`. Array elements, CLR ref
+  indexers and imported ref-return properties reached through a managed handle
+  remain borrowed locations and cannot be selected before a later suspension;
+  scalar and by-value property copies remain ordinary values.
+- State-machine entry is a storage boundary. Scoped managed-reference
+  parameters and scope-preserving locals are rejected in async, declared or
+  inferred suspending, iterator, and async-iterator functions because the
+  current lowering conservatively hoists every parameter and declared local
+  into generated fields. This applies even to uses before the first
+  suspension; ordinary non-scoped handles and scalar/value copies remain
+  valid. The rule is enforced in the shared managed-reference semantic pass,
+  before lowering. A Roslyn analyzer is intentionally not used here: the
+  decision depends on G# bound provenance, suspension inference, and iterator
+  detection that C# syntax analysis cannot recover without duplicating the
+  compiler. Focused compiler, reimport, reference-assembly, repeated-emit, and
+  ILVerify tests are the durable guard.
+- Instance method-group conversion is also a capture boundary: both source and
+  imported groups place a non-null receiver into the generated delegate's
+  `Target`. The shared managed-reference safety pass therefore rejects a scoped
+  handle receiver at the method-group node, independently of whether the
+  delegate is returned, stored, or passed. Static groups, scalar/value-copy
+  receivers, ordinary non-scoped handles, and direct calls remain valid. This
+  is likewise guarded by bound-node compiler tests rather than a Roslyn
+  analyzer; only the G# bound tree reliably distinguishes a direct call from
+  the source/CLR method-group forms and carries scoped-handle provenance.
+- Function-pointer invocation follows the existing unknown-call rule.
+  `BoundFunctionPointerInvocationExpression` now routes every argument through
+  the same conservative scoped-handle check as indirect calls because managed
+  and unmanaged pointer signatures have no scoped metadata. The disposition is
+  independent of the pointer expression shape (local, parameter, field,
+  property, or index) and argument position. Scalar/value copies and ordinary
+  handles remain valid. A Roslyn analyzer would only duplicate individual G#
+  behavior here; focused bound-node tests are the stronger guard.
+- Required initialization now has one flow model for class/struct shared
+  storage. Static fields and static auto-property backing fields whose type
+  contains a non-null managed handle are projected through direct field
+  initializers and every path of `shared { init { ... } }`, then checked by the
+  existing definite-assignment engine. Nullable storage remains an allowed
+  zero value. This replaces the direct-handle-only declaration special case and
+  covers generic/nested aggregate storage and synthesized backing fields.
+  Cross-assembly/refout, repeated emit, and ILVerify tests guard the model; a
+  Roslyn analyzer cannot reproduce G# initializer lowering or backing-field
+  identity without duplicating compiler semantics.
+- Durable exhaustiveness is enforced by a test-side semantic inventory.
+  Reflection discovers every concrete high-risk `BoundExpression` family
+  (assignments, calls/invocations, method groups, argument-bearing nodes,
+  aggregate/default/managed-reference creation), and the test requires an
+  explicit managed-reference disposition for each. A separate context matrix
+  pins provenance, sinks, call contracts, managed locations, suspension
+  ordering, delegate/state-machine/closure capture, and instance/static
+  required initialization to concrete implementation markers. Mutation
+  self-tests remove a function-pointer node and add an unclassified context to
+  prove both guards fail. The existing `GSharp.InternalAnalyzers` conventions
+  were inspected, but a new Roslyn analyzer is intentionally not added: it
+  would have to mirror the same G#-specific bound-type/context inventory in a
+  second assembly, cannot observe runtime-discovered bound subclasses more
+  directly than the Core test, and would add noise or suppressions without
+  preventing a broader class of gaps.
+
+The runtime, real-driver/ILVerify, cross-assembly, GC, allocation, formatting,
+completion and cs2gs witnesses are in `ManagedReferenceLanguageTests`,
+`ManagedReferenceRuntimeTests`, `ManagedReferenceFormattingTests`,
+`NativeSliceCompletionTests`, and `ManagedReferenceTranslationTests`.
+The runtime benchmark declares its budget before execution: **zero allocated
+bytes for one million warmed dereferences**, with a five-second sanity bound,
+and reports direct borrowed and explicit `StrongBox` baselines. This is not a
+zero-cost or portable throughput claim. Generated `Borrow` bodies are also
+checked for allocation/boxing/delegate construction and generated heap fields
+for forbidden byref/ref-like types. No verifier suppression is added.
+
+ADR-0154 discrimination: replacing promoted roots with independent value
+snapshots compiled and verified but made **eight of ten** execution programs
+fail their output assertions. A runtime mutant that copied array owners and
+omitted covariance rejection made **all four** runtime tests fail. Both
+mutants were reverted. A real packed-SDK consumer and an in-tree bootstrap
+consumer both execute the early-borrow/returned-cell witness and print `42`.
+The actual REPL script also prints `42`. On the validation host, the warmed
+million-operation observation was 2.1063 ms for the handle, 0.3248 ms for the
+direct borrow, and 2.0172 ms for `StrongBox`, with zero measured allocations
+in the handle loop. These measurements are informational and machine-specific.
+
+The proposal-stage text below retains the original rationale and matrices;
+its “proposed” and staged-implementation wording is historical.
 
 ## Context
 
@@ -82,8 +275,8 @@ All new syntax below is **proposed**.
 | Existing writable borrow | `ref T`, `*T`, `let ref x`, `&x` | `T&` with existing parameter/return contracts | No ordinary heap storage |
 | Existing readonly borrow | `ref readonly T`, readonly alias, `in` contract | `T&` plus exact readonly metadata | No ordinary heap storage |
 | New writable persistent handle | `managed[T]` | `Gsharp.Values.ManagedRef<T>` reference type | Yes |
-| New readonly persistent handle | `readonlyManaged[T]` | `Gsharp.Values.ReadOnlyManagedRef<T>` reference type | Yes |
-| Nullable persistent handle | `managed[T]?` / `readonlyManaged[T]?` | Nullable reference annotation on that handle type | Yes |
+| New readonly persistent handle | `readonly managed[T]` | `Gsharp.Values.ReadOnlyManagedRef<T>` reference type | Yes |
+| Nullable persistent handle | `managed[T]?` / `readonly managed[T]?` | Nullable reference annotation on that handle type | Yes |
 
 Outside unsafe contexts, `*T` continues to mean the existing managed byref.
 `&x` continues to produce a borrowed address. Neither changes meaning because
@@ -110,7 +303,7 @@ let ref readonly observed = ro.Borrow()
 
 `managed(location)` is a compiler intrinsic on an addressable expression;
 it is not a generic method accepting a `ref T` whose provenance can be lost.
-`readonlyManaged(location)` admits the same supported locations with readonly
+`readonly managed(location)` admits the same supported locations with readonly
 permission. Dereferencing a handle with `*p` is an lvalue, subject to its
 permission. `.Borrow()` returns `ref T` or `ref readonly T` for existing APIs.
 `managed(*p)` denotes the same location and may return the existing handle.
@@ -386,7 +579,7 @@ persistence across an assembly boundary, an API returns the handle itself.
 
 ### 8. Generic, metadata, GC, and concurrency contracts
 
-`managed[T]` and `readonlyManaged[T]` are invariant. No `managed[Derived]` to
+`managed[T]` and `readonly managed[T]` are invariant. No `managed[Derived]` to
 `managed[Base]` conversion can widen writable storage. The readonly category
 also remains invariant initially to avoid different identity/borrow contracts.
 Generic substitutions preserve permission and pointee nullability. Ref-like,
@@ -428,7 +621,7 @@ func AlsoBad(scoped caller *int32) managed[int32] {
 let q = managed(ForeignRef())       // ERROR: imported T& has no owner contract
 let r = managed(stackSpan[0])       // ERROR: unsupported borrowed owner
 let bad managed[Span[int32]] = ...  // ERROR: ref-like referent cannot be stored
-let ro = readonlyManaged(value)
+let ro = readonly managed(value)
 WriteByRef(&*ro)                    // ERROR: readonly capability
 ```
 
@@ -560,7 +753,7 @@ zero-cost abstraction.
 
 ## Remaining questions and acceptance gates
 
-- Ratify `managed[T]` / `readonlyManaged[T]` and address-intrinsic parsing.
+- Ratify `managed[T]` / `readonly managed[T]` and address-intrinsic parsing.
   Existing `*T` and borrowed ABI are non-negotiable compatibility boundaries.
 - Validate the small compiler-facing handle-base ABI, field-path identity,
   visibility, and readonly adapters through AOT and separate-assembly emission.

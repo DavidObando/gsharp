@@ -112,6 +112,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gsfmt.Cli", "src\Formatting
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Formatting.Tests", "test\Formatting.Tests\Formatting.Tests.csproj", "{6CC51E34-9C68-4B0D-959E-E1B01971D009}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Gsharp.Runtime.Values", "src\Sdk\Gsharp.Runtime.Values\Gsharp.Runtime.Values.csproj", "{31E9B076-6E69-4D36-A200-129C9CFB9818}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -518,6 +520,18 @@ Global
 		{6CC51E34-9C68-4B0D-959E-E1B01971D009}.Release|x64.Build.0 = Release|Any CPU
 		{6CC51E34-9C68-4B0D-959E-E1B01971D009}.Release|x86.ActiveCfg = Release|Any CPU
 		{6CC51E34-9C68-4B0D-959E-E1B01971D009}.Release|x86.Build.0 = Release|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Debug|x64.Build.0 = Debug|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Debug|x86.Build.0 = Debug|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Release|Any CPU.Build.0 = Release|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Release|x64.ActiveCfg = Release|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Release|x64.Build.0 = Release|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Release|x86.ActiveCfg = Release|Any CPU
+		{31E9B076-6E69-4D36-A200-129C9CFB9818}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -561,6 +575,7 @@ Global
 		{23BC6304-81C5-4952-9CEA-CEA375594F3F} = {6CD01915-77C2-BA51-1255-480D80E499BC}
 		{39DC1959-C77F-473A-9060-D678D0E761A4} = {6CD01915-77C2-BA51-1255-480D80E499BC}
 		{6CC51E34-9C68-4B0D-959E-E1B01971D009} = {A181298C-7433-4724-808A-E343FC9DC633}
+		{31E9B076-6E69-4D36-A200-129C9CFB9818} = {51B637F8-9C04-5803-F48E-8CB9352021B0}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {6F06C89F-C7AA-47E2-BB0B-E9F7727EB4B0}

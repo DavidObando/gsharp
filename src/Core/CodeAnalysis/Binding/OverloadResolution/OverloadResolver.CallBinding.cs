@@ -23,30 +23,6 @@ namespace GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 internal sealed partial class OverloadResolver
 {
     /// <summary>
-    /// Whether the referenced-assembly CLR <paramref name="type"/> declares a
-    /// <c>public static</c> method named <paramref name="name"/> — used to select
-    /// a static-import candidate for an unqualified call (ADR-0134, extended to
-    /// imported CLR types).
-    /// </summary>
-    private static bool ClrTypeExposesStaticMethod(System.Type type, string name)
-    {
-        if (type == null)
-        {
-            return false;
-        }
-
-        foreach (var m in ClrTypeUtilities.SafeGetMethods(type, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public))
-        {
-            if (ClrTypeUtilities.EmittedMemberNameMatches(m, name))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>
     /// Issue #3760: whether at least one of <paramref name="typeParameters"/>
     /// is still without a bound after the positional inference pass.
     /// </summary>
@@ -1363,9 +1339,9 @@ internal sealed partial class OverloadResolver
                 // Issue #1201 (C# `using static`): an unqualified call may resolve
                 // to a `shared` (static) method of a type brought into scope by a
                 // type import (`import Ns.Type`). Mirror C#'s using-static
-                // semantics — search every type-import's static method set and bind
-                // against the single match. When two or more imported types expose a
-                // same-named static method the reference is ambiguous (GS0414), but
+                // semantics — search every type-import's static member set and bind
+                // against the single match, including callable fields/properties.
+                // When two or more imported types expose the same name the reference is ambiguous (GS0414), but
                 // only here, where the name is actually used. The shared static-call
                 // finalizer (`bindUserTypeStaticCall`) provides full
                 // optional/variadic/generic fidelity, so an unqualified
@@ -1376,11 +1352,7 @@ internal sealed partial class OverloadResolver
                     var ambiguousStaticImport = false;
                     foreach (var importedType in binderCtx.GetStaticImportTypes())
                     {
-                        var importedStatics = TypeMemberModel.GetMethods(
-                            importedType,
-                            syntax.Identifier.ValueText,
-                            MemberQuery.Static(MemberKinds.Method));
-                        if (importedStatics.IsDefaultOrEmpty)
+                        if (!BinderContext.ImportedTypeExposesStaticMember(importedType, syntax.Identifier.ValueText))
                         {
                             continue;
                         }
@@ -1409,7 +1381,7 @@ internal sealed partial class OverloadResolver
                 }
 
                 // Issue #3334 / ADR-0134: an unqualified call may also resolve
-                // to a `public static` method on an imported CLR type or a
+                // to a `public static` member on an imported CLR type or a
                 // referenced package's synthetic `<Program>` holder. Consulted
                 // only when no same-compilation source class matched above; the
                 // imported qualified static-call binder provides full
@@ -1420,7 +1392,7 @@ internal sealed partial class OverloadResolver
                     var ambiguousClrStaticImport = false;
                     foreach (var clrType in Scope.EnumerateStaticImportClrTypes())
                     {
-                        if (!ClrTypeExposesStaticMethod(clrType, syntax.Identifier.ValueText))
+                        if (!BinderContext.ClrTypeExposesStaticMember(clrType, syntax.Identifier.ValueText))
                         {
                             continue;
                         }

@@ -348,20 +348,24 @@ public class Program
     }
 
     /// <summary>
-    /// ADR-0174 D1: an emitted program references <c>Gsharp.Runtime.Channels</c>
-    /// whenever it constructs or operates on a channel. Under the SDK, MSBuild's
+    /// Emitted channels and native slices reference their SDK runtime assemblies.
+    /// Under the SDK, MSBuild's
     /// copy-local puts that assembly beside the app; a direct <c>gsc /out:</c>
-    /// invocation has no such step, so gsc performs the one copy itself — only
-    /// when the emitted PE actually carries the AssemblyRef, so a program that
-    /// never touches a channel gets nothing extra. Never overwrites a file the
-    /// user already placed there.
+    /// invocation has no such step, so gsc copies each referenced runtime itself.
+    /// A program whose PE has no corresponding AssemblyRef gets nothing extra.
+    /// A destination copy is refreshed only when the bundled runtime is newer.
     /// </summary>
     /// <param name="outputPath">The emitted assembly.</param>
     private static void CopyBundledRuntimeBeside(string outputPath)
     {
+        CopyBundledRuntimeBeside(outputPath, ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory));
+        CopyBundledRuntimeBeside(outputPath, ReferenceResolver.FindBundledValuesRuntimePath(AppContext.BaseDirectory));
+    }
+
+    private static void CopyBundledRuntimeBeside(string outputPath, string? bundled)
+    {
         try
         {
-            var bundled = ReferenceResolver.FindBundledChannelsRuntimePath(AppContext.BaseDirectory);
             var outputDir = Path.GetDirectoryName(Path.GetFullPath(outputPath));
             if (bundled is null || string.IsNullOrEmpty(outputDir))
             {

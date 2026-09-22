@@ -72,6 +72,8 @@ internal sealed partial class ExpressionBinder
     private readonly Func<TypeSymbol, bool> isAsyncIteratorReturnType;
     private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList;
+    private readonly Func<AnonymousClassExpressionSyntax, StructSymbol, BoundExpression> bindRichAnonymousObject;
+    private readonly Func<CallExpressionSyntax, BoundExpression> bindStructuralAdaptation;
 
     // ADR-0151: declares the local a value-position `if let` binding
     // introduces, routed through the same
@@ -105,7 +107,9 @@ internal sealed partial class ExpressionBinder
         Func<TypeSymbol, bool> isAsyncIteratorReturnType,
         Func<FunctionSymbol?> getCurrentFunction,
         Func<ImmutableArray<StatementSyntax>, Func<BoundStatement>?, ImmutableArray<BoundStatement>> bindStatementList,
-        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable)
+        Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable,
+        Func<AnonymousClassExpressionSyntax, StructSymbol, BoundExpression> bindRichAnonymousObject,
+        Func<CallExpressionSyntax, BoundExpression> bindStructuralAdaptation)
     {
         this.binderCtx = binderCtx ?? throw new ArgumentNullException(nameof(binderCtx));
         this.memberLookup = memberLookup ?? throw new ArgumentNullException(nameof(memberLookup));
@@ -121,6 +125,8 @@ internal sealed partial class ExpressionBinder
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.bindStatementList = bindStatementList;
         this.bindLocalVariable = bindLocalVariable;
+        this.bindRichAnonymousObject = bindRichAnonymousObject;
+        this.bindStructuralAdaptation = bindStructuralAdaptation;
     }
 
     private DiagnosticBag Diagnostics => binderCtx.Diagnostics;
@@ -450,7 +456,7 @@ internal sealed partial class ExpressionBinder
             case SyntaxKind.BinaryExpression:
                 return BindBinaryExpression((BinaryExpressionSyntax)syntax);
             case SyntaxKind.CallExpression:
-                return overloads.BindCallExpression((CallExpressionSyntax)syntax);
+                return BindBufferAwareCallExpression((CallExpressionSyntax)syntax);
             case SyntaxKind.GenericNameExpression:
                 return BindGenericNameExpression((GenericNameExpressionSyntax)syntax);
             case SyntaxKind.ObjectCreationExpression:

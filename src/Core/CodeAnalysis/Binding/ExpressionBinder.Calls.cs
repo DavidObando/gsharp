@@ -267,6 +267,11 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindCollectionInitializerExpression(CollectionInitializerExpressionSyntax syntax)
     {
+        if (syntax.BufferType != null)
+        {
+            return BindNativeBufferLiteral(syntax);
+        }
+
         // Issue #1567: a target-less collection initializer only appears as a
         // composite/object-initializer member value (`T{ Prop: { a, b } }`) and
         // is consumed directly by the composite-literal binder — it never
@@ -1258,6 +1263,12 @@ internal sealed partial class ExpressionBinder
         var name = syntax.Identifier.ValueText;
         switch (name)
         {
+            case "adapt" when syntax.Identifier.Text == "adapt":
+            {
+                result = bindStructuralAdaptation(syntax);
+                return true;
+            }
+
             case "cast":
             {
                 if (syntax.TypeArgumentList == null

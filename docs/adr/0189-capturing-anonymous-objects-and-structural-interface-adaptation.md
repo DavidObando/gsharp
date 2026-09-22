@@ -1,8 +1,10 @@
 # ADR-0189: Capturing anonymous objects and structural interface adaptation
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-19
-- **Phase**: Language design; capture/inference before explicit forwarding
+- **Accepted**: 2026-09-20
+- **Implemented**: 2026-09-20
+- **Phase**: Implemented
 - **Issue**: [#4329](https://github.com/DavidObando/gsharp/issues/4329)
 - **Related**: [ADR-0146](0146-anonymous-class-literal.md),
   [ADR-0148](0148-safe-structural-projections.md),
@@ -11,11 +13,48 @@
   [ADR-0190](0190-native-slices-and-clr-array-interoperability.md),
   [ADR-0188](0188-heap-storable-managed-references.md),
   [ADR-0154](0154-test-oracle-strength.md)
-- **Effect if accepted**: Lift ADR-0146's rich-field inference and lexical
+- **Effect**: Lift ADR-0146's rich-field inference and lexical
   capture limitations, with explicit ordering and lifetime rules. Supply the
   separate interface-adaptation feature deferred by ADR-0148 section H.
   Preserve ADR-0181's ref contracts and ADR-0182's extension/member distinction.
-  This proposal does not amend accepted documents ahead of implementation.
+  Rich-data capture semantics, structural generic constraints, runtime shape
+  discovery, and Go interface-value identity remain separate designs.
+
+## Acceptance and implementation amendment (2026-09-20)
+
+The maintainer accepted this ADR for issue #4329. The implementation fixes the
+previously open rollout choices as follows:
+
+- The canonical operation is `adapt[I](source)`. The persistent-location form
+  is `adapt[I](ref handle)`, where `handle` has type `managed[T]` or
+  `readonly managed[T]` and `T` is a value type. `$adapt` remains an ordinary
+  escaped identifier.
+- Rich anonymous fields may omit their types. Initializers and base arguments
+  bind and evaluate at the literal site; member free variables capture lexical
+  bindings through the ADR-0188 location machinery when mutation must be
+  shared.
+- Generated rich-object constructors store snapshots and hidden environment
+  state before the selected base constructor call. Ordinary named-class
+  constructor order is unchanged.
+- Adapters are fresh ordinary generated classes in the caller assembly. The
+  compile-time plan forwards exact methods, generic methods, properties,
+  indexers, events, and ref-kind contracts across the complete interface
+  closure. Imported declarations are not modified and forwarding uses direct
+  calls only.
+- Reference/interface sources retain one evaluated object; struct sources own
+  one mutable copy; managed-handle sources retain the location. Readonly
+  handles admit only metadata-proven readonly imported members.
+- `GS0605` reports an uninferable rich field type and `GS0606` reports a
+  structural adaptation failure. Unsupported static abstract/virtual members
+  and operators are diagnosed rather than stubbed.
+
+The implementation and tests cover lexical cell sharing, inferred generic and
+nullable fields, pre-base stores, source single evaluation, wrapper identity,
+mutable struct copies, persistent handles, inherited/default/generic slots,
+properties/indexers/events, live ref returns, imported cross-assembly
+contracts, repeated emission, and IL verification. Field-only/data objects,
+structural projection, and cs2gs anonymous-type translation remain on their
+existing paths.
 
 ## Context
 
@@ -68,14 +107,12 @@ retroactive interface declaration, or runtime shape search. A missing or
 unsupported contract is a diagnostic. Direct `object : I { ... }` remains
 useful on its own and does not wait for ADR-0188.
 
-All new constructs and examples below are **proposed**. Named interfaces,
-methods, and existing object syntax in the examples use their current role;
-capture/inference/adaptation semantics are the proposed additions.
+The constructs and examples below are normative for the accepted feature.
 
 ### 1. Captures: binding versus snapshot
 
 ```gsharp
-// Proposed capture/inference behavior.
+// Capture/inference behavior.
 var count = 1
 let counter = object : ICounter {
     let Initial = count
@@ -282,7 +319,7 @@ capture cells and exclude hidden environment fields from data operations.
 ### 5. Explicit structural adaptation
 
 ```gsharp
-// Proposed explicit adaptation. The source need not declare IReader.
+// Explicit adaptation. The source need not declare IReader.
 let reader IReader = adapt[IReader](OpenReader())
 let manual = object : IReader {
     let Source = OpenReader()
@@ -326,7 +363,7 @@ future capability interface or introducing dependency cycles.
 | `adapt[I](structExpression)` | One value copy in a mutable private field of adapter | Calls act on that field; changes persist across calls, not in original variable |
 | `adapt[I](interfaceExpression)` | Evaluated interface value | Forward only statically available interface members; never discover dynamic shape |
 | `adapt[I](ref handle)` | ADR-0188 `managed[T]` for value-type `T` | Each call borrows that persistent location; updates original slot |
-| `adapt[I](ref readonlyHandle)` | ADR-0188 `readonlyManaged[T]` for value-type `T` | Only compatible readonly source members admitted |
+| `adapt[I](ref readonlyHandle)` | ADR-0188 `readonly managed[T]` for value-type `T` | Only compatible readonly source members admitted |
 | Raw borrowed/ref-like source or location | Not admitted | Ordinary heap adapter cannot retain it |
 
 The `ref` operand form is a **proposed adaptation mode**, not a CLR borrowed
@@ -334,8 +371,7 @@ argument. Its expression must have one of the persistent handle types.
 The referent must be statically a value type; an open type parameter needs an
 appropriate existing value-type constraint.
 It evaluates the handle once; rebinding that handle variable does not retarget
-the adapter. It is deferred until ADR-0188 is available and does not block
-reference/value-copy adaptation.
+the adapter. ADR-0188 supplies the persistent storage used by this mode.
 
 For class-valued handles, explicitly dereference and use value adaptation to
 snapshot the current object: `adapt[I](*p)`. The initial location mode rejects
@@ -350,7 +386,7 @@ An already boxed source supplied through an interface remains that evaluated
 interface object; the adapter does not unbox/rebox it behind the caller's back.
 
 ```gsharp
-// Proposed witnesses; Counter is a mutable value type.
+// Counter is a mutable value type.
 var c = Counter{Value: 1}
 let copy = adapt[ICounter](c)
 copy.Increment()
@@ -558,7 +594,7 @@ export an inaccessible interface accidentally.
 ### 11. Diagnostics and rejected programs
 
 ```gsharp
-// Proposed negative examples.
+// Negative examples.
 let implicit IReader = unrelated     // ERROR: still no nominal conformance
 let wrong = adapt[IReader](42)       // ERROR: missing required Read signature
 let hidden = adapt[IReader](privateOnlyReader) // ERROR: no public candidate
@@ -671,9 +707,9 @@ Costs and boundaries:
    manual escape hatch, but complete static forwarding avoids repetitive
    wrappers without introducing another dispatch runtime.
 
-## Staged implementation and conformance
+## Implementation and conformance
 
-This proposal adds no implementation and claims no executed validation.
+The originally staged work shipped as one accepted capability:
 
 1. **Stage A: capture and inference.** Bind rich fields/base arguments at the
    literal site, synthesize constructor/environment state, and share lexical
@@ -722,19 +758,16 @@ boxing/delegate allocation introduced by the adapter. Compare against a
 hand-written ordinary wrapper before claiming performance. Budget decisions
 belong in the implementation PR before measurements, not fabricated here.
 
-## Remaining questions and rollout gates
+## Closed rollout decisions and remaining boundaries
 
-- Ratify `adapt[I](e)` and the explicit persistent-handle operand spelling
-  with parser/name-collision tests. The explicit allocation/conversion boundary
-  must remain regardless of final spelling.
-- Reproduce the pre-base-store proof through G#'s generated-rich-constructor
-  path, including generic owner tokens and exact existing named-constructor
-  traces, before enabling captured base overrides. The CLI representation is
-  demonstrated above; its G# lowering remains an implementation obligation.
-- Decide the exact B2 member order by existing emitter readiness; the matrix's
-  diagnostics remain mandatory until each contract passes cross-assembly tests.
-- Coordinate shared capture-cell planning with ADR-0188 without making
-  reference-type captures depend on the complete persistent-reference feature.
+- `adapt[I](e)` and `adapt[I](ref handle)` are final, with escaped-identifier
+  collision coverage.
+- The verified pre-base-store shape is used only by generated rich objects;
+  named class ordering remains unchanged.
+- The bounded exact member matrix is implemented through existing named-member
+  metadata. Static abstract/virtual members and operators remain a separate
+  design and receive `GS0606`.
+- Capture cells and managed handles share ADR-0188 storage planning.
 - Rich-data captures, structural generic constraints, runtime shape discovery,
   and Go interface-value emulation remain separate designs, not hidden
   prerequisites or promised native behavior.

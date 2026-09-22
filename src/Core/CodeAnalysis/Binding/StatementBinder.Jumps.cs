@@ -598,6 +598,11 @@ internal sealed partial class StatementBinder
 
         if (expression != null)
         {
+            if (ManagedReferenceOrigins.IsScopedHandle(expression))
+            {
+                Diagnostics.ReportManagedReference(syntax.Location, "a scoped managed-reference value cannot escape its function");
+            }
+
             // ADR-0039 §4 / ADR-0058: a managed-pointer (*T) value cannot be returned from
             // a function — the callee's stack frame (containing the pointed-to variable) is
             // invalid after the function returns. Diagnose with GS9004.
@@ -903,6 +908,11 @@ internal sealed partial class StatementBinder
             // treatment exactly when the CLR author has declared the same
             // intent @UnscopedRef signals for a native G# member.
             case BoundClrIndexExpression clrIndex:
+                if (NativeSliceTypes.TryGetElement(clrIndex.Target.Type, out _, out _))
+                {
+                    return false;
+                }
+
                 // ADR-0184 amendment (hook A): an [UnscopedRef] CLR indexer
                 // reached through a READ-ONLY reference is copied before the
                 // call exactly like a native member would be, so its result
@@ -918,6 +928,8 @@ internal sealed partial class StatementBinder
                     ? HasFunctionLocalReferentScope(clrIndex.Target)
                     : !Binder.IsReferenceTypeForConstraint(clrIndex.Target.Type)
                         && HasFunctionLocalRefScope(clrIndex.Target);
+            case BoundImportedInstanceCallExpression call when ManagedReferenceOrigins.IsHandleBorrow(call):
+                return ManagedReferenceOrigins.IsScopedHandle(call.Receiver);
             case BoundDereferenceExpression deref:
                 // A pointer parameter's referent is not its by-value parameter slot.
                 // Local pointers conservatively retain function-local scope.

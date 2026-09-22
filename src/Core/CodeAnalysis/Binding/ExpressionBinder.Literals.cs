@@ -1912,14 +1912,13 @@ internal sealed partial class ExpressionBinder
 
     private BoundExpression BindRichAnonymousClassExpression(AnonymousClassExpressionSyntax syntax)
     {
-        // The desugaring pass records the synthesized backing class for each
-        // rich anonymous-object literal keyed by syntax-node identity. The
-        // literal simply constructs it with no arguments — base-constructor
-        // arguments (spliced verbatim into the synthesized `: Base(args)`
-        // clause) and field initializers execute inside the synthesized ctor.
+        // The declaration pre-pass records a stable synthesized class shell
+        // for each rich literal. The Binder callback completes the literal-site
+        // inference/capture/base-constructor plan and returns its exact
+        // constructor call.
         if (scope.GetRichAnonymousClassMap().TryGetValue(syntax, out var classSymbol) && classSymbol != null)
         {
-            return new BoundConstructorCallExpression(syntax, classSymbol, ImmutableArray<BoundExpression>.Empty);
+            return bindRichAnonymousObject(syntax, classSymbol);
         }
 
         // Defensive: if the desugaring pass produced no symbol (it reported a
@@ -2004,6 +2003,12 @@ internal sealed partial class ExpressionBinder
         StructSymbol? resolvedDefinition,
         ImmutableArray<TypeSymbol> enclosingTypeArguments = default)
     {
+        if (resolvedDefinition == null && syntax.TypeArgumentList is { } nativeTypeArguments
+            && binderCtx.CanUseNativeBufferAlias(scope, syntax.TypeIdentifier, getCurrentFunction(), expression: true))
+        {
+            return BindEmptyNativeBufferLiteral(syntax, nativeTypeArguments);
+        }
+
         if (syntax.SpreadExpression != null)
         {
             return BindStructuralSpreadLiteral(syntax, resolvedDefinition, enclosingTypeArguments);
@@ -2032,13 +2037,15 @@ internal sealed partial class ExpressionBinder
                 out var typeNameAmbiguous);
             var resolvedStruct = resolvedType as StructSymbol;
             ImportedClassSymbol? importedCandidate = null;
+            ImportedTypeAmbiguity? importedAmbiguity = null;
             bool hasImportedCandidate =
                 !typeNameAmbiguous
                 && scope.TryLookupImportedClassByArity(
                     typeName,
                     preferredArity,
                     declaration: null,
-                    out importedCandidate);
+                    out importedCandidate,
+                    out importedAmbiguity);
 
             // Issue #3466: a nested source type may retain the bare (name,
             // arity) key for references from its containing type. Outside that
@@ -2059,6 +2066,12 @@ internal sealed partial class ExpressionBinder
                     importedCandidate.ClassType);
             if (!foundAlias || resolvedStruct == null || importedTypeTakesPrecedence)
             {
+                if (importedAmbiguity != null)
+                {
+                    Diagnostics.ReportAmbiguousImportedTypeReference(syntax.TypeIdentifier.Location, typeName, importedAmbiguity);
+                    return new BoundErrorExpression(syntax);
+                }
+
                 // Issue #1199 / #2258: a composite literal `T{Field: value}` also
                 // targets an IMPORTED reference-type class (a BCL class such as
                 // `System.Text.Json.JsonSerializerOptions`) or an imported

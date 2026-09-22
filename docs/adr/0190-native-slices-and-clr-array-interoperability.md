@@ -1,8 +1,8 @@
 # ADR-0190: Native shared-storage slices and explicit CLR array interoperability
 
-- **Status**: Proposed
+- **Status**: Accepted
 - **Date**: 2026-09-19
-- **Phase**: Language and runtime design; additive implementation in stages
+- **Phase**: Native managed-array slice core implemented; optional composition deferred
 - **Issue**: [#4328](https://github.com/DavidObando/gsharp/issues/4328)
 - **Related**: [ADR-0188](0188-heap-storable-managed-references.md),
   [ADR-0189](0189-capturing-anonymous-objects-and-structural-interface-adaptation.md),
@@ -13,10 +13,121 @@
   [ADR-0174](0174-goroutines-and-channels-wave-2.md),
   [ADR-0181](0181-readonly-managed-reference-contracts.md),
   [ADR-0154](0154-test-oracle-strength.md)
-- **Effect if accepted**: Extend ADR-0016 with a distinct native slice category,
+- **Effect**: Extend ADR-0016 with a distinct native slice category,
   not replace its existing array ABI. Extend ADR-0159's default/nullability
   classification for that category. Preserve ADR-0174's retired built-ins.
-  No existing ADR is amended or superseded by filing this proposal.
+  Existing CLR-array representations remain unchanged.
+
+## Acceptance and implementation amendment — September 19, 2026
+
+The maintainer approved this design on **2026-09-19**, after requesting the
+contextual **`readonly slice[T]`** spelling and endpoint-based `Subslice`
+instance / imported `Slice` extension distinction. PR #4332 deliberately kept
+all three capability proposals Proposed. Acceptance belongs to this feature's
+implementation, not that documentation-only PR. ADR-0188 and ADR-0189 were
+Proposed at the native-slice merge and are not dependencies of the bounded core
+below. Persistent-reference composition is accepted separately in ADR-0188;
+ADR-0189 remains Proposed.
+
+Implemented contracts:
+
+- `slice[T]` and `readonly slice[T]` are ordinary nominal constructed value
+  types, `Gsharp.Values.Slice<T>` and `ReadOnlySlice<T>`, in the single
+  SDK-shipped `Gsharp.Runtime.Values` assembly. Compiler recognition checks
+  the assembly/type identity and required runtime surface. It reuses the
+  imported-generic symbol and MemberRef machinery, **not** `SliceTypeSymbol`,
+  `object` public signatures, or context-dependent representations.
+- Native literals, canonical empty defaults, nullable containers/elements,
+  invariant type arguments, readonly modifier positions and `ref readonly`
+  precedence, generic/source-defined elements, fields, closures, async value
+  storage, implementation metadata and `/refout` are supported.
+  `array[T]` is exactly the existing `[]T` CLR-array type; `[N]T` retains its
+  existing reference-backed meaning.
+- Native range/index lowering saves the descriptor before evaluating
+  operands. Range normalization happens after written bounds have evaluated.
+  Native method calls also save the receiver before argument evaluation,
+  including `Append` and explicit `Subslice` calls.
+  It calls known `Subslice` methods, independently of extension imports.
+  The runtime's four-argument `Subslice(lo,hi,lowerFromEnd,upperFromEnd)`
+  overload is the normalization entry point used by the compiler.
+  Element refs and nested value-field writes address retained array storage;
+  compound writes save the location and do not reevaluate the receiver/index.
+- Factories, observations, capacity limiting, append/reallocation, overlapping
+  copy/self-append, clear, clone, explicit array copies, permission weakening,
+  span/memory access, exact-array checks, whole-owner recovery, and array-backed
+  memory admission implement the matrices below. Empty custom-owner/string
+  memory is rejected before BCL empty-memory normalization can erase its owner.
+  Sharing does not widen or drop element nullability. Symbolic static `out`
+  inference and `[NotNullWhen(true)]` owner recovery preserve these annotations.
+- Equality/hashing compare owner identity and all descriptor bounds, normalizing
+  the default owner to `Array.Empty<T>()`. Native G# equality requires the same
+  declared permission kind; write `.AsReadOnly()` to compare across kinds.
+  The CLR types expose same-kind operators and ordinary implicit permission
+  conversion; C# applies its own normal conversion/overload rules.
+- Enumeration saves a descriptor and reads current logical elements. Native
+  list-pattern rest captures are shared native views. CLR-array range and
+  list-pattern copies, imported arrays, and cs2gs's C# array output are unchanged.
+- The .NET 10 SDK, direct driver, REPL, bootstrap SDK and package layout ship
+  the same runtime. Missing/incompatible support is GS0600; native element/type
+  restrictions are GS0601; readonly element stores are GS0603. Formatter,
+  display/completion, code-model/printer and the nominal C# type mapper use
+  the two-token readonly spelling.
+
+Explicit boundaries:
+
+- A write whose selected element/value-field location must survive suspension
+  is rejected with **GS0602** (and existing ref-liveness diagnostics where
+  applicable). Saving/reconstituting an owner/index across suspension is not
+  falsely presented as implemented. Slices themselves are heap-storable, and
+  segment-local element borrows and spans use the existing lifetime rules.
+- Persistent handles (ADR-0188), interface adaptation (ADR-0189), arbitrary
+  memory owners, pooling/disposal, Go nil/panic semantics, native Go fixed-value
+  arrays, and go2gs are deferred/outside this capability. Native buffer literals
+  currently take individual positional elements; use `AppendRange` for ranges.
+- The existing ILVerify 10.0.8 `ReturnPtrToStack` limitation also rejects
+  Roslyn's bare `ref Slice<T>` / `ref readonly ReadOnlySlice<T>` parameter
+  forwarders. Tests independently reproduce it with Roslyn and pin the G#
+  forwarding bodies to exactly `ldarg.0; ret`, identical byref parameter/return
+  types, and no locals. Only those named forwarding methods use the repository's
+  existing method-scoped exception; all other emitted slice methods are verified
+  without suppressions. No real IL failure is ignored.
+
+Evidence is executable in `NativeSliceLanguageTests`, `NativeSliceRuntimeTests`,
+`NativeSliceFormattingTests`, `NativeSliceCompletionTests`,
+`NativeSliceRuntimeLayoutTests`, and `NativeSliceTranslationTests`.
+The offline [`NativeSlices.gs`](../../samples/NativeSlices.gs) witness uses a
+real value `StereoFrame`, shared subranges and nested writes; its warmed-up
+100,000-iteration processing loop allocates **zero bytes**. Runtime allocation
+tests likewise require zero allocations for view creation and in-capacity
+append, with a predeclared five-second/100,000-operation sanity budget on the
+macOS/.NET 10 validation host. Raw-array, BCL-memory and explicit-copy observations
+are informational, not a speedup claim or a portable benchmark guarantee.
+
+Discrimination evidence (ADR-0154): a deliberately applied runtime mutant
+batch replacing shared views with array clones, ignoring capacity limits,
+admitting covariance, exposing subrange owners, sharing `Clone`, clearing spare
+storage, indexing to Capacity, and iterating the first element made **nine**
+runtime tests fail. A second batch returning empty values for invalid bounds
+made **all five** bounds rows fail. Both batches were fully reverted and the
+same checks passed. During implementation, the language witnesses also failed
+on duplicated nested-element index evaluation, nullable-element widening,
+cross-permission equality, and misparsed parenthesized readonly types before
+their respective fixes. Generic equality and permission-weakening tests also
+killed actual erased-`object` operator/nullable-constructor MemberRefs with
+`StackUnexpected`; those IL errors were fixed, not suppressed.
+The code-model snapshot change is one reviewed new
+`NativeSliceTypeReference` entry, not acceptance of unrelated golden drift.
+
+The original rationale and selected semantic matrices follow; references to
+proposal-stage gates below are historical context, resolved by this amendment.
+
+The ordinary-name/escape-precedence amendment merged with #4332 on September
+19, 2026 is also implemented. Source/imported lowercase generic types, explicit
+aliases, escaped identifiers, wrong arities, failed constraints and ambiguous
+imports have discriminating compiler tests. Generic import ambiguity uses the
+existing GS0547 diagnostic rather than a first-import or native fallback.
+Formatter escapes are retained, and cs2gs qualifies runtime native types when
+ordinary names at the C# binding site would shadow the aliases.
 
 ## Context
 
@@ -64,9 +175,8 @@ but this ADR neither schedules nor authorizes an ABI-changing reinterpretation.
 Resolved native types have the same CLR identity across mixed-version
 assemblies; ordinary-name lookup and shadowing are specified below.
 
-All new spellings and members below are **proposed**, not implemented examples.
-The semantic contracts are selected here; parser lookahead and final diagnostic
-IDs are implementation review gates.
+The spellings and members below describe the selected contracts, implemented
+as recorded in the acceptance amendment above.
 
 ### 1. Source and library surface
 
@@ -617,7 +727,7 @@ Costs and constraints:
 
 ## Staged implementation and validation
 
-No implementation or runtime measurements accompany this proposal.
+The acceptance amendment above records implementation and measurement evidence.
 
 1. **Identity and interoperability foundation.** Land `array[T]`, native
    runtime type identity, defaults/nullability, SDK references, literal creation,

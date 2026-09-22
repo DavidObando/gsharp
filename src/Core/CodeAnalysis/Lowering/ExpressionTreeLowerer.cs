@@ -239,6 +239,12 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 
         var statement = (BoundBlockStatement)lowerer.RewriteStatement(program.Statement);
         changed |= statement != program.Statement;
+        var initializers = program.Initializers.ToBuilder();
+        foreach (var pair in program.Initializers)
+        {
+            initializers[pair.Key] = pair.Value.Rewrite(lowerer.RewriteExpression, lowerer.RewriteStatement);
+            changed |= initializers[pair.Key] != pair.Value;
+        }
 
         if (!changed)
         {
@@ -258,6 +264,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             program.Globals,
             program.Delegates)
         {
+            Initializers = initializers.ToImmutable(),
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,

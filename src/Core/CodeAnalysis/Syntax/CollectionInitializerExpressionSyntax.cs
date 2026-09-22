@@ -63,6 +63,9 @@ public sealed class CollectionInitializerExpressionSyntax : ExpressionSyntax
     /// <inheritdoc/>
     public override SyntaxKind Kind => SyntaxKind.CollectionInitializerExpression;
 
+    /// <summary>Gets the explicit native-buffer type of a literal, when present.</summary>
+    public TypeClauseSyntax? BufferType { get; internal set; }
+
     /// <summary>Gets the underlying constructor call expression (a <see cref="CallExpressionSyntax"/>).</summary>
     public ExpressionSyntax? Target { get; }
 

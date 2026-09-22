@@ -10,6 +10,13 @@ internal static class DiagnosticDescriptors
     internal const string NonVoidFallthroughGuardMessage = "Compiler-generated guard reached: non-void function fell through without returning a value.";
     internal const string ObsoleteUseDetailMessageFormat = ": '{0}'";
 
+    internal static readonly DiagnosticDescriptor ManagedReference = new("GS0604", DiagnosticSeverity.Error, "Invalid persistent managed reference: {0}.");
+    internal static readonly DiagnosticDescriptor RichAnonymousFieldInference = new("GS0605", DiagnosticSeverity.Error, "Cannot infer a heap-storable type for rich anonymous field '{0}'; add an explicit type.");
+    internal static readonly DiagnosticDescriptor StructuralAdaptation = new("GS0606", DiagnosticSeverity.Error, "Cannot adapt '{0}' to '{1}': {2}.");
+    internal static readonly DiagnosticDescriptor NativeSliceRuntime = new("GS0600", DiagnosticSeverity.Error, "Native slices require .NET 10 and compatible Gsharp.Runtime.Values runtime support. Reference the runtime shipped with the G# SDK.");
+    internal static readonly DiagnosticDescriptor NativeSliceType = new("GS0601", DiagnosticSeverity.Error, "Invalid native buffer type or operation: {0}.");
+    internal static readonly DiagnosticDescriptor NativeSliceSuspendingWrite = new("GS0602", DiagnosticSeverity.Error, "A native slice element write cannot suspend while its location is borrowed. Evaluate the suspending value before selecting the element.");
+    internal static readonly DiagnosticDescriptor NativeSliceReadOnlyElement = new("GS0603", DiagnosticSeverity.Error, "Cannot modify an element through 'readonly slice[T]'; use a writable alias or explicitly clone the logical range.");
     internal static readonly DiagnosticDescriptor BadCharacter = new("GS0001", DiagnosticSeverity.Error, "Bad character input: '{0}'.");
     internal static readonly DiagnosticDescriptor UnterminatedComment = new("GS0002", DiagnosticSeverity.Error, "Unterminated comment.");
     internal static readonly DiagnosticDescriptor UnterminatedString = new("GS0003", DiagnosticSeverity.Error, "Unterminated string literal.");

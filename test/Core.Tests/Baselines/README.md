@@ -66,3 +66,8 @@ decomposition is complete). In that case:
 If you also added new samples, they will appear in the regenerated JSON
 automatically — both `samples/*.gs` and `samples/refactoring-baseline/*.gs`
 are scanned.
+
+The ADR-0190 native-slice implementation adds `samples/NativeSlices.gs` with a
+non-null baseline. Its reviewed diff adds only that sample; every pre-existing
+hash remains unchanged. The emitted stereo witness also independently verifies
+caller-visible value-frame writes and zero allocations in its warmed-up loop.
