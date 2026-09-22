@@ -400,6 +400,25 @@ public class IncrementDecrementTests
         Assert.Equal(1222, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void MemberIncrement_InvalidatesMemberPathNarrowing()
+    {
+        // The desugared `b.Other++` write must drop member-path smart casts
+        // exactly like the equivalent `b.Other = b.Other + 1` form.
+        var diagnostics = Bind("""
+            open class Animal { var Name string }
+            class Dog : Animal { func Bark() string { return "woof" } }
+            class Box { var Other int32 = 0 let Pet Animal }
+            func Run(b Box) string {
+                if b.Pet !is Dog { return "" }
+                b.Other++
+                return b.Pet.Bark()
+            }
+            """);
+
+        Assert.Contains(diagnostics, d => d.Message.Contains("Bark", System.StringComparison.Ordinal));
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

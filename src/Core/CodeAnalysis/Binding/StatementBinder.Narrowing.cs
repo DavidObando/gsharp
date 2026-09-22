@@ -362,6 +362,21 @@ internal sealed partial class StatementBinder
             case AssignmentExpressionSyntax a:
                 assigned.Add(a.IdentifierToken.ValueText);
                 break;
+
+            // Issue #4350: `x++` / `obj.f++` desugar to a compound-assignment
+            // node, so the write must invalidate the same narrowings as the
+            // equivalent `x = x + 1` / `obj.f = obj.f + 1` forms.
+            case EventSubscriptionExpressionSyntax { IsIncrementDecrement: true } inc:
+                if (inc.LeftHandSide is NameExpressionSyntax incName)
+                {
+                    assigned.Add(incName.IdentifierToken.ValueText);
+                }
+                else
+                {
+                    mayMutateMemberPaths = true;
+                }
+
+                break;
             case MultiAssignmentStatementSyntax m:
                 foreach (var t in m.Targets)
                 {
