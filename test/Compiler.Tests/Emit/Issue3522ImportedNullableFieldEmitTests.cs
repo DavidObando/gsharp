@@ -409,10 +409,17 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             context.GetField("Values")!,
             outerNullable: true,
             elementNullable: true);
+        // ADR-0186 step 3: the OBLIVIOUS row is the one cell the flip moves.
+        // `Issue3522.Metadata.ObliviousFields` has no nullable metadata at
+        // all, so both its array position and its element now read as the
+        // platform type `T!` rather than `T?`. The two annotated rows above
+        // and the non-null rows below are untouched, which is what keeps this
+        // an amendment to one cell rather than a weakening of the fixture.
         AssertArray(
             oblivious.GetField("Values")!,
             outerNullable: true,
-            elementNullable: true);
+            elementNullable: true,
+            oblivious: true);
         AssertArray(
             direct.GetField("NonNullArray")!,
             outerNullable: false,
@@ -915,15 +922,40 @@ public sealed class Issue3522ImportedNullableFieldEmitTests
             : (byte)attribute.ConstructorArguments.Single().Value!;
     }
 
-    private static void AssertArray(FieldInfo field, bool outerNullable, bool elementNullable)
+    /// <summary>
+    /// Asserts the decoded shape of an imported array field.
+    /// </summary>
+    /// <param name="field">The imported field.</param>
+    /// <param name="outerNullable">Whether the array position admits nil.</param>
+    /// <param name="elementNullable">Whether the element position admits nil.</param>
+    /// <param name="oblivious">
+    /// ADR-0186 step 3: whether the declaration says <em>nothing</em> about
+    /// these positions, in which case "admits nil" is spelled
+    /// <see cref="PlatformTypeSymbol"/> rather than
+    /// <see cref="NullableTypeSymbol"/>. The distinction is the entire
+    /// content of the flip, and it is a parameter rather than a widened
+    /// assertion so that an annotated-nullable row cannot go green on a
+    /// platform type or the other way round.
+    /// </param>
+    private static void AssertArray(
+        FieldInfo field,
+        bool outerNullable,
+        bool elementNullable,
+        bool oblivious = false)
     {
         var fieldType = ClrNullability.GetFieldTypeSymbol(field);
         var array = outerNullable
             ? Assert.IsType<NullabilityAnnotatedTypeSymbol>(
-                Assert.IsType<NullableTypeSymbol>(fieldType).UnderlyingType)
+                oblivious
+                    ? Assert.IsType<PlatformTypeSymbol>(fieldType).UnderlyingType
+                    : Assert.IsType<NullableTypeSymbol>(fieldType).UnderlyingType)
             : Assert.IsType<NullabilityAnnotatedTypeSymbol>(fieldType);
         var element = array.GetTypeArgumentSymbolForClrType(array.ClrType!.GetElementType());
-        if (elementNullable)
+        if (elementNullable && oblivious)
+        {
+            Assert.Same(TypeSymbol.String, Assert.IsType<PlatformTypeSymbol>(element).UnderlyingType);
+        }
+        else if (elementNullable)
         {
             var nullable = Assert.IsType<NullableTypeSymbol>(element);
             Assert.Same(TypeSymbol.String, nullable.UnderlyingType);

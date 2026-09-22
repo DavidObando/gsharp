@@ -3686,7 +3686,28 @@ public sealed class Conversion
             // `C[T] -> C[T!]` and `C[T?] -> C[T!]`: both would let §3's
             // `nil -> T!` row deposit a nil into a container another holder
             // reads as non-null.
-            return PlatformArgumentRelation.Illegal;
+            //
+            // But ONLY when the two positions are the same underlying type
+            // differing in reference nullability — which is the only thing
+            // rule 3 is about. Without the equivalence test this arm answered
+            // "illegal" for any pair whose target happened to be
+            // platform-wrapped, including pairs it has no opinion on at all,
+            // and the sibling arm above already tests exactly this before
+            // admitting the legal direction. The asymmetry was the defect.
+            //
+            // Measured: `Issue2471DictionaryIndexerSameCompilationTypeTests`
+            // reported *"Cannot convert type 'List[Payload2471]' to
+            // 'List[object!]!'"*. `Payload2471` is a SAME-COMPILATION type,
+            // so its closed generic erases to `List<object>` and the
+            // conversion is the ordinary erased-identity one the rest of
+            // `ClassifyCore` already admits; `Payload2471` and `object` are
+            // simply different types, which is `Unrelated` — "this arm cannot
+            // decide" — not `Illegal`.
+            return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                UnwrapPlatformAndNullable(a) ?? a!,
+                targetPlatform.UnderlyingType)
+                ? PlatformArgumentRelation.Illegal
+                : PlatformArgumentRelation.Unrelated;
         }
 
         return RelateNestedPlatformArguments(

@@ -6705,6 +6705,42 @@ internal sealed class MemberLookup
             return SameTypeSymbol(a, nullableReferenceB.UnderlyingType);
         }
 
+        // ADR-0186 §1: `T!` and `T` are ONE runtime type, so a question about
+        // type SAMENESS must see through the platform wrapper exactly as the
+        // reference-`T?` arms above do. §2 excludes value types, so there is
+        // no `IsAnyValueTypeNullable`-style guard to mirror.
+        //
+        // Measured, and the symptom was overload SELECTION rather than a
+        // conversion: `NestedKeyBox[T]` declares both `this[IEnumerable[T]]`
+        // and `this[List[object]]`, and `box[keys]` with a
+        // `List[Payload2471]` must pick the first
+        // (`Issue2471DictionaryIndexerSameCompilationTypeTests`). The
+        // `List[object]` candidate is rejected by
+        // `TryClassifyConstructedGenericConversion`'s invariant arm asking
+        // `SameTypeSymbol(Payload2471, <the argument>)`. With
+        // `--nullability=enabled` the argument is `object?`, the arm above
+        // unwraps it, and the answer is no. With the oblivious library read
+        // as `List[object!]` there was no such arm, the comparison fell
+        // through to the `ClrType` probe at the bottom — where a
+        // same-compilation `Payload2471` erases to `System.Object`, the
+        // platform wrapper's own relayed `ClrType` — and answered YES. The
+        // wrong indexer won, and only then did its parameter fail to convert,
+        // which is why the diagnostic named a conversion.
+        if (a is PlatformTypeSymbol platformA && b is PlatformTypeSymbol platformB)
+        {
+            return SameTypeSymbol(platformA.UnderlyingType, platformB.UnderlyingType);
+        }
+
+        if (a is PlatformTypeSymbol platformReferenceA)
+        {
+            return SameTypeSymbol(platformReferenceA.UnderlyingType, b);
+        }
+
+        if (b is PlatformTypeSymbol platformReferenceB)
+        {
+            return SameTypeSymbol(a, platformReferenceB.UnderlyingType);
+        }
+
         // Constructed user generics are interned (StructSymbol.Construct uses a
         // cache), so reference identity usually holds; fall back to a
         // structural comparison by definition + ordered type arguments.

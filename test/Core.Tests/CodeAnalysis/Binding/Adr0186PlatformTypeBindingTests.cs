@@ -386,39 +386,83 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
-    /// ADR-0186 §4 inside an expression-tree lambda: rejected, not silently
-    /// dropped.
+    /// ADR-0186 §4 inside an expression-tree lambda: the check is
+    /// <b>erased</b>, and the lambda compiles.
     /// <para>
-    /// <c>ExpressionTreeLowerer</c> erases every <c>NullAssertion</c> node,
-    /// on the reasoning that over a reference type <c>!!</c> is pure static
-    /// annotation with nothing to emit. That is true of a real <c>T?</c> and
-    /// false of a platform operand, whose assertion lowers to an actual
-    /// <c>dup; brtrue; pop; newobj; throw</c> — so a <c>T! -&gt; T</c>
-    /// boundary crossed inside such a lambda produced no check, no message
-    /// and no diagnostic.
+    /// <b>This reverses what step 2 shipped, deliberately.</b> Step 2
+    /// rejected a platform <c>!!</c> here (GS0473), reasoning that
+    /// <c>ExpressionTreeLowerer</c> erases every <c>NullAssertion</c> node on
+    /// the grounds that a reference <c>!!</c> is pure static annotation —
+    /// true of a real <c>T?</c>, false of a platform operand, whose assertion
+    /// lowers to a real <c>dup; brtrue; pop; newobj; throw</c>. Behind an
+    /// off-by-default flag, refusing was the conservative choice.
     /// </para>
     /// <para>
-    /// Rejected rather than represented, following the precedent of the
-    /// nullable value-type case in the same validator:
-    /// <c>System.Linq.Expressions</c> has no throw-on-nil-and-yield form that
-    /// preserves G#'s contract.
+    /// At step 3 it became a build break on ordinary code: any oblivious
+    /// reference member touched inside a LINQ-to-<c>IQueryable</c> lambda
+    /// inserts a §4 receiver check, so
+    /// <c>Issue2661ExpressionTreeNullablePipelineTests</c>' <c>.Where(b -&gt;
+    /// b.Conversion.AccountId == …)</c> stopped compiling. Two things settle
+    /// it. It is <b>not a regression</b> — under ADR-0136 that receiver is
+    /// <c>T?</c>, cs2gs writes an explicit <c>!!</c>, and the same lowering
+    /// erases it, so there is no check inside an expression tree today
+    /// either. And it is a case the ADR already classifies: an
+    /// expression-tree lambda is handed to <c>System.Linq.Expressions</c> as
+    /// <em>data</em>, never lowered to IL by gsc, so there is no instruction
+    /// stream for §4's check to live in — <b>ADR-0186 open question 13</b>'s
+    /// category, where "there is no expression at which a <c>T! → T</c> check
+    /// could be inserted" and Kotlin has the identical hole. A nil still
+    /// fails, from inside the compiled tree, with the CLR's own unattributed
+    /// <c>NullReferenceException</c>; what is lost is G#'s message.
+    /// </para>
+    /// <para>
+    /// The author-written and compiler-inserted spellings behave the same,
+    /// which is why this test uses the explicit one: §6 calls a user
+    /// <c>!!</c> on a <c>T!</c> "the explicit spelling of a conversion the
+    /// compiler would otherwise perform implicitly at the same point", so
+    /// rejecting one while erasing the other would be a distinction the model
+    /// does not make. Tracked as <b>#4352</b>.
     /// </para>
     /// </summary>
+    /// <param name="body">The probe body.</param>
+    [Theory]
+
+    // The explicit spelling.
+    [InlineData("    let e Expression[Func[string]] = () -> Ob.Value()!!\n    Console.WriteLine(e)")]
+
+    // The inserted one: an oblivious receiver inside the lambda, which is the
+    // shape the cs2gs pipeline actually hit.
+    [InlineData("    let e Expression[Func[string]] = () -> Ob.Nest2().Prop\n    Console.WriteLine(e)")]
+    public void Section4_APlatformCoercion_InsideAnExpressionTreeLambda_Is_Erased(string body)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes, extraDeclarations: string.Empty);
+
+        Assert.True(compiled.Success, Describe(compiled));
+        Assert.DoesNotContain(compiled.Diagnostics, d => d.Id == "GS0473");
+    }
+
+    /// <summary>
+    /// The control that keeps the erasure above narrow: the validator's
+    /// <em>other</em> rejection — a <c>!!</c> stripping a nullable VALUE type
+    /// (issue #3349) — is untouched. <c>T? → T</c> over a value type is a
+    /// real CLR conversion with no <c>System.Linq.Expressions</c>
+    /// counterpart that preserves G#'s throw-on-nil contract, so it stays an
+    /// error. ADR-0186 §2 excludes value types from this ADR entirely.
+    /// </summary>
     [Fact]
-    public void Section4_APlatformCoercion_InsideAnExpressionTreeLambda_Is_Rejected()
+    public void Section4_ANullableValueTypeAssertion_InAnExpressionTreeLambda_Is_Still_Rejected()
     {
         using var world = new World();
 
         var compiled = world.Compile(
-            "    let e Expression[Func[string]] = () -> Ob.Value()!!\n    Console.WriteLine(e)",
+            "    let n int32? = 1\n    let e Expression[Func[int32]] = () -> n!!\n    Console.WriteLine(e)",
             NullabilityMode.PlatformTypes,
             extraDeclarations: string.Empty);
 
         Assert.False(compiled.Success, Describe(compiled));
-        Assert.Contains(
-            compiled.Diagnostics,
-            d => d.Id == "GS0473"
-                && d.Message.Contains("nullability-oblivious", StringComparison.Ordinal));
+        Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0473");
     }
 
     /// <summary>

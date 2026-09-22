@@ -160,28 +160,51 @@ internal static class ExpressionTreeRestrictionValidator
                 {
                     diagnostics.ReportExpressionTreeUnsupported(LocationOf(unary.Syntax), "an unsafe pointer operation");
                 }
-                else if (unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion
-                    && unary.Operand.Type is PlatformTypeSymbol)
-                {
-                    // ADR-0186 §4: a null assertion over a PLATFORM operand is
-                    // the one reference-typed `!!` that is not pure static
-                    // annotation. It lowers to a real
-                    // `dup; brtrue; pop; newobj; throw`, whether the author
-                    // wrote it or §4 inserted it at a `T! -> T` coercion, and
-                    // `ExpressionTreeLowerer.BuildUnaryExpression` erases every
-                    // `NullAssertion` node on the reasoning directly below —
-                    // correct for a real `T?`, wrong here. Erased, the boundary
-                    // silently disappears inside an expression-tree lambda: no
-                    // check, no message, no diagnostic.
-                    //
-                    // Rejected rather than represented. `System.Linq.Expressions`
-                    // has no throw-on-nil-and-yield-the-value form that
-                    // preserves G#'s contract, which is exactly why the nullable
-                    // value-type case below is rejected too rather than lowered.
-                    diagnostics.ReportExpressionTreeUnsupported(
-                        LocationOf(unary.Syntax),
-                        "a nullability-oblivious value used where a non-null type is required");
-                }
+
+                // ADR-0186 §4 inside an expression-tree lambda: the check is
+                // ERASED, with the reference-`T?` assertion directly below,
+                // and this is a deliberate reversal of what step 2 shipped.
+                //
+                // Step 2 REJECTED a platform `!!` here, reasoning that it is
+                // the one reference-typed assertion which is not pure static
+                // annotation — it lowers to a real
+                // `dup; brtrue; pop; newobj; throw` — so erasing it makes the
+                // boundary silently disappear. That reasoning is still
+                // correct as far as it goes, and behind an off-by-default
+                // flag rejecting was the conservative choice. At step 3 it
+                // became a build break on ordinary code: any oblivious
+                // reference member touched inside a LINQ-to-`IQueryable`
+                // lambda inserts a §4 receiver check and was refused outright
+                // (`Issue2661ExpressionTreeNullablePipelineTests`, on
+                // `b.Conversion.AccountId` inside a `.Where(...)`).
+                //
+                // Two things settle it.
+                //
+                // FIRST, it is not a regression. Under ADR-0136 that same
+                // receiver is `T?` and cs2gs writes an explicit `!!`, which
+                // the arm below erases for exactly the same reason. There is
+                // no check inside an expression-tree lambda today either; the
+                // only thing rejection added was refusing to compile.
+                //
+                // SECOND, it is a case the ADR already classifies and
+                // accepts. An expression-tree lambda is not lowered to IL by
+                // gsc at all — it is handed to `System.Linq.Expressions` as
+                // data — so there is no instruction stream for §4's lowering
+                // to live in. That is ADR-0186 OPEN QUESTION 13's category
+                // verbatim: "signature relations, not value conversions, so
+                // there is no expression at which a `T! -> T` check could be
+                // inserted ... Kotlin has the identical hole." A nil still
+                // fails, from inside the compiled tree, with the CLR's own
+                // unattributed `NullReferenceException` — what is lost is
+                // G#'s message, which is precisely the cost open question 13
+                // records.
+                //
+                // The author-written and compiler-inserted spellings are
+                // treated the SAME, deliberately: §6 calls a user `!!` on a
+                // `T!` "the explicit spelling of a conversion the compiler
+                // would otherwise perform implicitly at the same point", so
+                // rejecting one while erasing the other would be a
+                // distinction the model does not make.
                 else if (unary.Op.Kind == BoundUnaryOperatorKind.NullAssertion
                     && IsNullableValueTypeAssertion(unary))
                 {
