@@ -248,6 +248,22 @@ public class IncrementDecrementTests
         Assert.Equal(4, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void ParenthesizedPointerPostfixIncrementMutatesPointee()
+    {
+        var result = EmittedOracle.Evaluate("""
+            unsafe func Run() int32 {
+                var value = 10
+                let pointer = &value
+                let previous = (*pointer)++
+                return previous * 100 + value
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1011, result.ReadGlobals()["answer"]);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

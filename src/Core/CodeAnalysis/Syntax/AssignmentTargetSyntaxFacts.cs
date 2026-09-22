@@ -14,6 +14,17 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// </summary>
 internal static class AssignmentTargetSyntaxFacts
 {
+    /// <summary>Removes grouping parentheses from an assignment target.</summary>
+    public static ExpressionSyntax UnwrapParentheses(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+        {
+            expression = parenthesized.Expression;
+        }
+
+        return expression;
+    }
+
     /// <summary>
     /// Builds the existing single-assignment syntax node for a parsed target.
     /// </summary>
@@ -117,13 +128,12 @@ internal static class AssignmentTargetSyntaxFacts
 
     /// <summary>Returns whether an expression's outermost operation is a call.</summary>
     public static bool IsCallResult(ExpressionSyntax expression)
-        => expression switch
+        => UnwrapParentheses(expression) switch
         {
             CallExpressionSyntax => true,
             AccessorExpressionSyntax { RightPart: CallExpressionSyntax } => true,
             BaseClassCallExpressionSyntax => true,
             BaseInterfaceCallExpressionSyntax { IsPropertyAccess: false } => true,
-            ParenthesizedExpressionSyntax parenthesized => IsCallResult(parenthesized.Expression),
             _ => false,
         };
 

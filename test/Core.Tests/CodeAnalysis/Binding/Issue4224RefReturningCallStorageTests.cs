@@ -201,6 +201,31 @@ public class Issue4224RefReturningCallStorageTests
         Assert.Equal((byte)1, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void WritableRefReturningCall_IncrementUsesUserCompoundOperator()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Bag {
+                var total int32
+                prop Total int32 { get { return total } }
+                func operator +=(amount int32) { total = total + amount }
+            }
+            func Forward(ref value Bag) ref Bag {
+                calls++
+                return ref value
+            }
+            func Run() int32 {
+                var bag = Bag()
+                let previous = Forward(ref bag)++
+                return bag.Total * 10 + calls
+            }
+            var calls = 0
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.ReadGlobals()["answer"]);
+    }
+
     [Theory]
     [InlineData("At(values, 0) = await Task.FromResult(1)")]
     [InlineData("At(values, 0) += await Task.FromResult(1)")]

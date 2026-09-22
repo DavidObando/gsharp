@@ -400,7 +400,8 @@ public partial class Parser
             null);
 
         ExpressionSyntax write;
-        var exactPostfix = operand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
+        var unwrappedOperand = AssignmentTargetSyntaxFacts.UnwrapParentheses(operand);
+        var exactPostfix = unwrappedOperand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
             || AssignmentTargetSyntaxFacts.IsCallResult(operand);
         if (exactPostfix)
         {

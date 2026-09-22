@@ -2604,7 +2604,8 @@ internal sealed partial class ExpressionBinder
 
         var declaration = new BoundVariableDeclaration(syntax, tempVar, pointer);
         var tempRef = new BoundVariableExpression(null, tempVar);
-        BoundExpression indirectRead = new BoundDereferenceExpression(null, tempRef);
+        BoundExpression indirectTarget = new BoundDereferenceExpression(null, tempRef);
+        BoundExpression indirectRead = indirectTarget;
         var previousValue = CapturePostfixCompoundValue(
             syntax.ReturnsPreviousValue,
             syntax,
@@ -2624,6 +2625,34 @@ internal sealed partial class ExpressionBinder
                 syntax.Value.Location,
                 "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
             return new BoundErrorExpression(syntax);
+        }
+
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind,
+            indirectTarget,
+            rhsBound,
+            syntax.Value.Location);
+        if (userCompound != null)
+        {
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            statements.Add(declaration);
+            if (syntax.ReturnsPreviousValue)
+            {
+                return FinishPostfixCompoundAssignment(
+                    syntax,
+                    statements,
+                    previousValueDeclaration,
+                    previousValue,
+                    userCompound);
+            }
+
+            if (syntax.IsIncrementDecrement)
+            {
+                statements.Add(new BoundExpressionStatement(syntax, userCompound));
+                return new BoundBlockExpression(syntax, statements.ToImmutable(), indirectTarget);
+            }
+
+            return new BoundBlockExpression(syntax, statements.ToImmutable(), userCompound);
         }
 
         // issue #1226 / #1246: the right operand of the compound operation
@@ -2673,7 +2702,8 @@ internal sealed partial class ExpressionBinder
         string? incrementOperatorText = null)
     {
         pointeeType = TypeSymbol.Error;
-        if (target is UnaryExpressionSyntax dereference
+        ExpressionSyntax unwrappedTarget = AssignmentTargetSyntaxFacts.UnwrapParentheses(target);
+        if (unwrappedTarget is UnaryExpressionSyntax dereference
             && dereference.OperatorToken.Kind == SyntaxKind.StarToken)
         {
             var pointer = BindExpression(dereference.Operand);
@@ -2684,7 +2714,7 @@ internal sealed partial class ExpressionBinder
 
             if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
             {
-                pointer = BorrowManagedReference(pointer, target);
+                pointer = BorrowManagedReference(pointer, unwrappedTarget);
                 if (pointer is BoundErrorExpression)
                 {
                     return pointer;
@@ -2743,7 +2773,7 @@ internal sealed partial class ExpressionBinder
 
         if (RefCapabilities.IsReadOnlyStorage(storage))
         {
-            if (target is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
+            if (unwrappedTarget is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
                 || AssignmentTargetSyntaxFacts.IsCallResult(target))
             {
                 Diagnostics.ReportManagedReference(
