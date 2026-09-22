@@ -247,6 +247,55 @@ public sealed class Conversion
         => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Widening;
 
     /// <summary>
+    /// ADR-0186 §3, asked about a whole <b>container pair</b> rather than a
+    /// single argument position: does the rule speak to
+    /// <paramref name="source"/> to <paramref name="target"/> at all, and if
+    /// so does it admit the conversion.
+    /// <para>
+    /// This is the guarded entry <see cref="ClassifyCore"/> itself uses, and
+    /// it is the one an outside caller wants. The two per-argument
+    /// predicates above assume their container has <b>already</b> been matched
+    /// — asked about the containers themselves they have no shape guard, so an
+    /// ordinary upcast such as <c>[]string! -&gt; object</c>, whose two sides
+    /// have no corresponding argument positions to compare, comes back
+    /// <c>Illegal</c>. This entry declines for such a pair, and for a function
+    /// shape, a value-type container and a pair whose platform-ness already
+    /// agrees; it answers only for rule 3's three illegal directions and rule
+    /// 2's one permitted widening.
+    /// </para>
+    /// <para>
+    /// Exposed for <c>MemberLookup</c>'s symbolic-indexer applicability check,
+    /// which has to ask it <b>before</b> its own same-type fast path — that
+    /// helper looks through the platform wrapper by design, which is the right
+    /// answer for member hiding and would otherwise pre-empt this rule with
+    /// <em>identity</em>.
+    /// </para>
+    /// </summary>
+    /// <param name="source">The source type.</param>
+    /// <param name="target">The target type.</param>
+    /// <param name="isImplicit">
+    /// When this returns <see langword="true"/>: whether the conversion is
+    /// admitted (rule 2's widening) rather than rejected (rule 3).
+    /// </param>
+    /// <returns>
+    /// <see langword="true"/> when ADR-0186 §3 decides this pair.
+    /// </returns>
+    internal static bool TryRelatePlatformContainer(
+        TypeSymbol? source,
+        TypeSymbol? target,
+        out bool isImplicit)
+    {
+        if (TryClassifyPlatformTypeArgumentMismatch(source, target, out var conversion))
+        {
+            isImplicit = conversion.IsImplicit;
+            return true;
+        }
+
+        isImplicit = false;
+        return false;
+    }
+
+    /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
     /// to keep member conversion non-recursive.
     /// </summary>

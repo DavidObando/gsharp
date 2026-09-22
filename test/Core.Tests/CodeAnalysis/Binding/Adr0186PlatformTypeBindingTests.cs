@@ -68,6 +68,10 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             public static List<string> NilStrings() => null;
 
+            // A non-nil `List<string>`, for probes about the CONTAINER's
+            // element nullability rather than about the container being nil.
+            public static List<string> Strings() => new List<string> { "a", null };
+
             public static Nested NilNest() => null;
 
             public static Nested Nest2() => new Nested();
@@ -138,6 +142,49 @@ public sealed class Adr0186PlatformTypeBindingTests
                 a = "a";
                 b = "b";
             }
+        }
+
+        #nullable enable
+
+        // ADR-0186 §3 at an indexer PARAMETER. Annotated on purpose: an
+        // oblivious `List<string>` parameter would project to the same
+        // `List[string!]!` the argument already has, and a rule about two
+        // DIFFERENT nullabilities cannot be witnessed by a pair that agrees.
+        //
+        // The set-only `int` indexer is the load-bearing part. Index
+        // resolution only takes the symbolic path when some argument has no
+        // `ClrType` or when the type has a set-only indexer, and a
+        // `List[string!]!` argument always has a `ClrType` — so without this
+        // member the access is resolved by reflection against the erased CLR
+        // shape, where `List<string>` is `List<string>` and neither rule is
+        // consulted at all. It is also what makes an empty applicable set
+        // final rather than a fallback to that erased retry.
+        public class ExactKeys
+        {
+            public string this[List<string> keys] => "exact";
+
+            public int this[int slot] { set { } }
+        }
+
+        public class NilableKeys
+        {
+            public string this[List<string?> keys] => "nilable";
+
+            public int this[int slot] { set { } }
+        }
+
+        // The same `List<string>` parameter, but now with a legal competitor.
+        // Applicability and the later argument conversion are two different
+        // steps, and only SELECTION can tell them apart: an over-accepted
+        // `List[string]` candidate wins the ranking and takes the whole access
+        // down with it, where rejecting it correctly leaves `object` to bind.
+        public class OverloadedKeys
+        {
+            public string this[List<string> keys] => "exact";
+
+            public string this[object any] => "object";
+
+            public int this[int slot] { set { } }
         }
         """;
 
@@ -1159,6 +1206,89 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.False(GsConversion.IsPlatformArgumentIllegal(platformObject, nilable));
         Assert.False(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, platformObject));
         Assert.False(GsConversion.IsPlatformArgumentWidening(platformObject, nilable));
+    }
+
+    /// <summary>
+    /// ADR-0186 §3 at a symbolic indexer parameter, <b>end to end</b> — and
+    /// the fast path it has to be asked before.
+    /// <para>
+    /// <c>ClassifySymbolicIndexerConversion</c> opened with
+    /// <c>SameTypeSymbol</c>, which looks through a platform wrapper by design
+    /// (member hiding needs <c>T!</c> and <c>T</c> to be one CLR signature —
+    /// making them distinct there collapsed <c>Issue2525</c>'s interface
+    /// diamond into GS0266). So it answered <em>identity</em> for
+    /// <c>List[string!]</c> against <c>List[string]</c> and returned before
+    /// the rule-3 guard below it ever ran: the aliasing conversion the guard
+    /// exists to reject stayed applicable, and rule 2's
+    /// <c>List[string!] -&gt; List[string?]</c> — a permitted
+    /// <em>non-identity</em> widening — was mis-ranked as identity, which the
+    /// candidate ranker prefers. Copilot review finding on the flip PR.
+    /// </para>
+    /// <para>
+    /// The question is now asked through
+    /// <c>Conversion.TryRelatePlatformContainer</c>, the same guarded entry
+    /// the general classifier on the last line of that method already uses —
+    /// so this is a hoist above the fast path, not a new rule — and
+    /// deliberately not through the per-<em>argument</em> predicates one
+    /// method down, which assume a container that has already been matched
+    /// and would answer <c>Illegal</c> for an ordinary upcast such as
+    /// <c>[]string! -&gt; object</c>.
+    /// </para>
+    /// <para>
+    /// <b>Why this fixture and not a simpler one.</b> The symbolic path is
+    /// entered only when an argument has no <c>ClrType</c> or the receiver
+    /// type has a set-only indexer, and a <c>List[string!]</c> argument always
+    /// has a <c>ClrType</c> — an earlier attempt at this test went through
+    /// reflection against the erased CLR shape instead and passed with the fix
+    /// mutated out. Hence <c>ExactKeys</c>/<c>NilableKeys</c>' set-only
+    /// <c>int</c> member, which also makes an empty applicable set final
+    /// rather than a fallback to that erased retry. Mutation witness:
+    /// removing the hoist compiles the second probe, which is the aliasing
+    /// hole.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Section3_SymbolicIndexerApplicability_Asks_TheRule_Before_TheSameTypeFastPath()
+    {
+        using var world = new World();
+
+        // Rule 2: `List[string!]! -> List[string?]` is the one container
+        // conversion the ADR permits, and it must stay applicable — a guard
+        // that rejected everything platform-shaped would redden here.
+        const string permitted = """
+                let keys = Ob.Strings()
+                Console.WriteLine(NilableKeys()[keys])
+            """;
+        Assert.Equal("nilable", world.Run(permitted, NullabilityMode.PlatformTypes).Trim());
+
+        // Rule 3: `List[string!]! -> List[string]` hands a container that
+        // demonstrably holds a nil (`Strings()`' second element) to a
+        // parameter annotated never to. No check can be inserted — the nil is
+        // inside the container, not the reference being converted — so the
+        // only sound answer is that the indexer is not applicable.
+        const string illegal = """
+                let keys = Ob.Strings()
+                Console.WriteLine(ExactKeys()[keys])
+            """;
+        var rejected = world.Compile(illegal, NullabilityMode.PlatformTypes);
+        Assert.False(rejected.Success, "rule 3 must reject C[T!] -> C[T]: " + Describe(rejected));
+
+        // …and the discriminator, because the two probes above pass either
+        // way. Applicability and the later argument conversion are separate
+        // steps, and the conversion step applies rule 3 too — so an
+        // over-accepted candidate is still caught, just one step further on
+        // and with the whole access lost. What only SELECTION can show is a
+        // legal competitor: with the rule asked first, the `List[string]`
+        // indexer is out of the running and `this[object]` binds; with the
+        // same-type fast path first, `List[string]` is reported IDENTICAL —
+        // the best possible match — wins the ranking, and the access then
+        // fails at conversion with GS0155 *"Cannot convert type
+        // 'List[string]!' to 'List[string]'"*, naming one type twice.
+        const string competing = """
+                let keys = Ob.Strings()
+                Console.WriteLine(OverloadedKeys()[keys])
+            """;
+        Assert.Equal("object", world.Run(competing, NullabilityMode.PlatformTypes).Trim());
     }
 
     /// <summary>

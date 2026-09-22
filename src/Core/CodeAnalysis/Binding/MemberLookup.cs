@@ -5956,6 +5956,45 @@ internal sealed class MemberLookup
         TypeSymbol source,
         TypeSymbol target)
     {
+        // ADR-0186 §3, asked BEFORE the same-type fast path, because that
+        // path is what the rule has to override.
+        //
+        // `SameTypeSymbol` unwraps a platform wrapper recursively — it answers
+        // the runtime-SIGNATURE question, which member hiding needs (see its
+        // own comment) — so it reports plain identity for
+        // `List[string!]` against `List[string]`. Left first, it therefore
+        // returned `(implicit, identity)` and the rule-3 guard further down in
+        // `TryClassifyConstructedGenericConversion` was never reached at all;
+        // it also ranked `List[string!] -> List[string?]` as identity, when
+        // rule 2 makes that a permitted NON-identity widening and the
+        // overload ranker prefers identity over implicit.
+        //
+        // Copilot review finding on the flip PR, and the third time this pair
+        // of questions has had to be pulled apart: the fix is always to ask
+        // the platform relation FIRST and let the same-type helper keep its
+        // own meaning, never to change what it means.
+        //
+        // Asked through `TryRelatePlatformContainer` — the same guarded entry
+        // `ClassifyNonStructural` uses on the fall-through below — and NOT
+        // through the per-argument `IsPlatformArgumentIllegal` /
+        // `IsPlatformArgumentWidening` pair used one method down. Those two
+        // answer about a single ARGUMENT position whose container has already
+        // been matched; asked about the containers themselves they have no
+        // shape guard, so `[]string! -> object` (an ordinary upcast, where the
+        // two sides have no corresponding argument positions at all) comes
+        // back `Illegal` and an indexer taking `object` stops accepting an
+        // oblivious string array. The container entry declines for such a
+        // pair instead, and speaks only for rule 3's three illegal directions
+        // and rule 2's one permitted widening.
+        //
+        // So this is a hoist, not a new rule: the same question the classifier
+        // on the last line already asks, moved above the fast path that was
+        // pre-empting it.
+        if (Conversion.TryRelatePlatformContainer(source, target, out var platformImplicit))
+        {
+            return (platformImplicit, false);
+        }
+
         if (SameTypeSymbol(source, target))
         {
             return (true, true);
