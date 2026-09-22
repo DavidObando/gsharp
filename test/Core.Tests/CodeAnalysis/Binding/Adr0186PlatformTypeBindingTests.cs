@@ -1718,6 +1718,49 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
+    /// <b>ADR-0186 step 4 — the same tightening on the WRITE path.</b>
+    /// <para>
+    /// <c>CanBindClrInstanceMember</c> has two call sites, and the second is
+    /// <c>BindMemberFieldAssignmentExpression</c>'s CLR-receiver arm. A
+    /// <em>write</em> through an annotated-nullable member is therefore moved
+    /// by the deletion exactly as a read is — and a write is the stronger
+    /// case, since it dereferences a possibly-nil receiver to store into it.
+    /// Pinned separately because a witness that only covered reads would leave
+    /// half the predicate's reach unmeasured.
+    /// </para>
+    /// <para>
+    /// The <c>!!</c> control is the point: the remedy is the ordinary one, so
+    /// the write is asking for a proof, not refusing to compile.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Step4_AWriteThroughAnAnnotatedNullableClrProperty_Is_Reported()
+    {
+        const string unguarded = """
+                let a = Annotated()
+                a.MaybeNumbers.Capacity = 4
+            """;
+        const string guarded = """
+                let a = Annotated()
+                a.MaybeNumbers!!.Capacity = 4
+            """;
+
+        using var world = new World();
+
+        foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
+        {
+            var compiled = world.Compile(unguarded, mode);
+
+            Assert.False(compiled.Success, Describe(compiled));
+            Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0158");
+
+            var guardedCompiled = world.Compile(guarded, mode);
+
+            Assert.True(guardedCompiled.Success, Describe(guardedCompiled));
+        }
+    }
+
+    /// <summary>
     /// <b>ADR-0186 step 4 — why the carve-out is dead code rather than a
     /// safety net.</b>
     /// <para>
