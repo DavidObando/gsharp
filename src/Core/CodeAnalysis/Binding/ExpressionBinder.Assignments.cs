@@ -2519,6 +2519,15 @@ internal sealed partial class ExpressionBinder
             return value;
         }
 
+        if (AssignmentTargetSyntaxFacts.IsCallResult(syntax.Target)
+            && AsyncBoundTreeQueries.HasAwait(value))
+        {
+            Diagnostics.ReportManagedReference(
+                syntax.Value.Location,
+                "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+            return new BoundErrorExpression(syntax);
+        }
+
         value = conversions.BindConversion(syntax.Value.Location, value, pointeeType);
         if (value is BoundErrorExpression)
         {
@@ -2584,6 +2593,15 @@ internal sealed partial class ExpressionBinder
         if (rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error)
         {
             return new BoundErrorExpression(null);
+        }
+
+        if (AssignmentTargetSyntaxFacts.IsCallResult(syntax.Target)
+            && AsyncBoundTreeQueries.HasAwait(rhsBound))
+        {
+            Diagnostics.ReportManagedReference(
+                syntax.Value.Location,
+                "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+            return new BoundErrorExpression(syntax);
         }
 
         // issue #1226 / #1246: the right operand of the compound operation

@@ -201,6 +201,30 @@ public class Issue4224RefReturningCallStorageTests
         Assert.Equal((byte)1, result.ReadGlobals()["answer"]);
     }
 
+    [Theory]
+    [InlineData("At(values, 0) = await Task.FromResult(1)")]
+    [InlineData("At(values, 0) += await Task.FromResult(1)")]
+    public void WritableRefReturningCall_SuspendingRhsIsRejected(string assignment)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System.Threading.Tasks
+            func At(values []int32, index int32) ref int32 {
+                return ref values[index]
+            }
+            async func Bad() int32 {
+                var values = []int32{0}
+                {{assignment}}
+                return values[0]
+            }
+            """);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id == "GS0604"
+                && diagnostic.Message.Contains(
+                    "cannot survive suspension",
+                    System.StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ImportedWritableRefReturningCall_AssignmentAndIncrementMutateReferent()
     {

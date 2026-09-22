@@ -363,16 +363,10 @@ public partial class Parser
     {
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var op = NextToken();
-        var baseOpKind = op.Kind == SyntaxKind.PlusPlusToken ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
-
         var leftName = new NameExpressionSyntax(syntaxTree, identifier);
-        var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, op.Position, SyntaxFacts.GetTextOrEmpty(baseOpKind), null);
-        var oneToken = new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, op.Position, "1", 1);
-        var oneLiteral = new LiteralExpressionSyntax(syntaxTree, oneToken, 1);
-        var binary = new BinaryExpressionSyntax(syntaxTree, leftName, baseOpToken, oneLiteral);
-        var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, op.Position, SyntaxFacts.GetTextOrEmpty(SyntaxKind.EqualsToken), null);
-        var assignment = new AssignmentExpressionSyntax(syntaxTree, identifier, equalsToken, binary);
-        return new ExpressionStatementSyntax(syntaxTree, assignment);
+        return new ExpressionStatementSyntax(
+            syntaxTree,
+            BuildIncrementDecrementExpression(leftName, op, isPrefix: true));
     }
 
     /// <summary>

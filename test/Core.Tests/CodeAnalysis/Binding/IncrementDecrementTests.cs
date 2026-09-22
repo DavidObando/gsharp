@@ -195,6 +195,26 @@ public class IncrementDecrementTests
         Assert.Equal(true, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void PostfixStatementUsesUserCompoundOperator()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Bag {
+                var total int32
+                prop Total int32 { get { return total } }
+                func operator +=(amount int32) { total = total + amount }
+            }
+            func Run() int32 {
+                var bag = Bag()
+                bag++
+                return bag.Total
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.ReadGlobals()["answer"]);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
