@@ -84,14 +84,68 @@ public class IncrementDecrementTests
     public void FloatingPointPropertyPostfixIncrement_ReturnsExactPreviousBoundaryValue()
     {
         var result = EmittedOracle.Evaluate("""
-            class Counter { var Value float64 }
+            class Counter {
+                var backing float64
+                prop Value float64 {
+                    get { return backing }
+                    set { backing = value }
+                }
+            }
             func Run() bool {
-                var counter = Counter{ Value: 9007199254740992.0 }
+                var counter = Counter{}
+                counter.Value = 9007199254740992.0
                 let previous = counter.Value++
                 return previous == 9007199254740992.0 &&
                     counter.Value == 9007199254740992.0
             }
             var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void FloatingPointBarePropertyPostfixIncrement_ReturnsExactPreviousBoundaryValue()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter {
+                var backing float64
+                prop Value float64 {
+                    get { return backing }
+                    set { backing = value }
+                }
+                func Run() bool {
+                    Value = 9007199254740992.0
+                    let previous = Value++
+                    return previous == 9007199254740992.0 &&
+                        Value == 9007199254740992.0
+                }
+            }
+            var answer = Counter{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void MemberPostfixIncrement_EvaluatesReceiverOnce()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Counter { var Value int32 }
+            class Holder {
+                var counter Counter
+                var calls int32
+                func Get() Counter {
+                    calls++
+                    return counter
+                }
+                func Run() bool {
+                    counter = Counter{ Value: 7 }
+                    let previous = Get().Value++
+                    return calls == 1 && previous == 7 && counter.Value == 8
+                }
+            }
+            var answer = Holder{}.Run()
             """);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(true, result.ReadGlobals()["answer"]);

@@ -24,6 +24,7 @@ public sealed class CompoundIndexAssignmentExpressionSyntax : ExpressionSyntax
     /// <param name="target">The parsed indexer access on the left of the operator.</param>
     /// <param name="operatorToken">The compound assignment token (e.g. <c>+=</c>).</param>
     /// <param name="value">The value expression on the right of the operator.</param>
+    /// <param name="returnsPreviousValue">Whether the expression yields the value read before the write.</param>
     public CompoundIndexAssignmentExpressionSyntax(
         SyntaxTree syntaxTree,
         IndexExpressionSyntax target,

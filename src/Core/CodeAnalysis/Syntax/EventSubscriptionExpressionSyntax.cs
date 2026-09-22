@@ -20,6 +20,7 @@ public sealed class EventSubscriptionExpressionSyntax : ExpressionSyntax
     /// <param name="leftHandSide">The accessor chain identifying the event (receiver.Event).</param>
     /// <param name="operatorToken">The <c>+=</c> or <c>-=</c> token.</param>
     /// <param name="value">The handler expression on the right side.</param>
+    /// <param name="returnsPreviousValue">Whether the expression yields the value read before the write.</param>
     public EventSubscriptionExpressionSyntax(
         SyntaxTree syntaxTree,
         ExpressionSyntax leftHandSide,

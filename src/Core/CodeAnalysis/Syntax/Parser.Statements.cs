@@ -376,11 +376,11 @@ public partial class Parser
     }
 
     /// <summary>
-    /// ADR-0126 / issue #1027 / #4350: addressable variables, pointer
-    /// dereferences, and ref-returning calls use the indirect compound path,
-    /// which captures the target once and saves the exact postfix old value.
-    /// Setter-based members/indexers/maps retain their established compound
-    /// assignment paths.
+    /// ADR-0126 / issue #1027 / #4350: pointer dereferences and ref-returning
+    /// calls use the indirect compound path. Bare names and setter-based
+    /// members/indexers/maps retain their established compound paths, whose
+    /// binders distinguish storage from properties and capture the exact
+    /// postfix value.
     /// </summary>
     /// <param name="operand">The already-parsed lvalue operand.</param>
     /// <param name="op">The <c>++</c> or <c>--</c> operator token.</param>
@@ -406,8 +406,7 @@ public partial class Parser
             null);
 
         ExpressionSyntax write;
-        var exactPostfix = operand is NameExpressionSyntax
-            || operand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
+        var exactPostfix = operand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
             || AssignmentTargetSyntaxFacts.IsCallResult(operand);
         if (exactPostfix)
         {
@@ -419,7 +418,16 @@ public partial class Parser
                 returnsPreviousValue: !isPrefix);
         }
 
-        if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out var indexed))
+        if (operand is NameExpressionSyntax)
+        {
+            write = new EventSubscriptionExpressionSyntax(
+                syntaxTree,
+                operand,
+                compoundToken,
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix);
+        }
+        else if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out var indexed))
         {
             write = new CompoundIndexAssignmentExpressionSyntax(
                 syntaxTree,
