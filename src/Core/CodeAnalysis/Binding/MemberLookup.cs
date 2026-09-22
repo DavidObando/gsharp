@@ -6705,40 +6705,45 @@ internal sealed class MemberLookup
             return SameTypeSymbol(a, nullableReferenceB.UnderlyingType);
         }
 
-        // ADR-0186 §1: `T!` and `T` are ONE runtime type, so a question about
-        // type SAMENESS must see through the platform wrapper exactly as the
-        // reference-`T?` arms above do. §2 excludes value types, so there is
-        // no `IsAnyValueTypeNullable`-style guard to mirror.
+        // ADR-0186: two platform wrappers are the same type exactly when their
+        // underlyings are; a platform wrapper and anything else are NOT the
+        // same type, full stop.
         //
-        // Measured, and the symptom was overload SELECTION rather than a
-        // conversion: `NestedKeyBox[T]` declares both `this[IEnumerable[T]]`
-        // and `this[List[object]]`, and `box[keys]` with a
-        // `List[Payload2471]` must pick the first
+        // The asymmetry with the reference-`T?` arms directly above is
+        // deliberate and is the whole content of this arm. `T?` unwraps there
+        // because this compiler treats inner `?` as not affecting identity;
+        // `T!` must NOT, because ADR-0186 §3 rule 3 rejects `C[T!] -> C[T]`
+        // and this helper is the invariant-position identity test that
+        // `TryClassifyConstructedGenericConversion` consults when deciding
+        // whether a symbolic CLR indexer candidate is applicable. Unwrapping
+        // `T!` here would make `SameTypeSymbol(List[string!], List[string])`
+        // true and let a candidate rule 3 rejects win overload selection —
+        // Copilot review finding on this PR, and correct.
+        //
+        // Returning FALSE for a mixed pair is also what fixes the defect this
+        // arm was added for, so the two requirements do not conflict.
+        // `NestedKeyBox[T]` declares both `this[IEnumerable[T]]` and
+        // `this[List[object]]`, and `box[keys]` with a `List[Payload2471]`
+        // must pick the first
         // (`Issue2471DictionaryIndexerSameCompilationTypeTests`). The
-        // `List[object]` candidate is rejected by
-        // `TryClassifyConstructedGenericConversion`'s invariant arm asking
-        // `SameTypeSymbol(Payload2471, <the argument>)`. With
+        // `List[object]` candidate is rejected only if
+        // `SameTypeSymbol(Payload2471, <argument>)` says no. With
         // `--nullability=enabled` the argument is `object?`, the arm above
         // unwraps it, and the answer is no. With the oblivious library read
-        // as `List[object!]` there was no such arm, the comparison fell
+        // as `List[object!]` there was no arm at all, so the comparison fell
         // through to the `ClrType` probe at the bottom — where a
-        // same-compilation `Payload2471` erases to `System.Object`, the
-        // platform wrapper's own relayed `ClrType` — and answered YES. The
-        // wrong indexer won, and only then did its parameter fail to convert,
-        // which is why the diagnostic named a conversion.
+        // same-compilation `Payload2471` erases to `System.Object`, which is
+        // the platform wrapper's own relayed `ClrType` — and answered YES.
+        // The wrong indexer won, and only then did its parameter fail to
+        // convert, which is why the diagnostic named a conversion.
         if (a is PlatformTypeSymbol platformA && b is PlatformTypeSymbol platformB)
         {
             return SameTypeSymbol(platformA.UnderlyingType, platformB.UnderlyingType);
         }
 
-        if (a is PlatformTypeSymbol platformReferenceA)
+        if (a is PlatformTypeSymbol || b is PlatformTypeSymbol)
         {
-            return SameTypeSymbol(platformReferenceA.UnderlyingType, b);
-        }
-
-        if (b is PlatformTypeSymbol platformReferenceB)
-        {
-            return SameTypeSymbol(a, platformReferenceB.UnderlyingType);
+            return false;
         }
 
         // Constructed user generics are interned (StructSymbol.Construct uses a

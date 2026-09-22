@@ -135,6 +135,40 @@ public sealed record BoundBinaryOperator
             return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.Sum, leftType, rightType, TypeSymbol.String);
         }
 
+        // ADR-0186 §6: reference EQUALITY with a platform operand, which is
+        // not a use of the value as non-null and therefore takes no §4 check.
+        //
+        // §4 lists the sites where a check is inserted — a store, an
+        // argument, a return, a `throw`/`lock`/`for … in` subject, a
+        // receiver — and comparing two references is none of them: `==`
+        // never dereferences either side. §6 already says `x == nil` on a
+        // `T!` is free; comparing against a non-nil `string` is the same
+        // operation with a different right-hand side.
+        //
+        // Without this arm the `supportedOperators` lookup missed (it is an
+        // exact `op.LeftType == leftType` match and cannot see through a
+        // wrapper), resolution fell through to the CLR `op_Equality`, and
+        // the platform operand became an ARGUMENT to a non-null parameter —
+        // so §4 inserted a check on a comparison. Measured on
+        // `b.Conversion.AccountId == id` with an oblivious `AccountId`
+        // (`Issue2661ExpressionTreeNullablePipelineTests`), where the
+        // spurious check then made the enclosing expression-tree lambda
+        // unrepresentable and reported GS0473.
+        //
+        // Guarded on "at least one operand is wrapped" for the same reason
+        // as the concatenation arm above: the homogeneous `string == string`
+        // case belongs to the table.
+        if ((syntaxKind == SyntaxKind.EqualsEqualsToken || syntaxKind == SyntaxKind.BangEqualsToken)
+            && IsStringOrNullableString(leftType)
+            && IsStringOrNullableString(rightType)
+            && (leftType is PlatformTypeSymbol || rightType is PlatformTypeSymbol))
+        {
+            var stringEqualityKind = syntaxKind == SyntaxKind.EqualsEqualsToken
+                ? BoundBinaryOperatorKind.Equals
+                : BoundBinaryOperatorKind.NotEquals;
+            return new BoundBinaryOperator(syntaxKind, stringEqualityKind, leftType, rightType, TypeSymbol.Bool);
+        }
+
         // Phase 4.2 / ADR-0020: `==` / `!=` on a `comparable`-constrained type parameter.
         // Allowed only when both operands are the SAME type-parameter symbol whose
         // constraint is `Comparable`. (`any` falls through to "operator undefined".)
