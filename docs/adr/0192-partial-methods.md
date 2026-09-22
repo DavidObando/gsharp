@@ -144,11 +144,17 @@ partial class Validators {
 }
 ```
 
-`partial` composes with every other `func` modifier in **any order** —
-`public partial func`, `partial async func`, `async partial func`,
-`unsafe partial func`, `partial unsafe async func` — matching ADR-0144 §A's
-order-independence for type modifiers. Canonical style places it immediately
-before `func`.
+`partial` joins the order-independent run with `unsafe` and the colour
+modifiers (`async`/`suspend`) — `partial async func`, `async partial func`,
+`unsafe partial func`, `partial unsafe async func` all parse. Accessibility
+and `open`/`override` are **not** part of that run: they must still precede
+it, exactly as they already had to before this ADR (`unsafe public func` is
+rejected the same way `public` after `partial` is). `public partial func` is
+legal only because accessibility comes first, not because `partial` composes
+with accessibility in any order — this is narrower than ADR-0144 §A's
+order-independence for type modifiers, which does fold accessibility into its
+single any-order run. Canonical style places `partial` immediately before
+`func`.
 
 **Where it is allowed:**
 
@@ -167,9 +173,13 @@ Parser touch points: a `PartialModifier` settable token + `IsPartial` on
 `InvalidateCachedSpan()`); a `partial` probe in the class/struct member loop,
 the `shared { }` loop, both interface member loops, and `ParseMember`; and one
 shared `FunctionModifierRunEndsInFunc(offset)` lookahead that the existing
-`unsafe` / `async` / accessibility probes now route through, because those
-probes used to hard-code `Peek(n) == func` and `partial` may now sit between
-them and the keyword.
+`unsafe` / `async` probes now route through, because those probes used to
+hard-code `Peek(n) == func` and `partial` may now sit between them and the
+keyword. The pre-existing accessibility lookahead is unchanged in kind — it
+still runs before that shared loop, not through it — but is extended to skip
+past a `partial`-bearing run so it can still see the member keyword that
+follows (`public partial prop …` must reach the misplaced-modifier rejection,
+not stop dead on `partial`).
 
 `PartialModifier` is deliberately **not** `[SyntaxChildIgnore]`: the token must
 take part in child enumeration so the declaration's `Span` covers it and tree

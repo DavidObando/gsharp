@@ -76,7 +76,7 @@ partial class A {
     [InlineData("unsafe partial func F() int32 { return 1 }")]
     [InlineData("partial unsafe async func F() int32 { return 1 }")]
     [InlineData("public partial func F() int32 { return 1 }")]
-    public void PartialModifier_ComposesWithTheOtherFunctionModifiers_InEitherOrder(string member)
+    public void PartialModifier_ComposesWithUnsafeAndColorModifiers_InEitherOrder(string member)
     {
         var method = SingleMethod($@"package App
 partial class A {{
@@ -421,5 +421,33 @@ partial class A {
         var tree = Parse(source);
         var type = tree.Root.Members.OfType<StructDeclarationSyntax>().Single();
         return type.Methods.Single();
+    }
+
+    [Fact]
+    public void PartialModifier_BeforeAccessibility_IsRejectedTheSameWayUnsafeAlreadyIs()
+    {
+        // Copilot review round 3, finding 1: ADR-0192 §A's "every other func
+        // modifier in any order" overclaimed. `partial` only joins the
+        // order-independent run with `unsafe` and the colour modifiers;
+        // accessibility (and `open`/`override`) must still precede that run,
+        // exactly as they already had to before this ADR — `unsafe public
+        // func` (no `partial` involved at all) cascades in the same way on
+        // unmodified `main`. `partial public func` is not a regression this
+        // ADR introduces; it is the pre-existing accessibility-must-lead
+        // constraint, unchanged.
+        var withoutPartial = ParseDiagnostics(@"package App
+class A {
+    unsafe public func F() int32 { return 1 }
+}
+");
+        var withPartial = ParseDiagnostics(@"package App
+partial class A {
+    partial public func F() int32 { return 1 }
+}
+");
+
+        Assert.Contains(withoutPartial, d => d.Id == "GS0288");
+        Assert.Contains(withPartial, d => d.Id == "GS0288");
+        Assert.Contains(withPartial, d => d.Id == "GS0607");
     }
 }

@@ -510,11 +510,11 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>
     /// Gets or sets the method declarations declared inside the body (Phase
-    /// 3.B.3 sub-step 2b — classes only). Empty for struct types and for
-    /// bodyless declarations. Settable since ADR-0192 so
-    /// <c>PartialMethodMerger</c> can replace the list with one in which each
-    /// partial method's declaring and implementing parts have been collapsed
-    /// into a single declaration — the same in-place normalization
+    /// 3.B.3 sub-step 2b). Both classes and structs may declare methods;
+    /// empty only when the type declares none, or has no body. Settable since
+    /// ADR-0192 so <c>PartialMethodMerger</c> can replace the list with one in
+    /// which each partial method's declaring and implementing parts have been
+    /// collapsed into a single declaration — the same in-place normalization
     /// <see cref="NestedTypes"/> already receives from
     /// <c>PartialTypeMerger</c>.
     /// </summary>
