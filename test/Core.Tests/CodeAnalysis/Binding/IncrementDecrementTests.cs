@@ -215,6 +215,39 @@ public class IncrementDecrementTests
         Assert.Equal(1, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void IncrementPrefersDerivedValueMemberOverInheritedEvent()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base {
+                event Value () -> void
+            }
+            class FieldDerived : Base {
+                var Value int32
+                func Run() int32 {
+                    Value++
+                    this.Value++
+                    return Value
+                }
+            }
+            class PropertyDerived : Base {
+                var backing int32
+                prop Value int32 {
+                    get { return backing }
+                    set { backing = value }
+                }
+                func Run() int32 {
+                    Value++
+                    this.Value++
+                    return Value
+                }
+            }
+            var answer = FieldDerived{}.Run() + PropertyDerived{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4, result.ReadGlobals()["answer"]);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

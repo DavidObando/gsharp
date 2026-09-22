@@ -1446,7 +1446,10 @@ internal sealed partial class ExpressionBinder
         // this bound node must carry the *declaring* type `t` as its owner. Collapsing
         // into TryGetEvent(receiverStruct, …) would change the owner from the declaring
         // base to the derived type, breaking bound-node parity. Left as a manual walk.
-        if (isEventOperator && function?.ThisParameter != null && function.ReceiverType is StructSymbol receiverStruct)
+        if (isEventOperator
+            && function?.ThisParameter != null
+            && function.ReceiverType is StructSymbol receiverStruct
+            && !SourceValueMemberPrecedesInheritedEvent(receiverStruct, name))
         {
             foreach (var t in receiverStruct.GetHierarchy())
             {
@@ -1732,6 +1735,25 @@ internal sealed partial class ExpressionBinder
             previousDeclaration,
             previousValue,
             assignment);
+    }
+
+    private static bool SourceValueMemberPrecedesInheritedEvent(StructSymbol type, string name)
+    {
+        foreach (var level in type.GetHierarchy())
+        {
+            if (level.Events.Any(candidate => candidate.Name == name))
+            {
+                return false;
+            }
+
+            if (level.TryGetField(name, out _)
+                || level.Properties.Any(candidate => !candidate.IsIndexer && candidate.Name == name))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

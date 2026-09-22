@@ -294,6 +294,25 @@ internal sealed partial class ExpressionBinder
                 eventName = GetTupleFieldName(eventName, tupleType);
             }
 
+            // A nearer source field/property hides an inherited event, while
+            // an event declared at the same level retains event precedence.
+            if (isEventCapableOperator
+                && boundReceiver.Type is StructSymbol sourceValueType
+                && SourceValueMemberPrecedesInheritedEvent(sourceValueType, eventName))
+            {
+                var sourceCompound = TryBindChainedCompoundAssignment(
+                    sourceValueType,
+                    boundReceiver,
+                    eventName,
+                    eventNameSyntax,
+                    syntax,
+                    baseOpSyntaxKind);
+                if (sourceCompound != null)
+                {
+                    return sourceCompound;
+                }
+            }
+
             // Check for user-defined event on a StructSymbol before falling through to CLR reflection.
             // ADR-0112 A5: TryGetEvent walks the base chain, so inherited instance
             // events on `open class` bases now resolve (parity with the bare-`this`
