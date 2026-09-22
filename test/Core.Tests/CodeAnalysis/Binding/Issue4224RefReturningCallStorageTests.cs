@@ -184,6 +184,24 @@ public class Issue4224RefReturningCallStorageTests
     }
 
     [Fact]
+    public void WritableRefReturningCall_AssignmentUsesConstantNarrowing()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func At(values []uint8) ref uint8 {
+                return ref values[0]
+            }
+            func Run() uint8 {
+                var values = []uint8{0}
+                At(values) = 1
+                return values[0]
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal((byte)1, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void ImportedWritableRefReturningCall_AssignmentAndIncrementMutateReferent()
     {
         var result = EmittedOracle.Evaluate("""

@@ -2253,7 +2253,6 @@ public sealed partial class CSharpToGSharpTranslator
                 ResidualInitStatements = residualInitStatements,
             };
         }
-#nullable restore annotations
 
         private bool ReferencesAnyParameter(ExpressionSyntax expression, IMethodSymbol ctorSymbol)
         {

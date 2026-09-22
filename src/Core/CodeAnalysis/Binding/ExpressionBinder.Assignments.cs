@@ -2317,22 +2317,16 @@ internal sealed partial class ExpressionBinder
             return pointer;
         }
 
-        var value = BindExpression(syntax.Value);
+        var value = BindAssignmentRhs(syntax.Value, pointeeType);
         if (value is BoundErrorExpression)
         {
             return value;
         }
 
-        if (value.Type != pointeeType && value.Type != TypeSymbol.Error)
+        value = conversions.BindConversion(syntax.Value.Location, value, pointeeType);
+        if (value is BoundErrorExpression)
         {
-            var converted = Conversion.Classify(value.Type, pointeeType);
-            if (!converted.IsImplicit)
-            {
-                Diagnostics.ReportCannotConvert(syntax.Value.Location, value.Type, pointeeType);
-                return new BoundErrorExpression(null);
-            }
-
-            value = new BoundConversionExpression(null, pointeeType, value);
+            return value;
         }
 
         return new BoundIndirectAssignmentExpression(syntax, pointer, value);
@@ -2377,7 +2371,24 @@ internal sealed partial class ExpressionBinder
 
         var declaration = new BoundVariableDeclaration(syntax, tempVar, pointer);
         var tempRef = new BoundVariableExpression(null, tempVar);
-        var indirectRead = new BoundDereferenceExpression(null, tempRef);
+        BoundExpression indirectRead = new BoundDereferenceExpression(null, tempRef);
+        BoundVariableDeclaration? previousValueDeclaration = null;
+        LocalVariableSymbol? previousValue = null;
+        if (syntax.ReturnsPreviousValue)
+        {
+            var previousName =
+                $"<postfix{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            previousValue = new LocalVariableSymbol(previousName, isReadOnly: true, pointeeType);
+            if (!scope.TryDeclareVariable(previousValue))
+            {
+                throw new System.InvalidOperationException(
+                    $"Failed to declare synthesized postfix value local '{previousName}'.");
+            }
+
+            previousValueDeclaration =
+                new BoundVariableDeclaration(syntax, previousValue, indirectRead);
+            indirectRead = new BoundVariableExpression(null, previousValue);
+        }
 
         var rhsBound = BindExpression(syntax.Value);
         if (rhsBound is BoundErrorExpression || rhsBound.Type == TypeSymbol.Error)
@@ -2408,6 +2419,23 @@ internal sealed partial class ExpressionBinder
         }
 
         var assignment = new BoundIndirectAssignmentExpression(syntax, tempRef, combined);
+        if (syntax.ReturnsPreviousValue)
+        {
+            return new BoundBlockExpression(
+                syntax,
+                ImmutableArray.Create<BoundStatement>(
+                    declaration,
+                    Invariant.Required(
+                        previousValueDeclaration,
+                        "postfix increment/decrement captures its previous value"),
+                    new BoundExpressionStatement(syntax, assignment)),
+                new BoundVariableExpression(
+                    syntax,
+                    Invariant.Required(
+                        previousValue,
+                        "postfix increment/decrement declares its previous value")));
+        }
+
         return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
     }
 
@@ -2478,7 +2506,18 @@ internal sealed partial class ExpressionBinder
 
         if (RefCapabilities.IsReadOnlyStorage(storage))
         {
-            Diagnostics.ReportManagedReference(target.Location, "readonly storage cannot be written through");
+            if (target is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
+                || AssignmentTargetSyntaxFacts.IsCallResult(target))
+            {
+                Diagnostics.ReportManagedReference(
+                    target.Location,
+                    "readonly storage cannot be written through");
+            }
+            else
+            {
+                Diagnostics.ReportCannotAssign(target.Location, target.ToString());
+            }
+
             return new BoundErrorExpression(target);
         }
 

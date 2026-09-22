@@ -6,7 +6,8 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
 /// Issue #1925 / #4350: syntax for a compound assignment through addressable
-/// storage, including <c>*p op= expr</c> and <c>GetRef() op= expr</c>.
+/// storage, including variables, fields, indexers, <c>*p op= expr</c>, and
+/// <c>GetRef() op= expr</c>.
 /// Complements <see cref="IndirectAssignmentExpressionSyntax"/>, which handles
 /// the plain <c>=</c> case. The binder evaluates the target address exactly
 /// once (via a synthesized temp local) and lowers the node to the equivalent
@@ -16,15 +17,25 @@ public sealed class IndirectCompoundAssignmentExpressionSyntax : ExpressionSynta
 {
     /// <summary>Initializes a new instance of the <see cref="IndirectCompoundAssignmentExpressionSyntax"/> class.</summary>
     /// <param name="syntaxTree">The parent syntax tree.</param>
-    /// <param name="target">The pointer dereference or writable ref-returning call.</param>
+    /// <param name="target">The addressable assignment target.</param>
     /// <param name="operatorToken">The compound assignment token (e.g. <c>+=</c>).</param>
     /// <param name="value">The right-hand-side expression on the right of the operator.</param>
-    public IndirectCompoundAssignmentExpressionSyntax(SyntaxTree syntaxTree, ExpressionSyntax target, SyntaxToken operatorToken, ExpressionSyntax value)
+    /// <param name="returnsPreviousValue">
+    /// Whether this node represents postfix increment/decrement and therefore
+    /// yields the value read before the write.
+    /// </param>
+    public IndirectCompoundAssignmentExpressionSyntax(
+        SyntaxTree syntaxTree,
+        ExpressionSyntax target,
+        SyntaxToken operatorToken,
+        ExpressionSyntax value,
+        bool returnsPreviousValue = false)
         : base(syntaxTree)
     {
         Target = target;
         OperatorToken = operatorToken;
         Value = value;
+        ReturnsPreviousValue = returnsPreviousValue;
     }
 
     /// <inheritdoc/>
@@ -38,4 +49,7 @@ public sealed class IndirectCompoundAssignmentExpressionSyntax : ExpressionSynta
 
     /// <summary>Gets the right-hand-side value on the right of the operator.</summary>
     public ExpressionSyntax Value { get; }
+
+    /// <summary>Gets a value indicating whether this expression yields the pre-write value.</summary>
+    public bool ReturnsPreviousValue { get; }
 }
