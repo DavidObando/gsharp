@@ -110,6 +110,22 @@ internal static class GSharpProjectTransformer
         return document;
     }
 
+    internal static HashSet<string> RewriteDeclaredProjectPathExpressions(
+        XDocument document,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths)
+        => RewriteDeclaredProjectPathExpressionsCore(
+            document,
+            sourceProjectDirectory,
+            destinationProjectDirectory,
+            generatedProjectPaths);
+
+    internal static bool TryRewriteExpression(
+        XAttribute include,
+        IReadOnlySet<string> mappedExpressions)
+        => TryRewriteExpressionCore(include, mappedExpressions);
+
     /// <summary>
     /// Resolves a transformed project's compiler-hosted <c>Reference</c>
     /// entries — those whose <c>HintPath</c> is anchored at the compiler's
@@ -748,7 +764,7 @@ internal static class GSharpProjectTransformer
     private static string RewriteCSharpSpecs(string value) =>
         CSharpSpecSuffix.Replace(value, ".gs");
 
-    private static HashSet<string> RewriteDeclaredProjectPathExpressions(
+    private static HashSet<string> RewriteDeclaredProjectPathExpressionsCore(
         XDocument document,
         string sourceProjectDirectory,
         string destinationProjectDirectory,
@@ -824,7 +840,7 @@ internal static class GSharpProjectTransformer
         return true;
     }
 
-    private static bool TryRewriteExpression(
+    private static bool TryRewriteExpressionCore(
         XAttribute include,
         IReadOnlySet<string> mappedExpressions)
     {

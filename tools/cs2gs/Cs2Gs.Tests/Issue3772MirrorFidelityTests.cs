@@ -155,8 +155,15 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             Path.Combine(runtimeDirectory, "Runtime.csproj"),
             """
             <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <CompilerProject>..\Compiler\Compiler.csproj</CompilerProject>
+              </PropertyGroup>
               <ItemGroup>
+                <CompilerProjects Include="..\Compiler\Compiler.csproj" />
                 <ProjectReference Include="..\Compiler\Compiler.csproj" />
+                <ProjectReference Include="$(CompilerProject)" />
+                <ProjectReference Include="@(CompilerProjects)" />
+                <ProjectReference Include="@(GsharpCore)" />
               </ItemGroup>
             </Project>
             """);
@@ -195,7 +202,21 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
         Assert.Equal("Microsoft.NET.Sdk", project.Root.Attribute("Sdk").Value);
         Assert.Equal(
             "../Compiler/Compiler.gsproj",
-            project.Descendants("ProjectReference").Single().Attribute("Include").Value);
+            project.Descendants("CompilerProject").Single().Value);
+        Assert.Equal(
+            "../Compiler/Compiler.gsproj",
+            project.Descendants("CompilerProjects").Single().Attribute("Include").Value);
+        Assert.Equal(
+            new[]
+            {
+                "../Compiler/Compiler.gsproj",
+                "$(CompilerProject)",
+                "@(CompilerProjects)",
+                "@(GsharpCore->'%(RootDir)%(Directory)%(Filename).gsproj')",
+            },
+            project.Descendants("ProjectReference")
+                .Select(reference => reference.Attribute("Include").Value)
+                .ToArray());
     }
 
     /// <summary>

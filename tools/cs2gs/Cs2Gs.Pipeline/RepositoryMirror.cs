@@ -336,13 +336,19 @@ internal static class RepositoryMirror
             Path.Combine(sourceRoot, relativeProjectPath.Replace('/', Path.DirectorySeparatorChar)));
         string destinationDirectory = Path.GetDirectoryName(
             Path.Combine(destinationRoot, relativeProjectPath.Replace('/', Path.DirectorySeparatorChar)));
+        HashSet<string> mappedExpressions = GSharpProjectTransformer.RewriteDeclaredProjectPathExpressions(
+            project,
+            sourceDirectory,
+            destinationDirectory,
+            generatedProjectPaths);
 
         foreach (XElement reference in project.Descendants()
             .Where(element => element.Name.LocalName.Equals("ProjectReference", StringComparison.OrdinalIgnoreCase))
             .ToList())
         {
             XAttribute include = reference.Attribute("Include");
-            if (include is null || include.Value.Contains("$(", StringComparison.Ordinal))
+            if (include is null
+                || GSharpProjectTransformer.TryRewriteExpression(include, mappedExpressions))
             {
                 continue;
             }

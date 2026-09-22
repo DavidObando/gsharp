@@ -1557,14 +1557,7 @@ internal sealed partial class ExpressionBinder
 
         // Synthesize the binary expression: variable op rhs.
         var compoundTarget = BindNameExpressionCore(bareName);
-        BoundExpression leftExpr = compoundTarget;
-        var previousValue = CapturePostfixCompoundValue(
-            syntax.ReturnsPreviousValue,
-            syntax,
-            ref leftExpr,
-            out var previousDeclaration);
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind);
-        var leftType = leftExpr.Type;
 
         // Issue #2834 / ADR-0035: a user-defined compound-assignment operator
         // mutates the receiver in place, so it replaces the whole
@@ -1573,13 +1566,32 @@ internal sealed partial class ExpressionBinder
             syntax.OperatorToken.Kind, compoundTarget, boundRhs, syntax.Value.Location);
         if (userCompound != null)
         {
+            if (syntax.ReturnsPreviousValue
+                && variable is ImplicitPropertyVariableSymbol or ImplicitStaticPropertyVariableSymbol)
+            {
+                return BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs);
+            }
+
+            BoundExpression previousRead = compoundTarget;
+            var userPreviousValue = CapturePostfixCompoundValue(
+                syntax.ReturnsPreviousValue,
+                syntax,
+                ref previousRead,
+                out var userPreviousDeclaration);
             return FinishPostfixCompoundAssignment(
                 syntax,
-                previousDeclaration,
-                previousValue,
+                userPreviousDeclaration,
+                userPreviousValue,
                 userCompound);
         }
 
+        BoundExpression leftExpr = compoundTarget;
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref leftExpr,
+            out var previousDeclaration);
+        var leftType = leftExpr.Type;
         var binaryResult = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftExpr, boundRhs, syntax.Value.Location);
         if (binaryResult == null)
         {
@@ -1826,12 +1838,6 @@ internal sealed partial class ExpressionBinder
                 receiver: null,
                 propertyOwner,
                 prop);
-            BoundExpression leftRead = compoundTarget;
-            var previousValue = CapturePostfixCompoundValue(
-                syntax.ReturnsPreviousValue,
-                syntax,
-                ref leftRead,
-                out var previousDeclaration);
 
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the target in place, replacing the read/binary/write rewrite.
@@ -1839,14 +1845,18 @@ internal sealed partial class ExpressionBinder
                 syntax.OperatorToken.Kind, compoundTarget, boundRhs, syntax.Value.Location);
             if (userCompound != null)
             {
-                result = FinishPostfixCompoundAssignment(
-                    syntax,
-                    previousDeclaration,
-                    previousValue,
-                    userCompound);
+                result = syntax.ReturnsPreviousValue
+                    ? BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs)
+                    : userCompound;
                 return true;
             }
 
+            BoundExpression leftRead = compoundTarget;
+            var previousValue = CapturePostfixCompoundValue(
+                syntax.ReturnsPreviousValue,
+                syntax,
+                ref leftRead,
+                out var previousDeclaration);
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -2008,12 +2018,6 @@ internal sealed partial class ExpressionBinder
             substitutedType,
             narrowedType: null,
             interfaceType: effectiveInterface);
-        BoundExpression leftRead = compoundTarget;
-        var previousValue = CapturePostfixCompoundValue(
-            syntax.ReturnsPreviousValue,
-            syntax,
-            ref leftRead,
-            out var previousDeclaration);
         var userCompound = TryBindUserCompoundAssignmentOperator(
             syntax.OperatorToken.Kind,
             compoundTarget,
@@ -2021,13 +2025,17 @@ internal sealed partial class ExpressionBinder
             syntax.Value.Location);
         if (userCompound != null)
         {
-            return FinishPostfixCompoundAssignment(
-                syntax,
-                previousDeclaration,
-                previousValue,
-                userCompound);
+            return syntax.ReturnsPreviousValue
+                ? BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs)
+                : userCompound;
         }
 
+        BoundExpression leftRead = compoundTarget;
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref leftRead,
+            out var previousDeclaration);
         var binary = TryBindCompoundBinaryOperation(
             baseOpSyntaxKind,
             leftRead,
@@ -2236,12 +2244,6 @@ internal sealed partial class ExpressionBinder
                 boundReceiver,
                 structSym,
                 prop);
-            BoundExpression leftRead = compoundTarget;
-            var previousValue = CapturePostfixCompoundValue(
-                syntax.ReturnsPreviousValue,
-                syntax,
-                ref leftRead,
-                out var previousDeclaration);
 
             // Issue #2834: a user-defined compound-assignment operator mutates
             // the property's *value* in place, so it needs only a getter — no
@@ -2256,11 +2258,9 @@ internal sealed partial class ExpressionBinder
                     syntax.Value.Location);
                 if (userPropCompound != null)
                 {
-                    return FinishPostfixCompoundAssignment(
-                        syntax,
-                        previousDeclaration,
-                        previousValue,
-                        userPropCompound);
+                    return syntax.ReturnsPreviousValue
+                        ? BindPostfixPropertyUserCompoundAssignment(syntax, compoundTarget, boundRhs)
+                        : userPropCompound;
                 }
             }
 
@@ -2284,6 +2284,12 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             }
 
+            BoundExpression leftRead = compoundTarget;
+            var previousValue = CapturePostfixCompoundValue(
+                syntax.ReturnsPreviousValue,
+                syntax,
+                ref leftRead,
+                out var previousDeclaration);
             var binary = TryBindCompoundBinaryOperation(baseOpSyntaxKind, leftRead, boundRhs, syntax.Value.Location);
             if (binary == null)
             {
@@ -3739,6 +3745,57 @@ internal sealed partial class ExpressionBinder
             converted,
             rectangular.ElementType);
         return FinishPostfixCompoundAssignment(syntax, statements, previousDeclaration, previousValue, assignment);
+    }
+
+    private BoundExpression BindPostfixPropertyUserCompoundAssignment(
+        EventSubscriptionExpressionSyntax syntax,
+        BoundExpression propertyTarget,
+        BoundExpression boundRhs)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        BoundExpression stableTarget;
+        if (IsLvalue(propertyTarget) && !RefCapabilities.IsReadOnlyReference(propertyTarget))
+        {
+            var pointer = new BoundAddressOfExpression(propertyTarget.Syntax, propertyTarget);
+            var address = DeclareRangeTemp("postfixPropertyAddress", pointer.Type, pointer, statements);
+            stableTarget = new BoundDereferenceExpression(
+                propertyTarget.Syntax,
+                new BoundVariableExpression(null, address));
+        }
+        else
+        {
+            var name =
+                $"<postfixTarget{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+            var target = new LocalVariableSymbol(name, isReadOnly: false, propertyTarget.Type);
+            if (!scope.TryDeclareVariable(target))
+            {
+                throw new System.InvalidOperationException(
+                    $"Failed to declare synthesized postfix target local '{name}'.");
+            }
+
+            statements.Add(new BoundVariableDeclaration(syntax, target, propertyTarget));
+            stableTarget = new BoundVariableExpression(null, target);
+        }
+
+        BoundExpression previousRead = stableTarget;
+        var previousValue = CapturePostfixCompoundValue(
+            returnsPreviousValue: true,
+            syntax,
+            ref previousRead,
+            out var previousDeclaration);
+        var userCompound = Invariant.Required(
+            TryBindUserCompoundAssignmentOperator(
+                syntax.OperatorToken.Kind,
+                stableTarget,
+                boundRhs,
+                syntax.Value.Location),
+            "a property compound operator resolved before postfix target capture");
+        return FinishPostfixCompoundAssignment(
+            syntax,
+            statements,
+            previousDeclaration,
+            previousValue,
+            userCompound);
     }
 
     private BoundVariableExpression? CapturePostfixCompoundValue(

@@ -151,6 +151,50 @@ public class IncrementDecrementTests
         Assert.Equal(true, result.ReadGlobals()["answer"]);
     }
 
+    [Fact]
+    public void PostfixUserCompoundOnProperty_EvaluatesGetterOnce()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Bag {
+                var total int32
+                prop Total int32 { get { return total } }
+                func operator +=(amount int32) { total = total + amount }
+            }
+            class Holder {
+                var first Bag
+                var second Bag
+                var calls int32
+                prop Next Bag {
+                    get {
+                        calls = calls + 1
+                        if calls == 1 { return first }
+                        return second
+                    }
+                }
+                func Reset() {
+                    first = Bag()
+                    second = Bag()
+                    calls = 0
+                }
+                func ScoreBare() int32 {
+                    Reset()
+                    let previous = Next++
+                    return calls * 100 + first.Total * 10 + second.Total
+                }
+                func ScoreQualified() int32 {
+                    Reset()
+                    let previous = this.Next++
+                    return calls * 100 + first.Total * 10 + second.Total
+                }
+            }
+            var holder = Holder()
+            var answer = holder.ScoreBare() == 110 &&
+                holder.ScoreQualified() == 110
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.ReadGlobals()["answer"]);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
