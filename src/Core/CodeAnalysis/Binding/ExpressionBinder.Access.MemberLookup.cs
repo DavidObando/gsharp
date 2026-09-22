@@ -1955,7 +1955,26 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            BoundExpression userCompoundTarget = compoundTarget;
+            // A user-defined `operator op=` mutates its receiver in place, so a
+            // NON-addressable element read (a map or indexer `get` returns a
+            // copy) has to be staged in a local and written back through the
+            // setter below. The staging local is created BEFORE resolution so
+            // the operator — and the conversion of its argument, which may
+            // report diagnostics — is bound exactly once, against the target
+            // that is actually mutated. It is materialised only if resolution
+            // succeeds.
+            LocalVariableSymbol? valueTemp =
+                GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(compoundTarget.Type)
+                && compoundTarget is not BoundDereferenceExpression
+                && compoundTarget is not BoundIndexExpression { IsArrayBackedElementAccess: true }
+                    ? new LocalVariableSymbol(
+                        $"<idxCompound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                        isReadOnly: false,
+                        compoundTarget.Type)
+                    : null;
+            BoundExpression userCompoundTarget = valueTemp == null
+                ? compoundTarget
+                : new BoundVariableExpression(null, valueTemp);
             var userCompound = TryBindUserCompoundAssignmentOperator(
                 compoundOperatorToken.Kind,
                 userCompoundTarget,
@@ -1963,26 +1982,10 @@ internal sealed partial class ExpressionBinder
                 resolvedCompoundRhsSyntax.Location);
             if (userCompound != null)
             {
-                var needsWriteBack =
-                    GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(compoundTarget.Type)
-                    && compoundTarget is not BoundDereferenceExpression
-                    && compoundTarget is not BoundIndexExpression { IsArrayBackedElementAccess: true };
-                LocalVariableSymbol? valueTemp = null;
-                if (needsWriteBack)
+                if (valueTemp != null)
                 {
-                    var valueTempName =
-                        $"<idxCompound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
-                    valueTemp = new LocalVariableSymbol(valueTempName, isReadOnly: false, compoundTarget.Type);
                     scope.TryDeclareVariable(valueTemp);
                     statements.Add(new BoundVariableDeclaration(outerSyntax, valueTemp, compoundTarget));
-                    userCompoundTarget = new BoundVariableExpression(null, valueTemp);
-                    userCompound = Invariant.Required(
-                        TryBindUserCompoundAssignmentOperator(
-                            compoundOperatorToken.Kind,
-                            userCompoundTarget,
-                            rhsBound,
-                            resolvedCompoundRhsSyntax.Location),
-                        "an indexed user compound operator remains applicable to its value temp");
                 }
 
                 BoundExpression previousRead = userCompoundTarget;

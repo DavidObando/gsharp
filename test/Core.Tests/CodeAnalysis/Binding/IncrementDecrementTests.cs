@@ -446,6 +446,24 @@ public class IncrementDecrementTests
         Assert.Contains(diagnostics, d => d.Message.Contains("Bark", System.StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void IndexedUserCompound_ReportsArgumentConversionOnce()
+    {
+        // Staging a non-addressable element for the in-place operator must not
+        // re-bind the operator (and its argument conversion) a second time.
+        var diagnostics = Bind("""
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) { Total = Total + amount }
+            }
+            func Run(mapped map[string, Meter], amount int64) {
+                mapped["x"] += amount
+            }
+            """);
+
+        Assert.Single(diagnostics);
+    }
+
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
