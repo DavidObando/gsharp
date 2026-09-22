@@ -128,6 +128,27 @@ public class IncrementDecrementTests
     }
 
     [Fact]
+    public void NullableFloatingAndDecimalIncrement_WidensSyntheticOne()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func Run() bool {
+                var single float32? = 1.5f
+                let oldSingle = single++
+                var doubled float64? = 2.5
+                let oldDouble = doubled++
+                var money decimal? = 3.5m
+                let oldMoney = money++
+                return oldSingle == 1.5f && single == 2.5f &&
+                    oldDouble == 2.5 && doubled == 3.5 &&
+                    oldMoney == 3.5m && money == 4.5m
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void MemberPostfixIncrement_EvaluatesReceiverOnce()
     {
         var result = EmittedOracle.Evaluate("""

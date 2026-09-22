@@ -3058,6 +3058,21 @@ internal sealed partial class ExpressionBinder
                         commonUnderlying = leftUnderlying;
                     }
                 }
+                else if (IsNumericPrimitiveType(leftUnderlying)
+                    && IsNumericPrimitiveType(rightUnderlying)
+                    && (IsFloatingOrDecimalType(leftUnderlying)
+                        || IsFloatingOrDecimalType(rightUnderlying))
+                    && leftUnderlying != rightUnderlying)
+                {
+                    if (Conversion.Classify(rightUnderlying, leftUnderlying).IsImplicit)
+                    {
+                        commonUnderlying = leftUnderlying;
+                    }
+                    else if (Conversion.Classify(leftUnderlying, rightUnderlying).IsImplicit)
+                    {
+                        commonUnderlying = rightUnderlying;
+                    }
+                }
             }
 
             if (commonUnderlying != null)
