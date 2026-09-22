@@ -1858,6 +1858,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 translated = IsNullOrSuppressedNull(argument.Expression)
                     && parameter.Type.IsReferenceType
+                    && parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
                         ? new DefaultValueExpression(this.typeMapper.Map(
                             parameter.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                             this.context,

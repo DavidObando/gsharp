@@ -376,12 +376,11 @@ public partial class Parser
     }
 
     /// <summary>
-    /// ADR-0126 / issue #1027 / #4350: lowers prefix/postfix increment and
-    /// decrement through the single-evaluating indirect compound-assignment
-    /// path. The binder captures the target address once; postfix additionally
-    /// saves and returns the pre-write value instead of reconstructing it with
-    /// inverse arithmetic (which is incorrect at floating-point precision
-    /// boundaries).
+    /// ADR-0126 / issue #1027 / #4350: addressable variables, pointer
+    /// dereferences, and ref-returning calls use the indirect compound path,
+    /// which captures the target once and saves the exact postfix old value.
+    /// Setter-based members/indexers/maps retain their established compound
+    /// assignment paths.
     /// </summary>
     /// <param name="operand">The already-parsed lvalue operand.</param>
     /// <param name="op">The <c>++</c> or <c>--</c> operator token.</param>
@@ -390,23 +389,15 @@ public partial class Parser
     private ExpressionSyntax BuildIncrementDecrementExpression(ExpressionSyntax operand, SyntaxToken op, bool isPrefix)
     {
         var isIncrement = op.Kind == SyntaxKind.PlusPlusToken;
+        var inverseOpKind = isIncrement ? SyntaxKind.MinusToken : SyntaxKind.PlusToken;
         var compoundOpKind = isIncrement ? SyntaxKind.PlusEqualsToken : SyntaxKind.MinusEqualsToken;
         var pos = op.Position;
 
-        var validTarget = operand is NameExpressionSyntax
-            || operand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
-            || AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out _)
-            || AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
-                operand,
-                out _,
-                out _,
-                out _)
-            || AssignmentTargetSyntaxFacts.IsCallResult(operand);
-        if (!validTarget)
-        {
-            Diagnostics.ReportInvalidIncrementDecrementTarget(operand.Location, op.Text);
-            return operand;
-        }
+        LiteralExpressionSyntax OneLiteral() =>
+            new(
+                syntaxTree,
+                new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1),
+                1);
 
         var compoundToken = new SyntaxToken(
             syntaxTree,
@@ -414,16 +405,63 @@ public partial class Parser
             pos,
             SyntaxFacts.GetTextOrEmpty(compoundOpKind),
             null);
-        var one = new LiteralExpressionSyntax(
-            syntaxTree,
-            new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1),
-            1);
-        return new IndirectCompoundAssignmentExpressionSyntax(
-            syntaxTree,
+
+        ExpressionSyntax write;
+        var exactPostfix = operand is NameExpressionSyntax
+            || operand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
+            || AssignmentTargetSyntaxFacts.IsCallResult(operand);
+        if (exactPostfix)
+        {
+            return new IndirectCompoundAssignmentExpressionSyntax(
+                syntaxTree,
+                operand,
+                compoundToken,
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix);
+        }
+
+        if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out var indexed))
+        {
+            write = new CompoundIndexAssignmentExpressionSyntax(
+                syntaxTree,
+                indexed,
+                compoundToken,
+                OneLiteral());
+        }
+        else if (AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
             operand,
-            compoundToken,
-            one,
-            returnsPreviousValue: !isPrefix);
+            out _,
+            out _,
+            out _))
+        {
+            write = new EventSubscriptionExpressionSyntax(
+                syntaxTree,
+                operand,
+                compoundToken,
+                OneLiteral());
+        }
+        else
+        {
+            Diagnostics.ReportInvalidIncrementDecrementTarget(operand.Location, op.Text);
+            return operand;
+        }
+
+        if (isPrefix)
+        {
+            return write;
+        }
+
+        var inverseToken = new SyntaxToken(
+            syntaxTree,
+            inverseOpKind,
+            pos,
+            SyntaxFacts.GetTextOrEmpty(inverseOpKind),
+            null);
+        return new BinaryExpressionSyntax(
+            syntaxTree,
+            write,
+            inverseToken,
+            OneLiteral());
     }
 
     private bool LooksLikeMultiAssignment()
