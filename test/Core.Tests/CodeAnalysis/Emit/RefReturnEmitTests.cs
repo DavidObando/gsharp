@@ -49,9 +49,10 @@ Console.WriteLine(n)
     public void FreeFunction_RefReturn_MutationThroughReturnedRef_VisibleToCaller()
     {
         // Verify the canonical "ref return enables in-place mutation through call expr".
-        // A G# caller can't directly *use* a ref-returning function as an lvalue yet
-        // (deferred), so we drive the assertion through reflection: the returned
-        // ByRef must read back the same managed-pointer slot as the source variable.
+        // This metadata-focused test drives the assertion through reflection:
+        // the returned ByRef must read back the same managed-pointer slot as
+        // the source variable. Direct G# call-result writes are covered by
+        // Issue4224RefReturningCallStorageTests.
         const string Source = @"package RefReturnMutate
 import System
 

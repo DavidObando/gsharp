@@ -149,16 +149,16 @@ value. They do not replace readonly contracts with writable refs or snapshots.
 The following remain separate:
 
 - **#4219:** first-class consumption/retention of source getter/call ref
-  results, ref-returning literals, and their source delegate integration.
-  Source `let ref readonly alias = holder.First` must not be implemented by
+  results and direct writes through named writable ref-returning calls were
+  completed by #4224 and #4350. Ref-returning literals and their source
+  delegate integration remain under #4219. Source
+  `let ref readonly alias = holder.First` must not be implemented by
   snapshotting the value; neither may a field underneath a value-type ref
-  result bypass that boundary. Unsupported consumers remain diagnosed. Existing
-  imported addressable paths retain their behavior and gain shared checks.
+  result bypass that boundary.
 - Ref reassignment: no `alias = ref other` operation.
 - Readonly-ref fields and readonly-ref parameter variants: no new forms.
   Existing `in` parameters are not redefined as readonly-return contracts.
-- General writable ref-result assignment and relaxation of the concrete
-  computed-property restriction.
+- Relaxation of the concrete computed-property restriction.
 
 ## Validation
 

@@ -163,6 +163,65 @@ public class Issue4224RefReturningCallStorageTests
     }
 
     [Fact]
+    public void WritableRefReturningCall_AssignmentAndPostfixIncrement_EvaluateCallOnce()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func At(values []int32, index int32) ref int32 {
+                calls++
+                return ref values[index]
+            }
+            func Run() int32 {
+                var values = []int32{10}
+                At(values, 0) = 41
+                let prior = At(values, 0)++
+                return values[0] * 100 + prior * 10 + calls
+            }
+            var calls = 0
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4612, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void ImportedWritableRefReturningCall_AssignmentAndIncrementMutateReferent()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+
+            func Run() int32 {
+                var values = []int32{10}
+                var span = Span[int32](values)
+                span.GetPinnableReference() = 20
+                span.GetPinnableReference()++
+                return values[0]
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(21, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void ReadOnlyRefReturningCall_RemainsProtectedFromDirectAssignment()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func View(values []int32) ref readonly int32 {
+                return ref values[0]
+            }
+            func Run() {
+                var values = []int32{10}
+                View(values) = 20
+            }
+            """);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains(
+                "readonly storage cannot be written through",
+                System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void AliasFromImportedRefIndexer_StillMutatesOriginalArrayElement()
     {
         // Not a new code path — ConversionClassifier.AutoDereferenceRefReturn

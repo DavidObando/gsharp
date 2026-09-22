@@ -94,6 +94,16 @@ internal static class AssignmentTargetSyntaxFacts
             return true;
         }
 
+        if (IsCallResult(target))
+        {
+            assignment = new IndirectAssignmentExpressionSyntax(
+                target.SyntaxTree,
+                target,
+                equalsToken,
+                value);
+            return true;
+        }
+
         if (target is BaseInterfaceCallExpressionSyntax baseProperty
             && baseProperty.IsPropertyAccess
             && !baseProperty.IsPropertyWrite)
@@ -114,6 +124,16 @@ internal static class AssignmentTargetSyntaxFacts
         assignment = null;
         return false;
     }
+
+    /// <summary>Returns whether an expression's outermost operation is a call.</summary>
+    public static bool IsCallResult(ExpressionSyntax expression)
+        => expression switch
+        {
+            CallExpressionSyntax => true,
+            AccessorExpressionSyntax { RightPart: CallExpressionSyntax } => true,
+            ParenthesizedExpressionSyntax parenthesized => IsCallResult(parenthesized.Expression),
+            _ => false,
+        };
 
     /// <summary>
     /// Canonicalizes an expression whose rightmost primary is an index access.

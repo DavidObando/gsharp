@@ -463,8 +463,25 @@ public partial class Parser
             }
             else
             {
-                Diagnostics.ReportInvalidIncrementDecrementTarget(operand.Location, op.Text);
-                return operand;
+                if (AssignmentTargetSyntaxFacts.IsCallResult(operand))
+                {
+                    var compoundToken = new SyntaxToken(
+                        syntaxTree,
+                        compoundOpKind,
+                        pos,
+                        SyntaxFacts.GetTextOrEmpty(compoundOpKind),
+                        null);
+                    write = new IndirectCompoundAssignmentExpressionSyntax(
+                        syntaxTree,
+                        operand,
+                        compoundToken,
+                        OneLiteral());
+                }
+                else
+                {
+                    Diagnostics.ReportInvalidIncrementDecrementTarget(operand.Location, op.Text);
+                    return operand;
+                }
             }
         }
 

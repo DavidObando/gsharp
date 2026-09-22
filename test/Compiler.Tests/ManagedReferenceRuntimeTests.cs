@@ -32,8 +32,7 @@ public sealed class ManagedReferenceRuntimeTests
         var hash = direct.GetHashCode();
         ref readonly var observed = ref readOnly.Borrow();
         var grown = slice.Append(4);
-        ref var writable = ref direct.Borrow();
-        writable = 17;
+        direct.Borrow() = 17;
         Assert.Equal(17, observed);
         Assert.Equal(17, array[1]);
         Assert.Equal(2, grown[0]);
@@ -64,8 +63,7 @@ public sealed class ManagedReferenceRuntimeTests
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         Assert.True(owner.IsAlive);
-        ref var writable = ref handle.Borrow();
-        writable = 23;
+        handle.Borrow() = 23;
         Assert.Equal(23, handle.Borrow());
         GC.KeepAlive(handle);
     }
@@ -81,14 +79,14 @@ public sealed class ManagedReferenceRuntimeTests
         var cell = new StrongBox<int>(0);
         for (var i = 0; i < 10_000; i++)
         {
-            Increment(handle);
+            handle.Borrow()++;
         }
 
         var stopwatch = Stopwatch.StartNew();
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < iterations; i++)
         {
-            Increment(handle);
+            handle.Borrow()++;
         }
 
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -113,13 +111,6 @@ public sealed class ManagedReferenceRuntimeTests
         Assert.Equal(iterations, cell.Value);
         Assert.True(handleTime < budget, handleTime.ToString());
         this.output.WriteLine($"iterations={iterations}; allocations={allocated}; handle={handleTime}; borrowed={borrowTime}; StrongBox={cellTime}; budget={budget}");
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static void Increment(ManagedRef<int> handle)
-    {
-        ref var value = ref handle.Borrow();
-        value++;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

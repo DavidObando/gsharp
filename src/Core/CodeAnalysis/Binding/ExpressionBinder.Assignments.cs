@@ -2304,49 +2304,17 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// ADR-0060 §13: binds an indirect assignment <c>*p = expr</c>. The left-hand
-    /// side must be a unary dereference of a pointer expression; the result is a
-    /// <see cref="BoundIndirectAssignmentExpression"/> whose value type is the
-    /// pointee type.
+    /// ADR-0060 §13 / issue #4350: binds assignment through an explicit pointer
+    /// dereference or a writable ref-returning call.
     /// </summary>
     /// <param name="syntax">The indirect-assignment syntax.</param>
     /// <returns>The bound expression, or an error expression on failure.</returns>
     private BoundExpression BindIndirectAssignmentExpression(IndirectAssignmentExpressionSyntax syntax)
     {
-        var pointer = BindExpression(syntax.Target.Operand);
+        var pointer = BindIndirectAssignmentPointer(syntax.Target, out var pointeeType);
         if (pointer is BoundErrorExpression)
         {
             return pointer;
-        }
-
-        if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
-        {
-            pointer = BorrowManagedReference(pointer, syntax.Target);
-            if (pointer is BoundErrorExpression)
-            {
-                return pointer;
-            }
-        }
-
-        if (RefCapabilities.IsReadOnlyReference(pointer))
-        {
-            Diagnostics.ReportManagedReference(syntax.Target.Location, "readonly storage cannot be written through");
-            return new BoundErrorExpression(syntax);
-        }
-
-        if (!TypeSymbol.TryGetPointeeType(pointer.Type, out var pointeeType))
-        {
-            Diagnostics.ReportUndefinedUnaryOperator(syntax.Target.OperatorToken.Location, syntax.Target.OperatorToken.Text, pointer.Type);
-            return new BoundErrorExpression(null);
-        }
-
-        // ADR-0122 §3 / issue #1033: a true `*void` pointer carries no element
-        // type and cannot be written through directly; cast to a typed pointer
-        // `*T` (e.g. `*int32(p)`) first.
-        if (TypeSymbol.IsVoidPointer(pointer.Type))
-        {
-            Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.Target.OperatorToken.Location, "dereference");
-            return new BoundErrorExpression(null);
         }
 
         var value = BindExpression(syntax.Value);
@@ -2382,40 +2350,10 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindIndirectCompoundAssignmentExpression(IndirectCompoundAssignmentExpressionSyntax syntax)
     {
-        var pointer = BindExpression(syntax.Target.Operand);
+        var pointer = BindIndirectAssignmentPointer(syntax.Target, out var pointeeType);
         if (pointer is BoundErrorExpression)
         {
             return pointer;
-        }
-
-        if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
-        {
-            pointer = BorrowManagedReference(pointer, syntax.Target);
-            if (pointer is BoundErrorExpression)
-            {
-                return pointer;
-            }
-        }
-
-        if (RefCapabilities.IsReadOnlyReference(pointer))
-        {
-            Diagnostics.ReportManagedReference(syntax.Target.Location, "readonly storage cannot be written through");
-            return new BoundErrorExpression(syntax);
-        }
-
-        if (!TypeSymbol.TryGetPointeeType(pointer.Type, out var pointeeType))
-        {
-            Diagnostics.ReportUndefinedUnaryOperator(syntax.Target.OperatorToken.Location, syntax.Target.OperatorToken.Text, pointer.Type);
-            return new BoundErrorExpression(null);
-        }
-
-        // ADR-0122 §3 / issue #1033: a true `*void` pointer carries no element
-        // type and cannot be read or written through directly; cast to a
-        // typed pointer `*T` (e.g. `*int32(p)`) first.
-        if (TypeSymbol.IsVoidPointer(pointer.Type))
-        {
-            Diagnostics.ReportVoidPointerOperationNotAllowed(syntax.Target.OperatorToken.Location, "dereference");
-            return new BoundErrorExpression(null);
         }
 
         if (!SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpKind))
@@ -2471,6 +2409,81 @@ internal sealed partial class ExpressionBinder
 
         var assignment = new BoundIndirectAssignmentExpression(syntax, tempRef, combined);
         return new BoundBlockExpression(syntax, ImmutableArray.Create<BoundStatement>(declaration), assignment);
+    }
+
+    private BoundExpression BindIndirectAssignmentPointer(
+        ExpressionSyntax target,
+        out TypeSymbol pointeeType)
+    {
+        pointeeType = TypeSymbol.Error;
+        if (target is UnaryExpressionSyntax dereference
+            && dereference.OperatorToken.Kind == SyntaxKind.StarToken)
+        {
+            var pointer = BindExpression(dereference.Operand);
+            if (pointer is BoundErrorExpression)
+            {
+                return pointer;
+            }
+
+            if (ManagedReferenceTypes.TryGetElement(pointer.Type, out _, out _))
+            {
+                pointer = BorrowManagedReference(pointer, target);
+                if (pointer is BoundErrorExpression)
+                {
+                    return pointer;
+                }
+            }
+
+            if (RefCapabilities.IsReadOnlyReference(pointer))
+            {
+                Diagnostics.ReportManagedReference(target.Location, "readonly storage cannot be written through");
+                return new BoundErrorExpression(target);
+            }
+
+            if (!TypeSymbol.TryGetPointeeType(pointer.Type, out var explicitPointeeType))
+            {
+                Diagnostics.ReportUndefinedUnaryOperator(
+                    dereference.OperatorToken.Location,
+                    dereference.OperatorToken.Text,
+                    pointer.Type);
+                return new BoundErrorExpression(null);
+            }
+
+            pointeeType = Invariant.Required(
+                explicitPointeeType,
+                "a successfully classified pointer has a pointee type");
+
+            if (TypeSymbol.IsVoidPointer(pointer.Type))
+            {
+                Diagnostics.ReportVoidPointerOperationNotAllowed(
+                    dereference.OperatorToken.Location,
+                    "dereference");
+                return new BoundErrorExpression(null);
+            }
+
+            return pointer;
+        }
+
+        var storage = BindExpression(target);
+        if (storage is BoundErrorExpression)
+        {
+            return storage;
+        }
+
+        if (!IsLvalue(storage))
+        {
+            Diagnostics.ReportCannotTakeAddressOfNonLvalue(target.Location, target.ToString());
+            return new BoundErrorExpression(target);
+        }
+
+        if (RefCapabilities.IsReadOnlyStorage(storage))
+        {
+            Diagnostics.ReportManagedReference(target.Location, "readonly storage cannot be written through");
+            return new BoundErrorExpression(target);
+        }
+
+        pointeeType = storage.Type;
+        return new BoundAddressOfExpression(target, storage, unmanaged: false);
     }
 
     /// <summary>
