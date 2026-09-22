@@ -223,6 +223,44 @@ public class IncrementDecrementTests
     }
 
     [Fact]
+    public void UserCompoundIncrementOnValuePropertyWritesBackThroughSetter()
+    {
+        var result = EmittedOracle.Evaluate("""
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) { Total = Total + amount }
+            }
+            class Holder {
+                var backing Meter
+                prop Value Meter {
+                    get { return backing }
+                    set { backing = value }
+                }
+            }
+            var holder = Holder{}
+            holder.Value++
+            var answer = holder.Value.Total
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void UserCompoundIncrementOnGetterOnlyValuePropertyIsRejected()
+    {
+        var diagnostics = Bind("""
+            struct Meter {
+                func operator +=(amount int32) { }
+            }
+            class Holder {
+                prop Value Meter { get { return Meter{} } }
+            }
+            func Run(holder Holder) { holder.Value++ }
+            """);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0127");
+    }
+
+    [Fact]
     public void PostfixStatementUsesUserCompoundOperator()
     {
         var result = EmittedOracle.Evaluate("""

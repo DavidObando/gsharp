@@ -3961,8 +3961,43 @@ internal sealed partial class ExpressionBinder
         BoundExpression boundRhs)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        BoundExpression? receiver = propertyTarget switch
+        {
+            BoundPropertyAccessExpression source => source.Receiver,
+            BoundClrPropertyAccessExpression imported => imported.Receiver,
+            _ => null,
+        };
+        if (receiver != null
+            && TrySavePostfixReceiver(syntax, receiver, out var savedReceiver, out var receiverPrefix))
+        {
+            statements.AddRange(receiverPrefix);
+            propertyTarget = propertyTarget switch
+            {
+                BoundPropertyAccessExpression source => new BoundPropertyAccessExpression(
+                    source.Syntax,
+                    savedReceiver,
+                    source.StructType,
+                    source.Property,
+                    source.SubstitutedType,
+                    source.NarrowedType,
+                    source.InterfaceType),
+                BoundClrPropertyAccessExpression imported => new BoundClrPropertyAccessExpression(
+                    imported.Syntax,
+                    savedReceiver,
+                    imported.Member,
+                    imported.Type,
+                    imported.StaticContainerType,
+                    imported.ConstrainedReceiverTypeParameter,
+                    imported.ConstrainedInterfaceType),
+                _ => propertyTarget,
+            };
+        }
+
         BoundExpression stableTarget;
-        if (IsLvalue(propertyTarget) && !RefCapabilities.IsReadOnlyReference(propertyTarget))
+        bool needsWriteBack =
+            GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(propertyTarget.Type)
+            && !IsLvalue(propertyTarget);
+        if (!needsWriteBack && IsLvalue(propertyTarget) && !RefCapabilities.IsReadOnlyReference(propertyTarget))
         {
             var pointer = new BoundAddressOfExpression(propertyTarget.Syntax, propertyTarget);
             var address = DeclareRangeTemp("incrementPropertyAddress", pointer.Type, pointer, statements);
@@ -3985,6 +4020,40 @@ internal sealed partial class ExpressionBinder
             stableTarget = new BoundVariableExpression(null, target);
         }
 
+        BoundExpression? writeBack = null;
+        if (needsWriteBack)
+        {
+            writeBack = propertyTarget switch
+            {
+                BoundPropertyAccessExpression source when source.Property.HasSetter =>
+                    new BoundPropertyAssignmentExpression(
+                        syntax,
+                        source.Receiver,
+                        source.StructType,
+                        source.Property,
+                        stableTarget,
+                        source.SubstitutedType,
+                        source.InterfaceType),
+                BoundClrPropertyAccessExpression { Member: System.Reflection.PropertyInfo property } imported
+                    when property.SetMethod != null =>
+                    new BoundClrPropertyAssignmentExpression(
+                        syntax,
+                        imported.Receiver,
+                        property,
+                        stableTarget,
+                        imported.Type,
+                        imported.StaticContainerType,
+                        imported.ConstrainedReceiverTypeParameter,
+                        imported.ConstrainedInterfaceType),
+                _ => null,
+            };
+            if (writeBack == null)
+            {
+                Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, syntax.LeftHandSide.ToString());
+                return new BoundErrorExpression(syntax);
+            }
+        }
+
         BoundVariableExpression? previousValue = null;
         BoundVariableDeclaration? previousDeclaration = null;
         if (syntax.ReturnsPreviousValue)
@@ -4004,6 +4073,23 @@ internal sealed partial class ExpressionBinder
                 boundRhs,
                 syntax.Value.Location),
             "a property compound operator resolved before increment target capture");
+        if (writeBack != null)
+        {
+            if (previousDeclaration != null)
+            {
+                statements.Add(previousDeclaration);
+            }
+
+            statements.Add(new BoundExpressionStatement(syntax, userCompound));
+            if (previousValue != null)
+            {
+                statements.Add(new BoundExpressionStatement(syntax, writeBack));
+                return new BoundBlockExpression(syntax, statements.ToImmutable(), previousValue);
+            }
+
+            return new BoundBlockExpression(syntax, statements.ToImmutable(), writeBack);
+        }
+
         if (syntax.ReturnsPreviousValue)
         {
             return FinishPostfixCompoundAssignment(
