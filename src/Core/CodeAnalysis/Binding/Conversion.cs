@@ -208,6 +208,25 @@ public sealed class Conversion
         => ClassifyCore(from, to, allowStructuralProjection: true);
 
     /// <summary>
+    /// ADR-0186 §3 rule 3, asked about a single ARGUMENT position: is
+    /// <paramref name="source"/> to <paramref name="target"/> one of the
+    /// relations a constructed type must <b>not</b> permit — <c>C[T!]
+    /// -&gt; C[T]</c>, <c>C[T] -&gt; C[T!]</c> or <c>C[T?] -&gt; C[T!]</c>.
+    /// <para>
+    /// The companion of <see cref="IsPlatformArgumentWidening"/>, and exposed
+    /// for the same reason: <c>MemberLookup</c>'s symbolic-indexer
+    /// applicability check has to reject what rule 3 rejects, and its own
+    /// same-type helper deliberately looks through the platform wrapper
+    /// (which is the right answer for member hiding and the wrong one here).
+    /// </para>
+    /// </summary>
+    /// <param name="source">The source argument position.</param>
+    /// <param name="target">The target argument position.</param>
+    /// <returns><see langword="true"/> for a relation rule 3 forbids.</returns>
+    internal static bool IsPlatformArgumentIllegal(TypeSymbol? source, TypeSymbol? target)
+        => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Illegal;
+
+    /// <summary>
     /// ADR-0186 §3 rule 2, asked about a single ARGUMENT position: is
     /// <paramref name="source"/> to <paramref name="target"/> the one
     /// widening a constructed type permits, <c>C[T!] -&gt; C[T?]</c>.

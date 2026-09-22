@@ -6034,10 +6034,30 @@ internal sealed class MemberLookup
                 // per-argument relation is one rule with one implementation,
                 // and a second copy is how ADR-0136's carve-out predicates
                 // began.
-                _ => SameTypeSymbol(sourceArguments[i], targetImported.TypeArguments[i])
-                    || Conversion.IsPlatformArgumentWidening(
+                // ADR-0186 §3, at an invariant argument position: rule 3's
+                // illegal relations are out, rule 2's one widening is in, and
+                // everything else is the ordinary same-type question.
+                //
+                // Both halves are review findings. Asking only
+                // `SameTypeSymbol` let `C[T!] -> C[T]` stay applicable
+                // (`SameTypeSymbol` unwraps the platform wrapper, by design —
+                // see its own comment), which is the aliasing conversion rule
+                // 3 exists to reject. Answering only "not the same type" for a
+                // mixed pair then made rule 2's `C[T!] -> C[T?]` — the ONE
+                // conversion the ADR permits — inapplicable, because this
+                // caller uses its verdict as the complete result and returns
+                // before the general classifier runs.
+                //
+                // The relation itself stays in `Conversion`, which owns it; a
+                // second copy here is how ADR-0136's carve-out predicates
+                // began.
+                _ => !Conversion.IsPlatformArgumentIllegal(
                         sourceArguments[i],
-                        targetImported.TypeArguments[i]),
+                        targetImported.TypeArguments[i])
+                    && (SameTypeSymbol(sourceArguments[i], targetImported.TypeArguments[i])
+                        || Conversion.IsPlatformArgumentWidening(
+                            sourceArguments[i],
+                            targetImported.TypeArguments[i])),
             };
             if (!compatible)
             {
@@ -6726,45 +6746,55 @@ internal sealed class MemberLookup
             return SameTypeSymbol(a, nullableReferenceB.UnderlyingType);
         }
 
-        // ADR-0186: two platform wrappers are the same type exactly when their
-        // underlyings are; a platform wrapper and anything else are NOT the
-        // same type, full stop.
+        // ADR-0186 §1: `T!` and `T` are ONE runtime type, so this helper —
+        // which answers "is this the same TYPE?" — sees through the platform
+        // wrapper exactly as the reference-`T?` arms above do. §2 excludes
+        // value types, so there is no `IsAnyValueTypeNullable`-style guard to
+        // mirror.
         //
-        // The asymmetry with the reference-`T?` arms directly above is
-        // deliberate and is the whole content of this arm. `T?` unwraps there
-        // because this compiler treats inner `?` as not affecting identity;
-        // `T!` must NOT, because ADR-0186 §3 rule 3 rejects `C[T!] -> C[T]`
-        // and this helper is the invariant-position identity test that
-        // `TryClassifyConstructedGenericConversion` consults when deciding
-        // whether a symbolic CLR indexer candidate is applicable. Unwrapping
-        // `T!` here would make `SameTypeSymbol(List[string!], List[string])`
-        // true and let a candidate rule 3 rejects win overload selection —
-        // Copilot review finding on this PR, and correct.
+        // <b>This helper answers a runtime-signature question, and that is
+        // why it unwraps.</b> It is also consulted for member HIDING, where a
+        // `new string this[string key]` in a derived interface must be
+        // recognised as covering the base slot whether the base's parameter
+        // was read as `string` or `string!` — they are one CLR signature.
+        // Making a mixed pair simply "not the same type" broke exactly that:
+        // `Issue2525ImportedIndexerHidingEmitTests`' diamond stopped
+        // collapsing and every access reported GS0266 "ambiguous between
+        // multiple overloads".
         //
-        // Returning FALSE for a mixed pair is also what fixes the defect this
-        // arm was added for, so the two requirements do not conflict.
-        // `NestedKeyBox[T]` declares both `this[IEnumerable[T]]` and
-        // `this[List[object]]`, and `box[keys]` with a `List[Payload2471]`
-        // must pick the first
-        // (`Issue2471DictionaryIndexerSameCompilationTypeTests`). The
-        // `List[object]` candidate is rejected only if
-        // `SameTypeSymbol(Payload2471, <argument>)` says no. With
-        // `--nullability=enabled` the argument is `object?`, the arm above
-        // unwraps it, and the answer is no. With the oblivious library read
-        // as `List[object!]` there was no arm at all, so the comparison fell
-        // through to the `ClrType` probe at the bottom — where a
-        // same-compilation `Payload2471` erases to `System.Object`, which is
-        // the platform wrapper's own relayed `ClrType` — and answered YES.
-        // The wrong indexer won, and only then did its parameter fail to
-        // convert, which is why the diagnostic named a conversion.
+        // The conversion side needs the OPPOSITE answer — §3 rule 3 rejects
+        // `C[T!] -> C[T]`, so an invariant type-argument position must NOT
+        // treat them as interchangeable. That is a different question and it
+        // is asked separately, at the one caller that needs it:
+        // `TryClassifyConstructedGenericConversion` pairs this test with
+        // `Conversion.IsPlatformArgumentIllegal` /
+        // `IsPlatformArgumentWidening`. Overloading this helper with both
+        // meanings is what produced two review rounds of finding-and-
+        // counter-finding; splitting them is the fix.
+        //
+        // Measured for the case the arm was added for: without any platform
+        // arm at all, `SameTypeSymbol(Payload2471, object!)` fell through to
+        // the `ClrType` probe at the bottom — where a same-compilation
+        // `Payload2471` erases to `System.Object`, which is the platform
+        // wrapper's own relayed `ClrType` — and answered YES, so
+        // `NestedKeyBox[T]`'s `this[List[object]]` beat `this[IEnumerable[T]]`
+        // (`Issue2471DictionaryIndexerSameCompilationTypeTests`). With the
+        // unwrap it answers `SameTypeSymbol(Payload2471, object)`, which is
+        // `false` — the same answer `--nullability=enabled` gives through its
+        // own `T?` unwrap one arm up.
         if (a is PlatformTypeSymbol platformA && b is PlatformTypeSymbol platformB)
         {
             return SameTypeSymbol(platformA.UnderlyingType, platformB.UnderlyingType);
         }
 
-        if (a is PlatformTypeSymbol || b is PlatformTypeSymbol)
+        if (a is PlatformTypeSymbol platformReferenceA)
         {
-            return false;
+            return SameTypeSymbol(platformReferenceA.UnderlyingType, b);
+        }
+
+        if (b is PlatformTypeSymbol platformReferenceB)
+        {
+            return SameTypeSymbol(a, platformReferenceB.UnderlyingType);
         }
 
         // Constructed user generics are interned (StructSymbol.Construct uses a

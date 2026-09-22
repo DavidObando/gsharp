@@ -1133,6 +1133,20 @@ public sealed class Adr0186PlatformTypeBindingTests
 
         // A platform-free pair is not this relation's business at all.
         Assert.False(GsConversion.IsPlatformArgumentWidening(TypeSymbol.String, nilable));
+
+        // …and its companion, which is what keeps rule 3 closed at an
+        // applicability check whose same-type helper deliberately looks
+        // THROUGH the platform wrapper. `SameTypeSymbol` has to unwrap —
+        // member hiding needs `T!` and `T` to be one signature, and making
+        // them distinct there collapsed `Issue2525`'s interface diamond into
+        // GS0266 "ambiguous between multiple overloads". So the two
+        // questions are asked separately rather than folded into one helper.
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(platform, TypeSymbol.String));
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, platform));
+        Assert.True(GsConversion.IsPlatformArgumentIllegal(nilable, platform));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platform, nilable));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(platform, platform));
+        Assert.False(GsConversion.IsPlatformArgumentIllegal(TypeSymbol.String, nilable));
     }
 
     /// <summary>
