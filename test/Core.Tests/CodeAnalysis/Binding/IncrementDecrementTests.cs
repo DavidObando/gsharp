@@ -447,6 +447,29 @@ public class IncrementDecrementTests
     }
 
     [Fact]
+    public void RefReturningIndexerIncrementMutatesInPlaceOnce()
+    {
+        var result = EmittedOracle.Evaluate("""
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) { Total = Total + amount }
+            }
+            class Source {
+                var value Meter
+                var calls int32
+                prop this[index int32] ref Meter {
+                    get { calls = calls + 1 return ref value }
+                }
+            }
+            var source = Source{}
+            source[0]++
+            var answer = source.calls * 10 + source.value.Total
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void IndexedUserCompound_ReportsArgumentConversionOnce()
     {
         // Staging a non-addressable element for the in-place operator must not

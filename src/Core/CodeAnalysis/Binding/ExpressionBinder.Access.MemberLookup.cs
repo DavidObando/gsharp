@@ -1962,19 +1962,48 @@ internal sealed partial class ExpressionBinder
             // the operator — and the conversion of its argument, which may
             // report diagnostics — is bound exactly once, against the target
             // that is actually mutated. It is materialised only if resolution
-            // succeeds.
-            LocalVariableSymbol? valueTemp =
-                GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(compoundTarget.Type)
+            // succeeds. A pointer dereference and an array-backed element are
+            // already addressable, so they keep the in-place application; a
+            // WRITABLE native ref-returning indexer (issue #4224) becomes
+            // addressable by hoisting the reference its getter returns, which
+            // also keeps that getter evaluated exactly once across the read,
+            // the postfix capture, and the mutation.
+            var refReturningElement = RefCapabilities.IsNativeRefReturningCall(compoundTarget)
+                && !RefCapabilities.IsReadOnlyStorage(compoundTarget)
+                && IsLvalue(compoundTarget);
+            LocalVariableSymbol? addressTemp = null;
+            BoundAddressOfExpression? elementAddress = null;
+            LocalVariableSymbol? valueTemp = null;
+            if (refReturningElement)
+            {
+                elementAddress = new BoundAddressOfExpression(null, compoundTarget, unmanaged: false);
+                addressTemp = new LocalVariableSymbol(
+                    $"<idxRef{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: true,
+                    elementAddress.Type);
+            }
+            else if (GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(compoundTarget.Type)
                 && compoundTarget is not BoundDereferenceExpression
-                && compoundTarget is not BoundIndexExpression { IsArrayBackedElementAccess: true }
-                    ? new LocalVariableSymbol(
-                        $"<idxCompound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
-                        isReadOnly: false,
-                        compoundTarget.Type)
-                    : null;
-            BoundExpression userCompoundTarget = valueTemp == null
-                ? compoundTarget
-                : new BoundVariableExpression(null, valueTemp);
+                && compoundTarget is not BoundIndexExpression { IsArrayBackedElementAccess: true })
+            {
+                valueTemp = new LocalVariableSymbol(
+                    $"<idxCompound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: false,
+                    compoundTarget.Type);
+            }
+
+            BoundExpression userCompoundTarget = compoundTarget;
+            if (addressTemp != null)
+            {
+                userCompoundTarget = new BoundDereferenceExpression(
+                    null,
+                    new BoundVariableExpression(null, addressTemp));
+            }
+            else if (valueTemp != null)
+            {
+                userCompoundTarget = new BoundVariableExpression(null, valueTemp);
+            }
+
             var userCompound = TryBindUserCompoundAssignmentOperator(
                 compoundOperatorToken.Kind,
                 userCompoundTarget,
@@ -1982,7 +2011,27 @@ internal sealed partial class ExpressionBinder
                 resolvedCompoundRhsSyntax.Location);
             if (userCompound != null)
             {
-                if (valueTemp != null)
+                if (addressTemp != null)
+                {
+                    // The captured managed pointer cannot survive a suspension
+                    // of the enclosing async method, so an awaiting right-hand
+                    // side is rejected exactly as it is for a ref-returning
+                    // call or property target.
+                    if (AsyncBoundTreeQueries.HasAwait(rhsBound))
+                    {
+                        Diagnostics.ReportManagedReference(
+                            resolvedCompoundRhsSyntax.Location,
+                            "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+                        return new BoundErrorExpression(outerSyntax);
+                    }
+
+                    scope.TryDeclareVariable(addressTemp);
+                    statements.Add(new BoundVariableDeclaration(
+                        outerSyntax,
+                        addressTemp,
+                        Invariant.Required(elementAddress, "a hoisted element reference has an address")));
+                }
+                else if (valueTemp != null)
                 {
                     scope.TryDeclareVariable(valueTemp);
                     statements.Add(new BoundVariableDeclaration(outerSyntax, valueTemp, compoundTarget));
