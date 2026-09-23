@@ -101,6 +101,10 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 #   src/Sdk/Gsharp.Runtime.Channels  #3905's root, and a ProjectReference
 #                                 leaf, so it costs this job only a couple of
 #                                 minutes. ADDED BY #3933, see below.
+#   src/Sdk/Gsharp.Runtime.Values  the native slice/managed-reference runtime
+#                                 that Compiler, the SDK, Repl and two test
+#                                 projects reference; a ProjectReference
+#                                 leaf. ADDED BY #4350, see below.
 #   tools/cs2gs/Cs2Gs.Pipeline    the OTHER cs2gs hub: Cli, Report and Tests
 #                                 all reference it. ADDED BY #3978, see below.
 #   tools/cs2gs/Cs2Gs.ProjectLoading  Pipeline's ProjectReference; here to keep
@@ -139,6 +143,13 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # otherwise fail the run). This expanded the guard from six apps to eight;
 # recent eight-app migrations measure ~50-52 minutes on GitHub-hosted runners.
 #
+# ADDED BY #4350. Gsharp.Runtime.Values declares the CLR types behind the
+# native `slice[T]` and `managed T` views. Its self-migration broke when cs2gs
+# printed those declarations through their own consumer view, and #4351 kept
+# it as a C# passthrough while ADR-0187 was implemented. It now translates
+# nominally inside its own compilation and uses first-class Index/Range
+# syntax, so this guard catches a regression before the nightly does.
+#
 # STILL DELIBERATELY ABSENT: tools/cs2gs/Cs2Gs.Tests, which #3836 names as the
 # natural next step. It has ~9 known migration failures and would be red by
 # construction until those clear — the same reasoning that kept Channels out
@@ -148,6 +159,7 @@ guard_apps=(
   src/Core/Core.csproj
   src/Formatting/GSharp.Formatting/GSharp.Formatting.csproj
   src/Sdk/Gsharp.Runtime.Channels/Gsharp.Runtime.Channels.csproj
+  src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.csproj
   tools/cs2gs/Cs2Gs.CodeModel/Cs2Gs.CodeModel.csproj
   tools/cs2gs/Cs2Gs.Pipeline/Cs2Gs.Pipeline.csproj
   tools/cs2gs/Cs2Gs.ProjectLoading/Cs2Gs.ProjectLoading.csproj

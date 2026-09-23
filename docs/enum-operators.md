@@ -12,7 +12,7 @@ G# follows the C# §11.10 enum operator specification. All enum operator rules a
 | `+` | U | E | E | Arithmetic |
 | `-` | E | U | E | Arithmetic |
 | `-` | E | E | U | Arithmetic |
-| `~` (prefix) | E | — | E | Unary (ones-complement; ADR-0192) |
+| `~` (prefix) | E | — | E | Unary (ones-complement; ADR-0187) |
 
 Where **E** is any enum type and **U** is its CLR underlying type (one of `int8`, `uint8`, `int16`, `uint16`, `int32`, `uint32`, `int64`, `uint64`).
 

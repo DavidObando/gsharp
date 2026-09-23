@@ -1230,7 +1230,7 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
-    /// ADR-0192 §6: whether <paramref name="type"/> is a compiler-recognized
+    /// ADR-0187 §6: whether <paramref name="type"/> is a compiler-recognized
     /// <c>Gsharp.Runtime.Values</c> type (one of <paramref name="names"/>) seen
     /// through its native CONSUMER view.
     /// </summary>
@@ -1251,7 +1251,7 @@ public sealed class CSharpTypeMapper
             && !SymbolEqualityComparer.Default.Equals(type.OriginalDefinition.ContainingAssembly, compilation.Assembly);
 
     /// <summary>
-    /// ADR-0192 §6: whether <paramref name="type"/> has the assembly, namespace
+    /// ADR-0187 §6: whether <paramref name="type"/> has the assembly, namespace
     /// and generic name of a compiler-recognized <c>Gsharp.Runtime.Values</c>
     /// type, regardless of which compilation declares it.
     /// </summary>
@@ -1266,7 +1266,7 @@ public sealed class CSharpTypeMapper
 
     /// <summary>
     /// Issue #1894: whether <paramref name="type"/> is the BCL <c>System.Index</c>
-    /// or <c>System.Range</c> struct. ADR-0192 maps both as ordinary imported
+    /// or <c>System.Range</c> struct. ADR-0187 maps both as ordinary imported
     /// types; this only distinguishes a range bound's compiler-inserted
     /// Index conversion from its natural type.
     /// </summary>

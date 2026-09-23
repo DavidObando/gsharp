@@ -160,7 +160,7 @@ public class Issue1022FromEndIndexEmitTests
     [Fact]
     public void OnesComplementAndXor_Unchanged()
     {
-        // Regression: one's-complement (spelled `~` since ADR-0192) and infix
+        // Regression: one's-complement (spelled `~` since ADR-0187) and infix
         // `^` (XOR) keep their meanings.
         var source = """
             package P

@@ -17,7 +17,7 @@ namespace Cs2Gs.Tests;
 /// site: <c>foreach</c> variables, <c>is</c>/<c>switch</c> pattern
 /// designations, <c>out</c> arguments, tuple deconstruction, LINQ query range
 /// variables, and collection-initializer elements (<c>{ [^1] = v }</c>).
-/// ADR-0192 / issue #4350 made Index/Range first-class G# values, so each of
+/// ADR-0187 / issue #4350 made Index/Range first-class G# values, so each of
 /// those sites now translates directly and the printed G# must bind.
 /// </summary>
 public class Issue1967IndexRangeHardeningTests
@@ -26,7 +26,7 @@ public class Issue1967IndexRangeHardeningTests
     public void ImplicitElementAccess_FromEndIndexKey_TranslatesWithoutGap()
     {
         // `{ [^1] = v }` inside a collection initializer, against an indexer
-        // whose parameter is `Index`: both translate directly (ADR-0192).
+        // whose parameter is `Index`: both translate directly (ADR-0187).
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 using System;

@@ -357,7 +357,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor FixedBufferElementTypeNotSupported = new("GS0409", DiagnosticSeverity.Error, "Fixed-size buffer element type '{0}' is not supported; use a blittable primitive (bool, int8…int64, uint8…uint64, char, float32, float64) (ADR-0122 §10).");
 
     // GS0410 (leading from-end marker in a standalone range) retired by
-    // ADR-0192 / issue #4350: prefix `^x` is now a first-class System.Index
+    // ADR-0187 / issue #4350: prefix `^x` is now a first-class System.Index
     // expression everywhere, so `^a..^b` is valid. The id is tracked as
     // Retired in DiagnosticIdUniquenessTests so it is never reused.
     internal static readonly DiagnosticDescriptor StackAllocCountInferredWithoutInitializer = new("GS0411", DiagnosticSeverity.Error, "A count-inferred 'stackalloc []T' requires a brace-delimited initializer to determine its length (e.g. 'stackalloc []int32{{1, 2, 3}}'); supply an initializer or spell the count explicitly ('stackalloc [n]T') (ADR-0124 / issue #1041).");

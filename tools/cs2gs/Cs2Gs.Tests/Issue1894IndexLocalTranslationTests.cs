@@ -15,7 +15,7 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Issue #1894: a <c>System.Index</c>-typed local (<c>Index third = ^3;</c>)
 /// used to print a bare G# <c>^3</c> that gsc read as one's-complement, so
-/// the translator reported a loud CS2GS-GAP. ADR-0192 / issue #4350 made
+/// the translator reported a loud CS2GS-GAP. ADR-0187 / issue #4350 made
 /// prefix <c>^x</c> a first-class G# <c>System.Index</c> expression (and moved
 /// one's-complement to <c>~x</c>), so saved, passed, and returned Index values
 /// now translate verbatim. The inline bracket forms (<c>a[^3]</c>,
@@ -133,7 +133,7 @@ namespace Corpus.Issue1894
     public void IndexTypedLocal_FromFromEndLiteral_TranslatesToFirstClassIndex()
     {
         // The exact issue #1894 repro: `Index third = ^3; ... a[third];`.
-        // ADR-0192 made `^3` a first-class G# System.Index expression, so the
+        // ADR-0187 made `^3` a first-class G# System.Index expression, so the
         // saved value keeps its from-end meaning with no gap.
         string rendered = Render(@"
 using System;

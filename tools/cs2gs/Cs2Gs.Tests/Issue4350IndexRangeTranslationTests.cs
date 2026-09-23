@@ -14,7 +14,7 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// ADR-0192 / issue #4350: cs2gs preserves C# <c>System.Index</c> /
+/// ADR-0187 / issue #4350: cs2gs preserves C# <c>System.Index</c> /
 /// <c>System.Range</c> declarations and expressions as first-class G# syntax,
 /// translates C# <c>~</c> to G# <c>~</c>, and keeps compiler-recognized
 /// runtime types nominal inside the compilation that declares them.

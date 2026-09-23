@@ -156,7 +156,7 @@ public sealed partial class CSharpToGSharpTranslator
                             prefix.IsKind(SyntaxKind.PreIncrementExpression) ? "+=" : "-=");
                     }
 
-                    // ADR-0192: a C# from-end index `^n` is a first-class G#
+                    // ADR-0187: a C# from-end index `^n` is a first-class G#
                     // `System.Index` expression in every position, so it
                     // round-trips verbatim — as a bracket argument, a saved
                     // local, an argument, or a range bound.
@@ -166,7 +166,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     // C# `~x` (one's-complement) and every other prefix
-                    // operator token are spelled identically in G# (ADR-0192).
+                    // operator token are spelled identically in G# (ADR-0187).
                     string prefixOp = prefix.OperatorToken.Text;
                     return new UnaryExpression(
                         prefixOp,
@@ -197,7 +197,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.TranslateAnonymousObjectCreation(anonymous);
 
                 case RangeExpressionSyntax range:
-                    // ADR-0192: a reusable C# range value keeps its readable
+                    // ADR-0187: a reusable C# range value keeps its readable
                     // `a..b` / `^a..^b` / `..` form as a G# System.Range value.
                     return new RangeIndexExpression(
                         range.LeftOperand != null ? this.TranslateExpression(range.LeftOperand) : null,

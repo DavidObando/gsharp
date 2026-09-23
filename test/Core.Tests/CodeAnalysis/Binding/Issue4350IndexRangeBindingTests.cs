@@ -10,7 +10,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
-/// ADR-0192 / issue #4350: emitted-oracle coverage for first-class
+/// ADR-0187 / issue #4350: emitted-oracle coverage for first-class
 /// <c>System.Index</c> / <c>System.Range</c> expressions and the <c>~</c>
 /// one's-complement operator.
 /// </summary>

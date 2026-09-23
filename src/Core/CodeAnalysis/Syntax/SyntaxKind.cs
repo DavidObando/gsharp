@@ -49,7 +49,7 @@ public enum SyntaxKind
     HatToken,
     HatEqualsToken,
 
-    // ADR-0192: C#-equivalent prefix `~` one's-complement. Prefix `^` is the
+    // ADR-0187: C#-equivalent prefix `~` one's-complement. Prefix `^` is the
     // first-class `System.Index` from-end expression.
     TildeToken,
     AmpersandToken,

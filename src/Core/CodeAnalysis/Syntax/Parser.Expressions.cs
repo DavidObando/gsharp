@@ -420,7 +420,7 @@ public partial class Parser
         }
         else if (Current.Kind == SyntaxKind.HatToken && parentPrecedence <= 6)
         {
-            // ADR-0192: prefix `^x` is the first-class `System.Index` from-end
+            // ADR-0187: prefix `^x` is the first-class `System.Index` from-end
             // expression in every expression context, at C#'s unary precedence
             // (`^a.b` is `^(a.b)`; `^a + 1` is `(^a) + 1`). One's-complement is
             // spelled `~x`, and binary `^` remains XOR.

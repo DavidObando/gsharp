@@ -205,7 +205,7 @@ public class DiagnosticIdUniquenessTests
             ["GS0316"] = "Retired",
             ["GS0317"] = "Retired",
 
-            // Retired by ADR-0192 / issue #4350: prefix `^x` is a first-class
+            // Retired by ADR-0187 / issue #4350: prefix `^x` is a first-class
             // System.Index expression, so a standalone range may start with it.
             ["GS0410"] = "Retired",
 

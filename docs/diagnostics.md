@@ -1198,10 +1198,10 @@ owned struct and that the two types differ; `GS0395` rejects a second conversion
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0410 | _Retired_ | Previously: a standalone range could not start with a from-end `^` marker. ADR-0192 (issue #4350) made prefix `^x` a first-class `System.Index` expression and moved one's-complement to `~x`, so `^a..^b` is valid; this diagnostic is no longer emitted. | — |
+| GS0410 | _Retired_ | Previously: a standalone range could not start with a from-end `^` marker. ADR-0187 (issue #4350) made prefix `^x` a first-class `System.Index` expression and moved one's-complement to `~x`, so `^a..^b` is valid; this diagnostic is no longer emitted. | — |
 
 GS0410 was reported for a standalone range that began with `^` while prefix
-`^` still meant one's-complement. ADR-0192 retired it: `^x` is a
+`^` still meant one's-complement. ADR-0187 retired it: `^x` is a
 `System.Index` expression in every position and `~x` is one's-complement.
 
 ## Stackalloc initializer diagnostics (GS0411–GS0412)

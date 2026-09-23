@@ -3462,7 +3462,7 @@ internal sealed partial class ExpressionBinder
             new BoundVariableExpression(null, lenLocal));
     }
 
-    // ADR-0192: bind one written range bound exactly once. A `^n` marker keeps
+    // ADR-0187: bind one written range bound exactly once. A `^n` marker keeps
     // its int32 operand and from-end flag so the direct slicing paths can
     // resolve it against the source length; a bound that is already a
     // `System.Index` value (`i..j` over saved indices, `(^1)..`) is kept as an
@@ -3495,7 +3495,7 @@ internal sealed partial class ExpressionBinder
 
     // Issue #1022: resolve a bound range bound to an int32 offset. A from-end
     // marker `^n` lowers to `srcLen - n`; an Index value resolves through
-    // `Index.GetOffset(srcLen)` (ADR-0192); a missing bound uses
+    // `Index.GetOffset(srcLen)` (ADR-0187); a missing bound uses
     // <paramref name="defaultValue"/>; otherwise the bound is the plain value.
     private BoundExpression BindRangeBoundValue(
         RangeBound? bound,
@@ -3651,7 +3651,7 @@ internal sealed partial class ExpressionBinder
     // defaults to the start (`Index(0, fromEnd: false)`), an open upper to the
     // end (`Index(0, fromEnd: true)`), a `^n` marker to `Index(n, fromEnd:
     // true)`, a bound that is already a `System.Index` value is used as-is
-    // (ADR-0192: `^3..^1`, `i..j`), and a plain value `v` to `Index(v,
+    // (ADR-0187: `^3..^1`, `i..j`), and a plain value `v` to `Index(v,
     // fromEnd: false)`. Shared by the `this[System.Range]` indexer-slice path
     // (#1016), the native-slice path, and the standalone range value (#1038).
     // Bounds are bound, and therefore evaluated, exactly once, left to right.
@@ -3701,20 +3701,20 @@ internal sealed partial class ExpressionBinder
             rangeSym);
     }
 
-    // ADR-0192: bind a first-class `^n` expression to a `System.Index` value.
+    // ADR-0187: bind a first-class `^n` expression to a `System.Index` value.
     private BoundExpression BindFromEndIndexValue(FromEndIndexExpressionSyntax syntax)
     {
         _ = TryBindSystemIndexValue(syntax, out var indexValue);
         return Invariant.Required(indexValue, "TryBindSystemIndexValue always binds a from-end index expression");
     }
 
-    // Issue #1038 / ADR-0192: bind a standalone range expression (`let r =
+    // Issue #1038 / ADR-0187: bind a standalone range expression (`let r =
     // 1..3`, `^4..^1`, `..`) to a constructed `System.Range` value.
     private BoundExpression BindStandaloneRange(RangeExpressionSyntax range)
         => BuildSystemRangeValue(range);
 
     /// <summary>
-    /// ADR-0192: one bound written in a range expression, bound exactly once.
+    /// ADR-0187: one bound written in a range expression, bound exactly once.
     /// </summary>
     /// <param name="Value">The bound int32 offset or <c>System.Index</c> value.</param>
     /// <param name="FromEnd">Whether <paramref name="Value"/> is the operand of a written <c>^n</c> marker.</param>

@@ -1,8 +1,12 @@
-# ADR-0192: First-class Index/Range expressions and recognized runtime declarations
+# ADR-0187: First-class Index/Range expressions and recognized runtime declarations
 
 - **Status**: Accepted (implemented for issue #4350)
 - **Date**: 2026-09-21
 - **Issue**: [#4350](https://github.com/DavidObando/gsharp/issues/4350)
+- **Numbering**: proposed as ADR-0192 in #4351 and renumbered to the free slot
+  0187 when ADR-0192 was assigned to partial methods (#4339). The 0187 number
+  was earlier proposed by closed, unmerged PR #4326, which ADR-0192 cites by
+  PR number.
 - **Related**: [ADR-0115](0115-csharp-to-gsharp-migration-tool.md),
   [ADR-0154](0154-test-oracle-strength.md),
   [ADR-0181](0181-readonly-managed-reference-contracts.md),

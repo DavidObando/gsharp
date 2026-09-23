@@ -10,7 +10,7 @@ using Xunit;
 namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
-/// ADR-0192 / issue #4350: prefix <c>^x</c> is a first-class
+/// ADR-0187 / issue #4350: prefix <c>^x</c> is a first-class
 /// <c>System.Index</c> expression, standalone ranges accept from-end and saved
 /// Index bounds, and unary one's-complement is spelled <c>~x</c>. Each program
 /// is compiled, IL-verified, and executed.

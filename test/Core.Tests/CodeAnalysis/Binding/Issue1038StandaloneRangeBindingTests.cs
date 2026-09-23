@@ -15,7 +15,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 
 /// <summary>
 /// Issue #1038: Emitted-oracle coverage for standalone range binding.
-/// Traceability: diagnostic GS0410 (retired by ADR-0192).
+/// Traceability: diagnostic GS0410 (retired by ADR-0187).
 /// </summary>
 public class Issue1038StandaloneRangeBindingTests
 {
@@ -96,7 +96,7 @@ public class Issue1038StandaloneRangeBindingTests
     [Fact]
     public void LeadingFromEndMarker_BindsReusableRange_Adr0192()
     {
-        // ADR-0192 retired GS0410: `^3..^1` over five elements is {30, 40}.
+        // ADR-0187 retired GS0410: `^3..^1` over five elements is {30, 40}.
         var result = Evaluate("var xs = [5]int32{10, 20, 30, 40, 50}\nlet r = ^3..^1\nlet ys = xs[r]\nys.Length * 1000 + ys[0] + ys[1]");
         Assert.Empty(result.Diagnostics);
         Assert.Equal((2 * 1000) + 30 + 40, result.Value);

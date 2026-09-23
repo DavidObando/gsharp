@@ -1085,7 +1085,7 @@ Slicing a target that matches none of these shapes reports `GS0392`.
 
 #### From-end indices (`^n`)
 
-A **from-end index** expression `^n` (ADR-0192) is a first-class `System.Index` value with `IsFromEnd == true`, exactly as in C#. It measures the offset `n` from the end of whatever it eventually indexes, i.e. the concrete offset is `length - n`:
+A **from-end index** expression `^n` (ADR-0187) is a first-class `System.Index` value with `IsFromEnd == true`, exactly as in C#. It measures the offset `n` from the end of whatever it eventually indexes, i.e. the concrete offset is `length - n`:
 
 ```gsharp
 let xs = []int32{10, 20, 30, 40, 50}
@@ -1137,7 +1137,7 @@ All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported, and either b
 
 **Indexing by a range value.** A `System.Range`-typed value used as an index argument (`a[r]`, or the inline `a[(1..3)]`) slices the receiver using the *same* shapes as the syntactic `a[1..3]` form: arrays/slices copy via `Array.Copy`, `string` uses `Substring`, span-like values use `Slice`, and a `this[System.Range]` indexer is called with the value directly. The concrete `start`/`length` are resolved from the range value at runtime via `System.Index.GetOffset(length)`.
 
-**From-end bounds.** Since ADR-0192 a standalone range may begin with a from-end bound (`^a..b`, `^4..^1`); the former `GS0410` restriction is retired. Saved `System.Index` values are valid bounds too (`let r = i..j`).
+**From-end bounds.** Since ADR-0187 a standalone range may begin with a from-end bound (`^a..b`, `^4..^1`); the former `GS0410` restriction is retired. Saved `System.Index` values are valid bounds too (`let r = i..j`).
 
 ### Composite literals
 
@@ -1529,9 +1529,9 @@ Assignment        = identifier "=" Assignment
                   | identifier "." identifier "=" Assignment
                   | AccessorExpression ( "+=" | "-=" ) Assignment
                   | RangeExpression .
-RangeExpression   = BinaryExpression? ".." ( "^"? BinaryExpression )? | BinaryExpression .  (* standalone System.Range value, ; `..` binds looser than every binary operator, so `1+2..3+4` is `(1+2)..(3+4)`. Either bound may be a `^` from-end Index expression (ADR-0192). Suppressed inside an index bound, where IndexArgument owns `..`. *)
+RangeExpression   = BinaryExpression? ".." ( "^"? BinaryExpression )? | BinaryExpression .  (* standalone System.Range value, ; `..` binds looser than every binary operator, so `1+2..3+4` is `(1+2)..(3+4)`. Either bound may be a `^` from-end Index expression (ADR-0187). Suppressed inside an index bound, where IndexArgument owns `..`. *)
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
-PrefixExpression  = ( "+" | "-" | "!" | "~" | "^" | "*" | "&" | "<-" | "await" | "++" | "--" ) PrefixExpression | PostfixExpression .  (* "~" one's-complement; "^" System.Index from-end (ADR-0192) *)
+PrefixExpression  = ( "+" | "-" | "!" | "~" | "^" | "*" | "&" | "<-" | "await" | "++" | "--" ) PrefixExpression | PostfixExpression .  (* "~" one's-complement; "^" System.Index from-end (ADR-0187) *)
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
 (* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions. Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`).. *)
 IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
@@ -2359,7 +2359,7 @@ Assignment        ::= identifier '=' Assignment
                     | (identifier | PostfixExpression) ('+=' | '-=') Assignment   (* event subscribe / unsubscribe *)
                     | ConditionalExpression
 ConditionalExpression ::= RangeExpression ('?' Assignment ':' Assignment)?   (* ternary,  *)
-RangeExpression   ::= NullCoalescingExpression? '..' ('^'? NullCoalescingExpression)? | NullCoalescingExpression   (* standalone System.Range value, ; `..` binds looser than all binary operators. Either bound may be a '^' from-end Index expression (ADR-0192). Suppressed inside an index bound (IndexArgument owns '..'); re-enabled inside parens/argument lists. *)
+RangeExpression   ::= NullCoalescingExpression? '..' ('^'? NullCoalescingExpression)? | NullCoalescingExpression   (* standalone System.Range value, ; `..` binds looser than all binary operators. Either bound may be a '^' from-end Index expression (ADR-0187). Suppressed inside an index bound (IndexArgument owns '..'); re-enabled inside parens/argument lists. *)
 NullCoalescingExpression ::= WithExpression ('??' NullCoalescingExpression)?  (* right-assoc null-coalescing,  *)
 WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* non-destructive record update *)
 CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '>>>=' | '??='   (* '>>>=' unsigned right shift assign,  *)
@@ -2373,7 +2373,7 @@ BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '>>>' | '&' | '&^'
                     | '==' | '!=' | '<' | '<=' | '>' | '>='
                     | '&&'
                     | '||'
-PrefixExpression  ::= ('+' | '-' | '!' | '~' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression   (* '~' is one's-complement; '^' is a System.Index from-end expression (ADR-0192) *)
+PrefixExpression  ::= ('+' | '-' | '!' | '~' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression   (* '~' is one's-complement; '^' is a System.Index from-end expression (ADR-0187) *)
 PostfixExpression ::= PrimaryExpression PostfixOp*
 PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') IndexArgumentList ']'
 IndexArgumentList ::= IndexArgument (',' IndexArgument)*

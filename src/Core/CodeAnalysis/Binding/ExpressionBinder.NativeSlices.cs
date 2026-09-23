@@ -385,7 +385,7 @@ internal sealed partial class ExpressionBinder
         BoundImportedInstanceCallExpression call;
         if (lowerBound is { IsIndexValue: true } || upperBound is { IsIndexValue: true })
         {
-            // ADR-0192: a saved `System.Index` bound (`s[i..j]`, `s[(^2)..]`)
+            // ADR-0187: a saved `System.Index` bound (`s[i..j]`, `s[(^2)..]`)
             // resolves through the runtime's Range overload, exactly like a
             // saved `System.Range` index.
             var rangeMethod = clrType.GetMethods().Single(m => m.Name == "Subslice" && m.GetParameters().Length == 1);

@@ -59,7 +59,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0192: C# `~` is G# `~`, so the complement needs no parentheses
+        // ADR-0187: C# `~` is G# `~`, so the complement needs no parentheses
         // to stay distinct from the from-end `^index`.
         Assert.Contains("values[~index]", printed);
         Assert.DoesNotContain("__spill", printed);

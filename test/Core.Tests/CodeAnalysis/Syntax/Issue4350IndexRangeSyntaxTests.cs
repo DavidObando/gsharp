@@ -9,7 +9,7 @@ using Xunit;
 namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 
 /// <summary>
-/// ADR-0192 / issue #4350: prefix <c>^x</c> parses as a first-class
+/// ADR-0187 / issue #4350: prefix <c>^x</c> parses as a first-class
 /// <see cref="FromEndIndexExpressionSyntax"/> in every expression context at
 /// unary precedence, <c>~x</c> is the one's-complement unary operator, and
 /// binary <c>^</c> stays XOR.

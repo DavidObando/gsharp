@@ -589,7 +589,7 @@ internal sealed partial class ExpressionBinder
                 // binds to a constructed `System.Range` value.
                 return BindStandaloneRange((RangeExpressionSyntax)syntax);
             case SyntaxKind.FromEndIndexExpression:
-                // ADR-0192: `^n` is a first-class `System.Index` value in every
+                // ADR-0187: `^n` is a first-class `System.Index` value in every
                 // expression context (`let last = ^1`, `consume(^2)`).
                 return BindFromEndIndexValue((FromEndIndexExpressionSyntax)syntax);
             default:
