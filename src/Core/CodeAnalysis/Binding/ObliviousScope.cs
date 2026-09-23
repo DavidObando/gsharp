@@ -489,28 +489,56 @@ internal static class ObliviousScope
                 }
             }
 
-            return builder.Count == 0 ? Empty : new ScopeMap(builder.ToImmutable());
+            if (builder.Count == 0)
+            {
+                return Empty;
+            }
+
+            // Sorted by start so a lookup can binary-search (see TryFind).
+            builder.Sort(static (x, y) => x.Span.Start.CompareTo(y.Span.Start));
+            return new ScopeMap(builder.ToImmutable());
         }
 
         /// <summary>
         /// Finds the innermost scope containing <paramref name="position"/>.
-        /// Scopes come from syntax, so any two either nest or are disjoint and
-        /// the shortest containing span is the innermost one.
+        /// Scopes come from syntax, so any two either nest or are disjoint:
+        /// among the scopes that contain a position, the innermost is the one
+        /// that starts last. The scopes are sorted by start, so this binary-
+        /// searches for the last scope starting at or before the position and
+        /// walks back to the first one that still contains it — typically a
+        /// step or two, since only enclosing declarations lie in between.
         /// </summary>
         internal bool TryFind(int position, out bool oblivious)
         {
             oblivious = false;
-            var bestLength = int.MaxValue;
-            foreach (var (span, value) in this.scopes)
+            var low = 0;
+            var high = this.scopes.Length - 1;
+            var last = -1;
+            while (low <= high)
             {
-                if (position >= span.Start && position < span.End && span.Length < bestLength)
+                var mid = low + ((high - low) / 2);
+                if (this.scopes[mid].Span.Start <= position)
                 {
-                    bestLength = span.Length;
-                    oblivious = value;
+                    last = mid;
+                    low = mid + 1;
+                }
+                else
+                {
+                    high = mid - 1;
                 }
             }
 
-            return bestLength != int.MaxValue;
+            for (var i = last; i >= 0; i--)
+            {
+                var (span, value) = this.scopes[i];
+                if (position < span.End)
+                {
+                    oblivious = value;
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }
