@@ -1588,11 +1588,12 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     private static bool StaticVirtualSignaturesMatch(FunctionSymbol iface, FunctionSymbol impl)
     {
-        // ADR-0186: exact identity, except that a platform type on either side
-        // conforms as its underlying (see ConformanceSignaturesEquivalent).
+        // ADR-0186: exact identity, or conformance — which reads through a
+        // platform position at any depth (`List[Item!]?` against
+        // `List[Item]?`) and is otherwise the ordinary signature comparison.
         static bool StaticVirtualTypesMatch(TypeSymbol a, TypeSymbol b)
             => System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(a, b)
-                || ((a is PlatformTypeSymbol || b is PlatformTypeSymbol) && ConformanceSignaturesEquivalent(a, b));
+                || ConformanceSignaturesEquivalent(a, b);
 
         if (iface.Parameters.Length != impl.Parameters.Length)
         {

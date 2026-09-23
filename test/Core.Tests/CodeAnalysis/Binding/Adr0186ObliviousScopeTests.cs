@@ -888,6 +888,53 @@ public class Adr0186ObliviousScopeTests
     }
 
     /// <summary>
+    /// Nested platform positions in conformance (found in review, PR #4357):
+    /// a function-typed parameter <c>(Item) -&gt; Item</c> and a tuple return
+    /// written over a G# class (no <c>ClrType</c>, so only a structural
+    /// comparison can match <c>(Item!) -&gt; Item!</c>), and a static member
+    /// whose platform position sits under an explicit <c>?</c>
+    /// (<c>List[Item!]?</c>) rather than at the top level.
+    /// </summary>
+    [Fact]
+    public void Nested_Platform_Positions_Conform()
+    {
+        var output = Run(
+            """
+            class Item {
+                var Value int32
+            }
+
+            interface IApply {
+                func Apply(f (Item) -> Item, x Item) Item;
+                func Pair(x Item) (Item, int32);
+            }
+
+            interface IAll {
+                shared {
+                    func All() List[Item]?;
+                }
+            }
+
+            @Oblivious
+            class Impl : IApply, IAll {
+                func Apply(f (Item) -> Item, x Item) Item { return f(x) }
+                func Pair(x Item) (Item, int32) { return (x, x.Value) }
+
+                shared {
+                    func All() List[Item]? { return nil }
+                }
+            }
+
+            let apply IApply = Impl{}
+            Console.WriteLine(apply.Apply((i Item) -> i, Item{Value: 7}).Value)
+            Console.WriteLine(apply.Pair(Item{Value: 8}).Item2)
+            Console.WriteLine(Impl.All() == nil)
+            """);
+
+        Assert.Equal("7\n8\nTrue\n", output.Replace("\r\n", "\n"));
+    }
+
+    /// <summary>
     /// A select arm awaiting a task checks a nil oblivious task like a plain
     /// <c>await</c> does (found in review, PR #4357).
     /// </summary>

@@ -1208,14 +1208,14 @@ internal sealed class InterfaceImplEmitter
 
         return true;
 
-        // ADR-0186: a platform type on either side (a static member declared
-        // in an ADR-0186 §9 oblivious scope) conforms as its underlying type,
-        // as the binder's StaticVirtualSignaturesMatch already decided.
+        // ADR-0186: a platform position at any depth (a static member
+        // declared in an ADR-0186 §9 oblivious scope) conforms as its
+        // underlying type, as the binder's StaticVirtualSignaturesMatch
+        // already decided.
         static bool Same(TypeSymbol? x, TypeSymbol? y)
             => ReferenceEquals(x, y)
                 || x?.Name == y?.Name
-                || ((x is PlatformTypeSymbol || y is PlatformTypeSymbol)
-                    && Binding.DeclarationBinder.ConformanceSignaturesEquivalent(x, y));
+                || Binding.DeclarationBinder.ConformanceSignaturesEquivalent(x, y);
     }
 
     private sealed record InheritedEventBridge(

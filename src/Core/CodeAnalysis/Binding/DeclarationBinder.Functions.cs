@@ -3127,6 +3127,32 @@ internal sealed partial class DeclarationBinder
             return TypeSignaturesEquivalent(na.UnderlyingType, nb.UnderlyingType, typeParamMap);
         }
 
+        // ADR-0186: under a conformance comparison, the structural shapes
+        // that can carry a nested platform position over a same-compilation
+        // type — whose ClrType is null, so the leaf fallback below cannot
+        // answer — compare element by element, so `(Item) -> Item` conforms to
+        // an oblivious `(Item!) -> Item!`. Scoped to conformance so every
+        // exact caller keeps its existing answer for these shapes.
+        if (conformanceMatchingDepth > 0)
+        {
+            switch (a, b)
+            {
+                case (FunctionTypeSymbol fa, FunctionTypeSymbol fb):
+                    return fa.ParameterTypes.Length == fb.ParameterTypes.Length
+                        && fa.HasVariadic == fb.HasVariadic
+                        && TypeArgumentsEquivalent(fa.ParameterTypes, fb.ParameterTypes, typeParamMap)
+                        && TypeSignaturesEquivalent(fa.ReturnType, fb.ReturnType, typeParamMap);
+                case (TupleTypeSymbol ta, TupleTypeSymbol tb):
+                    return TypeArgumentsEquivalent(ta.ElementTypes, tb.ElementTypes, typeParamMap);
+                case (MapTypeSymbol ma, MapTypeSymbol mb):
+                    return TypeSignaturesEquivalent(ma.KeyType, mb.KeyType, typeParamMap)
+                        && TypeSignaturesEquivalent(ma.ValueType, mb.ValueType, typeParamMap);
+                case (ChannelTypeSymbol ca, ChannelTypeSymbol cb):
+                    return ca.Direction == cb.Direction
+                        && TypeSignaturesEquivalent(ca.ElementType, cb.ElementType, typeParamMap);
+            }
+        }
+
         // Leaf fallback for non-generic types that are not reference-interned
         // (e.g. a primitive supplied as a concrete type argument such as the
         // `int32` in `ISeq[int32]`). Type parameters keep an absent ClrType so
