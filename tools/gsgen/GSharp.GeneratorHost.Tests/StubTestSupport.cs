@@ -72,14 +72,21 @@ internal static class StubTestSupport
         var runtimeDir = new DirectoryInfo(Path.GetDirectoryName(typeof(object).Assembly.Location));
         var dotnetRoot = runtimeDir.Parent?.Parent?.Parent?.FullName;
         var packs = dotnetRoot == null ? null : Path.Combine(dotnetRoot, "packs", "Microsoft.NETCore.App.Ref");
+        // Prefer the ref pack matching the running runtime: a newer (e.g.
+        // preview) pack's generator may need a newer Roslyn than the tests load.
         var path = packs != null && Directory.Exists(packs)
             ? Directory.GetDirectories(packs)
                 .Select(dir => Path.Combine(dir, "analyzers", "dotnet", "cs", "System.Text.RegularExpressions.Generator.dll"))
                 .Where(File.Exists)
-                .OrderByDescending(candidate => Version.TryParse(Directory.GetParent(candidate).Parent.Parent.Parent.Name.Split('-')[0], out var v) ? v : new Version(0, 0))
+                .OrderByDescending(candidate => PackVersionName(candidate) == runtimeDir.Name)
+                .ThenByDescending(candidate => Version.TryParse(PackVersionName(candidate).Split('-')[0], out var v) ? v : new Version(0, 0))
                 .FirstOrDefault()
             : null;
         Assert.True(path != null, $"no System.Text.RegularExpressions.Generator.dll under '{packs}'");
         return path;
     }
+
+    // {packs}/{version}/analyzers/dotnet/cs/{generator}.dll → {version}.
+    private static string PackVersionName(string generatorPath) =>
+        Directory.GetParent(generatorPath).Parent.Parent.Parent.Name;
 }
