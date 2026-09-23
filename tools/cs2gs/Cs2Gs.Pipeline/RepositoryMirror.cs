@@ -341,6 +341,12 @@ internal static class RepositoryMirror
             sourceDirectory,
             destinationDirectory,
             generatedProjectPaths);
+        GSharpProjectTransformer.SplitMixedProjectReferencesForMirror(
+            project,
+            mappedExpressions,
+            sourceDirectory,
+            destinationDirectory,
+            generatedProjectPaths);
         GSharpProjectTransformer.RewriteNestedProjectPathsForMirror(
             project,
             sourceDirectory,

@@ -210,8 +210,10 @@ public sealed class MigrationPipeline
                 LoadedCSharpProject project =
                     await CSharpProjectLoader.LoadProjectAsync(projectPath, cancellationToken)
                         .ConfigureAwait(false);
+
+                // LoadProjectAsync returns a project or throws.
                 sources[Path.GetFullPath(projectPath)] =
-                    project.Documents.Select(document => document.FilePath).ToList();
+                    CompileSourcePaths(project!);
             }
 
             passthroughCompileSources = sources;
@@ -701,6 +703,9 @@ public sealed class MigrationPipeline
 
         return references;
     }
+
+    private static IReadOnlyList<string> CompileSourcePaths(LoadedCSharpProject project) =>
+        project.Documents.Select(document => document.FilePath).ToList();
 
     private static string NewRunId(DateTime utc)
     {

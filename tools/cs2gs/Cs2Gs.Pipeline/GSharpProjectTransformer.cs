@@ -134,6 +134,19 @@ internal static class GSharpProjectTransformer
             destinationProjectDirectory,
             generatedProjectPaths);
 
+    internal static void SplitMixedProjectReferencesForMirror(
+        XDocument document,
+        IReadOnlySet<string> mappedExpressions,
+        string sourceProjectDirectory,
+        string destinationProjectDirectory,
+        IReadOnlyDictionary<string, string> generatedProjectPaths) =>
+        SplitMixedProjectReferences(
+            document,
+            mappedExpressions,
+            sourceProjectDirectory,
+            destinationProjectDirectory,
+            generatedProjectPaths);
+
     /// <summary>
     /// Resolves a transformed project's compiler-hosted <c>Reference</c>
     /// entries — those whose <c>HintPath</c> is anchored at the compiler's

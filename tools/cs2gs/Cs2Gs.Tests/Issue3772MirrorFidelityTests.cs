@@ -164,6 +164,7 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
                 <DependencyProjects Include="..\Compiler\Compiler.csproj; ..\Support\Support.csproj" />
                 <ProjectReference Include="..\Compiler\Compiler.csproj" />
                 <ProjectReference Include="..\Compiler\Compiler.csproj; ..\Support\Support.csproj" />
+                <ProjectReference Include="..\Compiler\Compiler.csproj; ..\External\External.csproj" />
                 <ProjectReference Include="$(DependencyProjects)" />
                 <ProjectReference Include="@(DependencyProjects)" />
                 <ProjectReference Include="@(GsharpCore)" />
@@ -220,6 +221,8 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
             {
                 "../Compiler/Compiler.gsproj",
                 "../Compiler/Compiler.gsproj; ../Support/Support.csproj",
+                "../Compiler/Compiler.gsproj",
+                @"..\External\External.csproj",
                 "$(DependencyProjects)",
                 "@(DependencyProjects)",
                 "@(GsharpCore->'%(RootDir)%(Directory)%(Filename).gsproj')",
