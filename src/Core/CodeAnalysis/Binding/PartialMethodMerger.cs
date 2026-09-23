@@ -302,10 +302,6 @@ internal static class PartialMethodMerger
 
     /// <summary>
     /// Validates that the declaring and implementing parts describe the same
-    /// method, reporting GS0611 for the first aspect they disagree on.
-    /// </summary>
-    /// <summary>
-    /// Validates that the declaring and implementing parts describe the same
     /// method, reporting GS0611 for the first aspect they disagree on and
     /// returning that aspect (or <see langword="null"/> when they agree) so
     /// the caller can replay the SAME diagnostic on a later bind — see
