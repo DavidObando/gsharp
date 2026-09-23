@@ -979,13 +979,17 @@ internal sealed partial class ExpressionBinder
             staticFn.Declaration,
             returnTypeOverride: symbolicReturn);
         var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
-        result = new BoundImportedCallExpression(
+
+        // ADR-0056 §1 / issue #4350: a ref-returning static CLR method
+        // (`Unsafe.As[TFrom, TTo](&x)`) is observed through its pointee, exactly
+        // like a ref-returning instance member or indexer.
+        result = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedCallExpression(
             ce,
             overriddenFn,
             convertedArgs.MoveToImmutable(),
             refKinds,
             typeArgumentSymbols: default,
-            staticContainerType: symbolicReceiver);
+            staticContainerType: symbolicReceiver));
         result = CompleteImportedSuspendingCall(result, staticFn.Method, ce.Location);
         return true;
     }
@@ -3253,13 +3257,15 @@ internal sealed partial class ExpressionBinder
                 // the erased closed method, which is exactly what the emitted
                 // signature encodes, so carrying the symbolic container changes
                 // only the parent token.
-                BoundExpression staticCall = new BoundImportedCallExpression(
+                // ADR-0056 §1 / issue #4350: ref-returning static CLR calls
+                // auto-dereference like instance members and indexers.
+                BoundExpression staticCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedCallExpression(
                     ce,
                     staticFn,
                     staticArguments,
                     refKinds,
                     staticTypeArgSymbolsForCall,
-                    classSymbol.SymbolicReceiver);
+                    classSymbol.SymbolicReceiver));
                 staticCall = CompleteImportedSuspendingCall(staticCall, staticFn.Method, ce.Location);
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }
