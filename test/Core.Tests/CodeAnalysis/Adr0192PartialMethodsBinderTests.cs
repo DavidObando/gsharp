@@ -233,16 +233,12 @@ partial class Greeter {
     [InlineData(false)]
     public void DocComment_BothPartsInOneTypeBlock_IsAttachedToTheMergedMethod(bool onDeclaringPart)
     {
-        // Copilot review round 9: with both parts in ONE type block,
-        // PartialTypeMerger hands back the same node and PartialMethodMerger
-        // rewrites its member list in place. The tree's `///` table is built
-        // lazily from the CURRENT member list, so if nothing had asked for
-        // documentation yet, the declaring node was already gone by the time
-        // the table was built — and its comment was never indexed.
-        // Deliberately no `package` line: attaching a package's own doc
-        // comment happens to build the table before the merge, which masks
-        // the bug (verified: with `package App` this test passes even without
-        // the fix).
+        // Both parts in ONE type block. The tree's `///` table is built lazily
+        // by walking the tree, so it must still see the original declaring
+        // node however the merge is done (an in-place merge once removed it
+        // before the table was built). Deliberately no `package` line:
+        // attaching a package's own doc comment happens to build the table
+        // early, which masked that bug.
         var declaringDoc = onDeclaringPart ? "    /// Greets someone by name.\n" : string.Empty;
         var implementingDoc = onDeclaringPart ? string.Empty : "    /// Greets someone by name.\n";
         var source = "partial class Greeter {\n"
@@ -253,6 +249,21 @@ partial class Greeter {
 
         var xml = EmitDocXml(new[] { SyntaxTree.Parse(SourceText.From(source, "Greeter.gs")) }, "Adr0192-DocSingleBlock");
         Assert.Contains("Greets someone by name.", xml);
+    }
+
+    [Fact]
+    public void TypeDocComment_OnALoneTypeWithAPartialMethod_IsKept()
+    {
+        // A type that declares a partial method now binds through a copy of
+        // its declaration (the merger no longer mutates the parsed tree), and
+        // `///` comments are indexed by node reference — so the TYPE's own
+        // comment must still be found through the copy.
+        var source = "package App\n\n/// A friendly greeter.\npartial class Greeter {\n"
+            + "    partial func Greet(name string) string;\n"
+            + "    partial func Greet(name string) string {\n        return name\n    }\n}\n";
+
+        var xml = EmitDocXml(new[] { SyntaxTree.Parse(SourceText.From(source, "Greeter.gs")) }, "Adr0192-TypeDoc");
+        Assert.Contains("A friendly greeter.", xml);
     }
 
     [Fact]
@@ -1260,16 +1271,15 @@ partial class A {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // 5. Idempotency — the merger mutates shared syntax trees in place
+    // 5. Rebinding — a syntax tree outlives one compilation, so binding the
+    //    same trees again (or with other files added/removed) must behave
+    //    exactly like a first bind
     // ─────────────────────────────────────────────────────────────────────────
 
     [Fact]
     public void BindingTheSameSyntaxTreeTwice_ProducesTheSameResult()
     {
-        // PartialMethodMerger normalizes a declaration in place, so the second
-        // bind of the same tree sees an already-merged method. Without the
-        // DeclaringPart idempotency guard that method would look like a lone
-        // implementing part and report a spurious GS0610.
+        // A well-formed pair across two blocks binds clean both times.
         var tree = SyntaxTree.Parse(SourceText.From(
             @"package App
 
@@ -1292,14 +1302,10 @@ partial class A {
     [Fact]
     public void BindingTheSameSyntaxTreeTwice_TwoDeclaringParts_ReportsTheSameGS0610BothTimes()
     {
-        // Copilot review round 5: recovery from a part-count mismatch (two
-        // declaring parts, zero implementing) keeps ONE survivor and drops
-        // the other to suppress a GS0102 cascade. Without the
-        // RecoveredPartCountMismatch marker, the SECOND bind of this same
-        // tree — a single `partial class A { }` block, so PartialTypeMerger
-        // hands back the SAME node both times (`group.Count == 1`) — would
-        // see only the lone survivor and misread it as a fresh "no
-        // implementation" shape, flipping GS0610 to GS0609.
+        // Recovery from a part-count mismatch keeps one surviving part and
+        // drops the other to avoid a GS0102 cascade. The second bind of the
+        // same single-block tree must still report GS0610 at both parts, not
+        // GS0609 for a lone survivor (Copilot review rounds 5 and 8).
         var tree = SyntaxTree.Parse(SourceText.From(
             @"package App
 
@@ -1356,6 +1362,70 @@ partial class A {
             second.Count(d => d.Id == "GS0610"));
     }
 
+    [Fact]
+    public void ReusedTree_AThirdPartAddedByAnotherFile_IsCountedWithTheOriginalTwo()
+    {
+        // Copilot review round 11: the merger used to rewrite a lone type's
+        // member list in place. After a first compilation merged the pair in
+        // `a1`, a later compilation that reused that unchanged tree (the
+        // language server does, for full rebuilds) saw only the merged node,
+        // so a third part added by another file was grouped on its own.
+        var a1 = SyntaxTree.Parse(SourceText.From(
+            "package App\n\npartial class A {\n    partial func F() int32;\n    partial func F() int32 { return 1 }\n}\n",
+            "A1.gs"));
+        Assert.DoesNotContain(EmitDiagnostics(new[] { a1 }), d => d.IsError);
+
+        var a2 = SyntaxTree.Parse(SourceText.From(
+            "package App\n\npartial class A {\n    partial func F() int32;\n}\n",
+            "A2.gs"));
+        var diagnostics = EmitDiagnostics(new[] { a1, a2 });
+
+        Assert.Equal(3, diagnostics.Count(d => d.Id == "GS0610" && d.Message.Contains("2 declaring part(s) and 1 implementing part(s)")));
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0609");
+    }
+
+    [Fact]
+    public void ReusedTree_ASiblingFileRemoved_ReportsTheCurrentShapeNotTheOldOne()
+    {
+        // Copilot review round 11: recovery used to leave a marker on the
+        // surviving part's syntax node, recording the group's old shape and
+        // locations. Compiling again with the sibling file removed replayed
+        // GS0610 "2 declaring, 0 implementing" at the removed file's location,
+        // although the current source is a single unimplemented declaration.
+        var a1 = SyntaxTree.Parse(SourceText.From("package App\n\npartial class A {\n    partial func F() int32;\n}\n", "A1.gs"));
+        var a2 = SyntaxTree.Parse(SourceText.From("package App\n\npartial class A {\n    partial func F() int32;\n}\n", "A2.gs"));
+        Assert.Equal(2, EmitDiagnostics(new[] { a1, a2 }).Count(d => d.Id == "GS0610"));
+
+        var alone = EmitDiagnostics(new[] { a1 });
+        Assert.DoesNotContain(alone, d => d.Id == "GS0610");
+        Assert.Contains(alone, d => d.Id == "GS0609");
+    }
+
+    [Fact]
+    public void GenericOverloadsOverQualifiedTypeNames_AreNotConflated()
+    {
+        // Copilot review round 11: the grouping key substituted type-parameter
+        // names by raw text, which also rewrote the member segment of a
+        // qualified name — `F[T](x Types.T)` and `F[U](x Types.U)` both keyed
+        // as `Types.!0`, so these two correct overloads collapsed into one
+        // two-declaring/two-implementing group and reported GS0610.
+        var diagnostics = Compile(@"package App
+
+class Types {
+    class T { }
+    class U { }
+}
+
+partial class A {
+    partial func F[T](x Types.T) int32;
+    partial func F[T](x Types.T) int32 { return 1 }
+    partial func F[U](x Types.U) int32;
+    partial func F[U](x Types.U) int32 { return 2 }
+}
+");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1385,14 +1455,9 @@ partial class A {
     [Fact]
     public void BindingTheSameSyntaxTreeTwice_WellFormedPairInANonPartialType_ReportsGS0608BothTimes()
     {
-        // Copilot review round 6: a well-formed pair (one declaring, one
-        // implementing part) still merges even when the enclosing type is
-        // not partial — GS0608 is reported but doesn't block the merge. The
-        // merged node's DeclaringPart idempotency guard then made the SECOND
-        // bind of this same tree (a single `class A { }` block, so
-        // PartialTypeMerger hands back the SAME node both times regardless
-        // of the type's own `partial`-ness) skip the node entirely — turning
-        // a real GS0608 compile error into silent success.
+        // GS0608 does not block the merge, so the second bind of the same
+        // single-block tree must report it again rather than silently
+        // succeeding (Copilot review round 6).
         var tree = SyntaxTree.Parse(SourceText.From(
             @"package App
 
@@ -1436,21 +1501,10 @@ partial class A {
     [Fact]
     public void BindingTheSameSyntaxTreeTwice_SingleDeclarationBothParts_ProducesTheSameResult()
     {
-        // Second review round: the test above uses TWO SEPARATE `partial class
-        // A { }` blocks, but PartialTypeMerger.MergeStructs only returns the
-        // SAME instance unchanged when a type has exactly ONE syntactic part
-        // (`group.Count == 1`) — a multi-part group always builds a BRAND-NEW
-        // node from the still-unmutated originals, so the guard above is never
-        // actually exercised by that shape: each bind starts fresh regardless.
-        // This shape — one `partial class A` containing BOTH the declaring and
-        // implementing parts of F in the same block — IS the `group.Count ==
-        // 1` case, so PartialTypeMerger hands back the SAME instance both
-        // times, and the second bind sees the ALREADY-MERGED method from the
-        // first call. Without the DeclaringPart guard, that already-merged
-        // node would look like a lone implementing part on the second pass and
-        // report a spurious GS0610 ("found 0 declaring part(s) and 1
-        // implementing part(s)") — confirmed empirically by temporarily
-        // removing the guard and observing exactly that failure here.
+        // Both parts in ONE `partial class` block: PartialTypeMerger hands back
+        // the parsed node itself, so this is the shape where an in-place merge
+        // would leak into the second bind (a spurious GS0610 "found 0
+        // declaring part(s) and 1 implementing part(s)").
         var tree = SyntaxTree.Parse(SourceText.From(
             @"package App
 

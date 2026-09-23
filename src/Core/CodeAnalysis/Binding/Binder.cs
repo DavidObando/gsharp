@@ -14517,6 +14517,13 @@ public sealed class Binder
     /// <param name="syntax">The syntax node whose attached doc-comment text is being attached.</param>
     internal static void AttachDocumentation(Symbol symbol, SyntaxNode? syntax)
     {
+        // ADR-0192: a type declaring a partial method binds through a copy of
+        // its declaration, which the tree's doc table never indexed.
+        if (syntax is StructDeclarationSyntax { DocumentationSource: { } documentationSource })
+        {
+            syntax = documentationSource;
+        }
+
         // ADR-0192 / Copilot review round 7: a merged partial method's own
         // node is a NEW SyntaxNode PartialMethodMerger builds — never
         // present in either original part's tree at the point

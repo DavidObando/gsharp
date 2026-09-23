@@ -388,11 +388,22 @@ it, over the declarations that pre-pass returns:
 - On a malformed group it keeps exactly **one** surviving part (preferring an
   implementing one) so callers still bind and the existing duplicate-overload
   check (`GS0264`) does not pile a second, less informative error on top.
-- The merged node records its declaring part (`FunctionDeclarationSyntax.DeclaringPart`),
-  which doubles as the **idempotency guard**: the merger normalizes
-  declarations in place, and the same syntax tree is bound more than once (the
-  LSP rebinds; a test may compile one tree twice), so an already-merged method
-  must be passed through rather than re-grouped as a lone implementing part.
+- It **never mutates the parsed tree.** When anything merges it returns a
+  copy of the type declaration (`StructDeclarationSyntax.WithMemberLists`),
+  otherwise the same instance, and the binder uses whatever it returns. Syntax
+  trees outlive a compilation — the language server reuses unchanged trees
+  for full rebuilds, and a test may compile one tree twice — so every bind
+  starts again from the original declaring and implementing parts. (An
+  earlier in-place version stored merged nodes and recovery markers in the
+  tree; later compilations then misread them — stale part counts, locations
+  from removed files, lost diagnostics.)
+- The merged node records both original parts (`DeclaringPart`,
+  `ImplementingPart`). The binder uses them to bind the declaring part's own
+  return and parameter types in its own file's import scope and compare them
+  semantically with the implementing part's (the textual check alone misses
+  an identically-spelled type that resolves differently per file), and to find
+  a `///` comment written on either part. The type copy likewise points back
+  to the parsed declaration (`DocumentationSource`) for the type's own comment.
 
 **Nothing else changes.** The ~2 000-line body binder, every `Set*` installer,
 `FunctionSymbol`, and the emitter are untouched, because one merged node yields

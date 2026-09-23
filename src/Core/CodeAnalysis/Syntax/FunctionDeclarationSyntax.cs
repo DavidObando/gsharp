@@ -2,9 +2,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
-using System.Collections.Immutable;
-using GSharp.Core.CodeAnalysis.Text;
-
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
@@ -281,18 +278,11 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <summary>
     /// Gets or sets the <em>declaring</em> part this node was merged from
     /// (ADR-0192). Non-<see langword="null"/> only on the synthetic node
-    /// <c>PartialMethodMerger</c> builds from a declaring/implementing pair; it
-    /// records the signature-only part so tooling can report both part
-    /// locations, and it is the merger's idempotency guard — a method whose
-    /// <c>DeclaringPart</c> is already set is never re-merged when the same
-    /// syntax tree is bound again (the LSP rebinds, and a test may compile one
-    /// tree more than once). It IS, however, re-checked for GS0608 (enclosing
-    /// type not partial — cheap to recompute fresh each bind) and replayed for
-    /// <see cref="RecoveredPartsDisagreement"/> (GS0611 — NOT cheap to
-    /// recompute, since the two original parts' own disagreement can be masked
-    /// once their data is unioned into this one node): Copilot review round 6
-    /// caught both diagnostics silently disappearing on a second bind, which
-    /// this doc comment's earlier "passed through untouched" claim missed.
+    /// <c>PartialMethodMerger</c> builds from a declaring/implementing pair. The
+    /// merger builds that node fresh on every bind from the untouched parsed
+    /// parts; it never stores it back into the tree. The binder uses this to
+    /// bind the declaring part's own signature in its own file's scope and to
+    /// find its <c>///</c> comment, and tooling can report both part locations.
     /// <c>[SyntaxChildIgnore]</c>: the declaring part's tokens already belong to
     /// their own declaration in its own file, so re-parenting them here would
     /// double-count them in child enumeration and stretch this node's
@@ -304,92 +294,26 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <summary>
     /// Gets or sets the <em>implementing</em> part this node was merged from
     /// (ADR-0192). Non-<see langword="null"/> only alongside
-    /// <see cref="DeclaringPart"/>, on the same synthetic merged node.
-    /// <para>
-    /// Every OTHER property on the merged node is copied FROM this part
-    /// (its <c>Identifier</c>, <c>Body</c>, <c>Type</c>, … are the
-    /// implementing part's own tokens/nodes, carried over verbatim by
-    /// <c>BuildMergedMethod</c>) — but the implementing part's OWN
-    /// <see cref="SyntaxNode"/> identity is not one of them, and
-    /// <c>DocumentationAttacher</c> indexes doc comments by node reference.
-    /// Copilot review round 8: a <c>///</c> comment written ONLY on the
-    /// implementing part (never on the declaring part) had nowhere to be
-    /// recovered from once <c>Binder.AttachDocumentation</c>'s
-    /// declaring-part lookup (added in round 7) also missed — this
-    /// property is that recovery path. Kept purely for that lookup: nothing
-    /// else needs the implementing part once the merge is built, since the
-    /// merged node already carries its data.
-    /// </para>
-    /// <c>[SyntaxChildIgnore]</c>: for the same reason as
-    /// <see cref="DeclaringPart"/> — its tokens already belong to the
-    /// merged node itself (they were copied from here), so re-parenting the
-    /// ORIGINAL node too would double-count them in child enumeration.
+    /// <see cref="DeclaringPart"/>, on the same synthetic merged node. The
+    /// merged node's own tokens and body are copied from this part, but its
+    /// node identity is not, and <c>DocumentationAttacher</c> indexes
+    /// <c>///</c> comments by node reference — so a comment written only on
+    /// the implementing part is found through this reference.
+    /// <c>[SyntaxChildIgnore]</c> for the same reason as
+    /// <see cref="DeclaringPart"/>.
     /// </summary>
     [SyntaxChildIgnore]
     public FunctionDeclarationSyntax? ImplementingPart { get; set; }
 
     /// <summary>
-    /// Gets or sets the GS0611 aspect the declaring/implementing pair
-    /// disagreed on when this merged node was built, or <see langword="null"/>
-    /// when they agreed (ADR-0192). Set only on a node with
-    /// <see cref="DeclaringPart"/> non-null.
-    /// <para>
-    /// A real signature disagreement does not stop the merge — see
-    /// <c>ValidateConsistency</c>'s caller — so a SECOND bind of the same
-    /// syntax tree would otherwise see only the already-merged node and, per
-    /// <see cref="DeclaringPart"/>'s idempotency guard, skip re-deriving
-    /// anything from it. Re-running the same comparison against the merged
-    /// node itself is not a safe substitute: the merge unions several
-    /// modifiers with <c>??</c> (e.g. <c>OpenModifier</c>), which can make an
-    /// aspect the two ORIGINAL parts genuinely disagreed on look consistent
-    /// again once compared against the union. Recording the aspect here at
-    /// merge time — when both original parts are still directly
-    /// available — lets a later bind replay the SAME GS0611 instead of
-    /// silently turning a real compile error into success.
-    /// </para>
+    /// Gets or sets the GS0611 aspect the syntax-level consistency check
+    /// reported for the pair this merged node was built from, or
+    /// <see langword="null"/> when the parts agreed (ADR-0192). The merge
+    /// proceeds either way; the binder's cross-file semantic signature check
+    /// skips a pair that already disagreed, since past that point it could
+    /// only add cascading diagnostics.
     /// </summary>
-    public string? RecoveredPartsDisagreement { get; set; }
-
-    /// <summary>
-    /// Gets or sets the original shape of a malformed partial-method group
-    /// (GS0610) whose sibling parts error recovery already dropped from the
-    /// type's member list, leaving this node as the sole survivor
-    /// (ADR-0192). Non-<see langword="null"/> only on that survivor.
-    /// <para>
-    /// Recovery drops every other part to suppress the GS0102
-    /// duplicate-member cascade — but that means a SECOND bind of the same
-    /// syntax tree (the LSP rebinds; ADR-0144's <c>PartialTypeMerger</c>
-    /// returns the SAME node when a type has exactly one syntactic part)
-    /// sees only this one survivor. Without this marker, <c>PartialMethodMerger</c>
-    /// would misread it as a freshly-encountered lone part — a declaring
-    /// part with no implementation reports GS0609 instead of the original
-    /// GS0610; an implementing part reports GS0610 again but with the WRONG
-    /// counts (0 declaring, 1 implementing) since its sibling declaring
-    /// parts are gone. Copilot review round 5 caught the former. Recording
-    /// the original counts here lets a later bind re-report the SAME GS0610
-    /// instead, reaching a genuine fixed point after the first bind.
-    /// </para>
-    /// <para>
-    /// <c>PartLocations</c> — one entry per ORIGINAL part, not just the
-    /// survivor — exists because the first bind reports GS0610 once PER
-    /// PART (so a two-part malformed group produces two diagnostics, one at
-    /// each part's own location). Recording only the survivor's own
-    /// location (as an early version of this fix did — Copilot review
-    /// round 8 caught it) would replay just one diagnostic on a later
-    /// bind, silently losing every other part's location even though the
-    /// message/count stays correct — still not a true fixed point.
-    /// </para>
-    /// <para>
-    /// <c>AnchorLocation</c> is where GS0608 went on the first bind (the
-    /// first declaring part, else the first part), which is not always the
-    /// survivor. The marker is only replayed when the survivor is alone in
-    /// its group: when the malformed parts span several <c>partial class</c>
-    /// blocks, each bind rebuilds the type from the untouched originals, the
-    /// siblings reappear, and the group is reprocessed from scratch (Copilot
-    /// review round 10).
-    /// </para>
-    /// </summary>
-    public (int DeclaringCount, int ImplementingCount, ImmutableArray<TextLocation> PartLocations, TextLocation AnchorLocation)? RecoveredPartCountMismatch { get; set; }
+    public string? PartsDisagreement { get; set; }
 
     /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
     public SyntaxToken? ReceiverOpenParenthesisToken { get; }

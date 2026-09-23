@@ -1016,7 +1016,7 @@ internal sealed partial class DeclarationBinder
         // paired with `Echo[U]` binds with only `U` seeded, so re-binding the
         // declaring side's `T` adds an unrelated "type not found", and a
         // textual return-type mismatch would be reported a second time here.
-        if (methodSyntax.RecoveredPartsDisagreement != null)
+        if (methodSyntax.PartsDisagreement != null)
         {
             return;
         }

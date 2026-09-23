@@ -75,9 +75,13 @@ internal static class PartialTypeMerger
         // NON-partial type carrying a `partial func` is the GS0608 case the
         // parser cannot detect (the aggregate's own `partial` token is attached
         // only after its member list has been parsed).
-        foreach (var declaration in result)
+        //
+        // Normalize never mutates its input; it returns a copy when anything
+        // merged, so the parsed tree (reused across compilations) keeps the
+        // original parts.
+        for (var i = 0; i < result.Count; i++)
         {
-            PartialMethodMerger.Normalize(declaration, diagnostics);
+            result[i] = PartialMethodMerger.Normalize(result[i], diagnostics);
         }
 
         return result;

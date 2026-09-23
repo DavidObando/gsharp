@@ -38,30 +38,31 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal static class PartialMethodMerger
 {
     /// <summary>
-    /// Normalizes every partial method inside <paramref name="declaration"/> in
-    /// place, recursing into nested types. Safe to call on a non-partial type
-    /// and on a type with no partial methods (both are cheap no-ops), and
-    /// idempotent: a method already merged is passed through untouched.
+    /// Returns <paramref name="declaration"/> with every partial method's parts
+    /// collapsed, recursing into nested types. Never mutates its input: when
+    /// anything merges it returns a copy (<see cref="StructDeclarationSyntax.WithMemberLists"/>),
+    /// otherwise the same instance. The parsed tree is reused across
+    /// compilations (the language server keeps unchanged trees for full
+    /// rebuilds), so each bind must start from the original parts; an earlier
+    /// in-place version left merged nodes and recovery markers in the tree
+    /// that later compilations then misread (Copilot review rounds 5-11).
     /// </summary>
     /// <param name="declaration">The (possibly already type-merged) class/struct declaration.</param>
     /// <param name="diagnostics">The bag that receives GS0608-GS0611.</param>
-    public static void Normalize(StructDeclarationSyntax declaration, DiagnosticBag diagnostics)
+    /// <returns>The normalized declaration.</returns>
+    public static StructDeclarationSyntax Normalize(StructDeclarationSyntax declaration, DiagnosticBag diagnostics)
     {
-        if (!declaration.Methods.IsDefaultOrEmpty)
-        {
-            var merged = MergeMethodList(declaration.Methods, declaration.IsPartial, diagnostics);
-            if (!merged.Equals(declaration.Methods))
-            {
-                declaration.Methods = merged;
-            }
-        }
+        var methods = declaration.Methods.IsDefaultOrEmpty
+            ? declaration.Methods
+            : MergeMethodList(declaration.Methods, declaration.IsPartial, diagnostics);
 
-        if (declaration.SharedBlock is { } shared && !shared.Methods.IsDefaultOrEmpty)
+        var sharedBlock = declaration.SharedBlock;
+        if (sharedBlock is { } shared && !shared.Methods.IsDefaultOrEmpty)
         {
             var mergedStatic = MergeMethodList(shared.Methods, declaration.IsPartial, diagnostics);
             if (!mergedStatic.Equals(shared.Methods))
             {
-                declaration.SharedBlock = new SharedBlockSyntax(
+                sharedBlock = new SharedBlockSyntax(
                     shared.SyntaxTree,
                     shared.SharedKeyword,
                     shared.OpenBraceToken,
@@ -74,15 +75,42 @@ internal static class PartialMethodMerger
             }
         }
 
-        if (declaration.NestedTypes.IsDefaultOrEmpty)
+        var nestedTypes = declaration.NestedTypes;
+        if (!nestedTypes.IsDefaultOrEmpty)
         {
-            return;
+            ImmutableArray<MemberSyntax>.Builder? rebuilt = null;
+            for (var i = 0; i < nestedTypes.Length; i++)
+            {
+                if (nestedTypes[i] is not StructDeclarationSyntax nested)
+                {
+                    rebuilt?.Add(nestedTypes[i]);
+                    continue;
+                }
+
+                var normalized = Normalize(nested, diagnostics);
+                if (rebuilt == null && !ReferenceEquals(normalized, nested))
+                {
+                    rebuilt = ImmutableArray.CreateBuilder<MemberSyntax>(nestedTypes.Length);
+                    rebuilt.AddRange(nestedTypes, i);
+                }
+
+                rebuilt?.Add(normalized);
+            }
+
+            if (rebuilt != null)
+            {
+                nestedTypes = rebuilt.MoveToImmutable();
+            }
         }
 
-        foreach (var nested in declaration.NestedTypes.OfType<StructDeclarationSyntax>())
+        if (methods.Equals(declaration.Methods)
+            && ReferenceEquals(sharedBlock, declaration.SharedBlock)
+            && nestedTypes.Equals(declaration.NestedTypes))
         {
-            Normalize(nested, diagnostics);
+            return declaration;
         }
+
+        return declaration.WithMemberLists(methods, sharedBlock, nestedTypes);
     }
 
     /// <summary>
@@ -92,14 +120,14 @@ internal static class PartialMethodMerger
     /// reader of the hand-written file expects the member to occupy (and keeps
     /// emitted member order stable when the implementing part arrives from a
     /// generated file whose <c>@(Compile)</c> position MSBuild may vary —
-    /// the ADR-0144 §D concern).
+    /// the ADR-0144 §D concern). Returns the input instance when nothing is
+    /// partial; otherwise a new list. Never modifies the parts themselves.
     /// </summary>
     private static ImmutableArray<FunctionDeclarationSyntax> MergeMethodList(
         ImmutableArray<FunctionDeclarationSyntax> methods,
         bool enclosingTypeIsPartial,
         DiagnosticBag diagnostics)
     {
-        // Fast path: nothing partial (and nothing already merged) to do.
         if (!methods.Any(m => m.IsPartial))
         {
             return methods;
@@ -107,39 +135,8 @@ internal static class PartialMethodMerger
 
         var groups = new List<List<FunctionDeclarationSyntax>>();
         var groupByKey = new Dictionary<MethodKey, List<FunctionDeclarationSyntax>>();
-        foreach (var method in methods)
+        foreach (var method in methods.Where(m => m.IsPartial))
         {
-            // Already-merged nodes (DeclaringPart set) are complete methods,
-            // not parts awaiting a partner — never re-group or re-merge them.
-            // But a PREVIOUS bind's merge is exactly where GS0608 and GS0611
-            // would have been reported, and skipping this node unconditionally
-            // would skip re-reporting them too — silently turning a real
-            // compile error into success on the second bind of an unchanged
-            // tree (Copilot review round 6). GS0608 is cheap to recompute
-            // fresh (it depends only on the enclosing type, unaffected by the
-            // merge); GS0611 is replayed from the aspect recorded at merge
-            // time, since re-deriving it from the merged node itself is not
-            // safe (see RecoveredPartsDisagreement's doc comment).
-            if (method.DeclaringPart != null)
-            {
-                if (!enclosingTypeIsPartial)
-                {
-                    diagnostics.ReportPartialMethodRequiresPartialType(method.DeclaringPart.Identifier.Location, method.Identifier.Text ?? string.Empty);
-                }
-
-                if (method.RecoveredPartsDisagreement is { } aspect)
-                {
-                    diagnostics.ReportPartialMethodPartsDisagree(method.Identifier.Location, method.Identifier.Text ?? string.Empty, aspect);
-                }
-
-                continue;
-            }
-
-            if (!method.IsPartial)
-            {
-                continue;
-            }
-
             var key = MethodKey.For(method);
             if (!groupByKey.TryGetValue(key, out var group))
             {
@@ -151,80 +148,24 @@ internal static class PartialMethodMerger
             group.Add(method);
         }
 
-        if (groups.Count == 0)
-        {
-            return methods;
-        }
-
         // Map each group's parts to the single node that replaces them.
         var replacementByPart = new Dictionary<FunctionDeclarationSyntax, FunctionDeclarationSyntax?>();
         foreach (var group in groups)
         {
-            // Copilot review round 9: each tree's `///` table is built lazily
-            // by walking the tree's CURRENT member lists. When both parts sit
-            // in one type block, the rewrite below removes the declaring node
-            // from that list before anything has asked for documentation, so
-            // a later build could no longer see it. Force every part's table
-            // now, while each original node is still in its tree.
-            foreach (var part in group)
-            {
-                _ = part.SyntaxTree?.GetDocumentation(part);
-            }
-
             var name = group[0].Identifier.Text ?? string.Empty;
-
-            // Copilot review rounds 5/8/10: the survivor of an earlier bind's
-            // part-count-mismatch recovery, now ALONE in its group — its
-            // siblings really were dropped from this (in-place rewritten)
-            // member list, so regrouping it would misread its shape. Replay
-            // the recorded diagnostics exactly and pass it through unchanged.
-            // Only when it is alone: if the malformed parts span several
-            // `partial class` blocks, PartialTypeMerger rebuilds the type from
-            // the untouched originals on every bind, the siblings are back,
-            // and the whole group must be reprocessed from scratch below.
-            if (group.Count == 1 && group[0].RecoveredPartCountMismatch is { } recovered)
-            {
-                if (!enclosingTypeIsPartial)
-                {
-                    diagnostics.ReportPartialMethodRequiresPartialType(recovered.AnchorLocation, name);
-                }
-
-                foreach (var partLocation in recovered.PartLocations)
-                {
-                    diagnostics.ReportPartialMethodPartCount(
-                        partLocation,
-                        name,
-                        recovered.DeclaringCount,
-                        recovered.ImplementingCount);
-                }
-
-                continue;
-            }
-
-            foreach (var part in group)
-            {
-                part.RecoveredPartCountMismatch = null;
-            }
-
             var declaringParts = group.Where(p => !HasImplementation(p)).ToList();
             var implementingParts = group.Where(HasImplementation).ToList();
-            var groupAnchor = declaringParts.Count > 0 ? declaringParts[0] : group[0];
 
             // GS0608: a `partial func` outside a `partial class`/`partial
-            // struct` is invalid regardless of its part shape — the ADR's
-            // table makes this unconditional, not contingent on the pair
-            // being otherwise well-formed. Checked once per METHOD (this
-            // branch runs once per group, not once per part), BEFORE the
-            // part-count branching below, so a lone declaring part or a
-            // part-count mismatch in a non-partial type still gets GS0608
-            // alongside GS0609/GS0610 rather than losing it to whichever
-            // branch happens to run. Anchored at the declaring part when one
-            // exists (matching the well-formed case's original anchor),
-            // falling back to the group's first part otherwise (e.g. two
-            // implementing parts and no declaring part at all).
+            // struct` is invalid regardless of its part shape, so it is checked
+            // once per method before the part-count branching below — a lone
+            // declaring part or a part-count mismatch in a non-partial type
+            // still gets GS0608 alongside GS0609/GS0610. Anchored at the
+            // declaring part when one exists, else the group's first part.
             if (!enclosingTypeIsPartial)
             {
-                diagnostics.ReportPartialMethodRequiresPartialType(groupAnchor.Identifier.Location, name);
+                var anchor = declaringParts.Count > 0 ? declaringParts[0] : group[0];
+                diagnostics.ReportPartialMethodRequiresPartialType(anchor.Identifier.Location, name);
             }
 
             if (declaringParts.Count == 1 && implementingParts.Count == 1)
@@ -239,11 +180,9 @@ internal static class PartialMethodMerger
 
                 var merged = BuildMergedMethod(declaring, implementing);
 
-                // Copilot review round 6: record the aspect (if any) so a
-                // later bind of the same tree — which sees only this merged
-                // node — can replay the SAME GS0611 instead of losing it to
-                // the DeclaringPart idempotency guard above.
-                merged.RecoveredPartsDisagreement = disagreement;
+                // Lets the binder's semantic signature check stand down when
+                // this syntax-level check already reported GS0611.
+                merged.PartsDisagreement = disagreement;
 
                 // The merged node takes the DECLARING part's slot; the
                 // implementing part's slot is removed.
@@ -252,8 +191,6 @@ internal static class PartialMethodMerger
                 continue;
             }
 
-            var survivor = implementingParts.Count > 0 ? implementingParts[0] : declaringParts[0];
-
             if (declaringParts.Count == 1 && implementingParts.Count == 0)
             {
                 // The headline G# divergence from C#: an unimplemented partial
@@ -261,47 +198,33 @@ internal static class PartialMethodMerger
                 // Narrowed to the well-formed-but-unimplemented shape — a group
                 // with TWO declaring parts is a part-count problem (GS0610), and
                 // reporting "no implementation" twice would hide that.
-                //
-                // group.Count == 1 here (the only part IS the survivor), so
-                // nothing is dropped below and this shape is already
-                // idempotent across rebinds without any marker — unlike the
-                // `else` branch just below.
                 diagnostics.ReportPartialMethodHasNoImplementation(declaringParts[0].Identifier.Location, name);
+                continue;
             }
-            else
-            {
-                foreach (var part in group)
-                {
-                    diagnostics.ReportPartialMethodPartCount(
-                        part.Identifier.Location,
-                        name,
-                        declaringParts.Count,
-                        implementingParts.Count);
-                }
 
-                // Copilot review round 5 (locations added in round 8): record
-                // the shape being dropped — including EVERY part's own
-                // location, not just the survivor's, since the loop above
-                // reports once per part — so a later bind of the same tree
-                // (only the survivor remains by then, per the "error
-                // recovery" comment below) can replay the exact same set of
-                // diagnostics instead of misreading the survivor as a
-                // freshly-encountered, differently-shaped part.
-                survivor.RecoveredPartCountMismatch = (
+            foreach (var part in group)
+            {
+                diagnostics.ReportPartialMethodPartCount(
+                    part.Identifier.Location,
+                    name,
                     declaringParts.Count,
-                    implementingParts.Count,
-                    group.Select(p => p.Identifier.Location).ToImmutableArray(),
-                    groupAnchor.Identifier.Location);
+                    implementingParts.Count);
             }
 
             // Error recovery: keep ONE part so callers of the method still bind
             // (no "no such member" cascade on top of the real diagnostic) and
             // drop the rest so the duplicate-overload check does not also fire.
             // Prefer an implementing part — it is the one that can be emitted.
+            var survivor = implementingParts.Count > 0 ? implementingParts[0] : declaringParts[0];
             foreach (var part in group)
             {
                 replacementByPart[part] = ReferenceEquals(part, survivor) ? part : null;
             }
+        }
+
+        if (replacementByPart.Count == 0)
+        {
+            return methods;
         }
 
         var result = ImmutableArray.CreateBuilder<FunctionDeclarationSyntax>(methods.Length);
@@ -333,9 +256,8 @@ internal static class PartialMethodMerger
     /// <summary>
     /// Validates that the declaring and implementing parts describe the same
     /// method, reporting GS0611 for the first aspect they disagree on and
-    /// returning that aspect (or <see langword="null"/> when they agree) so
-    /// the caller can replay the SAME diagnostic on a later bind — see
-    /// <see cref="FunctionDeclarationSyntax.RecoveredPartsDisagreement"/>.
+    /// returning that aspect (or <see langword="null"/> when they agree) for
+    /// <see cref="FunctionDeclarationSyntax.PartsDisagreement"/>.
     /// </summary>
     private static string? ValidateConsistency(
         FunctionDeclarationSyntax declaring,
@@ -601,10 +523,7 @@ internal static class PartialMethodMerger
             // consistency error — not two unrelated declarations. Substituting
             // `!0`, `!1`, … for the declaration's own type-parameter names
             // before hashing lets them group so that diagnostic can fire.
-            // ADR-0170 / Copilot review round 8: ValueText, not Text — `$T`
-            // and `T` are the same type-parameter name, and storing the
-            // escaped spelling would keep SubstituteTypeParameters below
-            // from ever matching a `$`-escaped reference to it.
+            // ValueText, because `$T` and `T` are the same name (ADR-0170).
             var typeParameterNames = method.TypeParameterList?.Parameters
                 .Select(parameter => parameter.Identifier.ValueText ?? string.Empty)
                 .Where(text => text.Length > 0)
@@ -627,7 +546,7 @@ internal static class PartialMethodMerger
                 {
                     var refKind = parameter.RefKindModifier?.Text ?? string.Empty;
                     var variadic = parameter.IsVariadic ? "..." : string.Empty;
-                    var type = SubstituteTypeParameters(NormalizeNodeText(parameter.Type), typeParameterNames);
+                    var type = TypeKey(parameter.Type, typeParameterNames);
                     return $"{refKind} {variadic}{type}";
                 }));
 
@@ -654,63 +573,67 @@ internal static class PartialMethodMerger
         public override int GetHashCode() => System.HashCode.Combine(Name, Arity, ParameterTypes);
 
         /// <summary>
-        /// Replaces whole-identifier occurrences of the declaration's own type
-        /// parameter names in <paramref name="text"/> with positional markers.
-        /// Whole-identifier matching keeps a type named <c>T2</c> from being
-        /// mangled by a type parameter named <c>T</c>.
+        /// Builds the grouping-key form of a parameter's type clause: each leaf
+        /// token's kind and text, with identifier tokens compared by
+        /// <c>ValueText</c> (ADR-0170) and every reference to one of the
+        /// method's own type parameters replaced by its position (<c>!0</c>,
+        /// <c>!1</c>, …).
         /// <para>
-        /// ADR-0170 / Copilot review round 8: this scans raw TEXT, not
-        /// tokens, so a <c>$</c> escape marker (<c>$T</c> ≡ <c>T</c>) is
-        /// otherwise invisible to it — `!char.IsLetter('$')` sends it down
-        /// the single-character "not an identifier" branch, so `$T` scans as
-        /// the two-character sequence `$` + `T` instead of the one
-        /// identifier `T`, and never matches a stored (now-<c>ValueText</c>)
-        /// type-parameter name. Recognizing the marker here — and emitting
-        /// the UNESCAPED spelling on a miss too, since `$Money` and `Money`
-        /// are the same identifier everywhere else in the binder — keeps a
-        /// generic partial method's parts pairing correctly regardless of
-        /// which spelling either one happens to use.
+        /// Works on tokens, not source text: a raw-text scan rewrote any matching
+        /// word, including the member segment of a qualified name, so
+        /// <c>F[T](x Types.T)</c> and <c>F[U](x Types.U)</c> both keyed their
+        /// parameter as <c>Types.!0</c> and two distinct overloads collapsed
+        /// into one group (Copilot review round 11). A qualifier's member
+        /// segments (<see cref="TypeClauseSyntax.QualifierIdentifierTokens"/>)
+        /// name a member of the qualifier, never the method's own type
+        /// parameter, so they are left as written.
         /// </para>
         /// </summary>
-        private static string SubstituteTypeParameters(string text, List<string>? typeParameterNames)
+        private static string TypeKey(TypeClauseSyntax? type, List<string>? typeParameterNames)
         {
-            if (text.Length == 0)
+            if (type == null)
             {
-                return text;
+                return string.Empty;
             }
 
-            var result = new System.Text.StringBuilder(text.Length);
-            var index = 0;
-            while (index < text.Length)
+            var builder = new System.Text.StringBuilder();
+            var qualifierMembers = new HashSet<SyntaxToken>(ReferenceEqualityComparer.Instance);
+            AppendTypeKey(type, typeParameterNames, qualifierMembers, builder);
+            return builder.ToString();
+        }
+
+        private static void AppendTypeKey(
+            SyntaxNode node,
+            List<string>? typeParameterNames,
+            HashSet<SyntaxToken> qualifierMembers,
+            System.Text.StringBuilder builder)
+        {
+            if (node is TypeClauseSyntax { QualifierIdentifierTokens.IsDefaultOrEmpty: false } qualified)
             {
-                var character = text[index];
-                if (character == '$'
-                    && index + 1 < text.Length
-                    && (char.IsLetter(text[index + 1]) || text[index + 1] == '_'))
-                {
-                    index++;
-                    character = text[index];
-                }
-
-                if (!char.IsLetter(character) && character != '_')
-                {
-                    result.Append(text[index]);
-                    index++;
-                    continue;
-                }
-
-                var start = index;
-                while (index < text.Length && (char.IsLetterOrDigit(text[index]) || text[index] == '_'))
-                {
-                    index++;
-                }
-
-                var identifier = text[start..index];
-                var position = typeParameterNames?.IndexOf(identifier) ?? -1;
-                result.Append(position >= 0 ? "!" + position.ToString(System.Globalization.CultureInfo.InvariantCulture) : identifier);
+                qualifierMembers.UnionWith(qualified.QualifierIdentifierTokens);
             }
 
-            return result.ToString();
+            if (node is SyntaxToken token)
+            {
+                var text = token.Text;
+                if (token.Kind == SyntaxKind.IdentifierToken)
+                {
+                    text = token.ValueText;
+                    var position = qualifierMembers.Contains(token) ? -1 : typeParameterNames?.IndexOf(text) ?? -1;
+                    if (position >= 0)
+                    {
+                        text = "!" + position.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    }
+                }
+
+                builder.Append((int)token.Kind).Append('\x01').Append(text).Append('\x02');
+                return;
+            }
+
+            foreach (var child in node.GetChildren())
+            {
+                AppendTypeKey(child, typeParameterNames, qualifierMembers, builder);
+            }
         }
     }
 }
