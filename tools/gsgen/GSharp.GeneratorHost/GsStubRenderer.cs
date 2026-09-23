@@ -49,6 +49,32 @@ public sealed class GsStubRenderer
         this.speller = speller ?? throw new ArgumentNullException(nameof(speller));
     }
 
+    /// <summary>How a G# method projects with respect to C# partial methods.</summary>
+    private enum PartialShape
+    {
+        /// <summary>An ordinary method (including every rejected partial shape).</summary>
+        None,
+
+        /// <summary>A lone declaring part: a C# partial method definition.</summary>
+        Definition,
+
+        /// <summary>A merged declaring/implementing pair: a C# definition plus implementation.</summary>
+        Pair,
+    }
+
+    /// <summary>Which C# declaration of a method <see cref="RenderMethod"/> writes.</summary>
+    private enum PartialPart
+    {
+        /// <summary>An ordinary, non-partial method.</summary>
+        None,
+
+        /// <summary>A body-less partial method definition.</summary>
+        Definition,
+
+        /// <summary>A partial method implementation with an elided body.</summary>
+        Implementation,
+    }
+
     /// <summary>
     /// Gets the type-spelling fallbacks accumulated during the last render
     /// (ADR-0145 §H / <c>GS9204</c>).
@@ -212,8 +238,9 @@ public sealed class GsStubRenderer
         RenderEvents(sb, memberIndent, structSymbol.Events, isStatic: false);
         RenderEvents(sb, memberIndent, structSymbol.StaticEvents, isStatic: true);
         RenderConstructors(sb, memberIndent, structSymbol);
-        RenderMethods(sb, memberIndent, structSymbol.Methods, isStatic: false);
-        RenderMethods(sb, memberIndent, structSymbol.StaticMethods, isStatic: true);
+        var isPartialType = structSymbol.Declaration?.IsPartial ?? false;
+        RenderMethods(sb, memberIndent, structSymbol.Methods, isStatic: false, isPartialType);
+        RenderMethods(sb, memberIndent, structSymbol.StaticMethods, isStatic: true, isPartialType);
 
         sb.Append(indent).AppendLine("}");
     }
@@ -282,8 +309,8 @@ public sealed class GsStubRenderer
         var memberIndent = indent + "    ";
         RenderProperties(sb, memberIndent, iface.Properties, isStatic: false);
         RenderEvents(sb, memberIndent, iface.Events, isStatic: false);
-        RenderMethods(sb, memberIndent, iface.Methods, isStatic: false);
-        RenderMethods(sb, memberIndent, iface.StaticMethods, isStatic: true);
+        RenderMethods(sb, memberIndent, iface.Methods, isStatic: false, isPartialType: false);
+        RenderMethods(sb, memberIndent, iface.StaticMethods, isStatic: true, isPartialType: false);
 
         sb.Append(indent).AppendLine("}");
     }
@@ -438,7 +465,12 @@ public sealed class GsStubRenderer
         }
     }
 
-    private void RenderMethods(StringBuilder sb, string indent, ImmutableArray<FunctionSymbol> methods, bool isStatic)
+    private void RenderMethods(
+        StringBuilder sb,
+        string indent,
+        ImmutableArray<FunctionSymbol> methods,
+        bool isStatic,
+        bool isPartialType)
     {
         if (methods.IsDefaultOrEmpty)
         {
@@ -452,20 +484,98 @@ public sealed class GsStubRenderer
                 continue;
             }
 
-            RenderAttributes(sb, indent, method.Attributes);
-            sb.Append(indent).Append(AccessibilityKeyword(method.Accessibility)).Append(' ');
-            if (isStatic || method.IsStatic)
+            switch (ClassifyPartialShape(method, isPartialType))
             {
-                sb.Append("static ");
-            }
+                case PartialShape.Definition:
+                    RenderMethod(sb, indent, method, isStatic, PartialPart.Definition, method.Attributes);
+                    break;
 
-            var isVoid = method.Type == null || method.Type == TypeSymbol.Void;
-            sb.Append(RenderMethodReturnType(method, isVoid)).Append(' ').Append(method.Name);
-            sb.Append(RenderTypeParameters(method.TypeParameters));
-            sb.Append('(').Append(RenderParameters(method.Parameters)).Append(')');
-            sb.Append(RenderConstraints(method.TypeParameters));
-            sb.AppendLine(isVoid && !method.IsAsync ? " { }" : " => throw null!;");
+                case PartialShape.Pair:
+                    // gsc merged the two parts into one symbol whose attributes
+                    // are the union of both parts. C# unions a partial method's
+                    // attributes the same way, so stating them once, on the
+                    // definition, is exact and avoids a duplicate-attribute error.
+                    RenderMethod(sb, indent, method, isStatic, PartialPart.Definition, method.Attributes);
+                    RenderMethod(sb, indent, method, isStatic, PartialPart.Implementation, ImmutableArray<BoundAttribute>.Empty);
+                    break;
+
+                default:
+                    RenderMethod(sb, indent, method, isStatic, PartialPart.None, method.Attributes);
+                    break;
+            }
         }
+    }
+
+    /// <summary>
+    /// ADR-0192: classifies how a G# <c>partial func</c> projects into the stub.
+    /// gsc keeps a lone declaring part after GS0609 precisely so a generator can
+    /// see it and supply the implementation, and C# generators (the Regex
+    /// generator first among them) only fill in a method declared
+    /// <c>partial</c> with no body — any other shape is SYSLIB1043 — so that
+    /// part renders as a C# partial method definition. A pair gsc has already
+    /// merged renders as a C# definition plus implementation. Every other shape
+    /// keeps the ordinary-method rendering: a lone implementing part (GS0610),
+    /// a partial method in a non-partial type (GS0608), or a receiver-clause or
+    /// explicit-interface partial (GS0607). C# would reject a partial member in
+    /// each of those, and gsc has already reported the real error.
+    /// </summary>
+    private static PartialShape ClassifyPartialShape(FunctionSymbol method, bool isPartialType)
+    {
+        var declaration = method.Declaration;
+        if (!isPartialType
+            || declaration is not { IsPartial: true }
+            || declaration.Receiver != null
+            || declaration.ExplicitInterfaceType != null)
+        {
+            return PartialShape.None;
+        }
+
+        if (declaration.DeclaringPart != null)
+        {
+            return PartialShape.Pair;
+        }
+
+        return declaration.Body == null ? PartialShape.Definition : PartialShape.None;
+    }
+
+    private void RenderMethod(
+        StringBuilder sb,
+        string indent,
+        FunctionSymbol method,
+        bool isStatic,
+        PartialPart part,
+        ImmutableArray<BoundAttribute> attributes)
+    {
+        RenderAttributes(sb, indent, attributes);
+        sb.Append(indent).Append(AccessibilityKeyword(method.Accessibility)).Append(' ');
+        if (isStatic || method.IsStatic)
+        {
+            sb.Append("static ");
+        }
+
+        // C# requires `partial` immediately before the return type.
+        if (part != PartialPart.None)
+        {
+            sb.Append("partial ");
+        }
+
+        var isVoid = method.Type == null || method.Type == TypeSymbol.Void;
+        sb.Append(RenderMethodReturnType(method, isVoid)).Append(' ').Append(method.Name);
+        sb.Append(RenderTypeParameters(method.TypeParameters));
+
+        // A default value belongs on the definition; C# ignores one restated
+        // on the implementation and warns about it (CS1066).
+        var includeDefaults = part != PartialPart.Implementation;
+        sb.Append('(').Append(RenderParameters(method.Parameters, includeDefaults)).Append(')');
+        sb.Append(RenderConstraints(method.TypeParameters));
+
+        if (part == PartialPart.Definition)
+        {
+            sb.AppendLine(";");
+            return;
+        }
+
+        sb.AppendLine(isVoid && !method.IsAsync ? " { }" : " => throw null!;");
     }
 
     private string RenderMethodReturnType(FunctionSymbol method, bool isVoid)
@@ -481,7 +591,7 @@ public sealed class GsStubRenderer
         return isVoid ? wrapper : wrapper + "<" + speller.Spell(method.Type) + ">";
     }
 
-    private string RenderParameters(ImmutableArray<ParameterSymbol> parameters)
+    private string RenderParameters(ImmutableArray<ParameterSymbol> parameters, bool includeDefaults = true)
     {
         if (parameters.IsDefaultOrEmpty)
         {
@@ -518,7 +628,7 @@ public sealed class GsStubRenderer
 
             builder.Append(parameter.Name);
 
-            if (parameter.HasExplicitDefaultValue && parameter.RefKind == RefKind.None && !parameter.IsVariadic)
+            if (includeDefaults && parameter.HasExplicitDefaultValue && parameter.RefKind == RefKind.None && !parameter.IsVariadic)
             {
                 var rendered = RenderConstant(parameter.ExplicitDefaultValue, parameter.Type);
                 builder.Append(" = ").Append(rendered ?? "default");
