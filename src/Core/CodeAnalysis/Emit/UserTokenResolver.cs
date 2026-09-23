@@ -1905,11 +1905,11 @@ internal sealed class UserTokenResolver
                     && clrParameterType.GetElementType() is { } sliceElement
                     && IndexParameterTypeMatches(sliceElement, slice.ElementType);
             case StructSymbol structSymbol:
-                return SourceTypeMatches(clrParameterType, structSymbol.PackageName, structSymbol.Name, structSymbol.TypeArguments);
+                return SourceTypeMatches(clrParameterType, structSymbol, structSymbol.PackageName, AllTypeArguments(structSymbol));
             case InterfaceSymbol interfaceSymbol:
-                return SourceTypeMatches(clrParameterType, interfaceSymbol.PackageName, interfaceSymbol.Name, interfaceSymbol.TypeArguments);
+                return SourceTypeMatches(clrParameterType, interfaceSymbol, interfaceSymbol.PackageName, interfaceSymbol.TypeArguments);
             case EnumSymbol enumSymbol:
-                return SourceTypeMatches(clrParameterType, enumSymbol.PackageName, enumSymbol.Name, ImmutableArray<TypeSymbol>.Empty);
+                return SourceTypeMatches(clrParameterType, enumSymbol, enumSymbol.PackageName, ImmutableArray<TypeSymbol>.Empty);
             default:
                 return false;
         }
@@ -1917,19 +1917,13 @@ internal sealed class UserTokenResolver
 
     private static bool SourceTypeMatches(
         Type clrType,
+        TypeSymbol symbol,
         string packageName,
-        string name,
         ImmutableArray<TypeSymbol> typeArguments)
     {
-        if (clrType.IsGenericParameter)
-        {
-            return false;
-        }
-
-        var clrName = clrType.Name;
-        var arityMarker = clrName.IndexOf('`', StringComparison.Ordinal);
-        if (!string.Equals(arityMarker < 0 ? clrName : clrName.Substring(0, arityMarker), name, StringComparison.Ordinal)
-            || !string.Equals(clrType.Namespace ?? string.Empty, packageName ?? string.Empty, StringComparison.Ordinal))
+        // Review finding: `OuterA.Key` and `OuterB.Key` share a namespace and
+        // simple name, so the declaring chain is part of the identity too.
+        if (clrType.IsGenericParameter || !DeclarationChainMatches(clrType, symbol, packageName))
         {
             return false;
         }
@@ -1950,6 +1944,36 @@ internal sealed class UserTokenResolver
         }
 
         return true;
+    }
+
+    // A CLR nested type in a generic outer type lists the enclosing type's
+    // arguments before its own.
+    private static ImmutableArray<TypeSymbol> AllTypeArguments(StructSymbol structSymbol)
+    {
+        var own = structSymbol.TypeArguments.IsDefault ? ImmutableArray<TypeSymbol>.Empty : structSymbol.TypeArguments;
+        return structSymbol.EnclosingTypeArguments.IsDefaultOrEmpty
+            ? own
+            : structSymbol.EnclosingTypeArguments.AddRange(own);
+    }
+
+    private static bool DeclarationChainMatches(Type clrType, Symbol symbol, string packageName)
+    {
+        var clrName = clrType.Name;
+        var arityMarker = clrName.IndexOf('`', StringComparison.Ordinal);
+        if (!string.Equals(arityMarker < 0 ? clrName : clrName.Substring(0, arityMarker), symbol.Name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (symbol.ContainingType is { } container)
+        {
+            return clrType.IsNested
+                && clrType.DeclaringType is { } declaringType
+                && DeclarationChainMatches(declaringType, container, packageName);
+        }
+
+        return !clrType.IsNested
+            && string.Equals(clrType.Namespace ?? string.Empty, packageName ?? string.Empty, StringComparison.Ordinal);
     }
 
     /// <summary>

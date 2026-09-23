@@ -139,6 +139,77 @@ public class Issue4350ClrInteropEmitTests
         }
     }
 
+    [Fact]
+    public void MultiParameterImportedIndexers_ReadAndWrite()
+    {
+        // Nightly finding (#4350): cs2gs now keeps `slice[-1, true]`, so gsc
+        // must bind a multi-parameter IMPORTED indexer — the runtime's
+        // ref-returning `Slice<T>.this[int, bool]` and a C# setter indexer —
+        // for reads, writes, and single-evaluation compound writes.
+        var library = """
+            namespace GridLib;
+            public sealed class Grid
+            {
+                private readonly int[] cells = new int[6];
+                public int Reads;
+                public int this[int row, int column]
+                {
+                    get { Reads++; return cells[(row * 3) + column]; }
+                    set => cells[(row * 3) + column] = value;
+                }
+            }
+            """;
+        var source = """
+            package P
+            import System
+            import GridLib
+
+            func next(log Grid, value int32) int32 {
+                log.Reads += 100
+                return value
+            }
+
+            func run() {
+                var s = slice[int32]{10, 20, 30}
+                Console.WriteLine(s[1, true] + s[1, false])
+                s[1, true] = 99
+                s[0, false] += 5
+                Console.WriteLine(String.Join(",", s))
+                try {
+                    Console.WriteLine(s[-1, true])
+                } catch (e IndexOutOfRangeException) {
+                    Console.WriteLine("ioor")
+                }
+
+                let grid = Grid()
+                grid[1, 2] = 7
+                grid[next(grid, 1), 2] += 3
+                Console.WriteLine(grid[1, 2])
+                Console.WriteLine(grid.Reads)
+            }
+
+            run()
+            """;
+
+        var fixtureDirectory = Directory.CreateTempSubdirectory("gs_issue4350_gridlib_").FullName;
+        try
+        {
+            Assert.Equal(
+                Lines("50", "15,20,99", "ioor", "10", "102"),
+                CompileAndRun(source, CompileCSharpLibrary(library, "GridLib", fixtureDirectory)));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(fixtureDirectory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
     private static string CompileCSharpLibrary(string source, string name, string directory)
     {
         var path = Path.Combine(directory, name + ".dll");

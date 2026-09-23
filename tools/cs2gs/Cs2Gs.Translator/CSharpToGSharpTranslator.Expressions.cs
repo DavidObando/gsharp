@@ -669,6 +669,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return analyzerIdiom;
             }
 
+            // Issue #4350 (review): `this.P = v` (or `Type.P = v`) in a
+            // constructor targets the synthesized backing field of a lowered
+            // static/virtual/override get-only auto-property, exactly like the
+            // bare `P = v` form handled in EmittedName.
+            if (this.context.GetSymbolInfo(member).Symbol is IPropertySymbol loweredProperty
+                && IsWriteTarget(member.Name)
+                && this.IsBackingFieldLoweredGetOnlyAutoProperty(loweredProperty))
+            {
+                string backingName = this.RegisterSynthesizedPropertyBackingField(loweredProperty, primaryCtorParamNames: null);
+                return loweredProperty.IsStatic
+                    ? new IdentifierExpression(backingName)
+                    : new MemberAccessExpression(this.TranslateExpression(member.Expression), backingName);
+            }
+
             // C# permits namespace-qualified type expressions without importing
             // their namespace, including relative qualification from the current
             // namespace. G# resolves expression receivers as values/types, not as

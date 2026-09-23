@@ -299,6 +299,12 @@ internal sealed partial class ExpressionBinder
         Func<TypeSymbol, Func<BoundExpression>, BoundExpression> bindValue,
         TextLocation location)
     {
+        if (target.Type is ImportedTypeSymbol or NullabilityAnnotatedTypeSymbol
+            && target.Type.ClrType is { } clrTarget)
+        {
+            return TryBindMultiIndexClrAssignment(target, clrTarget, indexSyntaxes, bindValue, location);
+        }
+
         if (target.Type is not (StructSymbol or InterfaceSymbol))
         {
             return null;
@@ -421,6 +427,116 @@ internal sealed partial class ExpressionBinder
                 receiver,
                 Invariant.Required(setter, "without a hoisted reference the indexer has a setter"),
                 capturedArguments.Add(valueRead))));
+        return new BoundBlockExpression(null, statements.ToImmutable(), valueRead);
+    }
+
+    /// <summary>
+    /// Issue #4350: a write through a multi-parameter IMPORTED indexer
+    /// (<c>slice[i, fromEnd] = v</c> over the runtime's
+    /// <c>Slice&lt;T&gt;.this[int, bool]</c>). The receiver and every argument
+    /// are evaluated once; a setter-less <c>ref</c>-returning indexer is written
+    /// through the reference its getter returns, which a compound assignment
+    /// also reads, so the getter runs exactly once.
+    /// </summary>
+    /// <param name="target">The indexed receiver.</param>
+    /// <param name="clrTarget">The receiver's CLR type.</param>
+    /// <param name="indexSyntaxes">The written index arguments.</param>
+    /// <param name="bindValue">Binds the stored value given the element type and a read of the current element.</param>
+    /// <param name="location">The location for diagnostics.</param>
+    /// <returns>The bound assignment, or <see langword="null"/> when no imported indexer applies.</returns>
+    private BoundExpression? TryBindMultiIndexClrAssignment(
+        BoundExpression target,
+        Type clrTarget,
+        SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
+        Func<TypeSymbol, Func<BoundExpression>, BoundExpression> bindValue,
+        TextLocation location)
+    {
+        var bound = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
+        foreach (var indexSyntax in indexSyntaxes)
+        {
+            bound.Add(BindExpression(indexSyntax));
+        }
+
+        var outcome = memberLookup.TryResolveClrIndexer(
+            target.Type,
+            clrTarget,
+            bound.MoveToImmutable(),
+            out var indexer,
+            out var resolvedArguments);
+        if (outcome != ClrIndexerResolutionOutcome.Resolved || indexer == null)
+        {
+            return ReportClrIndexerResolutionFailure(outcome, location) ? new BoundErrorExpression(null) : null;
+        }
+
+        var elementType = target.Type is ImportedTypeSymbol importedTarget
+            ? MapErasedIndexerElementType(importedTarget, indexer)
+            : MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer);
+        var isRefIndexer = elementType is ByRefTypeSymbol;
+        var visibleSetter = ClrMemberVisibility.GetVisibleSetter(indexer, CanAccessInternalsOf(indexer.DeclaringType));
+        if (!isRefIndexer && visibleSetter == null)
+        {
+            Diagnostics.ReportCannotAssign(location, "this[]");
+            return new BoundErrorExpression(null);
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var receiver = target;
+        if (target is not BoundVariableExpression)
+        {
+            var receiverLocal = DeclareRangeTemp("receiver", target.Type, target, statements);
+            receiver = new BoundVariableExpression(null, receiverLocal);
+        }
+
+        var converted = BindClrIndexerArguments(target.Type, indexer, resolvedArguments, location);
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(converted.Length);
+        foreach (var argument in converted)
+        {
+            var argumentLocal = DeclareRangeTemp("index", argument.Type, argument, statements);
+            arguments.Add(new BoundVariableExpression(null, argumentLocal));
+        }
+
+        var capturedArguments = arguments.MoveToImmutable();
+        if (elementType is ByRefTypeSymbol byRef)
+        {
+            var reference = new BoundClrIndexExpression(null, receiver, indexer, capturedArguments, elementType);
+            var referenceTemp = DeclareRangeTemp("ref", reference.Type, reference, statements);
+            BoundExpression ReadThroughReference()
+                => new BoundDereferenceExpression(null, new BoundVariableExpression(null, referenceTemp));
+
+            var refValue = conversions.BindConversion(location, bindValue(byRef.PointeeType, ReadThroughReference), byRef.PointeeType);
+            if (refValue is BoundErrorExpression)
+            {
+                return refValue;
+            }
+
+            if (GSharp.Core.CodeAnalysis.Lowering.Async.AsyncBoundTreeQueries.HasAwait(refValue))
+            {
+                Diagnostics.ReportManagedReference(
+                    location,
+                    "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+                return new BoundErrorExpression(null);
+            }
+
+            return new BoundBlockExpression(
+                null,
+                statements.ToImmutable(),
+                new BoundIndirectAssignmentExpression(null, new BoundVariableExpression(null, referenceTemp), refValue));
+        }
+
+        BoundExpression ReadCurrent()
+            => new BoundClrIndexExpression(null, receiver, indexer, capturedArguments, elementType);
+
+        var value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType);
+        if (value is BoundErrorExpression)
+        {
+            return value;
+        }
+
+        var valueLocal = DeclareRangeTemp("value", elementType, value, statements);
+        var valueRead = new BoundVariableExpression(null, valueLocal);
+        statements.Add(new BoundExpressionStatement(
+            null,
+            BoundClrIndexAssignmentExpression.WithExpressionTarget(null, receiver, indexer, capturedArguments, valueRead, elementType)));
         return new BoundBlockExpression(null, statements.ToImmutable(), valueRead);
     }
 

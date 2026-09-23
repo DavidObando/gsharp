@@ -112,7 +112,8 @@ namespace Corpus.Issue4350
     {
         public Derived(int value) : base(value)
         {
-            Extra = value * 10;
+            this.Extra = value * 10;
+            this.Extra += 1;
         }
 
         public override int Value { get; } = 40;
@@ -138,7 +139,7 @@ namespace Corpus.Issue4350
         var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run()");
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
-        Assert.Equal("6,40,20,3", result.Value);
+        Assert.Equal("6,40,21,3", result.Value);
     }
 
     private static string Render(string source)

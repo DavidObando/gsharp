@@ -1311,6 +1311,44 @@ internal sealed partial class ExpressionBinder
             }
         }
 
+        if (rectangular == null
+            && target.Type is ImportedTypeSymbol or StructSymbol or NullabilityAnnotatedTypeSymbol
+            && target.Type.ClrType is { } multiClrTarget)
+        {
+            // Issue #4350: a multi-parameter IMPORTED indexer — the runtime's
+            // `Slice<T>.this[int index, bool fromEnd]`, reached through the
+            // native `slice[T]` view — resolves through the same CLR indexer
+            // overload resolution as a single index.
+            var multiClrArguments = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
+            foreach (var indexSyntax in indexSyntaxes)
+            {
+                multiClrArguments.Add(BindExpression(indexSyntax));
+            }
+
+            var multiOutcome = this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                multiClrTarget,
+                multiClrArguments.MoveToImmutable(),
+                out var multiClrIndexer,
+                out var multiResolvedArguments);
+            if (multiOutcome == ClrIndexerResolutionOutcome.Resolved
+                && multiClrIndexer != null
+                && ClrMemberVisibility.GetVisibleGetter(multiClrIndexer, CanAccessInternalsOf(multiClrIndexer.DeclaringType)) != null)
+            {
+                var elementType = target.Type is ImportedTypeSymbol importedTarget
+                    ? MapErasedIndexerElementType(importedTarget, multiClrIndexer)
+                    : MemberLookup.GetClrPropertyTypeSymbol(target.Type, multiClrIndexer);
+                var convertedArguments = BindClrIndexerArguments(target.Type, multiClrIndexer, multiResolvedArguments, targetLocation);
+                return ConversionClassifier.AutoDereferenceRefReturn(
+                    new BoundClrIndexExpression(null, target, multiClrIndexer, convertedArguments, elementType));
+            }
+
+            if (ReportClrIndexerResolutionFailure(multiOutcome, targetLocation))
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+
         if (rectangular == null)
         {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
