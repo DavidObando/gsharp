@@ -121,6 +121,44 @@ internal static class RefCapabilities
         }
     }
 
+    /// <summary>
+    /// ADR-0187 / issue #4350 (the C# scoped-<c>this</c> rule): whether the
+    /// REF-safe-context of <paramref name="receiver"/> contributes to the
+    /// reference a ref-returning call or property read hands back.
+    /// </summary>
+    /// <remarks>
+    /// Every struct instance member's <c>this</c> is implicitly
+    /// <c>scoped ref</c>, and the binder already enforces the callee side of
+    /// that contract: a member that returns a reference into its own receiver
+    /// must be <c>@UnscopedRef</c> (GS0589). So when the receiver's static
+    /// type is a concrete struct — the call then names the implementation it
+    /// dispatches to — a member WITHOUT <c>@UnscopedRef</c> cannot be the
+    /// source of a reference into the receiver's storage, and C# excludes the
+    /// receiver from the result's ref-safe-context entirely. Any other shape
+    /// (a type-parameter or interface receiver, whose implementation may carry
+    /// <c>@UnscopedRef</c> the called slot does not advertise; a base call; an
+    /// unrecognized node) keeps the conservative answer.
+    /// </remarks>
+    /// <param name="expression">The ref-returning call or property read.</param>
+    /// <param name="receiver">Its instance receiver.</param>
+    /// <returns><see langword="true"/> when the receiver's storage can be the returned reference's source.</returns>
+    internal static bool ReceiverContributesRefScope(BoundExpression expression, BoundExpression receiver)
+    {
+        var member = expression switch
+        {
+            BoundUserInstanceCallExpression call => call.Method,
+            BoundPropertyAccessExpression property => property.Property.GetterSymbol,
+            _ => null,
+        };
+
+        if (member == null || receiver.Type is not StructSymbol { IsClass: false })
+        {
+            return true;
+        }
+
+        return member.HasUnscopedRef;
+    }
+
     internal static string DescribeReturn(RefKind kind)
         => kind == RefKind.RefReadOnly ? "by ref readonly" : kind == RefKind.Ref ? "by ref" : "by value";
 
@@ -265,11 +303,20 @@ internal static class RefCapabilities
             // member called on a `readonly` value requires a defensive copy,
             // so writing through whatever reference it returns cannot be
             // trusted to reach the original storage.
+            //
+            // ADR-0187: the copy only matters when the member may return into
+            // its receiver (see ReceiverContributesRefScope); a `ref` from a
+            // non-@UnscopedRef member of a concrete struct points elsewhere and
+            // stays writable, as in C#.
             BoundPropertyAccessExpression property => property.Property.ReturnRefKind == RefKind.RefReadOnly
-                || (property.Property.ReturnRefKind == RefKind.Ref && IsReadOnlyValueReceiver(property.Receiver)),
+                || (property.Property.ReturnRefKind == RefKind.Ref
+                    && IsReadOnlyValueReceiver(property.Receiver)
+                    && (property.Receiver == null || ReceiverContributesRefScope(property, property.Receiver))),
             BoundCallExpression call => call.Function.ReturnRefKind == RefKind.RefReadOnly,
             BoundUserInstanceCallExpression call => call.Method.ReturnRefKind == RefKind.RefReadOnly
-                || (call.Method.ReturnRefKind == RefKind.Ref && IsReadOnlyValueReceiver(call.Receiver)),
+                || (call.Method.ReturnRefKind == RefKind.Ref
+                    && IsReadOnlyValueReceiver(call.Receiver)
+                    && ReceiverContributesRefScope(call, call.Receiver)),
             BoundBaseInterfaceCallExpression call => call.Method.ReturnRefKind == RefKind.RefReadOnly,
             BoundBaseClassCallExpression call => (call.Method?.ReturnRefKind ?? call.Property?.ReturnRefKind) == RefKind.RefReadOnly,
             BoundConstrainedStaticCallExpression call => (call.InterfaceMethod?.ReturnRefKind ?? GetReturnRefKind(call.ClrMethod)) == RefKind.RefReadOnly,

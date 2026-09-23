@@ -108,11 +108,13 @@ internal sealed partial class DeclarationBinder
         TypeClauseSyntax? syntax,
         PackageSymbol package)
     {
+        // ADR-0187 / issue #4350: a top-level `?` on the owner (`ManagedRef[T]?`,
+        // C#'s `ManagedRef<T>?` operand of a reference-type operator) names
+        // the same generic owner, so it opens the same type parameters.
         if (syntax == null
             || syntax.HasQualifier
             || !syntax.HasTypeArguments
             || syntax.IsArray
-            || syntax.IsNullable
             || syntax.IsParenthesizedNullable
             || syntax.Identifier == null)
         {
@@ -781,9 +783,16 @@ internal sealed partial class DeclarationBinder
             seenParameterNames.Add(recvName);
             parameters.Add(explicitReceiverParameter);
 
+            // ADR-0187 / issue #4350: a nullable receiver (`left Box[T]?`, the
+            // C# `Box<T>?` operand of a reference-type operator) still names the
+            // owning type, so the operator is a static member of that type
+            // rather than of the package's `<Program>` holder.
             var isOperator = syntax.Identifier.ValueText.StartsWith("op_", StringComparison.Ordinal);
+            var ownerType = receiverType is NullableTypeSymbol nullableReceiver
+                ? nullableReceiver.UnderlyingType
+                : receiverType;
             if (isOperator &&
-                receiverType is StructSymbol receiverStruct &&
+                ownerType is StructSymbol receiverStruct &&
                 string.Equals(receiverStruct.PackageName, package.Name, StringComparison.Ordinal))
             {
                 methodReceiverStruct = receiverStruct.Definition ?? receiverStruct;

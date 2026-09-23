@@ -801,9 +801,13 @@ internal sealed partial class StatementBinder
                 // `readonly func`, so a NATIVE ref-returning member is never
                 // exempt from the copy. A future `readonly` member feature MUST
                 // thread it through here.
+                // ADR-0187: a copy matters only when the member may return a
+                // reference into its receiver at all (@UnscopedRef, or a
+                // receiver shape that cannot prove it does not).
                 return RefCapabilities.TryGetRefReturnEscapeSources(expr, out var receiver, out _, out _)
                     && receiver != null
                     && !Binder.IsReferenceTypeForConstraint(receiver.Type)
+                    && RefCapabilities.ReceiverContributesRefScope(expr, receiver)
                     && RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy(receiver);
         }
     }
@@ -969,11 +973,25 @@ internal sealed partial class StatementBinder
                         return true;
                     }
 
-                    if (callReceiver != null
-                        && !Binder.IsReferenceTypeForConstraint(callReceiver.Type)
-                        && HasFunctionLocalRefScope(callReceiver))
+                    // ADR-0187 / issue #4350: a non-@UnscopedRef member of a
+                    // concrete struct receives `this` as `scoped ref`, so its
+                    // receiver's storage cannot be the returned reference's
+                    // source (C#'s rule). A byref-like receiver's VALUE can
+                    // still carry the referent out, exactly like a by-value
+                    // byref-like argument.
+                    if (callReceiver != null && !Binder.IsReferenceTypeForConstraint(callReceiver.Type))
                     {
-                        return true;
+                        if (RefCapabilities.ReceiverContributesRefScope(expr, callReceiver))
+                        {
+                            if (HasFunctionLocalRefScope(callReceiver))
+                            {
+                                return true;
+                            }
+                        }
+                        else if (TypeSymbol.IsByRefLike(callReceiver.Type) && HasFunctionLocalReferentScope(callReceiver))
+                        {
+                            return true;
+                        }
                     }
 
                     foreach (var argument in byRefArguments)

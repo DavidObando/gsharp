@@ -599,6 +599,45 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
+    /// ADR-0187 / issue #4350: whether the only non-constructor callables named
+    /// <paramref name="name"/> are receiver-clause extension functions — no
+    /// free function, function-valued local, enclosing-type member, or
+    /// inherited CLR method shares the name.
+    /// </summary>
+    /// <param name="name">The unqualified callee name.</param>
+    /// <returns><see langword="true"/> when every candidate is an extension function.</returns>
+    private bool IsExtensionOnlyCallableName(string name)
+    {
+        if (Scope.TryLookupSymbol(name) is not FunctionSymbol)
+        {
+            return false;
+        }
+
+        var functions = Scope.TryLookupFunctions(name);
+        if (functions.IsDefaultOrEmpty || functions.Any(f => !f.IsExtension))
+        {
+            return false;
+        }
+
+        if (HasEnclosingMemberCallableCandidate(name))
+        {
+            return false;
+        }
+
+        var effThis = GetEffectiveThisParameter();
+        if (effThis?.Type is StructSymbol receiverStruct)
+        {
+            var inheritedClr = ExpressionBinder.GetInheritedClrBaseType(receiverStruct) ?? typeof(object);
+            if (MemberLookup.SafeGetMethodsIncludingSelfAndInterfaces(inheritedClr, name).Count > 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Issue #3527: whether <paramref name="name"/> resolves to a genuine
     /// member of the type lexically enclosing the current call — an instance
     /// or static (`shared`) sibling method reached through the implicit
@@ -806,6 +845,21 @@ internal sealed partial class OverloadResolver
                 || sourceCtorStruct.IsInline
                 || sourceCtorStruct.HasPrimaryConstructor
                 || !sourceCtorStruct.ExplicitConstructors.IsDefaultOrEmpty);
+
+        // ADR-0187 / issue #4350: construction syntax that names a constructible
+        // source type is never shadowed by receiver-clause EXTENSION functions
+        // of the same name. C# never considers an extension method for `new
+        // T(...)`, and cs2gs translates `new Slice<T>(owner, …)` inside the
+        // runtime that also declares `Slice(this Slice<T> s, lo, hi, max)` to
+        // exactly this spelling. Extensions stay callable in receiver form
+        // (`s.Slice(1, 2)`); a free function, function-valued local, or member
+        // of the same name still wins as before (#2403 / #3527).
+        if (hasNonConstructorCallable
+            && hasSourceConstructibleType
+            && IsExtensionOnlyCallableName(syntax.Identifier.ValueText))
+        {
+            hasNonConstructorCallable = false;
+        }
 
         // Phase 4-exit: prefer CLR class instantiation over the single-arg
         // conversion-call hijack below, so that `StringBuilder(16)` resolves

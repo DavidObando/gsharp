@@ -488,7 +488,12 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!receiverStructType.IsClass && !IsWritableStructFieldReceiver(receiver))
+        // ADR-0187 / issue #4350: a non-@UnscopedRef getter cannot return into
+        // its (possibly copied) receiver, so the write lands in the storage the
+        // reference names regardless of the receiver's writability — C#'s rule.
+        if (!receiverStructType.IsClass
+            && !IsWritableStructFieldReceiver(receiver)
+            && (prop.GetterSymbol?.HasUnscopedRef ?? true))
         {
             Diagnostics.ReportFieldAssignmentThroughStructTemporary(equalsLocation, prop.Name, receiverStructType);
             result = new BoundErrorExpression(null);
